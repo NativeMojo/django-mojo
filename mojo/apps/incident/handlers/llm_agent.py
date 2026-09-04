@@ -676,7 +676,12 @@ def _tool_block_ip(params):
                 params.get("incident_id"))
 
     geo, _ = GeoLocatedIP.objects.get_or_create(ip_address=ip)
-    geo.block(reason=reason, ttl=ttl)
+    checked = geo.block_checked(reason=reason, ttl=ttl)
+    if checked.get("status") != "verified" or checked.get("ok") is not True:
+        error = checked.get("error") or {}
+        return {"ok": False, "ip": ip, "blocked": False,
+                "reason": "firewall state was not verified",
+                "error_code": str(error.get("code") or "fleet_unverified")[:64]}
 
     # Record in incident history if linked
     if params.get("incident_id"):

@@ -32,11 +32,15 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 
 | Field | Description |
 |---|---|
-| `is_blocked` | Whether this IP is currently blocked |
+| `is_blocked` | Desired block state; use the checked result for fleet observation |
 | `blocked_at` | When the block was applied |
 | `blocked_until` | When the block expires (`null` = permanent) |
 | `blocked_reason` | Why the IP was blocked (e.g. `auto:threat_escalation`, `manual block: by admin`) |
 | `block_count` | Number of times this IP has been blocked |
+| `firewall_generation` | Monotonic desired-state generation used to fence stale receipts |
+| `firewall_pending` | Current generation lacks exact compatible-host proof. Only a checked action or aggregation of fresh matching host observations clears it. |
+| `firewall_sync_error` | Bounded failure or pending detail for the latest reconciliation attempt |
+| `firewall_observed_at` | Latest exact compatible-host observation; it can predate a newer pending generation |
 
 ### Whitelisting Fields
 
@@ -66,21 +70,40 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 | `instance.refresh(check_threats=False)` | Re-fetch geolocation data from provider |
 | `instance.check_threats(from_sync=False)` | Run threat intelligence checks. Pass `from_sync=True` to suppress outbound federation push. |
 | `instance.update_threat_from_incident(priority, block=False, from_sync=False)` | Escalate threat level from incident priority (0–15 scale). Pass `block=True` to allow auto-blocking when threat reaches `high`/`critical`. Pass `from_sync=True` to suppress outbound federation push. |
-| `instance.block(reason, ttl, broadcast, from_sync=False)` | Block this IP fleet-wide (DB + broadcast). Always escalates `threat_level` to at least `high`. Pass `from_sync=True` to suppress outbound federation push. |
-| `instance.unblock(reason, broadcast)` | Unblock this IP fleet-wide |
-| `instance.whitelist(reason, ttl=None, until=None)` | Whitelist — also unblocks if currently blocked. `ttl` seconds or an explicit `until` datetime sets `whitelisted_until` (`until` wins; omit both for permanent). |
-| `instance.unwhitelist()` | Remove whitelist status (clears `whitelisted_until` too) |
+| `instance.block_checked(reason, ttl, broadcast, from_sync=False)` | Write desired state and return the checked compatible-host result. Always escalates `threat_level` to at least `high`. |
+| `instance.block(reason, ttl, broadcast, from_sync=False)` | Bool-compatible wrapper around `block_checked()`; its return value is not fleet proof. |
+| `instance.unblock_checked(reason, broadcast)` | Write an absence tombstone and return the checked compatible-host result. |
+| `instance.unblock(reason, broadcast)` | Compatibility wrapper; it returns no checked result. |
+| `instance.whitelist(reason, ttl=None, until=None)` | Whitelist and prove fleet-wide block absence. `ttl` seconds or explicit `until` sets expiry (`until` wins; omit both for permanent). |
+| `instance.verify_absence_checked()` | For an active whitelist, create a fenced generation and prove exact compatible-host absence without changing whitelist policy. MojoSec uses this before a `whitelisted` target becomes terminal. |
+| `instance.unwhitelist()` | Remove whitelist status, advance the IP/permanent fences, checked-reconcile the desired state that becomes active, and return the checked result. Clears `whitelisted_until`. |
 
 ---
 
 ## Fleet-Wide IP Blocking
 
-`GeoLocatedIP` is the single source of truth for IP blocking. When `block()` is called, it:
+`GeoLocatedIP` is the desired-state owner for IP blocking. Firewall mutation is
+IPv4-only even though the model can cache and geolocate IPv6 addresses. A
+checked mutation:
 
-1. Returns `True` immediately if `is_blocked` is already `True` and the block has not expired (idempotent — no re-broadcast, no `block_count` increment)
-2. Updates the database record (`is_blocked`, `blocked_at`, `blocked_until`, `blocked_reason`, `block_count`)
-3. Broadcasts `broadcast_block_ip` to all instances via `jobs.broadcast_execute()`
-4. Each instance's job runner (as `ec2-user`) applies the iptables DROP rule
+1. Canonicalizes and bounds the IPv4 target and complete permanent-block set, then briefly acquires the global desired-state lease.
+2. Advances Redis fences for the IP and permanent aggregate, briefly locks the row, writes desired block/absence state, increments `firewall_generation`, and leaves `firewall_pending=True`.
+3. It releases the global lease before network or broker I/O, snapshots the concrete jobs channel, and dispatches one identity-correlated v2 checked command per compatible hostname. The payload binds desired fingerprints and fences; the checked envelope binds each selected heartbeat's immutable `started` value.
+4. Each host uses brief pre/post desired-state lease phases around an unlocked root-broker call under its host lock, then records an observation containing the current heartbeat incarnation. A restarted hostname therefore cannot reuse pre-restart evidence.
+5. Exact-current-roster aggregation plus a generation CAS clears pending and stamps `firewall_observed_at` only for a verified, still-owned result. Partial/unknown results preserve repair state and never write success logs/metrics.
+
+`verified` is both a dispatch and observation claim. `partial` means at least
+one checked-command dispatch was confirmed but the complete host evidence was
+not; it does not prove that the broker mutated state. `unknown`
+means dispatch/observation was not confirmed; after an ambiguous transport
+failure it must not be read as proof that no host changed.
+
+Hourly/startup repair writes a fenced, host-scoped Redis observation with a
+two-hour TTL and advances only that host's marker. A separate aggregator reads
+the exact current compatible-host roster and clears the shared pending/error
+state only when every host has the same desired fingerprint and fence. A later
+host joining the channel is outside that historical proof and must reconcile
+before a new current-roster aggregation can verify.
 
 ### block(reason, ttl, broadcast, from_sync=False)
 
@@ -90,10 +113,11 @@ geo.block(reason="ssh_brute_force", ttl=3600)  # Block for 1 hour fleet-wide
 geo.block(reason="repeat_offender")             # Permanent block (no ttl)
 ```
 
-- Returns `True` if the block succeeded or the IP was already actively blocked
+- `block_checked()` returns `status`, `ok`, `owned`, `generation`, `outcome`, and bounded error/evidence fields. Security decisions require `status="verified"`, `ok=true`, and `owned=true`.
+- `block()` preserves the legacy boolean signature: `True` means the desired write was accepted or already desired, not that fleet enforcement verified. Use `block_checked()` whenever the result governs a success transition.
 - Returns `False` if the IP is whitelisted (whitelisting always wins)
 - `ttl` in seconds. `None` or `0` = permanent (no auto-unblock)
-- `broadcast=False` to update DB only (used during bulk operations)
+- `broadcast=False` writes desired-only pending state and returns `unknown` from the checked method
 - Always escalates `threat_level` to at least `high` atomically in the same UPDATE — never downgrades. This ensures every block entry point (admin REST, LLM agent, rule-engine handler, asyncjobs, manual) feeds the federation signal loop without extra code at each call site.
 
 ### unblock(reason, broadcast)
@@ -102,8 +126,10 @@ geo.block(reason="repeat_offender")             # Permanent block (no ttl)
 geo.unblock(reason="manual: false positive")
 ```
 
-- Updates DB and broadcasts fleet-wide iptables removal
-- `broadcast=False` for DB-only updates
+- `unblock_checked()` writes the absence generation and verifies direct-rule and permanent-set absence on the compatible host snapshot
+- A partial/unknown result leaves `is_blocked=False` plus `firewall_pending=True`: durable desired absence, not a success claim
+- `unblock()` is the compatibility wrapper and returns `None`; use the checked method when the caller decides success
+- `broadcast=False` writes DB-only pending state
 
 ### whitelist(reason, ttl=None, until=None)
 
@@ -114,7 +140,7 @@ geo.whitelist(reason="audit window", until=some_datetime)     # explicit expiry
 ```
 
 - Sets `is_whitelisted=True` (+ `whitelisted_until` from `ttl`/`until`; `until` wins)
-- If the IP is currently blocked, it unblocks fleet-wide immediately
+- Always checks compatible-host absence, even when DB state was already unblocked, so a stale host rule cannot become false success
 - Prevents all future auto-blocks (threat escalation, rule handlers) **while active** — an expired whitelist no longer suppresses anything
 - Also exempts the IP from geofencing (see [Geofence — IP Allowlist](geofence.md)); every whitelist change invalidates that IP's cached geofence decisions and emits a `geofence_config` incident event
 
@@ -124,7 +150,13 @@ geo.whitelist(reason="audit window", until=some_datetime)     # explicit expiry
 geo.unwhitelist()
 ```
 
-Removes whitelist protection (clears `whitelisted_until`). Does not auto-block — the IP would need to trigger rules again.
+Removes whitelist protection (clears `whitelisted_until`), writes a pending
+generation, and checked-reconciles the direct rule plus permanent aggregate.
+It does not invent a new block: normally the IP remains unblocked, but any
+existing desired `is_blocked` state that the whitelist had suppressed becomes
+active. The returned result is terminal success only with `status="verified"`,
+`ok=true`, and `owned=true`. A partial/unknown result leaves the whitelist
+removed as desired state but retains pending/error repair state.
 
 ### Auto-block via threat escalation
 
@@ -145,12 +177,13 @@ Whitelisted IPs get the threat level update but are never blocked regardless of 
 
 ### Expiry sweep
 
-A cron job runs every minute (`sweep_expired_blocks`) that:
+A cron job runs every five minutes (`sweep_expired_blocks`) that:
 1. Finds all `GeoLocatedIP` records where `is_blocked=True` and `blocked_until` has passed
-2. Bulk updates `is_blocked=False` in the DB
-3. Broadcasts fleet-wide unblock for all expired IPs
+2. Calls `unblock_checked()` per bounded row, writing an absence generation
+3. Counts a removal only when the compatible-host absence result verifies
 
-This is a single job per minute — not one job per blocked IP.
+Partial/unknown removals remain pending for reconciliation; the job reports
+verified and unverified counts separately.
 
 ---
 
@@ -166,6 +199,12 @@ All blocking and management operations are exposed as POST_SAVE_ACTIONS on the m
 | `unwhitelist` | — | Remove whitelist status |
 | `refresh` | — | Re-fetch geolocation data from provider (with threat checks) |
 | `threat_analysis` | — | Run threat intelligence checks only |
+
+The REST response exposes the checked action result as `action_response` for
+`block`, `unblock`, `whitelist`, and `unwhitelist`. Keep a pending/error UI
+unless its result meets the same `verified` + `ok` + `owned` rule above; desired
+database state can already have changed when checked fleet truth is partial or
+unknown.
 
 ### Example REST calls
 
@@ -191,7 +230,7 @@ All actions are gated by `SAVE_PERMS`: `manage_users`, `manage_security`, or `se
 
 | Setting | Value |
 |---|---|
-| `VIEW_PERMS` | `['manage_users']` |
+| `VIEW_PERMS` | `['manage_users', 'view_security', 'manage_security', 'security', 'users']` |
 | `SAVE_PERMS` | `['manage_users', 'manage_security', 'security']` (the combined `users` term also satisfies `manage_users`) |
 | `SEARCH_FIELDS` | `ip_address`, `city`, `country_name`, `asn_org`, `isp` |
 | `POST_SAVE_ACTIONS` | `refresh`, `threat_analysis`, `block`, `unblock`, `whitelist`, `unwhitelist` |
@@ -203,7 +242,7 @@ All actions are gated by `SAVE_PERMS`: `manage_users`, `manage_security`, or `se
 | `default` | All fields except `data` and `provider`, plus computed extras |
 | `basic` | Core location + threat + blocking fields |
 | `detailed` | All fields including raw `data` |
-| `federation` | Location + abuse-signal fields only — the peer-instance wire format served by [`GET system/geoip/lookup`](#get-systemgeoiplookup--authenticated-ip-lookup) below. Never includes the per-fleet firewall fields (`is_blocked`, `is_whitelisted`, `blocked_*`, `whitelisted_*`) or the raw `data` blob. |
+| `federation` | Location + abuse-signal fields only — the peer-instance wire format served by [`GET system/geoip/lookup`](#get-systemgeoiplookup--authenticated-ip-lookup) below. Never includes per-fleet desired/reconciliation fields (`is_blocked`, `is_whitelisted`, `blocked_*`, `whitelisted_*`, `firewall_*`) or the raw `data` blob. |
 
 `default`, `basic`, and `detailed` include `is_threat`, `is_suspicious`, and `risk_score` as extras; `federation` defines no `extra` list at all, so none of the three are serialized on it — the fields they're computed from (`is_known_attacker`, `is_known_abuser`, `threat_level`, `is_tor`, `is_vpn`, `is_proxy`) are present, so a caller needing the computed booleans derives them itself. The `basic` graph also includes `block_active`.
 
@@ -220,7 +259,9 @@ GET  /api/system/geoip
 POST /api/system/geoip
 ```
 
-Standard CRUD via `GeoLocatedIP.on_rest_request`. Requires `manage_users` permission.
+Standard CRUD via `GeoLocatedIP.on_rest_request`. Reads accept any exact
+`VIEW_PERMS` grant above; creates/updates/actions require `manage_users`,
+`manage_security`, or `security`.
 
 **A group ApiKey is rejected here** — `GeoLocatedIP` has no `group` FK, so
 `_evaluate_permission`'s groupless branch denies an ApiKey identity by default
@@ -237,7 +278,9 @@ PUT    /api/system/geoip/123
 DELETE /api/system/geoip/123
 ```
 
-Requires `manage_users` permission. PUT supports POST_SAVE_ACTIONS for block/unblock/whitelist. Same ApiKey restriction as List/Create above.
+Reads accept any exact `VIEW_PERMS` grant above. PUT requires one of the
+`SAVE_PERMS` grants and supports POST_SAVE_ACTIONS for
+block/unblock/whitelist. Same ApiKey restriction as List/Create above.
 
 ### `GET system/geoip/lookup` — Authenticated IP Lookup
 

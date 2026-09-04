@@ -1,6 +1,6 @@
 import ipaddress
 from datetime import timedelta
-from django.db import models, IntegrityError
+from django.db import models, IntegrityError, transaction
 from mojo.helpers.settings import settings
 from mojo.models import MojoModel
 from mojo.helpers import dates, logit
@@ -77,6 +77,10 @@ class GeoLocatedIP(models.Model, MojoModel):
     blocked_until = models.DateTimeField(null=True, blank=True, db_index=True, help_text="When the block expires (null = permanent)")
     blocked_reason = models.CharField(max_length=255, null=True, blank=True, help_text="Why this IP was blocked")
     block_count = models.IntegerField(default=0, help_text="Number of times this IP has been blocked")
+    firewall_generation = models.PositiveBigIntegerField(default=0, db_index=True)
+    firewall_pending = models.BooleanField(default=False, db_index=True)
+    firewall_sync_error = models.CharField(max_length=512, blank=True, default="")
+    firewall_observed_at = models.DateTimeField(null=True, blank=True, default=None)
 
     # Whitelisting — takes precedence over all blocking
     is_whitelisted = models.BooleanField(default=False, db_index=True, help_text="Whitelisted IPs are never blocked")
@@ -105,6 +109,13 @@ class GeoLocatedIP(models.Model, MojoModel):
         VIEW_PERMS = ['manage_users', 'view_security', 'manage_security', 'security', 'users']
         SAVE_PERMS = ['manage_users', 'manage_security', 'security']
         SEARCH_FIELDS = ["ip_address", "city", "country_name", "asn_org", "isp"]
+        NO_SAVE_FIELDS = [
+            "id", "pk", "created", "modified",
+            "is_blocked", "blocked_at", "blocked_until", "blocked_reason",
+            "block_count", "is_whitelisted", "whitelisted_reason",
+            "whitelisted_until", "firewall_generation", "firewall_pending",
+            "firewall_sync_error", "firewall_observed_at",
+        ]
         POST_SAVE_ACTIONS = ["refresh", "threat_analysis", "block", "unblock", "whitelist", "unwhitelist"]
         GRAPHS = {
             'default': {
@@ -116,7 +127,8 @@ class GeoLocatedIP(models.Model, MojoModel):
                            'is_tor', 'is_vpn', 'is_proxy', 'is_known_attacker', 'is_known_abuser',
                            'threat_level', 'is_blocked', 'blocked_at', 'blocked_until', "provider",
                            'blocked_reason', 'block_count', 'is_whitelisted', 'whitelisted_reason',
-                           'whitelisted_until'],
+                           'whitelisted_until', 'firewall_generation', 'firewall_pending',
+                           'firewall_sync_error', 'firewall_observed_at'],
                 'extra': ['is_threat', 'is_suspicious', 'risk_score', 'block_active', 'whitelist_active'],
             },
             'detailed': {
@@ -501,132 +513,235 @@ class GeoLocatedIP(models.Model, MojoModel):
         _maybe_push_abuse_signals (item #2558); default None keeps the
         module-level config reads.
         """
-        if self.whitelist_active:
-            return False
+        result = self.block_checked(
+            reason=reason, ttl=ttl, broadcast=broadcast,
+            from_sync=from_sync, sync_config=sync_config)
+        return result.get("outcome") not in ("refused", "invalid")
 
-        # Idempotency: skip if already blocked and block hasn't expired
-        if self.is_blocked and self.block_active:
-            return True
+    @classmethod
+    def _permanent_firewall_ips(cls, limit=250001):
+        from mojo.apps.incident.services import firewall_truth
+        snapshot = firewall_truth.permanent_snapshot()
+        for pk, code in snapshot["quarantined"]:
+            cls.objects.filter(pk=pk).update(
+                firewall_pending=True,
+                firewall_sync_error=f"quarantined: {code}"[:512])
+        if len(snapshot["cidrs"]) > limit:
+            raise firewall_truth.FirewallTruthError(
+                "network_limit", "too many permanent firewall rows")
+        return snapshot["cidrs"]
 
-        prev_snapshot = self._abuse_snapshot()
+    @classmethod
+    def _prospective_permanent_firewall_ips(cls, canonical, present):
+        """Validate complete aggregate bounds before a desired-state write."""
+        from mojo.apps.incident.services import firewall_truth
+        firewall_truth.permanent_set_name()
+        current = cls._permanent_firewall_ips(limit=250002)
+        target = firewall_truth.canonical_ipv4(canonical)
+        values = set(current)
+        if present:
+            values.add(target)
+        else:
+            values.discard(target)
+        return firewall_truth.canonical_ipv4_networks(list(values))
 
-        # Escalate threat_level to at least 'high' as part of the same atomic
-        # update — block is a strong abuse signal. Never downgrade.
-        order = self.THREAT_LEVEL_ORDER
-        cur_idx = order.index(self.threat_level) if self.threat_level in order else 0
-        high_idx = order.index('high')
-        new_threat_level = self.threat_level if cur_idx >= high_idx else 'high'
-
-        # Atomic conditional update to prevent concurrent workers from
-        # double-blocking the same IP (race-safe idempotency).
-        # Match IPs that are either not blocked or have an expired block.
-        now = dates.utcnow()
-        ttl = int(ttl) if ttl else 0
-        blocked_until = now + timedelta(seconds=ttl) if ttl else None
+    def _finish_firewall_reconcile(self, generation, result):
+        from mojo.apps.incident.services.firewall_truth import bounded_error
+        verified = result.get("status") == "verified" and result.get("ok") is True
+        values = {}
+        if verified:
+            values.update(firewall_pending=False, firewall_sync_error="",
+                          firewall_observed_at=dates.utcnow())
+        else:
+            code, message = bounded_error(result)
+            values["firewall_sync_error"] = f"{code}: {message}"[:512]
         updated = GeoLocatedIP.objects.filter(
-            pk=self.pk,
-        ).filter(
-            models.Q(is_blocked=False) | models.Q(blocked_until__lte=now),
-        ).update(
-            is_blocked=True,
-            blocked_at=now,
-            blocked_reason=reason,
-            block_count=models.F('block_count') + 1,
-            blocked_until=blocked_until,
-            threat_level=new_threat_level,
-        )
-        if not updated:
-            # Already actively blocked (by us or a concurrent worker)
-            self.refresh_from_db()
-            return True
-
+            pk=self.pk, firewall_generation=generation).update(**values)
         self.refresh_from_db()
+        result["generation"] = generation
+        result["owned"] = bool(updated)
+        if not updated:
+            result["status"] = "partial"
+            result["ok"] = False
+            result["error"] = {
+                "code": "generation_superseded",
+                "message": "newer firewall desired state superseded this receipt",
+            }
+        return result
 
-        if not from_sync:
-            self._maybe_push_abuse_signals(prev_snapshot, sync_config=sync_config)
+    def block_checked(self, reason="manual", ttl=None, broadcast=True,
+                      from_sync=False, *, sync_config=None):
+        from mojo.apps.incident.services import firewall_truth
+        lease = None
+        try:
+            lease = firewall_truth.acquire_desired_state()
+            return self._block_checked_locked(
+                reason, ttl, broadcast, from_sync, sync_config, lease)
+        except firewall_truth.FirewallTruthError as err:
+            return {"status": "unknown", "ok": False, "outcome": "refused",
+                    "error": {"code": err.code, "message": str(err)}}
+        finally:
+            firewall_truth.release_desired_state(lease)
 
-        # Structured logit entry
-        trigger = "auto:incident_rule" if reason == "auto:ruleset" else "manual"
-        self.log(
-            f"IP Blocked: {self.ip_address} - {reason}",
-            "firewall:block",
-            payload=ujson.dumps({
-                "ip": self.ip_address,
-                "reason": reason,
-                "ttl": ttl or None,
-                "blocked_until": str(self.blocked_until) if self.blocked_until else None,
-                "block_count": self.block_count,
-                "trigger": trigger,
-            }),
-        )
-
-        # Metrics — only for blocks
-        metrics.record("firewall:blocks", category="firewall")
-        if self.country_code:
-            metrics.record(f"firewall:blocks:country:{self.country_code}", category="firewall")
-
-        if broadcast:
-            try:
-                if not ttl:
-                    # Permanent block — route through ipset for O(1) lookup
-                    jobs.broadcast_execute(
-                        "mojo.apps.incident.asyncjobs.broadcast_ipset_add_blocked",
-                        {"ip": self.ip_address},
-                    )
-                else:
-                    # TTL block — individual iptables rule (expires soon)
-                    jobs.broadcast_execute(
-                        "mojo.apps.incident.asyncjobs.broadcast_block_ip",
-                        {"ips": [self.ip_address], "ttl": ttl},
-                    )
-                metrics.record("firewall:broadcasts", category="firewall")
-            except Exception:
-                logit.exception("Failed to broadcast block for %s", self.ip_address)
-                metrics.record("firewall:broadcast_errors", category="firewall")
-
-        return True
+    def _block_checked_locked(self, reason, ttl, broadcast, from_sync,
+                              sync_config, lease):
+        """Persist desired state, wait outside the transaction, then CAS truth."""
+        from mojo.apps.incident.services import firewall_truth
+        try:
+            canonical = firewall_truth.canonical_ipv4_address(self.ip_address)
+        except firewall_truth.FirewallTruthError as err:
+            return {"status": "unknown", "ok": False, "outcome": "refused",
+                    "error": {"code": err.code, "message": str(err)}}
+        prev_snapshot = self._abuse_snapshot()
+        now = dates.utcnow()
+        try:
+            ttl = int(ttl) if ttl else 0
+        except (TypeError, ValueError):
+            return {"status": "unknown", "ok": False, "outcome": "invalid",
+                    "error": {"code": "invalid_ttl"}}
+        if ttl < 0:
+            return {"status": "unknown", "ok": False, "outcome": "invalid",
+                    "error": {"code": "invalid_ttl"}}
+        try:
+            self._prospective_permanent_firewall_ips(
+                canonical, present=not bool(ttl))
+        except firewall_truth.FirewallTruthError as err:
+            return {"status": "unknown", "ok": False, "outcome": "refused",
+                    "error": {"code": err.code, "message": str(err)}}
+        firewall_truth.advance_fences(
+            lease, [("ip", canonical),
+                    ("permanent", firewall_truth.permanent_set_name())])
+        with transaction.atomic():
+            row = type(self).objects.select_for_update().get(pk=self.pk)
+            if row.whitelist_active:
+                return {"status": "unknown", "ok": False,
+                        "outcome": "refused",
+                        "error": {"code": "whitelisted"}}
+            active = row.block_active
+            prior_reason = row.blocked_reason or ""
+            prior_until = row.blocked_until
+            if not active:
+                order = self.THREAT_LEVEL_ORDER
+                index = order.index(row.threat_level) if row.threat_level in order else 0
+                if index < order.index("high"):
+                    row.threat_level = "high"
+                row.is_blocked = True
+                row.blocked_at = now
+                row.blocked_reason = str(reason)[:255]
+                row.blocked_until = now + timedelta(seconds=ttl) if ttl else None
+                row.block_count += 1
+            row.firewall_generation += 1
+            row.firewall_pending = True
+            row.firewall_sync_error = "pending checked firewall reconciliation"
+            row.save(update_fields=[
+                "is_blocked", "blocked_at", "blocked_reason", "blocked_until",
+                "block_count", "threat_level", "firewall_generation",
+                "firewall_pending", "firewall_sync_error", "modified"])
+            generation = row.firewall_generation
+            temporary = row.blocked_until is not None
+        self.refresh_from_db()
+        if not broadcast:
+            # DB-only is an explicit compatibility mode used by federation
+            # tests and callers; its abuse-signal push describes desired data,
+            # not a claim that fleet enforcement succeeded.
+            if not from_sync and not active:
+                self._maybe_push_abuse_signals(
+                    prev_snapshot, sync_config=sync_config)
+            return {"status": "unknown", "ok": False,
+                    "outcome": "desired_only", "generation": generation,
+                    "error": {"code": "broadcast_disabled"}}
+        firewall_truth.release_desired_state(lease)
+        result = firewall_truth.reconcile_geolocated_ip(
+            canonical, self._permanent_firewall_ips(), temporary)
+        result["outcome"] = "pre_existing" if active else "applied"
+        result["prior_reason"] = prior_reason
+        result["prior_until"] = prior_until
+        result = self._finish_firewall_reconcile(generation, result)
+        if result.get("status") == "verified" and result.get("ok") is True:
+            if not from_sync and not active:
+                self._maybe_push_abuse_signals(
+                    prev_snapshot, sync_config=sync_config)
+            trigger = "auto:incident_rule" if reason == "auto:ruleset" else "manual"
+            self.log(f"IP Blocked: {canonical} - {reason}", "firewall:block",
+                     payload=ujson.dumps({"ip": canonical, "reason": reason,
+                                          "ttl": ttl or None,
+                                          "trigger": trigger}))
+            metrics.record("firewall:blocks", category="firewall")
+            metrics.record("firewall:broadcasts", category="firewall")
+        return result
 
     def unblock(self, reason="manual", broadcast=True):
         """
         Unblock this IP fleet-wide. Updates the database AND broadcasts
         the unblock to all instances.
         """
-        # Read DB truth to avoid stale in-memory state from concurrent updates
-        db_state = GeoLocatedIP.objects.filter(pk=self.pk).values("is_blocked", "blocked_until").first()
-        was_permanent = db_state and db_state["is_blocked"] and db_state["blocked_until"] is None
+        self.unblock_checked(reason=reason, broadcast=broadcast)
 
-        self.is_blocked = False
-        self.blocked_reason = f"unblocked: {reason}"
-        self.blocked_until = None
-        self.save(update_fields=['is_blocked', 'blocked_reason', 'blocked_until'])
+    def unblock_checked(self, reason="manual", broadcast=True,
+                        expected_reason_prefix=None):
+        from mojo.apps.incident.services import firewall_truth
+        lease = None
+        try:
+            lease = firewall_truth.acquire_desired_state()
+            return self._unblock_checked_locked(
+                reason, broadcast, expected_reason_prefix, lease)
+        except firewall_truth.FirewallTruthError as err:
+            return {"status": "unknown", "ok": False, "outcome": "refused",
+                    "error": {"code": err.code, "message": str(err)}}
+        finally:
+            firewall_truth.release_desired_state(lease)
 
-        self.log(
-            f"IP Unblocked: {self.ip_address} - {reason}",
-            "firewall:unblock",
-            payload=ujson.dumps({
-                "ip": self.ip_address,
-                "reason": reason,
-                "trigger": "manual",
-            }),
-        )
-
-        if broadcast:
-            try:
-                if was_permanent:
-                    # Remove from ipset (permanent blocks live in mojo_blocked)
-                    jobs.broadcast_execute(
-                        "mojo.apps.incident.asyncjobs.broadcast_ipset_del_blocked",
-                        {"ip": self.ip_address},
-                    )
-                else:
-                    # Remove individual iptables rule (TTL blocks)
-                    jobs.broadcast_execute(
-                        "mojo.apps.incident.asyncjobs.broadcast_unblock_ip",
-                        {"ips": [self.ip_address]},
-                    )
-            except Exception:
-                logit.exception("Failed to broadcast unblock for %s", self.ip_address)
-                metrics.record("firewall:broadcast_errors", category="firewall")
+    def _unblock_checked_locked(self, reason, broadcast,
+                                expected_reason_prefix, lease):
+        from mojo.apps.incident.services import firewall_truth
+        try:
+            canonical = firewall_truth.canonical_ipv4_address(self.ip_address)
+        except firewall_truth.FirewallTruthError as err:
+            return {"status": "unknown", "ok": False, "outcome": "refused",
+                    "error": {"code": err.code, "message": str(err)}}
+        try:
+            self._prospective_permanent_firewall_ips(canonical, present=False)
+        except firewall_truth.FirewallTruthError as err:
+            return {"status": "unknown", "ok": False, "outcome": "refused",
+                    "error": {"code": err.code, "message": str(err)}}
+        firewall_truth.advance_fences(
+            lease, [("ip", canonical),
+                    ("permanent", firewall_truth.permanent_set_name())])
+        with transaction.atomic():
+            row = type(self).objects.select_for_update().get(pk=self.pk)
+            if (expected_reason_prefix and row.block_active and
+                    not (row.blocked_reason or "").startswith(
+                        expected_reason_prefix)):
+                return {"status": "unknown", "ok": False,
+                        "outcome": "refused",
+                        "error": {"code": "ownership_changed"}}
+            row.is_blocked = False
+            row.blocked_reason = f"unblocked: {reason}"[:255]
+            row.blocked_until = None
+            row.firewall_generation += 1
+            row.firewall_pending = True
+            row.firewall_sync_error = "pending checked firewall removal"
+            row.save(update_fields=[
+                "is_blocked", "blocked_reason", "blocked_until",
+                "firewall_generation", "firewall_pending",
+                "firewall_sync_error", "modified"])
+            generation = row.firewall_generation
+        self.refresh_from_db()
+        if not broadcast:
+            return {"status": "unknown", "ok": False,
+                    "outcome": "desired_only", "generation": generation,
+                    "error": {"code": "broadcast_disabled"}}
+        firewall_truth.release_desired_state(lease)
+        result = firewall_truth.reconcile_geolocated_ip(
+            canonical, self._permanent_firewall_ips(), False)
+        result["outcome"] = "unblocked"
+        result = self._finish_firewall_reconcile(generation, result)
+        if result.get("status") == "verified" and result.get("ok") is True:
+            self.log(f"IP Unblocked: {canonical} - {reason}",
+                     "firewall:unblock", payload=ujson.dumps({
+                         "ip": canonical, "reason": reason,
+                         "trigger": "manual"}))
+        return result
 
     def whitelist(self, reason="manual", ttl=None, until=None):
         """
@@ -638,81 +753,173 @@ class GeoLocatedIP(models.Model, MojoModel):
             ttl: Seconds until the whitelist expires (None = permanent)
             until: Explicit expiry datetime — wins over ttl
         """
-        # Read DB truth to avoid stale in-memory state from concurrent updates
-        db_state = GeoLocatedIP.objects.filter(pk=self.pk).values(
-            "is_blocked", "blocked_until", "is_whitelisted", "whitelisted_until").first()
-        was_blocked = bool(db_state and db_state["is_blocked"])
-        was_permanent = was_blocked and db_state["blocked_until"] is None
-        prior = {
-            "is_whitelisted": bool(db_state and db_state["is_whitelisted"]),
-            "until": str(db_state["whitelisted_until"]) if db_state and db_state["whitelisted_until"] else None,
-        }
+        from mojo.apps.incident.services import firewall_truth
+        lease = None
+        try:
+            lease = firewall_truth.acquire_desired_state()
+            return self._whitelist_locked(reason, ttl, until, lease)
+        except firewall_truth.FirewallTruthError as err:
+            from mojo import errors as merrors
+            raise merrors.ValueException(str(err)) from err
+        finally:
+            firewall_truth.release_desired_state(lease)
+
+    def _whitelist_locked(self, reason, ttl, until, lease):
+        from mojo.apps.incident.services import firewall_truth
+        try:
+            canonical = firewall_truth.canonical_ipv4_address(self.ip_address)
+        except firewall_truth.FirewallTruthError as err:
+            from mojo import errors as merrors
+            raise merrors.ValueException(str(err)) from err
+        try:
+            self._prospective_permanent_firewall_ips(canonical, present=False)
+        except firewall_truth.FirewallTruthError as err:
+            from mojo import errors as merrors
+            raise merrors.ValueException(str(err)) from err
 
         if until is None and ttl:
             until = dates.utcnow() + timedelta(seconds=int(ttl))
-
-        self.is_whitelisted = True
-        self.whitelisted_reason = reason
-        self.whitelisted_until = until
-        if self.is_blocked:
-            self.is_blocked = False
-            self.blocked_until = None
-        self.save(update_fields=[
-            'is_whitelisted', 'whitelisted_reason', 'whitelisted_until',
-            'is_blocked', 'blocked_until',
-        ])
-
-        self.log(
-            f"IP Whitelisted: {self.ip_address} - {reason}",
-            "firewall:whitelist",
-            payload=ujson.dumps({
-                "ip": self.ip_address,
-                "reason": reason,
-                "until": str(self.whitelisted_until) if self.whitelisted_until else None,
-                "was_blocked": was_blocked,
-                "trigger": "manual",
-            }),
-        )
+        firewall_truth.advance_fences(
+            lease, [("ip", canonical),
+                    ("permanent", firewall_truth.permanent_set_name())])
+        with transaction.atomic():
+            row = type(self).objects.select_for_update().get(pk=self.pk)
+            was_blocked = bool(row.is_blocked)
+            prior = {
+                "is_whitelisted": bool(row.is_whitelisted),
+                "until": (str(row.whitelisted_until)
+                          if row.whitelisted_until else None),
+            }
+            row.is_whitelisted = True
+            row.whitelisted_reason = str(reason)[:255]
+            row.whitelisted_until = until
+            row.is_blocked = False
+            row.blocked_until = None
+            row.firewall_generation += 1
+            row.firewall_pending = True
+            row.firewall_sync_error = "pending checked whitelist reconciliation"
+            row.save(update_fields=[
+                "is_whitelisted", "whitelisted_reason", "whitelisted_until",
+                "is_blocked", "blocked_until", "firewall_generation",
+                "firewall_pending", "firewall_sync_error", "modified",
+            ])
+            generation = row.firewall_generation
+        self.refresh_from_db()
         self._on_whitelist_changed("whitelist", reason=reason, old=prior)
+        # Whitelisting is itself an absence guarantee. Reconcile even when DB
+        # truth said unblocked: stale host rules must not become fake success.
+        firewall_truth.release_desired_state(lease)
+        result = firewall_truth.reconcile_geolocated_ip(
+            canonical, self._permanent_firewall_ips(), False)
+        result["outcome"] = "whitelisted"
+        result = self._finish_firewall_reconcile(generation, result)
+        if result.get("status") == "verified" and result.get("ok") is True:
+            self.log(
+                f"IP Whitelisted: {self.ip_address} - {reason}",
+                "firewall:whitelist",
+                payload=ujson.dumps({
+                    "ip": self.ip_address,
+                    "reason": reason,
+                    "until": (str(self.whitelisted_until)
+                              if self.whitelisted_until else None),
+                    "was_blocked": was_blocked,
+                    "trigger": "manual",
+                }),
+            )
+        return result
 
-        if was_blocked:
-            try:
-                if was_permanent:
-                    # Remove from ipset (permanent blocks live in mojo_blocked)
-                    jobs.broadcast_execute(
-                        "mojo.apps.incident.asyncjobs.broadcast_ipset_del_blocked",
-                        {"ip": self.ip_address},
-                    )
-                else:
-                    # Remove individual iptables rule (TTL blocks)
-                    jobs.broadcast_execute(
-                        "mojo.apps.incident.asyncjobs.broadcast_unblock_ip",
-                        {"ips": [self.ip_address]},
-                    )
-            except Exception:
-                logit.exception("Failed to broadcast unblock for %s", self.ip_address)
-                metrics.record("firewall:broadcast_errors", category="firewall")
+    def verify_absence_checked(self):
+        """Create a fenced generation and prove a whitelisted target absent."""
+        from mojo.apps.incident.services import firewall_truth
+        lease = None
+        try:
+            lease = firewall_truth.acquire_desired_state()
+            canonical = firewall_truth.canonical_ipv4_address(self.ip_address)
+            self._prospective_permanent_firewall_ips(canonical, present=False)
+            firewall_truth.advance_fences(
+                lease, [("ip", canonical),
+                        ("permanent", firewall_truth.permanent_set_name())])
+            with transaction.atomic():
+                row = type(self).objects.select_for_update().get(pk=self.pk)
+                if not row.whitelist_active:
+                    return {"status": "unknown", "ok": False,
+                            "outcome": "refused",
+                            "error": {"code": "whitelist_changed"}}
+                row.firewall_generation += 1
+                row.firewall_pending = True
+                row.firewall_sync_error = "pending checked absence verification"
+                row.save(update_fields=[
+                    "firewall_generation", "firewall_pending",
+                    "firewall_sync_error", "modified"])
+                generation = row.firewall_generation
+            self.refresh_from_db()
+            firewall_truth.release_desired_state(lease)
+            lease = None
+            result = firewall_truth.reconcile_geolocated_ip(
+                canonical, self._permanent_firewall_ips(), False)
+            result["outcome"] = "whitelisted"
+            return self._finish_firewall_reconcile(generation, result)
+        except firewall_truth.FirewallTruthError as err:
+            return {"status": "unknown", "ok": False, "outcome": "refused",
+                    "error": {"code": err.code, "message": str(err)}}
+        finally:
+            firewall_truth.release_desired_state(lease)
 
     def unwhitelist(self):
         """Remove whitelist status."""
-        prior = {
-            "is_whitelisted": self.is_whitelisted,
-            "until": str(self.whitelisted_until) if self.whitelisted_until else None,
-        }
-        self.is_whitelisted = False
-        self.whitelisted_reason = None
-        self.whitelisted_until = None
-        self.save(update_fields=['is_whitelisted', 'whitelisted_reason', 'whitelisted_until'])
-
-        self.log(
-            f"IP Unwhitelisted: {self.ip_address}",
-            "firewall:unwhitelist",
-            payload=ujson.dumps({
-                "ip": self.ip_address,
-                "trigger": "manual",
-            }),
-        )
-        self._on_whitelist_changed("unwhitelist", old=prior)
+        from mojo.apps.incident.services import firewall_truth
+        from mojo import errors as merrors
+        lease = None
+        try:
+            lease = firewall_truth.acquire_desired_state()
+            canonical = firewall_truth.canonical_ipv4_address(self.ip_address)
+            current = type(self).objects.get(pk=self.pk)
+            permanent_present = bool(
+                current.is_blocked and current.blocked_until is None)
+            self._prospective_permanent_firewall_ips(
+                canonical, present=permanent_present)
+            firewall_truth.advance_fences(
+                lease, [("ip", canonical),
+                        ("permanent", firewall_truth.permanent_set_name())])
+            with transaction.atomic():
+                row = type(self).objects.select_for_update().get(pk=self.pk)
+                prior = {
+                    "is_whitelisted": row.is_whitelisted,
+                    "until": (str(row.whitelisted_until)
+                              if row.whitelisted_until else None),
+                }
+                row.is_whitelisted = False
+                row.whitelisted_reason = None
+                row.whitelisted_until = None
+                row.firewall_generation += 1
+                row.firewall_pending = True
+                row.firewall_sync_error = "pending checked whitelist removal"
+                row.save(update_fields=[
+                    "is_whitelisted", "whitelisted_reason",
+                    "whitelisted_until", "firewall_generation",
+                    "firewall_pending", "firewall_sync_error", "modified"])
+                generation = row.firewall_generation
+            self.refresh_from_db()
+            temporary = bool(
+                self.block_active and self.blocked_until is not None)
+            firewall_truth.release_desired_state(lease)
+            lease = None
+            result = firewall_truth.reconcile_geolocated_ip(
+                canonical, self._permanent_firewall_ips(), temporary)
+            result = self._finish_firewall_reconcile(generation, result)
+            if result.get("status") == "verified" and result.get("ok") is True:
+                self.log(
+                    f"IP Unwhitelisted: {self.ip_address}",
+                    "firewall:unwhitelist",
+                    payload=ujson.dumps({
+                        "ip": self.ip_address, "trigger": "manual"}),
+                )
+            self._on_whitelist_changed("unwhitelist", old=prior)
+            return result
+        except firewall_truth.FirewallTruthError as err:
+            raise merrors.ValueException(str(err)) from err
+        finally:
+            firewall_truth.release_desired_state(lease)
 
     def _on_whitelist_changed(self, action, reason=None, old=None):
         """Geofence hooks for whitelist changes — model-level so every write
@@ -741,13 +948,14 @@ class GeoLocatedIP(models.Model, MojoModel):
         if not isinstance(value, dict):
             username = self.active_user.username if self.active_user else "unknown"
             value = {"reason": f"manual block: by {username}", "ttl": 600}
-        self.block(reason=value.get("reason", ""), ttl=value.get("ttl"))
+        return self.block_checked(
+            reason=value.get("reason", ""), ttl=value.get("ttl"))
 
     def on_action_unblock(self, value):
         if not isinstance(value, str):
             username = self.active_user.username if self.active_user else "unknown"
             value = f"manual unblock: by {username}"
-        self.unblock(reason=value)
+        return self.unblock_checked(reason=value)
 
     def on_action_whitelist(self, value):
         username = self.active_user.username if self.active_user else "unknown"
@@ -762,18 +970,17 @@ class GeoLocatedIP(models.Model, MojoModel):
                     until = None
                 if until is None:
                     raise merrors.ValueException("Invalid 'until' datetime for whitelist")
-            self.whitelist(
+            return self.whitelist(
                 reason=value.get("reason") or f"manual whitelist: by {username}",
                 ttl=value.get("ttl"),
                 until=until,
             )
-            return
         if not isinstance(value, str):
             value = f"manual whitelist: by {username}"
-        self.whitelist(reason=value)
+        return self.whitelist(reason=value)
 
     def on_action_unwhitelist(self, value):
-        self.unwhitelist()
+        return self.unwhitelist()
 
     def on_action_refresh(self, value):
         self.refresh(check_threats=True)

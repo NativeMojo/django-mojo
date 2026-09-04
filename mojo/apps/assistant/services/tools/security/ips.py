@@ -73,13 +73,23 @@ def _tool_query_ip_history(params, user):
 )
 def _tool_block_ip(params, user):
     from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident.services import firewall_truth
 
-    ip = params["ip"]
+    try:
+        ip = firewall_truth.canonical_ipv4_address(params["ip"])
+    except firewall_truth.FirewallTruthError as err:
+        return {"error": str(err), "error_code": err.code,
+                "ok": False, "blocked": False}
     reason = f"[Admin Assistant] {params['reason']}"
     ttl = params.get("ttl", 3600)
 
     geo, _ = GeoLocatedIP.objects.get_or_create(ip_address=ip)
-    geo.block(reason=reason, ttl=ttl)
+    result = geo.block_checked(reason=reason, ttl=ttl)
+    if result.get("status") != "verified" or result.get("ok") is not True:
+        error = result.get("error") or {}
+        return {"error": "Firewall state was not verified.",
+                "error_code": str(error.get("code") or "fleet_unverified")[:64],
+                "ok": False, "ip": ip, "blocked": False}
 
     if params.get("incident_id"):
         try:
@@ -110,15 +120,25 @@ def _tool_block_ip(params, user):
 )
 def _tool_unblock_ip(params, user):
     from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident.services import firewall_truth
 
-    ip = params["ip"]
+    try:
+        ip = firewall_truth.canonical_ipv4_address(params["ip"])
+    except firewall_truth.FirewallTruthError as err:
+        return {"error": str(err), "error_code": err.code,
+                "ok": False}
     reason = f"[Admin Assistant] {params['reason']}"
     try:
         geo = GeoLocatedIP.objects.get(ip_address=ip)
     except GeoLocatedIP.DoesNotExist:
         return {"error": f"IP {ip} not found"}
 
-    geo.unblock(reason=reason)
+    result = geo.unblock_checked(reason=reason)
+    if result.get("status") != "verified" or result.get("ok") is not True:
+        error = result.get("error") or {}
+        return {"error": "Firewall state was not verified.",
+                "error_code": str(error.get("code") or "fleet_unverified")[:64],
+                "ok": False, "ip": ip}
     return {"ok": True, "ip": ip, "is_blocked": False}
 
 
@@ -139,11 +159,21 @@ def _tool_unblock_ip(params, user):
 )
 def _tool_whitelist_ip(params, user):
     from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident.services import firewall_truth
 
-    ip = params["ip"]
+    try:
+        ip = firewall_truth.canonical_ipv4_address(params["ip"])
+    except firewall_truth.FirewallTruthError as err:
+        return {"error": str(err), "error_code": err.code,
+                "ok": False}
     reason = f"[Admin Assistant] {params['reason']}"
     geo, _ = GeoLocatedIP.objects.get_or_create(ip_address=ip)
-    geo.whitelist(reason=reason)
+    result = geo.whitelist(reason=reason)
+    if result.get("status") != "verified" or result.get("ok") is not True:
+        error = result.get("error") or {}
+        return {"error": "Firewall state was not verified.",
+                "error_code": str(error.get("code") or "fleet_unverified")[:64],
+                "ok": False, "ip": ip}
     return {"ok": True, "ip": ip, "is_whitelisted": True, "is_blocked": geo.is_blocked}
 
 
@@ -163,14 +193,26 @@ def _tool_whitelist_ip(params, user):
 )
 def _tool_unwhitelist_ip(params, user):
     from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident.services import firewall_truth
 
-    ip = params["ip"]
+    try:
+        ip = firewall_truth.canonical_ipv4_address(params["ip"])
+    except firewall_truth.FirewallTruthError as err:
+        return {"error": str(err), "error_code": err.code,
+                "ok": False}
     try:
         geo = GeoLocatedIP.objects.get(ip_address=ip)
     except GeoLocatedIP.DoesNotExist:
         return {"error": f"IP {ip} not found"}
 
-    geo.unwhitelist()
+    result = geo.unwhitelist()
+    if result.get("status") != "verified" or result.get("ok") is not True:
+        error = result.get("error") or {}
+        return {"error": "Firewall state was not verified.",
+                "error_code": str(error.get("code") or
+                                  "fleet_unverified")[:64],
+                "ok": False, "ip": ip, "is_whitelisted": False,
+                "enforcement_status": result.get("status", "unknown")}
     return {"ok": True, "ip": ip, "is_whitelisted": False}
 
 

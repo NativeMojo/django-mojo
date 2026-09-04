@@ -355,6 +355,60 @@ Empty list if no runners respond.
 - Config reload
 - Collecting system info (`jobs.get_sysinfo()` uses this internally)
 
+`broadcast_execute()` is a compatibility API: its reply list is not a fleet
+snapshot and must not authorize security success or any other high-integrity
+decision.
+
+## broadcast_execute_checked()
+
+Use the checked companion when the caller must know whether every machine in
+one concrete channel reached and observed the requested state:
+
+```python
+result = jobs.broadcast_execute_checked(
+    "myapp.services.security.reconcile",
+    data={"resource_id": 42, "present": True},
+    channel="default",
+    timeout=30,
+)
+```
+
+The v2 protocol (`protocol: 2`, heartbeat capability `execute_checked: 2`) is
+capability-negotiated and intentionally distinct from the legacy `execute`
+command. It reads the channel's dedicated runner index from the Redis primary,
+refuses more than 128 live runner rows, validates every indexed heartbeat, and
+groups runners by lowercased hostname. It deterministically selects the
+lowest-id compatible runner per hostname and binds that runner's immutable
+heartbeat `started` value into the targeted command, reply, and returned
+roster. It refuses before publication if any host has no compatible runner.
+Multiple engines on one host therefore represent one machine-local state, not
+multiple independent targets. The snapshot is the live jobs-channel roster at
+read time; it is not an AWS/serving-topology inventory and does not include a
+host that joins after the snapshot. A restarted runner cannot satisfy the old
+snapshot.
+
+During a rolling upgrade, a host represented only by a legacy heartbeat has no
+`execute_checked: 2` capability. The call returns `unknown` before any
+confirmed publication. A host with both legacy and v2 engines is compatible
+because its v2 engine can represent the shared machine state. Put at least one
+v2 engine on every intended host before expecting checked mutations to verify;
+new engines continue to accept the legacy `execute` command.
+
+The result status is one of:
+
+| Status | Meaning |
+|---|---|
+| `verified` | Exactly one identity-correlated success reply was accepted from every expected host, with no anomaly. The application must still validate each returned semantic result. |
+| `partial` | At least one checked command was dispatched, but a host was missing, failed, duplicated, malformed, or returned mismatched semantic evidence. Dispatch alone does not prove that a mutation ran. Never report success. |
+| `unknown` | No dispatch was confirmed because the roster, channel, correlation identity, payload, timeout, or protocol compatibility could not be proven. There is no usable observation; callers must not infer that no host changed after an ambiguous transport failure. |
+
+Calls require an explicit channel. Payloads, host rosters, replies, anomalies,
+timeouts, correlation IDs, and returned semantic results are bounded. The
+engine accepts checked work only on its direct control channel and only when
+the reply channel is derived from the same strong correlation ID. New
+high-integrity call sites should use this API; ordinary cache invalidation and
+best-effort fan-out can continue to use `broadcast_execute()`.
+
 ## Channels
 
 A channel is a named queue. **A declared channel gets the job exactly as

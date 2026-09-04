@@ -548,9 +548,14 @@ def _handler_block_confirm(ticket, note, action, context):
                         f"(reason: {result.get('prior_reason') or 'unknown'}); "
                         "the requested TTL/reason were not applied.")
         else:
+            error = result.get("error")
+            error_code = (error.get("code") if isinstance(error, dict)
+                          else None)
+            detail = str(error_code or result.get("reason") or outcome)[:64]
             _add_system_note(
                 ticket, f"Block of {result.get('ip', ip)} refused: "
-                        f"{result.get('reason', outcome)}. Ticket left open.")
+                        f"{detail}. Firewall state was not verified; ticket "
+                        "left open.")
             return False
         ticket.status = "resolved"
         ticket.save(update_fields=["status"])

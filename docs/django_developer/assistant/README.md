@@ -374,8 +374,14 @@ credential nobody proved.
 | `block_ip` | `manage_security` | Yes | Block an IP fleet-wide with TTL |
 | `unblock_ip` | `manage_security` | Yes | Unblock a blocked IP fleet-wide |
 | `whitelist_ip` | `manage_security` | Yes | Add IP to whitelist (prevents future auto-blocks, unblocks if blocked) |
-| `unwhitelist_ip` | `manage_security` | Yes | Remove IP from whitelist |
+| `unwhitelist_ip` | `manage_security` | Yes | Remove IP from whitelist; success requires checked fleet truth |
 | `create_ticket` | `manage_security` | Yes | Create a ticket for human review |
+
+The four firewall mutation tools accept success only from their checked
+compatible-host result. In particular, `unwhitelist_ip` can persist desired
+whitelist removal while returning `ok=false`, the bounded firewall error code,
+and `enforcement_status=partial|unknown`; the approval record becomes failed
+rather than completed. Later reconciliation establishes fleet state separately.
 
 ### Jobs Domain (`view_jobs` / `manage_jobs`)
 

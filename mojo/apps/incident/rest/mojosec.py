@@ -361,6 +361,7 @@ def _recommendation_row(recommendation, detail=False):
         "reversed_count": recommendation.reversed_count,
         "policy_version": recommendation.policy_version,
         "evaluator_version": recommendation.evaluator_version,
+        "execution_generation": recommendation.execution_rounds,
     }
     if detail:
         row["explanation"] = recommendation.explanation
@@ -369,6 +370,7 @@ def _recommendation_row(recommendation, detail=False):
         row["approved_by"] = (
             recommendation.approved_by.username
             if recommendation.approved_by_id else None)
+        targets = list(recommendation.targets.order_by("id")[:513])
         row["targets"] = [
             {
                 "id": target.pk, "ip": target.ip, "kind": target.kind,
@@ -383,8 +385,9 @@ def _recommendation_row(recommendation, detail=False):
                 if target.prior_blocked_until else None,
                 "prior_reason": target.prior_reason,
             }
-            for target in recommendation.targets.order_by("id")[:512]
+            for target in targets[:512]
         ]
+        row["targets_truncated"] = len(targets) > 512
         row["transitions"] = [
             {
                 "id": item.pk, "created": _iso(item.created),

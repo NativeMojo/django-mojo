@@ -207,7 +207,10 @@ def test_llm_agent_investigate_and_block(opts):
     ]
 
     with patch("mojo.apps.incident.handlers.llm_agent._call_claude", side_effect=mock_responses):
-        with patch("mojo.apps.incident.handlers.llm_agent._get_llm_api_key", return_value="test-key"):
+        with patch("mojo.apps.incident.handlers.llm_agent._get_llm_api_key", return_value="test-key"), \
+                patch(
+                    "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
+                    return_value={"status": "verified", "ok": True}):
             jobs.publish(
                 "mojo.apps.incident.handlers.llm_agent.execute_llm_handler",
                 {"event_id": event.pk, "incident_id": incident.pk, "ruleset_id": None},
@@ -231,6 +234,27 @@ def test_llm_agent_investigate_and_block(opts):
     history = IncidentHistory.objects.filter(parent=incident, kind="handler:llm")
     block_notes = [h for h in history if "Blocked IP" in (h.note or "")]
     assert len(block_notes) >= 1, "Should have history entry for IP block"
+
+
+@th.django_unit_test("LLM checked block does not write success history on partial truth")
+def test_llm_block_partial_not_success(opts):
+    from mojo.apps.incident.handlers.llm_agent import _tool_block_ip
+    from mojo.apps.incident.models import Incident, IncidentHistory
+
+    incident = Incident.objects.create(
+        priority=10, status="new", category="llm_partial_test",
+        scope="global", title="partial checked block")
+    with patch(
+            "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
+            return_value={"status": "partial", "ok": False,
+                          "error": {"code": "missing_host"}}):
+        result = _tool_block_ip({
+            "ip": "203.0.114.199", "reason": "partial", "ttl": 600,
+            "incident_id": incident.pk})
+    assert result["ok"] is False and result["error_code"] == "missing_host", result
+    assert not IncidentHistory.objects.filter(
+        parent=incident, kind="handler:llm", note__contains="Blocked IP").exists(), \
+        "partial checked result wrote success history"
 
 
 @th.django_unit_test("LLM agent: create ticket for human review")

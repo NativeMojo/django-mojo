@@ -211,6 +211,12 @@ Distinguishable outcomes exist only for the operator the card belongs to.
 The mutation was attempted; the operator has to be told so. Show it as a failure
 card, not as a network error.
 
+This includes `unwhitelist_ip`: removing the whitelist changes desired policy,
+but partial or unknown checked firewall evidence makes the approval card
+`failed`, with the bounded firewall code in `failure_code`. Do not render the
+operation as complete until the card is `completed`; the fleet may still need
+reconciliation even though the row is no longer whitelisted.
+
 ---
 
 ## Not the `action` block

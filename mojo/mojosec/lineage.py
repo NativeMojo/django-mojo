@@ -379,8 +379,11 @@ def firewall_receipt(record):
             not re.fullmatch(r"[a-f0-9]{64}", str(value.get("argv_digest") or "")) or
             not re.fullmatch(r"[a-f0-9]{64}", str(value.get("stdin_digest") or "")) or
             value.get("operation") not in {
-                "rules.contains", "rule.insert", "rule.delete", "set.add", "set.delete",
-                "set.replace", "set.remove", "set.rule_ensure"} or
+                "rules.contains", "rule.insert", "rule.delete",
+                "permanent.add", "permanent.delete", "permanent.rule_ensure",
+                "permanent.normalize", "set.replace", "set.remove",
+                "set.rule_ensure", "set.status", "set.normalize",
+                "ip.status", "ip.normalize", "geolocated.normalize"} or
             not isinstance(value.get("semantic"), str) or
             not 1 <= len(value["semantic"]) <= 160 or
             any(ord(char) < 32 for char in value["semantic"]) or
@@ -394,7 +397,7 @@ def firewall_receipt(record):
             _integer(record.get("_PID"), 2 ** 31 - 1)):
         return None
     children = value.get("children")
-    if not isinstance(children, list) or len(children) > 8:
+    if not isinstance(children, list) or len(children) > 64:
         return None
     for child in children:
         if (not isinstance(child, dict) or set(child) != {

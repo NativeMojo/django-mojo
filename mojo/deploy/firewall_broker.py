@@ -7,6 +7,7 @@ raw argv, shell text, environment and restore stdin are not request fields.
 """
 
 import argparse
+import fcntl
 import hashlib
 import ipaddress
 import json
@@ -23,9 +24,18 @@ import syslog
 import time
 import uuid
 
+from mojo.apps.incident.services.firewall_truth import (
+    FirewallTruthError,
+    canonical_ipv4,
+    canonical_ipv4_networks,
+    network_digest,
+)
+
 
 BROKER_PATH = "/usr/local/sbin/mojo-firewall-broker"
 SUDOERS_PATH = "/etc/sudoers.d/70-mojo-firewall-broker"
+CONFIG_PATH = "/etc/mojo-firewall-broker.json"
+DEFAULT_PERMANENT_SET_NAME = "mojo_blocked"
 IPTABLES = "/sbin/iptables"
 IPTABLES_SAVE = "/sbin/iptables-save"
 IPSET = "/sbin/ipset"
@@ -38,6 +48,7 @@ SCALAR_TIMEOUT_SECONDS = 15
 BULK_TIMEOUT_SECONDS = 120
 ADDRESS_SPACE_BYTES = 256 * 1024 * 1024
 MAX_SET_NAME = 31
+MAX_CONFIG_BYTES = 4096
 _SET_NAME = re.compile(r"^[A-Za-z0-9_-]{1,31}$")
 _FUNCTION = re.compile(r"^mojo\.apps\.incident\.asyncjobs\.[A-Za-z0-9_]{1,96}$")
 _CONTEXT_TOKEN = re.compile(r"^[A-Za-z0-9_.:@/+\-]{1,160}$")
@@ -49,30 +60,49 @@ _OP_FIELDS = {
     "rules.contains": {"source"},
     "rule.insert": {"chain", "source"},
     "rule.delete": {"chain", "source"},
-    "set.add": {"set_name", "source"},
-    "set.delete": {"set_name", "source"},
-    "set.replace": {"set_name", "cidrs"},
-    "set.remove": {"set_name"},
-    "set.rule_ensure": {"set_name"},
+    "permanent.add": {"source", "expected_permanent_set"},
+    "permanent.delete": {"source", "expected_permanent_set"},
+    "permanent.rule_ensure": {"expected_permanent_set"},
+    "permanent.normalize": {"cidrs", "expected_permanent_set"},
+    "set.replace": {"set_name", "cidrs", "expected_permanent_set"},
+    "set.remove": {"set_name", "expected_permanent_set"},
+    "set.rule_ensure": {"set_name", "expected_permanent_set"},
+    "ip.status": {"source"},
+    "ip.normalize": {"source", "present"},
+    "set.status": {"set_name", "expected_permanent_set"},
+    "set.normalize": {
+        "set_name", "cidrs", "present", "expected_permanent_set"},
+    "geolocated.normalize": {
+        "source", "cidrs", "temporary_present", "expected_permanent_set"},
 }
 _FUNCTION_OPERATIONS = {
     "mojo.apps.incident.asyncjobs.broadcast_block_ip": {
-        "rules.contains", "rule.insert"},
+        "rules.contains", "rule.insert", "ip.status", "ip.normalize"},
     "mojo.apps.incident.asyncjobs.broadcast_unblock_ip": {
-        "rules.contains", "rule.delete"},
+        "rules.contains", "rule.delete", "ip.status", "ip.normalize"},
     "mojo.apps.incident.asyncjobs.broadcast_ipset_add_blocked": {
-        "set.add", "set.rule_ensure"},
-    "mojo.apps.incident.asyncjobs.broadcast_ipset_del_blocked": {"set.delete"},
+        "permanent.add", "permanent.rule_ensure"},
+    "mojo.apps.incident.asyncjobs.broadcast_ipset_del_blocked": {
+        "permanent.delete"},
     "mojo.apps.incident.asyncjobs.sync_firewall": {
-        "set.replace", "set.rule_ensure"},
+        "permanent.normalize", "set.normalize", "ip.normalize"},
     "mojo.apps.incident.asyncjobs.broadcast_sync_ipset": {
-        "set.replace", "set.rule_ensure"},
-    "mojo.apps.incident.asyncjobs.broadcast_remove_ipset": {"set.remove"},
+        "set.replace", "set.rule_ensure", "set.status", "set.normalize"},
+    "mojo.apps.incident.asyncjobs.broadcast_remove_ipset": {
+        "set.remove", "set.status", "set.normalize"},
+    "mojo.apps.incident.asyncjobs.broadcast_reconcile_firewall_ip": {
+        "ip.status", "ip.normalize"},
+    "mojo.apps.incident.asyncjobs.broadcast_reconcile_firewall_set": {
+        "set.status", "set.normalize"},
+    "mojo.apps.incident.asyncjobs.broadcast_reconcile_geolocated_ip": {
+        "geolocated.normalize"},
 }
 
 
 class BrokerError(RuntimeError):
-    pass
+    def __init__(self, message, code="invalid_request"):
+        super().__init__(message)
+        self.code = code
 
 
 class BrokerChildError(BrokerError):
@@ -117,20 +147,81 @@ def parse_request(payload):
 
 
 def _network(value):
-    if not isinstance(value, str) or len(value.encode("utf-8")) > 49:
-        raise BrokerError("network is invalid")
     try:
-        return str(ipaddress.ip_network(value, strict=False))
-    except ValueError as err:
-        raise BrokerError("network is invalid") from err
+        return canonical_ipv4(value)
+    except FirewallTruthError as err:
+        raise BrokerError(str(err), code=err.code) from err
 
 
 def _set_name(value, temporary=False):
     if not isinstance(value, str) or not _SET_NAME.fullmatch(value):
         raise BrokerError("set name is invalid")
+    if value.endswith("_tmp"):
+        raise BrokerError("temporary set namespace is reserved",
+                          code="reserved_set_name")
     if temporary and len(value) + 4 > MAX_SET_NAME:
         raise BrokerError("set name has no room for temporary suffix")
     return value
+
+
+def _root_permanent_set_name(path=CONFIG_PATH):
+    """Read the root-owned broker namespace, or the secure legacy default."""
+    descriptor = None
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        return DEFAULT_PERMANENT_SET_NAME
+    try:
+        info = os.fstat(descriptor)
+        if (info.st_uid != 0 or not stat.S_ISREG(info.st_mode) or
+                info.st_mode & 0o077):
+            raise BrokerError(
+                "firewall broker config metadata is unsafe",
+                code="broker_config_unsafe")
+        payload = os.read(descriptor, MAX_CONFIG_BYTES + 1)
+        if not payload or len(payload) > MAX_CONFIG_BYTES:
+            raise BrokerError(
+                "firewall broker config size is invalid",
+                code="broker_config_invalid")
+        value = json.loads(
+            payload.decode("utf-8"), object_pairs_hook=_strict_object,
+            parse_constant=lambda unused: (_ for _ in ()).throw(
+                BrokerError("constant")))
+        if not isinstance(value, dict) or set(value) != {"permanent_set_name"}:
+            raise BrokerError(
+                "firewall broker config is invalid",
+                code="broker_config_invalid")
+        return _set_name(value["permanent_set_name"], temporary=True)
+    except (UnicodeError, json.JSONDecodeError) as err:
+        raise BrokerError(
+            "firewall broker config is invalid",
+            code="broker_config_invalid") from err
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _permanent_authority(request):
+    """Return root authority only when application configuration agrees."""
+    actual = _root_permanent_set_name()
+    expected = _set_name(request.get("expected_permanent_set"), temporary=True)
+    if expected != actual:
+        raise BrokerError(
+            "application and root firewall set configuration differ",
+            code="permanent_set_config_mismatch")
+    return actual
+
+
+def _operator_set_target(request, temporary=False):
+    aggregate = _permanent_authority(request)
+    name = _set_name(request.get("set_name"), temporary=True)
+    if name == aggregate or name.startswith("mojo_"):
+        raise BrokerError(
+            "framework firewall set namespace is reserved",
+            code="reserved_set_name")
+    return name
 
 
 def _context(value, function=None):
@@ -182,15 +273,15 @@ def build_operation(request, function=None):
         argv = [IPTABLES, action, chain, "-s", source, "-j", "DROP"]
         built.update(chain=chain, source=source, argv=argv,
                      semantic=f"{action} {chain} source DROP")
-    elif operation in ("set.add", "set.delete"):
-        name = _set_name(request.get("set_name"))
+    elif operation in ("permanent.add", "permanent.delete"):
+        name = _permanent_authority(request)
         source = _network(request.get("source"))
-        verb = "add" if operation == "set.add" else "del"
+        verb = "add" if operation == "permanent.add" else "del"
         argv = [IPSET, verb, name, source, "-exist"]
         built.update(set_name=name, source=source, argv=argv,
                      semantic=f"set {verb} network")
     elif operation == "set.replace":
-        name = _set_name(request.get("set_name"), temporary=True)
+        name = _operator_set_target(request, temporary=True)
         cidrs = request.get("cidrs")
         if (not isinstance(cidrs, list) or len(cidrs) > MAX_CIDRS or
                 any(not isinstance(item, str) for item in cidrs)):
@@ -208,14 +299,56 @@ def build_operation(request, function=None):
         built.update(set_name=name, cidrs=normalized, argv=argv, stdin=stdin,
                      semantic="replace hash:net atomically")
     elif operation == "set.remove":
-        name = _set_name(request.get("set_name"))
+        name = _operator_set_target(request)
         argv = [IPSET, "destroy", name]
         built.update(set_name=name, argv=argv, semantic="destroy hash:net")
-    else:
-        name = _set_name(request.get("set_name"))
+    elif operation in ("set.rule_ensure", "permanent.rule_ensure"):
+        name = (_permanent_authority(request)
+                if operation == "permanent.rule_ensure"
+                else _operator_set_target(request))
         argv = [IPTABLES, "-C", "INPUT", "-m", "set", "--match-set", name,
                 "src", "-j", "DROP"]
         built.update(set_name=name, argv=argv, semantic="ensure INPUT set DROP")
+    elif operation in ("ip.status", "ip.normalize"):
+        source = _network(request.get("source"))
+        if not isinstance(request.get("present", False), bool):
+            raise BrokerError("present must be a boolean")
+        built.update(
+            source=source, present=request.get("present", False),
+            argv=[IPTABLES_SAVE], semantic="normalize exact IPv4 DROP rules")
+    elif operation in ("set.status", "set.normalize", "permanent.normalize"):
+        present = (True if operation == "permanent.normalize"
+                   else request.get("present", False))
+        if not isinstance(present, bool):
+            raise BrokerError("present must be a boolean")
+        name = (_permanent_authority(request)
+                if operation == "permanent.normalize"
+                else _operator_set_target(
+                    request, temporary=(
+                        operation == "set.normalize" and present)))
+        cidrs = request.get("cidrs", [])
+        try:
+            cidrs = canonical_ipv4_networks(cidrs, limit=MAX_CIDRS)
+        except FirewallTruthError as err:
+            raise BrokerError(str(err), code=err.code) from err
+        built.update(
+            set_name=name, present=present, cidrs=cidrs,
+            argv=[IPSET], semantic="normalize exact IPv4 hash:net set and rules")
+    else:
+        source = _network(request.get("source"))
+        name = _permanent_authority(request)
+        temporary_present = request.get("temporary_present")
+        if not isinstance(temporary_present, bool):
+            raise BrokerError("temporary_present must be a boolean")
+        try:
+            cidrs = canonical_ipv4_networks(
+                request.get("cidrs"), limit=MAX_CIDRS)
+        except FirewallTruthError as err:
+            raise BrokerError(str(err), code=err.code) from err
+        built.update(
+            source=source, set_name=name, cidrs=cidrs,
+            temporary_present=temporary_present, argv=[IPTABLES, IPSET],
+            semantic="normalize one IP and the permanent IPv4 set atomically")
     built["argv_digest"] = _digest_argv(built["argv"])
     built["stdin_digest"] = hashlib.sha256(built["stdin"].encode()).hexdigest()
     built["stdin_length"] = len(built["stdin"].encode())
@@ -356,6 +489,240 @@ def _rules_contain_source(payload, source):
     return False
 
 
+def _forwarding_required():
+    try:
+        with open("/proc/sys/net/ipv4/ip_forward", encoding="ascii") as value:
+            return value.read(8).strip() == "1"
+    except (OSError, UnicodeError):
+        raise BrokerError("cannot read IPv4 forwarding state", code="status_unavailable")
+
+
+def _rule_counts(payload, source=None, set_name=None):
+    counts = {"INPUT": 0, "FORWARD": 0}
+    for line in payload.splitlines():
+        if not line.startswith("-A "):
+            continue
+        try:
+            parts = shlex.split(line, posix=True)
+        except ValueError as err:
+            raise BrokerError(
+                "iptables-save returned malformed syntax",
+                code="status_malformed") from err
+        if len(parts) < 3 or parts[1] not in counts:
+            continue
+        if "-j" not in parts:
+            continue
+        try:
+            target = parts[parts.index("-j") + 1]
+        except IndexError:
+            raise BrokerError("firewall rule is malformed", code="status_malformed")
+        if target != "DROP":
+            continue
+        matched = False
+        if source is not None and "-s" in parts:
+            try:
+                found = _network(parts[parts.index("-s") + 1])
+                matched = parts == [
+                    "-A", parts[1], "-s", found, "-j", "DROP"] and found == source
+            except (IndexError, BrokerError):
+                matched = False
+        if set_name is not None and "--match-set" in parts:
+            try:
+                index = parts.index("--match-set")
+                matched = (
+                    parts[index + 1:index + 3] == [set_name, "src"] and
+                    parts == ["-A", parts[1], "-m", "set", "--match-set",
+                              set_name, "src", "-j", "DROP"])
+            except IndexError:
+                matched = False
+        if matched:
+            counts[parts[1]] += 1
+    return counts
+
+
+def _read_rules():
+    child, stdout, unused = _run_child(
+        [IPTABLES_SAVE], stdout_limit=MAX_RULES_OUTPUT_BYTES)
+    if not child["ok"]:
+        raise BrokerError("cannot read firewall rules", code="status_unavailable")
+    return child, stdout
+
+
+def _ip_status(source):
+    child, rules = _read_rules()
+    counts = _rule_counts(rules, source=source)
+    forwarding = _forwarding_required()
+    desired_forward = 1 if forwarding else 0
+    return child, {
+        "ip": source.split("/", 1)[0],
+        "present": counts["INPUT"] == 1 and counts["FORWARD"] == desired_forward,
+        "input_count": counts["INPUT"],
+        "forward_count": counts["FORWARD"],
+        "forwarding_required": forwarding,
+    }
+
+
+def _parse_set_save(payload, set_name):
+    family = None
+    set_type = None
+    members = []
+    for line in payload.splitlines():
+        try:
+            parts = shlex.split(line, posix=True)
+        except ValueError as err:
+            raise BrokerError("ipset returned malformed syntax", code="status_malformed") from err
+        if not parts:
+            continue
+        if parts[0] == "create" and len(parts) >= 3 and parts[1] == set_name:
+            set_type = parts[2]
+            family = "inet"
+            if "family" in parts:
+                try:
+                    family = parts[parts.index("family") + 1]
+                except IndexError as err:
+                    raise BrokerError(
+                        "ipset family is malformed", code="status_malformed") from err
+        elif parts[0] == "add" and len(parts) == 3 and parts[1] == set_name:
+            if len(members) >= MAX_CIDRS:
+                raise BrokerError("ipset member bound exceeded", code="status_overflow")
+            if len(parts[2].encode("utf-8")) > 128:
+                raise BrokerError("ipset member is too long", code="status_malformed")
+            members.append(parts[2])
+    if set_type is None:
+        raise BrokerError("ipset definition is missing", code="status_malformed")
+    if set_type == "hash:net" and family == "inet":
+        try:
+            canonical = sorted(set(canonical_ipv4(member) for member in members))
+        except FirewallTruthError as err:
+            raise BrokerError(str(err), code="set_member_invalid") from err
+    else:
+        # Incompatible types/families still need an observable status so the
+        # normalizer can remove references, destroy them, and recreate the
+        # reviewed IPv4 hash:net shape. Their member text is never executed.
+        canonical = sorted(set(members))
+    if len(canonical) != len(members):
+        raise BrokerError("ipset contains duplicate members", code="status_malformed")
+    digest = hashlib.sha256("\n".join(canonical).encode("utf-8")).hexdigest()
+    return set_type, family, canonical, digest
+
+
+def _set_status(set_name):
+    child, stdout, stderr = _run_child(
+        [IPSET, "save", set_name], stdout_limit=MAX_RULES_OUTPUT_BYTES)
+    if child["returncode"] == 1 and _expected_absence(stderr, "ipset"):
+        child["ok"] = True
+        exists = False
+        set_type, family, members = None, None, []
+        digest = network_digest([])
+    elif not child["ok"]:
+        raise BrokerError("cannot read ipset", code="status_unavailable")
+    else:
+        exists = True
+        set_type, family, members, digest = _parse_set_save(stdout, set_name)
+    rule_child, rules = _read_rules()
+    counts = _rule_counts(rules, set_name=set_name)
+    forwarding = _forwarding_required()
+    desired_forward = 1 if forwarding else 0
+    present = bool(
+        exists and set_type == "hash:net" and family == "inet" and
+        counts["INPUT"] == 1 and counts["FORWARD"] == desired_forward)
+    return [child, rule_child], {
+        "name": set_name, "present": present, "exists": exists,
+        "type": set_type, "family": family, "count": len(members),
+        "digest": digest,
+        "input_count": counts["INPUT"],
+        "forward_count": counts["FORWARD"],
+        "forwarding_required": forwarding,
+    }
+
+
+def _normalize_rules(source=None, set_name=None, present=True):
+    read_child, rules = _read_rules()
+    children = [read_child]
+    counts = _rule_counts(rules, source=source, set_name=set_name)
+    matcher = (["-s", source] if source is not None else
+               ["-m", "set", "--match-set", set_name, "src"])
+    for chain in ("INPUT", "FORWARD"):
+        for unused_count in range(counts[chain]):
+            child, stdout, stderr = _run_child(
+                [IPTABLES, "-D", chain] + matcher + ["-j", "DROP"])
+            children.append(child)
+            if not child["ok"]:
+                raise BrokerError("cannot remove duplicate rule", code="normalize_failed")
+    forwarding = _forwarding_required()
+    if present:
+        chains = ["INPUT"] + (["FORWARD"] if forwarding else [])
+        for chain in chains:
+            child, stdout, stderr = _run_child(
+                [IPTABLES, "-I", chain] + matcher + ["-j", "DROP"])
+            children.append(child)
+            if not child["ok"]:
+                raise BrokerError("cannot establish firewall rule", code="normalize_failed")
+    return children
+
+
+def _replace_set(set_name, cidrs):
+    temporary = set_name + "_tmp"
+    lines = [f"create {set_name} hash:net family inet -exist",
+             f"create {temporary} hash:net family inet -exist",
+             f"flush {temporary}"]
+    lines.extend(f"add {temporary} {item}" for item in cidrs)
+    lines.extend((f"swap {set_name} {temporary}", f"destroy {temporary}"))
+    stdin = "\n".join(lines) + "\n"
+    if len(stdin.encode()) > MAX_RESTORE_BYTES:
+        raise BrokerError("canonical restore program exceeds bound", code="network_limit")
+    child, stdout, stderr = _run_child(
+        [IPSET, "restore"], stdin, BULK_TIMEOUT_SECONDS)
+    if not child["ok"]:
+        raise BrokerError("cannot replace ipset", code="normalize_failed")
+    return child
+
+
+def _normalize_ip(source, present):
+    children = _normalize_rules(source=source, present=present)
+    child, observed = _ip_status(source)
+    children.append(child)
+    expected_forward = 1 if observed["forwarding_required"] and present else 0
+    ok = (observed["input_count"] == (1 if present else 0) and
+          observed["forward_count"] == expected_forward)
+    return children, observed, ok
+
+
+def _normalize_set(set_name, cidrs, present):
+    children, before = _set_status(set_name)
+    if present:
+        if (before["exists"] and
+                (before["type"] != "hash:net" or before["family"] != "inet")):
+            children.extend(_normalize_rules(set_name=set_name, present=False))
+            child, stdout, stderr = _run_child([IPSET, "destroy", set_name])
+            children.append(child)
+            if not child["ok"]:
+                raise BrokerError(
+                    "cannot replace incompatible ipset", code="normalize_failed")
+        children.append(_replace_set(set_name, cidrs))
+        children.extend(_normalize_rules(set_name=set_name, present=True))
+    else:
+        children.extend(_normalize_rules(set_name=set_name, present=False))
+        child, stdout, stderr = _run_child([IPSET, "destroy", set_name])
+        children.append(child)
+        if child["returncode"] == 1 and _expected_absence(stderr, "ipset"):
+            child["ok"] = True
+        elif not child["ok"]:
+            raise BrokerError("cannot remove ipset", code="normalize_failed")
+    status_children, observed = _set_status(set_name)
+    children.extend(status_children)
+    expected_forward = 1 if observed["forwarding_required"] and present else 0
+    ok = (observed["exists"] is present and
+          observed["input_count"] == (1 if present else 0) and
+          observed["forward_count"] == expected_forward)
+    if present:
+        ok = (ok and observed["type"] == "hash:net" and
+              observed["family"] == "inet" and
+              observed["count"] == len(cidrs) and
+              observed["digest"] == network_digest(cidrs))
+    return children, observed, ok
+
+
 def _expected_absence(stderr, target):
     message = str(stderr or "").lower()
     if target == "iptables":
@@ -371,7 +738,30 @@ def execute(request):
     started = time.monotonic()
     children = []
     try:
-        if built["operation"] == "set.add":
+        if built["operation"] == "ip.status":
+            child, observed = _ip_status(built["source"])
+            children.append(child)
+            result = {"ok": True, "observed": observed}
+        elif built["operation"] == "ip.normalize":
+            children, observed, ok = _normalize_ip(
+                built["source"], built["present"])
+            result = {"ok": ok, "observed": observed}
+        elif built["operation"] == "set.status":
+            children, observed = _set_status(built["set_name"])
+            result = {"ok": True, "observed": observed}
+        elif built["operation"] in ("set.normalize", "permanent.normalize"):
+            children, observed, ok = _normalize_set(
+                built["set_name"], built["cidrs"], built["present"])
+            result = {"ok": ok, "observed": observed}
+        elif built["operation"] == "geolocated.normalize":
+            ip_children, ip_observed, ip_ok = _normalize_ip(
+                built["source"], built["temporary_present"])
+            set_children, set_observed, set_ok = _normalize_set(
+                built["set_name"], built["cidrs"], True)
+            children = ip_children + set_children
+            observed = {"ip": ip_observed, "permanent": set_observed}
+            result = {"ok": bool(ip_ok and set_ok), "observed": observed}
+        elif built["operation"] == "permanent.add":
             child, unused_stdout, unused_stderr = _run_child(
                 [IPSET, "create", built["set_name"], "hash:net", "-exist"])
             children.append(child)
@@ -395,34 +785,42 @@ def execute(request):
                 child["ok"] = True
             elif not child["ok"]:
                 raise BrokerError("cannot flush set")
-        stdout_limit = (MAX_RULES_OUTPUT_BYTES if built["operation"] == "rules.contains"
-                        else MAX_OUTPUT_BYTES)
-        child, stdout, stderr = _run_child(
-            built["argv"], built["stdin"],
-            BULK_TIMEOUT_SECONDS if built["operation"] == "set.replace"
-            else SCALAR_TIMEOUT_SECONDS, stdout_limit=stdout_limit)
-        children.append(child)
-        ok = child["ok"]
-        if built["operation"] == "rules.contains":
-            if not ok:
-                raise BrokerError("cannot read firewall rules")
-            result = {"ok": True, "present": _rules_contain_source(
-                stdout, built["source"])}
-        elif built["operation"] == "set.rule_ensure" and child["returncode"] == 1:
-            child["ok"] = True
-            insert = [IPTABLES, "-I", "INPUT", "-m", "set", "--match-set",
-                      built["set_name"], "src", "-j", "DROP"]
-            child, stdout, stderr = _run_child(insert)
+        if built["operation"] not in (
+                "ip.status", "ip.normalize", "set.status", "set.normalize",
+                "permanent.normalize", "geolocated.normalize"):
+            stdout_limit = (MAX_RULES_OUTPUT_BYTES if built["operation"] == "rules.contains"
+                            else MAX_OUTPUT_BYTES)
+            child, stdout, stderr = _run_child(
+                built["argv"], built["stdin"],
+                BULK_TIMEOUT_SECONDS if built["operation"] == "set.replace"
+                else SCALAR_TIMEOUT_SECONDS, stdout_limit=stdout_limit)
             children.append(child)
             ok = child["ok"]
-            result = {"ok": ok}
-        elif (built["operation"] == "set.remove" and child["returncode"] == 1 and
-              _expected_absence(stderr, "ipset")):
-            child["ok"] = True
-            ok = True
-            result = {"ok": True}
+            if built["operation"] == "rules.contains":
+                if not ok:
+                    raise BrokerError("cannot read firewall rules")
+                result = {"ok": True, "present": _rules_contain_source(
+                    stdout, built["source"])}
+            elif built["operation"] in (
+                    "set.rule_ensure", "permanent.rule_ensure") and \
+                    child["returncode"] == 1:
+                child["ok"] = True
+                insert = [IPTABLES, "-I", "INPUT", "-m", "set", "--match-set",
+                          built["set_name"], "src", "-j", "DROP"]
+                child, stdout, stderr = _run_child(insert)
+                children.append(child)
+                ok = child["ok"]
+                result = {"ok": ok}
+            elif (built["operation"] == "set.remove" and child["returncode"] == 1 and
+                  _expected_absence(stderr, "ipset")):
+                child["ok"] = True
+                ok = True
+                result = {"ok": True}
+            else:
+                result = {"ok": ok}
         else:
-            result = {"ok": ok}
+            ok = result["ok"]
+            child = children[-1]
         receipt = _receipt(
             "result", operation_id, context, built, children=children,
             target_pid=child["pid"], target_start_ticks=child["start_ticks"],
@@ -444,7 +842,12 @@ def execute(request):
         _receipt("result", operation_id, context, built, children=children,
                  target_pid=0, target_start_ticks=0, returncode=-1, ok=False, error="timeout")
         raise BrokerError("target timed out") from err
-    except (BrokerError, OSError, subprocess.SubprocessError) as err:
+    except BrokerError as err:
+        _receipt("result", operation_id, context, built, children=children,
+                 target_pid=0, target_start_ticks=0, returncode=-1, ok=False,
+                 error=err.code)
+        raise
+    except (OSError, subprocess.SubprocessError) as err:
         _receipt("result", operation_id, context, built, children=children,
                  target_pid=0, target_start_ticks=0, returncode=-1, ok=False,
                  error="target_failure")
@@ -476,22 +879,51 @@ def render_sudoers(user="ec2-user"):
     return f"{user} ALL=(root) NOPASSWD: {BROKER_PATH} \"\"\n"
 
 
+def _acquire_host_lock():
+    path = "/run/lock/mojo-firewall-broker.lock"
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    info = os.fstat(descriptor)
+    if (info.st_uid != 0 or not stat.S_ISREG(info.st_mode) or
+            info.st_mode & 0o077):
+        os.close(descriptor)
+        raise BrokerError("host lock metadata is unsafe", code="host_lock_unsafe")
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as err:
+        os.close(descriptor)
+        raise BrokerError("host firewall reconciliation is busy",
+                          code="host_busy") from err
+    return descriptor
+
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     if argv:
         print("firewall broker accepts no arguments", file=sys.stderr)
         return 2
+    descriptor = None
     try:
         _verify_caller()
         resource.setrlimit(resource.RLIMIT_AS, (ADDRESS_SPACE_BYTES, ADDRESS_SPACE_BYTES))
         payload = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
         request = parse_request(payload)
+        descriptor = _acquire_host_lock()
         print(json.dumps(execute(request), sort_keys=True, separators=(",", ":")))
         return 0
     except (BrokerError, OSError, ValueError) as err:
-        print(f"firewall broker: {err}", file=sys.stderr)
+        code = err.code if isinstance(err, BrokerError) else "broker_failure"
+        message = str(err)[:256] if isinstance(err, BrokerError) else "broker failed"
+        print(json.dumps({
+            "ok": False,
+            "error": {"code": code, "message": message},
+        }, sort_keys=True, separators=(",", ":")))
         return 1
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 if __name__ == "__main__":

@@ -33,6 +33,12 @@ from typing import Callable
 from mojo.apps import metrics
 from mojo.helpers import dates
 from .execution_context import execution
+from .manager import (
+    CHECKED_EXECUTE_MAX_PAYLOAD_BYTES,
+    CHECKED_EXECUTE_MAX_REPLY_BYTES,
+    CHECKED_EXECUTE_PROTOCOL,
+    valid_checked_correlation,
+)
 
 logger = logit.get_logger("jobs", "jobs.log", debug=True)
 
@@ -418,12 +424,13 @@ class JobEngine:
             self.redis.expire(registry, self.heartbeat_interval * 6)
         self.redis.set(self.keys.runner_hb(self.runner_id), json.dumps({
             'runner_id': self.runner_id,
-            'hostname': socket.gethostname(),
+            'hostname': host_channel(),
             'channels': self.channels,
             'jobs_processed': self.jobs_processed,
             'jobs_failed': self.jobs_failed,
             'started': self.start_time.isoformat(),
-            'last_heartbeat': dates.utcnow().isoformat()
+            'last_heartbeat': dates.utcnow().isoformat(),
+            'capabilities': {'execute_checked': CHECKED_EXECUTE_PROTOCOL},
         }), ex=self.heartbeat_interval * 3)  # TTL = 3x interval
 
     def _start_control_listener(self):
@@ -492,7 +499,8 @@ class JobEngine:
                         with execution(
                                 broadcast_job_id, func_path, 1,
                                 str(message.get("channel") or "broadcast"),
-                                self.runner_id, broadcast=True):
+                                self.runner_id, broadcast=True,
+                                runner_started=self.start_time.isoformat()):
                             result = func(message.get('data', {}))
                         logger.info(f"Executed broadcast function {func_path}: {result}")
 
@@ -529,6 +537,9 @@ class JobEngine:
                                 pass
                 else:
                     logger.warning("Execute command received without func path")
+
+            elif command == 'execute_checked':
+                self._handle_checked_execute(message, channel)
 
             elif command == 'ping':
                 # Respond with pong
@@ -574,6 +585,92 @@ class JobEngine:
 
         except Exception as e:
             logger.exception(f"Failed to handle control message: {e}")
+
+    def _handle_checked_execute(self, message, source_channel=None):
+        """Execute the identity-correlated v2 checked command.
+
+        The command is accepted only on this runner's direct control channel.
+        The outer dispatcher gives legacy engines a safe unknown-command path,
+        which is the rolling-upgrade boundary for the distinct protocol.
+        """
+        expected_channel = self.keys.runner_ctl(self.runner_id)
+        if isinstance(source_channel, bytes):
+            try:
+                source_channel = source_channel.decode("utf-8")
+            except UnicodeError:
+                return
+        if source_channel != expected_channel:
+            return
+        reply_channel = message.get("reply_channel")
+        correlation_id = message.get("correlation_id")
+        func_path = message.get("func")
+        try:
+            payload_size = len(json.dumps(
+                message.get("data", {}), sort_keys=True,
+                separators=(",", ":"), allow_nan=False).encode())
+        except (TypeError, ValueError):
+            payload_size = CHECKED_EXECUTE_MAX_PAYLOAD_BYTES + 1
+        valid = (
+            message.get("protocol") == CHECKED_EXECUTE_PROTOCOL and
+            isinstance(reply_channel, str) and reply_channel and
+            valid_checked_correlation(correlation_id) and
+            reply_channel == self.keys.reply_channel(correlation_id) and
+            isinstance(func_path, str) and 1 <= len(func_path) <= 255 and
+            isinstance(message.get("channel"), str) and
+            message.get("channel") in self.channels and
+            isinstance(message.get("data", {}), dict) and
+            message.get("target") == {
+                "runner_id": self.runner_id,
+                "hostname": host_channel(),
+                "started": self.start_time.isoformat(),
+            } and
+            payload_size <= CHECKED_EXECUTE_MAX_PAYLOAD_BYTES)
+        if not valid:
+            return
+        reply = {
+            "schema": "mojo.jobs.execute-checked-reply",
+            "version": CHECKED_EXECUTE_PROTOCOL,
+            "correlation_id": correlation_id,
+            "runner_id": self.runner_id,
+            "hostname": host_channel(),
+            "started": self.start_time.isoformat(),
+            "func": func_path,
+        }
+        try:
+            func = load_job_function(func_path)
+        except (ImportError, AttributeError, ValueError):
+            reply.update(status="error", error="function_unavailable")
+        else:
+            try:
+                with execution(
+                        correlation_id, func_path, 1,
+                        message["channel"], self.runner_id, broadcast=True,
+                        runner_started=self.start_time.isoformat()):
+                    result = func(message.get("data", {}))
+                if not isinstance(result, dict):
+                    raise TypeError("checked result must be an object")
+                reply.update(status="success", result=result)
+            except TypeError:
+                reply.update(status="error", error="result_unserializable")
+            except Exception:
+                logger.exception("Checked execution failed for %s", func_path)
+                reply.update(status="error", error="execution_failed")
+        try:
+            encoded = json.dumps(
+                reply, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError):
+            reply.pop("result", None)
+            reply.update(status="error", error="result_unserializable")
+            encoded = json.dumps(
+                reply, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        if len(encoded.encode()) > CHECKED_EXECUTE_MAX_REPLY_BYTES:
+            reply.pop("result", None)
+            reply.update(status="error", error="result_unserializable")
+            encoded = json.dumps(reply, sort_keys=True, separators=(",", ":"))
+        try:
+            self.redis.publish(reply_channel, encoded)
+        except Exception:
+            logger.warning("Failed to publish checked execute reply")
 
     def _main_loop(self):
         """Main processing loop - claims jobs from List queues based on capacity."""
@@ -748,7 +845,8 @@ class JobEngine:
             func = load_job_function(job.func)
             with execution(
                     job.id, job.func, job.attempt, job.channel,
-                    self.runner_id, broadcast=bool(job.broadcast)):
+                    self.runner_id, broadcast=bool(job.broadcast),
+                    runner_started=self.start_time.isoformat()):
                 func(job)
             if JOBS_DEBUG:
                 logger.info(f"Completed job {job_id} from channel {channel}")
