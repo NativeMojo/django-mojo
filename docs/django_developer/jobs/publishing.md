@@ -373,23 +373,25 @@ result = jobs.broadcast_execute_checked(
 )
 ```
 
-The v1 protocol (`protocol: 1`, heartbeat capability `execute_checked: 1`) is
+The v2 protocol (`protocol: 2`, heartbeat capability `execute_checked: 2`) is
 capability-negotiated and intentionally distinct from the legacy `execute`
 command. It reads the channel's dedicated runner index from the Redis primary,
 refuses more than 128 live runner rows, validates every indexed heartbeat, and
 groups runners by lowercased hostname. It deterministically selects the
-lowest-id compatible runner
-per hostname, and refuses before publication if any host has no compatible
-runner. Multiple engines on one host therefore represent one machine-local
-state, not multiple independent targets. The snapshot is the live jobs-channel
-roster at read time; it is not an AWS/serving-topology inventory and does not
-include a host that joins after the snapshot.
+lowest-id compatible runner per hostname and binds that runner's immutable
+heartbeat `started` value into the targeted command, reply, and returned
+roster. It refuses before publication if any host has no compatible runner.
+Multiple engines on one host therefore represent one machine-local state, not
+multiple independent targets. The snapshot is the live jobs-channel roster at
+read time; it is not an AWS/serving-topology inventory and does not include a
+host that joins after the snapshot. A restarted runner cannot satisfy the old
+snapshot.
 
 During a rolling upgrade, a host represented only by a legacy heartbeat has no
-`execute_checked: 1` capability. The call returns `unknown` before any
-confirmed publication. A host with both legacy and v1 engines is compatible
-because its v1 engine can represent the shared machine state. Put at least one
-v1 engine on every intended host before expecting checked mutations to verify;
+`execute_checked: 2` capability. The call returns `unknown` before any
+confirmed publication. A host with both legacy and v2 engines is compatible
+because its v2 engine can represent the shared machine state. Put at least one
+v2 engine on every intended host before expecting checked mutations to verify;
 new engines continue to accept the legacy `execute` command.
 
 The result status is one of:

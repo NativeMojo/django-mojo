@@ -230,13 +230,16 @@ action response with `enforcement_status=verified` plus
 stale-auth sessions are refused.
 
 Migration `0054_geolocatedip_firewall_reconciliation` resets legacy IPSet
-dispatch fields to unverified state. Wait until at least one v1 checked-capable
+dispatch fields to unverified state. Wait until at least one v2 checked-capable
 job engine is live on every intended host, then call `ipset.sync` to establish
 new fleet proof. An invalid or IPv6 Geo row or legacy IPSet with an
 invalid/reserved name, an enabled name over 27 characters, malformed or IPv6
 CIDRs, or more than 250,000 networks is quarantined individually while valid
 rows continue.
 The configured permanent-aggregate set name is reserved dynamically too.
+It must match the root-owned broker configuration; absent a root configuration
+file the broker uses `mojo_blocked`. A mismatch refuses before any kernel
+mutation, and the application request cannot redefine the privileged target.
 Migration forces a quarantined legacy IPSet disabled. Valid sibling rows can
 still verify. Quarantined rows remain pending/error;
 have the backend operator repair them

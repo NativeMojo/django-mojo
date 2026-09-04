@@ -1127,6 +1127,9 @@ desired-disabled. Enabling them returns 400; reconciliation treats them as
 absence tombstones so threat-cache data never reaches the kernel firewall.
 The configured permanent-aggregate set name and framework namespaces are also
 reserved, preventing an operator IPSet from overwriting permanent blocks.
+The privileged broker derives the permanent identity from root-owned
+configuration (default `mojo_blocked`) and treats the application value only as
+a required equality assertion; configuration drift therefore fails closed.
 
 ### Governed lifecycle request and response
 

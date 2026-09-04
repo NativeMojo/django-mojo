@@ -516,12 +516,13 @@ success use their detailed checked companions.
 sync_firewall (hourly, minute 0) — BROADCAST on "default"
   → fans out one job per live runner
   → each runner, for its own kernel:
-      → take and renew the global desired-state lease plus per-host lock
+      → take the per-host lock and briefly lease desired snapshot/fence state
       → bound the whole desired-row roster and quarantine invalid objects per row
       → observe/repair/re-observe complete mojo_blocked membership, including empty
       → reconcile every valid IPSet row (enabled presence; disabled/cache absence tombstone)
       → reconcile valid active TTL presence and pending direct-rule absence
-      → write host-scoped observations bound to fences and desired fingerprints
+      → release the global lease for broker I/O, then reacquire briefly
+      → write host observations bound to fences, fingerprints, and heartbeat start
       → advance mojo:sync_firewall:last_sync:<host> for the observed valid generation
       → queue aggregate_firewall_truth; invalid siblings stay quarantined/pending
 
@@ -549,7 +550,8 @@ Up to one hour of exposure remains acceptable for a *newly issued* permanent blo
 `mojo.apps.incident.firewall` is the application-side semantic adapter. It is
 only called in a JobEngine execution context as `ec2-user`; sudo authorizes
 exactly the root-owned broker with an empty argument vector. The broker accepts
-strict bounded JSON, owns all argv/restore construction, serializes operations
+strict bounded JSON, owns all argv/restore construction and the permanent-set
+identity (root config, or secure `mojo_blocked` default), serializes operations
 with a fixed host lock, and returns typed status/normalization observations
 without raw argv, stdout, stderr, environment, or restore text.
 
@@ -627,9 +629,9 @@ promote an old `last_synced`/empty-error pair to verified.
 ### How it works
 
 1. CIDR data is stored as canonical, sorted, deduplicated IPv4 networks (one per line); invalid/IPv6 input refuses the whole update.
-2. The lifecycle path holds the global desired-state lease from claim through finalization and advances a per-set fence; the request binds that fence, desired fingerprint, and lease token.
-3. A checked sync selects one compatible runner per hostname and refuses before publication if the exact roster cannot be proven compatible.
-4. Each host validates the fence before and after it observes, atomically normalizes, and re-observes the `hash:net` family, full membership count/digest, and exact INPUT/FORWARD rule multiplicity.
+2. The lifecycle path briefly leases the desired write/fence, releases before network and broker I/O, then reacquires for post-I/O revalidation/finalization.
+3. A v2 checked sync selects one compatible runner per hostname, binds its heartbeat `started` incarnation, and refuses before publication if the exact roster cannot be proven compatible.
+4. Each host validates the fence in short lease phases before and after it observes, atomically normalizes, and re-observes the `hash:net` family, full membership count/digest, and exact INPUT/FORWARD rule multiplicity.
 5. Lookups are O(1) regardless of set size, making it practical to block entire countries or large abuse lists.
 6. Names are immutable/reserved, including the configured permanent-aggregate name; new rows start disabled, generic enable/delete paths are closed, and disabled/cache rows remain reconciliation tombstones.
 
@@ -1694,7 +1696,7 @@ created = admin_security.apply_action({
 | `INCIDENT_PRUNE_DAYS` | `90` | Days to retain resolved/closed/ignored incidents before pruning. Incidents with `metadata.do_not_delete = True` are exempt. |
 | `INCIDENT_EVENT_METRICS` | — | Enable metrics recording for events and incidents |
 | `INCIDENT_METRICS_MIN_GRANULARITY` | `"hours"` | Granularity for incident metrics |
-| `FIREWALL_BLOCKED_IPSET_NAME` | `"mojo_blocked"` | Canonical 1–27 character kernel set name for permanent blocks. It is dynamically reserved from operator IPSets; configure it consistently fleet-wide, and remediate any legacy IPSet collision that migration quarantines. |
+| `FIREWALL_BLOCKED_IPSET_NAME` | `"mojo_blocked"` | Application assertion for the canonical permanent set. It must equal the root-owned `/etc/mojo-firewall-broker.json` `permanent_set_name`; absent that file the broker uses `mojo_blocked`. Operator set operations can never target the broker-owned identity. |
 | `GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS` | `24` | Window the `ip_recent_*` rule fields and the `is_known_attacker` / `is_known_abuser` predicates count over |
 | `GEOLOCATION_RECHECK_THREATS_MAX` | `500` | Rows the daily `recheck_active_threats` decay cron processes |
 

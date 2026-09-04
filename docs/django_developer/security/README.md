@@ -672,7 +672,7 @@ When a `block://` handler fires:
 
 1. `GeoLocatedIP.block_checked()` validates/canonicalizes IPv4 and acquires the global desired-state lease before any desired write.
 2. It advances the IP/permanent Redis fences, then a short row-lock transaction writes desired state, increments `firewall_generation`, and leaves `firewall_pending=True`.
-3. Outside the transaction, a checked request targets one compatible runner per hostname and binds the lease token, desired fingerprint, and fences. Each host verifies them before and after normalizing the direct TTL rule and complete permanent `mojo_blocked` set under one root-broker lock.
+3. It releases the global lease before checked network/broker I/O. The request targets one compatible runner per hostname and binds desired fingerprints, fences, and the selected heartbeat `started` incarnation. Each host briefly reacquires the desired lease before and after normalizing under its root-broker host lock.
 4. Matching host observations plus a generation-CAS update clear pending state and stamp `firewall_observed_at` only after every expected host proves the exact semantic result. Partial/unknown results retain the tombstone and bounded `firewall_sync_error`.
 5. Only a verified, still-owned result writes success history/metrics or resolves the incident. Already-desired blocks are re-observed without incrementing `block_count`.
 
@@ -738,12 +738,13 @@ observation.
 one process per CIDR. Lists are sorted/deduplicated canonical IPv4 networks and
 bounded to 250,000 entries. Empty desired sets are actively normalized.
 
-**One desired generation and one reconcile at a time.** A token-owned, renewed
-global Redis lease serializes desired snapshots, fence advances, checked
-dispatch, and finalization. Full reconciliation also takes the per-host lock;
-every checked handler validates the global lease/fences before and after its
-root-broker mutation. The broker's fixed host lock keeps local kernel writes
-from interleaving. Every release is compare-and-delete.
+**Two-phase desired generations.** A token-owned global Redis lease serializes
+only short desired snapshots, fence advances, revalidation, observation
+publication, and finalization. It is released before checked transport and
+root-broker I/O. Full reconciliation retains the per-host lock around the local
+kernel operation, then reacquires the global lease briefly to reject a stale
+fence before publishing. Contention is retryable/unknown, never successful
+repair. Every release is compare-and-delete.
 
 **Redis keys are per HOST, not per runner** — two engines on one box share one kernel firewall:
 
@@ -752,9 +753,9 @@ from interleaving. Every release is compare-and-delete.
 | `mojo:sync_firewall:last_sync:<host>` | This host's valid-generation observation marker, TTL 7200s; quarantined rows remain separate |
 | `mojo:sync_firewall:force:<host>` | Pending forced reconcile, set by the startup hook |
 | `mojo:sync_firewall:lock:<host>` | The reconcile lock above |
-| `mojo:firewall:desired-state-lock` | Global lease spanning desired snapshot, fence advance, checked dispatch, and finalization |
+| `mojo:firewall:desired-state-lock` | Short global lease for desired snapshot/fence and post-I/O revalidation/finalization; never held across broker I/O |
 | `mojo:firewall:fence:<kind>:<identity>` | Monotonic desired-state fence for an IP, IPSet, or permanent aggregate |
-| `mojo:firewall:observation:<kind>:<identity>:<fence>:<host>` | Host-scoped matching observation, TTL 7200s |
+| `mojo:firewall:observation:<kind>:<identity>:<fence>:<host>` | Host-scoped matching observation including heartbeat `started`, TTL 7200s |
 
 **Generation fencing:** after network waits, the run compares the bounded
 desired generation, Redis fences, fingerprints, and lease ownership again.
@@ -783,7 +784,7 @@ exist before that cross-app reset; it does not claim
 that old best-effort broadcasts were observed. Unsupported legacy rows receive
 a bounded quarantine error rather than blocking valid IPv4 repair.
 
-Roll the v1 job engine to at least one runner on every intended hostname before
+Roll the v2 job engine to at least one runner on every intended hostname before
 using checked actions. An old-only host makes the compatible roster fail
 closed with `unknown` before confirmed dispatch. After the fleet is compatible,
 run reconciliation on every host and use `ipset.sync` (or the GeoLocatedIP
@@ -799,6 +800,10 @@ remain pending/error and cannot verify until repaired;
 valid siblings still receive host observations and can become verified. The
 configured `FIREWALL_BLOCKED_IPSET_NAME` is dynamically reserved too; an IPSet
 with that name is quarantined so it cannot overwrite the permanent aggregate.
+The privileged broker derives that identity from root-owned
+`/etc/mojo-firewall-broker.json`; when the file is absent it securely defaults
+to `mojo_blocked`. The application setting is only an equality assertion, so a
+mismatch refuses before mutation and cannot redefine the broker namespace.
 Resolve legacy collisions before relying on the immutable-name and no-delete
 lifecycle.
 

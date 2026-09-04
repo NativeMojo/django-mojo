@@ -86,10 +86,10 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 IPv4-only even though the model can cache and geolocate IPv6 addresses. A
 checked mutation:
 
-1. Canonicalizes and bounds the IPv4 target and complete permanent-block set, then acquires the global desired-state lease.
+1. Canonicalizes and bounds the IPv4 target and complete permanent-block set, then briefly acquires the global desired-state lease.
 2. Advances Redis fences for the IP and permanent aggregate, briefly locks the row, writes desired block/absence state, increments `firewall_generation`, and leaves `firewall_pending=True`.
-3. Outside the database transaction, snapshots the concrete jobs channel and dispatches one identity-correlated v1 checked command per compatible hostname. The payload binds the desired fingerprint, fences, and lease token.
-4. Each host verifies those values before and after its root-owned broker observes, repairs, and re-observes direct-rule multiplicity plus the complete permanent `mojo_blocked` membership under one host lock, then records host-scoped observations.
+3. It releases the global lease before network or broker I/O, snapshots the concrete jobs channel, and dispatches one identity-correlated v2 checked command per compatible hostname. The payload binds desired fingerprints and fences; the checked envelope binds each selected heartbeat's immutable `started` value.
+4. Each host uses brief pre/post desired-state lease phases around an unlocked root-broker call under its host lock, then records an observation containing the current heartbeat incarnation. A restarted hostname therefore cannot reuse pre-restart evidence.
 5. Exact-current-roster aggregation plus a generation CAS clears pending and stamps `firewall_observed_at` only for a verified, still-owned result. Partial/unknown results preserve repair state and never write success logs/metrics.
 
 `verified` is both a dispatch and observation claim. `partial` means at least
