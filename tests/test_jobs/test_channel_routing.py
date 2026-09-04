@@ -454,31 +454,46 @@ def test_unconsumed_alert_is_suppressed_when_unchanged(opts):
 def test_disjoint_engines_claim_only_own_channels(opts):
     """The acceptance shape: one Redis, two engines, no cross-claiming.
 
-    Drains via BRPOP + execute_job in THIS process — the same thing
-    `th.run_jobs()` does. The engine's isolation IS its BRPOP key list, so
-    deriving the keys from `engine.channels` (never hardcoded) is what makes
-    this a faithful stand-in for the daemon's main loop.
+    Seeds real Job rows and drains via BRPOP + execute_job in THIS process —
+    the same claim and execution path `th.run_jobs()` uses. Publishing is
+    covered independently above. This assertion owns a private Redis key
+    prefix so concurrent modules cannot clear or recover its queues.
     """
     _clear(opts)
-    from mojo.apps import jobs
     from mojo.apps.jobs.job_engine import JobEngine
+    from mojo.apps.jobs.keys import JobKeys
     from mojo.apps.jobs.models import Job
 
-    # Test modules share Redis and execute in parallel. Use per-test direct
-    # channels so another module's cleanup or transient runner cannot claim a
-    # fixed suite-wide queue between the two assertions below.
+    # Test modules share Redis and execute in parallel. Unique channels are not
+    # sufficient when a maintenance test scans the whole production jobs
+    # prefix, so this module owns both names and the storage prefix.
     suffix = uuid.uuid4().hex[:10]
-    channel_a = f"t906-a-{suffix}-engine"
-    channel_b = f"t906-b-{suffix}-engine"
+    channel_a = f"t906-a-{suffix}"
+    channel_b = f"t906-b-{suffix}"
     owned_channels = [channel_a, channel_b]
+    owned_keys = JobKeys(prefix=f"testit:t906:{suffix}")
+    engines = []
+
+    def queued(channel):
+        return opts.redis.get_client().lrange(
+            owned_keys.queue(channel), 0, -1)
+
     try:
-        id_a = jobs.publish(
-            func=HANDLER, payload={"marker": "a"}, channel=channel_a)
-        id_b = jobs.publish(
-            func=HANDLER, payload={"marker": "b"}, channel=channel_b)
+        id_a = uuid.uuid4().hex
+        id_b = uuid.uuid4().hex
+        Job.objects.create(
+            id=id_a, channel=channel_a, func=HANDLER,
+            payload={"marker": "a"})
+        Job.objects.create(
+            id=id_b, channel=channel_b, func=HANDLER,
+            payload={"marker": "b"})
+        opts.redis.rpush(owned_keys.queue(channel_a), id_a)
+        opts.redis.rpush(owned_keys.queue(channel_b), id_b)
 
         engine_a = JobEngine(
             channels=[channel_a], runner_id=f"t906-a-{suffix}")
+        engine_a.keys = owned_keys
+        engines.append(engine_a)
         drained = _drain(opts, engine_a)
 
         assert drained == [id_a], (
@@ -488,13 +503,15 @@ def test_disjoint_engines_claim_only_own_channels(opts):
         assert CALLS == ["a"], (
             f"only the {channel_a!r} job should have executed, got {CALLS}"
         )
-        assert id_b in _queued_ids(opts, channel_b), (
+        assert id_b in queued(channel_b), (
             f"job {id_b} must still be waiting on {channel_b!r} for its own "
-            f"engine, queue holds {_queued_ids(opts, channel_b)}"
+            f"engine, queue holds {queued(channel_b)}"
         )
 
         engine_b = JobEngine(
             channels=[channel_b], runner_id=f"t906-b-{suffix}")
+        engine_b.keys = owned_keys
+        engines.append(engine_b)
         drained_b = _drain(opts, engine_b)
 
         assert drained_b == [id_b], (
@@ -505,11 +522,13 @@ def test_disjoint_engines_claim_only_own_channels(opts):
             f"both jobs should have run by now, got {CALLS}"
         )
     finally:
+        for engine in engines:
+            engine.executor.shutdown(wait=True)
         for channel in owned_channels:
-            opts.redis.delete(opts.keys.queue(channel))
-            opts.redis.delete(opts.keys.processing(channel))
-            opts.redis.delete(opts.keys.sched(channel))
-            opts.redis.delete(opts.keys.sched_broadcast(channel))
+            opts.redis.delete(owned_keys.queue(channel))
+            opts.redis.delete(owned_keys.processing(channel))
+            opts.redis.delete(owned_keys.sched(channel))
+            opts.redis.delete(owned_keys.sched_broadcast(channel))
         Job.objects.filter(channel__in=owned_channels).delete()
 
 
@@ -692,7 +711,7 @@ def test_default_channels_cover_framework(opts):
 
 def _drain(opts, engine, max_jobs=10):
     """Claim and execute everything on this engine's own channels."""
-    queue_keys = [opts.keys.queue(ch) for ch in engine.channels]
+    queue_keys = [engine.keys.queue(ch) for ch in engine.channels]
     executed = []
     while len(executed) < max_jobs:
         target = next((k for k in queue_keys if opts.redis.llen(k) > 0), None)
