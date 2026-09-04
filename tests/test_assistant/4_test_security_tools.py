@@ -274,12 +274,33 @@ def test_unwhitelist_ip(opts):
     geo.is_whitelisted = True
     geo.save(update_fields=["is_whitelisted"])
 
-    result = _tool_unwhitelist_ip({"ip": TEST_IP_2}, opts.admin)
+    with mock.patch(
+            "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
+            return_value={"status": "verified", "ok": True}):
+        result = _tool_unwhitelist_ip({"ip": TEST_IP_2}, opts.admin)
     assert_true(result.get("ok"), f"Should succeed, got {result}")
     assert_eq(result["is_whitelisted"], False, "Should report not whitelisted")
 
     geo.refresh_from_db()
     assert_true(not geo.is_whitelisted, "IP should not be whitelisted in DB")
+
+
+@th.django_unit_test("Assistant unwhitelist refuses partial firewall truth")
+def test_unwhitelist_ip_partial_result(opts):
+    from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.assistant.services.tools.security import _tool_unwhitelist_ip
+
+    geo, _ = GeoLocatedIP.objects.get_or_create(ip_address=TEST_IP_2)
+    geo.is_whitelisted = True
+    geo.save(update_fields=["is_whitelisted"])
+    with mock.patch(
+            "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
+            return_value={"status": "partial", "ok": False,
+                          "error": {"code": "missing_host"}}):
+        result = _tool_unwhitelist_ip({"ip": TEST_IP_2}, opts.admin)
+    assert_true(result.get("ok") is False, result)
+    assert_eq(result.get("error_code"), "missing_host", result)
+    assert_eq(result.get("enforcement_status"), "partial", result)
 
 
 @th.django_unit_test()

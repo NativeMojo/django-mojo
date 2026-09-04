@@ -55,7 +55,11 @@ def test_name_lifecycle(opts):
     with th.assert_raises(merrors.ValueException):
         IPSet.objects.create(name="mojo_blocked", kind="custom")
     with th.assert_raises(merrors.ValueException):
+        IPSet.objects.create(name="mojo_operator", kind="custom")
+    with th.assert_raises(merrors.ValueException):
         IPSet.objects.create(name="operator_tmp", kind="custom")
+    with th.assert_raises(merrors.ValueException):
+        IPSet.objects.create(name="x" * 28, kind="custom")
 
 
 @th.django_unit_test("configured permanent set name is dynamically reserved")

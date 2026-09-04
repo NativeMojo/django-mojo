@@ -116,8 +116,10 @@ class IPSet(models.Model, MojoModel):
                     "reserved_set_name",
                     "configured permanent firewall set name is reserved")
             allowed_reserved = bool(getattr(self, "_allow_reserved_name", False))
-            if (self.name in self.THREAT_CACHE_SETS or
-                    self.name.startswith("mojo_")) and not allowed_reserved:
+            if self.name.startswith("mojo_"):
+                raise FirewallTruthError(
+                    "reserved_set_name", "firewall set namespace is reserved")
+            if self.name in self.THREAT_CACHE_SETS and not allowed_reserved:
                 raise FirewallTruthError(
                     "reserved_set_name", "firewall set namespace is reserved")
             lifecycle = bool(getattr(self, "_lifecycle_write", False))
@@ -127,6 +129,8 @@ class IPSet(models.Model, MojoModel):
             else:
                 self.data = ""
                 self.cidr_count = 0
+            firewall_truth.canonical_operator_ipset(
+                self.name, self.cidrs, bool(self.is_enabled))
             prior = None
             if self.pk is None:
                 # Creation never mutates the kernel. Explicit enable is a separate,

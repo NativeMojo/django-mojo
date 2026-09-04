@@ -205,7 +205,14 @@ def _tool_unwhitelist_ip(params, user):
     except GeoLocatedIP.DoesNotExist:
         return {"error": f"IP {ip} not found"}
 
-    geo.unwhitelist()
+    result = geo.unwhitelist()
+    if result.get("status") != "verified" or result.get("ok") is not True:
+        error = result.get("error") or {}
+        return {"error": "Firewall state was not verified.",
+                "error_code": str(error.get("code") or
+                                  "fleet_unverified")[:64],
+                "ok": False, "ip": ip, "is_whitelisted": False,
+                "enforcement_status": result.get("status", "unknown")}
     return {"ok": True, "ip": ip, "is_whitelisted": False}
 
 

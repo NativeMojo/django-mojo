@@ -915,6 +915,7 @@ class GeoLocatedIP(models.Model, MojoModel):
                         "ip": self.ip_address, "trigger": "manual"}),
                 )
             self._on_whitelist_changed("unwhitelist", old=prior)
+            return result
         except firewall_truth.FirewallTruthError as err:
             raise merrors.ValueException(str(err)) from err
         finally:
@@ -979,7 +980,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         return self.whitelist(reason=value)
 
     def on_action_unwhitelist(self, value):
-        self.unwhitelist()
+        return self.unwhitelist()
 
     def on_action_refresh(self, value):
         self.refresh(check_threats=True)

@@ -19,6 +19,7 @@ MAX_FIREWALL_NETWORKS = 250000
 MAX_FIREWALL_ERROR = 512
 FIREWALL_OBSERVATION_TTL = 7200
 DESIRED_STATE_LOCK = "mojo:firewall:desired-state-lock"
+DESIRED_STATE_GENERATION = "mojo:firewall:desired-state-generation"
 FENCE_PREFIX = "mojo:firewall:fence"
 OBSERVATION_PREFIX = "mojo:firewall:observation"
 _SET_NAME = re.compile(r"^[A-Za-z0-9_-]{1,31}$")
@@ -71,6 +72,24 @@ def canonical_set_name(value):
         raise FirewallTruthError(
             "reserved_set_name", "temporary firewall set names are reserved")
     return value
+
+
+def canonical_operator_ipset(name, values, present):
+    """Validate the shared operator-IPSet namespace and stored IPv4 data."""
+    name = canonical_set_name(name)
+    if name.startswith("mojo_"):
+        raise FirewallTruthError(
+            "reserved_set_name", "framework firewall set names are reserved")
+    if not isinstance(present, bool):
+        raise FirewallTruthError("invalid_request", "present must be a boolean")
+    # Validate stored data even for an absence tombstone. A disabled legacy row
+    # with unsafe data stays quarantined instead of reaching the broker as a
+    # seemingly successful removal.
+    cidrs = canonical_ipv4_networks(values)
+    if len(name) + 4 > 31:
+        raise FirewallTruthError(
+            "invalid_set_name", "set name is too long for replacement")
+    return name, cidrs
 
 
 def permanent_set_name():
@@ -170,10 +189,16 @@ def _parse_fence(value):
 
 
 def read_fences(redis, targets):
-    return {
-        (kind, identity): _parse_fence(redis.get(fence_key(kind, identity)))
-        for kind, identity in targets
-    }
+    unique = list(dict.fromkeys(targets))
+    keys = [fence_key(kind, identity) for kind, identity in unique]
+    values = redis.mget(keys) if keys and hasattr(redis, "mget") else [
+        redis.get(key) for key in keys]
+    return {target: _parse_fence(value)
+            for target, value in zip(unique, values)}
+
+
+def read_desired_generation(redis):
+    return _parse_fence(redis.get(DESIRED_STATE_GENERATION))
 
 
 def advance_fences(lease, targets):
@@ -189,14 +214,16 @@ def advance_fences(lease, targets):
 if redis.call('get', KEYS[1]) ~= ARGV[1] then
   return false
 end
+redis.call('incr', KEYS[2])
 local values = {}
-for index = 2, #KEYS do
-  values[index - 1] = redis.call('incr', KEYS[index])
+for index = 3, #KEYS do
+  values[index - 2] = redis.call('incr', KEYS[index])
 end
 return values
 """
     values = lease.redis.eval(
-        script, len(keys) + 1, DESIRED_STATE_LOCK, *keys, lease.token)
+        script, len(keys) + 2, DESIRED_STATE_LOCK,
+        DESIRED_STATE_GENERATION, *keys, lease.token)
     if values is None or values is False:
         raise FirewallTruthError(
             "desired_state_busy", "firewall desired-state lease expired")
@@ -244,14 +271,10 @@ def permanent_snapshot():
     return value
 
 
-def geolocated_snapshot(ip, permanent=None):
-    from mojo.apps.account.models import GeoLocatedIP
+def geolocated_snapshot_from_row(row, permanent=None):
     from mojo.helpers import dates
 
-    canonical = canonical_ipv4_address(ip)
-    row = GeoLocatedIP.objects.filter(ip_address=canonical).first()
-    if row is None:
-        raise FirewallTruthError("target_missing", "firewall target is missing")
+    canonical = canonical_ipv4_address(row.ip_address)
     now = dates.utcnow()
     whitelisted = bool(
         row.is_whitelisted and
@@ -284,32 +307,43 @@ def geolocated_snapshot(ip, permanent=None):
     }
 
 
-def ipset_snapshot(name):
-    from mojo.apps.incident.models import IPSet
+def geolocated_snapshot(ip, permanent=None):
+    from mojo.apps.account.models import GeoLocatedIP
+    canonical = canonical_ipv4_address(ip)
+    row = GeoLocatedIP.objects.filter(ip_address=canonical).first()
+    if row is None:
+        raise FirewallTruthError("target_missing", "firewall target is missing")
+    return geolocated_snapshot_from_row(row, permanent=permanent)
 
-    name = canonical_set_name(name)
+
+def ipset_snapshot_from_row(row):
+    name = canonical_set_name(row.name)
     if name == permanent_set_name():
         raise FirewallTruthError(
             "reserved_set_name", "configured permanent set name is reserved")
-    row = IPSet.objects.filter(name=name).first()
-    if row is None:
-        raise FirewallTruthError("target_missing", "firewall set is missing")
     present = bool(row.is_enabled and not row.is_cache_only)
-    cidrs = canonical_ipv4_networks(row.cidrs if present else [])
-    if present and len(name) + 4 > 31:
-        raise FirewallTruthError(
-            "invalid_set_name", "set name is too long for replacement")
+    name, cidrs = canonical_operator_ipset(name, row.cidrs, present)
     desired = {
         "name": name, "present": present,
         "count": len(cidrs) if present else 0,
         "digest": network_digest(cidrs if present else []),
     }
     source = {
-        "pk": row.pk, "modified": _iso(row.modified),
-        "enabled": row.is_enabled, "cidrs": cidrs, "desired": desired,
+        "pk": row.pk, "enabled": row.is_enabled,
+        "cidrs": cidrs, "desired": desired,
     }
-    return {"row": row, "cidrs": cidrs, "desired": desired,
+    return {"row": row, "cidrs": cidrs if present else [], "desired": desired,
             "fingerprint": state_fingerprint(source)}
+
+
+def ipset_snapshot(name):
+    from mojo.apps.incident.models import IPSet
+
+    name = canonical_set_name(name)
+    row = IPSet.objects.filter(name=name).first()
+    if row is None:
+        raise FirewallTruthError("target_missing", "firewall set is missing")
+    return ipset_snapshot_from_row(row)
 
 
 def observation_key(kind, identity, fence, host):
@@ -326,7 +360,7 @@ def observation_key(kind, identity, fence, host):
     return f"{OBSERVATION_PREFIX}:{kind}:{identity}:{fence}:{host}"
 
 
-def current_host_incarnation():
+def current_host_runner_target():
     from mojo.apps.jobs.execution_context import current_runner_incarnation
     from mojo.apps.jobs.job_engine import host_channel
 
@@ -337,7 +371,13 @@ def current_host_incarnation():
         raise FirewallTruthError(
             "runner_incarnation_unavailable",
             "current runner heartbeat incarnation is unavailable")
-    return {"host": host_channel(), "started": incarnation["started"]}
+    return {"host": host_channel(), "runner_id": incarnation["runner_id"],
+            "started": incarnation["started"]}
+
+
+def current_host_incarnation():
+    target = current_host_runner_target()
+    return {"host": target["host"], "started": target["started"]}
 
 
 def record_host_observation(kind, identity, fence, fingerprint, desired,
@@ -373,7 +413,7 @@ def record_host_observation(kind, identity, fence, fingerprint, desired,
     return value
 
 
-def exact_compatible_roster(channel="default"):
+def exact_compatible_runner_roster(channel="default"):
     from mojo.apps import jobs
     try:
         manager = jobs.get_manager()
@@ -388,8 +428,14 @@ def exact_compatible_roster(channel="default"):
     if incompatible or set(selected) != set(expected):
         raise FirewallTruthError(
             "runner_roster_incompatible", "runner roster is not fully compatible")
-    return [{"host": host, "started": selected[host]["started"]}
+    return [{"host": host, "runner_id": selected[host]["runner_id"],
+             "started": selected[host]["started"]}
             for host in expected]
+
+
+def exact_compatible_roster(channel="default"):
+    return [{"host": row["host"], "started": row["started"]}
+            for row in exact_compatible_runner_roster(channel)]
 
 
 def exact_compatible_hosts(channel="default"):

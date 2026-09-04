@@ -466,6 +466,22 @@ return 0
 _DELETE_VALUE_LUA = _LOCK_RELEASE_LUA
 
 
+class FirewallSyncRetry(RuntimeError):
+    """Make uncertain reconciliation use JobEngine's durable jittered retry."""
+
+    def __init__(self, code):
+        super().__init__(f"retryable firewall reconciliation: {code}")
+        self.code = code
+
+
+def _retry_firewall_sync(job, code):
+    # Raising is deliberate: JobEngine owns the durable exponential backoff
+    # (including jitter).  A falsey return marks the Job completed and loses
+    # the repair permanently.
+    job.add_log(f"sync_firewall: retry required ({code})")
+    raise FirewallSyncRetry(code)
+
+
 def _firewall_host():
     """Per-HOST identity for the reconcile keys.
 
@@ -503,13 +519,15 @@ def sync_firewall(job):
     last_sync_key, force_key, lock_key = _sync_firewall_keys()
     token = None
     try:
+        expected_target = (job.payload or {}).get("target")
+        current_target = firewall_truth.current_host_runner_target()
+        if expected_target != current_target:
+            _retry_firewall_sync(job, "runner_incarnation_changed")
         token = uuid.uuid4().hex
         if not redis_client.set(
                 lock_key, token, nx=True, ex=SYNC_FIREWALL_LOCK_TTL):
-            job.add_log(
-                "sync_firewall: another reconcile is in flight on this host, skipped")
-            return False
-        incarnation = firewall_truth.current_host_incarnation()
+            _retry_firewall_sync(job, "host_busy")
+        incarnation = {key: current_target[key] for key in ("host", "started")}
         force_value = redis_client.get(force_key)
         failures = 0
         quarantined = 0
@@ -519,75 +537,82 @@ def sync_firewall(job):
                 _LOCK_RENEW_LUA, 1, lock_key, token,
                 str(SYNC_FIREWALL_LOCK_TTL)))
 
-        # Phase one is a short global critical section. It allocates any legacy
-        # zero fences and captures complete desired fingerprints, then releases
-        # before the first root-broker call so other hosts can make progress.
+        # Read a constant-size generation under the lease, build the bounded DB
+        # plan without it, then validate/allocate fences in one Redis batch.
+        # No per-row query or canonicalization can starve another host's lease.
         lease = None
         try:
             lease = firewall_truth.acquire_desired_state()
-            ipsets = list(IPSet.objects.order_by("pk")[
-                :SYNC_FIREWALL_MAX_OBJECTS + 1])
-            geos = list(GeoLocatedIP.objects.filter(
-                Q(is_blocked=True) | Q(firewall_pending=True) |
-                Q(is_whitelisted=True)).order_by("pk")[
-                    :SYNC_FIREWALL_MAX_OBJECTS + 1])
-            if (len(ipsets) > SYNC_FIREWALL_MAX_OBJECTS or
-                    len(geos) > SYNC_FIREWALL_MAX_OBJECTS):
-                job.add_log("sync_firewall: desired object bound exceeded; no writes")
-                return False
-            permanent = firewall_truth.permanent_snapshot()
-            aggregate_name = permanent["name"]
-            aggregate_target = ("permanent", aggregate_name)
-            aggregate_fence = firewall_truth.read_fences(
-                redis_client, [aggregate_target])[aggregate_target]
-            if aggregate_fence == 0:
-                aggregate_fence = firewall_truth.advance_fences(
-                    lease, [aggregate_target])[aggregate_target]
-            set_plans = []
-            for row in ipsets:
-                try:
-                    snapshot = firewall_truth.ipset_snapshot(row.name)
-                    target = ("set", snapshot["desired"]["name"])
-                    fence = firewall_truth.read_fences(
-                        redis_client, [target])[target]
-                    if fence == 0:
-                        fence = firewall_truth.advance_fences(
-                            lease, [target])[target]
-                    set_plans.append((snapshot, fence))
-                except firewall_truth.FirewallTruthError as err:
-                    quarantined += 1
-                    job.add_log(
-                        f"sync_firewall: IPSet {row.pk} quarantined ({err.code})")
-
-            geo_plans = []
-            for row in geos:
-                try:
-                    snapshot = firewall_truth.geolocated_snapshot(
-                        row.ip_address, permanent=permanent)
-                    target = ("ip", snapshot["canonical"])
-                    fence = firewall_truth.read_fences(
-                        redis_client, [target])[target]
-                    if fence == 0:
-                        fence = firewall_truth.advance_fences(
-                            lease, [target])[target]
-                    geo_plans.append((snapshot, fence))
-                except firewall_truth.FirewallTruthError as err:
-                    quarantined += 1
-                    job.add_log(
-                        f"sync_firewall: GeoLocatedIP {row.pk} quarantined ({err.code})")
+            baseline_generation = firewall_truth.read_desired_generation(
+                lease.redis)
             if not firewall_truth.desired_state_is_current(lease):
-                raise firewall_truth.FirewallTruthError(
-                    "desired_state_busy", "desired snapshot lease expired")
+                _retry_firewall_sync(job, "desired_state_busy")
         except firewall_truth.FirewallTruthError as err:
-            job.add_log(
-                f"sync_firewall: permanent desired state refused ({err.code})")
-            return False
+            _retry_firewall_sync(job, err.code)
         finally:
             firewall_truth.release_desired_state(lease)
 
+        ipsets = list(IPSet.objects.order_by("pk")[
+            :SYNC_FIREWALL_MAX_OBJECTS + 1])
+        geos = list(GeoLocatedIP.objects.filter(
+            Q(is_blocked=True) | Q(firewall_pending=True) |
+            Q(is_whitelisted=True)).order_by("pk")[
+                :SYNC_FIREWALL_MAX_OBJECTS + 1])
+        if (len(ipsets) > SYNC_FIREWALL_MAX_OBJECTS or
+                len(geos) > SYNC_FIREWALL_MAX_OBJECTS):
+            job.add_log("sync_firewall: desired object bound exceeded; no writes")
+            _retry_firewall_sync(job, "desired_object_bound_exceeded")
+        permanent = firewall_truth.permanent_snapshot()
+        aggregate_name = permanent["name"]
+        aggregate_target = ("permanent", aggregate_name)
+        set_plans = []
+        for row in ipsets:
+            try:
+                set_plans.append(firewall_truth.ipset_snapshot_from_row(row))
+            except firewall_truth.FirewallTruthError as err:
+                quarantined += 1
+                job.add_log(
+                    f"sync_firewall: IPSet {row.pk} quarantined ({err.code})")
+        geo_plans = []
+        for row in geos:
+            try:
+                geo_plans.append(firewall_truth.geolocated_snapshot_from_row(
+                    row, permanent=permanent))
+            except firewall_truth.FirewallTruthError as err:
+                quarantined += 1
+                job.add_log(
+                    f"sync_firewall: GeoLocatedIP {row.pk} quarantined ({err.code})")
+
+        targets = [aggregate_target]
+        targets.extend(("set", item["desired"]["name"])
+                       for item in set_plans)
+        targets.extend(("ip", item["canonical"]) for item in geo_plans)
+        lease = None
+        try:
+            lease = firewall_truth.acquire_desired_state()
+            if firewall_truth.read_desired_generation(
+                    lease.redis) != baseline_generation:
+                _retry_firewall_sync(job, "desired_generation_changed")
+            fences = firewall_truth.read_fences(lease.redis, targets)
+            missing = [target for target, value in fences.items() if value == 0]
+            if missing:
+                fences.update(firewall_truth.advance_fences(lease, missing))
+            plan_generation = firewall_truth.read_desired_generation(lease.redis)
+            if not firewall_truth.desired_state_is_current(lease):
+                _retry_firewall_sync(job, "desired_state_busy")
+        except firewall_truth.FirewallTruthError as err:
+            _retry_firewall_sync(job, err.code)
+        finally:
+            firewall_truth.release_desired_state(lease)
+
+        aggregate_fence = fences[aggregate_target]
+        set_plans = [(snapshot, fences[("set", snapshot["desired"]["name"])])
+                     for snapshot in set_plans]
+        geo_plans = [(snapshot, fences[("ip", snapshot["canonical"])])
+                     for snapshot in geo_plans]
+
         if not renew():
-            job.add_log("sync_firewall: lock ownership lost before writes")
-            return False
+            _retry_firewall_sync(job, "host_lock_lost")
         set_desired = permanent["desired"] if "desired" in permanent else {
             "name": aggregate_name, "present": True,
             "count": len(permanent["cidrs"]),
@@ -595,15 +620,17 @@ def sync_firewall(job):
         }
         result = firewall.normalize_permanent_ipset(permanent["cidrs"])
         semantic = _semantic("set", set_desired, result)
+        current_permanent = firewall_truth.permanent_snapshot()
         lease = None
         try:
             lease = firewall_truth.acquire_desired_state()
-            current_permanent = firewall_truth.permanent_snapshot()
             current_aggregate_fence = firewall_truth.read_fences(
                 redis_client, [aggregate_target])[aggregate_target]
             aggregate_ok = bool(
                 semantic["ok"] and
                 current_permanent["fingerprint"] == permanent["fingerprint"] and
+                firewall_truth.read_desired_generation(lease.redis) ==
+                plan_generation and
                 current_aggregate_fence == aggregate_fence and
                 firewall_truth.desired_state_is_current(lease))
             if aggregate_ok:
@@ -613,28 +640,29 @@ def sync_firewall(job):
                     incarnation=incarnation)
             else:
                 failures += 1
-        except firewall_truth.FirewallTruthError:
-            aggregate_ok = False
-            failures += 1
+        except firewall_truth.FirewallTruthError as err:
+            _retry_firewall_sync(job, err.code)
         finally:
             firewall_truth.release_desired_state(lease)
 
         for snapshot, fence in set_plans:
             if not renew():
-                failures += 1
-                break
+                _retry_firewall_sync(job, "host_lock_lost")
             desired = snapshot["desired"]
             result = firewall.normalize_ipset(
                 desired["name"], snapshot["cidrs"], desired["present"])
+            current_snapshot = firewall_truth.ipset_snapshot(desired["name"])
             lease = None
             try:
                 lease = firewall_truth.acquire_desired_state()
-                current = firewall_truth.ipset_snapshot(desired["name"])
                 target = ("set", desired["name"])
                 current_fence = firewall_truth.read_fences(
                     redis_client, [target])[target]
                 if (_semantic("set", desired, result)["ok"] and
-                        current["fingerprint"] == snapshot["fingerprint"] and
+                        current_snapshot["fingerprint"] == snapshot["fingerprint"] and
+                        current_snapshot["desired"] == desired and
+                        firewall_truth.read_desired_generation(lease.redis) ==
+                        plan_generation and
                         current_fence == fence and
                         firewall_truth.desired_state_is_current(lease)):
                     firewall_truth.record_host_observation(
@@ -643,28 +671,31 @@ def sync_firewall(job):
                         incarnation=incarnation)
                 else:
                     failures += 1
-            except firewall_truth.FirewallTruthError:
-                failures += 1
+            except firewall_truth.FirewallTruthError as err:
+                _retry_firewall_sync(job, err.code)
             finally:
                 firewall_truth.release_desired_state(lease)
 
         for snapshot, fence in geo_plans:
             if not renew():
-                failures += 1
-                break
+                _retry_firewall_sync(job, "host_lock_lost")
             desired = snapshot["desired"]
             ip_desired = desired["ip"]
             result = firewall.normalize_ip(
                 ip_desired["ip"], ip_desired["present"])
+            current_snapshot = firewall_truth.geolocated_snapshot(
+                ip_desired["ip"], permanent=permanent)
             lease = None
             try:
                 lease = firewall_truth.acquire_desired_state()
-                current = firewall_truth.geolocated_snapshot(ip_desired["ip"])
                 target = ("ip", ip_desired["ip"])
                 current_fence = firewall_truth.read_fences(
                     redis_client, [target])[target]
                 if (_semantic("ip", ip_desired, result)["ok"] and aggregate_ok and
-                        current["fingerprint"] == snapshot["fingerprint"] and
+                        current_snapshot["fingerprint"] == snapshot["fingerprint"] and
+                        current_snapshot["desired"] == desired and
+                        firewall_truth.read_desired_generation(lease.redis) ==
+                        plan_generation and
                         current_fence == fence and
                         firewall_truth.desired_state_is_current(lease)):
                     firewall_truth.record_host_observation(
@@ -673,8 +704,8 @@ def sync_firewall(job):
                         incarnation=incarnation)
                 else:
                     failures += 1
-            except firewall_truth.FirewallTruthError:
-                failures += 1
+            except firewall_truth.FirewallTruthError as err:
+                _retry_firewall_sync(job, err.code)
             finally:
                 firewall_truth.release_desired_state(lease)
 
@@ -684,17 +715,20 @@ def sync_firewall(job):
         lease = None
         try:
             lease = firewall_truth.acquire_desired_state()
+            if firewall_truth.read_desired_generation(
+                    lease.redis) != plan_generation:
+                _retry_firewall_sync(job, "desired_generation_changed")
             jobs.publish(
                 func="mojo.apps.incident.asyncjobs.aggregate_firewall_truth",
-                payload={}, channel="default")
-        except firewall_truth.FirewallTruthError:
-            failures += 1
+                payload={}, channel="default", max_retries=8,
+                backoff_base=2.0, backoff_max=300,
+                expires_in=SYNC_FIREWALL_MARKER_TTL)
+        except firewall_truth.FirewallTruthError as err:
+            _retry_firewall_sync(job, err.code)
         finally:
             firewall_truth.release_desired_state(lease)
         if failures:
-            job.add_log(
-                f"sync_firewall: {failures} object(s) unverified; marker not advanced")
-            return False
+            _retry_firewall_sync(job, f"{failures}_objects_unverified")
         redis_client.set(last_sync_key, dates.utcnow().isoformat(),
                          ex=SYNC_FIREWALL_MARKER_TTL)
         if force_value:
@@ -705,8 +739,7 @@ def sync_firewall(job):
             f"quarantined={quarantined}")
         return True
     except firewall_truth.FirewallTruthError as err:
-        job.add_log(f"sync_firewall: refused ({err.code})")
-        return False
+        _retry_firewall_sync(job, err.code)
     finally:
         try:
             if token is not None:
@@ -725,59 +758,82 @@ def aggregate_firewall_truth(job):
 
     lease = None
     try:
-        # Phase one captures desired truth and fences, then releases before the
-        # potentially large set of Redis observation reads.
         lease = firewall_truth.acquire_desired_state()
-        roster = firewall_truth.exact_compatible_roster()
-        redis_client = lease.redis
-        permanent = firewall_truth.permanent_snapshot()
-        aggregate_target = ("permanent", permanent["name"])
-        aggregate_fence = firewall_truth.read_fences(
-            redis_client, [aggregate_target])[aggregate_target]
-        permanent_desired = {
-            "name": permanent["name"], "present": True,
-            "count": len(permanent["cidrs"]),
-            "digest": firewall_truth.network_digest(permanent["cidrs"]),
-        }
-        ipsets = list(IPSet.objects.order_by("pk")[
-            :SYNC_FIREWALL_MAX_OBJECTS + 1])
-        geos = list(GeoLocatedIP.objects.filter(
-            Q(is_blocked=True) | Q(firewall_pending=True) |
-            Q(is_whitelisted=True)).order_by("pk")[
-                :SYNC_FIREWALL_MAX_OBJECTS + 1])
-        if (len(ipsets) > SYNC_FIREWALL_MAX_OBJECTS or
-                len(geos) > SYNC_FIREWALL_MAX_OBJECTS):
-            job.add_log("aggregate_firewall_truth: desired object bound exceeded")
-            return False
-        ipset_plans = []
-        for row in ipsets:
-            try:
-                snapshot = firewall_truth.ipset_snapshot(row.name)
-                target = ("set", snapshot["desired"]["name"])
-                fence = firewall_truth.read_fences(
-                    redis_client, [target])[target]
-                ipset_plans.append((row, snapshot, fence, None))
-            except firewall_truth.FirewallTruthError as err:
-                ipset_plans.append((row, None, None, err.code))
-        geo_plans = []
-        for row in geos:
-            try:
-                snapshot = firewall_truth.geolocated_snapshot(
-                    row.ip_address, permanent=permanent)
-                target = ("ip", snapshot["canonical"])
-                fence = firewall_truth.read_fences(
-                    redis_client, [target])[target]
-                geo_plans.append((row, snapshot, fence, None))
-            except firewall_truth.FirewallTruthError as err:
-                geo_plans.append((row, None, None, err.code))
+        baseline_generation = firewall_truth.read_desired_generation(lease.redis)
         if not firewall_truth.desired_state_is_current(lease):
-            raise firewall_truth.FirewallTruthError(
-                "desired_state_busy", "desired snapshot lease expired")
+            _retry_firewall_sync(job, "desired_state_busy")
     except firewall_truth.FirewallTruthError as err:
-        job.add_log(f"aggregate_firewall_truth: refused ({err.code})")
-        return False
+        _retry_firewall_sync(job, err.code)
     finally:
         firewall_truth.release_desired_state(lease)
+
+    roster = firewall_truth.exact_compatible_roster()
+    permanent = firewall_truth.permanent_snapshot()
+    aggregate_target = ("permanent", permanent["name"])
+    permanent_desired = {
+        "name": permanent["name"], "present": True,
+        "count": len(permanent["cidrs"]),
+        "digest": firewall_truth.network_digest(permanent["cidrs"]),
+    }
+    ipsets = list(IPSet.objects.order_by("pk")[
+        :SYNC_FIREWALL_MAX_OBJECTS + 1])
+    geos = list(GeoLocatedIP.objects.filter(
+        Q(is_blocked=True) | Q(firewall_pending=True) |
+        Q(is_whitelisted=True)).order_by("pk")[
+            :SYNC_FIREWALL_MAX_OBJECTS + 1])
+    if (len(ipsets) > SYNC_FIREWALL_MAX_OBJECTS or
+            len(geos) > SYNC_FIREWALL_MAX_OBJECTS):
+        job.add_log("aggregate_firewall_truth: desired object bound exceeded")
+        _retry_firewall_sync(job, "desired_object_bound_exceeded")
+    ipset_plans = []
+    for row in ipsets:
+        try:
+            snapshot = firewall_truth.ipset_snapshot_from_row(row)
+            ipset_plans.append((row, snapshot, None, None))
+        except firewall_truth.FirewallTruthError as err:
+            ipset_plans.append((row, None, None, err.code))
+    geo_plans = []
+    for row in geos:
+        try:
+            snapshot = firewall_truth.geolocated_snapshot_from_row(
+                row, permanent=permanent)
+            geo_plans.append((row, snapshot, None, None))
+        except firewall_truth.FirewallTruthError as err:
+            geo_plans.append((row, None, None, err.code))
+
+    targets = [aggregate_target]
+    targets.extend(("set", snapshot["desired"]["name"])
+                   for unused, snapshot, unused_fence, quarantine in ipset_plans
+                   if not quarantine)
+    targets.extend(("ip", snapshot["canonical"])
+                   for unused, snapshot, unused_fence, quarantine in geo_plans
+                   if not quarantine)
+    lease = None
+    try:
+        lease = firewall_truth.acquire_desired_state()
+        if firewall_truth.read_desired_generation(
+                lease.redis) != baseline_generation:
+            _retry_firewall_sync(job, "desired_generation_changed")
+        fence_map = firewall_truth.read_fences(lease.redis, targets)
+        plan_generation = baseline_generation
+        if not firewall_truth.desired_state_is_current(lease):
+            _retry_firewall_sync(job, "desired_state_busy")
+    except firewall_truth.FirewallTruthError as err:
+        _retry_firewall_sync(job, err.code)
+    finally:
+        firewall_truth.release_desired_state(lease)
+
+    aggregate_fence = fence_map[aggregate_target]
+    ipset_plans = [
+        (row, snapshot,
+         fence_map[("set", snapshot["desired"]["name"])] if not quarantine
+         else None, quarantine)
+        for row, snapshot, unused_fence, quarantine in ipset_plans]
+    geo_plans = [
+        (row, snapshot,
+         fence_map[("ip", snapshot["canonical"])] if not quarantine
+         else None, quarantine)
+        for row, snapshot, unused_fence, quarantine in geo_plans]
 
     aggregate = firewall_truth.aggregate_observations(
         "permanent", permanent["name"], aggregate_fence,
@@ -833,59 +889,71 @@ def aggregate_firewall_truth(job):
             failures += 1
         geo_updates.append((row, snapshot, fence, values))
 
-    # Phase two refuses a mixed roster or changed desired generation before any
-    # shared marker write, then publishes the CAS-guarded aggregate truth.
+    # Phase two brackets CAS publication with short constant/batched checks.
+    # Per-row DB writes remain outside the fleet lease; a changed generation
+    # pessimistically re-marks this plan pending before its durable retry.
+    current_roster = firewall_truth.exact_compatible_roster()
     lease = None
     try:
         lease = firewall_truth.acquire_desired_state()
-        if firewall_truth.exact_compatible_roster() != roster:
-            job.add_log("aggregate_firewall_truth: runner roster changed")
-            return False
-        current_permanent = firewall_truth.permanent_snapshot()
-        current_aggregate_fence = firewall_truth.read_fences(
-            lease.redis, [aggregate_target])[aggregate_target]
-        if (current_permanent["fingerprint"] != permanent["fingerprint"] or
-                current_aggregate_fence != aggregate_fence):
-            job.add_log("aggregate_firewall_truth: permanent generation changed")
-            return False
-        for unused_row, snapshot, fence, quarantine in ipset_plans:
-            if quarantine:
-                continue
-            current = firewall_truth.ipset_snapshot(snapshot["desired"]["name"])
-            target = ("set", snapshot["desired"]["name"])
-            if (current["fingerprint"] != snapshot["fingerprint"] or
-                    firewall_truth.read_fences(
-                        lease.redis, [target])[target] != fence):
-                job.add_log("aggregate_firewall_truth: IPSet generation changed")
-                return False
-        for unused_row, snapshot, fence, quarantine in geo_plans:
-            if quarantine:
-                continue
-            current = firewall_truth.geolocated_snapshot(snapshot["canonical"])
-            target = ("ip", snapshot["canonical"])
-            if (current["fingerprint"] != snapshot["fingerprint"] or
-                    firewall_truth.read_fences(
-                        lease.redis, [target])[target] != fence):
-                job.add_log("aggregate_firewall_truth: Geo generation changed")
-                return False
+        if current_roster != roster:
+            _retry_firewall_sync(job, "runner_roster_changed")
+        if firewall_truth.read_desired_generation(
+                lease.redis) != plan_generation:
+            _retry_firewall_sync(job, "desired_generation_changed")
+        if firewall_truth.read_fences(lease.redis, targets) != fence_map:
+            _retry_firewall_sync(job, "desired_fence_changed")
         if not firewall_truth.desired_state_is_current(lease):
-            job.add_log("aggregate_firewall_truth: desired lease expired")
-            return False
-        for row, unused_snapshot, unused_fence, values in ipset_updates:
-            IPSet.objects.filter(
-                pk=row.pk, modified=row.modified).update(**values)
-        for row, unused_snapshot, unused_fence, values in geo_updates:
-            GeoLocatedIP.objects.filter(
-                pk=row.pk,
-                firewall_generation=row.firewall_generation).update(**values)
-        job.add_log(
-            f"aggregate_firewall_truth: roster={len(roster)} failures={failures}")
-        return failures == 0
+            _retry_firewall_sync(job, "desired_state_busy")
     except firewall_truth.FirewallTruthError as err:
-        job.add_log(f"aggregate_firewall_truth: refused ({err.code})")
-        return False
+        _retry_firewall_sync(job, err.code)
     finally:
         firewall_truth.release_desired_state(lease)
+
+    stale_code = None
+    for row, unused_snapshot, unused_fence, values in ipset_updates:
+        if not IPSet.objects.filter(
+                pk=row.pk, modified=row.modified).update(**values):
+            stale_code = stale_code or "ipset_generation_changed"
+    for row, unused_snapshot, unused_fence, values in geo_updates:
+        if not GeoLocatedIP.objects.filter(
+                pk=row.pk,
+                firewall_generation=row.firewall_generation).update(**values):
+            stale_code = stale_code or "geo_generation_changed"
+
+    current_roster = firewall_truth.exact_compatible_roster()
+    lease = None
+    try:
+        lease = firewall_truth.acquire_desired_state()
+        if current_roster != roster:
+            stale_code = stale_code or "runner_roster_changed"
+        if firewall_truth.read_desired_generation(
+                lease.redis) != plan_generation:
+            stale_code = stale_code or "desired_generation_changed"
+        if firewall_truth.read_fences(lease.redis, targets) != fence_map:
+            stale_code = stale_code or "desired_fence_changed"
+        if not firewall_truth.desired_state_is_current(lease):
+            stale_code = stale_code or "desired_state_busy"
+    except firewall_truth.FirewallTruthError as err:
+        stale_code = stale_code or err.code
+    finally:
+        firewall_truth.release_desired_state(lease)
+
+    if stale_code:
+        IPSet.objects.filter(pk__in=[row.pk for row, *_ in ipset_updates]).update(
+            last_synced=None,
+            sync_error=f"{stale_code}: aggregate publication superseded"[:512])
+        GeoLocatedIP.objects.filter(
+            pk__in=[row.pk for row, *_ in geo_updates]).update(
+                firewall_pending=True,
+                firewall_sync_error=(
+                    f"{stale_code}: aggregate publication superseded"[:512]))
+        _retry_firewall_sync(job, stale_code)
+    job.add_log(
+        f"aggregate_firewall_truth: roster={len(roster)} failures={failures}")
+    if failures:
+        _retry_firewall_sync(job, f"{failures}_observations_unverified")
+    return True
 
 
 def on_engine_start(engine):
@@ -918,8 +986,13 @@ def on_engine_start(engine):
                       ex=SYNC_FIREWALL_MARKER_TTL)
     jobs.publish(
         func="mojo.apps.incident.asyncjobs.sync_firewall",
-        payload={"force": True},
-        channel=engine.runner_id)
+        payload={"target": {
+            "host": _firewall_host(), "runner_id": engine.runner_id,
+            "started": engine.start_time.isoformat(),
+        }},
+        channel=engine.runner_id, max_retries=8,
+        backoff_base=2.0, backoff_max=300,
+        expires_in=SYNC_FIREWALL_MARKER_TTL)
     return f"queued:sync_firewall force={engine.runner_id}"
 
 

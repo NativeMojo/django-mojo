@@ -1,13 +1,9 @@
 import ipaddress
-import re
 
 from django.conf import settings
 from django.db import migrations, models
 from django.db.models import Q
 from django.utils import timezone
-
-
-_SET_NAME = re.compile(r"^[A-Za-z0-9_-]{1,31}$")
 
 
 def _geo_touched():
@@ -28,29 +24,25 @@ def _valid_ipv4(value):
 
 
 def _ipset_quarantine(row, permanent_name):
-    name = row.name
-    if not isinstance(name, str) or not _SET_NAME.fullmatch(name):
-        return "invalid_set_name"
+    from mojo.apps.incident.services.firewall_truth import (
+        FirewallTruthError, canonical_operator_ipset, canonical_set_name)
+
+    try:
+        name = canonical_set_name(row.name)
+    except FirewallTruthError as err:
+        return err.code
     if name == permanent_name:
         return "configured_name_collision"
-    if name.endswith("_tmp") or name.startswith("mojo_"):
-        return "reserved_set_name"
-    if row.is_enabled and len(name) + 4 > 31:
-        return "invalid_set_name"
     values = []
     for line in (row.data or "").splitlines():
         value = line.strip()
         if not value or value.startswith("#"):
             continue
         values.append(value)
-    if len(values) > 250000:
-        return "network_limit"
     try:
-        networks = [ipaddress.ip_network(value, strict=False) for value in values]
-    except ValueError:
-        return "invalid_network"
-    if any(network.version != 4 for network in networks):
-        return "unsupported_family"
+        canonical_operator_ipset(name, values, bool(row.is_enabled))
+    except FirewallTruthError as err:
+        return err.code
     return ""
 
 

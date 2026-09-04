@@ -216,10 +216,11 @@ def _permanent_authority(request):
 
 def _operator_set_target(request, temporary=False):
     aggregate = _permanent_authority(request)
-    name = _set_name(request.get("set_name"), temporary=temporary)
-    if name == aggregate:
+    name = _set_name(request.get("set_name"), temporary=True)
+    if name == aggregate or name.startswith("mojo_"):
         raise BrokerError(
-            "configured permanent set is reserved", code="reserved_set_name")
+            "framework firewall set namespace is reserved",
+            code="reserved_set_name")
     return name
 
 

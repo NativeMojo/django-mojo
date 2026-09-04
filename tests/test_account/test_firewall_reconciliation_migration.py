@@ -25,7 +25,10 @@ def test_firewall_truth_migration_backfill(opts):
     from mojo.apps.incident.models import IPSet
 
     ips = ("198.51.100.201", "198.51.100.202", "2001:db8::201")
-    names = ("migration_valid", "migration_ipv6", "configured_reserved")
+    names = (
+        "migration_valid", "migration_ipv6", "configured_reserved",
+        "mojo_legacy_operator", "x" * 28,
+    )
     GeoLocatedIP.objects.filter(ip_address__in=ips).delete()
     IPSet.objects.filter(name__in=names).delete()
     touched = GeoLocatedIP.objects.create(
@@ -42,6 +45,10 @@ def test_firewall_truth_migration_backfill(opts):
               is_enabled=True, last_synced=timezone.now()),
         IPSet(name=names[2], kind="custom", data="198.51.100.0/24",
               is_enabled=True, last_synced=timezone.now()),
+        IPSet(name=names[3], kind="custom", data="198.51.100.0/24",
+              is_enabled=False, last_synced=timezone.now()),
+        IPSet(name=names[4], kind="custom", data="198.51.100.0/24",
+              is_enabled=False, last_synced=timezone.now()),
     ])
     migration = importlib.import_module(
         "mojo.apps.account.migrations.0054_geolocatedip_firewall_reconciliation")
@@ -58,11 +65,16 @@ def test_firewall_truth_migration_backfill(opts):
     valid = IPSet.objects.get(name=names[0])
     ipv6 = IPSet.objects.get(name=names[1])
     collision = IPSet.objects.get(name=names[2])
+    framework = IPSet.objects.get(name=names[3])
+    overlong = IPSet.objects.get(name=names[4])
     assert valid.is_enabled and valid.last_synced is None and \
         valid.sync_error.startswith("pending checked")
     assert not ipv6.is_enabled and "unsupported_family" in ipv6.sync_error
     assert not collision.is_enabled and \
         "configured_name_collision" in collision.sync_error
+    assert not framework.is_enabled and \
+        "reserved_set_name" in framework.sync_error
+    assert not overlong.is_enabled and "invalid_set_name" in overlong.sync_error
 
 
 @th.unit_test("0054 depends on the historical IPSet schema")

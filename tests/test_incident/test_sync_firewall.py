@@ -11,15 +11,21 @@ TEST_PERM = "198.51.100.50"
 TEST_TTL = "198.51.100.52"
 TEST_ABSENT = "198.51.100.53"
 LOCAL_INCARNATION = {"host": "test-host", "started": "test-start"}
+LOCAL_TARGET = {**LOCAL_INCARNATION, "runner_id": "test-runner"}
 
 
 class _Redis:
     def __init__(self):
         self.store = {}
         self.evals = []
+        self.mget_calls = []
 
     def get(self, key):
         return self.store.get(key)
+
+    def mget(self, keys):
+        self.mget_calls.append(list(keys))
+        return [self.store.get(key) for key in keys]
 
     def set(self, key, value, nx=False, ex=None):
         if nx and key in self.store:
@@ -33,8 +39,9 @@ class _Redis:
         if "redis.call('incr'" in script:
             if self.store.get(keys[0]) != argv[0]:
                 return False
+            self.store[keys[1]] = int(self.store.get(keys[1], 0)) + 1
             values = []
-            for key in keys[1:]:
+            for key in keys[2:]:
                 self.store[key] = int(self.store.get(key, 0)) + 1
                 values.append(self.store[key])
             return values
@@ -48,9 +55,9 @@ class _Redis:
         return 1
 
 
-def _job():
+def _job(target=None):
     from objict import objict
-    value = objict(logs=[], payload={})
+    value = objict(logs=[], payload={"target": target or LOCAL_TARGET})
     value.add_log = value.logs.append
     return value
 
@@ -95,8 +102,8 @@ def _observation(kind, identity, fence, fingerprint, host, desired,
 def _run_sync(job):
     from mojo.apps.incident.asyncjobs import sync_firewall
     with mock.patch(
-            "mojo.apps.incident.services.firewall_truth.current_host_incarnation",
-            return_value=LOCAL_INCARNATION):
+            "mojo.apps.incident.services.firewall_truth.current_host_runner_target",
+            return_value=LOCAL_TARGET):
         return sync_firewall(job)
 
 
@@ -225,7 +232,8 @@ def test_lock_is_atomic_and_renewed(opts):
 
 @th.django_unit_test("busy host lock refuses before firewall writes")
 def test_busy_host_lock_is_not_success(opts):
-    from mojo.apps.incident.asyncjobs import _sync_firewall_keys, sync_firewall
+    from mojo.apps.incident.asyncjobs import (
+        FirewallSyncRetry, _sync_firewall_keys, sync_firewall)
 
     redis = _Redis()
     redis.store[_sync_firewall_keys()[2]] = "another-generation"
@@ -235,8 +243,10 @@ def test_busy_host_lock_is_not_success(opts):
             mock.patch("mojo.apps.incident.firewall.normalize_permanent_ipset") \
                     as permanent, \
             mock.patch("mojo.apps.incident.firewall.normalize_ip") as ips:
-        result = _run_sync(_job())
-    assert result is False, "host lock collision looked like reconcile success"
+        with th.assert_raises(FirewallSyncRetry) as raised:
+            _run_sync(_job())
+    assert raised.exception.code == "host_busy", \
+        "host lock collision completed instead of requesting durable retry"
     sets.assert_not_called()
     permanent.assert_not_called()
     ips.assert_not_called()
@@ -245,7 +255,8 @@ def test_busy_host_lock_is_not_success(opts):
 @th.django_unit_test("stale generation cannot clear a newer pending decision")
 def test_object_generation_fences_finalize(opts):
     from mojo.apps.account.models import GeoLocatedIP
-    from mojo.apps.incident.asyncjobs import _sync_firewall_keys, sync_firewall
+    from mojo.apps.incident.asyncjobs import (
+        FirewallSyncRetry, _sync_firewall_keys, sync_firewall)
 
     redis = _Redis()
 
@@ -263,17 +274,19 @@ def test_object_generation_fences_finalize(opts):
                        side_effect=_permanent_result), \
             mock.patch("mojo.apps.incident.firewall.normalize_ip",
                        side_effect=normalize_ip):
-        result = _run_sync(_job())
+        with th.assert_raises(FirewallSyncRetry):
+            _run_sync(_job())
     row = GeoLocatedIP.objects.get(ip_address=TEST_ABSENT)
     assert row.firewall_generation == 99 and row.firewall_pending is True, \
         "stale observation overwrote a newer desired generation"
-    assert result is False and redis.get(_sync_firewall_keys()[0]) is None, \
+    assert redis.get(_sync_firewall_keys()[0]) is None, \
         "superseded desired generation advanced host success"
 
 
 @th.django_unit_test("semantic mismatch does not advance host marker")
 def test_mismatch_does_not_advance_marker(opts):
-    from mojo.apps.incident.asyncjobs import _sync_firewall_keys, sync_firewall
+    from mojo.apps.incident.asyncjobs import (
+        FirewallSyncRetry, _sync_firewall_keys, sync_firewall)
 
     redis = _Redis()
     unused_marker, force_key, unused_lock = _sync_firewall_keys()
@@ -288,8 +301,8 @@ def test_mismatch_does_not_advance_marker(opts):
                        return_value=bad), \
             mock.patch("mojo.apps.incident.firewall.normalize_ip",
                        side_effect=_ip_result):
-        result = _run_sync(_job())
-    assert result is False, "mismatch was reported as successful reconcile"
+        with th.assert_raises(FirewallSyncRetry):
+            _run_sync(_job())
     assert redis.get(_sync_firewall_keys()[0]) is None, \
         "host marker advanced without semantic verification"
     assert redis.get(force_key) == "pending-force-generation", \
@@ -304,19 +317,33 @@ def test_per_object_quarantine_continues_valid_rows(opts):
 
     invalid_ip = "2001:db8::252"
     invalid_set = "legacy_ipv6_sync"
+    reserved_set = "mojo_legacy_operator"
+    overlong_set = "x" * 28
     GeoLocatedIP.objects.filter(ip_address=invalid_ip).delete()
-    IPSet.objects.filter(name=invalid_set).delete()
+    IPSet.objects.filter(name__in=(
+        invalid_set, reserved_set, overlong_set)).delete()
     GeoLocatedIP.objects.create(
         ip_address=invalid_ip, firewall_pending=True)
     IPSet.objects.bulk_create([
         IPSet(name=invalid_set, kind="custom", is_enabled=True,
-              data="2001:db8::/32", cidr_count=1)])
+              data="2001:db8::/32", cidr_count=1),
+        IPSet(name=reserved_set, kind="custom", is_enabled=False,
+              data="192.0.2.0/24", cidr_count=1),
+        IPSet(name=overlong_set, kind="custom", is_enabled=False,
+              data="192.0.2.0/24", cidr_count=1),
+    ])
     redis = _Redis()
     job = _job()
+    operator_calls = []
+
+    def normalize_set(name, cidrs, present=True):
+        operator_calls.append(name)
+        return _set_result(name, cidrs, present)
+
     with mock.patch("mojo.apps.jobs.adapters.get_adapter", return_value=redis), \
             mock.patch("mojo.apps.jobs.publish") as publish, \
             mock.patch("mojo.apps.incident.firewall.normalize_ipset",
-                       side_effect=_set_result), \
+                       side_effect=normalize_set), \
             mock.patch("mojo.apps.incident.firewall.normalize_permanent_ipset",
                        side_effect=_permanent_result), \
             mock.patch("mojo.apps.incident.firewall.normalize_ip",
@@ -328,6 +355,8 @@ def test_per_object_quarantine_continues_valid_rows(opts):
     assert any(key.startswith("mojo:firewall:observation:set:test_sync_fw")
                for key in redis.store), \
         "valid sibling was not observed after a legacy row was quarantined"
+    assert not {invalid_set, reserved_set, overlong_set} & set(operator_calls), \
+        "quarantined operator namespace/data reached the privileged broker"
 
 
 @th.django_unit_test("firewall reconcile keys are host scoped")
@@ -447,6 +476,16 @@ def test_sync_broker_io_does_not_starve_other_hosts(opts):
 
     redis = _Redis()
     observed_unlocked = []
+    permanent_snapshot = firewall_truth.permanent_snapshot
+    ipset_snapshot_from_row = firewall_truth.ipset_snapshot_from_row
+    geo_snapshot_from_row = firewall_truth.geolocated_snapshot_from_row
+    ipset_snapshot = firewall_truth.ipset_snapshot
+    geo_snapshot = firewall_truth.geolocated_snapshot
+
+    def outside_lease(callback, *args, **kwargs):
+        observed_unlocked.append(
+            redis.get(firewall_truth.DESIRED_STATE_LOCK) is None)
+        return callback(*args, **kwargs)
 
     def normalize_permanent(cidrs):
         observed_unlocked.append(
@@ -472,11 +511,32 @@ def test_sync_broker_io_does_not_starve_other_hosts(opts):
             mock.patch("mojo.apps.incident.firewall.normalize_ip",
                        side_effect=normalize_ip), \
             mock.patch.object(
-                firewall_truth, "current_host_incarnation",
-                return_value={"host": "node-a", "started": "node-a-start"}):
-        result = sync_firewall(_job())
+                firewall_truth, "permanent_snapshot",
+                side_effect=lambda: outside_lease(permanent_snapshot)), \
+            mock.patch.object(
+                firewall_truth, "ipset_snapshot_from_row",
+                side_effect=lambda row: outside_lease(
+                    ipset_snapshot_from_row, row)), \
+            mock.patch.object(
+                firewall_truth, "geolocated_snapshot_from_row",
+                side_effect=lambda row, permanent=None: outside_lease(
+                    geo_snapshot_from_row, row, permanent=permanent)), \
+            mock.patch.object(
+                firewall_truth, "ipset_snapshot",
+                side_effect=lambda name: outside_lease(ipset_snapshot, name)), \
+            mock.patch.object(
+                firewall_truth, "geolocated_snapshot",
+                side_effect=lambda ip, permanent=None: outside_lease(
+                    geo_snapshot, ip, permanent=permanent)), \
+            mock.patch.object(
+                firewall_truth, "current_host_runner_target",
+                return_value={"host": "node-a", "runner_id": "runner-a",
+                              "started": "node-a-start"}):
+        result = sync_firewall(_job({
+            "host": "node-a", "runner_id": "runner-a",
+            "started": "node-a-start"}))
     assert result is True and observed_unlocked and all(observed_unlocked), \
-        "host-local broker work retained the fleet-wide desired-state lease"
+        "snapshot or broker work retained the fleet-wide desired-state lease"
     assert any(key.endswith(":node-a") and "observation" in key
                for key in redis.store), \
         "the unstarved host did not publish its incarnation-bound observation"
@@ -513,15 +573,66 @@ def test_desired_lease_contention_is_bounded_and_retryable(opts):
         "lease contention was not exposed as retryable unknown state"
 
 
+@th.django_unit_test("sync lease contention is a durable retry, never completion")
+def test_sync_lease_contention_raises_for_job_retry(opts):
+    from mojo.apps.incident.asyncjobs import FirewallSyncRetry, sync_firewall
+    from mojo.apps.incident.services import firewall_truth
+
+    redis = _Redis()
+    busy = firewall_truth.FirewallTruthError(
+        "desired_state_busy", "another host owns the desired lease")
+    with mock.patch("mojo.apps.jobs.adapters.get_adapter", return_value=redis), \
+            mock.patch.object(firewall_truth, "current_host_runner_target",
+                              return_value=LOCAL_TARGET), \
+            mock.patch.object(firewall_truth, "acquire_desired_state",
+                              side_effect=busy), \
+            mock.patch("mojo.apps.incident.firewall.normalize_ipset") as broker, \
+            th.assert_raises(FirewallSyncRetry) as raised:
+        sync_firewall(_job())
+    assert raised.exception.code == "desired_state_busy"
+    broker.assert_not_called()
+
+
+@th.django_unit_test("bounded fence validation uses one Redis round trip")
+def test_max_cardinality_fences_are_batch_read(opts):
+    from mojo.apps.incident.services import firewall_truth
+
+    redis = _Redis()
+    targets = [("ip", f"10.{index // 256}.{index % 256}.1")
+               for index in range(10000)]
+    assert len(firewall_truth.read_fences(redis, targets)) == 10000
+    assert len(redis.mget_calls) == 1 and len(redis.mget_calls[0]) == 10000, \
+        "max-cardinality plan performed serialized per-object Redis reads"
+
+
+@th.django_unit_test("oversize desired plan remains pending through job retry")
+def test_desired_plan_bound_raises_for_retry(opts):
+    from mojo.apps.incident import asyncjobs
+
+    redis = _Redis()
+    with mock.patch("mojo.apps.jobs.adapters.get_adapter", return_value=redis), \
+            mock.patch.object(asyncjobs, "SYNC_FIREWALL_MAX_OBJECTS", 0), \
+            mock.patch(
+                "mojo.apps.incident.services.firewall_truth.current_host_runner_target",
+                return_value=LOCAL_TARGET), \
+            mock.patch("mojo.apps.incident.firewall.normalize_ipset") as broker, \
+            th.assert_raises(asyncjobs.FirewallSyncRetry) as raised:
+        asyncjobs.sync_firewall(_job())
+    assert raised.exception.code == "desired_object_bound_exceeded"
+    broker.assert_not_called()
+
+
 @th.django_unit_test("independent hosts can publish the same desired generation")
 def test_two_hosts_publish_without_global_lease_starvation(opts):
     from mojo.apps.incident.asyncjobs import sync_firewall
     from mojo.apps.incident.services import firewall_truth
 
     redis = _Redis()
-    incarnations = [
-        {"host": "node-a", "started": "node-a-start"},
-        {"host": "node-b", "started": "node-b-start"},
+    targets = [
+        {"host": "node-a", "runner_id": "runner-a",
+         "started": "node-a-start"},
+        {"host": "node-b", "runner_id": "runner-b",
+         "started": "node-b-start"},
     ]
     with mock.patch("mojo.apps.jobs.adapters.get_adapter", return_value=redis), \
             mock.patch("mojo.apps.jobs.publish"), \
@@ -532,14 +643,14 @@ def test_two_hosts_publish_without_global_lease_starvation(opts):
             mock.patch("mojo.apps.incident.firewall.normalize_ip",
                        side_effect=_ip_result), \
             mock.patch.object(
-                firewall_truth, "current_host_incarnation",
-                side_effect=incarnations):
-        assert sync_firewall(_job()) is True
-        assert sync_firewall(_job()) is True
+                firewall_truth, "current_host_runner_target",
+                side_effect=targets):
+        assert sync_firewall(_job(targets[0])) is True
+        assert sync_firewall(_job(targets[1])) is True
     permanent = firewall_truth.permanent_snapshot()
     target = ("permanent", permanent["name"])
     fence = firewall_truth.read_fences(redis, [target])[target]
-    for incarnation in incarnations:
+    for incarnation in targets:
         key = firewall_truth.observation_key(
             "permanent", permanent["name"], fence, incarnation["host"])
         assert redis.get(key) is not None, \
@@ -548,7 +659,8 @@ def test_two_hosts_publish_without_global_lease_starvation(opts):
 
 @th.django_unit_test("fleet aggregator alone clears shared IPSet truth")
 def test_fleet_aggregator_requires_every_host(opts):
-    from mojo.apps.incident.asyncjobs import aggregate_firewall_truth
+    from mojo.apps.incident.asyncjobs import (
+        FirewallSyncRetry, aggregate_firewall_truth)
     from mojo.apps.incident.models import IPSet
     from mojo.apps.incident.services import firewall_truth
 
@@ -568,7 +680,8 @@ def test_fleet_aggregator_requires_every_host(opts):
                 return_value=[
                     {"host": "node-a", "started": "node-a-start"},
                     {"host": "node-b", "started": "node-b-start"}]):
-        aggregate_firewall_truth(_job())
+        with th.assert_raises(FirewallSyncRetry):
+            aggregate_firewall_truth(_job())
     row.refresh_from_db()
     assert row.last_synced is None and row.sync_error, \
         "one successful host cleared shared IPSet truth"
@@ -582,7 +695,8 @@ def test_fleet_aggregator_requires_every_host(opts):
                 return_value=[
                     {"host": "node-a", "started": "node-a-start"},
                     {"host": "node-b", "started": "node-b-start"}]):
-        aggregate_firewall_truth(_job())
+        with th.assert_raises(FirewallSyncRetry):
+            aggregate_firewall_truth(_job())
     row.refresh_from_db()
     assert row.last_synced is not None and row.sync_error is None, \
         "complete same-generation fleet evidence did not finalize IPSet truth"
@@ -608,23 +722,42 @@ def test_verified_sync_clears_force_flag(opts):
         "verified reconciliation left a consumed force generation behind"
 
 
-@th.django_unit_test("firewall cron schedule and host fanout stay registered")
-def test_cron_schedule_and_broadcast(opts):
+@th.django_unit_test("firewall cron selects exactly one incarnation per hostname")
+def test_cron_schedule_and_host_fanout(opts):
     from mojo.apps.incident import cronjobs
+    from mojo.apps.jobs.manager import JobManager
     from mojo.decorators.cron import schedule
 
     specs = {spec["func"].__name__: spec
              for spec in schedule.scheduled_functions}
     assert specs["sweep_expired_blocks"]["minutes"] == "*/5"
     assert specs["sync_firewall"]["minutes"] == "0"
-    with th.capture_publishes(
+    rows = [
+        {"runner_id": "z-runner", "hostname": "node-a",
+         "started": "2026-09-04T12:00:00+00:00", "channels": ["default"],
+         "capabilities": {"execute_checked": 2}},
+        {"runner_id": "a-runner", "hostname": "node-a",
+         "started": "2026-09-04T12:01:00+00:00", "channels": ["default"],
+         "capabilities": {"execute_checked": 2}},
+        {"runner_id": "b-runner", "hostname": "node-b",
+         "started": "2026-09-04T12:02:00+00:00", "channels": ["default"],
+         "capabilities": {"execute_checked": 2}},
+    ]
+    manager = mock.Mock()
+    manager.get_runners_bounded.return_value = rows
+    manager._checked_host_roster = JobManager._checked_host_roster
+    with mock.patch("mojo.apps.jobs.get_manager", return_value=manager), \
+            th.capture_publishes(
             lambda call: call.get("func") == cronjobs.FIREWALL_SYNC_JOB) as calls:
         cronjobs.sync_firewall()
-    assert len(calls) == 1 and calls[0].get("broadcast") is True, calls
-    assert calls[0].get("channel") == "default", calls
+    assert [call["channel"] for call in calls] == ["a-runner", "b-runner"], calls
+    assert [call["payload"]["target"]["host"] for call in calls] == [
+        "node-a", "node-b"], calls
+    assert all(call.get("max_retries") == 8 and
+               call.get("backoff_max") == 300 for call in calls), calls
 
 
-@th.django_unit_test("firewall cron preserves hostname-channel fallback")
+@th.django_unit_test("firewall cron fails closed without hostname channels")
 def test_cron_fallback_without_hostname_channels(opts):
     from mojo.apps.incident import cronjobs
 
@@ -639,5 +772,5 @@ def test_cron_fallback_without_hostname_channels(opts):
             cronjobs.settings, "get_static", side_effect=get_static), \
             th.capture_publishes(
                 lambda call: call.get("func") == cronjobs.FIREWALL_SYNC_JOB) as calls:
-        cronjobs.sync_firewall()
-    assert len(calls) == 1 and not calls[0].get("broadcast"), calls
+        result = cronjobs.sync_firewall()
+    assert result == "failed" and calls == [], calls

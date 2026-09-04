@@ -7,6 +7,7 @@ HEALTH_MONITORING_ENABLED = settings.get_static("HEALTH_MONITORING_ENABLED", Fal
 
 FIREWALL_SYNC_JOB = "mojo.apps.incident.asyncjobs.sync_firewall"
 FIREWALL_SYNC_CHANNEL = "default"
+FIREWALL_SYNC_EXPIRES = 7200
 
 
 def _llm_triage_enabled():
@@ -97,19 +98,10 @@ def sweep_expired_blocks(force=False, verbose=False, now=None):
         payload={})
 
 
-# Hourly — every node rebuilds ITS OWN ipsets from DB truth (drift
-# reconciliation; boot recovery is asyncjobs.on_engine_start).
-#
-# BROADCAST, not a plain publish (item #2716): the job does node-local kernel
-# work, so a single consumer heals one arbitrary node and its marker then
-# suppresses the rest. This dispatcher stays fleet-once — the broadcast is what
-# fans out, exactly as edge's converge_edge does. Do not add per_node=True.
-#
-# The channel is load-bearing now. Under a plain publish it only decided WHICH
-# box did the work; under a broadcast it decides which boxes reconcile at all,
-# so it is "default" — the publish default, the first DEFAULT_CHANNELS entry,
-# and the channel the shipped role-split example consumes while omitting
-# "cleanup".
+# Hourly — select exactly one compatible incarnation per hostname, using the
+# same deterministic roster authority as checked execution. Multiple runners
+# on one box share one kernel, so broadcasting to both can let the non-roster
+# lock winner publish an observation the aggregator must reject.
 @schedule(minutes="0")
 def sync_firewall(force=False, verbose=False, now=None):
     # run_now() executes matched functions in one bare loop and re-raises, so
@@ -118,17 +110,20 @@ def sync_firewall(force=False, verbose=False, now=None):
         if not settings.get_static("JOBS_HOSTNAME_CHANNEL", True):
             # The fan-out addresses each runner's box-direct channel, which no
             # engine consumes when this is off — every job would strand.
-            # Degrade to the pre-existing single-runner reconcile instead.
             logit.warning(
                 "incident: JOBS_HOSTNAME_CHANNEL is off — the firewall "
-                "reconcile falls back to a single runner; per-node recovery "
-                "is disabled")
-            return jobs.publish(
-                func=FIREWALL_SYNC_JOB, channel=FIREWALL_SYNC_CHANNEL,
-                payload={})
-        return jobs.publish(
-            func=FIREWALL_SYNC_JOB, channel=FIREWALL_SYNC_CHANNEL,
-            payload={}, broadcast=True)
+                "reconcile cannot safely address one runner per host")
+            return "failed"
+        from mojo.apps.incident.services import firewall_truth
+        queued = []
+        for target in firewall_truth.exact_compatible_runner_roster(
+                FIREWALL_SYNC_CHANNEL):
+            queued.append(jobs.publish(
+                func=FIREWALL_SYNC_JOB, channel=target["runner_id"],
+                payload={"target": target}, max_retries=8,
+                backoff_base=2.0, backoff_max=300,
+                expires_in=FIREWALL_SYNC_EXPIRES))
+        return queued
     except Exception as err:
         logit.error(f"incident: could not publish the firewall reconcile: {err}")
         return "failed"

@@ -220,6 +220,24 @@ def test_dynamic_reserved_set_collision(opts):
                  "operator lifecycle could overwrite the configured aggregate")
 
 
+@th.unit_test("broker independently closes the framework operator namespace")
+def test_framework_operator_namespace_is_refused(opts):
+    from mojo.deploy import firewall_broker as broker
+
+    request = {
+        "operation": "set.normalize", "set_name": "mojo_forged_operator",
+        "expected_permanent_set": "mojo_blocked", "cidrs": [],
+        "present": False,
+    }
+    with mock.patch.object(
+            broker, "_root_permanent_set_name", return_value="mojo_blocked"), \
+            th.assert_raises(broker.BrokerError) as raised:
+        broker.build_operation(
+            request, function="mojo.apps.incident.asyncjobs.sync_firewall")
+    th.assert_eq(raised.exception.code, "reserved_set_name",
+                 "framework namespace reached an operator broker operation")
+
+
 @th.unit_test("caller fields cannot redefine the root permanent namespace")
 def test_forged_permanent_namespace_is_refused(opts):
     from mojo.deploy import firewall_broker as broker

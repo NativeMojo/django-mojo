@@ -22,6 +22,9 @@ class _CheckedRedis:
     def get(self, key):
         return self.store.get(key)
 
+    def mget(self, keys):
+        return [self.store.get(key) for key in keys]
+
     def set(self, key, value, nx=False, ex=None):
         if nx and key in self.store:
             return False
@@ -33,8 +36,9 @@ class _CheckedRedis:
         if "redis.call('incr'" in script:
             if self.store.get(keys[0]) != argv[0]:
                 return False
+            self.store[keys[1]] = int(self.store.get(keys[1], 0)) + 1
             values = []
-            for key in keys[1:]:
+            for key in keys[2:]:
                 self.store[key] = int(self.store.get(key, 0)) + 1
                 values.append(self.store[key])
             return values
