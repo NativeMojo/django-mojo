@@ -22,8 +22,12 @@ def setup_user_tools(opts):
 
 @th.django_unit_test()
 def test_query_rate_limits_reads_redis(opts):
-    """query_rate_limits must reach Redis and report active rate-limit entries
-    from both rate-limit families without letting one family consume the cap."""
+    """query_rate_limits reaches Redis and returns only bounded active entries.
+
+    Redis SCAN deliberately makes no ordering or membership guarantee.  The
+    full suite shares this database, so exact fixture membership belongs in the
+    deterministic adapter tests below rather than this live integration seam.
+    """
     from mojo.apps.assistant import get_registry
     from mojo.apps.assistant.services.tools.users import (
         MAX_RESULTS,
@@ -32,10 +36,7 @@ def test_query_rate_limits_reads_redis(opts):
     from mojo.helpers.redis import get_connection
 
     r = get_connection()
-    fixed_keys = [
-        f"rl:testit_users_tool_fair:ip:127.0.0.1:{index}"
-        for index in range(MAX_RESULTS)
-    ]
+    fixed_keys = ["rl:testit_users_tool_fair:ip:127.0.0.1"]
     sliding_key = "srl:testit_users_tool:account:0"
     no_ttl_key = "rl:testit_users_tool_fair:no_ttl"
     cleanup_keys = fixed_keys + [sliding_key, no_ttl_key]
@@ -55,25 +56,16 @@ def test_query_rate_limits_reads_redis(opts):
                   "Reported count should match the returned entries")
         assert_true(result["count"] <= MAX_RESULTS,
                     "Rate-limit results must stay within the global cap")
-        assert_true(result["truncated"],
-                    "A full capped result must report that more keys may exist")
-        by_key = {e["key"]: e for e in result["rate_limits"]}
-        returned_fixed = [key for key in fixed_keys if key in by_key]
-        assert_true(returned_fixed,
-                    "The capped result should include fixed-window entries")
-        fixed_entry = by_key[returned_fixed[0]]
-        assert_eq(fixed_entry["count"], 3,
-                  "Fixed-window count should reflect the stored value")
-        assert_true(fixed_entry["ttl_seconds"] > 0,
-                    "Fixed-window entry should carry a positive TTL")
-        assert_true(sliding_key in by_key,
-                    "Sliding-window entries must survive fixed-window cap pressure")
-        assert_eq(by_key[sliding_key]["count"], 2,
-                  "Sliding-window count should be the zset cardinality")
-        assert_true(by_key[sliding_key]["ttl_seconds"] > 0,
-                    "Sliding-window entry should carry a positive TTL")
-        assert_true(no_ttl_key not in by_key,
-                    "Entries without a positive TTL must remain filtered out")
+        assert_true(isinstance(result["truncated"], bool),
+                    "Truncation state must be explicit")
+        assert_true(bool(result["rate_limits"]),
+                    "The live Redis seam should return at least one active key")
+        assert_true(all(
+            entry["key"].startswith(("rl:", "srl:"))
+            and entry["ttl_seconds"] > 0
+            and isinstance(entry["count"], int)
+            for entry in result["rate_limits"]
+        ), "Every returned entry must be an active bounded rate-limit record")
         assert_eq(get_registry()["query_rate_limits"]["permission"], "view_admin",
                   "Rate-limit inspection must remain behind view_admin")
     finally:
@@ -84,6 +76,7 @@ def test_query_rate_limits_reads_redis(opts):
 def test_query_rate_limits_bounds_inspection_and_scan_work(opts):
     """Ineligible keys and empty SCAN pages must not create unbounded work."""
     from mojo.apps.assistant.services.tools.users import (
+        MAX_RESULTS,
         MAX_RATE_LIMIT_KEYS_INSPECTED,
         MAX_RATE_LIMIT_SCAN_CALLS,
         _collect_rate_limits,
@@ -153,6 +146,22 @@ def test_query_rate_limits_bounds_inspection_and_scan_work(opts):
               "A fully scanned finite keyspace should return both families")
     assert_true(not finite_result["truncated"],
                 "Exhausted cursors with no buffered keys must be complete")
+
+    class FamilyPressureRedis(FiniteRedis):
+        def scan(self, cursor, match, count):
+            if match == "rl:*":
+                return 0, [f"rl:fixed:{index}" for index in range(count)]
+            return 0, ["srl:sliding:active"]
+
+    pressured_result = _collect_rate_limits(FamilyPressureRedis())
+    pressured_keys = {
+        entry["key"] for entry in pressured_result["rate_limits"]
+    }
+    assert_true("srl:sliding:active" in pressured_keys,
+                "Round-robin lanes must preserve sliding-window visibility "
+                "under fixed-window cap pressure")
+    assert_true(len(pressured_keys) <= MAX_RESULTS,
+                "Family fairness must not exceed the global result cap")
 
 
 @th.django_unit_test()
