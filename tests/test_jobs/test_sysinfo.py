@@ -174,8 +174,22 @@ def test_api_all_runners(opts):
 
     assert isinstance(results, list), \
         f"Expected list, got {type(results).__name__}"
+    if not results:
+        # Full-suite modules run in parallel and create short-lived test
+        # engines. A runner can truthfully be alive at discovery and stop
+        # before the control request is published. Skip only when every
+        # originally observed runner has now disappeared; a still-live runner
+        # that fails to reply remains a real test failure.
+        expected = {row.get("runner_id") for row in alive}
+        still_alive = {
+            row.get("runner_id") for row in jobs.get_runners()
+            if row.get("alive")
+        }
+        if not expected.intersection(still_alive):
+            raise TestitSkip(
+                "Discovered runners stopped before the sysinfo request")
     assert len(results) > 0, \
-        "Expected at least one reply from a live runner"
+        "Expected at least one reply from a runner that remains live"
 
     # Store first result for shape tests below
     opts.sysinfo_first = results[0]
