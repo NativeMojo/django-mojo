@@ -276,6 +276,40 @@ def _ignorecase_domain(codepoint):
     return frozenset(domain)
 
 
+def _contains_alternation_syntax(pattern):
+    """Find an unescaped branch token without mistaking class literals."""
+    escaped = False
+    in_class = False
+    class_can_close = False
+    class_at_start = False
+    for char in pattern:
+        if escaped:
+            escaped = False
+            if in_class:
+                class_can_close = True
+                class_at_start = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if in_class:
+            if char == "]" and class_can_close:
+                in_class = False
+            elif char == "^" and class_at_start:
+                class_at_start = False
+            else:
+                class_can_close = True
+                class_at_start = False
+            continue
+        if char == "[":
+            in_class = True
+            class_can_close = False
+            class_at_start = True
+        elif char == "|":
+            return True
+    return False
+
+
 def _contains_repeat(parsed, inside_repeat=False):
     """Reject nested repetition and assertion/backreference regex features."""
     try:
@@ -295,6 +329,18 @@ def _contains_repeat(parsed, inside_repeat=False):
         subpattern = _constants.SUBPATTERN
         branch = _constants.BRANCH
         in_class = _constants.IN
+        safe_atoms = {
+            _constants.ANY,
+            _constants.AT,
+            _constants.LITERAL,
+            _constants.NOT_LITERAL,
+        }
+        safe_class_atoms = {
+            _constants.CATEGORY,
+            _constants.LITERAL,
+            _constants.NEGATE,
+            _constants.RANGE,
+        }
     except Exception:
         return True
     seen_repeat_domains = []
@@ -322,22 +368,31 @@ def _contains_repeat(parsed, inside_repeat=False):
                     return True
             seen_repeat_domains.append(domain)
         elif operation == subpattern:
-            # Capturing parentheses must not hide a repeated atom from the
-            # adjacency guard (`(a*)(a*)b`). Groups with no quantifier remain
-            # available for ordinary capture/alternation.
-            if _contains_repeat(argument[-1], inside_repeat=True):
-                return True
+            # Capturing and flag-scoped groups add parser structure without
+            # adding a capability needed by rule matching. Safe non-capturing
+            # literal groups are flattened by the parser before this point.
+            return True
         elif operation == branch:
-            for child in argument[1]:
-                if _contains_repeat(child, inside_repeat=inside_repeat):
-                    return True
+            # Even fully unrolled alternation can create exponentially many
+            # partitions (`(?:a|aa)(?:a|aa)...`). The governed safe subset has
+            # no alternation construct.
+            return True
         elif operation == in_class:
-            continue
+            if any(child_operation not in safe_class_atoms
+                   for child_operation, _child_argument in argument):
+                return True
+        elif operation not in safe_atoms:
+            # Fail closed on new or grouping-like parser operations until they
+            # have an explicit bounded-safety argument above.
+            return True
     return False
 
 
 def validate_regex(pattern):
     pattern = _text(pattern, "rule.value", MAX_PATTERN, required=True)
+    if _contains_alternation_syntax(pattern):
+        _error("rule.value uses a regular-expression feature that is not allowed",
+               code="unsafe_regex", path="rule.value")
     try:
         compiled = re.compile(pattern, re.IGNORECASE)
         from re import _parser

@@ -91,7 +91,9 @@ def test_policy_validation(opts):
     for pattern in (
             "a*a*a*a*a*b", "[ab]*[ab]*c", r"\d+\d+z",
             "(a*)(a*)(a*)b", "a*aa*aa*aa*$",
-            "I*x\N{LATIN CAPITAL LETTER I WITH DOT ABOVE}*y$"):
+            "I*x\N{LATIN CAPITAL LETTER I WITH DOT ABOVE}*y$",
+            "foo|bar", "a|b", "(abc)",
+            "(?:a|aa)(?:a|aa)(?:a|aa)(?:a|aa)$"):
         adjacent = _policy(rules=[{
             "field": "details", "operator": "regex", "value": pattern,
             "value_type": "str"}])
@@ -99,6 +101,10 @@ def test_policy_validation(opts):
             rule_validation.normalize_ruleset(adjacent)
     assert rule_validation.validate_regex("a+b+").pattern == "a+b+", (
         "adjacent repetitions with disjoint literal domains should remain safe")
+    assert rule_validation.validate_regex(r"^node-[A-Z0-9]+$").search(
+        "node-A12"), "simple literal, class, repetition, and anchor syntax stays safe"
+    assert rule_validation.validate_regex(r"^[|]+\|$").search("|||"), (
+        "pipe literals in classes and escapes must not be treated as alternation")
     for fleet_wide in (False, 0, 1, "true"):
         unsafe_scope = _policy(handlers=[{
             "type": "block", "ttl_seconds": 600,
@@ -177,6 +183,11 @@ def test_legacy_runtime_fails_closed(opts):
         parent=row, field_name="level", comparator="regex", value="(",
         value_type="int")
     assert condition.check_rule(event) is False
+    unrolled = Rule.objects.create(
+        parent=row, field_name="category", comparator="regex",
+        value="(?:a|aa)(?:a|aa)(?:a|aa)(?:a|aa)$", value_type="str")
+    assert unrolled.check_rule(event) is False, (
+        "legacy execution must reject unrolled ambiguous alternation")
     with mock.patch("mojo.apps.jobs.publish") as publish:
         assert row.run_handler(event) is False
     assert not publish.called
