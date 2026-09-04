@@ -23,6 +23,29 @@ MAX_PATTERN = 256
 MAX_VALUE = 512
 MAX_SUBJECT = 4096
 
+# Exact server-shipped OSSEC defaults that predate the atomic regex subset.
+# These values are separately audited and drift-tested against
+# RuleSet.ensure_ossec_rules. Never broaden this to names or mutable metadata.
+TRUSTED_DEFAULT_REGEXES = frozenset({
+    (
+        r"\.php\d*\b|\.git[x]?\b|\.asp[x]?\b|\.env[x]?\b|\bcgi-bin\b"
+        r"|wp-content\b|wlwmanifest\b|locale\.json\b|\.jsp\b|\.cfm\b"
+        r"|\.pl\b|\.cgi[x]?\b|dns\-query\b"
+    ),
+    (
+        r"/git/\b|/wlwmanifest\.xml\b|/\.well-known/security\.txt"
+        r"|/autodiscover/|/remote/login|/owa/|/ecp/"
+    ),
+    (
+        r"\.php\d*\b|\.git[x]?\b|\.asp[x]?\b|\.env[x]?\b|\bcgi-bin\b"
+        r"|wp-content\b|wlwmanifest\b|locale\.json\b|\.jsp\b|\.cfm\b"
+        r"|\.pl\b|\.cgi[x]?\b|dns\-query\b|/vendor/phpunit\b"
+        r"|/vendor/[^/]+/[^/]+/eval-stdin"
+    ),
+    r"Login session (opened|closed)\.",
+    r"^Web (Attack )?4(?:0[045])\b",
+})
+
 _CATEGORY_RE = re.compile(r"^[A-Za-z0-9_*][A-Za-z0-9_.:*-]{0,123}$")
 _FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 _HANDLER_CATEGORY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$")
@@ -406,6 +429,22 @@ def validate_regex(pattern):
     return compiled
 
 
+def validate_runtime_regex(pattern):
+    """Validate runtime regexes, including exact audited shipped defaults."""
+    try:
+        return validate_regex(pattern)
+    except RuleValidationError:
+        if not isinstance(pattern, str) or pattern not in TRUSTED_DEFAULT_REGEXES:
+            raise
+        # Membership is exact and the constants are import-time literals, but
+        # retain the same compile failure contract if an audited value drifts.
+        try:
+            return re.compile(pattern, re.IGNORECASE)
+        except re.error:
+            _error("trusted default regex is invalid",
+                   code="unsafe_regex", path="rule.value")
+
+
 def _bool_value(value, path):
     if isinstance(value, bool):
         return value
@@ -444,7 +483,7 @@ def convert_value(value, value_type, path="rule.value"):
     _error(f"unknown value type {value_type!r}", path=path)
 
 
-def _normalized_rule(row, index):
+def _normalized_rule(row, index, regex_validator):
     if not isinstance(row, dict):
         _error("each rule must be an object", path=f"rules.{index}")
     allowed = {"name", "field", "field_name", "operator", "comparator",
@@ -481,7 +520,7 @@ def _normalized_rule(row, index):
     value = convert_value(row.get("value"), value_type,
                           path=f"rules.{index}.value")
     if operator == "regex":
-        validate_regex(value)
+        regex_validator(value)
     name = _text(row.get("name", ""), f"rules.{index}.name", MAX_NAME)
     required = row.get("is_required", False)
     if required not in (False, True, 0, 1):
@@ -660,8 +699,7 @@ def normalize_queued_handler(handler_spec, schema, schema_version):
     return normalize_handlers(rows)
 
 
-def normalize_ruleset(payload):
-    """Validate and normalize one complete governed RuleSet aggregate."""
+def _normalize_ruleset(payload, regex_validator):
     if not isinstance(payload, dict):
         _error("ruleset must be an object", path="ruleset")
     allowed = {
@@ -739,8 +777,16 @@ def normalize_ruleset(payload):
         "metadata": ({"delete_on_resolution": True}
                      if delete_on_resolution else {}),
         "is_active": active,
-        "rules": [_normalized_rule(row, index) for index, row in enumerate(rules)],
+        "rules": [
+            _normalized_rule(row, index, regex_validator)
+            for index, row in enumerate(rules)
+        ],
     }
+
+
+def normalize_ruleset(payload):
+    """Validate and normalize one complete governed RuleSet aggregate."""
+    return _normalize_ruleset(payload, validate_regex)
 
 
 def ruleset_payload(rule_set):
@@ -788,7 +834,7 @@ def validate_existing(rule_set):
     if len(payload["rules"]) > MAX_RULES:
         _error("stored ruleset exceeds the rule limit",
                code="legacy_rule_count", path="ruleset.rules")
-    return normalize_ruleset(payload)
+    return _normalize_ruleset(payload, validate_runtime_regex)
 
 
 def validation_summary(rule_set):
@@ -851,7 +897,7 @@ def evaluate_rule(rule, event):
         if value_type == "str" and len(right) > MAX_VALUE:
             return False
         if operator == "regex":
-            return validate_regex(right).search(left) is not None
+            return validate_runtime_regex(right).search(left) is not None
         if operator == "contains":
             return right in left
         if operator in ("==", "eq"):
