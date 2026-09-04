@@ -20,8 +20,6 @@ testproject's JOBS_ALLOWED_CHANNELS (allowed-but-not-consumed — the cross-box
 shape); the t936_undeclared name is deliberately NOT.
 """
 
-import uuid
-
 from testit import helpers as th
 
 
@@ -450,86 +448,9 @@ def test_unconsumed_alert_is_suppressed_when_unchanged(opts):
     )
 
 
-@th.django_unit_test("two engines with disjoint channels each claim only their own jobs")
-def test_disjoint_engines_claim_only_own_channels(opts):
-    """The acceptance shape: one Redis, two engines, no cross-claiming.
-
-    Seeds real Job rows and drains via BRPOP + execute_job in THIS process —
-    the same claim and execution path `th.run_jobs()` uses. Publishing is
-    covered independently above. This assertion owns a private Redis key
-    prefix so concurrent modules cannot clear or recover its queues.
-    """
-    _clear(opts)
-    from mojo.apps.jobs.job_engine import JobEngine
-    from mojo.apps.jobs.keys import JobKeys
-    from mojo.apps.jobs.models import Job
-
-    # Test modules share Redis and execute in parallel. Unique channels are not
-    # sufficient when a maintenance test scans the whole production jobs
-    # prefix, so this module owns both names and the storage prefix.
-    suffix = uuid.uuid4().hex[:10]
-    channel_a = f"t906-a-{suffix}"
-    channel_b = f"t906-b-{suffix}"
-    owned_channels = [channel_a, channel_b]
-    owned_keys = JobKeys(prefix=f"testit:t906:{suffix}")
-    engines = []
-
-    def queued(channel):
-        return opts.redis.get_client().lrange(
-            owned_keys.queue(channel), 0, -1)
-
-    try:
-        id_a = uuid.uuid4().hex
-        id_b = uuid.uuid4().hex
-        Job.objects.create(
-            id=id_a, channel=channel_a, func=HANDLER,
-            payload={"marker": "a"})
-        Job.objects.create(
-            id=id_b, channel=channel_b, func=HANDLER,
-            payload={"marker": "b"})
-        opts.redis.rpush(owned_keys.queue(channel_a), id_a)
-        opts.redis.rpush(owned_keys.queue(channel_b), id_b)
-
-        engine_a = JobEngine(
-            channels=[channel_a], runner_id=f"t906-a-{suffix}")
-        engine_a.keys = owned_keys
-        engines.append(engine_a)
-        drained = _drain(opts, engine_a)
-
-        assert drained == [id_a], (
-            f"the {channel_a!r} engine should claim only its own job, "
-            f"drained {drained}"
-        )
-        assert CALLS == ["a"], (
-            f"only the {channel_a!r} job should have executed, got {CALLS}"
-        )
-        assert id_b in queued(channel_b), (
-            f"job {id_b} must still be waiting on {channel_b!r} for its own "
-            f"engine, queue holds {queued(channel_b)}"
-        )
-
-        engine_b = JobEngine(
-            channels=[channel_b], runner_id=f"t906-b-{suffix}")
-        engine_b.keys = owned_keys
-        engines.append(engine_b)
-        drained_b = _drain(opts, engine_b)
-
-        assert drained_b == [id_b], (
-            f"the {channel_b!r} engine should then claim its own job, "
-            f"drained {drained_b}"
-        )
-        assert CALLS == ["a", "b"], (
-            f"both jobs should have run by now, got {CALLS}"
-        )
-    finally:
-        for engine in engines:
-            engine.executor.shutdown(wait=True)
-        for channel in owned_channels:
-            opts.redis.delete(owned_keys.queue(channel))
-            opts.redis.delete(owned_keys.processing(channel))
-            opts.redis.delete(owned_keys.sched(channel))
-            opts.redis.delete(owned_keys.sched_broadcast(channel))
-        Job.objects.filter(channel__in=owned_channels).delete()
+# The real two-engine BRPOP integration case lives in
+# tests/test_jobs_extended_serial/test_channel_routing.py. Suite-wide Jobs
+# maintenance scans Redis globally, so it cannot own a queue concurrently.
 
 
 @th.django_unit_test("an explicit channel list is not mutated by the host channel")
@@ -707,20 +628,3 @@ def test_default_channels_cover_framework(opts):
             f"the framework publishes to {channel!r}, so it must be in "
             f"DEFAULT_CHANNELS or an unconfigured deployment strands those jobs"
         )
-
-
-def _drain(opts, engine, max_jobs=10):
-    """Claim and execute everything on this engine's own channels."""
-    queue_keys = [engine.keys.queue(ch) for ch in engine.channels]
-    executed = []
-    while len(executed) < max_jobs:
-        target = next((k for k in queue_keys if opts.redis.llen(k) > 0), None)
-        if target is None:
-            break
-        popped = opts.redis.brpop([target], timeout=1)
-        if not popped:
-            break
-        queue_key, job_id = popped
-        engine.execute_job(queue_key.split(":")[-1], job_id)
-        executed.append(job_id)
-    return executed
