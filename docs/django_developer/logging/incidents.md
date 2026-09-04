@@ -412,7 +412,10 @@ for complete request and response examples.
 The `schemas` section publishes the complete aggregate field contract, allowed
 condition fields, types, operators, bundling, typed handler arguments, and
 caps. Raw handler URLs, `job://`/Python targets, unknown fields/operators, and
-unsafe or oversized regex are rejected. A
+unsafe or oversized regex are rejected. Regex validation also refuses broader
+backtracking ambiguity: repeated atoms with overlapping or unprovable
+case-insensitive domains remain unsafe even when literals separate them, and
+Unicode `IGNORECASE` equivalents participate in that overlap check. A
 malformed legacy policy remains readable, deactivatable and deletable, but
 cannot dispatch or reactivate; replace its complete inactive tree first.
 Generic RuleSet/Rule URLs remain bounded reads but reject mutation. Generic

@@ -234,6 +234,13 @@ Rule.objects.create(
 | `contains` | Substring match | `field_name="http_path"`, `value=".php"` |
 | `regex` | Regex match (case-insensitive) | `field_name="http_path"`, `value="\\.(php|asp|env)"` |
 
+Governed regex is capped at 256 pattern characters and a 4096-character
+subject. Validation rejects assertions, backreferences, nested or repeated
+groups, and multiple repetitions whose case-insensitive character domains
+overlap or cannot be proved disjoint—even when literals separate them (for
+example, `a*aa*aa*$`). The overlap check includes Python's special Unicode
+`IGNORECASE` equivalences.
+
 ### Value Types
 
 The `value_type` field controls how both the event field and the comparison value are cast before comparison:

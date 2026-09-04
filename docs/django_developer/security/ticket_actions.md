@@ -107,7 +107,7 @@ A `TicketNote` whose `metadata` carries an `action` block:
 | `proposal_digest` | SHA-256 of the canonical complete `review`; clients copy it back rather than recomputing it |
 | `review.proposal` | Complete bounded JSON-safe copy of the server-authored `context`, including every action parameter or complete RuleSet aggregate the operator reviews |
 | `review.target`, `review.revision`, `review.confirmation` | Convenience projections for generic approval-card rendering |
-| `state` | `pending`, transiently `claimed`, then `resolved` after success |
+| `state` | `pending`; durably `claimed` before execution; `resolved` after known success; or `unknown` after an ambiguous failure |
 | `resolved` | Stamped `true` only after a successful dispatch |
 
 Action producers save the note, then call `bind_action_note()` to stamp these
@@ -170,16 +170,26 @@ rebuilds `review` from it and verifies both stored and echoed digests.
    carry its active request, the actor must hold global `manage_security` or
    `security`, key-backed sessions are refused, and authentication must be
    within 600 seconds.
-5. **The claim and resolution are durable** — the proposal is stamped
-   `state="claimed"` with response-note and actor IDs before the handler runs.
-   Success sets `state="resolved"`, `resolved=true`, and an auditable
-   `resolution`; a reported failure restores `state="pending"` and removes the
-   claim. Exceptions roll back the transaction and are logged, never propagated
-   into the note save.
+5. **The claim commits before side effects** — `_claim_dispatch()` uses an
+   outermost `transaction.atomic(durable=True)` to stamp `state="claimed"`
+   before the handler runs. The claim records response/actor identity plus a
+   stable `dispatch_key`: SHA-256 over the action schema/version, proposal-note
+   ID, proposal digest, and approve/deny choice.
+6. **Execution and finalization are separate** — the handler runs only after
+   that claim transaction commits. A second durable transaction records known
+   success as `state="resolved"`, `resolved=true`, and an auditable resolution
+   carrying the same dispatch key.
+7. **Ambiguity never reopens the proposal** — a handler refusal or exception is
+   recorded as `state="unknown"` with its dispatch key and safe failure code.
+   A crash after the side effect or a failed finalization can leave the durable
+   `claimed` state. Neither `unknown` nor `claimed` is made pending or replayed
+   automatically; both require operator reconciliation.
 
-A retry or concurrent response with the same choice observes the recorded
-success without redispatching. A conflicting choice cannot rewrite the
-committed resolution.
+The proposal-note ID and digest identify what was reviewed, while the choice
+completes the stable dispatch identity. A same-choice retry after known success
+observes the recorded resolution without redispatching. A retry while the
+identity is `claimed`/`unknown` reports no success and performs no side effect;
+a conflicting choice has a different dispatch key and is rejected.
 
 ## Built-in handlers
 
@@ -279,5 +289,8 @@ LLM; a structured `action_response` always dispatches instead.
   `llm_proposed` guard, but both target and complete replacement are bound to
   the server-authored proposal and stale revisions fail closed.
 - Approvals are bound to an immutable proposal-note ID and serialized under
-  row locks. Same-choice retries converge, conflicting choices fail closed,
-  and every RuleSet action also binds the aggregate revision.
+  row locks. The stable proposal/digest/choice identity is durably claimed
+  before side effects; same-choice retries converge only after recorded
+  success, conflicting choices fail closed, and ambiguous outcomes remain
+  non-replayable for operator reconciliation. Every RuleSet action also binds
+  the aggregate revision.

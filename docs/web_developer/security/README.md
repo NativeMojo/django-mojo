@@ -600,7 +600,9 @@ canonical `match_by` (not `match_type`). `review.target`, `review.revision`, and
 Render all proposal strings as text, never HTML. The server caps canonical
 review JSON at 64 KiB, nesting at eight levels, each array/object at 64 entries,
 strings at 4096 characters, and keys at 80 characters.
-Once `action.resolved` is `true`, disable the buttons.
+Enable the buttons only while `action.state` is `"pending"`. Disable them for
+`claimed`, `unknown`, and `resolved`, even when `action.resolved` is still
+false; `unknown` requires operator reconciliation, not another click.
 
 To answer, create a new note whose `metadata.action_response` has exactly four
 keys: copy the pending `proposal_note_id`, `proposal_digest`, and `handler`, then
@@ -631,11 +633,16 @@ activates exactly the revision that was reviewed and resolves the ticket;
 denying deletes that same revision and closes it. A stale revision fails closed.
 A structured response never triggers an LLM reply; plain notes on an
 LLM-enabled ticket do. The outcome is posted back to the thread as an
-`[LLM Agent]` system note. Disable the buttons after the first successful click
-— the backend locks the ticket and named proposal while claiming it. A retry of
-the same resolved choice converges without redispatch; a conflicting choice
-cannot replace the committed decision. Failed handlers return the proposal to
-`state: "pending"`.
+`[LLM Agent]` system note. After submitting a response, reload the proposal and
+follow its server state. The backend first commits a durable claim, then runs
+the handler outside that transaction. Its stable dispatch identity is derived
+from the action schema/version, proposal-note ID, proposal digest, and
+approve/deny choice.
+A same-choice retry converges only after a known resolution; a conflicting
+choice cannot replace it. A handler refusal/exception is `state: "unknown"`,
+and a crash around execution/finalization may remain `state: "claimed"`.
+Because either path may have crossed a side-effect boundary, neither state is
+automatically replayable.
 
 ### 8. Event Reporting (Client-Side)
 
@@ -903,9 +910,12 @@ not written independently:
 The `schemas.rule_policy.fields` response is the authority for allowed fields,
 their value types, and operators. `field_name`/`comparator` are accepted aliases
 for `field`/`operator`, but the two forms cannot disagree. Regex patterns are
-bounded and reject backreferences, assertions, nested repetition, and other
-unsafe forms. A RuleSet with no rules is a catch-all and needs the additional
-catch-all confirmation before activation.
+bounded and reject backreferences, assertions, nested/group repetition, and
+broader ambiguous repetition. In particular, repeated atoms with overlapping
+or unprovable case-insensitive character domains are rejected even when
+literals separate them; Unicode `IGNORECASE` equivalences are included in that
+check. A RuleSet with no rules is a catch-all and needs the additional catch-all
+confirmation before activation.
 
 ## Incident Handlers
 
