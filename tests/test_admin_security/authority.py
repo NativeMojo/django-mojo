@@ -90,7 +90,8 @@ def test_policy_validation(opts):
         rule_validation.normalize_ruleset(bad_regex)
     for pattern in (
             "a*a*a*a*a*b", "[ab]*[ab]*c", r"\d+\d+z",
-            "(a*)(a*)(a*)b"):
+            "(a*)(a*)(a*)b", "a*aa*aa*aa*$",
+            "I*x\N{LATIN CAPITAL LETTER I WITH DOT ABOVE}*y$"):
         adjacent = _policy(rules=[{
             "field": "details", "operator": "regex", "value": pattern,
             "value_type": "str"}])

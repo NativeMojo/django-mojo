@@ -237,22 +237,42 @@ def _repeat_atom_domain(parsed):
         return None
     operation, argument = parsed[0]
     if operation == _constants.LITERAL:
-        return frozenset({chr(argument).casefold()})
+        return _ignorecase_domain(argument)
     if operation != _constants.IN:
         return None
     domain = set()
     for child_operation, child_argument in argument:
         if child_operation == _constants.LITERAL:
-            domain.add(chr(child_argument).casefold())
+            domain.update(_ignorecase_domain(child_argument))
         elif child_operation == _constants.RANGE:
             start, end = child_argument
             if end - start > 256:
                 return None
-            domain.update(chr(value).casefold() for value in range(start, end + 1))
+            for value in range(start, end + 1):
+                domain.update(_ignorecase_domain(value))
         else:
             # Categories, negation and Unicode classes may overlap any
             # following atom. Treat them as unknown and reject conservatively.
             return None
+    return frozenset(domain)
+
+
+def _ignorecase_domain(codepoint):
+    """Approximate Python re.IGNORECASE equivalence, including its specials."""
+    char = chr(codepoint)
+    domain = {f"fold:{char.casefold()}"}
+    # Python's Unicode IGNORECASE adds these four non-ASCII letters to the
+    # ASCII I/S/K equivalence classes. casefold alone does not join dotted and
+    # dotless I, so retain explicit shared sentinels for the engine behavior.
+    special_classes = (
+        ("i", frozenset("Ii\N{LATIN CAPITAL LETTER I WITH DOT ABOVE}"
+                        "\N{LATIN SMALL LETTER DOTLESS I}")),
+        ("s", frozenset("Ss\N{LATIN SMALL LETTER LONG S}")),
+        ("k", frozenset("Kk\N{KELVIN SIGN}")),
+    )
+    for name, members in special_classes:
+        if char in members:
+            domain.add(f"special:{name}")
     return frozenset(domain)
 
 
@@ -277,7 +297,7 @@ def _contains_repeat(parsed, inside_repeat=False):
         in_class = _constants.IN
     except Exception:
         return True
-    previous_repeat_domain = False
+    seen_repeat_domains = []
     for operation, argument in parsed:
         if operation in forbidden:
             return True
@@ -293,31 +313,26 @@ def _contains_repeat(parsed, inside_repeat=False):
             if _contains_repeat(argument[-1], inside_repeat=True):
                 return True
             domain = _repeat_atom_domain(argument[-1])
-            if (previous_repeat_domain is not False and
-                    (previous_repeat_domain is None or domain is None or
-                     previous_repeat_domain & domain)):
-                # Adjacent repetitions over an overlapping alphabet create a
-                # large family of partitions (`a*a*a*a*a*b`) even without a
-                # nested quantifier. Refuse unknown domains too.
-                return True
-            previous_repeat_domain = domain
+            for previous_domain in seen_repeat_domains:
+                if (previous_domain is None or domain is None or
+                        previous_domain & domain):
+                    # Repetitions over the same alphabet can create a large
+                    # family of partitions even with literals between them
+                    # (`a*aa*aa*aa*$`). Refuse unknown domains too.
+                    return True
+            seen_repeat_domains.append(domain)
         elif operation == subpattern:
-            previous_repeat_domain = False
             # Capturing parentheses must not hide a repeated atom from the
             # adjacency guard (`(a*)(a*)b`). Groups with no quantifier remain
             # available for ordinary capture/alternation.
             if _contains_repeat(argument[-1], inside_repeat=True):
                 return True
         elif operation == branch:
-            previous_repeat_domain = False
             for child in argument[1]:
                 if _contains_repeat(child, inside_repeat=inside_repeat):
                     return True
         elif operation == in_class:
-            previous_repeat_domain = False
             continue
-        else:
-            previous_repeat_domain = False
     return False
 
 
