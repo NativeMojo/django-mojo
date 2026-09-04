@@ -307,6 +307,29 @@ GET /api/system/geoip?search=cloudflare
 
 ## Firewall Activity Log
 
+The packaged Admin's read-only enforcement view uses
+`GET /api/incident/admin/security?sections=ipsets`, not detailed IPSet graphs or
+log payloads. Schema version 2 returns a server-curated `enforcement` summary:
+desired presence/count/digest, observed status, generation, observation cutoff,
+and bounded captured expected/responded/succeeded/failed/missing host IDs.
+`verified` means every captured compatible host proved the exact desired state;
+`partial`, `missing`, `stale`, and `unavailable` must remain visibly distinct.
+No CIDR member, source key, runner identity/incarnation, broker reply, raw
+observation, or exception message is included.
+
+The cutoff and captured expected-host IDs belong to that observation. Do not
+compare them with a later roster or relabel an incomplete receipt as success.
+The server labels the projection `verified` only after validating the complete
+sorted roster/incarnations, desired identity/presence/count/digest, generation
+fence/fingerprint, direct observations, and any checked per-host results. A
+top-level `ok` never fills in missing responded/succeeded hosts. Missing fields,
+duplicates, contradictions, anomalies, or incomplete host coverage degrade to
+partial/missing/stale/unavailable while the browser-visible projection still
+omits roster incarnations, runner IDs, fingerprints, and raw receipts.
+A lifecycle action still requires the current `modified` revision and the
+server-advertised typed confirmation. A 409 requires a fresh read and human
+review; clients must not replay it.
+
 Verified firewall actions are logged to logit with `kind` values prefixed by
 `firewall:`. Partial/unknown checked results deliberately produce no success
 log or success metric.

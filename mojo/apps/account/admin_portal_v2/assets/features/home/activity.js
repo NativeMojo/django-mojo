@@ -1,5 +1,5 @@
-// Activity & logs — everything the platform recorded, in the four views v1
-// already had: incidents, security events, tickets, and the audit log.
+// Activity & logs retains Tickets and the audit log. Incidents and security
+// events live exclusively in the bounded Admin Security workspace in v2.
 //
 // This is v1's features/activity/page.js ported whole. The query machinery is
 // unchanged on purpose: the same QUERY_KEYS, the same subject translations, the
@@ -40,30 +40,8 @@ const QUERY_KEYS = new Set([
 const SUBJECT_TYPES = new Set(['incident', 'user', 'group', 'model']);
 
 const MODELS = {
-  incidents: {
-    label: 'Incidents', endpoint: '/api/incident/incident', capability: 'view_security',
-    date: 'created', sorts: ['-created', 'created', '-priority', 'priority', '-id'],
-    filters: [{name: 'status', label: 'Status'}, {name: 'category', label: 'Category'}],
-    columns: [
-      {label: 'Incident', render: (row) => h('div', {}, h('strong', {text: row.title || `Incident ${row.id}`}), h('small', {text: row.category || 'uncategorized'}))},
-      {label: 'Status', render: (row) => badge(row.status || 'unknown', statusTone(row.status))},
-      {label: 'Priority', render: (row) => String(row.priority ?? '—')},
-      {label: 'Created', render: (row) => formatDate(row.created)},
-    ],
-  },
-  events: {
-    label: 'Events', endpoint: '/api/incident/event', capability: 'view_security',
-    date: 'created', sorts: ['-created', 'created', '-level', 'level', '-id'],
-    filters: [{name: 'level', label: 'Level'}, {name: 'category', label: 'Category'}],
-    columns: [
-      {label: 'Event', render: (row) => h('div', {}, h('strong', {text: row.title || row.category || `Event ${row.id}`}), h('small', {text: row.scope || 'global'}))},
-      {label: 'Level', render: (row) => badge(String(row.level ?? '—'), Number(row.level) > 7 ? 'danger' : Number(row.level) > 3 ? 'warning' : 'neutral')},
-      {label: 'Source', render: (row) => row.source_ip || row.hostname || '—'},
-      {label: 'Created', render: (row) => formatDate(row.created)},
-    ],
-  },
   tickets: {
-    label: 'Tickets', endpoint: '/api/incident/ticket', capability: 'view_security',
+    label: 'Tickets', endpoint: '/api/incident/ticket', capability: 'view_tickets',
     date: 'modified', sorts: ['-modified', 'modified', '-created', 'created', '-priority', 'priority', '-id'],
     filters: [{name: 'status', label: 'Status'}, {name: 'category', label: 'Category'}],
     columns: [
@@ -86,9 +64,7 @@ const MODELS = {
   },
 };
 
-// Tab order is the order of the mockup and of v1's tab bar: Incidents · Events
-// · Tickets · Logs. MODELS is keyed for lookup, this names the display order.
-const TAB_ORDER = ['incidents', 'events', 'tickets', 'logs'];
+const TAB_ORDER = ['tickets', 'logs'];
 
 /** Does this caller hold the capability the named tab's source requires? */
 export function activityTabVisible(ctx, tab) {
@@ -105,7 +81,7 @@ function visibleTabs(ctx) {
 
 /**
  * The Activity surface opens only when the bootstrap payload carries the block
- * AND the caller can read at least one of its four sources. A page with four
+ * AND the caller can read at least one of its two retained sources. A page with two
  * hidden tabs is not a page.
  */
 export function activityAvailable(ctx) {
@@ -120,7 +96,7 @@ function normalizedState() {
   const params = hashParams();
   const unknown = [...decodeRouteState().unknown,
     ...[...params.keys()].filter((key) => !QUERY_KEYS.has(key))];
-  const tab = MODELS[params.get('tab')] ? params.get('tab') : 'incidents';
+  const tab = MODELS[params.get('tab')] ? params.get('tab') : 'tickets';
   const size = PAGE_SIZES.includes(Number(params.get('size'))) ? Number(params.get('size')) : 25;
   const model = MODELS[tab];
   const sort = model.sorts.includes(params.get('sort')) ? params.get('sort') : model.sorts[0];
@@ -164,13 +140,13 @@ function subjectFilters(state, tab) {
   }
   const id = state.subject_id;
   const translations = {
-    incident: {incidents: {id}, events: {incident: id}, tickets: {incident: id}, logs: {model_name: 'Incident', model_id: id}},
-    user: {events: {uid: id}, tickets: {user: id}, logs: {uid: id}},
-    group: {incidents: {group: id}, events: {group: id}, tickets: {group: id}, logs: {gid: id}},
+    incident: {tickets: {incident: id}, logs: {model_name: 'Incident', model_id: id}},
+    user: {tickets: {user: id}, logs: {uid: id}},
+    group: {tickets: {group: id}, logs: {gid: id}},
   };
   let result = translations[state.subject_type]?.[tab];
   if (state.subject_type === 'model') {
-    const recordModel = {incidents: 'Incident', events: 'Event', logs: 'Log', tickets: 'Ticket'}[tab];
+    const recordModel = {logs: 'Log', tickets: 'Ticket'}[tab];
     if (recordModel.toLowerCase() === state.subject_model.toLowerCase()) result = {id};
     else if (tab !== 'tickets') result = {model_name: state.subject_model, model_id: id};
   }
@@ -254,8 +230,8 @@ function copyRecordButton(row) {
 /**
  * A record this row names, if the portal has somewhere to open it.
  *
- * Incidents, events, tickets and logs are other tabs of this very page, so
- * those links stay in v2. So do a WebApp, a Domain, a User and a Group: Apps,
+ * Tickets and logs are other tabs of this very page, so those links stay in
+ * v2. So do a WebApp, a Domain, a User and a Group: Apps,
  * Domains and Access are built, and each takes an id in route state — the link
  * carries this view's location in `?return=` so the destination can offer the
  * way back.
@@ -321,12 +297,11 @@ function knownReference(ctx, row) {
       h('small', {text: 'opens the current Admin'}));
   }
   const id = Number(rawId);
-  const tab = {incident: 'incidents', event: 'events', ticket: 'tickets', log: 'logs'}[name];
+  const tab = {ticket: 'tickets', log: 'logs'}[name];
   if (!tab || !Number.isInteger(id) || id < 1) return null;
   if (!activityTabVisible(ctx, tab)) return null;
   return h('div', {class: 'activity-reference'}, h('a', {class: 'button ghost compact', href: routeHref('activity', {
-    tab, subject_type: name === 'incident' ? 'incident' : 'model', subject_id: id,
-    subject_model: name === 'incident' ? '' : row.model_name,
+    tab, subject_type: 'model', subject_id: id, subject_model: row.model_name,
   })}, `Open ${name} ${id}`));
 }
 
@@ -378,7 +353,7 @@ function openRecord(state, row, ctx, refresh) {
     subtitle: row.title || row.category || row.kind || '',
     content, wide: true, onClose: () => clearLinkedRecord(state, row),
   };
-  const canManage = ctx.features.activity.capabilities.manage_security && ['incidents', 'tickets'].includes(state.tab);
+  const canManage = ctx.features.activity.capabilities.manage_tickets && state.tab === 'tickets';
   if (canManage) {
     const statuses = ['new', 'open', 'paused', 'resolved', 'closed'];
     const select = h('select', {}, ...statuses.map((value) => h('option', {value, text: value, selected: row.status === value || null})));
@@ -527,9 +502,7 @@ export async function activityPage(ctx, parentSignal) {
       h('div', {},
         h('div', {class: 'eyebrow', text: 'Home · Activity'}),
         h('h1', {text: 'Activity & logs', tabindex: '-1'}),
-        h('p', {text: 'Everything the platform recorded — incidents, security '
-          + 'events, tickets, and the audit log. Search and inspect bounded '
-          + 'system evidence without bypassing source permissions.'})),
+        h('p', {text: 'Tickets and the audit log remain here. Incidents and events use the bounded Security workspace.'})),
       h('div', {class: 'page-actions'},
         returnHref ? h('a', {class: 'button ghost', href: returnHref}, 'Return to record') : null)),
     summary, tabBar, body);

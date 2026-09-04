@@ -1,4 +1,4 @@
-// Access ▸ Security activity — the trust evidence, where the people are.
+// Access ▸ Security activity — authentication evidence, where the people are.
 //
 // This tab does NOT re-implement Activity. It is the same recent-rows preview
 // Home renders, on the two sources that answer "who has been reaching this
@@ -8,17 +8,12 @@
 //     gated on `view_logins`) and had no page-level view of it: the evidence
 //     existed only inside one user's record. It lives here now, whole
 //     installation, newest first, and the per-user timeline stays where it was.
-//   * security events — `/api/incident/event`, the Activity page's Events tab,
-//     under that page's own `view_security` gate.
-//
-// Each panel links into the full viewer rather than growing filters of its own,
-// and a source this caller cannot read contributes no panel — an empty heading
+// A source this caller cannot read contributes no panel — an empty heading
 // would read as "nothing has happened".
 
 import {apiEnvelope, h, icon} from '../../core.js';
 import {loadInto} from '../../components/actions.js';
-import {routeHref} from '../../components/routes.js';
-import {activityTabVisible, capabilities} from './shared.js';
+import {capabilities} from './shared.js';
 
 const PREVIEW_SIZE = 8;
 
@@ -81,37 +76,12 @@ function signinsPanel() {
   return node;
 }
 
-function eventsPanel() {
-  const body = h('div', {class: 'panel-body'});
-  const load = () => loadInto(body, async (current) => {
-    const rows = (await apiEnvelope(
-      `/api/incident/event?size=${PREVIEW_SIZE}&sort=-created`)).items;
-    if (!current()) return;
-    if (!rows.length) {
-      body.replaceChildren(h('p', {text: 'Nothing has been recorded here yet.'}));
-      return;
-    }
-    body.replaceChildren(...rows.map((row) => eventRow(
-      row.title || row.category || `Event ${row.id}`,
-      [row.source_ip || row.hostname || '', agoText(row.created)].filter(Boolean).join(' · '))));
-  }, {message: 'Loading events…', retry: load});
-  const node = panel('Security events',
-    'Step-up confirmations, credential changes and everything else the platform '
-    + 'recorded as security-relevant.',
-    h('a', {class: 'panel-link', href: routeHref('activity', {tab: 'events'})},
-      'Full activity →'),
-    body);
-  load();
-  return node;
-}
-
 export function securityTabVisible(ctx) {
-  return capabilities(ctx).view_logins === true || activityTabVisible(ctx, 'events');
+  return capabilities(ctx).view_logins === true;
 }
 
 export function securityTab(ctx) {
   const caps = capabilities(ctx);
   return h('div', {class: 'access-tab'},
-    caps.view_logins === true ? signinsPanel() : null,
-    activityTabVisible(ctx, 'events') ? eventsPanel() : null);
+    caps.view_logins === true ? signinsPanel() : null);
 }

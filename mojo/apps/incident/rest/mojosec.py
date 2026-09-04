@@ -481,7 +481,7 @@ def on_mojosec_recommendation_action(request):
         return admin_security.apply_action(data, request.user)
     except admin_security.SecurityActionError as err:
         raise merrors.ValueException(
-            str(err), code=err.status, status=err.status) from err
+            str(err), code=err.code, status=err.status) from err
 
 
 @md.GET("mojosec/deployment")

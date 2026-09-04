@@ -1,6 +1,7 @@
 """Admin Security authority, policy safety, and compatibility contracts."""
 
 from datetime import timedelta
+from copy import deepcopy
 import uuid
 from unittest import mock
 
@@ -50,8 +51,10 @@ def setup_admin_security(opts):
 
 @th.django_unit_test("Admin Security routes pin human and fresh-auth authority")
 def test_route_authority(opts):
+    from mojo import errors as merrors
     from mojo.apps.incident.rest import admin_security as views
     from mojo.apps.incident.rest import ipset as ipset_views
+    from mojo.apps.incident.services import admin_security
     assert views.on_admin_security.__url__ == ("GET", "admin/security")
     assert views.on_admin_security_action.__url__ == (
         "POST", "admin/security/action")
@@ -68,6 +71,14 @@ def test_route_authority(opts):
     assert set(ipset_views.on_ipset_action._mojo_required_permissions) == {
         "manage_security", "security"}
     assert ipset_views.on_ipset_action._mojo_requires_fresh_auth
+    try:
+        views._translate(lambda: (_ for _ in ()).throw(
+            admin_security.SecurityActionError(
+                "revision changed", code="stale_revision", status=409)))
+    except merrors.ValueException as error:
+        assert error.status == 409 and error.code == "stale_revision"
+    else:
+        assert False, "the REST adapter must retain typed security error codes"
 
 
 @th.django_unit_test("generic rule and IPSet lifecycle writes retire")
@@ -310,7 +321,7 @@ def test_bounded_redacted_overview(opts):
                          source_key="fixture-key", data="8.8.8.8/32")
     result = admin_security.overview({"limit": 100})
     rendered = str(result)
-    assert result["schema_version"] == 1
+    assert result["schema_version"] == 2
     assert "fixture-secret" not in rendered
     assert "fixture-key" not in rendered
     assert "8.8.8.8/32" not in rendered
@@ -320,6 +331,112 @@ def test_bounded_redacted_overview(opts):
     assert metrics["accuracy"]["resolution_rate"] == "unavailable"
     for section in result["sections"].values():
         assert {"status", "observed_at", "cutoff", "window", "truncated", "data"} <= set(section)
+
+
+@th.django_unit_test("schema v2 advertises bounded actions and redacted checked receipts")
+def test_action_schema_and_checked_receipt_projection(opts):
+    from types import SimpleNamespace
+    from mojo.apps.incident.services import admin_security
+
+    schemas = admin_security._action_schemas()
+    assert set(schemas) == set(admin_security.ACTIONS)
+    for action, schema in schemas.items():
+        assert schema["additional_properties"] is False
+        assert schema["properties"]["action"]["const"] == action
+        assert {"confirm"} <= set(schema["properties"])
+    row = SimpleNamespace(
+        pk=91, modified=None, name="safe_set", kind="custom",
+        description="safe", is_enabled=True, cidr_count=2,
+        last_synced=None, sync_error="raw provider exception text")
+    result = {
+        "status": "partial", "ok": False, "fence": 7,
+        "desired": {"name": "safe_set", "present": True, "count": 2,
+                    "digest": "a" * 64, "cidrs": ["8.8.8.8/32"]},
+        "error": {"code": "missing_host", "message": "raw broker exception"},
+        "checked": {
+            "expected_hosts": ["edge-a", "edge-b", "8.8.8.8"],
+            "responded_hosts": ["edge-a"], "succeeded_hosts": ["edge-a"],
+            "failed_hosts": [], "missing_hosts": ["edge-b"],
+            "expected_roster": [{"host": "edge-a", "started": "secret-incarnation"}],
+            "results": [{"host": "edge-a", "runner_id": "secret-runner",
+                         "result": {"cidrs": ["8.8.8.8/32"]}}],
+        },
+    }
+    projected = admin_security._safe_ipset(
+        row, result=result, observation_cutoff="2026-08-10T17:10:00Z")
+    assert projected["enforcement"]["status"] == "missing"
+    assert projected["enforcement"]["expected_host_ids"] == ["edge-a", "edge-b"]
+    rendered = str(projected)
+    for secret in ("8.8.8.8/32", "secret-incarnation", "secret-runner",
+                   "raw broker exception", "raw provider exception text"):
+        assert secret not in rendered
+    stale = dict(result, error={"code": "generation_superseded"})
+    assert admin_security._safe_ipset(row, result=stale)[
+        "enforcement_status"] == "stale", (
+            "a superseded generation must not be mislabeled as merely missing")
+
+    desired = {"name": "safe_set", "present": True, "count": 2,
+               "digest": "a" * 64}
+    roster = [{"host": "edge-a", "started": "incarnation-a"},
+              {"host": "edge-b", "started": "incarnation-b"}]
+    direct = {
+        "status": "verified", "ok": True, "expected_hosts": ["edge-a", "edge-b"],
+        "expected_roster": roster, "desired": desired, "fence": 8,
+        "fingerprint": "b" * 64,
+        "observations": [{
+            "schema": "mojo.firewall.semantic", "version": 1, "kind": "set",
+            "identity": "safe_set", "fence": 8, "fingerprint": "b" * 64,
+            "host": host, "started": started, "desired": desired,
+        } for host, started in (("edge-a", "incarnation-a"),
+                                ("edge-b", "incarnation-b"))],
+    }
+    verified = admin_security._safe_ipset(row, result=direct, roster=roster)
+    assert verified["enforcement_status"] == "verified", verified
+    assert verified["enforcement"]["responded_host_ids"] == ["edge-a", "edge-b"]
+    assert verified["enforcement"]["succeeded_host_ids"] == ["edge-a", "edge-b"]
+
+    checked = deepcopy(direct)
+    checked["checked"] = {
+        "schema": "mojo.jobs.execute-checked", "version": 2,
+        "status": "verified", "expected_hosts": ["edge-a", "edge-b"],
+        "expected_roster": roster, "responded_hosts": ["edge-a", "edge-b"],
+        "succeeded_hosts": ["edge-a", "edge-b"], "failed_hosts": [],
+        "missing_hosts": [], "anomalies": [],
+        "results": [{
+            "host": host, "runner_id": f"secret-runner-{host}",
+            "started": started, "status": "success", "error": None,
+            "result": {"schema": "mojo.firewall.semantic", "version": 1,
+                       "kind": "set", "desired": desired,
+                       "observed": desired, "ok": True},
+        } for host, started in (("edge-a", "incarnation-a"),
+                                ("edge-b", "incarnation-b"))],
+    }
+    assert admin_security._safe_ipset(
+        row, result=checked, roster=roster)["enforcement_status"] == "verified"
+
+    contradictions = {}
+    partial = deepcopy(direct)
+    partial["status"] = "partial"
+    contradictions["partial"] = (partial, "partial")
+    bare = {"status": "verified", "ok": True, "desired": desired}
+    contradictions["malformed"] = (bare, "partial")
+    for expected_status, field in (("missing", "missing_hosts"),
+                                   ("partial", "failed_hosts"),
+                                   ("partial", "anomalies")):
+        value = deepcopy(checked)
+        value["checked"][field] = (["edge-b"] if field != "anomalies"
+                                    else ["unexpected_reply"])
+        if field == "missing_hosts":
+            value["checked"]["responded_hosts"] = ["edge-a"]
+            value["checked"]["succeeded_hosts"] = ["edge-a"]
+        elif field == "failed_hosts":
+            value["checked"]["succeeded_hosts"] = ["edge-a"]
+        contradictions[field] = (value, expected_status)
+    for case, (value, expected_status) in contradictions.items():
+        projection = admin_security._safe_ipset(row, result=value, roster=roster)
+        assert projection["enforcement_status"] == expected_status, (case, projection)
+        assert projection["enforcement_ok"] is False, (case, projection)
+        assert projection["error_code"] == "fleet_unverified", (case, projection)
 
 
 @th.django_unit_test("Assistant rule mutations bind fresh auth and previews")

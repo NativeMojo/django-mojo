@@ -19,6 +19,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | Section | Description |
 |---|---|
 | [account/](account/README.md) | User, Group, JWT authentication, permissions, push notifications |
+| [account/admin.md](account/admin.md) | Packaged Admin v2 — seven destinations, Security authority boundary, auth recovery, previews, and browser proof |
 | [security/](security/README.md) | Security system — incidents, events, rules, handlers, LLM agent, firewall, bouncer integration, health monitoring |
 | [security/llm_safety.md](security/llm_safety.md) | Mandatory provider-neutral policy, budgets, ledger, breaker, emergency stop, and duplicate-safe incident LLM dispatch |
 | [security/mojosec_sensor.md](security/mojosec_sensor.md) | Settings-free EC2 host sensor — targeted journal/nginx/FIM signals, durable aggregation, and batched incident delivery |

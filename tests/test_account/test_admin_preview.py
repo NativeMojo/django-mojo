@@ -214,6 +214,85 @@ def test_setup_preview_states(opts):
         "preview failure states do not have stable non-secret messages"
 
 
+@th.django_unit_test("preview renders every Admin Security state without raw material")
+def test_security_preview_states(opts):
+    from urllib.parse import urlparse
+
+    server = _server()
+    provider = server.security
+    for state in ("full", "empty", "unavailable", "partial", "failed",
+                  "stale", "recovery", "malformed"):
+        class Handler:
+            pass
+
+        provider.reset(Handler, {}, security_state=state)
+        code, body = provider.get(
+            Handler, urlparse("/api/incident/admin/security?sections=ipsets,schemas"))
+        assert code == 200 and body["schema_version"] == 2, state
+        rendered = json.dumps(body)
+        for forbidden in ("source_key", "expected_roster", "runner_id",
+                          "incarnation", "broker", "8.8.8.8/32"):
+            assert forbidden not in rendered, f"{state} leaked {forbidden}"
+        if state == "partial":
+            truth = body["sections"]["ipsets"]["data"][0]["enforcement"]
+            assert truth["observed"] == "missing"
+            assert truth["expected_host_ids"] == ["edge-a", "edge-b"]
+            assert truth["missing_host_ids"] == ["edge-b"]
+        if state == "malformed":
+            assert body["sections"]["ipsets"]["status"] == "available"
+            assert body["sections"]["ipsets"]["data"] == {
+                "not": "a bounded row array"}
+            assert isinstance(body["sections"]["schemas"]["data"]["actions"], list)
+        if state == "recovery":
+            assert body["sections"]["ipsets"]["status"] == "unavailable"
+            _, recovered = provider.get(
+                Handler, urlparse("/api/incident/admin/security?sections=ipsets"))
+            assert recovered["sections"]["ipsets"]["status"] == "available"
+
+    class Conflict:
+        pass
+    provider.reset(Conflict, {}, security_state="conflict")
+    code, body = provider.post(Conflict, "/api/incident/admin/security/action", {
+        "action": "ipset.sync", "ipset_id": 901})
+    assert code == 409 and body["error_code"] == "stale_revision"
+
+    class Fresh:
+        pass
+    provider.reset(Fresh, {}, security_state="440")
+    first = provider.post(Fresh, "/api/incident/admin/security/action", {
+        "action": "ipset.sync", "ipset_id": 901})
+    second = provider.post(Fresh, "/api/incident/admin/security/action", {
+        "action": "ipset.sync", "ipset_id": 901})
+    assert first[0] == 440 and second[0] == 200, \
+        "fresh-auth preview must model one safe pre-action refusal then recovery"
+
+    class Recommendation:
+        pass
+    provider.reset(Recommendation, {}, security_state="full")
+    for action in ("recommendation.approve", "recommendation.reverse"):
+        code, body = provider.post(
+            Recommendation, "/api/incident/admin/security/action", {
+                "action": action, "recommendation_id": 1001})
+        assert code == 200 and body["action"] == action, action
+
+    view_only = server.bootstrap([], security_state="view-only")["features"]["security"]
+    no_access = server.bootstrap([], security_state="no-access")["features"]["security"]
+    assert view_only["enabled"] is True and view_only["capabilities"] == {
+        "view": True, "manage": False}
+    assert no_access["enabled"] is False and no_access["capabilities"] == {
+        "view": False, "manage": False}
+
+    class RuleDetail:
+        pass
+    provider.reset(RuleDetail, {}, security_state="full")
+    code, body = provider.get(
+        RuleDetail,
+        urlparse("/api/incident/admin/security?sections=rules&ruleset_id=801"))
+    rule = body["sections"]["rules"]["data"][0]
+    assert code == 200 and rule["handlers"] and rule["rules"], (
+        "the deterministic preview must exercise the complete rule editor")
+
+
 @th.django_unit_test("preview covers independent WebApp health and secure posture")
 def test_platform_preview_truth_axes(opts):
     platform = (ROOT / "bin/admin_preview_support/features/platform.py").read_text()

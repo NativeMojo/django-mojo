@@ -2,6 +2,7 @@
 
 - [Bootstrap](bootstrap.md) — Creating initial admin users via `manage.py create_user`; why `createsuperuser` doesn't work; portal-permission reference table
 - [Built-in Admin Portal](built_in_admin.md) — Private source delivery, Bouncer handoff, Hybrid UI architecture, themes, configuration, and tests
+  - [Packaged Admin v2](admin.md) — Exact seven-destination registry, Security capability/routing boundary, auth replay rules, previews, and real-Chrome proof
   - [Dashboard integration](admin_portal/dashboard.md) — Permission-separated source matrix, canonical cross-feature routes, and secret boundaries
   - [People feature](admin_portal/people.md) — User, Group, permission, sign-in, and credential contracts
   - [Settings catalog](admin_portal/settings.md) — Existing-Setting provenance, typed overrides, owner routing, and Admin UX

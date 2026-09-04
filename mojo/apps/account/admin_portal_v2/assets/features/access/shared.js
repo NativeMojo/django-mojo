@@ -33,19 +33,22 @@ export function detailGrid(rows) {
  *
  * Stated here rather than imported from features/home/activity.js: a feature
  * module reaching into another feature's file makes the two load together, and
- * this is one boolean. It mirrors that file's `activityTabVisible` exactly —
- * incidents, events and tickets all come from `view_security`; logs from
- * `view_logs`.
+ * this is one boolean. Tickets/logs use Activity; incidents/events use the
+ * separately gated Security workspace.
  *
  * v1 gated these links on the PEOPLE block's own view_events/view_incidents/
  * view_tickets keys, which is what its own Activity page used. v2's Activity
- * page reads the activity block, so a link offered from a key the destination
- * does not consult would be a link to a tab that is not there.
+ * pages read different bootstrap blocks, so a link is offered only when its
+ * actual destination is enabled.
  */
 export function activityTabVisible(ctx, tab) {
-  if (ctx.features?.activity?.enabled !== true) return false;
   if (!['incidents', 'events', 'tickets', 'logs'].includes(tab)) return false;
-  const capability = tab === 'logs' ? 'view_logs' : 'view_security';
+  if (tab === 'incidents' || tab === 'events') {
+    return ctx.features?.security?.enabled === true
+      && ctx.features.security.capabilities?.view === true;
+  }
+  if (ctx.features?.activity?.enabled !== true) return false;
+  const capability = tab === 'logs' ? 'view_logs' : 'view_tickets';
   return ctx.features.activity.capabilities?.[capability] === true;
 }
 

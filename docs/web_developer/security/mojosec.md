@@ -121,6 +121,14 @@ Raw handler strings, arbitrary jobs/Python paths, unsafe regex, and stale
 ticket or Assistant approvals fail closed. Malformed legacy rows remain
 visible for deactivation/deletion but evaluate as no-match and cannot dispatch.
 
+The packaged Admin v2 uses the same authority for its Security destination.
+Its six tabs consume only schema-version-2 curated envelopes; v2 Activity keeps
+tickets/logs and makes no generic Incident/Event request. RuleSet and
+recommendation/IPSet controls are built from the returned action schemas,
+require the current `modified` revision plus typed confirmation, and never
+replay after a 409 or ambiguous 401. Admin v1 retains its existing routes and
+Activity content.
+
 Recommendation approve/reject/cancel/reverse operations use the same action
 writer and bind to the recommendation's `modified` value and exact proposal
 scope. `cancel` is an audited transition to the existing `rejected` state.

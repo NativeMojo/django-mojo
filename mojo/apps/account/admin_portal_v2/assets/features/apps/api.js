@@ -8,7 +8,7 @@
 // come from CI, and the controls are retry-same-SHA, verify, and converge.
 import {api, apiOnce, badge, formatDate, h, icon, statusTone} from '../../core.js';
 import {openModal} from '../../components/overlays.js';
-import {activityHref, returnLocation} from '../../components/routes.js';
+import {returnLocation, routeHref} from '../../components/routes.js';
 import {statusRow} from '../../components/rows.js';
 import {runAction} from '../../components/actions.js';
 
@@ -346,9 +346,11 @@ function attemptView(ctx, row, act, message, extras = {}) {
         h('div', {}, h('dt', {text: 'Commit'}), h('dd', {class: 'mono', text: row.sha})),
         h('div', {}, h('dt', {text: 'Attempt id'}), h('dd', {class: 'mono', text: row.id})),
         h('div', {}, h('dt', {text: 'Framework'}), h('dd', {text: row.framework_version || 'unknown'}))),
-      h('a', {class: 'related-record', href: activityHref('events', {}, {
-        search: row.id, return: returnLocation(),
-      })}, h('strong', {text: 'Related deployment activity'}), icon('chevron'))));
+      ctx.features?.security?.enabled === true
+        && ctx.features.security.capabilities?.view === true
+        ? h('a', {class: 'related-record', href: routeHref('security-operations', {
+          tab: 'activity', return: returnLocation(),
+        })}, h('strong', {text: 'Open security events'}), icon('chevron')) : null));
 }
 
 export function openDeployHistory(ctx, deployments, reload, {apiSection = null, onClose = null} = {}) {

@@ -6,14 +6,15 @@ import {activityAvailable, activityPage} from './activity.js';
 // uses, so a caller who can see one can see the other.
 //
 // Home also owns Activity & logs. v1 spent a sidebar entry on it; v2 spends
-// six and no more, so it is a sub-page reached from Home's activity preview and
+// seven feature destinations, so Activity remains a Home-owned sub-page reached
+// from Home's activity preview and
 // from every blocker that names a log, wearing the back pill like every other
 // sub-page. The sidebar keeps Home lit while it is open (`matches`), because
 // that is where the operator came from and where the pill returns them.
 //
 // A caller with no readable Activity source has no Activity page: the route
 // falls back to Home exactly like any unknown route, hash and title included,
-// rather than opening a page whose four tabs are all hidden.
+// rather than opening a page whose two retained tabs are both hidden.
 export default {
   id: 'home',
   routes: ['home', 'activity'],
@@ -26,7 +27,7 @@ export default {
   navigation: (ctx) => [
     {route: 'home', label: 'Home', icon: 'home', section: 'Control plane', order: 0},
     activityAvailable(ctx)
-      ? {route: 'activity', label: 'Activity & logs', icon: 'activity', section: 'Control plane', order: 50}
+      ? {route: 'activity', label: 'Activity & logs', icon: 'activity', section: 'Control plane', order: 60}
       : null,
     ctx.capabilities?.setup === true
       ? {href: `${ctx.admin_path || '/admin/'}#/setup`, external: true, label: 'System Setup', icon: 'settings',

@@ -67,8 +67,42 @@ let freshAuthAttempt = null;
 export class FreshAuthRequired extends Error {
   constructor(path) {
     super('Recent authentication is required to continue.');
-    this.name = 'FreshAuthRequired'; this.code = 'fresh_auth_required'; this.path = path;
+    this.name = 'FreshAuthRequired'; this.code = 'fresh_auth_required';
+    this.status = 440; this.path = path;
   }
+}
+
+export class AdminApiError extends Error {
+  constructor(message, {status = 0, code = 'request_failed', path = ''} = {}) {
+    super(message);
+    this.name = 'AdminApiError'; this.status = status; this.code = code; this.path = path;
+  }
+}
+
+function safeScalar(value) {
+  if (typeof value !== 'string' && typeof value !== 'number') return '';
+  return String(value).replace(/[\r\n\t]+/g, ' ').trim().slice(0, 512);
+}
+
+export function effectiveResponseStatus(payload, response) {
+  const declared = payload?.status === false ? payload?.error_status : null;
+  return response.status === 200 && Number.isInteger(declared)
+    && declared >= 400 && declared <= 599 ? declared : response.status;
+}
+
+function responseError(payload, response, path, status) {
+  const message = safeScalar(payload?.error) || safeScalar(payload?.reason)
+    || `Request failed (${status})`;
+  const code = status === 401 ? 'session_expired'
+    : safeScalar(payload?.error_code) || safeScalar(payload?.code) || 'request_failed';
+  return new AdminApiError(message, {status, code, path});
+}
+
+function expireSession(path) {
+  const returnPath = `${location.pathname}${location.search}${location.hash}`.slice(0, 1000);
+  window.dispatchEvent(new CustomEvent('mojo-admin:session-expired', {
+    detail: {path, returnPath},
+  }));
 }
 
 function requestFreshAuth(error) {
@@ -87,7 +121,10 @@ async function renewSourceSession() {
   const response = await fetch('/api/account/admin/session', {
     method: 'POST', headers: {Authorization: header, 'Content-Type': 'application/json'}, body: '{}',
   });
-  return response.ok;
+  let payload = {};
+  try { payload = await response.json(); } catch (_) { payload = {}; }
+  return response.ok && payload.status !== false
+    && effectiveResponseStatus(payload, response) < 400;
 }
 
 async function requestPayload(path, options = {}, retry = true, freshRetry = true) {
@@ -95,22 +132,30 @@ async function requestPayload(path, options = {}, retry = true, freshRetry = tru
   const authorization = authHeader();
   if (authorization) headers.set('Authorization', authorization);
   if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-  let response = await fetch(path, {...options, headers});
-  if (response.status === 401 && retry && window.MojoAuth?.getRefreshToken?.()) {
-    await window.MojoAuth.refreshToken();
-    await renewSourceSession();
-    return requestPayload(path, options, false, freshRetry);
+  const response = await fetch(path, {...options, headers});
+  const method = String(options.method || 'GET').toUpperCase();
+  const replaySafe = method === 'GET' || method === 'HEAD';
+  let payload = {};
+  try { payload = await response.json(); } catch (_) { payload = {}; }
+  const status = effectiveResponseStatus(payload, response);
+  if (status === 401 && retry && replaySafe
+      && window.MojoAuth?.getRefreshToken?.()) {
+    let renewed = false;
+    try {
+      await window.MojoAuth.refreshToken();
+      renewed = await renewSourceSession();
+    } catch (_) { renewed = false; }
+    if (renewed) return requestPayload(path, options, false, freshRetry);
   }
-  if (response.status === 440) {
+  if (status === 440) {
     const error = new FreshAuthRequired(path);
     clearBusy();
     if (!freshRetry) throw error;
     await requestFreshAuth(error);
     return requestPayload(path, options, retry, false);
   }
-  let payload = {};
-  try { payload = await response.json(); } catch (_) { payload = {}; }
-  if (!response.ok || payload.status === false) throw new Error(payload.error || payload.reason || `Request failed (${response.status})`);
+  if (status === 401) expireSession(path);
+  if (!response.ok || payload.status === false) throw responseError(payload, response, path, status);
   return payload;
 }
 

@@ -69,6 +69,7 @@ def test_403_default_wire_status(opts):
         body = json.loads(resp.content)
         assert body.get("status") is False, f"Expected status:false in body, got {body!r}"
         assert body.get("code") == 403, f"Expected code:403 in body, got {body!r}"
+        assert body.get("error_status") == 403, body
     finally:
         http_decorators._status_200_on_error = original
 
@@ -98,6 +99,7 @@ def test_403_with_status_200_flag(opts):
         assert body.get("code") == 403, (
             f"Body must still carry the real code 403, got {body!r}"
         )
+        assert body.get("error_status") == 403, body
     finally:
         http_decorators._status_200_on_error = original
 
@@ -124,5 +126,46 @@ def test_401_with_status_200_flag(opts):
         )
         body = json.loads(resp.content)
         assert body.get("code") == 401, f"Body code must remain 401, got {body!r}"
+        assert body.get("error_status") == 401, body
     finally:
         http_decorators._status_200_on_error = original
+
+
+@th.django_unit_test("folded errors retain effective 409 and 440 status")
+def test_conflict_and_reauth_with_status_200_flag(opts):
+    from mojo import errors
+    from mojo.decorators import http as http_decorators
+
+    original = http_decorators._status_200_on_error
+    http_decorators._status_200_on_error = lambda: True
+    try:
+        for exception, expected, code in (
+                (errors.ValueException(
+                    "changed", code="stale_revision", status=409),
+                 409, "stale_revision"),
+                (errors.ReauthRequiredException(), 440, 440)):
+            response = _invoke_dispatcher_with_raise(exception)
+            body = json.loads(response.content)
+            assert response.status_code == 200, body
+            assert body["status"] is False and body["code"] == code, body
+            assert body["error_status"] == expected, body
+    finally:
+        http_decorators._status_200_on_error = original
+
+
+@th.django_unit_test("model REST errors retain effective status under compatibility folding")
+def test_model_rest_error_response_effective_status(opts):
+    import objict
+    from mojo.models import rest
+
+    original = rest.MOJO_APP_STATUS_200_ON_ERROR
+    rest.MOJO_APP_STATUS_200_ON_ERROR = True
+    try:
+        request = objict.objict(user=objict.objict(is_authenticated=True))
+        response = rest.MojoModel.rest_error_response(
+            request, status=409, error="changed", code="stale_revision")
+        body = json.loads(response.content)
+        assert response.status_code == 200, body
+        assert body["status"] is False and body["error_status"] == 409, body
+    finally:
+        rest.MOJO_APP_STATUS_200_ON_ERROR = original

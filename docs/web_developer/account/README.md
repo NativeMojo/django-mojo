@@ -37,6 +37,7 @@
 - [Admin People](admin_portal/people.md) — Operator workflows for Users, Groups, access, sign-ins, and API keys
 - [Group API](group.md) — Groups, membership, permissions
 - [Admin Portal API Guide](admin_portal.md) — Building admin consoles (users, groups, secure settings)
+- [Packaged Admin Security client](admin.md) — Security destination disclosure, schema-v2 rendering, conflict/auth recovery, and v1 compatibility
 - [Admin Dashboard API](admin_portal/dashboard.md) — Permission-separated health and attention sources, status semantics, and cross-feature links
 - [Admin Settings API](admin_portal/settings.md) — Curated effective configuration, typed overrides, ownership, and provenance
 - [Admin Metrics API](admin_portal/metrics.md) — CloudWatch charts for EC2/RDS/ElastiCache: controls, range/granularity matrix, deep links, and degraded responses

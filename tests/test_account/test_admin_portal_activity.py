@@ -63,7 +63,7 @@ def setup_admin_activity(opts):
     opts.ticket_id = ticket.pk
 
 
-@th.django_unit_test("Activity publishes independent log, security-read, and security-manage grants")
+@th.django_unit_test("Activity keeps tickets and logs while Security owns incidents and events")
 def test_activity_capability_split(opts):
     from objict import objict
     from mojo.apps.account.services.admin_features import activity
@@ -75,11 +75,19 @@ def test_activity_capability_split(opts):
             return bool(self.grants.intersection(values))
 
     logs = activity.describe(objict(user=Identity({"view_logs"})), {})
+    admin_only = activity.describe(objict(user=Identity({"admin"})), {})
     security = activity.describe(objict(user=Identity({"view_security"})), {})
     manager = activity.describe(objict(user=Identity({"manage_security"})), {})
-    assert logs["capabilities"] == {"view_logs": True, "view_security": False, "manage_security": False}
-    assert security["capabilities"] == {"view_logs": False, "view_security": True, "manage_security": False}
-    assert manager["capabilities"] == {"view_logs": False, "view_security": True, "manage_security": True}
+    assert logs["capabilities"] == {"view_logs": True, "view_security": False,
+        "manage_security": False, "view_tickets": False, "manage_tickets": False}
+    assert admin_only["capabilities"] == {"view_logs": True,
+        "view_security": False, "manage_security": False,
+        "view_tickets": False, "manage_tickets": False}, (
+            "literal admin may retain logs but must not imply Security")
+    assert security["capabilities"] == {"view_logs": False, "view_security": True,
+        "manage_security": False, "view_tickets": True, "manage_tickets": False}
+    assert manager["capabilities"] == {"view_logs": False, "view_security": True,
+        "manage_security": True, "view_tickets": True, "manage_tickets": True}
 
 
 @th.django_unit_test("Activity graphs expose bounded scalar context without nested account or GeoIP graphs")

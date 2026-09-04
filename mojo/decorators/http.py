@@ -209,7 +209,8 @@ def dispatch_error_handler(func):
             # the true code (see mojo/helpers/error_pages.py).
             return error_pages.error_response(
                 request,
-                {"error": err.reason, "code": err.code, "status": False },
+                {"error": err.reason, "code": err.code, "status": False,
+                 "error_status": err.status},
                 wire_status,
                 page_status=err.status,
                 reference=getattr(event, "pk", None))

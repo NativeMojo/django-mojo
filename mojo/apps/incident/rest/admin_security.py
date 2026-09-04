@@ -10,7 +10,7 @@ def _translate(call):
         return call()
     except admin_security.SecurityActionError as error:
         raise merrors.ValueException(
-            str(error), code=error.status, status=error.status) from error
+            str(error), code=error.code, status=error.status) from error
 
 
 @md.GET("admin/security")

@@ -3,12 +3,13 @@ import apps from './apps/feature.js';
 import infrastructure from './infrastructure/feature.js';
 import domains from './domains/feature.js';
 import access from './access/feature.js';
+import security from './security/manifest.js';
 import settings from './settings/feature.js';
 
-// Six destinations, in sidebar order. Nothing is added here without removing
-// something: a new capability becomes a sub-page or a tab of an existing
-// destination, never a seventh entry.
-const DESCRIPTORS = Object.freeze([home, apps, infrastructure, domains, access, settings]);
+// Seven packaged destinations, in the exact sidebar-feature order.
+const DESCRIPTORS = Object.freeze([
+  home, apps, infrastructure, domains, access, security, settings,
+]);
 const ROUTES = new Map();
 
 for (const feature of DESCRIPTORS) {

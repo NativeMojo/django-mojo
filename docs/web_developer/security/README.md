@@ -67,7 +67,7 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | IPSet | `/api/incident/ipset` | Bulk CIDR blocking: countries, datacenters, abuse lists |
 | Maestro Item Links | `/api/incident/maestro/item-link` | Remote Maestro items linked to local Tickets or Incidents |
 | Admin Security | `/api/incident/admin/security` | Versioned, bounded and redacted operational sections plus the typed policy schema |
-| Admin Security Actions | `/api/incident/admin/security/action` | Fresh-auth, version-bound RuleSet and recommendation actions |
+| Admin Security Actions | `/api/incident/admin/security/action` | Fresh-auth, version-bound RuleSet, recommendation, and IPSet actions |
 | IPSet Actions | `/api/incident/ipset/action` | Fresh-auth, revision-bound enable/disable/sync actions with checked fleet results |
 
 See individual API docs for full details:
@@ -99,7 +99,8 @@ global `view_security`, `manage_security`, or `security`. Writes accept global
 | `sections` or `section` | A comma-separated string or array drawn from `overview`, `cases`, `incidents`, `events`, `rules`, `ipsets`, `recommendations`, and `schemas`; omitted means all sections |
 | `limit` | Rows per list section; default 50, maximum 100 |
 | `window_hours` | Window for time-bound sections; default 24, maximum 2160 (90 days) |
-| `recommendation_id` | Adds the bounded target projection to the `recommendations` section for one recommendation |
+| `recommendation_id` | Selects one recommendation's bounded, address-free target outcome summary |
+| `ruleset_id` | Selects one RuleSet's complete safe typed policy for editing |
 
 The standard response envelope contains a versioned map. Every requested
 section completes independently:
@@ -109,7 +110,7 @@ section completes independently:
   "status": true,
   "code": 200,
   "data": {
-    "schema_version": 1,
+    "schema_version": 2,
     "sections": {
       "rules": {
         "status": "available",
@@ -134,26 +135,51 @@ Render each section's own `status`, `observed_at`, `cutoff`, `window`, and
 zero. Only metrics explicitly labelled exact are suitable for exact totals;
 case and learning projections identify themselves as sampled.
 
+The packaged v2 client validates the exact envelope/window contract, bounded
+row fields and types, policy/action schemas, and firewall host lists for every
+requested section. Schema version 2 by itself is not acceptance. A malformed,
+contradictory, duplicate, or oversized value fails that requested view with a
+contract error; it must not be converted to an empty list, rendered as partial
+success, or allowed to expose action controls.
+
 The `rules` section is a summary list: it includes the aggregate revision,
 configuration, validation status, `rule_count`, and—for a valid policy—the
 safe typed handlers under `validation.handlers`; it does not inline child
 rules. Successful `ruleset.create` and `ruleset.replace` action responses
 include their validated typed `rules`, top-level `handlers`, and
 `delete_on_resolution`. Do not treat the generic RuleSet read as an editable
-aggregate: its raw handler field is deliberately omitted.
+aggregate: its raw handler field is deliberately omitted. Request
+`?sections=rules&ruleset_id=<id>` for the complete safe editable aggregate.
 
 To review a recommendation, request
-`?sections=recommendations&recommendation_id=<id>`. That bounded detail is the
-only Admin Security read that returns target IPs; it intentionally omits
-execution errors and prior block reasons. Bind the returned `modified` revision
-and exact target set into the operator's confirmation. The detail list is
-bounded to 1024 targets and reports `targets_truncated`; never offer an action
-when it is true.
+`?sections=recommendations&recommendation_id=<id>`. Its optional target list is
+bounded to 1024 and carries only IDs, kind, validation state, outcome, attempts,
+and lifecycle timestamps. Target addresses, validation reasons, execution
+errors, and prior block reasons are absent. Bind the returned `modified`
+revision into the operator's confirmation. Never offer an action when
+`targets_truncated` is true.
 
 `sections=schemas` returns the server-owned `rule_policy.aggregate` object
 contract, condition fields/types/operators, bundling choices, typed handler
-arguments, caps, and the action roster. Build editors from that response;
-never send raw handler URLs.
+arguments, caps, and `actions`: one complete typed schema per governed action
+(plus `action_names` for ordered discovery). Build editors and confirmations
+from that response; never send raw handler URLs.
+
+The `ipsets` projection includes an `enforcement` summary with desired
+presence/count/digest, observed status, generation, observation cutoff, and
+bounded captured expected/responded/succeeded/failed/missing host IDs. Treat
+`verified`, `partial`, `missing`, `stale`, and `unavailable` as distinct. CIDRs,
+source keys, runner identities/incarnations, broker output, raw observations,
+and exception text are never returned.
+
+`verified` additionally means the server validated a complete, sorted and
+internally consistent receipt: exact roster/incarnations, desired set
+identity/presence/digest/count, generation fence/fingerprint, direct
+observations, and any checked per-host semantic results. A bare top-level `ok`,
+missing fields, duplicates, contradictions, anomalies, or incomplete host
+coverage is never enough. The projection does not synthesize
+responded/succeeded hosts; it degrades to partial, missing, stale, or
+unavailable while withholding those internal proof fields.
 
 #### Write
 
@@ -213,7 +239,7 @@ Success returns the action and its safe object projection:
   "status": true,
   "code": 200,
   "data": {
-    "schema_version": 1,
+    "schema_version": 2,
     "action": "ruleset.create",
     "data": {
       "id": 42,
@@ -230,13 +256,23 @@ Success returns the action and its safe object projection:
 }
 ```
 
-| HTTP/body `code` | Meaning |
-|---|---|
-| 400 | Unknown action/field, invalid typed policy, bad ID/note, or missing typed confirmation |
-| 403 | The caller lacks a qualifying global human grant or is key-backed |
-| 404 | The named RuleSet, recommendation, or IPSet does not exist |
-| 409 | Stale revision, invalid recommendation state/scope, or a legacy RuleSet that must be replaced before activation |
-| 440 | Reauthentication is required; refreshing the token does not update its authentication time |
+Use the effective status for the client state machine. Normally it is the HTTP
+status. With legacy `MOJO_APP_STATUS_200_ON_ERROR`, a framework error is folded
+onto HTTP 200 with `status: false`; its validated `error_status` carries the
+real 400–599 status. The packaged clients honor folded 401, 409, and 440 exactly
+like native statuses. The body `code` is separate typed detail: governed-action
+errors use stable strings such as `confirmation_required`, `not_found`,
+`stale_revision`, `invalid_state`, and `scope_unavailable`; authentication
+decorators retain their numeric codes.
+
+| Effective status | Body `code` examples | Meaning |
+|---|---|---|
+| 400 | `invalid_action`, `confirmation_required`, `catch_all_confirmation_required`, or a validator code | Unknown action/field, invalid typed policy, bad ID/note, or missing typed confirmation |
+| 401 | `401` | The interactive session is invalid or expired. A packaged client may refresh and replay a GET/HEAD once; it must never replay this POST. |
+| 403 | `403` | The caller lacks a qualifying global human grant or is key-backed |
+| 404 | `not_found` | The named RuleSet, recommendation, or IPSet does not exist |
+| 409 | `stale_revision`, `invalid_state`, `scope_unavailable`, or a validation code | Reload authoritative state and require review plus confirmation again; never replay automatically |
+| 440 | `440` | The server refused the action before execution because recent authentication is required. Reauthenticate and retry at most once. Refreshing a token does not update its authentication time. |
 
 The older RuleSet/Rule URLs are read-only compatibility surfaces. IPSet
 metadata/CIDR writes remain on the generic model URL; lifecycle changes and
