@@ -13,6 +13,7 @@ kept identical: this module is serial, so it never runs concurrently with
 tests/test_jobs.
 """
 
+import time
 import uuid
 
 from testit import helpers as th
@@ -211,6 +212,46 @@ def test_disjoint_engines_claim_only_own_channels(opts):
             opts.redis.delete(owned_keys.sched(channel))
             opts.redis.delete(owned_keys.sched_broadcast(channel))
         Job.objects.filter(channel__in=owned_channels).delete()
+
+
+@th.django_unit_test("the scheduler promotes a channel this box does not consume")
+def test_scheduler_registry_covers_foreign_channel(opts):
+    """Auto mode promotes delayed work for another box's channel.
+
+    The test owns a real delayed queue and registry entry, so it shares the
+    serial boundary with the other Jobs maintenance integration cases.
+    """
+    _clear(opts)
+    from mojo.apps import jobs
+    from mojo.apps.jobs.scheduler import Scheduler
+
+    job_id = jobs.publish(func=HANDLER, payload={"marker": "sched"},
+                          channel=CH_SCHED, delay=1)
+
+    assert opts.redis.zcard(opts.keys.sched(CH_SCHED)) == 1, (
+        f"a delayed job should be parked in the {CH_SCHED!r} sched ZSET"
+    )
+    assert CH_SCHED in jobs.get_sched_channels(), (
+        f"publish should register {CH_SCHED!r} so the cluster scheduler finds it, "
+        f"registry holds {jobs.get_sched_channels()}"
+    )
+
+    scheduler = Scheduler(channels=None, scheduler_id="t906-sched")
+    assert scheduler.auto_channels is True, \
+        "Scheduler(channels=None) must be in auto mode"
+    scheduler._refresh_channels()
+    assert CH_SCHED in scheduler.channels, (
+        f"auto mode should pick up {CH_SCHED!r} from the registry, "
+        f"serving {scheduler.channels}"
+    )
+
+    time.sleep(1.2)
+    scheduler._process_scheduled_jobs()
+
+    assert job_id in _queued_ids(opts, CH_SCHED), (
+        f"the due job should have been promoted onto the {CH_SCHED!r} queue, "
+        f"queue holds {_queued_ids(opts, CH_SCHED)}"
+    )
 
 
 @th.django_unit_test("enforced: an undeclared channel is refused — ValueError, no job, one incident")

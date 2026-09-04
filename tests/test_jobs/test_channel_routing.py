@@ -448,9 +448,9 @@ def test_unconsumed_alert_is_suppressed_when_unchanged(opts):
     )
 
 
-# The real two-engine BRPOP integration case lives in
+# The real two-engine BRPOP and delayed-scheduler integration cases live in
 # tests/test_jobs_extended_serial/test_channel_routing.py. Suite-wide Jobs
-# maintenance scans Redis globally, so it cannot own a queue concurrently.
+# maintenance scans Redis globally, so they cannot own queues concurrently.
 
 
 @th.django_unit_test("an explicit channel list is not mutated by the host channel")
@@ -463,48 +463,6 @@ def test_channels_argument_not_mutated(opts):
     JobEngine(channels=caller_list, runner_id="t906-nomutate")
     assert caller_list == ["default"], (
         f"the caller's channel list must not be mutated, it became {caller_list}"
-    )
-
-
-@th.django_unit_test("the scheduler promotes a channel this box does not consume")
-def test_scheduler_registry_covers_foreign_channel(opts):
-    """Auto mode: a delayed job on a foreign channel still gets promoted.
-
-    This is the second half of the bug — the cluster runs ONE scheduler, so if
-    it only served its own box's JOBS_CHANNELS, every other box's delayed jobs
-    and retries would stall forever.
-    """
-    _clear(opts)
-    import time
-    from mojo.apps import jobs
-    from mojo.apps.jobs.scheduler import Scheduler
-
-    job_id = jobs.publish(func=HANDLER, payload={"marker": "sched"},
-                          channel=CH_SCHED, delay=1)
-
-    assert opts.redis.zcard(opts.keys.sched(CH_SCHED)) == 1, (
-        f"a delayed job should be parked in the {CH_SCHED!r} sched ZSET"
-    )
-    assert CH_SCHED in jobs.get_sched_channels(), (
-        f"publish should register {CH_SCHED!r} so the cluster scheduler finds it, "
-        f"registry holds {jobs.get_sched_channels()}"
-    )
-
-    scheduler = Scheduler(channels=None, scheduler_id="t906-sched")
-    assert scheduler.auto_channels is True, \
-        "Scheduler(channels=None) must be in auto mode"
-    scheduler._refresh_channels()
-    assert CH_SCHED in scheduler.channels, (
-        f"auto mode should pick up {CH_SCHED!r} from the registry, "
-        f"serving {scheduler.channels}"
-    )
-
-    time.sleep(1.2)  # let the job come due
-    scheduler._process_scheduled_jobs()
-
-    assert job_id in _queued_ids(opts, CH_SCHED), (
-        f"the due job should have been promoted onto the {CH_SCHED!r} queue, "
-        f"queue holds {_queued_ids(opts, CH_SCHED)}"
     )
 
 
