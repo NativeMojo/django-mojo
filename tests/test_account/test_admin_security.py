@@ -40,7 +40,11 @@ def test_security_packaging_and_routes(opts):
     app = (V2 / "app.js").read_text()
     page = (SECURITY / "page.js").read_text()
     manifest = (SECURITY / "manifest.json").read_text()
-    assert "[home, apps, infrastructure, domains, access, security, settings]" in registry
+    descriptor_block = registry.split(
+        "const DESCRIPTORS = Object.freeze([", 1)[1].split("]);", 1)[0]
+    assert [name.strip() for name in descriptor_block.split(",") if name.strip()] == [
+        "home", "apps", "infrastructure", "domains", "access", "security", "settings",
+    ], "Admin v2 does not package the exact seven-feature order"
     assert "route: 'security-operations'" in (SECURITY / "manifest.js").read_text()
     for label in ("Overview", "Cases", "Incidents & events", "Rules",
                   "Firewall & IPSets", "Recommendations"):

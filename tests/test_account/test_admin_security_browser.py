@@ -139,12 +139,14 @@ def test_admin_security_real_chrome(opts):
             cdp.call("Page.enable")
             cdp.wait("document.querySelector('h1')?.textContent === 'Security'", "Security heading")
 
-            tabs = cdp.evaluate("[...document.querySelectorAll('.section-tabs button')].map(x=>x.textContent.trim())")
+            tabs = cdp.evaluate(
+                "[...document.querySelectorAll('.tabs button')].map(x=>x.textContent.trim())")
             assert tabs == ["Overview", "Cases", "Incidents & events", "Rules",
                             "Firewall & IPSets", "Recommendations"], tabs
             assert cdp.evaluate("location.hash") == "#/security-operations", "initial hash drifted"
 
-            cdp.evaluate("[...document.querySelectorAll('.section-tabs button')].find(x=>x.textContent.includes('Cases')).click()")
+            cdp.evaluate(
+                "[...document.querySelectorAll('.tabs button')].find(x=>x.textContent.includes('Cases')).click()")
             cdp.wait("location.hash.includes('tab=cases') && !!document.querySelector('input[aria-label=\"Filter cases\"]')", "Cases route")
             cdp.evaluate("[...document.querySelectorAll('button')].find(x=>x.textContent.trim()==='Next').click()")
             cdp.wait("document.body.textContent.includes('page 2 of 2')", "case paging")
@@ -158,15 +160,28 @@ def test_admin_security_real_chrome(opts):
 
             cdp.call("Emulation.setDeviceMetricsOverride", {
                 "width": 390, "height": 844, "deviceScaleFactor": 1, "mobile": False})
-            assert cdp.evaluate("document.documentElement.scrollWidth <= 390"), "narrow viewport overflows"
+            narrow = cdp.evaluate(
+                "(()=>{const box=(selector)=>{const x=document.querySelector(selector),"
+                "r=x?.getBoundingClientRect(),s=x&&getComputedStyle(x);return x?{selector,"
+                "left:Math.round(r.left),right:Math.round(r.right),width:Math.round(r.width),"
+                "client:x.clientWidth,scroll:x.scrollWidth,minWidth:s.minWidth,overflowX:s.overflowX}:null};"
+                "return {viewport:innerWidth,client:document.documentElement.clientWidth,"
+                "scroll:document.documentElement.scrollWidth,boxes:['body','#app','.main','.content',"
+                "'.security-page','.security-body','.security-stack','.security-toolbar',"
+                "'.security-toolbar input','.table-wrap'].map(box),overflow:[...document.querySelectorAll('body *')]"
+                ".filter(x=>x.getBoundingClientRect().right>innerWidth+1).slice(0,8)"
+                ".map(x=>({tag:x.tagName,class:x.className,right:Math.round(x.getBoundingClientRect().right)}))}})()")
+            assert narrow["scroll"] <= narrow["viewport"], (
+                f"narrow viewport overflows: {narrow!r}")
             for theme in ("light", "dark"):
+                theme_label = {"light": "light theme", "dark": "dark theme"}[theme]
                 cdp.call("Emulation.setEmulatedMedia", {"features": [{
                     "name": "prefers-color-scheme", "value": theme}]})
                 cdp.evaluate(f"document.documentElement.dataset.theme='{theme}'")
-                assert cdp.evaluate("getComputedStyle(document.body).backgroundColor") != "rgba(0, 0, 0, 0)", f"{theme} theme lost its canvas"
+                assert cdp.evaluate("getComputedStyle(document.body).backgroundColor") != "rgba(0, 0, 0, 0)", f"{theme_label} lost its canvas"
                 png = base64.b64decode(cdp.call("Page.captureScreenshot", {
                     "format": "png", "captureBeyondViewport": False})["data"])
-                assert png.startswith(b"\x89PNG") and len(png) > 1000, f"{theme} screenshot was invalid"
+                assert png.startswith(b"\x89PNG") and len(png) > 1000, f"{theme_label} screenshot was invalid"
                 (Path(profile) / f"security-{theme}.png").write_bytes(png)
             cdp.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Tab", "code": "Tab"})
             cdp.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Tab", "code": "Tab"})
