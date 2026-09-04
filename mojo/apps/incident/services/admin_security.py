@@ -540,43 +540,170 @@ def _action_schemas():
 def _safe_host_list(value):
     if not isinstance(value, list):
         return []
-    return [host for host in value[:MAX_RECEIPT_HOSTS]
-            if isinstance(host, str) and
-            re.fullmatch(r"(?=.*[a-z])[a-z0-9][a-z0-9.\-]{0,253}", host)]
+    hosts = []
+    for host in value[:MAX_RECEIPT_HOSTS]:
+        if (isinstance(host, str) and
+                re.fullmatch(r"(?=.*[a-z])[a-z0-9][a-z0-9.\-]{0,253}", host) and
+                host not in hosts):
+            hosts.append(host)
+    return hosts
+
+
+def _validated_host_list(value, required=False):
+    if (not isinstance(value, list) or len(value) > MAX_RECEIPT_HOSTS or
+            (required and not value)):
+        return None
+    safe = _safe_host_list(value)
+    if safe != value or safe != sorted(safe):
+        return None
+    return safe
+
+
+def _validated_roster(value, expected, required_roster=None):
+    if (not isinstance(value, list) or len(value) != len(expected) or
+            len(value) > MAX_RECEIPT_HOSTS):
+        return None
+    safe = []
+    for item in value:
+        if (not isinstance(item, dict) or set(item) != {"host", "started"} or
+                _validated_host_list([item.get("host")], required=True) is None or
+                not isinstance(item.get("started"), str) or
+                not 1 <= len(item["started"]) <= 96):
+            return None
+        safe.append({"host": item["host"], "started": item["started"]})
+    if [item["host"] for item in safe] != expected:
+        return None
+    if required_roster is not None and safe != required_roster:
+        return None
+    return safe
+
+
+def _validated_set_desired(value):
+    if (not isinstance(value, dict) or
+            set(value) != {"name", "present", "count", "digest"} or
+            not isinstance(value.get("name"), str) or
+            not re.fullmatch(r"[A-Za-z0-9_-]{1,31}", value["name"]) or
+            not isinstance(value.get("present"), bool) or
+            isinstance(value.get("count"), bool) or
+            not isinstance(value.get("count"), int) or
+            not 0 <= value["count"] <= MAX_RECEIPT_MEMBER_COUNT or
+            not isinstance(value.get("digest"), str) or
+            not re.fullmatch(r"[0-9a-f]{64}", value["digest"])):
+        return None
+    return value
+
+
+def _validated_direct_observations(result, expected, roster, desired,
+                                   fence, fingerprint):
+    rows = result.get("observations")
+    if not isinstance(rows, list) or len(rows) != len(expected):
+        return False
+    for index, row in enumerate(rows):
+        if row != {
+                "schema": "mojo.firewall.semantic", "version": 1,
+                "kind": "set", "identity": desired["name"],
+                "fence": fence, "fingerprint": fingerprint,
+                "host": expected[index], "started": roster[index]["started"],
+                "desired": desired}:
+            return False
+    return True
+
+
+def _validated_checked_receipts(checked, expected, roster, desired):
+    if (not isinstance(checked, dict) or
+            checked.get("schema") != "mojo.jobs.execute-checked" or
+            checked.get("version") != 2 or checked.get("status") != "verified" or
+            _validated_host_list(checked.get("expected_hosts"), required=True) != expected or
+            _validated_roster(checked.get("expected_roster"), expected) != roster or
+            _validated_host_list(checked.get("responded_hosts")) != expected or
+            _validated_host_list(checked.get("succeeded_hosts")) != expected or
+            checked.get("failed_hosts") != [] or checked.get("missing_hosts") != [] or
+            checked.get("anomalies") != []):
+        return False
+    rows = checked.get("results")
+    if not isinstance(rows, list) or len(rows) != len(expected):
+        return False
+    for index, row in enumerate(rows):
+        semantic = row.get("result") if isinstance(row, dict) else None
+        if (not isinstance(row, dict) or
+                set(row) != {"host", "runner_id", "started", "status",
+                             "result", "error"} or
+                row.get("host") != expected[index] or
+                not isinstance(row.get("runner_id"), str) or
+                not 1 <= len(row["runner_id"]) <= 128 or
+                row.get("started") != roster[index]["started"] or
+                row.get("status") != "success" or row.get("error") is not None or
+                semantic != {"schema": "mojo.firewall.semantic", "version": 1,
+                             "kind": "set", "desired": desired,
+                             "observed": desired, "ok": True}):
+            return False
+    return True
+
+
+def _verified_enforcement_proof(result, required_roster=None):
+    """Return a redacted complete proof, or ``None`` for any contradiction."""
+    if (result.get("status") != "verified" or result.get("ok") is not True or
+            result.get("error") not in (None, {})):
+        return None
+    expected = _validated_host_list(result.get("expected_hosts"), required=True)
+    desired = _validated_set_desired(result.get("desired"))
+    fence = result.get("fence")
+    fingerprint = result.get("fingerprint")
+    if (expected is None or desired is None or isinstance(fence, bool) or
+            not isinstance(fence, int) or not 1 <= fence <= 9223372036854775807 or
+            not isinstance(fingerprint, str) or
+            not re.fullmatch(r"[0-9a-f]{64}", fingerprint)):
+        return None
+    roster = _validated_roster(
+        result.get("expected_roster"), expected, required_roster=required_roster)
+    if (roster is None or not _validated_direct_observations(
+            result, expected, roster, desired, fence, fingerprint)):
+        return None
+    if ("checked" in result and not _validated_checked_receipts(
+            result.get("checked"), expected, roster, desired)):
+        return None
+    return {"expected": expected, "responded": list(expected),
+            "succeeded": list(expected), "desired": desired,
+            "fence": fence}
 
 
 def _safe_enforcement(result, roster=None, observation_cutoff=None):
     """Project checked fleet truth without exposing its raw receipt plane."""
     result = result if isinstance(result, dict) else {}
-    checked = result.get("checked")
-    checked = checked if isinstance(checked, dict) else result
-    expected = _safe_host_list(checked.get("expected_hosts"))
+    checked = result.get("checked") if isinstance(result.get("checked"), dict) else {}
+    receipt = checked or result
+    expected = _safe_host_list(receipt.get("expected_hosts"))
     if not expected and isinstance(roster, list):
         expected = _safe_host_list([
             item.get("host") for item in roster if isinstance(item, dict)])
-    responded = _safe_host_list(checked.get("responded_hosts"))
-    succeeded = _safe_host_list(checked.get("succeeded_hosts"))
-    failed = _safe_host_list(checked.get("failed_hosts"))
-    missing = _safe_host_list(checked.get("missing_hosts"))
-    if result.get("ok") is True and expected and not responded:
-        responded = list(expected)
-        succeeded = list(expected)
-    if expected and not result.get("ok") and not responded and not missing:
-        missing = list(expected)
+    responded = _safe_host_list(receipt.get("responded_hosts"))
+    succeeded = _safe_host_list(receipt.get("succeeded_hosts"))
+    failed = _safe_host_list(receipt.get("failed_hosts"))
+    missing = _safe_host_list(receipt.get("missing_hosts"))
     error = result.get("error") if isinstance(result.get("error"), dict) else {}
     code = error.get("code") if isinstance(error.get("code"), str) else ""
-    if result.get("ok") is True:
+    required_roster = (roster if isinstance(roster, list) else None)
+    proof = _verified_enforcement_proof(result, required_roster=required_roster)
+    if proof is not None:
         status = "verified"
+        expected = proof["expected"]
+        responded = proof["responded"]
+        succeeded = proof["succeeded"]
+        failed = []
+        missing = []
     elif code in {"generation_superseded", "runner_roster_changed",
                   "host_observation_mismatch"}:
         status = "stale"
     elif missing:
         status = "missing"
-    elif result.get("status") == "partial" or responded or failed:
+    elif (result.get("status") in {"partial", "verified"} or
+          checked.get("status") in {"partial", "verified"} or
+          result.get("ok") is True or responded or failed or
+          bool(checked.get("anomalies"))):
         status = "partial"
     else:
         status = "unavailable"
-    desired = result.get("desired")
+    desired = proof["desired"] if proof is not None else result.get("desired")
     safe_desired = {}
     if isinstance(desired, dict):
         for key in ("present", "count", "digest"):
@@ -588,7 +715,7 @@ def _safe_enforcement(result, roster=None, observation_cutoff=None):
                     (key == "digest" and isinstance(value, str) and
                      re.fullmatch(r"[0-9a-f]{64}", value))):
                 safe_desired[key] = value
-    generation = result.get("fence")
+    generation = proof["fence"] if proof is not None else result.get("fence")
     if (isinstance(generation, bool) or not isinstance(generation, int) or
             not 1 <= generation <= 9223372036854775807):
         generation = None
@@ -623,7 +750,7 @@ def _safe_ipset(row, result=None, roster=None, observation_cutoff=None):
         value["enforcement"] = enforcement
         value["enforcement_status"] = enforcement["status"]
         value["enforcement_ok"] = enforcement["status"] == "verified"
-        if result.get("ok") is not True:
+        if enforcement["status"] != "verified":
             error = result.get("error") or {}
             code = error.get("code")
             value["error_code"] = (

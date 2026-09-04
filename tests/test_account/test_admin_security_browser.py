@@ -109,7 +109,7 @@ def test_admin_security_real_chrome(opts):
         "the opt-in harness does not auto-discover or download browsers.")
     preview_port = _port()
     debug_port = _port()
-    preview = chrome = None
+    preview = malformed_preview = chrome = None
     cdp = None
     with tempfile.TemporaryDirectory(prefix="mojo-admin-security-chrome-") as profile:
         try:
@@ -171,6 +171,21 @@ def test_admin_security_real_chrome(opts):
             cdp.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Tab", "code": "Tab"})
             cdp.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Tab", "code": "Tab"})
             assert cdp.evaluate("document.activeElement !== document.body"), "keyboard focus did not enter the workspace"
+            malformed_port = _port()
+            malformed_preview = subprocess.Popen([
+                sys.executable, str(ROOT / "bin/admin_preview"),
+                "--port", str(malformed_port), "--security-state", "malformed",
+            ], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True)
+            _json(f"http://127.0.0.1:{malformed_port}/api/account/admin/bootstrap",
+                  time.monotonic() + DEADLINE_SECONDS)
+            cdp.call("Page.navigate", {"url":
+                f"http://127.0.0.1:{malformed_port}/v2/#/security-operations"})
+            cdp.wait("document.body.textContent.includes('security section is malformed')",
+                     "malformed contract")
+            assert not cdp.evaluate(
+                "!!document.querySelector('.security-body table, .security-row-actions')"), (
+                    "malformed Security data enabled rows or governed actions")
             time.sleep(0.1)
             cdp.evaluate("true")  # Drain any trailing console/runtime events.
             assert not cdp.failures, f"Chrome reported console/runtime failures: {cdp.failures}"
@@ -181,3 +196,4 @@ def test_admin_security_real_chrome(opts):
             finally:
                 _stop(chrome)
                 _stop(preview)
+                _stop(malformed_preview)

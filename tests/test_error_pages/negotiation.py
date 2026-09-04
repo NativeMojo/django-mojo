@@ -159,7 +159,8 @@ def test_json_403_bytes_unchanged(opts):
     from mojo.helpers.response import JsonResponse
 
     err = mojo.errors.PermissionDeniedException("Permission Denied", 403, 403)
-    payload = {"error": err.reason, "code": err.code, "status": False}
+    payload = {"error": err.reason, "code": err.code, "status": False,
+               "error_status": err.status}
     expected = JsonResponse(dict(payload), status=403)
     got = _dispatch(err, _request(accept="*/*"))
 

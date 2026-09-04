@@ -1,6 +1,7 @@
 """Admin Security authority, policy safety, and compatibility contracts."""
 
 from datetime import timedelta
+from copy import deepcopy
 import uuid
 from unittest import mock
 
@@ -373,6 +374,69 @@ def test_action_schema_and_checked_receipt_projection(opts):
     assert admin_security._safe_ipset(row, result=stale)[
         "enforcement_status"] == "stale", (
             "a superseded generation must not be mislabeled as merely missing")
+
+    desired = {"name": "safe_set", "present": True, "count": 2,
+               "digest": "a" * 64}
+    roster = [{"host": "edge-a", "started": "incarnation-a"},
+              {"host": "edge-b", "started": "incarnation-b"}]
+    direct = {
+        "status": "verified", "ok": True, "expected_hosts": ["edge-a", "edge-b"],
+        "expected_roster": roster, "desired": desired, "fence": 8,
+        "fingerprint": "b" * 64,
+        "observations": [{
+            "schema": "mojo.firewall.semantic", "version": 1, "kind": "set",
+            "identity": "safe_set", "fence": 8, "fingerprint": "b" * 64,
+            "host": host, "started": started, "desired": desired,
+        } for host, started in (("edge-a", "incarnation-a"),
+                                ("edge-b", "incarnation-b"))],
+    }
+    verified = admin_security._safe_ipset(row, result=direct, roster=roster)
+    assert verified["enforcement_status"] == "verified", verified
+    assert verified["enforcement"]["responded_host_ids"] == ["edge-a", "edge-b"]
+    assert verified["enforcement"]["succeeded_host_ids"] == ["edge-a", "edge-b"]
+
+    checked = deepcopy(direct)
+    checked["checked"] = {
+        "schema": "mojo.jobs.execute-checked", "version": 2,
+        "status": "verified", "expected_hosts": ["edge-a", "edge-b"],
+        "expected_roster": roster, "responded_hosts": ["edge-a", "edge-b"],
+        "succeeded_hosts": ["edge-a", "edge-b"], "failed_hosts": [],
+        "missing_hosts": [], "anomalies": [],
+        "results": [{
+            "host": host, "runner_id": f"secret-runner-{host}",
+            "started": started, "status": "success", "error": None,
+            "result": {"schema": "mojo.firewall.semantic", "version": 1,
+                       "kind": "set", "desired": desired,
+                       "observed": desired, "ok": True},
+        } for host, started in (("edge-a", "incarnation-a"),
+                                ("edge-b", "incarnation-b"))],
+    }
+    assert admin_security._safe_ipset(
+        row, result=checked, roster=roster)["enforcement_status"] == "verified"
+
+    contradictions = {}
+    partial = deepcopy(direct)
+    partial["status"] = "partial"
+    contradictions["partial"] = (partial, "partial")
+    bare = {"status": "verified", "ok": True, "desired": desired}
+    contradictions["malformed"] = (bare, "partial")
+    for expected_status, field in (("missing", "missing_hosts"),
+                                   ("partial", "failed_hosts"),
+                                   ("partial", "anomalies")):
+        value = deepcopy(checked)
+        value["checked"][field] = (["edge-b"] if field != "anomalies"
+                                    else ["unexpected_reply"])
+        if field == "missing_hosts":
+            value["checked"]["responded_hosts"] = ["edge-a"]
+            value["checked"]["succeeded_hosts"] = ["edge-a"]
+        elif field == "failed_hosts":
+            value["checked"]["succeeded_hosts"] = ["edge-a"]
+        contradictions[field] = (value, expected_status)
+    for case, (value, expected_status) in contradictions.items():
+        projection = admin_security._safe_ipset(row, result=value, roster=roster)
+        assert projection["enforcement_status"] == expected_status, (case, projection)
+        assert projection["enforcement_ok"] is False, (case, projection)
+        assert projection["error_code"] == "fleet_unverified", (case, projection)
 
 
 @th.django_unit_test("Assistant rule mutations bind fresh auth and previews")

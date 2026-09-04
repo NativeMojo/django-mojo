@@ -221,7 +221,7 @@ def test_security_preview_states(opts):
     server = _server()
     provider = server.security
     for state in ("full", "empty", "unavailable", "partial", "failed",
-                  "stale", "recovery"):
+                  "stale", "recovery", "malformed"):
         class Handler:
             pass
 
@@ -238,6 +238,11 @@ def test_security_preview_states(opts):
             assert truth["observed"] == "missing"
             assert truth["expected_host_ids"] == ["edge-a", "edge-b"]
             assert truth["missing_host_ids"] == ["edge-b"]
+        if state == "malformed":
+            assert body["sections"]["ipsets"]["status"] == "available"
+            assert body["sections"]["ipsets"]["data"] == {
+                "not": "a bounded row array"}
+            assert isinstance(body["sections"]["schemas"]["data"]["actions"], list)
         if state == "recovery":
             assert body["sections"]["ipsets"]["status"] == "unavailable"
             _, recovered = provider.get(

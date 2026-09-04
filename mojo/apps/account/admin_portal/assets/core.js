@@ -83,12 +83,18 @@ function safeScalar(value) {
   return String(value).replace(/[\r\n\t]+/g, ' ').trim().slice(0, 512);
 }
 
-function responseError(payload, response, path) {
+export function effectiveResponseStatus(payload, response) {
+  const declared = payload?.status === false ? payload?.error_status : null;
+  return response.status === 200 && Number.isInteger(declared)
+    && declared >= 400 && declared <= 599 ? declared : response.status;
+}
+
+function responseError(payload, response, path, status) {
   const message = safeScalar(payload?.error) || safeScalar(payload?.reason)
-    || `Request failed (${response.status})`;
-  const code = response.status === 401 ? 'session_expired'
+    || `Request failed (${status})`;
+  const code = status === 401 ? 'session_expired'
     : safeScalar(payload?.error_code) || safeScalar(payload?.code) || 'request_failed';
-  return new AdminApiError(message, {status: response.status, code, path});
+  return new AdminApiError(message, {status, code, path});
 }
 
 function expireSession(path) {
@@ -114,7 +120,10 @@ async function renewSourceSession() {
   const response = await fetch('/api/account/admin/session', {
     method: 'POST', headers: {Authorization: header, 'Content-Type': 'application/json'}, body: '{}',
   });
-  return response.ok;
+  let payload = {};
+  try { payload = await response.json(); } catch (_) { payload = {}; }
+  return response.ok && payload.status !== false
+    && effectiveResponseStatus(payload, response) < 400;
 }
 
 async function requestPayload(path, options = {}, retry = true, freshRetry = true) {
@@ -125,7 +134,10 @@ async function requestPayload(path, options = {}, retry = true, freshRetry = tru
   const response = await fetch(path, {...options, headers});
   const method = String(options.method || 'GET').toUpperCase();
   const replaySafe = method === 'GET' || method === 'HEAD';
-  if (response.status === 401 && retry && replaySafe
+  let payload = {};
+  try { payload = await response.json(); } catch (_) { payload = {}; }
+  const status = effectiveResponseStatus(payload, response);
+  if (status === 401 && retry && replaySafe
       && window.MojoAuth?.getRefreshToken?.()) {
     let renewed = false;
     try {
@@ -134,17 +146,15 @@ async function requestPayload(path, options = {}, retry = true, freshRetry = tru
     } catch (_) { renewed = false; }
     if (renewed) return requestPayload(path, options, false, freshRetry);
   }
-  if (response.status === 440) {
+  if (status === 440) {
     const error = new FreshAuthRequired(path);
     clearBusy();
     if (!freshRetry) throw error;
     await requestFreshAuth(error);
     return requestPayload(path, options, retry, false);
   }
-  let payload = {};
-  try { payload = await response.json(); } catch (_) { payload = {}; }
-  if (response.status === 401) expireSession(path);
-  if (!response.ok || payload.status === false) throw responseError(payload, response, path);
+  if (status === 401) expireSession(path);
+  if (!response.ok || payload.status === false) throw responseError(payload, response, path, status);
   return payload;
 }
 

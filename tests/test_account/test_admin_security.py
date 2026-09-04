@@ -66,6 +66,10 @@ def test_security_browser_authority(opts):
     assert "confirm_catch_all = catchAllInput.value" in rules
     assert "await reread?.()" in api and "SecurityConflictError" in api
     assert "apiOnce" in api, "governed mutations may not receive transport replay"
+    assert "validateSectionData" in api and "validateSchemas" in api
+    assert "validators[name](data, name)" in api
+    assert "if (!Array.isArray(envelope?.data))" in api, (
+        "a malformed available list must not become an authoritative empty table")
     for forbidden in ("expected_roster", "row.runner_id", "row.incarnation",
                       "row.source_key", "row.broker", "row.title", ".cidrs",
                       "validation_reason"):
@@ -80,7 +84,13 @@ def test_admin_auth_recovery_contract(opts):
         assert "const replaySafe = method === 'GET' || method === 'HEAD'" in core
         assert "mojo-admin:session-expired" in core and "returnPath" in core
         assert "AdminApiError" in core and "safeScalar" in core
-        assert "response.status === 401 ? 'session_expired'" in core
+        assert "effectiveResponseStatus" in core and "payload?.error_status" in core
+        assert "const status = effectiveResponseStatus(payload, response)" in core
+        assert "status === 401 ? 'session_expired'" in core
+        assert "if (status === 401 && retry && replaySafe" in core
+        assert "if (status === 440)" in core
+        assert "if (!freshRetry) throw error" in core
+        assert "return requestPayload(path, options, retry, false)" in core
         assert "mojo-admin:session-expired" in app
         assert "location.pathname}${location.search}${location.hash}" in app
         assert "context = null" in app and "closeAllOverlays()" in app
@@ -92,7 +102,7 @@ def test_security_preview_contract(opts):
     server = (ROOT / "bin/admin_preview_support/server.py").read_text()
     for state in ("full", "empty", "unavailable", "view-only", "no-access",
                   "partial", "failed", "stale", "expired-session", "440",
-                  "conflict", "recovery"):
+                  "conflict", "recovery", "malformed"):
         assert f'"{state}"' in server
     assert "expected_host_ids" in preview and "missing_host_ids" in preview
     for forbidden in ("source_key", "runner_id", "expected_roster", "cidrs"):
@@ -109,6 +119,7 @@ def test_security_browser_harness_contract(opts):
     assert "TemporaryDirectory" in harness and "DEADLINE_SECONDS" in harness
     assert "Runtime.exceptionThrown" in harness and "Log.entryAdded" in harness
     for proof in ("case paging", "case filtering", "bounded case detail",
-                  "narrow viewport", "dark theme", "keyboard focus"):
+                  "narrow viewport", "dark theme", "keyboard focus",
+                  "malformed contract"):
         assert proof in harness
     assert "process.terminate()" in harness and "process.kill()" in harness

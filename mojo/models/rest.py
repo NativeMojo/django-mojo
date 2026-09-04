@@ -258,6 +258,7 @@ class MojoModel:
         payload["status"] = False
         if "code" not in payload:
             payload["code"] = status
+        payload["error_status"] = status
         if MOJO_APP_STATUS_200_ON_ERROR:
             status = 200
         return JsonResponse(payload, status=status)

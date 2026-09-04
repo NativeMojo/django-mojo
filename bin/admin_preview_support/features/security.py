@@ -45,7 +45,7 @@ CASES = [
      "state": "learning", "urgency": "high", "occurrence_count": 12,
      "receipt_count": 12, "projected_event_count": 3, "distinct_count": 4,
      "sample_count": 3, "overflow_count": 9, "distinct_source_count": 4,
-     "policy_version": "preview-1", "evaluator_version": "preview-1",
+     "policy_version": 1, "evaluator_version": 1,
      "accuracy": "sampled_learning_projection"},
 ]
 INCIDENTS = [
@@ -64,7 +64,8 @@ RULES = [
      "priority": 10, "is_active": True, "bundle_minutes": 30,
      "bundle_by": 1, "bundle_by_rule_set": True, "match_by": 1,
      "trigger_count": 5, "trigger_window": 10, "retrigger_every": 5,
-     "rule_count": 2, "validation": {"valid": True, "legacy": False}},
+     "rule_count": 2, "validation": {"status": "valid", "legacy": False,
+       "handlers": [{"type": "notify", "permission": "manage_security"}]}},
 ]
 IPSETS = [
     {"id": 901, "created": "2026-08-01T11:00:00Z", "modified": NOW,
@@ -86,7 +87,7 @@ RECOMMENDATIONS = [
      "expires_at": "2026-08-10T18:10:00Z", "approved_at": None,
      "target_count": 2, "validated_count": 2, "protected_count": 0,
      "executed_count": 0, "failed_count": 0, "reversed_count": 0,
-     "policy_version": "preview-1", "evaluator_version": "preview-1"},
+     "policy_version": 1, "evaluator_version": 1},
 ]
 
 
@@ -166,7 +167,21 @@ def _sections(state):
           "recommendation_transitions": {}, "accuracy": {"current": "exact_current_rows",
           "recommendation_transitions": "exact_append_only_transitions", "resolution_rate": "unavailable"},
           "unavailable": {"resolution_rate": "immutable_resolution_history_unavailable"},
-          "metric_definitions": {}},
+          "metric_definitions": {
+            "open_incidents": {"source": "incident.Incident current rows",
+                               "accuracy": "exact", "window": "current"},
+            "active_rule_sets": {"source": "incident.RuleSet current rows",
+                                 "accuracy": "exact", "window": "current"},
+            "pending_recommendations": {
+              "source": "incident.MojoSecRecommendation current rows",
+              "accuracy": "exact", "window": "current"},
+            "recommendation_transitions": {
+              "source": "incident.MojoSecRecommendationTransition append-only rows",
+              "accuracy": "exact", "window": WINDOW},
+            "case_learning": {"source": "bounded MojoSecCase projections",
+                              "accuracy": "sampled", "window": WINDOW},
+            "resolution_rate": {"source": None, "accuracy": "unavailable",
+                                "window": WINDOW}}},
         "cases": cases,
         "incidents": [] if empty else deepcopy(INCIDENTS),
         "events": [] if empty else deepcopy(EVENTS),
@@ -213,6 +228,14 @@ def get(handler, parsed):
                          succeeded_host_ids=["edge-a"], missing_host_ids=["edge-b"])
             data[name][0].update(enforcement_status="missing", enforcement_ok=False,
                                  error_code="host_observation_missing")
+        elif state == "malformed":
+            if name == "overview":
+                data[name] = {"current": {"open_incidents": "one"}}
+            elif name == "schemas":
+                data[name] = {"rule_policy": {}, "actions": [],
+                              "action_names": list(ACTIONS)}
+            else:
+                data[name] = {"not": "a bounded row array"}
         if name == "rules" and ruleset_id is not None:
             data[name] = [row for row in data[name]
                           if str(row["id"]) == str(ruleset_id)]

@@ -167,7 +167,7 @@ export function renderRules({ctx, report, refresh}) {
     {label: 'Rule set', render: (row) => h('div', {}, h('strong', {text: row.name || `Rule set ${row.id}`}), h('small', {text: row.category || 'uncategorized'}))},
     {label: 'State', render: (row) => badge(row.is_active ? 'active' : 'inactive', statusTone(row.is_active ? 'active' : 'inactive'))},
     {label: 'Rules', key: 'rule_count'},
-    {label: 'Validation', render: (row) => badge(row.validation?.valid ? 'valid' : row.validation?.legacy ? 'legacy' : 'invalid', row.validation?.valid ? 'success' : 'warning')},
+    {label: 'Validation', render: (row) => badge(row.validation.status === 'valid' ? 'valid' : 'legacy', row.validation.status === 'valid' ? 'success' : 'warning')},
     {label: 'Actions', render: (row) => manage ? h('div', {class: 'security-row-actions'},
       (() => { const edit = h('button', {class: 'button ghost compact', type: 'button'}, 'Edit'); edit.addEventListener('click', (event) => { event.stopPropagation(); runAction(edit, () => openEditor({report, row, refresh}), {pendingLabel: 'Opening…'}); }); return edit; })(),
       actionButton({report, row, action: row.is_active ? 'ruleset.deactivate' : 'ruleset.activate', label: row.is_active ? 'Deactivate' : 'Activate', refresh}),
