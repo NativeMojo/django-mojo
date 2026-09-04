@@ -9,8 +9,9 @@ TEST_ADMIN_EMAIL = "ctxref_admin@test.com"
 @th.requires_app("mojo.apps.assistant")
 def setup_context_refs(opts):
     from mojo.apps.account.models import User
-    from mojo.apps.incident.models import Event, RuleSet
+    from mojo.apps.assistant.models import Skill
 
+    Skill.objects.filter(name__startswith="ctxref_").delete()
     User.objects.filter(email=TEST_ADMIN_EMAIL).delete()
     opts.admin = User.objects.create_user(
         username=TEST_ADMIN_EMAIL, email=TEST_ADMIN_EMAIL, password="pass123",
@@ -20,19 +21,19 @@ def setup_context_refs(opts):
     for perm in ["view_admin", "view_security", "security"]:
         opts.admin.add_permission(perm)
 
-    # Seed data
-    RuleSet.objects.filter(name__startswith="ctxref_").delete()
-    Event.objects.filter(title__startswith="ctxref_").delete()
-
-    opts.ruleset = RuleSet.objects.create(
-        name="ctxref_test_rule", category="ctxref_cat",
+    # Seed ordinary AI-visible models. Governed security models such as
+    # RuleSet deliberately reject assistant references.
+    opts.skill = Skill.objects.create(
+        user=opts.admin,
+        tier="user",
+        name="ctxref_test_skill",
+        steps=[],
     )
-    opts.event = Event.objects.create(
-        title="ctxref_test_event",
-        details="seed event",
-        category="ctxref_cat",
-        level=3,
-        scope="global",
+    opts.other_skill = Skill.objects.create(
+        user=opts.admin,
+        tier="user",
+        name="ctxref_other_skill",
+        steps=[],
     )
 
 
@@ -49,25 +50,25 @@ def _add_context(params, user):
 def test_valid_ref_passes(opts):
     result = _add_context({
         "references": [{
-            "app_name": "incident",
-            "model_name": "RuleSet",
-            "pk": opts.ruleset.pk,
-            "label": "Test rule",
+            "app_name": "assistant",
+            "model_name": "Skill",
+            "pk": opts.skill.pk,
+            "label": "Test skill",
         }],
     }, opts.admin)
     assert "error" not in result, f"Should succeed: {result.get('error')}"
     refs = result["references"]
     assert len(refs) == 1, f"Expected 1 valid ref, got {len(refs)}"
-    assert refs[0]["pk"] == opts.ruleset.pk, "Should return the correct pk"
-    assert refs[0]["label"] == "Test rule", "Should preserve label"
+    assert refs[0]["pk"] == opts.skill.pk, "Should return the correct pk"
+    assert refs[0]["label"] == "Test skill", "Should preserve label"
 
 
 @th.django_unit_test()
 def test_multiple_valid_refs(opts):
     result = _add_context({
         "references": [
-            {"app_name": "incident", "model_name": "RuleSet", "pk": opts.ruleset.pk, "label": "Rule"},
-            {"app_name": "incident", "model_name": "Event", "pk": opts.event.pk, "label": "Event"},
+            {"app_name": "assistant", "model_name": "Skill", "pk": opts.skill.pk, "label": "Skill"},
+            {"app_name": "assistant", "model_name": "Skill", "pk": opts.other_skill.pk, "label": "Other"},
         ],
     }, opts.admin)
     assert "error" not in result, f"Should succeed: {result.get('error')}"
@@ -99,7 +100,7 @@ def test_invalid_app_filtered(opts):
     result = _add_context({
         "references": [{
             "app_name": "nonexistent_app",
-            "model_name": "Event",
+            "model_name": "Skill",
             "pk": 1,
             "label": "Bad",
         }],
@@ -117,8 +118,8 @@ def test_invalid_app_filtered(opts):
 def test_nonexistent_pk_filtered(opts):
     result = _add_context({
         "references": [{
-            "app_name": "incident",
-            "model_name": "RuleSet",
+            "app_name": "assistant",
+            "model_name": "Skill",
             "pk": 999999999,
             "label": "Ghost",
         }],
@@ -129,12 +130,6 @@ def test_nonexistent_pk_filtered(opts):
 
 
 # ---------------------------------------------------------------------------
-# DENY_AI model filtered
-# ---------------------------------------------------------------------------
-
-
-
-# ---------------------------------------------------------------------------
 # Mixed valid/invalid refs
 # ---------------------------------------------------------------------------
 
@@ -142,10 +137,10 @@ def test_nonexistent_pk_filtered(opts):
 def test_mixed_refs_only_valid_returned(opts):
     result = _add_context({
         "references": [
-            {"app_name": "incident", "model_name": "RuleSet", "pk": opts.ruleset.pk, "label": "Good"},
-            {"app_name": "incident", "model_name": "NonExistent", "pk": 1, "label": "Bad model"},
-            {"app_name": "incident", "model_name": "RuleSet", "pk": 999999999, "label": "Bad pk"},
-            {"app_name": "incident", "model_name": "Event", "pk": opts.event.pk, "label": "Good too"},
+            {"app_name": "assistant", "model_name": "Skill", "pk": opts.skill.pk, "label": "Good"},
+            {"app_name": "assistant", "model_name": "NonExistent", "pk": 1, "label": "Bad model"},
+            {"app_name": "assistant", "model_name": "Skill", "pk": 999999999, "label": "Bad pk"},
+            {"app_name": "assistant", "model_name": "Skill", "pk": opts.other_skill.pk, "label": "Good too"},
         ],
     }, opts.admin)
     assert "error" not in result, f"Should not error: {result.get('error')}"
@@ -172,9 +167,9 @@ def test_empty_references_returns_empty(opts):
 def test_missing_required_fields_filtered(opts):
     result = _add_context({
         "references": [
-            {"app_name": "incident", "model_name": "RuleSet"},
-            {"app_name": "incident", "pk": 1},
-            {"model_name": "RuleSet", "pk": 1},
+            {"app_name": "assistant", "model_name": "Skill"},
+            {"app_name": "assistant", "pk": 1},
+            {"model_name": "Skill", "pk": 1},
         ],
     }, opts.admin)
     assert "error" not in result, f"Should not error: {result.get('error')}"
@@ -189,7 +184,7 @@ def test_missing_required_fields_filtered(opts):
 @th.django_unit_test()
 def test_context_block_validation_valid(opts):
     from mojo.apps.assistant.services.agent import _validate_block
-    block = {"type": "context", "references": [{"app_name": "incident", "model_name": "RuleSet", "pk": 1}]}
+    block = {"type": "context", "references": [{"app_name": "assistant", "model_name": "Skill", "pk": 1}]}
     assert _validate_block(block) is True, "Valid context block should pass validation"
 
 
@@ -223,7 +218,7 @@ def test_extract_context_refs(opts):
     tool_results = [
         {"tool_use_id": "call_1", "content": ujson.dumps({"results": []})},
         {"tool_use_id": "call_2", "content": ujson.dumps({
-            "references": [{"app_name": "incident", "model_name": "RuleSet", "pk": 1, "label": "Test"}],
+            "references": [{"app_name": "assistant", "model_name": "Skill", "pk": 1, "label": "Test"}],
         })},
     ]
     refs = _extract_context_refs(tool_blocks, tool_results)
