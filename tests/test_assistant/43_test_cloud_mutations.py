@@ -7,9 +7,8 @@ only correct when called directly is not a gate.
 
 Deliberately provider-free: nothing here reaches AWS, and nothing calls
 `deploy.request_deploy`, which writes the shared deploy target key (that
-coverage lives in the opt-in serial module). Rows are created with a
-module-unique `source` and only those rows are deleted — tests/test_edge owns
-this table too.
+coverage lives in the opt-in serial module). Each test owns a unique `source`
+and deletes only those rows — tests/test_edge owns this table too.
 """
 
 TESTIT_TIER = "edge"
@@ -22,7 +21,7 @@ from testit.helpers import assert_eq, assert_true
 
 TEST_EMAIL = "cloud-mutations-platform@example.com"
 TEST_PASSWORD = "TestPass1!"
-SOURCE = "assistant-cloud-test-mutations"
+SOURCE_PREFIX = "assistant-cloud-"
 SHA = "d" * 40
 
 DEPLOY_TOOLS = ("retry_platform_deployment", "verify_platform_deployment",
@@ -33,9 +32,7 @@ DEPLOY_TOOLS = ("retry_platform_deployment", "verify_platform_deployment",
 @th.requires_app("mojo.apps.assistant")
 def setup_cloud_mutations(opts):
     from mojo.apps.account.models import User
-    from mojo.apps.edge.models import PlatformDeployment
 
-    PlatformDeployment.objects.filter(source=SOURCE).delete()
     User.objects.filter(email=TEST_EMAIL).delete()
     opts.admin = User.objects.create_user(
         username=TEST_EMAIL, email=TEST_EMAIL, password=TEST_PASSWORD)
@@ -45,12 +42,16 @@ def setup_cloud_mutations(opts):
         opts.admin.add_permission(perm)
 
 
-def _row(status):
+def _owned_source():
+    return f"{SOURCE_PREFIX}{uuid_module.uuid4().hex[:16]}"
+
+
+def _row(status, source):
     from mojo.apps.edge.models import PlatformDeployment
 
-    PlatformDeployment.objects.filter(source=SOURCE).delete()
     return PlatformDeployment.objects.create(
-        sha=SHA, source=SOURCE, actor="test", status=status,
+        sha=SHA, source=source, actor="test", status=status,
+        request_key=f"{source}:{status}:{uuid_module.uuid4().hex}",
         framework_version="1.15.15",
         frozen_roster=["mojo-api-a-engine", "mojo-api-b-engine"])
 
@@ -71,14 +72,39 @@ def _propose(opts, conversation, tool_name, deployment):
                              {"deployment": str(deployment)})
 
 
-def _cleanup(opts, conversation):
+def _cleanup(opts, conversation, source):
     from mojo.apps.assistant.models import Message, PendingAction
     from mojo.apps.edge.models import PlatformDeployment
 
     PendingAction.objects.filter(conversation=conversation).delete()
     Message.objects.filter(conversation=conversation).delete()
     conversation.delete()
-    PlatformDeployment.objects.filter(source=SOURCE).delete()
+    PlatformDeployment.objects.filter(source=source).delete()
+
+
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("one test's deployment fixture cannot delete another's row")
+def test_deployment_fixture_is_test_owned(opts):
+    from mojo.apps.edge.models import PlatformDeployment
+
+    first_source = _owned_source()
+    second_source = _owned_source()
+    first = _row("failed", first_source)
+    try:
+        second = _row("verified", second_source)
+        PlatformDeployment.objects.filter(source=first_source).delete()
+        assert_true(
+            not PlatformDeployment.objects.filter(pk=first.pk).exists(),
+            "the owning cleanup did not remove its deployment fixture",
+        )
+        assert_true(
+            PlatformDeployment.objects.filter(pk=second.pk).exists(),
+            "one test's cleanup deleted a neighboring deployment fixture",
+        )
+    finally:
+        PlatformDeployment.objects.filter(
+            source__in=[first_source, second_source]).delete()
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +113,7 @@ def _cleanup(opts, conversation):
 def test_unknown_deployment_refuses_with_no_record(opts):
     from mojo.apps.assistant.models import PendingAction
 
+    source = _owned_source()
     conv = _conversation(opts, "cloud-unknown-deployment")
     try:
         for tool_name in DEPLOY_TOOLS:
@@ -100,17 +127,18 @@ def test_unknown_deployment_refuses_with_no_record(opts):
         assert_eq(PendingAction.objects.filter(conversation=conv).count(), 0,
                   "a refused proposal must leave no record behind")
     finally:
-        _cleanup(opts, conv)
+        _cleanup(opts, conv, source)
 
 
 @th.django_unit_test("an attempt the orchestrator is still driving earns no control")
 def test_active_attempt_refuses_every_control(opts):
     from mojo.apps.assistant.models import PendingAction
 
+    source = _owned_source()
     conv = _conversation(opts, "cloud-active-deployment")
     try:
         for status in ("requested", "canary", "fleet"):
-            row = _row(status)
+            row = _row(status, source)
             for tool_name in DEPLOY_TOOLS:
                 result, block = _propose(opts, conv, tool_name, row.pk)
                 assert_true(block is None,
@@ -122,7 +150,7 @@ def test_active_attempt_refuses_every_control(opts):
         assert_eq(PendingAction.objects.filter(conversation=conv).count(), 0,
                   "an active attempt must leave no approval records")
     finally:
-        _cleanup(opts, conv)
+        _cleanup(opts, conv, source)
 
 
 @th.django_unit_test("each control is offered exactly where the Admin offers it")
@@ -139,10 +167,11 @@ def test_controls_match_the_admin(opts):
         "converged": {"verify_platform_deployment"},
         "superseded": set(),
     }
+    source = _owned_source()
     conv = _conversation(opts, "cloud-control-matrix")
     try:
         for status, allowed in expected.items():
-            row = _row(status)
+            row = _row(status, source)
             for tool_name in DEPLOY_TOOLS:
                 result, block = _propose(opts, conv, tool_name, row.pk)
                 if tool_name in allowed:
@@ -160,7 +189,7 @@ def test_controls_match_the_admin(opts):
                                 f"{tool_name} on {status} refused without "
                                 f"saying why: {result}")
     finally:
-        _cleanup(opts, conv)
+        _cleanup(opts, conv, source)
 
 
 @th.django_unit_test("the bound revision moves when the attempt's status moves")
@@ -171,10 +200,11 @@ def test_revision_binds_the_status(opts):
     # not a hole — resolving it re-runs preview and refuses precondition_failed
     # (covered by the approval gate's own tests); what is asserted here is that
     # this preview's revision actually tracks the status.
+    source = _owned_source()
     first_conv = _conversation(opts, "cloud-revision-before")
     second_conv = _conversation(opts, "cloud-revision-after")
     try:
-        row = _row("verified")
+        row = _row("verified", source)
         _result, first = _propose(
             opts, first_conv, "verify_platform_deployment", row.pk)
         assert_true(first is not None, "the verified attempt did not propose")
@@ -190,23 +220,25 @@ def test_revision_binds_the_status(opts):
                   f"the revision did not move with the status: "
                   f"{second['preview']['revision']}")
     finally:
-        _cleanup(opts, first_conv)
-        _cleanup(opts, second_conv)
+        _cleanup(opts, first_conv, source)
+        _cleanup(opts, second_conv, source)
 
 
 @th.django_unit_test("a proposal explains the operation and never executes it")
 def test_proposal_is_not_execution(opts):
     from mojo.apps.edge.models import PlatformDeployment
 
+    source = _owned_source()
     conv = _conversation(opts, "cloud-proposal-shape")
     try:
-        row = _row("failed")
-        before = PlatformDeployment.objects.count()
+        row = _row("failed", source)
+        before_retries = PlatformDeployment.objects.filter(retry_of=row).count()
         result, block = _propose(opts, conv, "retry_platform_deployment", row.pk)
 
         assert_eq(result.get("status"), "approval_required",
                   f"a mutating cloud tool must PROPOSE, not run: {result}")
-        assert_eq(PlatformDeployment.objects.count(), before,
+        assert_eq(PlatformDeployment.objects.filter(retry_of=row).count(),
+                  before_retries,
                   "proposing a retry created a deployment — the handler ran")
         assert_eq(block["requires_fresh_auth"], True,
                   f"the retry card must demand a step-up: {block}")
@@ -224,14 +256,15 @@ def test_proposal_is_not_execution(opts):
         assert_true("stderr_tail" not in str(block),
                     "a card carried deploy stderr")
     finally:
-        _cleanup(opts, conv)
+        _cleanup(opts, conv, source)
 
 
 @th.django_unit_test("the verify and converge cards say what they read and publish")
 def test_verify_and_converge_summaries(opts):
+    source = _owned_source()
     conv = _conversation(opts, "cloud-verify-converge")
     try:
-        row = _row("partial")
+        row = _row("partial", source)
         _result, verify = _propose(opts, conv, "verify_platform_deployment", row.pk)
         assert_true("proof" in verify["preview"]["summary"],
                     f"verify's sentence must say it collects proof: "
@@ -246,7 +279,7 @@ def test_verify_and_converge_summaries(opts):
                     f"converge's sentence must rule out a new commit: "
                     f"{converge['preview']['summary']}")
     finally:
-        _cleanup(opts, conv)
+        _cleanup(opts, conv, source)
 
 
 # ---------------------------------------------------------------------------
