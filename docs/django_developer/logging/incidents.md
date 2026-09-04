@@ -515,14 +515,15 @@ success use their detailed checked companions.
 ```
 sync_firewall (hourly, minute 0) — BROADCAST on "default"
   → fans out one job per live runner
-  → each runner, for its own kernel:
-      → take the per-host lock and briefly lease desired snapshot/fence state
+  → one per-host lock winner, for that host's shared kernel:
+      → briefly lease and capture the bounded desired snapshot/fence state
       → bound the whole desired-row roster and quarantine invalid objects per row
+      → release the global lease before broker I/O
       → observe/repair/re-observe complete mojo_blocked membership, including empty
       → reconcile every valid IPSet row (enabled presence; disabled/cache absence tombstone)
       → reconcile valid active TTL presence and pending direct-rule absence
-      → release the global lease for broker I/O, then reacquire briefly
-      → write host observations bound to fences, fingerprints, and heartbeat start
+      → after each broker call, briefly reacquire the lease and reject stale truth
+      → write matching host observations bound to fences, fingerprints, and heartbeat start
       → advance mojo:sync_firewall:last_sync:<host> for the observed valid generation
       → queue aggregate_firewall_truth; invalid siblings stay quarantined/pending
 
@@ -578,7 +579,7 @@ Firewall targets are canonical IPv4 only. IPv6 is refused with
 | `broadcast_block_ip` / `broadcast_unblock_ip` | Legacy broadcast | Compatibility handlers retained for old publishers; authoritative callers use checked compound reconciliation |
 | `broadcast_ipset_add_blocked` / `broadcast_ipset_del_blocked` | Legacy broadcast | Compatibility handlers retained for old publishers; permanent membership is now reconciled as a complete checked set |
 | `sweep_expired_blocks` | Cron (every 5 minutes) | Writes one checked absence generation per expired row and counts only fleet-verified removals |
-| `sync_firewall` | Cron (hourly, minute 0), **broadcast** | Each runner exactly observes/repairs/re-observes its host's bounded valid IPv4 desired generation, including absence tombstones, then writes fenced TTL host observations. Invalid siblings stay quarantined; the host marker advances only without operational failures. Also published box-direct by `on_engine_start`. |
+| `sync_firewall` | Cron (hourly, minute 0), **broadcast** | One per-host lock winner observes/repairs/re-observes that host's bounded valid IPv4 desired generation, including absence tombstones, then writes incarnation-bound fenced TTL observations. Invalid siblings stay quarantined; the host marker advances only without operational failures. Also published box-direct by `on_engine_start`. |
 | `aggregate_firewall_truth` | Follow-up job | Re-reads the exact current compatible-host roster and finalizes shared Geo/IPSet truth only from matching fresh fence/fingerprint observations for every host |
 | `on_engine_start` | Job-engine startup hook | Sets this host's force flag and queues a forced `sync_firewall` on its own runner, so a rebooted node recovers without waiting for the hourly broadcast. Publishes rather than touching the firewall directly — the broker refuses outside a JobEngine execution context. |
 | `prune_events` | Cron (daily 9:45) | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` with level < 6 |
@@ -668,8 +669,10 @@ A separate 6-hourly cron, `refresh_threat_lists`, keeps two **cache-only**
 IPSet rows warm — `tor_exits` (source `tor`) and `blocklist_de` (source
 `blocklist_de`). They are created with `is_enabled=False` and refreshed via
 `refresh_from_source()` only — never `sync()` — so they are excluded from
-`refresh_ipsets`/`sync_firewall` and never reach the kernel firewall. They
-exist purely so `mojo.helpers.geoip.detection.detect_tor()` and
+`refresh_ipsets` and never reach the kernel firewall as membership. The
+hourly/startup `sync_firewall` still reconciles their desired absence and
+removes any kernel drift. They exist purely so
+`mojo.helpers.geoip.detection.detect_tor()` and
 `check_blocklist_de()` can read from the DB cache instead of downloading the
 full list on every lookup. See
 [account/geoip.md](../account/geoip.md#threat-list-caches-tor-exit-list-blocklistde)

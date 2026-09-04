@@ -705,11 +705,11 @@ The `refresh_ipsets` cron fetches CIDRs from source URLs weekly and syncs to all
 **Cache-only rows:** `tor_exits` and `blocklist_de` are `IPSet` rows created with
 `is_enabled=False` — they exist purely as a geoip-detection cache (see
 [account/geoip.md](../account/geoip.md#threat-list-caches-tor-exit-list-blocklistde))
-and are excluded from `refresh_ipsets`/`sync_firewall`. They're kept warm by the
-separate `refresh_threat_lists` cron and can never be enabled: the REST `enable`
-action rejects them (400) and `sync()` hard no-ops for them even if the flag is
-force-set — otherwise the full Tor exit list / blocklist.de list would be pushed
-into the kernel firewall fleet-wide.
+and are excluded from `refresh_ipsets`. They're kept warm by the separate
+`refresh_threat_lists` cron and can never be enabled: the REST `enable` action
+rejects them (400) and `sync()` hard no-ops for them even if the flag is
+force-set. Hourly/startup `sync_firewall` still reconciles each row as a durable
+absence tombstone so kernel drift is removed; it never loads the cached CIDRs.
 
 ### Firewall Reconciliation (`sync_firewall`)
 
@@ -743,8 +743,10 @@ only short desired snapshots, fence advances, revalidation, observation
 publication, and finalization. It is released before checked transport and
 root-broker I/O. Full reconciliation retains the per-host lock around the local
 kernel operation, then reacquires the global lease briefly to reject a stale
-fence before publishing. Contention is retryable/unknown, never successful
-repair. Every release is compare-and-delete.
+fence before publishing. Contention is retryable and never successful repair:
+a checked caller reports `unknown` before dispatch or `partial` after dispatch,
+while the hourly host run returns false without advancing its marker. Every
+release is compare-and-delete.
 
 **Redis keys are per HOST, not per runner** — two engines on one box share one kernel firewall:
 
