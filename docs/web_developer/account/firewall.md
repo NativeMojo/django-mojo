@@ -186,8 +186,16 @@ POST /api/system/geoip/42
 }
 ```
 
+Removing the whitelist writes a pending firewall generation and reconciles the
+direct rule plus permanent aggregate against the desired state that becomes
+active. It does not create a new block, but a previously retained desired
+block can stop being suppressed. This compatibility action does not return an
+`action_response`; reload the record and keep the UI pending when
+`firewall_pending=true` or `firewall_sync_error` is non-empty.
+
 Firewall mutation targets are canonical IPv4 addresses only. IPv6 is refused
-with `unsupported_family` before desired block/whitelist state is written.
+with `unsupported_family` before desired block/whitelist state is written or a
+whitelist is removed.
 
 ## Bulk IPSet lifecycle
 
@@ -225,8 +233,9 @@ Migration `0054_geolocatedip_firewall_reconciliation` resets legacy IPSet
 dispatch fields to unverified state. Wait until at least one v1 checked-capable
 job engine is live on every intended host, then call `ipset.sync` to establish
 new fleet proof. An invalid or IPv6 Geo row or legacy IPSet with an
-invalid/reserved name, an enabled name over 27 characters, IPv6 CIDRs, or more
-than 250,000 networks is quarantined individually while valid rows continue.
+invalid/reserved name, an enabled name over 27 characters, malformed or IPv6
+CIDRs, or more than 250,000 networks is quarantined individually while valid
+rows continue.
 The configured permanent-aggregate set name is reserved dynamically too.
 Migration forces a quarantined legacy IPSet disabled. Valid sibling rows can
 still verify. Quarantined rows remain pending/error;

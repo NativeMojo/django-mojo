@@ -792,7 +792,8 @@ checked action) when an operator needs a retained exact fleet result.
 Preflight legacy desired data before this upgrade. Firewall state accepts only
 canonical IPv4. Migration/reconciliation quarantines an invalid or IPv6 Geo
 row or an IPSet with an invalid/reserved name, an enabled name without suffix
-room, IPv6 CIDRs, or more than 250,000 networks while valid rows continue.
+room, malformed or IPv6 CIDRs, or more than 250,000 networks while valid rows
+continue.
 Migration also forces a quarantined legacy IPSet disabled. Quarantined objects
 remain pending/error and cannot verify until repaired;
 valid siblings still receive host observations and can become verified. The

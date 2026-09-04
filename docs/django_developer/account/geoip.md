@@ -76,7 +76,7 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 | `instance.unblock(reason, broadcast)` | Compatibility wrapper; it returns no checked result. |
 | `instance.whitelist(reason, ttl=None, until=None)` | Whitelist and prove fleet-wide block absence. `ttl` seconds or explicit `until` sets expiry (`until` wins; omit both for permanent). |
 | `instance.verify_absence_checked()` | For an active whitelist, create a fenced generation and prove exact compatible-host absence without changing whitelist policy. MojoSec uses this before a `whitelisted` target becomes terminal. |
-| `instance.unwhitelist()` | Remove whitelist status (clears `whitelisted_until` too) |
+| `instance.unwhitelist()` | Remove whitelist status, advance the IP/permanent fences, and checked-reconcile the desired state that becomes active. Clears `whitelisted_until`; the compatibility method returns no checked result. |
 
 ---
 
@@ -150,7 +150,12 @@ geo.whitelist(reason="audit window", until=some_datetime)     # explicit expiry
 geo.unwhitelist()
 ```
 
-Removes whitelist protection (clears `whitelisted_until`). Does not auto-block — the IP would need to trigger rules again.
+Removes whitelist protection (clears `whitelisted_until`), writes a pending
+generation, and checked-reconciles the direct rule plus permanent aggregate.
+It does not invent a new block: normally the IP remains unblocked, but any
+existing desired `is_blocked` state that the whitelist had suppressed becomes
+active. The compatibility method returns no checked result, so callers inspect
+the row's pending/error fields after it finishes.
 
 ### Auto-block via threat escalation
 
@@ -196,8 +201,10 @@ All blocking and management operations are exposed as POST_SAVE_ACTIONS on the m
 
 The REST response exposes the checked action result as `action_response` for
 `block`, `unblock`, and `whitelist`. Keep a pending/error UI unless its result
-meets the same `verified` + `ok` + `owned` rule above. `unwhitelist` changes
-exemption state but does not itself create a block or firewall dispatch.
+meets the same `verified` + `ok` + `owned` rule above. `unwhitelist` also runs
+checked reconciliation, but its compatibility action returns no
+`action_response`; reload the row and honor `firewall_pending` and
+`firewall_sync_error`.
 
 ### Example REST calls
 
