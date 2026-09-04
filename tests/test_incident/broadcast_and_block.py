@@ -85,6 +85,82 @@ def test_broadcast_block_ip_no_ips(opts):
         assert not mock_block.called, "firewall.block should not be called with empty IP list"
 
 
+@th.django_unit_test("checked handler returns only canonical semantic truth")
+def test_checked_ip_reconcile_receipt(opts):
+    from mojo.apps.incident.asyncjobs import broadcast_reconcile_firewall_ip
+
+    broker = {"ok": True, "observed": {
+        "ip": "192.0.2.8", "present": True,
+        "input_count": 1, "forward_count": 0,
+        "forwarding_required": False,
+    }}
+    with mock.patch("mojo.apps.incident.firewall.normalize_ip",
+                    return_value=broker):
+        result = broadcast_reconcile_firewall_ip(
+            {"ip": "192.0.2.8", "present": True})
+    assert result["ok"] is True, f"exact observation should verify: {result!r}"
+    assert result["observed"] == {"ip": "192.0.2.8", "present": True}, \
+        f"raw broker details escaped the checked projection: {result!r}"
+
+
+@th.django_unit_test("IPv6 checked payload is refused before broker mutation")
+def test_checked_ip_reconcile_refuses_ipv6(opts):
+    from mojo.apps.incident.asyncjobs import broadcast_reconcile_firewall_ip
+
+    with mock.patch("mojo.apps.incident.firewall.normalize_ip") as normalize:
+        result = broadcast_reconcile_firewall_ip(
+            {"ip": "2001:db8::8", "present": True})
+    assert result["ok"] is False, f"IPv6 unexpectedly verified: {result!r}"
+    normalize.assert_not_called()
+
+
+@th.django_unit_test("compound reconciliation uses one root-broker transaction")
+def test_checked_geolocated_reconcile_is_compound(opts):
+    from mojo.apps.incident.asyncjobs import broadcast_reconcile_geolocated_ip
+
+    broker = {"ok": True, "observed": {
+        "ip": {"ip": "192.0.2.8", "present": False},
+        "permanent": {
+            "name": "mojo_blocked", "present": True,
+            "count": 1,
+            "digest": "939b8c79f98fcdf61a10cd17f2f6c057955dbd30485e6c06b5be2a61e3adc691",
+        },
+    }}
+    # Use the production digest rather than making the fixture depend on a
+    # hand-maintained literal.
+    from mojo.apps.incident.services.firewall_truth import network_digest
+    broker["observed"]["permanent"]["digest"] = network_digest(
+        ["192.0.2.8"])
+    with mock.patch(
+            "mojo.apps.incident.firewall.normalize_geolocated_ip",
+            return_value=broker) as normalize:
+        result = broadcast_reconcile_geolocated_ip({
+            "ip": "192.0.2.8", "permanent_set_name": "mojo_blocked",
+            "permanent_ips": ["192.0.2.8"],
+            "temporary_present": False,
+        })
+    assert result["ok"] is True, result
+    normalize.assert_called_once_with(
+        "192.0.2.8", "mojo_blocked", ["192.0.2.8/32"], False)
+
+
+@th.django_unit_test("empty checked host evidence cannot verify firewall truth")
+def test_firewall_truth_requires_exact_nonempty_evidence(opts):
+    from mojo.apps.incident.services import firewall_truth
+
+    malformed = {
+        "status": "verified", "expected_hosts": [], "responded_hosts": [],
+        "succeeded_hosts": [], "failed_hosts": [], "missing_hosts": [],
+        "anomalies": [], "results": [],
+    }
+    with mock.patch(
+            "mojo.apps.jobs.broadcast_execute_checked",
+            return_value=malformed):
+        result = firewall_truth.reconcile_ip("192.0.2.8", True)
+    assert result["status"] == "partial" and result["ok"] is False, result
+    assert result["error"]["code"] == "checked_evidence_invalid", result
+
+
 # =============================================================================
 # Block idempotency
 # =============================================================================
@@ -100,7 +176,9 @@ def test_block_idempotency_skips_reblock(opts):
     geo = GeoLocatedIP.objects.create(ip_address="10.99.99.1")
 
     # First block should succeed and set block_count=1
-    with mock.patch("mojo.apps.jobs.broadcast_execute"):
+    with mock.patch(
+            "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
+            return_value={"status": "verified", "ok": True}):
         result = geo.block(reason="test:first", ttl=600)
     assert result is True, "First block should succeed"
     geo.refresh_from_db()
@@ -108,14 +186,17 @@ def test_block_idempotency_skips_reblock(opts):
     assert geo.is_blocked is True, "IP should be blocked"
 
     # Second block should be idempotent — no side effects
-    with mock.patch("mojo.apps.jobs.broadcast_execute") as mock_broadcast:
+    with mock.patch(
+            "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
+            return_value={"status": "verified", "ok": True}) as mock_broadcast:
         result = geo.block(reason="test:second", ttl=600)
     assert result is True, "Idempotent block should return True (already blocked)"
     geo.refresh_from_db()
     assert geo.block_count == 1, f"block_count should still be 1 after idempotent block, got {geo.block_count}"
     assert geo.blocked_reason == "test:first", \
         f"Reason should remain from first block, got {geo.blocked_reason}"
-    assert not mock_broadcast.called, "Should not re-broadcast for already-blocked IP"
+    mock_broadcast.assert_called_once(), \
+        "an already-desired block must still re-observe fleet truth"
 
 
 @th.django_unit_test()
@@ -129,7 +210,9 @@ def test_block_reblocks_after_expiry(opts):
     geo = GeoLocatedIP.objects.create(ip_address="10.99.99.2")
 
     # First block with short TTL
-    with mock.patch("mojo.apps.jobs.broadcast_execute"):
+    with mock.patch(
+            "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
+            return_value={"status": "verified", "ok": True}):
         geo.block(reason="test:first", ttl=60)
     geo.refresh_from_db()
     assert geo.block_count == 1, f"block_count should be 1, got {geo.block_count}"
@@ -144,7 +227,9 @@ def test_block_reblocks_after_expiry(opts):
     assert not geo.block_active, "block_active should be False after expiry"
 
     # Re-block should go through
-    with mock.patch("mojo.apps.jobs.broadcast_execute"):
+    with mock.patch(
+            "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
+            return_value={"status": "verified", "ok": True}):
         result = geo.block(reason="test:reblock", ttl=600)
     assert result is True, "Re-block after expiry should succeed"
     geo.refresh_from_db()
@@ -200,7 +285,9 @@ def test_block_handler_includes_incident_event_in_reason(opts):
 
     handler = BlockHandler(target=None, ttl="300")
 
-    with mock.patch("mojo.apps.jobs.broadcast_execute"):
+    with mock.patch(
+            "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
+            return_value={"status": "verified", "ok": True}):
         result = handler.run(event)
 
     assert result is True, "BlockHandler should succeed"
@@ -242,7 +329,9 @@ def test_block_handler_resolves_incident(opts):
 
     handler = BlockHandler(target=None, ttl="600")
 
-    with mock.patch("mojo.apps.jobs.broadcast_execute"):
+    with mock.patch(
+            "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
+            return_value={"status": "verified", "ok": True}):
         result = handler.run(event)
 
     assert result is True, "BlockHandler should succeed"
@@ -259,6 +348,27 @@ def test_block_handler_resolves_incident(opts):
     status_history = [h for h in histories if h.kind == "status_changed" and "Auto-resolved" in (h.note or "")]
     assert len(status_history) >= 1, \
         f"Should have auto-resolved status_changed history entry, got {len(status_history)}"
+
+
+@th.django_unit_test("partial checked block cannot resolve an incident")
+def test_block_handler_partial_is_not_success(opts):
+    from mojo.apps.incident.models import Event, Incident
+    from mojo.apps.incident.handlers.event_handlers import BlockHandler
+
+    incident = Incident.objects.create(
+        title="Partial firewall", category="test:block_partial",
+        priority=10, status="open")
+    event = Event.objects.create(
+        title="Partial firewall event", category="test:block_partial",
+        level=10, source_ip="198.51.100.203", incident=incident)
+    with mock.patch(
+            "mojo.apps.account.models.GeoLocatedIP.block_checked",
+            return_value={"status": "partial", "ok": False,
+                          "error": {"code": "missing_host"}}):
+        result = BlockHandler(ttl="600").run(event)
+    incident.refresh_from_db()
+    assert result is False, "partial fleet evidence became handler success"
+    assert incident.status == "open", "partial fleet evidence resolved incident"
 
 
 @th.django_unit_test()
@@ -289,7 +399,9 @@ def test_block_handler_skips_resolve_if_already_resolved(opts):
 
     handler = BlockHandler(target=None, ttl="600")
 
-    with mock.patch("mojo.apps.jobs.broadcast_execute"):
+    with mock.patch(
+            "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
+            return_value={"status": "verified", "ok": True}):
         result = handler.run(event)
 
     assert result is True, "BlockHandler should succeed"

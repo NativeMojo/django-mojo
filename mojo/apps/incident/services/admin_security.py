@@ -238,9 +238,9 @@ def _ipsets(cutoff, window, limit):
         "description": row.description, "source": row.source,
         "is_enabled": row.is_enabled, "cidr_count": row.cidr_count,
         "last_synced": _iso(row.last_synced),
-        # This is configured/sync state only. Item 2685 owns runtime firewall
-        # truth and must not be pre-empted here.
-        "enforcement_status": "unavailable",
+        "enforcement_status": ("verified" if not row.sync_error and
+                               row.last_synced else "pending_or_unknown"),
+        "sync_error": row.sync_error or "",
     } for row in rows[:limit]]
     return _envelope(data, cutoff, window, len(rows) > limit)
 
@@ -391,6 +391,7 @@ ACTIONS = (
     "ruleset.create", "ruleset.replace", "ruleset.activate",
     "ruleset.deactivate", "ruleset.delete", "recommendation.approve",
     "recommendation.reject", "recommendation.cancel", "recommendation.reverse",
+    "ipset.sync", "ipset.enable", "ipset.disable",
 )
 
 _ACTION_FIELDS = {
@@ -409,7 +410,47 @@ _ACTION_FIELDS = {
                               "expected_modified", "confirm", "note"},
     "recommendation.reverse": {"action", "recommendation_id",
                                "expected_modified", "confirm", "note"},
+    "ipset.sync": {"action", "ipset_id", "expected_modified", "confirm"},
+    "ipset.enable": {"action", "ipset_id", "expected_modified", "confirm"},
+    "ipset.disable": {"action", "ipset_id", "expected_modified", "confirm"},
 }
+
+
+def _safe_ipset(row, result=None):
+    value = {
+        "id": row.pk, "modified": _iso(row.modified), "name": row.name,
+        "kind": row.kind, "description": row.description,
+        "is_enabled": row.is_enabled, "cidr_count": row.cidr_count,
+        "last_synced": _iso(row.last_synced),
+        "sync_error": row.sync_error or "",
+    }
+    if isinstance(result, dict):
+        value["enforcement_status"] = result.get("status", "unknown")
+        value["enforcement_ok"] = result.get("ok") is True
+        if result.get("ok") is not True:
+            error = result.get("error") or {}
+            value["error_code"] = str(error.get("code") or "fleet_unverified")[:64]
+    return value
+
+
+def _claim_ipset_action(action, payload):
+    from mojo.apps.incident.models import IPSet
+    pk = _id(payload.get("ipset_id"), "ipset_id")
+    with transaction.atomic():
+        row = IPSet.objects.select_for_update().filter(pk=pk).first()
+        if row is None:
+            raise SecurityActionError("IPSet does not exist", status=404,
+                                      code="not_found")
+        _expect_revision(payload, row)
+        verb = action.split(".", 1)[1].upper()
+        _confirm(payload, f"{verb} IPSET {row.pk}")
+        if action == "ipset.enable":
+            row.set_enabled_desired(True)
+        elif action == "ipset.disable":
+            row.set_enabled_desired(False)
+        elif action != "ipset.sync":
+            raise SecurityActionError("unsupported IPSet action")
+    return row
 
 
 def _rule_action(action, payload, actor):
@@ -459,6 +500,37 @@ def _rule_action(action, payload, actor):
 
 def _recommendation_action(action, payload, actor):
     from mojo.apps.incident.models import MojoSecRecommendation
+    if action == "recommendation.reverse":
+        pk = _id(payload.get("recommendation_id"), "recommendation_id")
+        note = payload.get("note", "")
+        if not isinstance(note, str) or len(note) > 256:
+            raise SecurityActionError(
+                "note must be a string of at most 256 characters")
+        with transaction.atomic():
+            row = MojoSecRecommendation.objects.select_for_update().filter(
+                pk=pk).first()
+            if row is None:
+                raise SecurityActionError(
+                    "Recommendation does not exist", status=404,
+                    code="not_found")
+            actual_targets = row.targets.count()
+            if (actual_targets > MAX_ACTION_TARGETS or
+                    actual_targets != row.target_count):
+                raise SecurityActionError(
+                    "Recommendation target scope is inconsistent or exceeds the review bound",
+                    code="scope_unavailable", status=409)
+            _expect_revision(payload, row)
+            _confirm(payload, f"REVERSE RECOMMENDATION {row.pk}")
+        try:
+            row = mojosec_actions.reverse(
+                row, actor, note=note,
+                expected_modified=payload["expected_modified"])
+        except ValueError as error:
+            raise SecurityActionError(
+                str(error), code="invalid_state", status=409) from error
+        with transaction.atomic():
+            _audit(actor, action, "recommendation", row.pk)
+        return _safe_recommendation(row, detail=True)
     pk = _id(payload.get("recommendation_id"), "recommendation_id")
     row = MojoSecRecommendation.objects.select_for_update().filter(pk=pk).first()
     if row is None:
@@ -512,11 +584,24 @@ def apply_action(payload, actor):
     if unknown:
         raise SecurityActionError(
             f"unknown fields for {action}: {', '.join(unknown)}")
-    with transaction.atomic():
-        if action.startswith("ruleset."):
-            data = _rule_action(action, payload, actor)
-        else:
-            data = _recommendation_action(action, payload, actor)
+    if action.startswith("ipset."):
+        row = _claim_ipset_action(action, payload)
+        # Fleet waits must never hold the row lock or a database transaction.
+        result = row.sync()
+        row.refresh_from_db()
+        with transaction.atomic():
+            _audit(actor, action, "ipset", row.pk)
+        data = _safe_ipset(row, result)
+    elif action == "recommendation.reverse":
+        # reverse() owns short claim/finalize transactions around its network
+        # wait; an outer transaction would defeat that boundary.
+        data = _recommendation_action(action, payload, actor)
+    else:
+        with transaction.atomic():
+            if action.startswith("ruleset."):
+                data = _rule_action(action, payload, actor)
+            else:
+                data = _recommendation_action(action, payload, actor)
     return {"schema_version": SCHEMA_VERSION, "action": action, "data": data}
 
 

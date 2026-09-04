@@ -47,16 +47,17 @@ def test_ensure_threat_caches(opts):
     assert IPSet.objects.filter(name="tor_exits").count() == 1, \
         "ensure must not duplicate rows"
 
-    # get_or_create only applies defaults on create: an operator's explicit
-    # flag change survives (we don't fight the operator, docs warn them).
+    # Cache lifecycle is now closed: ordinary model writes cannot enable it,
+    # and the sole factory heals a low-level bypass back to disabled.
+    from mojo import errors as merrors
     row = again["tor_exits"]
     row.is_enabled = True
-    row.save(update_fields=["is_enabled"])
+    with th.assert_raises(merrors.ValueException):
+        row.save(update_fields=["is_enabled"])
+    IPSet.objects.filter(pk=row.pk).update(is_enabled=True)
     _ensure_rows()
     row.refresh_from_db()
-    assert row.is_enabled is True, "ensure must not overwrite operator changes"
-    row.is_enabled = False
-    row.save(update_fields=["is_enabled"])
+    assert row.is_enabled is False, "cache factory did not heal unsafe state"
 
 
 @th.django_unit_test("threat cache: _parse_tor_exit_list extracts ExitAddress IPs")
@@ -149,14 +150,13 @@ def test_cache_only_never_syncs(opts):
     assert row.is_enabled is False, "rejected enable must not flip the flag"
 
     # Even a force-set flag must not reach the firewall: sync() no-ops.
-    row.is_enabled = True
-    row.save(update_fields=["is_enabled"])
-    row.sync()
+    type(row).objects.filter(pk=row.pk).update(is_enabled=True)
+    result = row.sync()
     row.refresh_from_db()
     assert row.last_synced is None, \
         "sync() must be a hard no-op for cache-only rows (kernel-firewall breaker)"
-    row.is_enabled = False
-    row.save(update_fields=["is_enabled"])
+    assert result["error"]["code"] == "cache_only_set"
+    type(row).objects.filter(pk=row.pk).update(is_enabled=False)
 
 
 @th.django_unit_test("threat cache: excluded from the weekly refresh_ipsets selection")

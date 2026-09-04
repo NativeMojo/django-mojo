@@ -51,6 +51,7 @@ def setup_admin_security(opts):
 @th.django_unit_test("Admin Security routes pin human and fresh-auth authority")
 def test_route_authority(opts):
     from mojo.apps.incident.rest import admin_security as views
+    from mojo.apps.incident.rest import ipset as ipset_views
     assert views.on_admin_security.__url__ == ("GET", "admin/security")
     assert views.on_admin_security_action.__url__ == (
         "POST", "admin/security/action")
@@ -62,9 +63,14 @@ def test_route_authority(opts):
         "manage_security", "security"}
     assert views.on_admin_security_action._mojo_requires_fresh_auth
     assert views.on_admin_security_action._mojo_fresh_auth_seconds == 600
+    assert ipset_views.on_ipset_action.__url__ == ("POST", "ipset/action")
+    assert ipset_views.on_ipset_action._mojo_denies_key_backed_session
+    assert set(ipset_views.on_ipset_action._mojo_required_permissions) == {
+        "manage_security", "security"}
+    assert ipset_views.on_ipset_action._mojo_requires_fresh_auth
 
 
-@th.django_unit_test("generic rule writes retire while IPSet stays available")
+@th.django_unit_test("generic rule and IPSet lifecycle writes retire")
 def test_generic_compatibility(opts):
     from mojo.apps.incident.models import IPSet, Rule, RuleSet
     for model in (RuleSet, Rule):
@@ -73,7 +79,50 @@ def test_generic_compatibility(opts):
         assert model.RestMeta.CAN_DELETE is False
         assert model.RestMeta.DENY_AI is True
     assert getattr(IPSet.RestMeta, "CAN_CREATE", True) is True
-    assert IPSet.RestMeta.CAN_DELETE is True
+    assert IPSet.RestMeta.CAN_DELETE is False
+    assert "is_enabled" in IPSet.RestMeta.NO_SAVE_FIELDS
+
+
+@th.django_unit_test("IPSet action claims desired state before an out-of-tx checked wait")
+def test_ipset_action_checked_and_revision_fenced(opts):
+    from django.db import connection
+    from mojo.apps.account.models import User
+    from mojo.apps.incident.models import IPSet
+    from mojo.apps.incident.services import admin_security
+
+    actor = User.objects.get(pk=opts.security_operator)
+    row = IPSet.objects.create(
+        name=f"as_{PREFIX[-10:]}_gov", kind="custom", source="manual",
+        data="192.0.2.0/24")
+
+    def partial(name, cidrs, present=True):
+        assert not connection.in_atomic_block, \
+            "checked IPSet wait held the desired-state transaction"
+        return {"status": "partial", "ok": False,
+                "error": {"code": "missing_host",
+                          "message": "host receipt missing"}}
+
+    with mock.patch(
+            "mojo.apps.incident.services.firewall_truth.reconcile_set",
+            side_effect=partial) as reconcile:
+        result = admin_security.apply_action({
+            "action": "ipset.enable", "ipset_id": row.pk,
+            "expected_modified": row.modified.isoformat(),
+            "confirm": f"ENABLE IPSET {row.pk}"}, actor)
+    row.refresh_from_db()
+    assert reconcile.called and row.is_enabled is True, \
+        "governed action lost desired enable state"
+    assert result["data"]["enforcement_ok"] is False
+    assert result["data"]["error_code"] == "missing_host"
+
+    stale = row.modified.isoformat()
+    row.description = "concurrent edit"
+    row.save(update_fields=["description", "modified"])
+    with th.assert_raises(admin_security.SecurityActionError):
+        admin_security.apply_action({
+            "action": "ipset.sync", "ipset_id": row.pk,
+            "expected_modified": stale,
+            "confirm": f"SYNC IPSET {row.pk}"}, actor)
 
 
 @th.django_unit_test("typed rules reject arbitrary handlers and unsafe regular expressions")
