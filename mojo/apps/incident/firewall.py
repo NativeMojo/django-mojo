@@ -10,18 +10,15 @@ Called only from async jobs — never from the web process.
 import getpass
 import json
 import subprocess
-import re
 from mojo.helpers import logit
-
-ALLOWED_USER = "ec2-user"
-
-# Validate IP/CIDR to prevent command injection
-_IP_PATTERN = re.compile(
-    r'^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$|'  # IPv4 or IPv4/CIDR
-    r'^[0-9a-fA-F:]+(/\d{1,3})?$'             # IPv6 or IPv6/CIDR
+from mojo.apps.incident.services.firewall_truth import (
+    FirewallTruthError,
+    canonical_ipv4,
+    canonical_ipv4_networks,
+    canonical_set_name,
 )
 
-_IPSET_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
+ALLOWED_USER = "ec2-user"
 
 SUDO = "/usr/bin/sudo"
 IPTABLES = "/sbin/iptables"
@@ -31,25 +28,21 @@ BROKER = "/usr/local/sbin/mojo-firewall-broker"
 
 
 def _validate_ip(ip):
-    """Validate IP/CIDR format to prevent injection."""
-    if not ip or not isinstance(ip, str):
+    """Return the canonical IPv4 network or fail closed."""
+    try:
+        return canonical_ipv4(ip)
+    except FirewallTruthError as err:
+        logit.error("Firewall target refused: %s", err.code)
         return None
-    ip = ip.strip()
-    if not _IP_PATTERN.match(ip):
-        logit.error(f"Invalid IP format rejected: {ip}")
-        return None
-    return ip
 
 
 def _validate_ipset_name(name):
     """Validate ipset name to prevent injection."""
-    if not name or not isinstance(name, str):
+    try:
+        return canonical_set_name(name)
+    except FirewallTruthError as err:
+        logit.error("Invalid ipset name rejected: %s", err.code)
         return None
-    name = name.strip()
-    if not _IPSET_NAME_PATTERN.match(name):
-        logit.error(f"Invalid ipset name rejected: {name}")
-        return None
-    return name
 
 
 def _check_user():
@@ -119,9 +112,6 @@ def _broker_request(operation, timeout=20, **values):
     except OSError as err:
         logit.error(f"firewall broker could not start during {operation}: {err}")
         return None
-    if result.returncode:
-        logit.error(f"firewall broker rejected {operation}: {result.stderr[:512]}")
-        return None
     try:
         value = json.loads(result.stdout)
     except (TypeError, json.JSONDecodeError):
@@ -130,7 +120,68 @@ def _broker_request(operation, timeout=20, **values):
     if not isinstance(value, dict) or not isinstance(value.get("ok"), bool):
         logit.error(f"firewall broker returned an invalid result for {operation}")
         return None
+    if result.returncode:
+        error = value.get("error") if isinstance(value.get("error"), dict) else {}
+        logit.error(
+            "firewall broker refused %s: %s",
+            operation, str(error.get("code") or "broker_failure")[:64])
     return value
+
+
+def ip_status(ip):
+    ip = _validate_ip(ip)
+    if not ip:
+        return {"ok": False, "error": {"code": "unsupported_or_invalid_ip"}}
+    return _broker_request("ip.status", source=ip) or {
+        "ok": False, "error": {"code": "broker_unavailable"}}
+
+
+def normalize_ip(ip, present):
+    ip = _validate_ip(ip)
+    if not ip:
+        return {"ok": False, "error": {"code": "unsupported_or_invalid_ip"}}
+    return _broker_request(
+        "ip.normalize", source=ip, present=bool(present)) or {
+            "ok": False, "error": {"code": "broker_unavailable"}}
+
+
+def ipset_status(name):
+    name = _validate_ipset_name(name)
+    if not name:
+        return {"ok": False, "error": {"code": "invalid_set_name"}}
+    return _broker_request("set.status", set_name=name) or {
+        "ok": False, "error": {"code": "broker_unavailable"}}
+
+
+def normalize_ipset(name, cidrs, present=True):
+    name = _validate_ipset_name(name)
+    if not name:
+        return {"ok": False, "error": {"code": "invalid_set_name"}}
+    try:
+        canonical = canonical_ipv4_networks(cidrs)
+    except FirewallTruthError as err:
+        return {"ok": False, "error": {"code": err.code}}
+    return _broker_request(
+        "set.normalize", timeout=125, set_name=name, cidrs=canonical,
+        present=bool(present)) or {
+        "ok": False, "error": {"code": "broker_unavailable"}}
+
+
+def normalize_geolocated_ip(ip, permanent_set_name, permanent_cidrs,
+                            temporary_present):
+    """Normalize both parts of one GeoLocatedIP while one broker lock is held."""
+    ip = _validate_ip(ip)
+    name = _validate_ipset_name(permanent_set_name)
+    if not ip or not name:
+        return {"ok": False, "error": {"code": "invalid_firewall_target"}}
+    try:
+        canonical = canonical_ipv4_networks(permanent_cidrs)
+    except FirewallTruthError as err:
+        return {"ok": False, "error": {"code": err.code}}
+    return _broker_request(
+        "geolocated.normalize", timeout=125, source=ip, set_name=name,
+        cidrs=canonical, temporary_present=bool(temporary_present)) or {
+            "ok": False, "error": {"code": "broker_unavailable"}}
 
 
 # ---------------------------------------------------------------------------
@@ -155,24 +206,13 @@ def block(ip):
     if not ip:
         return False
 
-    if is_blocked(ip):
-        return True
-
-    result = _broker_request("rule.insert", chain="INPUT", source=ip)
-    if not result or not result["ok"]:
-        logit.error(f"firewall broker failed to block INPUT source {ip}")
-        return False
-
-    # Also block forwarded traffic if forwarding is enabled
-    try:
-        with open("/proc/sys/net/ipv4/ip_forward") as f:
-            if f.read().strip() == "1":
-                _broker_request("rule.insert", chain="FORWARD", source=ip)
-    except (FileNotFoundError, PermissionError):
-        pass
-
-    logit.info(f"Blocked IP: {ip}")
-    return True
+    result = normalize_ip(ip, True)
+    observed = result.get("observed") if isinstance(result, dict) else None
+    ok = bool(result and result.get("ok") and isinstance(observed, dict) and
+              observed.get("present") is True)
+    if ok:
+        logit.info(f"Blocked IP: {ip}")
+    return ok
 
 
 def unblock(ip):
@@ -184,14 +224,14 @@ def unblock(ip):
     if not ip:
         return False
 
-    if not is_blocked(ip):
-        return True
-
-    _broker_request("rule.delete", chain="INPUT", source=ip)
-    _broker_request("rule.delete", chain="FORWARD", source=ip)
-
-    logit.info(f"Unblocked IP: {ip}")
-    return True
+    result = normalize_ip(ip, False)
+    observed = result.get("observed") if isinstance(result, dict) else None
+    ok = bool(result and result.get("ok") and isinstance(observed, dict) and
+              observed.get("input_count") == 0 and
+              observed.get("forward_count") == 0)
+    if ok:
+        logit.info(f"Unblocked IP: {ip}")
+    return ok
 
 
 # ---------------------------------------------------------------------------
@@ -281,15 +321,15 @@ def ipset_load(name, cidrs):
     if not name:
         return False, 0
 
-    values = [value for value in (_validate_ip(cidr) for cidr in cidrs) if value]
-    if not values:
+    try:
+        values = canonical_ipv4_networks(cidrs)
+    except FirewallTruthError:
         return False, 0
-    result = _broker_request("set.replace", timeout=125, set_name=name, cidrs=values)
-    if not result or not result["ok"]:
-        logit.error(f"firewall broker failed set replace for {name}")
-        return False, 0
-    ensured = _broker_request("set.rule_ensure", set_name=name)
-    if not ensured or not ensured["ok"]:
+    result = normalize_ipset(name, values, present=True)
+    observed = result.get("observed") if isinstance(result, dict) else None
+    if (not result or not result.get("ok") or not isinstance(observed, dict) or
+            observed.get("count") != len(values)):
+        logit.error(f"firewall broker failed set normalization for {name}")
         return False, 0
     loaded = len(values)
     logit.info(f"ipset {name}: loaded {loaded}/{len(cidrs)} CIDRs")
@@ -305,8 +345,10 @@ def ipset_remove(name):
     if not name:
         return False
 
-    result = _broker_request("set.remove", set_name=name)
-    if not result or not result["ok"]:
+    result = normalize_ipset(name, [], present=False)
+    observed = result.get("observed") if isinstance(result, dict) else None
+    if (not result or not result.get("ok") or not isinstance(observed, dict) or
+            observed.get("exists") is not False):
         return False
 
     logit.info(f"ipset {name}: removed")

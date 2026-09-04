@@ -10,6 +10,146 @@ INCIDENT_PRUNE_DAYS = settings.get_static("INCIDENT_PRUNE_DAYS", 90)
 FIREWALL_BLOCKED_IPSET_NAME = settings.get_static("FIREWALL_BLOCKED_IPSET_NAME", "mojo_blocked")
 
 
+def _semantic(kind, desired, broker_result):
+    """Project a broker response into the bounded checked wire contract."""
+    from mojo.apps.incident.services.firewall_truth import (
+        FIREWALL_SEMANTIC_SCHEMA, FIREWALL_SEMANTIC_VERSION)
+
+    observed = broker_result.get("observed") if isinstance(broker_result, dict) else None
+    if kind == "ip" and isinstance(observed, dict):
+        actual = {"ip": observed.get("ip"),
+                  "present": observed.get("present") is True}
+    elif kind == "set" and isinstance(observed, dict):
+        actual = {
+            "name": observed.get("name"),
+            "present": observed.get("present") is True,
+            "count": observed.get("count"),
+            "digest": observed.get("digest"),
+        }
+    else:
+        actual = None
+    result = {
+        "schema": FIREWALL_SEMANTIC_SCHEMA,
+        "version": FIREWALL_SEMANTIC_VERSION,
+        "kind": kind,
+        "desired": desired,
+        "observed": actual,
+        "ok": bool(broker_result and broker_result.get("ok") and actual == desired),
+    }
+    if not result["ok"]:
+        error = broker_result.get("error") if isinstance(broker_result, dict) else None
+        code = error.get("code") if isinstance(error, dict) else "semantic_mismatch"
+        result["error"] = str(code)[:64]
+    return result
+
+
+def broadcast_reconcile_firewall_ip(data):
+    """Checked handler: normalize one IPv4 source then return exact truth."""
+    from mojo.apps.incident import firewall
+    from mojo.apps.incident.services import firewall_truth
+
+    if not isinstance(data, dict) or set(data) != {"ip", "present"} or \
+            not isinstance(data.get("present"), bool):
+        return _semantic("ip", {}, {"ok": False,
+                                    "error": {"code": "invalid_request"}})
+    try:
+        ip = firewall_truth.canonical_ipv4_address(data["ip"])
+    except firewall_truth.FirewallTruthError as err:
+        return _semantic("ip", {}, {"ok": False,
+                                    "error": {"code": err.code}})
+    desired = {"ip": ip, "present": data["present"]}
+    return _semantic("ip", desired, firewall.normalize_ip(ip, data["present"]))
+
+
+def broadcast_reconcile_firewall_set(data):
+    """Checked handler: normalize one hash:net set and exact rule counts."""
+    from mojo.apps.incident import firewall
+    from mojo.apps.incident.services import firewall_truth
+
+    if not isinstance(data, dict) or set(data) != {"name", "cidrs", "present"} \
+            or not isinstance(data.get("present"), bool):
+        return _semantic("set", {}, {"ok": False,
+                                     "error": {"code": "invalid_request"}})
+    try:
+        name = firewall_truth.canonical_set_name(data["name"])
+        cidrs = firewall_truth.canonical_ipv4_networks(data["cidrs"])
+    except firewall_truth.FirewallTruthError as err:
+        return _semantic("set", {}, {"ok": False,
+                                     "error": {"code": err.code}})
+    desired = {
+        "name": name, "present": data["present"],
+        "count": len(cidrs) if data["present"] else 0,
+        "digest": firewall_truth.network_digest(cidrs if data["present"] else []),
+    }
+    return _semantic(
+        "set", desired,
+        firewall.normalize_ipset(name, cidrs, data["present"]))
+
+
+def broadcast_reconcile_geolocated_ip(data):
+    """Normalize direct-IP and permanent-set truth as one checked result."""
+    from mojo.apps.incident import firewall
+    from mojo.apps.incident.services import firewall_truth
+    if not isinstance(data, dict) or set(data) != {
+            "ip", "permanent_set_name", "permanent_ips",
+            "temporary_present"}:
+        return _semantic("geolocated_ip", {}, {
+            "ok": False, "error": {"code": "invalid_payload"}})
+    try:
+        ip = firewall_truth.canonical_ipv4_address(data["ip"])
+        set_name = firewall_truth.canonical_set_name(
+            data["permanent_set_name"])
+        if len(set_name) + 4 > 31:
+            raise firewall_truth.FirewallTruthError(
+                "invalid_set_name", "permanent set name is too long")
+        permanent = firewall_truth.canonical_ipv4_networks(
+            data["permanent_ips"])
+    except firewall_truth.FirewallTruthError as err:
+        return _semantic("geolocated_ip", {}, {
+            "ok": False, "error": {"code": err.code}})
+    if not isinstance(data["temporary_present"], bool):
+        return _semantic("geolocated_ip", {}, {
+            "ok": False, "error": {"code": "invalid_payload"}})
+    ip_desired = {"ip": ip, "present": data["temporary_present"]}
+    set_desired = {
+        "name": set_name, "present": True,
+        "count": len(permanent),
+        "digest": firewall_truth.network_digest(permanent),
+    }
+    desired = {"ip": ip_desired, "permanent": set_desired}
+    broker_result = firewall.normalize_geolocated_ip(
+        ip, set_name, permanent,
+        data["temporary_present"])
+    combined = (broker_result.get("observed")
+                if isinstance(broker_result, dict) else None)
+    direct_observed = (combined.get("ip")
+                       if isinstance(combined, dict) else None)
+    set_observed = (combined.get("permanent")
+                    if isinstance(combined, dict) else None)
+    observed = {
+        "ip": ({"ip": direct_observed.get("ip"),
+                "present": direct_observed.get("present") is True}
+               if isinstance(direct_observed, dict) else None),
+        "permanent": ({
+            "name": set_observed.get("name"),
+            "present": set_observed.get("present") is True,
+            "count": set_observed.get("count"),
+            "digest": set_observed.get("digest"),
+        } if isinstance(set_observed, dict) else None),
+    }
+    ok = (isinstance(broker_result, dict) and
+          broker_result.get("ok") is True and
+          observed == desired)
+    return {
+        "schema": firewall_truth.FIREWALL_SEMANTIC_SCHEMA,
+        "version": firewall_truth.FIREWALL_SEMANTIC_VERSION,
+        "kind": "geolocated_ip",
+        "ok": ok,
+        "desired": desired, "observed": observed,
+        "error": None if ok else {"code": "state_mismatch"},
+    }
+
+
 def prune_events(job):
     qset = Event.objects.filter(
         created__lt=timezone.now() - timedelta(days=INCIDENT_EVENT_PRUNE_DAYS),
@@ -137,6 +277,20 @@ SYNC_FIREWALL_MARKER_TTL = 7200
 # Long enough for a full reconcile of every enabled set (each set.replace has
 # its own 125s broker ceiling) without wedging the next hour if a run dies.
 SYNC_FIREWALL_LOCK_TTL = 900
+SYNC_FIREWALL_MAX_OBJECTS = 10000
+_LOCK_RENEW_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('expire', KEYS[1], ARGV[2])
+end
+return 0
+"""
+_LOCK_RELEASE_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('del', KEYS[1])
+end
+return 0
+"""
+_DELETE_VALUE_LUA = _LOCK_RELEASE_LUA
 
 
 def _firewall_host():
@@ -162,24 +316,7 @@ def _sync_firewall_keys(host=None):
 
 
 def sync_firewall(job):
-    """
-    Reconcile THIS node's kernel ipsets against DB truth.
-
-    Published two ways, both landing here (item #2716):
-      * hourly by cronjobs.sync_firewall as a BROADCAST — one job per runner,
-        because each node has its own kernel and only the node running the job
-        can repair it;
-      * box-direct with {"force": True} by on_engine_start below, so a node
-        that just booted recovers immediately instead of waiting up to an hour.
-
-    Skips ipsets unchanged since THIS HOST last synced, so the steady-state
-    cost stays low. The marker only advances on a clean run — a node whose
-    loads failed must retry next cycle, not record success and suppress
-    itself forever.
-
-    1. Load permanently blocked IPs into mojo_blocked (if changed)
-    2. Load enabled IPSet records modified since this host's last sync
-    """
+    """Observe, normalize and re-observe every bounded desired object."""
     import uuid
 
     from mojo.apps.incident import firewall
@@ -187,9 +324,10 @@ def sync_firewall(job):
     from mojo.apps.incident.models import IPSet
     from mojo.apps.jobs.adapters import get_adapter
     from mojo.helpers import dates
+    from mojo.apps.incident.services import firewall_truth
+    from django.db.models import Q
 
     redis_client = get_adapter()
-    now = dates.utcnow()
     last_sync_key, force_key, lock_key = _sync_firewall_keys()
 
     # One reconcile at a time per host. The broker builds its temp set name as
@@ -197,83 +335,197 @@ def sync_firewall(job):
     # set.replace calls for one set interleave and can swap in a live set that
     # is missing entries. Skipping is safe because the force flag lives in
     # Redis, not in this job: a forced run that loses the lock leaves the flag
-    # set and the next reconcile on this host honors it.
+    # set and the next reconcile on this host rebuilds the full snapshot.
     token = uuid.uuid4().hex
     if not redis_client.set(lock_key, token, nx=True, ex=SYNC_FIREWALL_LOCK_TTL):
         job.add_log("sync_firewall: another reconcile is in flight on this host, skipped")
-        return
+        return False
 
     try:
-        forced = bool((job.payload or {}).get("force")) or bool(
-            redis_client.get(force_key))
+        force_value = redis_client.get(force_key)
+        # Bound the entire snapshot before the first desired-state write.
+        ipsets = list(IPSet.objects.order_by("pk")[:SYNC_FIREWALL_MAX_OBJECTS + 1])
+        geos = list(GeoLocatedIP.objects.filter(
+            Q(is_blocked=True) | Q(firewall_pending=True)
+        ).order_by("pk")[:SYNC_FIREWALL_MAX_OBJECTS + 1])
+        if (len(ipsets) > SYNC_FIREWALL_MAX_OBJECTS or
+                len(geos) > SYNC_FIREWALL_MAX_OBJECTS):
+            job.add_log("sync_firewall: desired object bound exceeded; no writes")
+            return False
+        ipset_generation = [
+            (row.pk, row.modified, row.name, row.is_enabled)
+            for row in ipsets]
+        geo_generation = [
+            (row.pk, row.firewall_generation, row.is_blocked,
+             row.blocked_until, row.is_whitelisted, row.whitelisted_until)
+            for row in geos]
+        try:
+            aggregate_name = firewall_truth.permanent_set_name()
+            geo_plans = [
+                (row, firewall_truth.canonical_ipv4_address(row.ip_address))
+                for row in geos]
+            permanent = firewall_truth.canonical_ipv4_networks([
+                canonical for row, canonical in geo_plans
+                if row.is_blocked and row.blocked_until is None and
+                not row.whitelist_active])
+        except firewall_truth.FirewallTruthError as err:
+            job.add_log(f"sync_firewall: desired state refused ({err.code}); no writes")
+            return False
+        set_plans = []
+        try:
+            for row in ipsets:
+                name = firewall_truth.canonical_set_name(row.name)
+                present = bool(row.is_enabled and not row.is_cache_only)
+                if present and len(name) + 4 > 31:
+                    raise firewall_truth.FirewallTruthError(
+                        "invalid_set_name", "set name is too long for atomic replacement")
+                cidrs = firewall_truth.canonical_ipv4_networks(
+                    row.cidrs if present else [])
+                set_plans.append((
+                    row, name, present, cidrs,
+                    firewall_truth.network_digest(cidrs)))
+        except firewall_truth.FirewallTruthError as err:
+            job.add_log(f"sync_firewall: desired state refused ({err.code}); no writes")
+            return False
 
-        # Check when THIS HOST last synced. A forced run ignores it entirely:
-        # the marker is in shared Redis and therefore survives the very reboot
-        # the startup hook exists to recover from.
-        last_sync = None
-        if not forced:
-            last_sync_raw = redis_client.get(last_sync_key)
-            if last_sync_raw:
-                try:
-                    last_sync = dates.parse(last_sync_raw)
-                except Exception:
-                    pass
-
-        # A load counts as failed only when there was something to load:
-        # ipset_load also returns (False, 0) for an empty CIDR list, which is
-        # its deliberate refusal to wipe a live set with an empty swap.
         failures = 0
 
-        # Permanent blocks → mojo_blocked ipset (only if changed since last sync)
-        perm_query = GeoLocatedIP.objects.filter(
-            is_blocked=True,
-            blocked_until__isnull=True,
-        )
-        if last_sync and not perm_query.filter(modified__gt=last_sync).exists():
-            job.add_log(f"sync_firewall: {FIREWALL_BLOCKED_IPSET_NAME} unchanged, skipped")
-        else:
-            permanent_ips = list(perm_query.values_list("ip_address", flat=True))
-            ok, loaded = firewall.ipset_load(FIREWALL_BLOCKED_IPSET_NAME, permanent_ips)
-            if permanent_ips and not ok:
-                failures += 1
-            job.add_log(f"sync_firewall: loaded {loaded}/{len(permanent_ips)} permanent blocks into {FIREWALL_BLOCKED_IPSET_NAME}")
+        def renew():
+            return bool(redis_client.eval(
+                _LOCK_RENEW_LUA, 1, lock_key, token,
+                str(SYNC_FIREWALL_LOCK_TTL)))
 
-        # Enabled IPSets — skip those unchanged since last sync
-        ipsets = IPSet.objects.filter(is_enabled=True)
-        synced = 0
-        skipped = 0
-        for ipset in ipsets:
-            if last_sync and ipset.last_synced and ipset.modified <= last_sync:
-                skipped += 1
+        if not renew():
+            job.add_log("sync_firewall: host lock ownership lost before writes")
+            return False
+        result = firewall.normalize_ipset(
+            aggregate_name, permanent, True)
+        desired = {"name": aggregate_name, "present": True,
+                   "exists": True, "type": "hash:net", "family": "inet",
+                   "count": len(permanent),
+                   "digest": firewall_truth.network_digest(permanent)}
+        observed = result.get("observed") if isinstance(result, dict) else None
+        aggregate_ok = bool(
+            result and result.get("ok") is True and isinstance(observed, dict) and
+            all(observed.get(key) == value for key, value in desired.items()))
+        if not aggregate_ok:
+            failures += 1
+
+        for row, name, present, cidrs, digest in set_plans:
+            if not renew():
+                failures += 1
+                break
+            dispatched_at = dates.utcnow()
+            claimed = IPSet.objects.filter(
+                pk=row.pk, modified=row.modified).update(
+                    last_synced=dispatched_at)
+            if not claimed:
+                failures += 1
                 continue
-            cidrs = ipset.cidrs
-            ok, count = firewall.ipset_load(ipset.name, cidrs)
+            result = firewall.normalize_ipset(name, cidrs, present)
+            observed = result.get("observed") if isinstance(result, dict) else None
+            expected = {
+                "name": name, "present": present, "exists": present,
+                "count": len(cidrs) if present else 0,
+                "digest": digest,
+            }
+            ok = bool(result and result.get("ok") is True and
+                      isinstance(observed, dict) and
+                      all(observed.get(key) == value for key, value in expected.items()))
             if ok:
-                synced += 1
-                job.add_log(f"sync_firewall: loaded {count}/{len(cidrs)} CIDRs into {ipset.name}")
-            elif cidrs:
+                finalized = IPSet.objects.filter(
+                    pk=row.pk, modified=row.modified,
+                    last_synced=dispatched_at).update(sync_error=None)
+            else:
+                failures += 1
+                finalized = IPSet.objects.filter(
+                    pk=row.pk, modified=row.modified,
+                    last_synced=dispatched_at).update(
+                        sync_error="fleet_unverified: local host state mismatch")
+            if not finalized:
                 failures += 1
 
-        if skipped:
-            job.add_log(f"sync_firewall: skipped {skipped} unchanged IPSets")
+        now = dates.utcnow()
+        for row, canonical in geo_plans:
+            if not renew():
+                failures += 1
+                break
+            temporary = bool(
+                row.is_blocked and row.blocked_until is not None and
+                row.blocked_until > now and not row.whitelist_active)
+            result = firewall.normalize_ip(canonical, temporary)
+            observed = result.get("observed") if isinstance(result, dict) else None
+            expected = {"ip": canonical, "present": temporary}
+            ok = bool(result and result.get("ok") is True and
+                      isinstance(observed, dict) and
+                      observed.get("ip") == expected["ip"] and
+                      observed.get("present") is expected["present"])
+            values = {}
+            if ok and aggregate_ok:
+                values.update(firewall_pending=False, firewall_sync_error="",
+                              firewall_observed_at=dates.utcnow())
+            else:
+                failures += 1
+                values["firewall_sync_error"] = (
+                    "fleet_unverified: local host state mismatch")
+            finalized = GeoLocatedIP.objects.filter(
+                pk=row.pk, firewall_generation=row.firewall_generation
+            ).update(**values)
+            if not finalized:
+                failures += 1
+
+        # Desired state can change while root operations are in flight. The
+        # per-host lock serializes kernel writers, while this exact generation
+        # comparison prevents a stale database snapshot from advancing the
+        # success marker after it has repaired an obsolete generation.
+        current_ipsets = list(
+            IPSet.objects.order_by("pk")[:SYNC_FIREWALL_MAX_OBJECTS + 1])
+        geo_ids = [row.pk for row in geos]
+        current_geos = list(GeoLocatedIP.objects.filter(
+            pk__in=geo_ids).order_by("pk")[:SYNC_FIREWALL_MAX_OBJECTS + 1])
+        new_relevant_geo_ids = list(GeoLocatedIP.objects.filter(
+            Q(is_blocked=True) | Q(firewall_pending=True)).exclude(
+                pk__in=geo_ids).order_by("pk").values_list(
+                    "pk", flat=True)[:SYNC_FIREWALL_MAX_OBJECTS + 1])
+        current_ipset_generation = [
+            (row.pk, row.modified, row.name, row.is_enabled)
+            for row in current_ipsets]
+        current_geo_generation = [
+            (row.pk, row.firewall_generation, row.is_blocked,
+             row.blocked_until, row.is_whitelisted, row.whitelisted_until)
+            for row in current_geos]
+        if (len(current_ipsets) > SYNC_FIREWALL_MAX_OBJECTS or
+                len(current_geos) != len(geos) or new_relevant_geo_ids or
+                current_ipset_generation != ipset_generation or
+                current_geo_generation != geo_generation):
+            failures += 1
+            GeoLocatedIP.objects.filter(
+                pk__in=(geo_ids + new_relevant_geo_ids[
+                    :SYNC_FIREWALL_MAX_OBJECTS])).update(
+                    firewall_pending=True,
+                    firewall_sync_error=(
+                        "generation_superseded: desired state changed during "
+                        "host reconciliation"))
+            job.add_log(
+                "sync_firewall: desired generation changed during reconcile")
 
         if failures:
-            # Do NOT advance the marker or clear the force flag: this host is
-            # not in the state the marker would claim, and the next reconcile
-            # must reload rather than skip.
             job.add_log(
-                f"sync_firewall: {failures} load(s) failed — marker not advanced; "
-                "the next reconcile will retry")
-        else:
-            redis_client.set(last_sync_key, now.isoformat(),
-                             ex=SYNC_FIREWALL_MARKER_TTL)
-            if forced:
-                redis_client.delete(force_key)
+                f"sync_firewall: {failures} object(s) unverified; marker not advanced")
+            return False
+        redis_client.set(last_sync_key, dates.utcnow().isoformat(),
+                         ex=SYNC_FIREWALL_MARKER_TTL)
+        if force_value:
+            redis_client.eval(_DELETE_VALUE_LUA, 1, force_key, force_value)
+        job.add_log(
+            f"sync_firewall: verified {len(ipsets)} set tombstone(s) and "
+            f"{len(geos)} IP desired state(s)")
+        return True
     finally:
-        # Only release a lock we still hold — a lock that expired mid-run
-        # belongs to whoever took it next.
-        if redis_client.get(lock_key) == token:
-            redis_client.delete(lock_key)
+        try:
+            redis_client.eval(_LOCK_RELEASE_LUA, 1, lock_key, token)
+        except Exception:
+            logit.exception("sync_firewall: failed to release owned host lock")
 
 
 def on_engine_start(engine):
@@ -301,7 +553,9 @@ def on_engine_start(engine):
         return "skipped:no box-direct channel"
 
     _, force_key, _ = _sync_firewall_keys()
-    get_adapter().set(force_key, "1", ex=SYNC_FIREWALL_MARKER_TTL)
+    import uuid
+    get_adapter().set(force_key, uuid.uuid4().hex,
+                      ex=SYNC_FIREWALL_MARKER_TTL)
     jobs.publish(
         func="mojo.apps.incident.asyncjobs.sync_firewall",
         payload={"force": True},
@@ -316,35 +570,28 @@ def sweep_expired_blocks(job):
     """
     from mojo.apps.account.models import GeoLocatedIP
     from mojo.helpers import dates
-    from mojo.apps import jobs
-
     expired = list(
         GeoLocatedIP.objects.filter(
             is_blocked=True,
             blocked_until__isnull=False,
             blocked_until__lte=dates.utcnow(),
-        ).values_list("ip_address", flat=True)
+        ).order_by("pk")[:SYNC_FIREWALL_MAX_OBJECTS + 1]
     )
 
     if not expired:
-        return
-
-    # DB update in bulk
-    GeoLocatedIP.objects.filter(
-        ip_address__in=expired
-    ).update(
-        is_blocked=False,
-        blocked_reason="expired",
-        blocked_until=None,
-    )
-
-    # Single broadcast to remove all expired blocks fleet-wide
-    jobs.broadcast_execute(
-        "mojo.apps.incident.asyncjobs.broadcast_unblock_ip",
-        {"ips": expired},
-    )
-
-    job.add_log(f"Swept {len(expired)} expired blocks: {expired}")
+        return {"verified": 0, "unverified": 0}
+    if len(expired) > SYNC_FIREWALL_MAX_OBJECTS:
+        job.add_log("sweep_expired_blocks: scope exceeds safety bound")
+        return {"verified": 0, "unverified": len(expired)}
+    verified = 0
+    for row in expired:
+        result = row.unblock_checked(reason="expired")
+        if result.get("status") == "verified" and result.get("ok") is True:
+            verified += 1
+    unverified = len(expired) - verified
+    job.add_log(
+        f"sweep_expired_blocks: verified {verified}; unverified {unverified}")
+    return {"verified": verified, "unverified": unverified}
 
 
 # Daily decay pass. Nothing else ever recomputes threat_level downward:

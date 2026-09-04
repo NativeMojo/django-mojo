@@ -80,7 +80,7 @@ def _reply(correlation, runner_id, host, result=None, status="success"):
 
 @th.django_unit_test("checked execution chooses one compatible runner per host")
 def test_checked_selects_one_runner_per_host(opts):
-    correlation = "a" * 32
+    correlation = "0123456789abcdef" * 2
     rows = [
         _runner("z-runner", "WEB-1"),
         _runner("a-runner", "web-1"),
@@ -115,7 +115,7 @@ def test_checked_mixed_versions_refuse_before_publish(opts):
 
     result = manager.broadcast_execute_checked(
         "example.checked", {}, timeout=0.1, channel="default",
-        correlation_id="b" * 32)
+        correlation_id="1234567890abcdef" * 2)
 
     assert result["status"] == "unknown", (
         f"a host with no compatible runner must refuse, got {result!r}")
@@ -127,7 +127,7 @@ def test_checked_mixed_versions_refuse_before_publish(opts):
 
 @th.django_unit_test("missing and anomalous replies poison verification")
 def test_checked_anomaly_is_partial(opts):
-    correlation = "c" * 32
+    correlation = "fedcba0987654321" * 2
     manager = _manager(
         [_runner("one", "web-1"), _runner("two", "web-2")],
         [
@@ -163,3 +163,33 @@ def test_checked_rejects_ambiguous_identity(opts):
         f"weak correlation should be unknown, got {weak_id!r}")
     assert manager.redis.published == [], (
         f"invalid checked calls published work: {manager.redis.published!r}")
+
+
+@th.django_unit_test("checked wire rejects non-finite and unsafe bounded identity")
+def test_checked_rejects_nonfinite_payload_and_unsafe_channel(opts):
+    manager = _manager([_runner("one", "web-1")])
+
+    nonfinite = manager.broadcast_execute_checked(
+        "example.checked", {"value": float("nan")}, timeout=0.1,
+        channel="default", correlation_id="89abcdef01234567" * 2)
+    unsafe_channel = manager.broadcast_execute_checked(
+        "example.checked", {}, timeout=0.1, channel="bad:channel",
+        correlation_id="76543210fedcba98" * 2)
+
+    assert nonfinite["status"] == "unknown", nonfinite
+    assert unsafe_channel["status"] == "unknown", unsafe_channel
+    assert manager.redis.published == [], \
+        "invalid checked wire values reached a runner control channel"
+
+
+@th.django_unit_test("falsey non-object payloads remain invalid")
+def test_checked_rejects_empty_array_payload(opts):
+    manager = _manager([_runner("one", "web-1")])
+
+    result = manager.broadcast_execute_checked(
+        "example.checked", [], timeout=0.1, channel="default",
+        correlation_id="abcdef0123456789" * 2)
+
+    assert result["status"] == "unknown", result
+    assert result["anomalies"] == ["payload_must_be_object"], result
+    assert manager.redis.published == []

@@ -21,10 +21,20 @@ from .models import Job, JobEvent
 
 CHECKED_EXECUTE_PROTOCOL = 1
 CHECKED_EXECUTE_MAX_HOSTS = 128
+CHECKED_EXECUTE_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
 CHECKED_EXECUTE_MAX_REPLY_BYTES = 65536
+CHECKED_EXECUTE_MAX_HEARTBEAT_BYTES = 65536
 CHECKED_EXECUTE_MAX_ANOMALIES = 64
 _HOSTNAME_RE = __import__("re").compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9.\-]{0,251}[A-Za-z0-9])?$")
+_CHANNEL_RE = __import__("re").compile(r"^[A-Za-z0-9_.\-]{1,100}$")
+
+
+def valid_checked_correlation(value):
+    return bool(
+        isinstance(value, str) and 32 <= len(value) <= 128 and
+        all(ch.isalnum() or ch in "-_" for ch in value) and
+        len(set(value)) >= 8)
 
 
 class JobManager:
@@ -189,6 +199,10 @@ class JobManager:
             if time.monotonic() >= deadline:
                 raise RuntimeError("runner_roster_timeout")
             try:
+                if (not isinstance(raw, (bytes, str)) or
+                        len(raw if isinstance(raw, bytes) else raw.encode()) >
+                        CHECKED_EXECUTE_MAX_HEARTBEAT_BYTES):
+                    raise RuntimeError("runner_roster_invalid")
                 row = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
             except (TypeError, ValueError, AttributeError) as exc:
                 raise RuntimeError("runner_roster_invalid") from exc
@@ -683,28 +697,28 @@ class JobManager:
             return self._checked_result(
                 "unknown", correlation_id, channel, [], [], [], [], [],
                 ["invalid_timeout"], [], started)
-        if not isinstance(channel, str) or not channel:
+        if not isinstance(channel, str) or not _CHANNEL_RE.fullmatch(channel):
             return self._checked_result(
                 "unknown", correlation_id, channel, [], [], [], [], [],
                 ["concrete_channel_required"], [], started)
         if correlation_id is None:
             correlation_id = uuid.uuid4().hex
-        if (not isinstance(correlation_id, str) or len(correlation_id) < 32 or
-                len(correlation_id) > 128 or
-                not all(ch.isalnum() or ch in "-_" for ch in correlation_id)):
+        if not valid_checked_correlation(correlation_id):
             return self._checked_result(
                 "unknown", "", channel, [], [], [], [], [],
                 ["invalid_correlation_id"], [], started)
-        if not isinstance(data or {}, dict):
+        payload = {} if data is None else data
+        if not isinstance(payload, dict):
             return self._checked_result(
                 "unknown", correlation_id, channel, [], [], [], [], [],
                 ["payload_must_be_object"], [], started)
         try:
             payload_bytes = len(json.dumps(
-                data or {}, sort_keys=True, separators=(",", ":")).encode())
+                payload, sort_keys=True, separators=(",", ":"),
+                allow_nan=False).encode())
         except (TypeError, ValueError):
-            payload_bytes = CHECKED_EXECUTE_MAX_REPLY_BYTES + 1
-        if payload_bytes > CHECKED_EXECUTE_MAX_REPLY_BYTES:
+            payload_bytes = CHECKED_EXECUTE_MAX_PAYLOAD_BYTES + 1
+        if payload_bytes > CHECKED_EXECUTE_MAX_PAYLOAD_BYTES:
             return self._checked_result(
                 "unknown", correlation_id, channel, [], [], [], [], [],
                 ["payload_overflow"], [], started)
@@ -729,9 +743,15 @@ class JobManager:
                 expected, incompatibilities, [], started)
 
         reply_channel = self.keys.reply_channel(correlation_id)
-        pubsub = self.redis.pubsub()
+        try:
+            pubsub = self.redis.pubsub()
+        except Exception:
+            return self._checked_result(
+                "unknown", correlation_id, channel, expected, [], [], [],
+                expected, ["reply_subscription_unavailable"], [], started)
         anomalies = []
         replies = {}
+        dispatched = 0
         try:
             pubsub.subscribe(reply_channel)
             message = {
@@ -740,14 +760,17 @@ class JobManager:
                 "correlation_id": correlation_id,
                 "channel": channel,
                 "func": func_path,
-                "data": data or {},
+                "data": payload,
                 "reply_channel": reply_channel,
             }
-            encoded = json.dumps(message, sort_keys=True, separators=(",", ":"))
+            encoded = json.dumps(
+                message, sort_keys=True, separators=(",", ":"),
+                allow_nan=False)
             for host in expected:
                 runner = selected[host]
                 self.redis.publish(
                     self.keys.runner_ctl(runner["runner_id"]), encoded)
+                dispatched += 1
 
             deadline = started + timeout
             while time.monotonic() < deadline and len(replies) < len(expected):
@@ -771,14 +794,22 @@ class JobManager:
             if len(anomalies) < CHECKED_EXECUTE_MAX_ANOMALIES:
                 anomalies.append("dispatch_or_reply_unavailable")
         finally:
-            pubsub.close()
+            try:
+                pubsub.close()
+            except Exception:
+                if len(anomalies) < CHECKED_EXECUTE_MAX_ANOMALIES:
+                    anomalies.append("reply_subscription_close_failed")
 
         responded = sorted(replies)
         succeeded = sorted(
             host for host, row in replies.items() if row["status"] == "success")
         failed = sorted(set(responded) - set(succeeded))
         missing = sorted(set(expected) - set(responded))
-        status = "verified" if not anomalies and not failed and not missing else "partial"
+        if dispatched == 0:
+            status = "unknown"
+        else:
+            status = ("verified" if not anomalies and not failed and not missing
+                      else "partial")
         semantic = [{
             "host": host,
             "runner_id": replies[host]["runner_id"],
@@ -806,7 +837,10 @@ class JobManager:
                     len(runner_id) > 128 or
                     not isinstance(hostname, str) or
                     not _HOSTNAME_RE.fullmatch(hostname) or
-                    not isinstance(channels, list) or channel not in channels):
+                    not isinstance(channels, list) or len(channels) > 128 or
+                    not all(isinstance(item, str) and
+                            _CHANNEL_RE.fullmatch(item) for item in channels) or
+                    channel not in channels):
                 raise ValueError("runner_roster_invalid")
             hostname = hostname.lower()
             expected.add(hostname)
@@ -833,7 +867,9 @@ class JobManager:
                 return None, "reply_not_text"
             if len(raw.encode()) > CHECKED_EXECUTE_MAX_REPLY_BYTES:
                 return None, "reply_overflow"
-            row = json.loads(raw)
+            row = json.loads(
+                raw, parse_constant=lambda unused: (_ for _ in ()).throw(
+                    ValueError("non-finite JSON")))
         except (UnicodeError, ValueError, TypeError):
             return None, "malformed_reply"
         if not isinstance(row, dict):

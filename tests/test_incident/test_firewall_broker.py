@@ -23,14 +23,166 @@ def test_restore_construction(opts):
 
     built = build_operation({
         "operation": "set.replace", "set_name": "blocked",
-        "cidrs": ["192.0.2.1/24", "2001:db8::1/64"],
+        "cidrs": ["192.0.2.1/24", "192.0.2.9/24"],
     }, function="mojo.apps.incident.asyncjobs.broadcast_sync_ipset")
-    th.assert_eq(built["cidrs"], ["192.0.2.0/24", "2001:db8::/64"],
+    th.assert_eq(built["cidrs"], ["192.0.2.0/24"],
                  "the broker must canonicalize networks before root execution")
     th.assert_in("create blocked_tmp hash:net", built["stdin"],
                  "restore text must be generated inside the root broker")
     th.assert_true("argv_digest" in built and "stdin_digest" in built,
                    "root receipts need exact semantic input digests")
+
+
+@th.unit_test("broker refuses IPv6 with a typed compatibility error")
+def test_ipv6_refused_before_build(opts):
+    from mojo.deploy.firewall_broker import BrokerError, build_operation
+
+    with th.assert_raises(BrokerError) as raised:
+        build_operation({
+            "operation": "ip.normalize", "source": "2001:db8::1",
+            "present": True,
+        }, function="mojo.apps.incident.asyncjobs.broadcast_reconcile_firewall_ip")
+    th.assert_eq(raised.exception.code, "unsupported_family",
+                 "IPv6 refusal must stay machine-readable")
+
+
+@th.unit_test("compound GeoLocatedIP repair is one closed broker operation")
+def test_compound_geolocated_build(opts):
+    from mojo.deploy.firewall_broker import build_operation
+
+    built = build_operation({
+        "operation": "geolocated.normalize", "source": "192.0.2.8",
+        "set_name": "mojo_blocked",
+        "cidrs": ["192.0.2.8", "198.51.100.9/32"],
+        "temporary_present": False,
+    }, function=(
+        "mojo.apps.incident.asyncjobs.broadcast_reconcile_geolocated_ip"))
+    th.assert_eq(built["source"], "192.0.2.8/32",
+                 "compound direct-IP input was not canonicalized")
+    th.assert_eq(built["cidrs"], ["192.0.2.8/32", "198.51.100.9/32"],
+                 "compound permanent set was not canonicalized")
+
+
+@th.unit_test("status reports exact duplicate multiplicity")
+def test_ip_status_exact_multiplicity(opts):
+    from mojo.deploy import firewall_broker as broker
+
+    rules = (
+        "-A INPUT -s 192.0.2.8/32 -j DROP\n"
+        "-A INPUT -s 192.0.2.8/32 -j DROP\n"
+        "-A FORWARD -s 192.0.2.8/32 -j DROP\n")
+    child = {"ok": True, "pid": 1, "start_ticks": 1,
+             "returncode": 0}
+    with mock.patch.object(broker, "_read_rules", return_value=(child, rules)), \
+            mock.patch.object(broker, "_forwarding_required", return_value=True):
+        unused, observed = broker._ip_status("192.0.2.8/32")
+    th.assert_eq((observed["input_count"], observed["forward_count"]), (2, 1),
+                 "duplicate rules must remain visible to normalization")
+    th.assert_true(not observed["present"],
+                   "duplicate multiplicity cannot be reported as desired truth")
+
+
+@th.unit_test("IP normalization removes duplicates before establishing one rule")
+def test_ip_normalize_repairs_duplicate_rules(opts):
+    from mojo.deploy import firewall_broker as broker
+
+    initial = (
+        "-A INPUT -s 192.0.2.8/32 -j DROP\n"
+        "-A INPUT -s 192.0.2.8/32 -j DROP\n")
+    final = "-A INPUT -s 192.0.2.8/32 -j DROP\n"
+    read_child = {"ok": True, "pid": 1, "start_ticks": 1,
+                  "returncode": 0}
+    child = {"ok": True, "pid": 2, "start_ticks": 2,
+             "returncode": 0}
+    commands = []
+
+    def run(argv, *args, **kwargs):
+        commands.append(argv)
+        return dict(child), "", ""
+
+    with mock.patch.object(
+            broker, "_read_rules",
+            side_effect=[(read_child, initial), (read_child, final)]), \
+            mock.patch.object(broker, "_run_child", side_effect=run), \
+            mock.patch.object(broker, "_forwarding_required", return_value=False):
+        unused, observed, ok = broker._normalize_ip("192.0.2.8/32", True)
+    deletes = [argv for argv in commands if argv[1] == "-D"]
+    inserts = [argv for argv in commands if argv[1] == "-I"]
+    th.assert_eq((len(deletes), len(inserts)), (2, 1),
+                 "normalization did not repair exact duplicate multiplicity")
+    th.assert_true(ok and observed["present"],
+                   "repair did not re-observe exact desired truth")
+
+
+@th.unit_test("incompatible set families remain observable for repair")
+def test_incompatible_set_family_status(opts):
+    from mojo.deploy import firewall_broker as broker
+
+    payload = (
+        "create blocked hash:net family inet6 hashsize 1024 maxelem 65536\n"
+        "add blocked 2001:db8::/32\n")
+    set_type, family, members, digest = broker._parse_set_save(
+        payload, "blocked")
+    th.assert_eq((set_type, family), ("hash:net", "inet6"),
+                 "wrong-family truth was hidden from the repair path")
+    th.assert_eq(members, ["2001:db8::/32"],
+                 "incompatible membership should be observed, never executed")
+    th.assert_true(len(digest) == 64, "status digest was not bounded")
+
+
+@th.unit_test("wrong-family sets are destroyed and recreated before success")
+def test_normalize_repairs_incompatible_set(opts):
+    from mojo.apps.incident.services.firewall_truth import network_digest
+    from mojo.deploy import firewall_broker as broker
+
+    before = {
+        "name": "blocked", "present": False, "exists": True,
+        "type": "hash:net", "family": "inet6", "count": 1,
+        "digest": "0" * 64, "input_count": 1, "forward_count": 0,
+        "forwarding_required": False,
+    }
+    after = {
+        "name": "blocked", "present": True, "exists": True,
+        "type": "hash:net", "family": "inet", "count": 1,
+        "digest": network_digest(["192.0.2.0/24"]),
+        "input_count": 1, "forward_count": 0,
+        "forwarding_required": False,
+    }
+    child = {"ok": True, "pid": 3, "start_ticks": 3,
+             "returncode": 0}
+    with mock.patch.object(
+            broker, "_set_status",
+            side_effect=[([], before), ([], after)]), \
+            mock.patch.object(
+                broker, "_normalize_rules", side_effect=[[], []]), \
+            mock.patch.object(
+                broker, "_run_child", return_value=(child, "", "")) as run, \
+            mock.patch.object(
+                broker, "_replace_set", return_value=child) as replace:
+        unused, observed, ok = broker._normalize_set(
+            "blocked", ["192.0.2.0/24"], True)
+    run.assert_called_once_with([broker.IPSET, "destroy", "blocked"])
+    replace.assert_called_once_with("blocked", ["192.0.2.0/24"])
+    th.assert_true(ok and observed == after,
+                   "incompatible set repair was not re-observed")
+
+
+@th.unit_test("the root broker host lock fails closed when already owned")
+def test_host_lock_busy_is_typed(opts):
+    import stat
+    from mojo.deploy import firewall_broker as broker
+
+    info = mock.Mock(st_uid=0, st_mode=stat.S_IFREG | 0o600)
+    with mock.patch.object(broker.os, "open", return_value=7), \
+            mock.patch.object(broker.os, "fstat", return_value=info), \
+            mock.patch.object(
+                broker.fcntl, "flock", side_effect=BlockingIOError), \
+            mock.patch.object(broker.os, "close") as close:
+        with th.assert_raises(broker.BrokerError) as raised:
+            broker._acquire_host_lock()
+    th.assert_eq(raised.exception.code, "host_busy",
+                 "concurrent root mutation did not return a typed refusal")
+    close.assert_called_once_with(7)
 
 
 @th.unit_test("broker function-operation matrix is closed")

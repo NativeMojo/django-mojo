@@ -34,8 +34,10 @@ from mojo.apps import metrics
 from mojo.helpers import dates
 from .execution_context import execution
 from .manager import (
+    CHECKED_EXECUTE_MAX_PAYLOAD_BYTES,
     CHECKED_EXECUTE_MAX_REPLY_BYTES,
     CHECKED_EXECUTE_PROTOCOL,
+    valid_checked_correlation,
 )
 
 logger = logit.get_logger("jobs", "jobs.log", debug=True)
@@ -596,20 +598,27 @@ class JobEngine:
                 source_channel = source_channel.decode("utf-8")
             except UnicodeError:
                 return
-        if source_channel not in (None, expected_channel):
+        if source_channel != expected_channel:
             return
         reply_channel = message.get("reply_channel")
         correlation_id = message.get("correlation_id")
         func_path = message.get("func")
+        try:
+            payload_size = len(json.dumps(
+                message.get("data", {}), sort_keys=True,
+                separators=(",", ":"), allow_nan=False).encode())
+        except (TypeError, ValueError):
+            payload_size = CHECKED_EXECUTE_MAX_PAYLOAD_BYTES + 1
         valid = (
             message.get("protocol") == CHECKED_EXECUTE_PROTOCOL and
             isinstance(reply_channel, str) and reply_channel and
-            isinstance(correlation_id, str) and 32 <= len(correlation_id) <= 128 and
-            all(ch.isalnum() or ch in "-_" for ch in correlation_id) and
+            valid_checked_correlation(correlation_id) and
+            reply_channel == self.keys.reply_channel(correlation_id) and
             isinstance(func_path, str) and 1 <= len(func_path) <= 255 and
             isinstance(message.get("channel"), str) and
             message.get("channel") in self.channels and
-            isinstance(message.get("data", {}), dict))
+            isinstance(message.get("data", {}), dict) and
+            payload_size <= CHECKED_EXECUTE_MAX_PAYLOAD_BYTES)
         if not valid:
             return
         reply = {
@@ -639,11 +648,13 @@ class JobEngine:
                 logger.exception("Checked execution failed for %s", func_path)
                 reply.update(status="error", error="execution_failed")
         try:
-            encoded = json.dumps(reply, sort_keys=True, separators=(",", ":"))
+            encoded = json.dumps(
+                reply, sort_keys=True, separators=(",", ":"), allow_nan=False)
         except (TypeError, ValueError):
             reply.pop("result", None)
             reply.update(status="error", error="result_unserializable")
-            encoded = json.dumps(reply, sort_keys=True, separators=(",", ":"))
+            encoded = json.dumps(
+                reply, sort_keys=True, separators=(",", ":"), allow_nan=False)
         if len(encoded.encode()) > CHECKED_EXECUTE_MAX_REPLY_BYTES:
             reply.pop("result", None)
             reply.update(status="error", error="result_unserializable")
