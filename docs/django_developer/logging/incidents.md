@@ -419,9 +419,16 @@ Unicode `IGNORECASE` equivalents participate in that overlap check. The safe
 subset also rejects every unescaped alternation, capturing or flag-scoped
 group, assertion, backreference, and unknown parser operation. Simple
 literal/class/anchor patterns remain valid, and `\\|` or `[|]` matches a
-literal pipe. Governed input and legacy evaluation share this boundary, so a
-malformed legacy policy remains readable, deactivatable and deletable, but
-cannot match, dispatch, or reactivate; replace its complete inactive tree first.
+literal pipe. Governed input always uses this atomic subset.
+
+Legacy runtime validation has one exact-value exception for the five audited
+regex strings emitted by `RuleSet.ensure_ossec_rules()`: the three Bot/Scanner
+conditions plus Login Session Noise and Generic Web Errors. The immutable
+`TRUSTED_DEFAULT_REGEXES` set, not a RuleSet name or mutable metadata, grants
+that compatibility; a one-character change is refused, and a governed/user
+write cannot claim the exception. Any other malformed legacy policy remains
+readable, deactivatable and deletable, but cannot match, dispatch, or
+reactivate; replace its complete inactive tree first.
 Generic RuleSet/Rule URLs remain bounded reads but reject mutation. Generic
 IPSet administration intentionally remains available until its governed
 replacement ships.

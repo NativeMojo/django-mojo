@@ -919,10 +919,18 @@ The validator also rejects capturing and flag-scoped groups, assertions,
 backreferences, nested/group repetition, unknown parser operations, and
 broader ambiguous repetition. Repeated atoms with overlapping or unprovable
 case-insensitive character domains are rejected even when literals separate
-them; Unicode `IGNORECASE` equivalences are included in that check. The same
-boundary applies to stored legacy rules, which fail closed until replaced. A
-RuleSet with no rules is a catch-all and needs the additional catch-all
-confirmation before activation.
+them; Unicode `IGNORECASE` equivalences are included in that check. This atomic
+boundary applies to every governed/user write.
+
+The only runtime compatibility exception is the five exact audited regex
+values installed by `RuleSet.ensure_ossec_rules()`—three Bot/Scanner
+conditions, Login Session Noise, and Generic Web Errors. Existing server
+defaults continue to match, but clients cannot submit those non-atomic patterns
+through a governed action. Compatibility is keyed only to the immutable exact
+pattern value, never the RuleSet name, category, or metadata; changing a single
+character removes it. Other stored legacy regexes fail closed until replaced
+with the strict subset. A RuleSet with no rules is a catch-all and needs the
+additional catch-all confirmation before activation.
 
 ## Incident Handlers
 

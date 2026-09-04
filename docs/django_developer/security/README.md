@@ -245,8 +245,19 @@ operations. It also rejects multiple repetitions whose case-insensitive
 character domains overlap or cannot be proved disjoint—even when literals
 separate them (for example, `a*aa*aa*$`). The overlap check includes Python's
 special Unicode `IGNORECASE` equivalences. Governed writes and legacy runtime
-evaluation use the same validator: an older pattern outside this subset fails
-closed as no-match and its RuleSet requires complete governed replacement.
+evaluation normally share this subset.
+
+Runtime compatibility has one closed exception: the five audited pattern
+strings shipped by `RuleSet.ensure_ossec_rules()` (three Bot/Scanner patterns,
+Login Session Noise, and Generic Web Errors) remain executable through
+`validate_runtime_regex()`. `TRUSTED_DEFAULT_REGEXES` is an immutable exact-value
+set drift-tested against those server defaults. Trust does not come from the
+RuleSet name, category, metadata, or creator; changing even one character loses
+the exception, while runtime membership depends only on exact string equality.
+The governed writer always uses `validate_regex()`, so even those five values
+cannot be submitted as new/user policy. Any other stored pattern outside the
+atomic subset fails closed as no-match and requires complete governed
+replacement.
 
 ### Value Types
 
@@ -969,6 +980,11 @@ Single-server job functions follow the engine's calling convention: `func(job)` 
 ## 13. Default Rules Reference
 
 These rules are auto-created by `RuleSet.ensure_default_rules()` and serve as the baseline security policy. They can be customized or disabled via the admin API.
+
+The five legacy regex values used by the three OSSEC pattern RuleSets retain
+the exact runtime-only compatibility exception described above. A governed
+replacement must express equivalent intent using the atomic safe subset; the
+exception cannot be inherited by reusing a RuleSet name or metadata flag.
 
 ### OSSEC Rules
 
