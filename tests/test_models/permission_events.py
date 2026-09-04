@@ -15,7 +15,7 @@ TESTIT_TIER = "core"  # #2792 tier curation
 TEST_NOPERM = "perm_events_noperm"
 TEST_PWORD = "testit##mojo"
 TEST_FIXTURE_GROUP = "perm-events-fixture"
-TEST_RULESET = "perm-events-ruleset"
+TEST_TICKET = "perm-events-ticket"
 
 
 @th.django_unit_setup()
@@ -23,7 +23,7 @@ def setup_permission_events(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.models.member import GroupMember
     from mojo.apps.account.models.group import Group
-    from mojo.apps.incident.models import RuleSet
+    from mojo.apps.incident.models import Ticket
     from mojo.apps.incident.models.event import Event
 
     user = User.objects.filter(username=TEST_NOPERM).last()
@@ -48,9 +48,9 @@ def setup_permission_events(opts):
     group.save()
     opts.fixture_group_id = group.id
 
-    RuleSet.objects.filter(name=TEST_RULESET).delete()
-    ruleset = RuleSet.objects.create(name=TEST_RULESET, category="perm_events_cat")
-    opts.ruleset_id = ruleset.id
+    Ticket.objects.filter(title=TEST_TICKET).delete()
+    ticket = Ticket.objects.create(title=TEST_TICKET, category="perm_events_cat")
+    opts.ticket_id = ticket.id
 
     Event.objects.filter(uid=user.id).delete()
 
@@ -97,7 +97,7 @@ def test_get_protected_instance_emits_view_permission_denied(opts):
 
 @th.django_unit_test()
 def test_post_protected_emits_user_permission_denied(opts):
-    """POST /api/incident/event/ruleset by a no-perms user.
+    """POST /api/incident/ticket by a no-perms user.
 
     No instance, perms not satisfied at user.has_permission → fires
     user_permission_denied via the dispatcher.
@@ -108,11 +108,11 @@ def test_post_protected_emits_user_permission_denied(opts):
     assert opts.client.login(TEST_NOPERM, TEST_PWORD), "login failed"
 
     resp = opts.client.post(
-        "/api/incident/event/ruleset",
-        json={"name": "perm-events-attempt", "category": "perm_events_cat"},
+        "/api/incident/ticket",
+        json={"title": "perm-events-attempt", "category": "perm_events_cat"},
     )
     assert resp.status_code == 403, (
-        f"Expected 403 on POST ruleset by noperm user, got "
+        f"Expected 403 on POST ticket by noperm user, got "
         f"{resp.status_code}: {resp.response!r}"
     )
 
@@ -125,22 +125,22 @@ def test_post_protected_emits_user_permission_denied(opts):
     assert meta.get("branch") == "user.has_permission", (
         f"Expected branch=user.has_permission, got {meta.get('branch')!r}"
     )
-    assert meta.get("model_name") == "RuleSet", (
-        f"Expected model_name=RuleSet, got {meta.get('model_name')!r}"
+    assert meta.get("model_name") == "Ticket", (
+        f"Expected model_name=Ticket, got {meta.get('model_name')!r}"
     )
 
 
 @th.django_unit_test()
 def test_delete_protected_emits_user_permission_denied(opts):
-    """DELETE /api/incident/event/ruleset/<id> by a no-perms user."""
+    """DELETE /api/incident/ticket/<id> by a no-perms user."""
     from mojo.apps.incident.models.event import Event
     Event.objects.filter(uid=opts.user_id, category="user_permission_denied").delete()
 
     assert opts.client.login(TEST_NOPERM, TEST_PWORD), "login failed"
 
-    resp = opts.client.delete(f"/api/incident/event/ruleset/{opts.ruleset_id}")
+    resp = opts.client.delete(f"/api/incident/ticket/{opts.ticket_id}")
     assert resp.status_code == 403, (
-        f"Expected 403 on DELETE ruleset by noperm user, got "
+        f"Expected 403 on DELETE ticket by noperm user, got "
         f"{resp.status_code}: {resp.response!r}"
     )
 

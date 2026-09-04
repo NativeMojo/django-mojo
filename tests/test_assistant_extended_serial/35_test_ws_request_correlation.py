@@ -71,7 +71,9 @@ def test_request_id_is_echoed_on_ack_and_streamed_events(opts):
             self.target(*self.args)
 
     with mock.patch.object(settings, "get", side_effect=settings_get):
-        with mock.patch("mojo.helpers.llm.get_api_key", return_value="sk-test"):
+        with mock.patch(
+                "mojo.apps.account.services.llm_safety.route_state",
+                return_value={"ready": True}):
             with mock.patch("threading.Thread", ImmediateThread):
                 with mock.patch(
                     "mojo.apps.assistant.services.agent.run_assistant_ws",

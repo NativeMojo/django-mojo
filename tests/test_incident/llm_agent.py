@@ -785,10 +785,10 @@ def test_llm_agent_create_rule_deduplicates_variant(opts):
         "category": "llm_dedup_variant",
         "handlers": [{"type": "block", "ttl_seconds": 3600, "fleet_wide": True}],
         "rules": [
-            {"name": "Path cred files", "field": "path", "comparator": "regex",
-             "value": "/(etc|var)/(shadow|passwd)"},
+            {"name": "Path cred files", "field": "path", "comparator": "contains",
+             "value": "/etc/passwd"},
         ],
-        "reasoning": "Same credential harvesting pattern with broader regex.",
+        "reasoning": "Same credential harvesting pattern with a variant path.",
         "bundle_by": 4,
         "bundle_minutes": 30,
     }

@@ -265,8 +265,8 @@ def test_off_restores_audit_and_removes_feature_assets(opts):
     with mock.patch.object(deploy.os, "geteuid", return_value=0), \
             mock.patch.object(deploy, "_ensure_dir"), \
             mock.patch.object(deploy, "_require_root_install_dir"), \
-            mock.patch.object(deploy, "_owned_snapshot", return_value={
-                "path": "prior", "payload": b"prior", "mode": 0o600}), \
+            mock.patch.object(
+                deploy, "_owned_snapshot", return_value=(b"{}", 0o600)), \
             mock.patch.object(deploy, "_retired_unit_snapshot", return_value={}), \
             mock.patch.object(deploy, "_retire_stale_units", return_value=False), \
             mock.patch.object(deploy, "_nginx_snapshot", return_value={}), \

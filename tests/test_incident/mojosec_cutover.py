@@ -374,7 +374,7 @@ def test_web_probes_route_and_promotion_projects_once(opts):
 
     rule_set = RuleSet.objects.create(
         name=f"{PREFIX} promoted", category="mojosec.case.promoted",
-        priority=10, handler="notify://security@example.test")
+        priority=10, handler="notify://perm@manage_security")
     # 15:12 keeps a clear hour on both sides of every other fixture in this
     # file — the sustained promotion under test must not pick up cross-kind
     # corroboration (#2105), which has its own coverage in
@@ -646,6 +646,7 @@ def test_case_read_contract_carries_cutover_fields(opts):
 
 @th.django_unit_test()
 def test_shadow_compare_reports_cutover_evidence(opts):
+    import datetime as _dt
     import io
 
     from django.core.management import call_command
@@ -653,14 +654,19 @@ def test_shadow_compare_reports_cutover_evidence(opts):
 
     rule_set = RuleSet.objects.create(
         name=f"{PREFIX} fim automation", category="mojosec.fim.change",
-        priority=5, handler="notify://security@example.test")
+        priority=5, handler="notify://perm@manage_security")
     try:
         out = io.StringIO()
-        call_command(
-            "mojosec_shadow_compare",
-            "--installation-key", str(opts.cutover_api_key.pk),
-            "--sensor", SENSOR_ID, "--hours", "168",
-            "--min-compression", "2", stdout=out)
+        fixture_now = _dt.datetime.fromisoformat("2026-08-19T01:00:00+00:00")
+        with mock.patch(
+                "mojo.apps.incident.management.commands."
+                "mojosec_shadow_compare.dates.utcnow",
+                return_value=fixture_now):
+            call_command(
+                "mojosec_shadow_compare",
+                "--installation-key", str(opts.cutover_api_key.pk),
+                "--sensor", SENSOR_ID, "--hours", "168",
+                "--min-compression", "2", stdout=out)
         report = json.loads(out.getvalue())
     finally:
         rule_set.delete()
