@@ -231,6 +231,74 @@ def test_health_rules_never_block_ips(opts):
 # ---------------------------------------------------------------------------
 
 @th.django_unit_test()
+def test_ossec_default_regex_allowlist_cannot_drift(opts):
+    """Every shipped regex is atomic-safe or an exact audited default."""
+    from unittest import mock
+
+    from mojo.apps.incident.models.rule import RuleSet
+    from mojo.apps.incident.services import rule_validation
+
+    with mock.patch.object(RuleSet, "_create_ruleset") as create_ruleset:
+        RuleSet.ensure_ossec_rules()
+
+    shipped = []
+    for call in create_ruleset.call_args_list:
+        shipped.extend(
+            row["value"] for row in call.kwargs["rules"]
+            if row.get("comparator") == "regex"
+        )
+    assert len(shipped) == len(set(shipped)) == 5, (
+        "the OSSEC defaults should contain the five audited regex values")
+
+    outside_atomic_subset = set()
+    for pattern in shipped:
+        try:
+            rule_validation.validate_regex(pattern)
+        except rule_validation.RuleValidationError:
+            outside_atomic_subset.add(pattern)
+        rule_validation.validate_runtime_regex(pattern)
+    assert outside_atomic_subset == rule_validation.TRUSTED_DEFAULT_REGEXES, (
+        "shipped regex drift must be classified by the exact-value allowlist")
+
+    changed = next(iter(rule_validation.TRUSTED_DEFAULT_REGEXES)) + " "
+    with th.assert_raises(rule_validation.RuleValidationError):
+        rule_validation.validate_runtime_regex(changed)
+
+
+@th.django_unit_test()
+def test_trusted_ossec_default_regexes_still_match(opts):
+    """The three RuleSets using audited legacy regexes remain effective."""
+    from mojo.apps.incident.models import Event
+    from mojo.apps.incident.models.rule import RuleSet
+
+    RuleSet.objects.filter(category="ossec").delete()
+    RuleSet.ensure_ossec_rules()
+    examples = (
+        (
+            "OSSEC - Bot/Scanner URL Patterns",
+            {"details": "Scanner probe", "metadata": {
+                "http_url": "/wp-content/plugins/probe.php"}},
+        ),
+        (
+            "OSSEC - Login Session Noise",
+            {"details": "Login session closed.", "metadata": {}},
+        ),
+        (
+            "OSSEC - Generic Web Errors",
+            {"details": "Web Attack 405 POST /admin", "metadata": {}},
+        ),
+    )
+    for ruleset_name, event_values in examples:
+        ruleset = RuleSet.objects.get(category="ossec", name=ruleset_name)
+        event = Event.objects.create(
+            category="ossec", scope="ossec", level=5, **event_values)
+        assert ruleset.check_rules(event) is True, (
+            f"{ruleset_name} must retain its shipped matching behavior")
+        event.delete()
+    RuleSet.objects.filter(category="ossec").delete()
+
+
+@th.django_unit_test()
 def test_ossec_login_session_noise_ignores_event(opts):
     """Login session opened/closed events should match the ignore ruleset."""
     from mojo.apps.incident.models.rule import RuleSet

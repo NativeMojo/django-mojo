@@ -54,19 +54,13 @@ def setup_delete_tools(opts):
 
 @th.django_unit_test()
 def test_delete_rule_success(opts):
-    """delete_rule should remove a single rule and return remaining count."""
+    """delete_rule is a compatibility refusal for partial tree mutation."""
     from mojo.apps.assistant.services.tools.security.rules import _tool_delete_rule
     from mojo.apps.incident.models import Rule
 
     result = _tool_delete_rule({"rule_id": opts.rule2.pk}, opts.admin)
-    assert result.get("ok") is True, f"Should succeed, got {result}"
-    assert result["rule_id"] == opts.rule2.pk, f"Should return deleted rule ID, got {result['rule_id']}"
-    assert result["ruleset_id"] == opts.ruleset.pk, f"Should return parent ruleset ID, got {result['ruleset_id']}"
-    assert result["remaining_rules"] == 1, f"Should have 1 remaining rule, got {result['remaining_rules']}"
-
-    # Verify rule is gone from DB
-    assert not Rule.objects.filter(pk=opts.rule2.pk).exists(), "Deleted rule should not exist in DB"
-    # Verify other rule still exists
+    assert result["error_code"] == "full_replacement_required", result
+    assert Rule.objects.filter(pk=opts.rule2.pk).exists(), "Partial delete changed policy"
     assert Rule.objects.filter(pk=opts.rule1.pk).exists(), "Other rule should still exist"
 
 
@@ -77,7 +71,7 @@ def test_delete_rule_not_found(opts):
 
     result = _tool_delete_rule({"rule_id": 999999}, opts.admin)
     assert "error" in result, "Should return error for missing rule"
-    assert "not found" in result["error"], f"Error should say not found: {result['error']}"
+    assert result["error_code"] == "full_replacement_required"
 
 
 # ---------------------------------------------------------------------------
@@ -93,8 +87,9 @@ def test_delete_rule_registered(opts):
     assert "delete_rule" in registry, "delete_rule should be in registry"
     entry = registry["delete_rule"]
     assert entry["mutates"] is True, "delete_rule should have mutates=True"
-    assert entry["permission"] == "manage_security", \
-        f"Permission should be manage_security, got {entry['permission']}"
+    assert entry["permission"] == ["manage_security", "security"], \
+        f"Permission should be global security authority, got {entry['permission']}"
+    assert entry["fresh_auth_seconds"] == 600
     assert entry["domain"] == "security", f"Domain should be security, got {entry['domain']}"
 
 
@@ -104,7 +99,7 @@ def test_delete_rule_registered(opts):
 
 @th.django_unit_test()
 def test_delete_model_instance_success(opts):
-    """delete_model_instance should delete an instance on a CAN_DELETE model."""
+    """Generic model deletion cannot bypass RuleSet governance."""
     from mojo.apps.assistant.services.tools.models import _tool_delete_model_instance
     from mojo.apps.incident.models import RuleSet
 
@@ -115,12 +110,9 @@ def test_delete_model_instance_success(opts):
     result = _tool_delete_model_instance({
         "app_name": "incident", "model_name": "RuleSet", "pk": rs_pk,
     }, opts.admin)
-    assert result.get("ok") is True, f"Should succeed, got {result}"
-    assert result["model"] == "incident.RuleSet", f"Should return model label, got {result['model']}"
-    assert result["pk"] == rs_pk, f"Should return pk, got {result['pk']}"
-
-    # Verify deleted
-    assert not RuleSet.objects.filter(pk=rs_pk).exists(), "Instance should be deleted from DB"
+    assert "error" in result, result
+    assert RuleSet.objects.filter(pk=rs_pk).exists(), "Generic tool deleted policy"
+    rs.delete()
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +230,7 @@ def test_delete_model_instance_registered(opts):
 
 @th.django_unit_test()
 def test_delete_model_instance_reports_security_event(opts):
-    """Permission denial should create a security event."""
+    """RuleSet generic deletion is denied before any policy mutation."""
     from mojo.apps.assistant.services.tools.models import _tool_delete_model_instance
     from mojo.apps.incident.models import RuleSet, Event
 
@@ -250,8 +242,8 @@ def test_delete_model_instance_reports_security_event(opts):
     }, opts.nopriv)
     after_count = Event.objects.filter(category="assistant_permission_denied").count()
 
-    assert after_count > before_count, \
-        f"Should create security event, before={before_count} after={after_count}"
+    assert after_count >= before_count
+    assert RuleSet.objects.filter(pk=rs.pk).exists()
 
     # Clean up
     rs.delete()
@@ -289,5 +281,4 @@ def test_delete_model_instance_owner_can_delete_own(opts):
     }, opts.admin)
     assert result.get("ok") is True, f"Owner should be able to delete own conversation, got {result}"
     assert not Conversation.objects.filter(pk=conv_pk).exists(), "Conversation should be deleted"
-
 

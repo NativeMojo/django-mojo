@@ -1,5 +1,10 @@
 # MojoSec Sensor Ingestion
 
+> The sensor receiver below is machine-facing. Human operations clients use
+> `GET /api/incident/admin/security` and
+> `POST /api/incident/admin/security/action`; API keys are deliberately refused
+> there.
+
 `POST /api/incident/mojosec/batch` is the machine-facing receiver for dedicated
 EC2 host sensors. It is not a browser/admin ingestion endpoint and does not use
 the normal REST response envelope.
@@ -106,6 +111,21 @@ callers — one outage is one growing event per failure shape — and their
 `Event.source_ip` carries a single latest-occurrence sample: a witness of the
 failure, not an actor attribution. The source alone still performs no action:
 only an exact active central RuleSet may create an Incident or run a handler.
+
+RuleSets are written only through the Admin Security aggregate authority.
+Generic `/api/incident/event/ruleset` and child-rule URLs remain readable but
+reject mutation. The action writer requires the exact parent revision and
+typed confirmation; a complete replacement is saved inactive and must pass
+the server-owned field/operator/handler schema before separate activation.
+Raw handler strings, arbitrary jobs/Python paths, unsafe regex, and stale
+ticket or Assistant approvals fail closed. Malformed legacy rows remain
+visible for deactivation/deletion but evaluate as no-match and cannot dispatch.
+
+Recommendation approve/reject/cancel/reverse operations use the same action
+writer and bind to the recommendation's `modified` value and exact proposal
+scope. `cancel` is an audited transition to the existing `rejected` state.
+Partial reversal is nonterminal and retryable; the sweep also requeues stranded
+approved/auto-approved work idempotently.
 
 Raw bounded request targets, referrers, and user agents are retained in the
 protected `MojoSecReceipt.replay_features` audit record (`DENY_AI`, excluded
@@ -285,7 +305,7 @@ rejected and group/member grants never authorize this platform-wide surface.
 | `GET` | `/api/incident/mojosec/case-metrics` | global `view_security` or `security` | Bounded aggregate case metrics |
 | `GET` | `/api/incident/mojosec/recommendation` | global `view_security`, `manage_security` or `security` | Paginated recommendation list (`state`, `action`, `urgency`, `confidence`, `case_id` filters) |
 | `GET` | `/api/incident/mojosec/recommendation/<id>` | global `view_security`, `manage_security` or `security` | One recommendation with per-target validation/outcome rows, last 50 transitions and attempts |
-| `POST` | `/api/incident/mojosec/recommendation-action` | global `manage_security` or `security` | `{recommendation_id, action: approve\|reject\|cancel\|reverse, note}` — approves exactly what was proposed; no parameter can add targets or widen scope |
+| `POST` | `/api/incident/mojosec/recommendation-action` | global `manage_security` or `security` | Fresh human session only; `{recommendation_id, action: approve\|reject\|cancel\|reverse, expected_modified, confirm, note}` delegates to the governed authority and cannot add targets or widen scope |
 | `GET` | `/api/incident/mojosec/deployment` | global `view_security`, `manage_security` or `security` | Driver-side deployment registrations (optional `installation_key_id` filter) |
 | `POST` | `/api/incident/mojosec/deployment` | global `manage_security` or `security` | Pre-register `{installation_key_id, deployment_id, ttl_seconds, note}` before a deploy |
 

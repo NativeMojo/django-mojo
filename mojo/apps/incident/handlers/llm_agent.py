@@ -279,7 +279,12 @@ TOOLS = [
             "properties": {
                 "name": {"type": "string", "description": "Rule name describing the pattern"},
                 "category": {"type": "string", "description": "Event category to match"},
-                "handler": {"type": "string", "description": "Handler chain (e.g. 'block://?ttl=3600,notify://perm@manage_security')"},
+                "handlers": {
+                    "type": "array",
+                    "description": "Typed handlers from the server security schema; arbitrary jobs and Python paths are forbidden.",
+                    "items": {"type": "object"},
+                    "maxItems": 8,
+                },
                 "rules": {
                     "type": "array",
                     "description": "List of field match rules",
@@ -322,7 +327,7 @@ TOOLS = [
                     "description": "Set true for noise patterns (bot scanning, health blips) where the incident should be auto-deleted on resolution or close.",
                 },
             },
-            "required": ["name", "category", "handler", "reasoning"],
+            "required": ["name", "category", "handlers", "reasoning"],
         },
     },
     {
@@ -937,6 +942,7 @@ def _rule_signature(category, handler, rules_list):
 
 def _rule_signature_from_ruleset(ruleset):
     """Same signature computed from a persisted RuleSet + its child Rules."""
+    from mojo.apps.incident.services import rule_validation
     tuples = []
     for r in ruleset.rules.all():
         tuples.append([
@@ -946,7 +952,10 @@ def _rule_signature_from_ruleset(ruleset):
             r.value_type or "str",
         ])
     tuples.sort()
-    return ujson.dumps([ruleset.category or "", ruleset.handler or "", tuples])
+    handlers = rule_validation.parse_handlers(ruleset.handler)
+    canonical = (rule_validation.normalize_handlers(handlers)
+                 if handlers is not None else "legacy")
+    return ujson.dumps([ruleset.category or "", canonical, tuples])
 
 
 def _threshold_bundle_policy(trigger_count, trigger_window, bundle_by, bundle_minutes):
@@ -1055,14 +1064,36 @@ def _validate_rule_thresholds(params):
 
 
 def _tool_create_rule(params):
-    from mojo.apps.incident.models import RuleSet, Rule, Ticket
+    from mojo.apps.incident.models import Ticket
+    from mojo.apps.incident.services import admin_security, rule_validation
 
+    if "handler" in params:
+        return {
+            "ok": False,
+            "error": "Raw handler strings are not accepted; use typed handlers.",
+            "error_code": "raw_handler_not_allowed",
+        }
     threshold_error = _validate_rule_thresholds(params)
     if threshold_error:
         return {"ok": False, "error": threshold_error}
 
     category = params["category"]
-    handler = params["handler"]
+    try:
+        normalized = rule_validation.normalize_ruleset({
+            "name": params["name"], "category": category,
+            "handlers": params.get("handlers", []),
+            "rules": params.get("rules") or [],
+            "bundle_by": params.get("bundle_by", 4),
+            "bundle_minutes": params.get("bundle_minutes", 30),
+            "trigger_count": params.get("min_count"),
+            "trigger_window": params.get("window_minutes"),
+            "priority": params.get("priority", 50),
+            "delete_on_resolution": params.get("delete_on_resolution") is True,
+            "is_active": False,
+        })
+    except rule_validation.RuleValidationError as error:
+        return {"ok": False, "error": str(error), "error_code": error.code}
+    handler = normalized["handler"]
     rules_payload = params.get("rules") or []
     signature = _rule_signature(category, handler, rules_payload)
     policy = _threshold_bundle_policy_from_params(params)
@@ -1103,37 +1134,19 @@ def _tool_create_rule(params):
         }
 
     # No match — create a new RuleSet and approval ticket with action block.
-    metadata = {
-        "llm_proposed": True,
-        "llm_reasoning": params["reasoning"],
-        "occurrence_count": 1,
-    }
-    if params.get("delete_on_resolution"):
-        metadata["delete_on_resolution"] = True
-
-    ruleset = RuleSet.objects.create(
-        name=params["name"],
-        category=category,
-        handler=handler,
-        bundle_by=params.get("bundle_by", 4),
-        bundle_minutes=params.get("bundle_minutes", 30),
-        trigger_count=params.get("min_count"),
-        trigger_window=params.get("window_minutes"),
-        priority=params.get("priority", 50),
-        is_active=False,
-        metadata=metadata,
-    )
-
-    for i, rule_data in enumerate(rules_payload):
-        Rule.objects.create(
-            parent=ruleset,
-            name=rule_data.get("name", ""),
-            index=i,
-            field_name=_normalize_field_name(rule_data.get("field", "")),
-            comparator=rule_data.get("comparator", "=="),
-            value=rule_data.get("value", ""),
-            value_type=rule_data.get("value_type", "str"),
-        )
+    ruleset = admin_security.create_inactive_proposal(
+        {"name": params["name"], "category": category,
+         "handlers": params.get("handlers", []), "rules": rules_payload,
+         "bundle_by": params.get("bundle_by", 4),
+         "bundle_minutes": params.get("bundle_minutes", 30),
+         "trigger_count": params.get("min_count"),
+         "trigger_window": params.get("window_minutes"),
+         "priority": params.get("priority", 50),
+         "delete_on_resolution": params.get("delete_on_resolution") is True},
+        metadata={"reasoning": params["reasoning"]})
+    ruleset.metadata.update({"llm_proposed": True, "occurrence_count": 1})
+    ruleset.save(update_fields=["metadata", "modified"])
+    metadata = ruleset.metadata
 
     delete_note = ""
     if metadata.get("delete_on_resolution"):
@@ -1170,7 +1183,7 @@ def _tool_create_rule(params):
         f"I've detected a recurring pattern and propose a new rule:\n\n"
         f"**Name**: {params['name']}\n"
         f"**Category**: {category}\n"
-        f"**Handler**: {handler}\n"
+        f"**Handlers**: {len(params.get('handlers') or [])} governed action(s)\n"
         f"{threshold_note}"
         f"{delete_note}"
         f"**Reasoning**: {params['reasoning']}"
@@ -1182,13 +1195,18 @@ def _tool_create_rule(params):
             "label": f"Approve rule proposal \"{params['name']}\"?",
             "context": {
                 "target": {"model": "incident.RuleSet", "pk": ruleset.pk},
+                "ruleset": rule_validation.ruleset_payload(ruleset),
+                "expected_modified": ruleset.modified.isoformat(),
+                "confirm": f"ACTIVATE RULESET {ruleset.pk}",
+                "confirm_catch_all": f"ACTIVATE CATCH-ALL RULESET {ruleset.pk}",
+                "deny_confirm": f"DELETE RULESET {ruleset.pk}",
             },
         }
     }
     note = _append_ticket_note(ticket, note_text)
     if note:
-        note.metadata = action_note_meta
-        note.save(update_fields=["metadata"])
+        from mojo.apps.incident.handlers import ticket_actions
+        ticket_actions.bind_action_note(note, action_note_meta)
 
     return {"ok": True, "ruleset_id": ruleset.pk, "ticket_id": ticket.pk}
 
@@ -1215,7 +1233,9 @@ def _tool_update_rule_memory(params):
         updated.append("agent_prompt")
 
     if updated:
-        ruleset.save(update_fields=["metadata"])
+        # Memory/prompt changes invalidate any pending approval card that was
+        # bound to this RuleSet aggregate.
+        ruleset.save(update_fields=["metadata", "modified"])
 
     return {"ok": True, "ruleset_id": ruleset.pk, "updated": updated}
 
@@ -1332,16 +1352,26 @@ def _tool_request_approval(params):
         f"Requesting approval: {params['label']}\n\nReasoning: {params['reasoning']}",
     )
     if note:
-        note.metadata = action_meta
-        note.save(update_fields=["metadata"])
+        from mojo.apps.incident.handlers import ticket_actions
+        ticket_actions.bind_action_note(note, action_meta)
 
     return {"ok": True, "ticket_id": ticket.pk, "note_id": note.pk if note else None}
 
 
 def _tool_suggest_rule_update(params):
     from mojo.apps.incident.models import RuleSet, Ticket
+    from mojo.apps.incident.services import rule_validation
 
     ruleset = RuleSet.objects.get(pk=params["ruleset_id"])
+    try:
+        replacement = rule_validation.ruleset_payload(ruleset)
+        replacement["rules"] = params["proposed_rules"]
+        replacement["is_active"] = False
+        # Pre-validation means an approval card can never carry an arbitrary
+        # field, handler or unsafe regular expression into the write path.
+        rule_validation.normalize_ruleset(replacement)
+    except rule_validation.RuleValidationError as error:
+        return {"ok": False, "error": str(error), "error_code": error.code}
 
     # Dedup: check for an existing open update-suggestion ticket for this ruleset
     existing_ticket = (
@@ -1409,8 +1439,9 @@ def _tool_suggest_rule_update(params):
             "label": f"Update RuleSet \"{ruleset.name}\"?",
             "context": {
                 "target": {"model": "incident.RuleSet", "pk": ruleset.pk},
-                "proposed_rules": params["proposed_rules"],
-                "current_rules": current_rules,
+                "ruleset": replacement,
+                "expected_modified": ruleset.modified.isoformat(),
+                "confirm": f"REPLACE RULESET {ruleset.pk}",
             },
         }
     }
@@ -1424,8 +1455,8 @@ def _tool_suggest_rule_update(params):
     )
     note = _append_ticket_note(ticket, note_text)
     if note:
-        note.metadata = action_note_meta
-        note.save(update_fields=["metadata"])
+        from mojo.apps.incident.handlers import ticket_actions
+        ticket_actions.bind_action_note(note, action_note_meta)
 
     return {"ok": True, "ticket_id": ticket.pk, "ruleset_id": ruleset.pk}
 
@@ -1625,7 +1656,12 @@ def _build_active_rules_section(category):
         conditions = ", ".join(
             f"{r.field_name} {r.comparator} {r.value}" for r in rules
         ) or "no conditions"
-        lines.append(f"- **RuleSet #{rs.pk}** \"{rs.name}\" — handler: {rs.handler}")
+        from mojo.apps.incident.services import rule_validation
+        summary = rule_validation.validation_summary(rs)
+        handler_types = [row["type"] for row in summary.get("handlers", [])]
+        rendered = ", ".join(handler_types) if handler_types else "legacy/redacted"
+        lines.append(
+            f"- **RuleSet #{rs.pk}** \"{rs.name}\" — governed handlers: {rendered}")
         lines.append(f"  Conditions: {conditions}")
     return "\n".join(lines)
 

@@ -188,6 +188,16 @@ class TicketNote(models.Model, MojoModel):
 
         if not self.parent_id:
             raise me.ValueException("Ticket note parent is required")
+        if not created and set(changed_fields) & {
+                "metadata", "note", "parent", "parent_id", "group", "group_id"}:
+            old_metadata = changed_fields.get("metadata")
+            candidates = (old_metadata, self.metadata)
+            for metadata in candidates:
+                action = metadata.get("action") if isinstance(metadata, dict) else None
+                if (isinstance(action, dict) and
+                        action.get("schema") == "incident.ticket_approval"):
+                    raise me.ValueException(
+                        "bound approval proposal notes are immutable")
         self.group_id = self.parent.group_id
 
     def on_rest_saved(self, changed_fields, created):

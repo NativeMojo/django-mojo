@@ -30,24 +30,23 @@ is idempotent: a Ticket already linked to Maestro updates the same item rather
 than creating another. A missing deployment key or malformed selector returns
 400 before enqueueing.
 
-## Rules handlers
+## Governed RuleSet reporting
 
-Report an Incident directly, without a Ticket:
+The governed RuleSet schema no longer accepts the direct `maestro://` handler.
+A legacy policy containing it fails validation and does not dispatch; replace
+that policy before activation.
 
-```text
-maestro://
-maestro://?board=3
+Create/reuse a local Ticket and report that Ticket by including a typed handler
+in the complete Admin Security RuleSet payload:
+
+```json
+{"type": "ticket", "priority": 8, "maestro": true}
+{"type": "ticket", "priority": 8, "board_id": 3}
 ```
 
-Create/reuse a local Ticket and also report it:
-
-```text
-ticket://?priority=8&maestro=1
-ticket://?priority=8&board=3
-```
-
-Plain `ticket://?priority=8` stays local-only. `maestro=1` selects the server
-default; presence of `board` opts into Maestro and selects that remote board.
+A typed `ticket` without either option stays local-only. `maestro: true` selects
+the server default; `board_id` opts into Maestro and selects that remote board.
+The two options are mutually exclusive.
 
 ## Item links
 

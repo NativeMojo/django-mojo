@@ -482,7 +482,7 @@ and deletes terminal rows older than 30 days. Correctness never depends on it;
 
 ## Built-in mutating tools and their Admin twins
 
-59 built-in tools declare `mutates=True`. Every one is gated. The extra gates
+60 built-in tools declare `mutates=True`. Every one is gated. The extra gates
 mirror whatever the visual Admin endpoint that performs the same operation
 requires — so a tool is never easier to reach through chat than through the
 portal.
@@ -493,7 +493,8 @@ portal.
 | `block_ip`, `unblock_ip`, `whitelist_ip`, `unwhitelist_ip` | security | `manage_security` | `incident/rest/ipset.py` — RestMeta CRUD | — |
 | `update_incident`, `bulk_update_incidents`, `merge_incidents` | security | `manage_security` | `incident/rest/event.py` — RestMeta CRUD | — |
 | `create_ticket`, `update_ticket`, `add_ticket_note` | security | `manage_security` | `incident/rest/ticket.py` — RestMeta CRUD | — |
-| `create_rule`, `add_rule_condition`, `update_ruleset`, `delete_ruleset`, `delete_rule` | security | `manage_security` | `incident/rest/event.py` ruleset/rule — RestMeta CRUD | — |
+| `create_rule`, `update_ruleset`, `delete_ruleset`, `manage_security_recommendation` | security | `manage_security`, `security` | `incident/rest/admin_security.py` governed action authority | `fresh_auth_seconds=600`, preview, bound object revision/confirmation; recommendation preview binds the frozen target scope |
+| `add_rule_condition`, `delete_rule` | security | `manage_security`, `security` | Retired compatibility tools; aggregate-only Admin Security has no partial-write twin | `fresh_auth_seconds=600`; always returns `full_replacement_required` |
 | `cancel_job`, `retry_job`, `run_job`, `run_scheduled_task_now` | jobs | `manage_jobs` | `jobs/rest/control.py` — `requires_global_perms('manage_jobs','jobs')` | — |
 | `create_scheduled_task`, `update_scheduled_task`, `delete_scheduled_task` | jobs | `manage_jobs` | `jobs/rest/scheduled_task.py` — RestMeta CRUD | — |
 | `create_group`, `invite_to_group` | groups | `manage_groups` | `account/rest/group.py` — RestMeta CRUD + `group/member/invite` | — |

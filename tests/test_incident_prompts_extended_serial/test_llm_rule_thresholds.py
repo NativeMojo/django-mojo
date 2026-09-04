@@ -12,6 +12,19 @@ from testit import helpers as th
 FLOW_CATEGORY = "maestro_1124_threshold_flow"
 
 
+def _dispatch_as(user, dispatch, *args):
+    from objict import objict
+    from mojo.models.rest import ACTIVE_REQUEST
+
+    token = ACTIVE_REQUEST.set(objict(
+        user=user, bearer="bearer", api_key=None, META={}, method="POST"))
+    try:
+        with mock.patch("mojo.apps.account.services.fresh_auth.require_fresh"):
+            return dispatch(*args)
+    finally:
+        ACTIVE_REQUEST.reset(token)
+
+
 def _cleanup_categories(categories):
     from mojo.apps.incident.models import Event, Incident, RuleSet, Ticket
 
@@ -23,16 +36,30 @@ def _cleanup_categories(categories):
 
 @th.django_unit_test("LLM-proposed thresholds persist and govern handler firing")
 def test_llm_rule_thresholds(opts):
+    from django.contrib.auth import get_user_model
     from mojo.apps.incident.handlers.llm_agent import _tool_create_rule
     from mojo.apps.incident.handlers.ticket_actions import dispatch_action
     from mojo.apps.incident.models import Event, Incident, RuleSet, Ticket, TicketNote
 
     _cleanup_categories([FLOW_CATEGORY])
 
+    User = get_user_model()
+    operator = User.objects.filter(is_superuser=True, is_active=True).first()
+    if operator is None:
+        operator = User.objects.create_user(
+            username="maestro_1124_operator",
+            email="maestro_1124_operator@example.test",
+            password="Maestro1124##1",
+            is_superuser=True,
+            is_active=True,
+        )
+
     result = _tool_create_rule({
         "name": "Maestro #1124 threshold flow",
         "category": FLOW_CATEGORY,
-        "handler": "job://maestro_1124.handler",
+        "handlers": [
+            {"type": "notify", "permission": "manage_security"},
+        ],
         "rules": [{
             "name": "Match test category",
             "field": "category",
@@ -72,12 +99,14 @@ def test_llm_rule_thresholds(opts):
         f"Approval note must show the bundle window, got {action_note.note!r}")
 
     response_meta = {
+        "proposal_note_id": action_note.pk,
+        "proposal_digest": action_note.metadata["action"]["proposal_digest"],
         "handler": "incident.rule_approval",
         "action": "approve",
-        "context": {"target": {"model": "incident.RuleSet", "pk": ruleset.pk}},
     }
     th.assert_true(
-        dispatch_action(ticket, action_note, response_meta),
+        _dispatch_as(
+            operator, dispatch_action, ticket, action_note, response_meta),
         "The proposal approval action should activate the persisted RuleSet")
     ruleset.refresh_from_db()
     th.assert_true(ruleset.is_active, "Approved LLM proposal should be active")

@@ -1193,7 +1193,11 @@ def test_handler_chaining(opts):
         category="chain_test",
         priority=1,
         match_by=0,
-        handler="job://handler1,email://admin@example.com,notify://security-team"
+        handler=(
+            "email://perm@manage_security,"
+            "sms://perm@manage_security,"
+            "notify://perm@manage_security"
+        )
     )
 
     Rule.objects.create(
@@ -1211,7 +1215,7 @@ def test_handler_chaining(opts):
     )
     event.sync_metadata()
 
-    # Test that run_handler processes all three handlers
+    # Test that run_handler processes all three governed handlers.
     result = ruleset.run_handler(event)
     assert result is True, "Chained handlers should return True"
 
@@ -1272,7 +1276,8 @@ def test_handler_ticket_creation(opts):
     event.incident = incident
     event.save(update_fields=["incident"])
 
-    # Publish handler job via the real job queue (same as RuleSet.run_handler)
+    # An old node's unversioned durable payload must fail closed even when the
+    # handler text itself happens to be in the current allowlist.
     jobs.publish(
         "mojo.apps.incident.handlers.event_handlers.execute_handler",
         {
@@ -1282,9 +1287,18 @@ def test_handler_ticket_creation(opts):
         },
         channel="default",
     )
+    legacy_executed = th.run_pending_jobs(channel="default")
+    assert legacy_executed >= 1, (
+        f"Expected the stale job to be consumed, got {legacy_executed}")
+    assert Ticket.objects.filter(category="ticket_test").count() == 0, (
+        "an unversioned durable handler must never execute")
+
+    # The RuleSet producer stamps the current governed job schema.
+    assert ruleset.run_handler(event, incident=incident) is True, (
+        "a validated RuleSet should enqueue its governed handler")
 
     # Execute pending jobs using the real calling convention: func(job)
-    executed = th.run_pending_jobs(channel="default")
+    executed = th.run_pending_jobs(channel="incident_handlers")
     assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
 
     # Check that ticket was created

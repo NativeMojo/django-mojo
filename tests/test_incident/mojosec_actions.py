@@ -323,8 +323,15 @@ def test_ttl_expiry_and_operator_reversal(opts):
         rec2 = MojoSecRecommendation.objects.get(case=case2)
         target2 = rec2.targets.get()
         th.assert_eq(target2.outcome, "applied", "reversal fixture must apply")
-        reversed_rec = mojosec_actions.reverse(
-            rec2, opts.action_approver, note="false positive")
+        manager = GeoLocatedIP.objects
+        with mock.patch.object(
+                manager, "select_for_update",
+                wraps=manager.select_for_update) as geo_lock:
+            reversed_rec = mojosec_actions.reverse(
+                rec2, opts.action_approver, note="false positive")
+        th.assert_true(
+            geo_lock.called,
+            "reversal must lock GeoLocatedIP before ownership proof and unblock")
         th.assert_eq(reversed_rec.state, "reversed",
                      "operator reversal must land the reversed state")
         geo = GeoLocatedIP.objects.get(ip_address=REVERSE_IP)
@@ -412,6 +419,59 @@ def test_approval_freezes_the_target_set(opts):
 
 
 @th.django_unit_test()
+def test_sweep_recovers_stranded_approved_work(opts):
+    from mojo.apps.incident.models import MojoSecRecommendation
+    from mojo.apps.incident.services import mojosec_actions
+    from mojo.helpers import dates
+
+    case = _case(opts, sources=[SCANNER_IP], key_suffix="recover",
+                 resource_id="vhost:recover")
+    recommendation, _ = mojosec_actions.propose(
+        case, MojoSecRecommendation.ACTION_BLOCK_IP,
+        "repeated_impossible_paths", "recover", "high", [SCANNER_IP])
+    MojoSecRecommendation.objects.filter(pk=recommendation.pk).update(
+        state="approved", modified=dates.utcnow() - datetime.timedelta(minutes=5))
+    with mock.patch.object(mojosec_actions, "_propose_from_cases", return_value=0), \
+            mock.patch.object(mojosec_actions, "_queue_execution") as queued:
+        result = mojosec_actions.action_sweep()
+    th.assert_true(result["retried"] >= 1, result)
+    th.assert_true(any(call.args[0].pk == recommendation.pk
+                       for call in queued.call_args_list),
+                   "stranded approved work was not requeued")
+
+
+@th.django_unit_test()
+def test_failed_reversal_remains_nonterminal_and_retryable(opts):
+    from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident.models import MojoSecRecommendation
+    from mojo.apps.incident.services import mojosec_actions
+
+    case = _case(opts, sources=[REVERSE_IP], key_suffix="reverse-failure",
+                 resource_id="vhost:reverse-failure")
+    recommendation, _ = mojosec_actions.propose(
+        case, MojoSecRecommendation.ACTION_BLOCK_IP,
+        "repeated_impossible_paths", "reverse failure", "high", [REVERSE_IP])
+    target = recommendation.targets.get()
+    geo = GeoLocatedIP.geolocate(REVERSE_IP, auto_refresh=False)
+    geo.block(reason=f"mojosec:rec:{recommendation.pk}", ttl=600,
+              broadcast=False)
+    target.outcome = "applied"
+    target.save(update_fields=["outcome", "modified"])
+    recommendation.state = "executed"
+    recommendation.executed_count = 1
+    recommendation.save(update_fields=["state", "executed_count", "modified"])
+    with mock.patch.object(GeoLocatedIP, "unblock",
+                           side_effect=RuntimeError("fixture failure")):
+        result = mojosec_actions.reverse(
+            recommendation, opts.action_approver, note="retry me")
+    th.assert_eq(result.state, "executed",
+                 "partial reversal must not claim terminal success")
+    th.assert_eq(result.transitions.order_by("-id").first().transition,
+                 "reversal_incomplete",
+                 "partial reversal needs an explicit retryable transition")
+
+
+@th.django_unit_test()
 def test_block_handler_suppression_is_scoped_to_routed_categories(opts):
     from mojo.apps.account.models import GeoLocatedIP
     from mojo.apps.incident.handlers.event_handlers import BlockHandler
@@ -486,13 +546,23 @@ def test_block_handler_suppression_is_scoped_to_routed_categories(opts):
 def test_recommendation_rest_contract_and_permissions(opts):
     from mojo.decorators.limits import clear_rate_limits
     from mojo.apps.incident.models import MojoSecRecommendation
-    from mojo.apps.incident.services import mojosec_actions
+    from mojo.apps.incident.services import admin_security, mojosec_actions
 
     case = _case(opts, sources=[SECOND_IP], key_suffix="rest",
                  resource_id="vhost:5157")
     recommendation, _created = mojosec_actions.propose(
         case, MojoSecRecommendation.ACTION_BLOCK_IP,
         "repeated_impossible_paths", "rest fixture", "high", [SECOND_IP])
+    governed = admin_security.overview({
+        "sections": "recommendations",
+        "recommendation_id": recommendation.pk,
+    })["sections"]["recommendations"]["data"][0]
+    th.assert_eq(governed["targets"][0]["ip"], SECOND_IP,
+                 "governed review must show the exact frozen target scope")
+    th.assert_true("last_error" not in governed["targets"][0],
+                   "governed review must redact execution exceptions")
+    th.assert_true("prior_reason" not in governed["targets"][0],
+                   "governed review must redact prior free-form block reasons")
 
     opts.client.logout()
     clear_rate_limits(ip="127.0.0.1", key="login")
@@ -535,15 +605,17 @@ def test_recommendation_rest_contract_and_permissions(opts):
     approved = opts.client.post(
         "/api/incident/mojosec/recommendation-action",
         {"recommendation_id": recommendation.pk, "action": "approve",
+         "expected_modified": recommendation.modified.isoformat(),
+         "confirm": f"APPROVE RECOMMENDATION {recommendation.pk}",
          "note": "ok"})
     th.assert_eq(approved.status_code, 200,
                  f"manage_security may approve: {approved.response}")
     th.assert_true(approved.response.data["state"] in
                    ("approved", "executing", "executed"),
                    "approval must advance the lifecycle")
-    th.assert_eq(approved.response.data["approved_by"],
-                 opts.action_approver.username,
-                 "the approver identity must be recorded and exposed")
+    recommendation.refresh_from_db()
+    th.assert_eq(recommendation.approved_by_id, opts.action_approver.pk,
+                 "the approver identity must be recorded durably")
 
     registered = opts.client.post(
         "/api/incident/mojosec/deployment",

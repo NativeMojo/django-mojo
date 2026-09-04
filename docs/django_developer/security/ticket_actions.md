@@ -23,8 +23,74 @@ A `TicketNote` whose `metadata` carries an `action` block:
     "type": "approval",
     "handler": "incident.rule_approval",
     "label": "Approve rule proposal?",
+    "schema": "incident.ticket_approval",
+    "schema_version": 1,
+    "proposal_note_id": 73,
+    "proposal_digest": "28e3fb760c71d0d2f4247688c8bc16d354699fccfdcec1f1ba9bd51bed0b959b",
+    "state": "pending",
+    "resolved": false,
     "context": {
-      "target": {"model": "incident.RuleSet", "pk": 42}
+      "target": {"model": "incident.RuleSet", "pk": 42},
+      "ruleset": {
+        "name": "SSH brute force blocker",
+        "category": "auth:failed",
+        "priority": 50,
+        "bundle_minutes": 30,
+        "bundle_by": 4,
+        "bundle_by_rule_set": true,
+        "match_by": 0,
+        "trigger_count": 10,
+        "trigger_window": 5,
+        "retrigger_every": null,
+        "handlers": [
+          {"type": "block", "ttl_seconds": 3600, "fleet_wide": true}
+        ],
+        "delete_on_resolution": false,
+        "is_active": false,
+        "rules": [
+          {"name": "High severity", "field": "level", "operator": ">=", "value": "8", "value_type": "int", "is_required": false}
+        ]
+      },
+      "expected_modified": "2026-09-04T17:18:19.123456+00:00",
+      "confirm": "ACTIVATE RULESET 42",
+      "confirm_catch_all": "ACTIVATE CATCH-ALL RULESET 42",
+      "deny_confirm": "DELETE RULESET 42"
+    },
+    "review": {
+      "proposal": {
+        "target": {"model": "incident.RuleSet", "pk": 42},
+        "ruleset": {
+          "name": "SSH brute force blocker",
+          "category": "auth:failed",
+          "priority": 50,
+          "bundle_minutes": 30,
+          "bundle_by": 4,
+          "bundle_by_rule_set": true,
+          "match_by": 0,
+          "trigger_count": 10,
+          "trigger_window": 5,
+          "retrigger_every": null,
+          "handlers": [
+            {"type": "block", "ttl_seconds": 3600, "fleet_wide": true}
+          ],
+          "delete_on_resolution": false,
+          "is_active": false,
+          "rules": [
+            {"name": "High severity", "field": "level", "operator": ">=", "value": "8", "value_type": "int", "is_required": false}
+          ]
+        },
+        "expected_modified": "2026-09-04T17:18:19.123456+00:00",
+        "confirm": "ACTIVATE RULESET 42",
+        "confirm_catch_all": "ACTIVATE CATCH-ALL RULESET 42",
+        "deny_confirm": "DELETE RULESET 42"
+      },
+      "target": {"model": "incident.RuleSet", "pk": 42},
+      "revision": "2026-09-04T17:18:19.123456+00:00",
+      "confirmation": {
+        "approve": "ACTIVATE RULESET 42",
+        "approve_catch_all": "ACTIVATE CATCH-ALL RULESET 42",
+        "deny": "DELETE RULESET 42"
+      }
     }
   }
 }
@@ -36,17 +102,31 @@ A `TicketNote` whose `metadata` carries an `action` block:
 | `handler` | Registered handler name, `"app.handler_name"` scoped |
 | `label` | Human-readable question the UI shows |
 | `context` | Handler-specific payload (model refs, IPs, proposed rules) |
-| `resolved` | Stamped `true` by the dispatcher after a successful dispatch |
+| `schema`, `schema_version` | Durable action contract (`incident.ticket_approval`, version 1) |
+| `proposal_note_id` | Immutable identity of the saved server-authored proposal note |
+| `proposal_digest` | SHA-256 of the canonical complete `review`; clients copy it back rather than recomputing it |
+| `review.proposal` | Complete bounded JSON-safe copy of the server-authored `context`, including every action parameter or complete RuleSet aggregate the operator reviews |
+| `review.target`, `review.revision`, `review.confirmation` | Convenience projections for generic approval-card rendering |
+| `state` | `pending`; durably `claimed` before execution; `resolved` after known success; or `unknown` after an ambiguous failure |
+| `resolved` | Stamped `true` only after a successful dispatch |
+
+Action producers save the note, then call `bind_action_note()` to stamp these
+server-owned fields. Review data is limited to 64 KiB of canonical JSON, eight
+levels of nesting, 64 entries per array/object, 4096 characters per string,
+and 80 characters per key. Non-JSON values and non-finite numbers are refused.
+Rule approvals additionally require a complete `context.ruleset`; its canonical
+field is `match_by`, not `match_type`, and RuleSet has no persisted
+`description`. A proposal lacking the binding fields is not executable.
 
 Tickets created around an approval also carry `metadata.requires_approval:
 true` for UI filtering.
 
 ## The response note
 
-The UI (or any REST caller with `manage_security`) answers by creating a new
-note whose `metadata` carries an `action_response`, copying `handler` and
-`context` from the action note — the backend does not have to look up the
-original:
+The UI answers by creating a new note whose `metadata` carries an
+`action_response`. Its object must contain exactly the pending proposal note
+ID, proposal digest, handler name, and the operator's choice; the server reloads
+context from that exact proposal note:
 
 ```
 POST /api/incident/ticket/note
@@ -55,9 +135,10 @@ POST /api/incident/ticket/note
   "note": "Approved",
   "metadata": {
     "action_response": {
+      "proposal_note_id": 73,
+      "proposal_digest": "28e3fb760c71d0d2f4247688c8bc16d354699fccfdcec1f1ba9bd51bed0b959b",
       "handler": "incident.rule_approval",
-      "action": "approve",
-      "context": {"target": {"model": "incident.RuleSet", "pk": 42}}
+      "action": "approve"
     }
   }
 }
@@ -67,42 +148,62 @@ POST /api/incident/ticket/note
 `action_response` and dispatches it **instead of** invoking the LLM — a
 structured response never triggers a conversational reply.
 
-Note the trust boundary: the dispatcher validates the **handler name**
-against a pending action note, but the `context` it executes is the one on
-the **response** note — it does not re-read the context stored on the action
-note. The responder (an admin holding `manage_security`) is trusted to copy
-it verbatim; UIs must copy the action note's `context` unchanged, never
-compose their own.
+The response cannot replace the target, revision, confirmation, or proposed
+policy. Extra keys (including response-side `context`) invalidate the response.
+The digest binds the card to the complete displayed review, but the
+server-stored `context` remains the execution authority; the dispatcher
+rebuilds `review` from it and verifies both stored and echoed digests.
 
 ## Dispatch flow and guards
 
 `dispatch_action(ticket, note, response_meta)`:
 
-1. **Handler must be registered** — unknown names are logged and rejected.
-2. **A matching unresolved action note must exist** on the ticket for that
-   handler — a response cannot invoke a handler that has no pending proposal
-   on the ticket. Only the handler **name** is bound by this check; the
-   executed `context` comes from the response note (see the trust boundary
-   above), so approval authority rests on the `manage_security` gate, not on
-   the dispatcher comparing contexts.
+1. **The response is bound** — its four-key shape is exact, the response note
+   belongs to the ticket, and the named handler is registered.
+2. **The ticket and exact proposal are locked** — `select_for_update()` locks
+   the ticket and `proposal_note_id` on that ticket. The proposal's schema,
+   version, ID, handler, digest, and derived complete `review` must match its
+   stored context.
 3. **Terminal tickets are skipped** — a ticket already `closed`/`resolved`
-   dispatches nothing (double-click / replay guard, alongside the
-   `resolved` stamp on the action note).
-4. The handler runs; on success the action note is stamped
-   `action.resolved = true`. Handler exceptions are logged and reported as a
-   failed dispatch — never propagated into the note save.
+   cannot execute an unresolved proposal.
+4. **Global interactive authority is re-proved at dispatch** — the note must
+   carry its active request, the actor must hold global `manage_security` or
+   `security`, key-backed sessions are refused, and authentication must be
+   within 600 seconds.
+5. **The claim commits before side effects** — `_claim_dispatch()` uses an
+   outermost `transaction.atomic(durable=True)` to stamp `state="claimed"`
+   before the handler runs. The claim records response/actor identity plus a
+   stable `dispatch_key`: SHA-256 over the action schema/version, proposal-note
+   ID, proposal digest, and approve/deny choice.
+6. **Execution and finalization are separate** — the handler runs only after
+   that claim transaction commits. A second durable transaction records known
+   success as `state="resolved"`, `resolved=true`, and an auditable resolution
+   carrying the same dispatch key.
+7. **Ambiguity never reopens the proposal** — a handler refusal or exception is
+   recorded as `state="unknown"` with its dispatch key and safe failure code.
+   A crash after the side effect or a failed finalization can leave the durable
+   `claimed` state. Neither `unknown` nor `claimed` is made pending or replayed
+   automatically; both require operator reconciliation.
+
+The proposal-note ID and digest identify what was reviewed, while the choice
+completes the stable dispatch identity. A same-choice retry after known success
+observes the recorded resolution without redispatching. A retry while the
+identity is `claimed`/`unknown` reports no success and performs no side effect;
+a conflicting choice has a different dispatch key and is rejected.
 
 ## Built-in handlers
 
 | Handler | Approve | Deny |
 |---------|---------|------|
-| `incident.rule_approval` | `RuleSet.is_active = True`, ticket `resolved`. Refuses targets not flagged `metadata.llm_proposed`; an already-active ruleset is a no-op with a note. | RuleSet **deleted**, ticket `closed` |
-| `incident.rule_update` | Replace the target RuleSet's child `Rule` rows with `context.proposed_rules`, ticket `resolved` | No changes, ticket `closed` |
-| `incident.block_confirm` | Validate `context.ip` (must parse as an IP address), `IPSet.block_ip(ip, reason)`, ticket `resolved` | Ticket `closed` |
+| `incident.rule_approval` | Governed `ruleset.activate` against the stored revision/confirmations, ticket `resolved`. Refuses targets not flagged `metadata.llm_proposed`. | Governed, revision-bound RuleSet delete; ticket `closed` |
+| `incident.rule_update` | Governed complete inactive replacement from stored `context.ruleset`; ticket `closed` so activation remains a separate review | No changes, ticket `closed` |
+| `incident.block_confirm` | Validate and execute the bounded manual block through `mojosec_actions`; resolve only for `applied` or verifiably `pre_existing`, otherwise leave open | Ticket `closed` |
 | `incident.escalate` | Email `context.message` to `context.targets` (same target grammar as `notify://` handlers), ticket `resolved` | Ticket `closed` |
 
-Every outcome — including failure paths like "ruleset was deleted before
-approval" — is written back to the thread as an `[LLM Agent]` system note.
+Built-in handlers write their operator-visible outcomes — including failure
+paths such as "ruleset was deleted before approval" — back to the thread as an
+`[LLM Agent]` system note. Responses rejected before handler dispatch are
+logged and leave the proposal pending.
 
 ## Model references
 
@@ -152,9 +253,10 @@ The LLM security agent composes actions through two tools (see the
 - **`suggest_rule_update(ruleset_id, proposed_rules, reasoning)`** — when an
   existing active rule almost covers a pattern, the agent proposes widening
   it rather than creating a duplicate: a ticket with an
-  `incident.rule_update` action carrying the proposed and current rules (for
-  a diff view). Deduplicated — an open update-suggestion ticket for the same
-  ruleset collects follow-up notes instead of spawning a new one.
+  `incident.rule_update` action carrying a prevalidated complete inactive
+  replacement, the source revision, and typed confirmation. Deduplicated — an
+  open update-suggestion ticket for the same ruleset collects follow-up notes
+  instead of spawning a new one.
 
 `create_rule` proposals follow the same shape automatically: the RuleSet is
 created `is_active=False` and its review ticket's first note carries an
@@ -179,12 +281,16 @@ LLM; a structured `action_response` always dispatches instead.
 ## Security notes
 
 - Creating notes requires `manage_security`/`security` (`TicketNote`
-  `SAVE_PERMS`) — the approval surface is admin-gated.
+  `SAVE_PERMS`), and dispatch separately requires a fresh, global, interactive
+  grant. A programmatic note without `active_request` cannot execute an action.
 - Model resolution is whitelist-only. `incident.rule_approval` additionally
   refuses any RuleSet not flagged `metadata.llm_proposed`, so *that* handler
-  cannot activate an arbitrary ruleset. `incident.rule_update` has **no**
-  `llm_proposed` guard — it applies the responder-supplied
-  `context.proposed_rules` to whichever whitelisted RuleSet the response
-  targets; the `manage_security` gate is the effective control there.
-- Approvals are idempotent at three layers: the `resolved` stamp, the
-  terminal-status skip, and per-handler no-ops ("already active").
+  cannot activate an arbitrary ruleset. `incident.rule_update` has no
+  `llm_proposed` guard, but both target and complete replacement are bound to
+  the server-authored proposal and stale revisions fail closed.
+- Approvals are bound to an immutable proposal-note ID and serialized under
+  row locks. The stable proposal/digest/choice identity is durably claimed
+  before side effects; same-choice retries converge only after recorded
+  success, conflicting choices fail closed, and ambiguous outcomes remain
+  non-replayable for operator reconciliation. Every RuleSet action also binds
+  the aggregate revision.

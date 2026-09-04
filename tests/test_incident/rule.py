@@ -77,6 +77,16 @@ def test_rule_check(opts):
     )
     assert rule.check_rule(event) is False, "Invalid type conversion should return False"
 
+    # Malformed legacy data is inert; it cannot interrupt Event publication.
+    malformed = Rule(
+        comparator="regex", field_name="message", value="(", value_type="str")
+    assert malformed.check_rule(event) is False, \
+        "Malformed legacy regex should fail as no-match"
+    invalid_operator = Rule(
+        comparator="__import__", field_name="severity", value="1", value_type="int")
+    assert invalid_operator.check_rule(event) is False, \
+        "Unknown legacy comparators should fail as no-match"
+
 
 @th.django_unit_test()
 def test_ruleset_check_all_match(opts):
@@ -349,8 +359,9 @@ def test_ruleset_run_handler(opts):
         handler="job://incident_handler?severity=high&notify=true"
     )
 
-    # Test job handler
-    assert ruleset_job.run_handler(event) is True, "Job handler should return True"
+    # Arbitrary stored jobs are legacy policy code and fail closed.
+    assert ruleset_job.run_handler(event) is False, (
+        "An arbitrary job handler must not dispatch")
 
     # Create RuleSet with email handler
     ruleset_email = RuleSet.objects.create(
@@ -360,8 +371,9 @@ def test_ruleset_run_handler(opts):
         handler="email://admin@example.com"
     )
 
-    # Test email handler
-    assert ruleset_email.run_handler(event) is True, "Email handler should return True"
+    # Direct recipients are outside the governed permission-only schema.
+    assert ruleset_email.run_handler(event) is False, (
+        "A direct-recipient email handler must not dispatch")
 
     # Create RuleSet with notify handler
     ruleset_notify = RuleSet.objects.create(
@@ -371,14 +383,24 @@ def test_ruleset_run_handler(opts):
         handler="notify://security-team"
     )
 
-    # Test notify handler
-    assert ruleset_notify.run_handler(event) is True, "Notify handler should return True"
+    assert ruleset_notify.run_handler(event) is False, (
+        "A direct-recipient notification handler must not dispatch")
+
+    # A typed, permission-scoped handler remains dispatchable.
+    ruleset_governed = RuleSet.objects.create(
+        name="Governed Notify RuleSet",
+        category="testing",
+        priority=4,
+        handler="notify://perm@manage_security",
+    )
+    assert ruleset_governed.run_handler(event) is True, (
+        "A governed notification handler should dispatch")
 
     # Create RuleSet with invalid handler
     ruleset_invalid = RuleSet.objects.create(
         name="Invalid Handler RuleSet",
         category="testing",
-        priority=4,
+        priority=5,
         handler="invalid://handler"
     )
 
@@ -389,7 +411,7 @@ def test_ruleset_run_handler(opts):
     ruleset_none = RuleSet.objects.create(
         name="No Handler RuleSet",
         category="testing",
-        priority=5,
+        priority=6,
         handler=None
     )
 

@@ -50,11 +50,13 @@ will receive terminal authorization failures for old work.
 
 ## Routing
 
-`board` always means a remote Maestro board id in the configured ApiKey's
-workspace. It is never a local model primary key.
+The public governed RuleSet field `board_id` always means a remote Maestro board
+id in the configured ApiKey's workspace. It is never a local model primary key;
+the validator compiles it to the legacy handler query key `board`.
 
-- Omit `board` to use the integration's server-side default board.
-- Supply `board=3` to request Maestro board 3.
+- Set `maestro=True` to use the integration's server-side default board.
+- Supply `board_id=3` to request Maestro board 3. It is mutually exclusive with
+  `maestro=True`.
 - Maestro rejects missing/inactive defaults and inactive or cross-workspace
   overrides. django-mojo never guesses a replacement.
 - After creation, updates and comments address the remote item id, so a human
@@ -64,30 +66,23 @@ workspace. It is never a local model primary key.
 
 ### Incident only
 
-Use the rules handler when Maestro should be the workflow record and no local
-Ticket is needed:
-
-```text
-maestro://
-maestro://?board=3
-```
-
-The handler reports its associated Incident idempotently. A directly linked
-Incident is retained through resolution cleanup and age pruning, cannot be
-deleted until explicitly unlinked, and transfers its link through an
-unambiguous Incident merge.
+Direct `maestro://` RuleSet handlers are outside the governed schema. A legacy
+aggregate containing one is replacement-required and cannot dispatch. Existing
+direct Incident links remain readable and keep their retention/merge behavior,
+but new RuleSet policy should use the Ticket route below.
 
 ### Local Ticket plus Maestro
 
-Plain `ticket://` remains local-only. Opt into Maestro explicitly:
+Use a typed `ticket` handler. Omit both Maestro selectors for a local-only
+Ticket, or opt in explicitly:
 
-```text
-ticket://?priority=8&maestro=1
-ticket://?priority=8&board=3
+```python
+{"type": "ticket", "priority": 8, "maestro": True}
+{"type": "ticket", "priority": 8, "board_id": 3}
 ```
 
-`maestro=1` uses the default; `board=3` both opts in and selects the remote
-board. Rule-created Tickets inherit the Incident group. Existing unresolved
+`maestro=True` uses the default; `board_id=3` both opts in and selects the
+remote board. Rule-created Tickets inherit the Incident group. Existing unresolved
 Ticket dedupe is group-scoped; a recurring Incident reuses and pushes the
 eligible Ticket while recording the occurrence without reparenting it.
 
@@ -183,8 +178,9 @@ against an unpinned incompatible version.
 ## CloudWatch alarm routing
 
 CloudWatch SNS ingestion never calls Maestro directly. Configure an explicit
-`aws:cloudwatch` RuleSet with `ticket://?board=<id>` to create a local Ticket;
-the normal Ticket -> `MaestroItemLink` job path then creates or updates the
-remote item. Alarm recovery resolves the machine Incident and synchronizes a
-recovery note, but leaves Ticket/board closure to the human workflow. See
+`aws:cloudwatch` RuleSet with a typed `ticket` handler carrying `board_id` to
+create a local Ticket; the normal Ticket -> `MaestroItemLink` job path then
+creates or updates the remote item. Alarm recovery resolves the machine
+Incident and synchronizes a recovery note, but leaves Ticket/board closure to
+the human workflow. See
 [CloudWatch SNS alarm ingestion](../aws/cloudwatch.md#sns-alarm-ingestion).

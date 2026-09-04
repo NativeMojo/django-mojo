@@ -12,6 +12,44 @@ from testit import helpers as th
 from unittest.mock import patch
 
 
+def _dispatch_as(user, dispatch, *args):
+    """Exercise ticket dispatch with the interactive request it now requires."""
+    from objict import objict
+    from mojo.models.rest import ACTIVE_REQUEST
+    token = ACTIVE_REQUEST.set(objict(
+        user=user, bearer="bearer", api_key=None, META={}, method="POST"))
+    try:
+        with patch("mojo.apps.account.services.fresh_auth.require_fresh"):
+            return dispatch(*args)
+    finally:
+        ACTIVE_REQUEST.reset(token)
+
+
+def _bind_action_note(note):
+    from mojo.apps.incident.handlers.ticket_actions import bind_action_note
+    from mojo.apps.incident.models import RuleSet
+    from mojo.apps.incident.services import rule_validation
+
+    action = note.metadata["action"]
+    context = action["context"]
+    if (action["handler"] in (
+            "incident.rule_approval", "incident.rule_update") and
+            "ruleset" not in context):
+        target = context["target"]
+        context["ruleset"] = rule_validation.ruleset_payload(
+            RuleSet.objects.get(pk=target["pk"]))
+    return bind_action_note(note, note.metadata)
+
+
+def _action_response(action_note, action):
+    return {
+        "proposal_note_id": action_note.pk,
+        "proposal_digest": action_note.metadata["action"]["proposal_digest"],
+        "handler": action_note.metadata["action"]["handler"],
+        "action": action,
+    }
+
+
 def _claude_response(stop_reason, content):
     """Build a dict matching the Claude API response shape (model_dump output)."""
     return {
@@ -471,7 +509,7 @@ def test_llm_agent_create_rule_deduplicates_pending(opts):
     rule_payload = {
         "name": "Dedup test rule",
         "category": "llm_dedup_rule",
-        "handler": "block://?ttl=3600",
+        "handlers": [{"type": "block", "ttl_seconds": 3600, "fleet_wide": True}],
         "rules": [
             {"name": "Level high", "field": "level", "comparator": ">=", "value": "9", "value_type": "int"},
         ],
@@ -589,7 +627,7 @@ def test_llm_agent_create_rule_deduplicates_active(opts):
     rule_payload = {
         "name": "Duplicate proposal",
         "category": "llm_dedup_active",
-        "handler": "block://?ttl=3600",
+        "handlers": [{"type": "block", "ttl_seconds": 3600, "fleet_wide": True}],
         "rules": [
             {"name": "Level high", "field": "level", "comparator": ">=", "value": "9", "value_type": "int"},
         ],
@@ -669,7 +707,7 @@ def test_llm_agent_create_rule_deduplicates_variant(opts):
     rule_payload_1 = {
         "name": "Credential harvesting scan",
         "category": "llm_dedup_variant",
-        "handler": "block://?ttl=3600",
+        "handlers": [{"type": "block", "ttl_seconds": 3600, "fleet_wide": True}],
         "rules": [
             {"name": "Path shadow", "field": "path", "comparator": "contains", "value": "/etc/shadow"},
         ],
@@ -721,7 +759,7 @@ def test_llm_agent_create_rule_deduplicates_variant(opts):
     rule_payload_2 = {
         "name": "Config file harvesting",
         "category": "llm_dedup_variant",
-        "handler": "block://?ttl=3600",
+        "handlers": [{"type": "block", "ttl_seconds": 3600, "fleet_wide": True}],
         "rules": [
             {"name": "Path cred files", "field": "path", "comparator": "regex",
              "value": "/(etc|var)/(shadow|passwd)"},
@@ -813,7 +851,9 @@ def test_llm_ticket_approval_activates_rule(opts):
     Rule.objects.create(
         parent=ruleset, name="Path match", index=0,
         field_name="path", comparator="contains", value="/etc/shadow",
+        value_type="str",
     )
+    ruleset.refresh_from_db()
 
     ticket = Ticket.objects.create(
         title=f"[Rule Proposal] {ruleset.name}",
@@ -824,7 +864,7 @@ def test_llm_ticket_approval_activates_rule(opts):
         metadata={"llm_linked": True, "llm_enabled": True, "ruleset_id": ruleset.pk},
     )
 
-    TicketNote.objects.create(
+    action_note = TicketNote.objects.create(
         parent=ticket, user=user,
         note="[LLM Agent] I've detected a recurring pattern and propose a new rule.",
         metadata={
@@ -832,18 +872,19 @@ def test_llm_ticket_approval_activates_rule(opts):
                 "type": "approval",
                 "handler": "incident.rule_approval",
                 "label": "Approve rule?",
-                "context": {"target": {"model": "incident.RuleSet", "pk": ruleset.pk}},
+                "context": {
+                    "target": {"model": "incident.RuleSet", "pk": ruleset.pk},
+                    "expected_modified": ruleset.modified.isoformat(),
+                    "confirm": f"ACTIVATE RULESET {ruleset.pk}",
+                },
             }
         },
     )
+    _bind_action_note(action_note)
 
     # Dispatch the approval directly via the action system
     from mojo.apps.incident.handlers.ticket_actions import dispatch_action
-    response_meta = {
-        "handler": "incident.rule_approval",
-        "action": "approve",
-        "context": {"target": {"model": "incident.RuleSet", "pk": ruleset.pk}},
-    }
+    response_meta = _action_response(action_note, "approve")
 
     approval_note = TicketNote.objects.create(
         parent=ticket, user=user,
@@ -851,7 +892,7 @@ def test_llm_ticket_approval_activates_rule(opts):
         metadata={"action_response": response_meta},
     )
 
-    result = dispatch_action(ticket, approval_note, response_meta)
+    result = _dispatch_as(user, dispatch_action, ticket, approval_note, response_meta)
     assert result is True, "dispatch_action should return True on success"
 
     ruleset.refresh_from_db()
@@ -983,6 +1024,7 @@ def test_ticket_action_denial_deletes_rule(opts):
         parent=ruleset, name="Match", index=0,
         field_name="level", comparator=">=", value="9", value_type="int",
     )
+    ruleset.refresh_from_db()
     rs_pk = ruleset.pk
 
     ticket = Ticket.objects.create(
@@ -992,7 +1034,7 @@ def test_ticket_action_denial_deletes_rule(opts):
     )
 
     # Create the original action note (required for dispatch validation)
-    TicketNote.objects.create(
+    action_note = TicketNote.objects.create(
         parent=ticket, user=user,
         note="[LLM Agent] Proposing rule for approval",
         metadata={
@@ -1000,22 +1042,23 @@ def test_ticket_action_denial_deletes_rule(opts):
                 "type": "approval",
                 "handler": "incident.rule_approval",
                 "label": "Approve rule?",
-                "context": {"target": {"model": "incident.RuleSet", "pk": rs_pk}},
+                "context": {
+                    "target": {"model": "incident.RuleSet", "pk": rs_pk},
+                    "expected_modified": ruleset.modified.isoformat(),
+                    "deny_confirm": f"DELETE RULESET {rs_pk}",
+                },
             }
         },
     )
+    _bind_action_note(action_note)
 
-    response_meta = {
-        "handler": "incident.rule_approval",
-        "action": "deny",
-        "context": {"target": {"model": "incident.RuleSet", "pk": rs_pk}},
-    }
+    response_meta = _action_response(action_note, "deny")
     deny_note = TicketNote.objects.create(
         parent=ticket, user=user, note="Denied",
         metadata={"action_response": response_meta},
     )
 
-    result = dispatch_action(ticket, deny_note, response_meta)
+    result = _dispatch_as(user, dispatch_action, ticket, deny_note, response_meta)
     assert result is True, "dispatch_action should return True"
 
     assert not RuleSet.objects.filter(pk=rs_pk).exists(), \
@@ -1026,7 +1069,7 @@ def test_ticket_action_denial_deletes_rule(opts):
         f"Ticket should be closed after denial, got {ticket.status}"
 
 
-@th.django_unit_test("Action system: double approval is idempotent")
+@th.django_unit_test("Action system: exact proposal selection and retries are idempotent")
 def test_ticket_action_double_approval(opts):
     from mojo.apps.incident.models import RuleSet, Ticket, TicketNote
     from mojo.apps.incident.handlers.ticket_actions import dispatch_action
@@ -1048,6 +1091,7 @@ def test_ticket_action_double_approval(opts):
         handler="block://?ttl=3600", is_active=False,
         metadata={"llm_proposed": True},
     )
+    ruleset.refresh_from_db()
 
     ticket = Ticket.objects.create(
         title="[Rule Proposal] Double test",
@@ -1056,7 +1100,7 @@ def test_ticket_action_double_approval(opts):
     )
 
     # Create the original action note
-    TicketNote.objects.create(
+    action_note = TicketNote.objects.create(
         parent=ticket, user=user,
         note="[LLM Agent] Proposing rule for approval",
         metadata={
@@ -1064,37 +1108,187 @@ def test_ticket_action_double_approval(opts):
                 "type": "approval",
                 "handler": "incident.rule_approval",
                 "label": "Approve rule?",
-                "context": {"target": {"model": "incident.RuleSet", "pk": ruleset.pk}},
+                "context": {
+                    "target": {"model": "incident.RuleSet", "pk": ruleset.pk},
+                    "expected_modified": ruleset.modified.isoformat(),
+                    "confirm": f"ACTIVATE RULESET {ruleset.pk}",
+                    "confirm_catch_all": f"ACTIVATE CATCH-ALL RULESET {ruleset.pk}",
+                },
             }
         },
     )
+    _bind_action_note(action_note)
 
-    response_meta = {
-        "handler": "incident.rule_approval",
-        "action": "approve",
-        "context": {"target": {"model": "incident.RuleSet", "pk": ruleset.pk}},
-    }
+    decoy = RuleSet.objects.create(
+        name="Newer same-handler proposal", category="action_double_test",
+        handler="notify://perm@manage_security", is_active=False,
+        metadata={"llm_proposed": True},
+    )
+    decoy.refresh_from_db()
+    decoy_note = TicketNote.objects.create(
+        parent=ticket, user=user, note="[LLM Agent] Newer proposal",
+        metadata={
+            "action": {
+                "type": "approval",
+                "handler": "incident.rule_approval",
+                "label": "Approve newer rule?",
+                "context": {
+                    "target": {"model": "incident.RuleSet", "pk": decoy.pk},
+                    "expected_modified": decoy.modified.isoformat(),
+                    "confirm": f"ACTIVATE RULESET {decoy.pk}",
+                    "confirm_catch_all": f"ACTIVATE CATCH-ALL RULESET {decoy.pk}",
+                },
+            }
+        },
+    )
+    _bind_action_note(decoy_note)
+
+    response_meta = _action_response(action_note, "approve")
+    tampered_meta = dict(response_meta)
+    tampered_meta["proposal_digest"] = "0" * 64
+    tampered_note = TicketNote.objects.create(
+        parent=ticket, user=user, note="Approve tampered digest",
+        metadata={"action_response": tampered_meta},
+    )
+    refused = _dispatch_as(
+        user, dispatch_action, ticket, tampered_note, tampered_meta)
+    assert refused is False, (
+        "a response digest that does not bind the reviewed proposal must fail closed")
+    ruleset.refresh_from_db()
+    assert not ruleset.is_active, (
+        "a rejected digest must not mutate the proposal target")
 
     note1 = TicketNote.objects.create(
         parent=ticket, user=user, note="Approved",
         metadata={"action_response": response_meta},
     )
-    dispatch_action(ticket, note1, response_meta)
+    _dispatch_as(user, dispatch_action, ticket, note1, response_meta)
 
     ruleset.refresh_from_db()
     assert ruleset.is_active, "RuleSet should be active after first approval"
+    decoy.refresh_from_db()
+    assert not decoy.is_active, (
+        "the dispatcher must use the requested proposal ID, never the newest handler match")
 
-    # Second dispatch should be blocked — ticket is now resolved
+    # A retry observes the exact committed resolution without dispatching the
+    # mutation again.
     ticket.refresh_from_db()
     note2 = TicketNote.objects.create(
         parent=ticket, user=user, note="Approved again",
         metadata={"action_response": response_meta},
     )
-    result = dispatch_action(ticket, note2, response_meta)
-    assert result is False, "Second approval should be blocked (ticket already resolved)"
+    result = _dispatch_as(user, dispatch_action, ticket, note2, response_meta)
+    assert result is True, "Same-choice retry should be an idempotent success"
+
+    conflicting_meta = _action_response(action_note, "deny")
+    conflicting_note = TicketNote.objects.create(
+        parent=ticket, user=user, note="Denied after approval",
+        metadata={"action_response": conflicting_meta},
+    )
+    conflict = _dispatch_as(
+        user, dispatch_action, ticket, conflicting_note, conflicting_meta)
+    assert conflict is False, (
+        "a conflicting retry must not rewrite the committed approval decision")
 
     ruleset.refresh_from_db()
     assert ruleset.is_active, "RuleSet should still be active after second approval attempt"
+
+
+@th.django_unit_test(
+    "Action system: durable claims isolate ambiguous handler execution")
+def test_ticket_action_ambiguous_execution_stays_claimed(opts):
+    from django.contrib.auth import get_user_model
+    from django.db import connection
+    from mojo.apps.incident.handlers import ticket_actions
+    from mojo.apps.incident.models import Ticket, TicketNote
+
+    User = get_user_model()
+    Ticket.objects.filter(category="action_claim_test").delete()
+    user = User.objects.filter(is_superuser=True, is_active=True).first()
+    if not user:
+        user = User.objects.create_user(
+            username="action_claim_admin", email="action_claim@test.com",
+            password="testpass123", is_superuser=True, is_active=True,
+        )
+
+    ticket = Ticket.objects.create(
+        title="[Escalation] Durable claim test", status="open", priority=3,
+        category="action_claim_test",
+    )
+    action_note = TicketNote.objects.create(
+        parent=ticket, user=user, note="[LLM Agent] Escalation proposal",
+        metadata={
+            "action": {
+                "type": "approval",
+                "handler": "incident.escalate",
+                "label": "Escalate?",
+                "context": {
+                    "targets": ["manage_security"],
+                    "message": "Investigate the durable approval claim",
+                    "channel": "email",
+                },
+            }
+        },
+    )
+    _bind_action_note(action_note)
+    response_meta = _action_response(action_note, "approve")
+    response_note = TicketNote.objects.create(
+        parent=ticket, user=user, note="Approved",
+        metadata={"action_response": response_meta},
+    )
+
+    observations = []
+
+    def ambiguous_handler(*args):
+        action_note.refresh_from_db()
+        action = action_note.metadata["action"]
+        observations.append({
+            "in_atomic_block": connection.in_atomic_block,
+            "state": action["state"],
+            "dispatch_key": action["claim"]["dispatch_key"],
+        })
+        raise RuntimeError("ambiguous failure after a possible external effect")
+
+    with patch.dict(
+            ticket_actions.ACTION_HANDLERS,
+            {"incident.escalate": ambiguous_handler}):
+        result = _dispatch_as(
+            user, ticket_actions.dispatch_action, ticket, response_note,
+            response_meta)
+
+    assert result is False, "ambiguous execution must not report success"
+    assert len(observations) == 1, "the claimed proposal should execute once"
+    assert observations[0]["in_atomic_block"] is False, (
+        "handler side effects must run outside the durable claim transaction")
+    assert observations[0]["state"] == "claimed", (
+        "the executing handler must observe a committed claim")
+    assert observations[0]["dispatch_key"] == ticket_actions._dispatch_key(
+        action_note.pk, response_meta["proposal_digest"], "approve"), (
+        "the claim must use the exact proposal/digest/choice dispatch key")
+
+    action_note.refresh_from_db()
+    action = action_note.metadata["action"]
+    assert action["state"] == "unknown", (
+        "an ambiguous handler result must never restore pending state")
+    assert action["execution"] == {
+        "status": "unknown",
+        "dispatch_key": observations[0]["dispatch_key"],
+        "failure_code": "handler_exception",
+    }
+
+    retry_note = TicketNote.objects.create(
+        parent=ticket, user=user, note="Approved retry",
+        metadata={"action_response": response_meta},
+    )
+    with patch.dict(
+            ticket_actions.ACTION_HANDLERS,
+            {"incident.escalate": ambiguous_handler}):
+        retry = _dispatch_as(
+            user, ticket_actions.dispatch_action, ticket, retry_note,
+            response_meta)
+    assert retry is False, "unknown execution must require reconciliation"
+    assert len(observations) == 1, (
+        "a retry must not repeat a possibly completed external side effect")
 
 
 @th.django_unit_test("LLM tool: suggest_rule_update creates ticket with action note")
@@ -1147,8 +1341,11 @@ def test_suggest_rule_update_creates_ticket(opts):
         "Action handler should be incident.rule_update"
     assert action_note.metadata["action"]["context"]["target"]["pk"] == ruleset.pk, \
         "Action context should reference the target ruleset"
-    assert len(action_note.metadata["action"]["context"]["proposed_rules"]) == 2, \
+    assert len(action_note.metadata["action"]["context"]["ruleset"]["rules"]) == 2, \
         "Should have 2 proposed rules in context"
+    assert (action_note.metadata["action"]["review"]["proposal"]["ruleset"] ==
+            action_note.metadata["action"]["context"]["ruleset"]), \
+        "The immutable rendered review must include the complete replacement policy"
 
 
 @th.django_unit_test("LLM tool: request_approval creates action note on ticket")
@@ -1243,7 +1440,7 @@ def test_create_rule_includes_action_block(opts):
     result = _tool_create_rule({
         "name": "Action block test rule",
         "category": "action_block_test",
-        "handler": "block://?ttl=3600",
+        "handlers": [{"type": "block", "ttl_seconds": 3600, "fleet_wide": True}],
         "rules": [
             {"name": "Level", "field": "level", "comparator": ">=", "value": "9", "value_type": "int"},
         ],
@@ -1269,6 +1466,26 @@ def test_create_rule_includes_action_block(opts):
         "Action context should reference RuleSet model"
     assert action_note.metadata["action"]["context"]["target"]["pk"] == result["ruleset_id"], \
         "Action context should reference the created ruleset"
+    assert action_note.metadata["action"]["proposal_note_id"] == action_note.pk, \
+        "The rendered action must expose its immutable proposal note ID"
+    review = action_note.metadata["action"]["review"]
+    assert review["target"] == {"model": "incident.RuleSet", "pk": result["ruleset_id"]}, \
+        "The rendered review target must exactly match the executable target"
+    assert review["revision"] == action_note.metadata["action"]["context"]["expected_modified"], \
+        "The rendered revision must exactly match the executable revision"
+    assert review["confirmation"]["approve"] == f"ACTIVATE RULESET {result['ruleset_id']}", \
+        "The rendered confirmation must exactly match the executable confirmation"
+    assert review["proposal"]["ruleset"] == action_note.metadata["action"]["context"]["ruleset"], \
+        "The immutable review must contain the complete bounded policy proposal"
+    assert len(action_note.metadata["action"]["proposal_digest"]) == 64, \
+        "The action must expose a SHA-256 digest binding the rendered proposal"
+    from mojo import errors as merrors
+    with th.assert_raises(merrors.ValueException):
+        action_note.on_rest_pre_save(
+            {"metadata": action_note.metadata}, created=False)
+    from mojo.apps.incident.handlers.ticket_actions import _review_payload
+    with th.assert_raises(ValueError):
+        _review_payload({"reason": "x" * 4097})
 
     ruleset = RuleSet.objects.get(pk=result["ruleset_id"])
     assert not ruleset.is_active, "RuleSet should be inactive (pending approval)"
@@ -1299,6 +1516,7 @@ def test_rule_update_approval(opts):
         parent=ruleset, name="Old condition", index=0,
         field_name="level", comparator=">=", value="9", value_type="int",
     )
+    ruleset.refresh_from_db()
 
     ticket = Ticket.objects.create(
         title="[Rule Update] Updatable rule",
@@ -1310,9 +1528,21 @@ def test_rule_update_approval(opts):
         {"name": "Wider level", "field_name": "level", "comparator": ">=", "value": "7", "value_type": "int"},
         {"name": "IP filter", "field_name": "source_ip", "comparator": "regex", "value": "10\\..*"},
     ]
+    replacement = {
+        "name": ruleset.name, "category": ruleset.category,
+        "priority": ruleset.priority, "bundle_minutes": ruleset.bundle_minutes,
+        "bundle_by": ruleset.bundle_by,
+        "bundle_by_rule_set": ruleset.bundle_by_rule_set,
+        "match_by": ruleset.match_by, "trigger_count": ruleset.trigger_count,
+        "trigger_window": ruleset.trigger_window,
+        "retrigger_every": ruleset.retrigger_every,
+        "handlers": [{"type": "block", "ttl_seconds": 3600,
+                      "fleet_wide": True}],
+        "rules": proposed_rules, "is_active": False,
+    }
 
     # Create the original action note (required for dispatch validation)
-    TicketNote.objects.create(
+    action_note = TicketNote.objects.create(
         parent=ticket, user=user,
         note="[LLM Agent] Suggesting rule update",
         metadata={
@@ -1322,27 +1552,23 @@ def test_rule_update_approval(opts):
                 "label": "Update rule?",
                 "context": {
                     "target": {"model": "incident.RuleSet", "pk": ruleset.pk},
-                    "proposed_rules": proposed_rules,
+                    "ruleset": replacement,
+                    "expected_modified": ruleset.modified.isoformat(),
+                    "confirm": f"REPLACE RULESET {ruleset.pk}",
                 },
             }
         },
     )
+    _bind_action_note(action_note)
 
-    response_meta = {
-        "handler": "incident.rule_update",
-        "action": "approve",
-        "context": {
-            "target": {"model": "incident.RuleSet", "pk": ruleset.pk},
-            "proposed_rules": proposed_rules,
-        },
-    }
+    response_meta = _action_response(action_note, "approve")
 
     note = TicketNote.objects.create(
         parent=ticket, user=user, note="Approved update",
         metadata={"action_response": response_meta},
     )
 
-    result = dispatch_action(ticket, note, response_meta)
+    result = _dispatch_as(user, dispatch_action, ticket, note, response_meta)
     assert result is True, "dispatch_action should succeed"
 
     new_rules = list(ruleset.rules.all().order_by("index"))
@@ -1352,7 +1578,7 @@ def test_rule_update_approval(opts):
     assert new_rules[1].field_name == "source_ip", f"Second rule should match source_ip, got {new_rules[1].field_name}"
 
     ticket.refresh_from_db()
-    assert ticket.status == "resolved", f"Ticket should be resolved, got {ticket.status}"
+    assert ticket.status == "closed", f"Ticket should be closed, got {ticket.status}"
 
 
 @th.django_unit_test("LLM tool: add_ticket_note with context references")

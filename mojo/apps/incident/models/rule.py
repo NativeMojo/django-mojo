@@ -99,11 +99,9 @@ class RuleSet(models.Model, MojoModel):
                          0=none, 1=hostname, 2=model, 3=model and hostname.
         match_by (int): Defines the matching behavior for events.
                         0 for all rules must match, 1 for any rule can match.
-        handler (str): A field specifying a chain of handlers to process the event,
-                       formatted as URL-like strings, e.g.,
-                       job://handler_name?param1=value1&param2=value2.
-                       Handlers are separated by commas, and they can include
-                       different schemes like email or notify.
+        handler (str): Internal URL-form storage compiled from the governed,
+                       typed handler schema. Handlers are separated by commas;
+                       arbitrary job/Python handlers are invalid policy.
         metadata (json): A JSON field to store additional metadata about the RuleSet.
     """
 
@@ -119,11 +117,9 @@ class RuleSet(models.Model, MojoModel):
     bundle_by_rule_set = models.BooleanField(default=True, help_text="Bundle by rule set")
     match_by = models.IntegerField(default=MatchBy.ALL, choices=MatchBy.CHOICES,
         help_text="Rule matching mode")
-    # handler syntax is a url like string that can be chained by commas
-    # job://handler_name?param1=value1&param2=value2 | email://user@example.com
-    # notify://perm@permission,user@example.com | ticket://?status=open
-    # resolve://?status=resolved&note=Auto-resolved
-    # Chains split on ',(job|email|notify|ticket|maestro|block|llm|resolve)://'
+    # Legacy storage is a comma-chained URL string. Governed writers accept
+    # typed handlers and compile them into this column; runtime validation
+    # rejects arbitrary jobs/Python paths and direct notification recipients.
     handler = models.TextField(default=None, null=True)
     trigger_count = models.IntegerField(null=True, blank=True,
         validators=[MinValueValidator(1)],
@@ -143,7 +139,25 @@ class RuleSet(models.Model, MojoModel):
         CREATE_PERMS = ["manage_security", "security"]
         SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security", "security"]
-        CAN_DELETE = True
+        # Human mutations are owned by /api/incident/admin/security/action. These
+        # flags do not affect internal defaults/provisioning, which use the ORM.
+        CAN_CREATE = False
+        CAN_UPDATE = False
+        CAN_DELETE = False
+        # The Assistant has dedicated, governed projections and tools.  The
+        # generic model tools must never expose handler strings or mutate a
+        # policy around the approval/revision boundary.
+        DENY_AI = True
+        GRAPHS = {
+            "default": {
+                "fields": [
+                    "id", "created", "modified", "priority", "category",
+                    "name", "bundle_minutes", "bundle_by",
+                    "bundle_by_rule_set", "match_by", "trigger_count",
+                    "trigger_window", "retrigger_every", "is_active",
+                ],
+            },
+        }
 
 
     def run_handler(self, event, incident=None, idempotency_prefix=None, strict=False):
@@ -165,9 +179,16 @@ class RuleSet(models.Model, MojoModel):
             return False
 
         try:
+            # Stored legacy policies are data, not trusted code. A malformed
+            # or non-allowlisted aggregate remains visible to administrators
+            # for replacement/deactivation/deletion, but cannot dispatch.
+            from mojo.apps.incident.services import rule_validation
+            normalized = rule_validation.validate_existing(self)
             from mojo.apps import jobs
 
-            specs = re.split(r',(?=(?:job|email|sms|notify|ticket|maestro|block|llm|resolve)://)', self.handler.strip())
+            specs = re.split(
+                r',(?=(?:job|email|sms|notify|ticket|maestro|block|llm|resolve)://)',
+                normalized["handler"])
             published = False
 
             for index, spec in enumerate(filter(None, [s.strip() for s in specs])):
@@ -177,6 +198,9 @@ class RuleSet(models.Model, MojoModel):
 
                 payload = {
                     "handler_spec": spec,
+                    "handler_schema": rule_validation.HANDLER_JOB_SCHEMA,
+                    "handler_schema_version": (
+                        rule_validation.HANDLER_JOB_SCHEMA_VERSION),
                     "event_id": event.pk,
                     "incident_id": incident.pk if incident else None,
                 }
@@ -981,7 +1005,45 @@ class Rule(models.Model, MojoModel):
         CREATE_PERMS = ["manage_security", "security"]
         SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security", "security"]
-        CAN_DELETE = True
+        CAN_CREATE = False
+        CAN_UPDATE = False
+        CAN_DELETE = False
+        DENY_AI = True
+        GRAPHS = {
+            "default": {
+                "fields": [
+                    "id", "created", "modified", "name", "index",
+                    "comparator", "field_name", "value", "value_type",
+                    "is_required",
+                ],
+                "extra": ["parent_id"],
+            },
+        }
+
+    def save(self, *args, **kwargs):
+        """Persist the condition and advance the aggregate revision."""
+        from django.db import transaction
+        from django.utils import timezone
+
+        with transaction.atomic():
+            result = super().save(*args, **kwargs)
+            if self.parent_id:
+                RuleSet.objects.filter(pk=self.parent_id).update(
+                    modified=timezone.now())
+        return result
+
+    def delete(self, *args, **kwargs):
+        """Delete the condition and advance the surviving parent revision."""
+        from django.db import transaction
+        from django.utils import timezone
+
+        parent_id = self.parent_id
+        with transaction.atomic():
+            result = super().delete(*args, **kwargs)
+            if parent_id:
+                RuleSet.objects.filter(pk=parent_id).update(
+                    modified=timezone.now())
+        return result
 
     def check_rule(self, event):
         """
@@ -993,26 +1055,9 @@ class Rule(models.Model, MojoModel):
         Returns:
             bool: True if the event field matches the criteria, False otherwise.
         """
-        field_name = self.field_name
-        if not field_name:
-            return False
-        if field_name.startswith("metadata."):
-            field_name = field_name[9:]
-        if field_name.startswith("_"):
-            return False
-        field_value = event.metadata.get(field_name, None)
-        if field_value is None:
-            field_value = getattr(event, field_name, None)
-        if field_value is None:
-            return False
+        from mojo.apps.incident.services import rule_validation
 
-        comp_value = self.value
-        field_value, comp_value = self._convert_values(field_value, comp_value)
-
-        if field_value is None or comp_value is None:
-            return False
-
-        return self._compare(field_value, comp_value)
+        return rule_validation.evaluate_rule(self, event)
 
     def _convert_values(self, field_value, comp_value):
         """

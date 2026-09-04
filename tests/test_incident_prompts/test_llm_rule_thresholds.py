@@ -48,7 +48,9 @@ def test_llm_rule_threshold_validation(opts):
         params = {
             "name": f"Maestro #1124 invalid {name}",
             "category": category,
-            "handler": "job://maestro_1124.handler",
+            "handlers": [
+                {"type": "notify", "permission": "manage_security"},
+            ],
             "rules": [],
             "bundle_by": 4,
             "bundle_minutes": 30,
@@ -110,7 +112,9 @@ def _threshold_proposal_params(category):
     return {
         "name": f"Maestro #1124 canonical {category}",
         "category": category,
-        "handler": "job://maestro_1124.handler",
+        "handlers": [
+            {"type": "notify", "permission": "manage_security"},
+        ],
         "rules": [{
             "name": "Match test category",
             "field": "category",
