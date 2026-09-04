@@ -288,6 +288,9 @@ def test_ws_assistant_action_carries_no_authority(opts):
     with mock.patch(
         "mojo.apps.assistant.services.agent.run_assistant_ws",
         return_value={"message_id": 1, "response": "ok"},
+    ), mock.patch(
+        "mojo.apps.account.services.llm_safety.route_state",
+        return_value={"ready": True, "error": ""},
     ):
         response, _events = _send(opts, {
             "type": "assistant_action",

@@ -1,6 +1,8 @@
 """
 Detection logic for Tor, VPN, Proxy, Cloud services, and Mobile carriers.
 """
+import ipaddress
+
 import requests
 from mojo.helpers import logit
 from .config import (
@@ -25,7 +27,17 @@ def _cached_ip_set(name):
         from mojo.apps.incident.models.ipset import IPSet
         row = IPSet.objects.filter(name=name).first()
         if row is not None and row.data:
-            return set(row.cidrs)
+            # Firewall truth stores canonical networks, including /32 host
+            # routes.  Threat-list consumers historically expose and compare
+            # bare addresses, so project host routes back to addresses while
+            # retaining any genuine network entries.
+            values = set()
+            for value in row.cidrs:
+                network = ipaddress.ip_network(value, strict=False)
+                values.add(
+                    str(network.network_address)
+                    if network.prefixlen == network.max_prefixlen else str(network))
+            return values
     except Exception:
         return None
     return None

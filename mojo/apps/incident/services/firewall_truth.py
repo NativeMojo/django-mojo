@@ -414,9 +414,9 @@ def record_host_observation(kind, identity, fence, fingerprint, desired,
 
 
 def exact_compatible_runner_roster(channel="default"):
-    from mojo.apps import jobs
+    from mojo.apps.jobs.manager import get_manager
     try:
-        manager = jobs.get_manager()
+        manager = get_manager()
         rows = manager.get_runners_bounded(channel, limit=128, timeout=2.0)
         selected, expected, incompatible = manager._checked_host_roster(
             rows, channel)

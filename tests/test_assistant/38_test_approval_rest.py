@@ -1,7 +1,7 @@
 """Approval resolution over REST — POST/GET /api/assistant/action.
 
 `opts.client` reaches a SEPARATE server process that does not import `tests/`,
-so these bind to genuinely registered tools: `block_ip` (mutating, no step-up)
+so these bind to genuinely registered tools: `create_ticket` (mutating, no step-up)
 and `update_user_permission` (mutating, `fresh_auth_seconds=600`). The pending
 records are proposed in-process through the real service and resolved over the
 wire, which is exactly the split the protocol has in production.
@@ -24,6 +24,7 @@ PASSWORD = "TestPass1!"
 
 TEST_IP = "198.51.100.71"
 TEST_IP_CANCEL = "198.51.100.72"
+TEST_TICKET_TITLE = "approval-rest-completion"
 KEY_NAME = "approval-rest-apikey"
 GROUP_NAME = "approval-rest-group"
 TARGET_PERM = "testit_rest_perm"
@@ -33,9 +34,11 @@ TARGET_PERM = "testit_rest_perm"
 @th.requires_app("mojo.apps.assistant")
 def setup_approval_rest(opts):
     from mojo.apps.account.models import ApiKey, GeoLocatedIP, Group, User
+    from mojo.apps.incident.models import Ticket
 
     User.objects.filter(email__in=[ADMIN_EMAIL, OTHER_EMAIL, TARGET_EMAIL]).delete()
     GeoLocatedIP.objects.filter(ip_address__in=[TEST_IP, TEST_IP_CANCEL]).delete()
+    Ticket.objects.filter(title=TEST_TICKET_TITLE).delete()
     ApiKey.objects.filter(name=KEY_NAME).delete()
     Group.objects.filter(name=GROUP_NAME).delete()
 
@@ -116,15 +119,16 @@ def _assert_unavailable(resp, why):
 
 @th.django_unit_test("approve over REST executes the tool and returns the resolved card")
 def test_approve_executes(opts):
-    from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident.models import Ticket
 
     conv = _conversation(opts, "approval-rest-approve")
-    block = _propose(opts.admin, conv, "block_ip",
-                     {"ip": TEST_IP, "reason": "approval rest test", "ttl": 60})
+    block = _propose(opts.admin, conv, "create_ticket", {
+        "title": TEST_TICKET_TITLE,
+        "description": "approval REST completion probe",
+    })
     assert_eq(block["state"], "pending", "a fresh card must be pending")
-    assert_true(GeoLocatedIP.objects.filter(ip_address=TEST_IP,
-                                            is_blocked=True).first() is None,
-                "the IP must NOT be blocked before the operator approves")
+    assert_true(not Ticket.objects.filter(title=TEST_TICKET_TITLE).exists(),
+                "the ticket must not exist before the operator approves")
 
     _login(opts)
     resp = _resolve(opts, block["action_id"], "approve")
@@ -140,9 +144,8 @@ def test_approve_executes(opts):
     assert_true(resp.json.get("data", {}).get("message_id"),
                 "approval must write a server-authored outcome message")
 
-    geo = GeoLocatedIP.objects.filter(ip_address=TEST_IP).first()
-    assert_true(geo is not None and geo.is_blocked,
-                "the approved block_ip must actually have blocked the IP")
+    assert_true(Ticket.objects.filter(title=TEST_TICKET_TITLE).exists(),
+                "the approved create_ticket must have executed")
 
 
 @th.django_unit_test("cancel over REST changes nothing")

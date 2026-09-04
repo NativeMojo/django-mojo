@@ -308,7 +308,8 @@ def test_permanent_client_request_has_no_target_field(opts):
                 firewall.subprocess, "run", return_value=completed) as run:
         firewall.normalize_permanent_ipset([])
     payload = json.loads(run.call_args.kwargs["input"])
-    th.assert_eq(payload["operation"], "permanent.normalize")
+    th.assert_eq(payload["operation"], "permanent.normalize",
+                 "aggregate client used the wrong broker authority")
     th.assert_true("set_name" not in payload and "reserved_set_name" not in payload,
                    "unprivileged aggregate caller still selected root identity")
     th.assert_eq(payload["expected_permanent_set"], "mojo_blocked",

@@ -2,6 +2,7 @@
 
 from datetime import timedelta
 from copy import deepcopy
+import importlib
 import uuid
 
 from testit import helpers as th
@@ -52,8 +53,7 @@ def setup_admin_security(opts):
 @th.django_unit_test("Admin Security routes pin human and fresh-auth authority")
 def test_route_authority(opts):
     from mojo import errors as merrors
-    from importlib import import_module
-    views = import_module("mojo.apps.incident.rest.admin_security")
+    views = importlib.import_module("mojo.apps.incident.rest.admin_security")
     from mojo.apps.incident.rest import ipset as ipset_views
     from mojo.apps.incident.services import admin_security
     assert views.on_admin_security.__url__ == ("GET", "admin/security")

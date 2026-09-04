@@ -148,6 +148,7 @@ def test_checked_engine_requires_current_target_incarnation(opts):
     engine.channels = ["default"]
     engine.keys = JobKeys(pubsub_prefix="")
     engine.redis = _Redis()
+    engine.is_initialized = True
     engine.start_time = mock.Mock()
     engine.start_time.isoformat.return_value = "2026-09-04T12:01:00+00:00"
     message = {
@@ -166,6 +167,47 @@ def test_checked_engine_requires_current_target_incarnation(opts):
         message, engine.keys.runner_ctl(engine.runner_id))
     assert engine.redis.published == [], \
         "a pre-restart command executed or replied from the new incarnation"
+
+
+@th.django_unit_test("a lazy legacy epoch cannot authorize checked execution")
+def test_checked_engine_requires_initialized_daemon(opts):
+    from mojo.apps.jobs.job_engine import JobEngine, host_channel
+    from mojo.apps.jobs.keys import JobKeys
+
+    engine = JobEngine.__new__(JobEngine)
+    engine.runner_id = "runner-legacy"
+    engine.channels = ["default"]
+    engine.keys = JobKeys(pubsub_prefix="")
+    engine.redis = _Redis()
+    engine.is_initialized = False
+    engine.start_time = None
+    engine.jobs_processed = 0
+    engine.jobs_failed = 0
+
+    engine._handle_control_message(json.dumps({
+        "command": "status", "reply_channel": "legacy-status",
+    }))
+    assert engine.start_time is not None, \
+        "legacy status did not exercise lazy execution-epoch allocation"
+    started = engine.start_time.isoformat()
+    engine.redis.published.clear()
+    correlation = "13579bdf02468ace" * 2
+    engine._handle_checked_execute({
+        "protocol": 2,
+        "correlation_id": correlation,
+        "reply_channel": engine.keys.reply_channel(correlation),
+        "func": "example.checked",
+        "channel": "default",
+        "data": {},
+        "target": {
+            "runner_id": engine.runner_id,
+            "hostname": host_channel(),
+            "started": started,
+        },
+    }, engine.keys.runner_ctl(engine.runner_id))
+
+    assert engine.redis.published == [], \
+        "an uninitialized engine used a lazy legacy epoch as checked authority"
 
 
 @th.django_unit_test("an incompatible host refuses before mutation")

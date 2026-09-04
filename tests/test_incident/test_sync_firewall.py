@@ -109,10 +109,21 @@ def _run_sync(job):
 
 @th.django_unit_setup()
 def setup_sync_firewall(opts):
+    from django.db.models import Q
     from mojo.apps.account.models import GeoLocatedIP
     from mojo.apps.incident.models import IPSet
     from mojo.helpers import dates
 
+    # sync_firewall consumes the complete desired snapshot, so this serial
+    # fixture must own that snapshot rather than inherit blocks from earlier
+    # packages in the long-lived test database.
+    GeoLocatedIP.objects.filter(
+        Q(is_blocked=True) | Q(is_whitelisted=True) |
+        Q(firewall_pending=True)
+    ).update(
+        is_blocked=False, blocked_until=None, is_whitelisted=False,
+        whitelisted_until=None, firewall_pending=False,
+        firewall_sync_error="")
     GeoLocatedIP.objects.filter(ip_address__in=(
         TEST_PERM, TEST_TTL, TEST_ABSENT)).delete()
     IPSet.objects.filter(name__in=("test_sync_fw", "test_disabled_fw")).delete()
@@ -746,7 +757,8 @@ def test_cron_schedule_and_host_fanout(opts):
     manager = mock.Mock()
     manager.get_runners_bounded.return_value = rows
     manager._checked_host_roster = JobManager._checked_host_roster
-    with mock.patch("mojo.apps.jobs.get_manager", return_value=manager), \
+    with mock.patch("mojo.apps.jobs.manager.get_manager",
+                    return_value=manager), \
             th.capture_publishes(
             lambda call: call.get("func") == cronjobs.FIREWALL_SYNC_JOB) as calls:
         cronjobs.sync_firewall()

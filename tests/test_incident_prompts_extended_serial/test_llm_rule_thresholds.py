@@ -108,6 +108,7 @@ def test_llm_rule_thresholds(opts):
         parent=ticket,
         user=operator,
         note="Approved",
+        group=ticket.group,
         metadata={"action_response": response_meta},
     )
     th.assert_true(
