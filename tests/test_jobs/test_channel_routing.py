@@ -20,6 +20,8 @@ testproject's JOBS_ALLOWED_CHANNELS (allowed-but-not-consumed — the cross-box
 shape); the t936_undeclared name is deliberately NOT.
 """
 
+import uuid
+
 from testit import helpers as th
 
 
@@ -460,29 +462,55 @@ def test_disjoint_engines_claim_only_own_channels(opts):
     _clear(opts)
     from mojo.apps import jobs
     from mojo.apps.jobs.job_engine import JobEngine
+    from mojo.apps.jobs.models import Job
 
-    id_a = jobs.publish(func=HANDLER, payload={"marker": "a"}, channel=CH_A)
-    id_b = jobs.publish(func=HANDLER, payload={"marker": "b"}, channel=CH_B)
+    # Test modules share Redis and execute in parallel. Use per-test direct
+    # channels so another module's cleanup or transient runner cannot claim a
+    # fixed suite-wide queue between the two assertions below.
+    suffix = uuid.uuid4().hex[:10]
+    channel_a = f"t906-a-{suffix}-engine"
+    channel_b = f"t906-b-{suffix}-engine"
+    owned_channels = [channel_a, channel_b]
+    try:
+        id_a = jobs.publish(
+            func=HANDLER, payload={"marker": "a"}, channel=channel_a)
+        id_b = jobs.publish(
+            func=HANDLER, payload={"marker": "b"}, channel=channel_b)
 
-    engine_a = JobEngine(channels=[CH_A], runner_id="t906-engine-a")
-    drained = _drain(opts, engine_a)
+        engine_a = JobEngine(
+            channels=[channel_a], runner_id=f"t906-a-{suffix}")
+        drained = _drain(opts, engine_a)
 
-    assert drained == [id_a], (
-        f"the {CH_A!r} engine should claim only its own job, drained {drained}"
-    )
-    assert CALLS == ["a"], f"only the {CH_A!r} job should have executed, got {CALLS}"
-    assert id_b in _queued_ids(opts, CH_B), (
-        f"job {id_b} must still be waiting on {CH_B!r} for its own engine, "
-        f"queue holds {_queued_ids(opts, CH_B)}"
-    )
+        assert drained == [id_a], (
+            f"the {channel_a!r} engine should claim only its own job, "
+            f"drained {drained}"
+        )
+        assert CALLS == ["a"], (
+            f"only the {channel_a!r} job should have executed, got {CALLS}"
+        )
+        assert id_b in _queued_ids(opts, channel_b), (
+            f"job {id_b} must still be waiting on {channel_b!r} for its own "
+            f"engine, queue holds {_queued_ids(opts, channel_b)}"
+        )
 
-    engine_b = JobEngine(channels=[CH_B], runner_id="t906-engine-b")
-    drained_b = _drain(opts, engine_b)
+        engine_b = JobEngine(
+            channels=[channel_b], runner_id=f"t906-b-{suffix}")
+        drained_b = _drain(opts, engine_b)
 
-    assert drained_b == [id_b], (
-        f"the {CH_B!r} engine should then claim its own job, drained {drained_b}"
-    )
-    assert CALLS == ["a", "b"], f"both jobs should have run by now, got {CALLS}"
+        assert drained_b == [id_b], (
+            f"the {channel_b!r} engine should then claim its own job, "
+            f"drained {drained_b}"
+        )
+        assert CALLS == ["a", "b"], (
+            f"both jobs should have run by now, got {CALLS}"
+        )
+    finally:
+        for channel in owned_channels:
+            opts.redis.delete(opts.keys.queue(channel))
+            opts.redis.delete(opts.keys.processing(channel))
+            opts.redis.delete(opts.keys.sched(channel))
+            opts.redis.delete(opts.keys.sched_broadcast(channel))
+        Job.objects.filter(channel__in=owned_channels).delete()
 
 
 @th.django_unit_test("an explicit channel list is not mutated by the host channel")
