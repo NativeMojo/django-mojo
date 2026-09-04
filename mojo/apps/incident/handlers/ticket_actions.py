@@ -7,69 +7,122 @@ triggers the handler to execute or reject it.
 
 Handler naming: "app.handler_name" (e.g., "incident.rule_approval").
 """
+from copy import deepcopy
+import hashlib
+import json
+import math
+
+from django.db import transaction
+
 from mojo.helpers import logit
 
 logger = logit.get_logger(__name__, "incident.log")
 
 ACTION_HANDLERS = {}
+ACTION_SCHEMA = "incident.ticket_approval"
+ACTION_SCHEMA_VERSION = 1
+MAX_ACTION_REVIEW_BYTES = 65536
+MAX_ACTION_REVIEW_DEPTH = 8
+MAX_ACTION_REVIEW_ITEMS = 64
+MAX_ACTION_REVIEW_STRING = 4096
 
 
 def register_handler(name, func):
     ACTION_HANDLERS[name] = func
 
 
-def _find_matching_action_note(ticket, handler_name):
-    """Find an unresolved action note on this ticket matching the given handler."""
-    from mojo.apps.incident.models import TicketNote
-    for tn in TicketNote.objects.filter(parent=ticket).order_by("-created"):
-        meta = tn.metadata or {}
-        action = meta.get("action")
-        if not action or not isinstance(action, dict):
-            continue
-        if action.get("handler") == handler_name and not action.get("resolved"):
-            return tn
-    return None
+def _bounded_review_value(value, depth=0):
+    if depth > MAX_ACTION_REVIEW_DEPTH:
+        raise ValueError("action review exceeds the nesting limit")
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("action review numbers must be finite")
+        return value
+    if isinstance(value, str):
+        if len(value) > MAX_ACTION_REVIEW_STRING:
+            raise ValueError("action review string exceeds the length limit")
+        return value
+    if isinstance(value, list):
+        if len(value) > MAX_ACTION_REVIEW_ITEMS:
+            raise ValueError("action review list exceeds the item limit")
+        return [_bounded_review_value(item, depth + 1) for item in value]
+    if isinstance(value, dict):
+        if len(value) > MAX_ACTION_REVIEW_ITEMS:
+            raise ValueError("action review object exceeds the item limit")
+        result = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or len(key) > 80:
+                raise ValueError("action review keys must be bounded strings")
+            result[key] = _bounded_review_value(item, depth + 1)
+        return result
+    raise ValueError("action review must contain JSON-safe values")
 
 
-def dispatch_action(ticket, note, response_meta):
-    """Dispatch an action response to the appropriate handler.
+def _review_payload(context):
+    """Build the exact structured fields rendered for human review."""
+    proposal = _bounded_review_value(context)
+    target = proposal.get("target")
+    if target is None and context.get("ip"):
+        target = {"ip": proposal["ip"]}
+    confirmations = {
+        key: value for key, value in (
+            ("approve", proposal.get("confirm")),
+            ("approve_catch_all", proposal.get("confirm_catch_all")),
+            ("deny", proposal.get("deny_confirm")),
+        ) if value is not None
+    }
+    review = {
+        "proposal": proposal,
+        "target": deepcopy(target),
+        "revision": proposal.get("expected_modified"),
+        "confirmation": confirmations,
+    }
+    encoded = json.dumps(
+        review, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True).encode("utf-8")
+    if len(encoded) > MAX_ACTION_REVIEW_BYTES:
+        raise ValueError("action review exceeds the serialized size limit")
+    return review
 
-    Args:
-        ticket: The parent Ticket instance
-        note: The TicketNote that carries the action_response
-        response_meta: The action_response dict from note.metadata
-            Expected keys: handler, action (approve/deny/choice), context
-    """
-    handler_name = response_meta.get("handler")
-    if not handler_name:
-        logger.warning("Action response on ticket %s missing handler", ticket.pk)
-        return False
 
-    handler = ACTION_HANDLERS.get(handler_name)
-    if not handler:
-        logger.warning("Unknown action handler: %s (ticket %s)", handler_name, ticket.pk)
-        return False
+def _review_digest(review):
+    encoded = json.dumps(
+        review, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
-    # Verify a matching unresolved action note exists on this ticket
-    action_note = _find_matching_action_note(ticket, handler_name)
-    if action_note is None:
-        logger.warning(
-            "No matching action note for handler %s on ticket %s — rejecting",
-            handler_name, ticket.pk,
-        )
-        return False
 
-    # Prevent double-dispatch: if ticket is already in a terminal state, skip
-    if ticket.status in ("closed", "resolved"):
-        logger.info("Ticket %s already %s — skipping action dispatch", ticket.pk, ticket.status)
-        return False
+def bind_action_note(note, metadata):
+    """Stamp a server-created proposal with its immutable note identity."""
+    stored = deepcopy(metadata or {})
+    action = stored.get("action")
+    if not isinstance(action, dict) or not note.pk:
+        raise ValueError("an action note must be saved before it is bound")
+    context = action.get("context")
+    if not isinstance(context, dict):
+        raise ValueError("an action note requires structured context")
+    if (action.get("handler") in (
+            "incident.rule_approval", "incident.rule_update") and
+            not isinstance(context.get("ruleset"), dict)):
+        raise ValueError("a rule approval requires the complete ruleset proposal")
+    review = _review_payload(context)
+    action.update({
+        "schema": ACTION_SCHEMA,
+        "schema_version": ACTION_SCHEMA_VERSION,
+        "proposal_note_id": note.pk,
+        "proposal_digest": _review_digest(review),
+        "review": review,
+        "state": "pending",
+        "resolved": False,
+    })
+    note.metadata = stored
+    note.save(update_fields=["metadata"])
+    return note
 
-    # The response may choose approve/deny only. The target, revision and
-    # confirmation always come from the server-stored proposal note; accepting
-    # response context would let a client swap the object after review.
-    action = response_meta.get("action")
-    context = action_note.metadata["action"].get("context") or {}
 
+def _has_interactive_authority(note, handler_name):
     request = getattr(note, "active_request", None)
     actor = getattr(request, "user", None) if request is not None else None
     try:
@@ -79,21 +132,135 @@ def dispatch_action(ticket, note, response_meta):
                 not getattr(actor, "is_authenticated", False) or
                 is_key_backed_session(request) or
                 not actor.has_permission(["manage_security", "security"])):
-            logger.warning("Ticket action %s lacked interactive global authority", handler_name)
-            return False
+            logger.warning(
+                "Ticket action %s lacked interactive global authority",
+                handler_name)
+            return None
         fresh_auth.require_fresh(request, seconds=600)
     except Exception:
-        logger.warning("Ticket action %s failed fresh-auth authority", handler_name)
+        logger.warning(
+            "Ticket action %s failed fresh-auth authority", handler_name)
+        return None
+    return actor
+
+
+def dispatch_action(ticket, note, response_meta):
+    """Dispatch an action response to the appropriate handler.
+
+    Args:
+        ticket: The parent Ticket instance
+        note: The TicketNote that carries the action_response
+        response_meta: The action_response dict from note.metadata
+            Expected keys: proposal_note_id, proposal_digest, handler,
+                action (approve/deny)
+    """
+    if (not isinstance(response_meta, dict) or
+            set(response_meta) != {
+                "proposal_note_id", "proposal_digest", "handler", "action"}):
+        logger.warning("Action response on ticket %s has an invalid shape", ticket.pk)
+        return False
+    handler_name = response_meta.get("handler")
+    requested_action = response_meta.get("action")
+    proposal_note_id = response_meta.get("proposal_note_id")
+    proposal_digest = response_meta.get("proposal_digest")
+    if (not handler_name or requested_action not in ("approve", "deny") or
+            isinstance(proposal_note_id, bool) or
+            not isinstance(proposal_note_id, int) or
+            not isinstance(proposal_digest, str) or
+            len(proposal_digest) != 64):
+        logger.warning("Action response on ticket %s missing handler", ticket.pk)
+        return False
+
+    handler = ACTION_HANDLERS.get(handler_name)
+    if not handler:
+        logger.warning("Unknown action handler: %s (ticket %s)", handler_name, ticket.pk)
+        return False
+
+    if (note.pk is None or note.parent_id != ticket.pk or
+            (note.metadata or {}).get("action_response") != response_meta):
+        logger.warning("Action response note is not bound to ticket %s", ticket.pk)
+        return False
+
+    actor = _has_interactive_authority(note, handler_name)
+    if actor is None:
         return False
 
     try:
-        completed = handler(ticket, note, action, context)
-        if completed is False:
-            return False
-        # Mark the original action note as resolved
-        action_note.metadata["action"]["resolved"] = True
-        action_note.save(update_fields=["metadata"])
-        return True
+        from mojo.apps.incident.models import Ticket, TicketNote
+        with transaction.atomic():
+            locked_ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+            action_note = TicketNote.objects.select_for_update().filter(
+                pk=proposal_note_id, parent_id=locked_ticket.pk).first()
+            if action_note is None:
+                logger.warning(
+                    "Proposal note %s does not belong to ticket %s",
+                    proposal_note_id, ticket.pk)
+                return False
+            metadata = deepcopy(action_note.metadata or {})
+            stored_action = metadata.get("action")
+            if not isinstance(stored_action, dict):
+                return False
+            if (stored_action.get("schema") != ACTION_SCHEMA or
+                    stored_action.get("schema_version") != ACTION_SCHEMA_VERSION or
+                    stored_action.get("proposal_note_id") != action_note.pk or
+                    stored_action.get("handler") != handler_name):
+                logger.warning("Proposal note %s is stale or malformed", action_note.pk)
+                return False
+            context = stored_action.get("context")
+            review = _review_payload(context) if isinstance(context, dict) else None
+            if (review is None or stored_action.get("review") != review or
+                    stored_action.get("proposal_digest") != _review_digest(review) or
+                    proposal_digest != stored_action.get("proposal_digest")):
+                logger.warning("Proposal note %s review contract is malformed", action_note.pk)
+                return False
+
+            resolution = stored_action.get("resolution")
+            if stored_action.get("resolved"):
+                # A same-choice concurrent response or retry observes success
+                # without dispatching the mutation twice. A conflicting choice
+                # never rewrites the committed decision.
+                return bool(
+                    isinstance(resolution, dict) and
+                    resolution.get("action") == requested_action and
+                    resolution.get("handler") == handler_name)
+            if locked_ticket.status in ("closed", "resolved"):
+                logger.info(
+                    "Ticket %s already %s — skipping unresolved action",
+                    locked_ticket.pk, locked_ticket.status)
+                return False
+            if stored_action.get("state") != "pending":
+                logger.warning("Proposal note %s is not pending", action_note.pk)
+                return False
+
+            stored_action["state"] = "claimed"
+            stored_action["claim"] = {
+                "response_note_id": note.pk,
+                "actor_id": actor.pk,
+            }
+            action_note.metadata = metadata
+            action_note.save(update_fields=["metadata"])
+
+            completed = handler(
+                locked_ticket, note, requested_action, deepcopy(context))
+            if completed is False:
+                stored_action["state"] = "pending"
+                stored_action.pop("claim", None)
+                action_note.metadata = metadata
+                action_note.save(update_fields=["metadata"])
+                return False
+
+            stored_action["state"] = "resolved"
+            stored_action["resolved"] = True
+            stored_action["resolution"] = {
+                "handler": handler_name,
+                "action": requested_action,
+                "response_note_id": note.pk,
+                "actor_id": actor.pk,
+            }
+            stored_action.pop("claim", None)
+            action_note.metadata = metadata
+            action_note.save(update_fields=["metadata"])
+            return True
     except Exception:
         logger.exception("Action handler %s failed for ticket %s", handler_name, ticket.pk)
         return False

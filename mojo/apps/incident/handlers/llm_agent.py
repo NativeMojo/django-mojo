@@ -1195,6 +1195,7 @@ def _tool_create_rule(params):
             "label": f"Approve rule proposal \"{params['name']}\"?",
             "context": {
                 "target": {"model": "incident.RuleSet", "pk": ruleset.pk},
+                "ruleset": rule_validation.ruleset_payload(ruleset),
                 "expected_modified": ruleset.modified.isoformat(),
                 "confirm": f"ACTIVATE RULESET {ruleset.pk}",
                 "confirm_catch_all": f"ACTIVATE CATCH-ALL RULESET {ruleset.pk}",
@@ -1204,8 +1205,8 @@ def _tool_create_rule(params):
     }
     note = _append_ticket_note(ticket, note_text)
     if note:
-        note.metadata = action_note_meta
-        note.save(update_fields=["metadata"])
+        from mojo.apps.incident.handlers import ticket_actions
+        ticket_actions.bind_action_note(note, action_note_meta)
 
     return {"ok": True, "ruleset_id": ruleset.pk, "ticket_id": ticket.pk}
 
@@ -1351,8 +1352,8 @@ def _tool_request_approval(params):
         f"Requesting approval: {params['label']}\n\nReasoning: {params['reasoning']}",
     )
     if note:
-        note.metadata = action_meta
-        note.save(update_fields=["metadata"])
+        from mojo.apps.incident.handlers import ticket_actions
+        ticket_actions.bind_action_note(note, action_meta)
 
     return {"ok": True, "ticket_id": ticket.pk, "note_id": note.pk if note else None}
 
@@ -1454,8 +1455,8 @@ def _tool_suggest_rule_update(params):
     )
     note = _append_ticket_note(ticket, note_text)
     if note:
-        note.metadata = action_note_meta
-        note.save(update_fields=["metadata"])
+        from mojo.apps.incident.handlers import ticket_actions
+        ticket_actions.bind_action_note(note, action_note_meta)
 
     return {"ok": True, "ticket_id": ticket.pk, "ruleset_id": ruleset.pk}
 

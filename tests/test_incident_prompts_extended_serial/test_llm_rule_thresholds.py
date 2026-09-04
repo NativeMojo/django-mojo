@@ -99,9 +99,10 @@ def test_llm_rule_thresholds(opts):
         f"Approval note must show the bundle window, got {action_note.note!r}")
 
     response_meta = {
+        "proposal_note_id": action_note.pk,
+        "proposal_digest": action_note.metadata["action"]["proposal_digest"],
         "handler": "incident.rule_approval",
         "action": "approve",
-        "context": {"target": {"model": "incident.RuleSet", "pk": ruleset.pk}},
     }
     th.assert_true(
         _dispatch_as(
