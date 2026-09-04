@@ -14,7 +14,6 @@ import json
 import os
 import shutil
 import tempfile
-from contextlib import redirect_stdout
 from unittest import mock
 
 from testit import helpers as th
@@ -57,9 +56,11 @@ def _run(argv, session, config_body="AWS_REGION=us-east-1\n"):
     try:
         path = _config_file(root, config_body)
         buffer = io.StringIO()
-        with redirect_stdout(buffer):
-            code = cs.main(["--config", path, "--json"] + argv,
-                           session_factory=lambda config, profile: session)
+        code = cs.main(
+            ["--config", path, "--json"] + argv,
+            session_factory=lambda config, profile: session,
+            stdout=buffer,
+        )
         return code, json.loads(buffer.getvalue())
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -668,9 +669,8 @@ def test_an_unknown_section_is_rejected_before_any_aws_call(opts):
         factory = mock.Mock()
         with mock.patch("boto3.Session") as session_cls:
             with th.assert_raises(SystemExit):
-                with redirect_stdout(io.StringIO()):
-                    cs.main(["--config", path, "--section", "nope"],
-                            session_factory=factory)
+                cs.main(["--config", path, "--section", "nope"],
+                        session_factory=factory)
         th.assert_eq(factory.call_count, 0,
                      "a typo in --section must cost a usage message, not a "
                      "round of AWS API calls")

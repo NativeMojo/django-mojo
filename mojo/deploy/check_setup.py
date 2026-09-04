@@ -1154,11 +1154,13 @@ def topology_enabled(requested, config):
     return str(value).strip().lower() == "reference"
 
 
-def main(argv, *, session_factory=None):
+def main(argv, *, session_factory=None, stdout=None):
     # session_factory is a test seam: it must build (or fake) the boto3
     # session from (config, profile). None keeps the real build_session.
     if session_factory is None:
         session_factory = build_session
+    if stdout is None:
+        stdout = sys.stdout
     parser = argparse.ArgumentParser(
         prog="python3 -m mojo.deploy.check_setup",
         description="Audit an AWS account for django-mojo deployment gaps")
@@ -1228,7 +1230,7 @@ def main(argv, *, session_factory=None):
             "findings": report.findings,
             "counts": counts,
             "topology": "reference" if topology else "none",
-        }, indent=2))
+        }, indent=2), file=stdout)
     else:
         report.render()
 
