@@ -64,11 +64,32 @@ def dispatch_action(ticket, note, response_meta):
         logger.info("Ticket %s already %s — skipping action dispatch", ticket.pk, ticket.status)
         return False
 
+    # The response may choose approve/deny only. The target, revision and
+    # confirmation always come from the server-stored proposal note; accepting
+    # response context would let a client swap the object after review.
     action = response_meta.get("action")
-    context = response_meta.get("context") or {}
+    context = action_note.metadata["action"].get("context") or {}
+
+    request = getattr(note, "active_request", None)
+    actor = getattr(request, "user", None) if request is not None else None
+    try:
+        from mojo.apps.account.services import fresh_auth
+        from mojo.helpers.request import is_key_backed_session
+        if (request is None or actor is None or
+                not getattr(actor, "is_authenticated", False) or
+                is_key_backed_session(request) or
+                not actor.has_permission(["manage_security", "security"])):
+            logger.warning("Ticket action %s lacked interactive global authority", handler_name)
+            return False
+        fresh_auth.require_fresh(request, seconds=600)
+    except Exception:
+        logger.warning("Ticket action %s failed fresh-auth authority", handler_name)
+        return False
 
     try:
-        handler(ticket, note, action, context)
+        completed = handler(ticket, note, action, context)
+        if completed is False:
+            return False
         # Mark the original action note as resolved
         action_note.metadata["action"]["resolved"] = True
         action_note.save(update_fields=["metadata"])
@@ -135,36 +156,44 @@ def _handler_rule_approval(ticket, note, action, context):
     ruleset = _resolve_model_ref(context)
     if ruleset is None or not isinstance(ruleset, RuleSet):
         _add_system_note(ticket, "Cannot resolve linked ruleset — it may have been deleted.")
-        ticket.status = "closed"
-        ticket.save(update_fields=["status"])
-        return
+        return False
 
     if not (ruleset.metadata or {}).get("llm_proposed"):
         _add_system_note(ticket, "Target ruleset is not an LLM proposal — refusing to modify.")
-        return
+        return False
 
+    actor = note.active_request.user
     if action == "approve":
-        if ruleset.is_active:
-            _add_system_note(ticket, f"RuleSet #{ruleset.pk} \"{ruleset.name}\" is already active.")
-        else:
-            ruleset.is_active = True
-            ruleset.save(update_fields=["is_active"])
-            _add_system_note(
-                ticket,
-                f"Rule approved and activated. RuleSet #{ruleset.pk} \"{ruleset.name}\" is now live.",
-            )
+        from mojo.apps.incident.services import admin_security
+        admin_security.apply_action({
+            "action": "ruleset.activate", "ruleset_id": ruleset.pk,
+            "expected_modified": context.get("expected_modified"),
+            "confirm": context.get("confirm"),
+            "confirm_catch_all": context.get("confirm_catch_all"),
+        }, actor)
+        _add_system_note(
+            ticket,
+            f"Rule approved and activated. RuleSet #{ruleset.pk} \"{ruleset.name}\" is now live.",
+        )
         ticket.status = "resolved"
         ticket.save(update_fields=["status"])
 
     elif action == "deny":
         name = ruleset.name
-        ruleset.delete()
+        from mojo.apps.incident.services import admin_security
+        admin_security.apply_action({
+            "action": "ruleset.delete", "ruleset_id": ruleset.pk,
+            "expected_modified": context.get("expected_modified"),
+            "confirm": context.get("deny_confirm"),
+        }, actor)
         _add_system_note(ticket, f"Rule denied and deleted. RuleSet \"{name}\" has been removed.")
         ticket.status = "closed"
         ticket.save(update_fields=["status"])
 
     else:
         logger.warning("Unknown action '%s' for rule_approval on ticket %s", action, ticket.pk)
+        return False
+    return True
 
 
 def _handler_rule_update(ticket, note, action, context):
@@ -178,33 +207,28 @@ def _handler_rule_update(ticket, note, action, context):
     ruleset = _resolve_model_ref(context)
     if ruleset is None or not isinstance(ruleset, RuleSet):
         _add_system_note(ticket, "Cannot resolve linked ruleset — it may have been deleted.")
-        ticket.status = "closed"
-        ticket.save(update_fields=["status"])
-        return
+        return False
 
     if action == "approve":
-        proposed_rules = context.get("proposed_rules") or []
-        if proposed_rules:
-            from mojo.apps.incident.models import Rule
-            ruleset.rules.all().delete()
-            for i, rule_data in enumerate(proposed_rules):
-                Rule.objects.create(
-                    parent=ruleset,
-                    name=rule_data.get("name", ""),
-                    index=i,
-                    field_name=rule_data.get("field_name", ""),
-                    comparator=rule_data.get("comparator", "=="),
-                    value=rule_data.get("value", ""),
-                    value_type=rule_data.get("value_type", "str"),
-                )
+        proposed = context.get("ruleset")
+        if proposed:
+            from mojo.apps.incident.services import admin_security
+            admin_security.apply_action({
+                "action": "ruleset.replace", "ruleset_id": ruleset.pk,
+                "expected_modified": context.get("expected_modified"),
+                "confirm": context.get("confirm"), "ruleset": proposed,
+            }, note.active_request.user)
             _add_system_note(
                 ticket,
                 f"Rule update approved. RuleSet #{ruleset.pk} \"{ruleset.name}\" "
-                f"updated with {len(proposed_rules)} new rule(s).",
+                f"updated with {len(proposed.get('rules') or [])} new rule(s).",
             )
         else:
             _add_system_note(ticket, "Rule update approved but no proposed rules found in context.")
-        ticket.status = "resolved"
+            return False
+        # Full replacements are deliberately inactive and need a distinct
+        # activation confirmation after review.
+        ticket.status = "closed"
         ticket.save(update_fields=["status"])
 
     elif action == "deny":
@@ -214,6 +238,8 @@ def _handler_rule_update(ticket, note, action, context):
 
     else:
         logger.warning("Unknown action '%s' for rule_update on ticket %s", action, ticket.pk)
+        return False
+    return True
 
 
 def _handler_block_confirm(ticket, note, action, context):
@@ -228,20 +254,18 @@ def _handler_block_confirm(ticket, note, action, context):
     if action == "approve":
         from mojo.apps.incident.services import mojosec_actions
 
-        actor = getattr(note, "user", None)
+        actor = note.active_request.user
         if actor is None or not actor.has_permission(
                 ["manage_security", "security"]):
             _add_system_note(
                 ticket, "Block approval refused: approver lacks security "
                         "permissions.")
-            return
+            return False
         ip = context.get("ip")
         reason = context.get("reason", "Approved via ticket action")
         if not ip:
             _add_system_note(ticket, "No IP specified in block context.")
-            ticket.status = "resolved"
-            ticket.save(update_fields=["status"])
-            return
+            return False
         try:
             result = mojosec_actions.execute_manual_block(ip, reason, actor)
         except Exception:
@@ -249,7 +273,7 @@ def _handler_block_confirm(ticket, note, action, context):
             _add_system_note(
                 ticket, f"Failed to block IP {ip} — see logs for details. "
                         "Ticket left open.")
-            return
+            return False
         outcome = result.get("outcome")
         if outcome == "applied":
             _add_system_note(
@@ -264,7 +288,7 @@ def _handler_block_confirm(ticket, note, action, context):
             _add_system_note(
                 ticket, f"Block of {result.get('ip', ip)} refused: "
                         f"{result.get('reason', outcome)}. Ticket left open.")
-            return
+            return False
         ticket.status = "resolved"
         ticket.save(update_fields=["status"])
 
@@ -272,6 +296,9 @@ def _handler_block_confirm(ticket, note, action, context):
         _add_system_note(ticket, "Block request denied.")
         ticket.status = "closed"
         ticket.save(update_fields=["status"])
+    else:
+        return False
+    return True
 
 
 def _handler_escalate(ticket, note, action, context):

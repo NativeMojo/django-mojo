@@ -21,6 +21,7 @@ from .tickets import (  # noqa: F401
 from .rules import (  # noqa: F401
     _tool_query_rulesets, _tool_get_ruleset, _tool_create_rule,
     _tool_add_rule_condition, _tool_update_ruleset, _tool_delete_ruleset,
+    _tool_manage_security_recommendation,
 )
 from .ips import (  # noqa: F401
     _tool_query_ip_history, _tool_block_ip, _tool_unblock_ip,

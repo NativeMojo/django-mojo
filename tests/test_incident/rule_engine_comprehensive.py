@@ -1193,7 +1193,11 @@ def test_handler_chaining(opts):
         category="chain_test",
         priority=1,
         match_by=0,
-        handler="job://handler1,email://admin@example.com,notify://security-team"
+        handler=(
+            "email://perm@manage_security,"
+            "sms://perm@manage_security,"
+            "notify://perm@manage_security"
+        )
     )
 
     Rule.objects.create(
@@ -1211,7 +1215,7 @@ def test_handler_chaining(opts):
     )
     event.sync_metadata()
 
-    # Test that run_handler processes all three handlers
+    # Test that run_handler processes all three governed handlers.
     result = ruleset.run_handler(event)
     assert result is True, "Chained handlers should return True"
 

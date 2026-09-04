@@ -12,6 +12,19 @@ from testit import helpers as th
 from unittest.mock import patch
 
 
+def _dispatch_as(user, dispatch, *args):
+    """Exercise ticket dispatch with the interactive request it now requires."""
+    from objict import objict
+    from mojo.models.rest import ACTIVE_REQUEST
+    token = ACTIVE_REQUEST.set(objict(
+        user=user, bearer="bearer", api_key=None, META={}, method="POST"))
+    try:
+        with patch("mojo.apps.account.services.fresh_auth.require_fresh"):
+            return dispatch(*args)
+    finally:
+        ACTIVE_REQUEST.reset(token)
+
+
 def _claude_response(stop_reason, content):
     """Build a dict matching the Claude API response shape (model_dump output)."""
     return {
@@ -471,7 +484,7 @@ def test_llm_agent_create_rule_deduplicates_pending(opts):
     rule_payload = {
         "name": "Dedup test rule",
         "category": "llm_dedup_rule",
-        "handler": "block://?ttl=3600",
+        "handlers": [{"type": "block", "ttl_seconds": 3600, "fleet_wide": True}],
         "rules": [
             {"name": "Level high", "field": "level", "comparator": ">=", "value": "9", "value_type": "int"},
         ],
@@ -589,7 +602,7 @@ def test_llm_agent_create_rule_deduplicates_active(opts):
     rule_payload = {
         "name": "Duplicate proposal",
         "category": "llm_dedup_active",
-        "handler": "block://?ttl=3600",
+        "handlers": [{"type": "block", "ttl_seconds": 3600, "fleet_wide": True}],
         "rules": [
             {"name": "Level high", "field": "level", "comparator": ">=", "value": "9", "value_type": "int"},
         ],
@@ -669,7 +682,7 @@ def test_llm_agent_create_rule_deduplicates_variant(opts):
     rule_payload_1 = {
         "name": "Credential harvesting scan",
         "category": "llm_dedup_variant",
-        "handler": "block://?ttl=3600",
+        "handlers": [{"type": "block", "ttl_seconds": 3600, "fleet_wide": True}],
         "rules": [
             {"name": "Path shadow", "field": "path", "comparator": "contains", "value": "/etc/shadow"},
         ],
@@ -721,7 +734,7 @@ def test_llm_agent_create_rule_deduplicates_variant(opts):
     rule_payload_2 = {
         "name": "Config file harvesting",
         "category": "llm_dedup_variant",
-        "handler": "block://?ttl=3600",
+        "handlers": [{"type": "block", "ttl_seconds": 3600, "fleet_wide": True}],
         "rules": [
             {"name": "Path cred files", "field": "path", "comparator": "regex",
              "value": "/(etc|var)/(shadow|passwd)"},
@@ -813,7 +826,9 @@ def test_llm_ticket_approval_activates_rule(opts):
     Rule.objects.create(
         parent=ruleset, name="Path match", index=0,
         field_name="path", comparator="contains", value="/etc/shadow",
+        value_type="str",
     )
+    ruleset.refresh_from_db()
 
     ticket = Ticket.objects.create(
         title=f"[Rule Proposal] {ruleset.name}",
@@ -832,7 +847,11 @@ def test_llm_ticket_approval_activates_rule(opts):
                 "type": "approval",
                 "handler": "incident.rule_approval",
                 "label": "Approve rule?",
-                "context": {"target": {"model": "incident.RuleSet", "pk": ruleset.pk}},
+                "context": {
+                    "target": {"model": "incident.RuleSet", "pk": ruleset.pk},
+                    "expected_modified": ruleset.modified.isoformat(),
+                    "confirm": f"ACTIVATE RULESET {ruleset.pk}",
+                },
             }
         },
     )
@@ -851,7 +870,7 @@ def test_llm_ticket_approval_activates_rule(opts):
         metadata={"action_response": response_meta},
     )
 
-    result = dispatch_action(ticket, approval_note, response_meta)
+    result = _dispatch_as(user, dispatch_action, ticket, approval_note, response_meta)
     assert result is True, "dispatch_action should return True on success"
 
     ruleset.refresh_from_db()
@@ -983,6 +1002,7 @@ def test_ticket_action_denial_deletes_rule(opts):
         parent=ruleset, name="Match", index=0,
         field_name="level", comparator=">=", value="9", value_type="int",
     )
+    ruleset.refresh_from_db()
     rs_pk = ruleset.pk
 
     ticket = Ticket.objects.create(
@@ -1000,7 +1020,11 @@ def test_ticket_action_denial_deletes_rule(opts):
                 "type": "approval",
                 "handler": "incident.rule_approval",
                 "label": "Approve rule?",
-                "context": {"target": {"model": "incident.RuleSet", "pk": rs_pk}},
+                "context": {
+                    "target": {"model": "incident.RuleSet", "pk": rs_pk},
+                    "expected_modified": ruleset.modified.isoformat(),
+                    "deny_confirm": f"DELETE RULESET {rs_pk}",
+                },
             }
         },
     )
@@ -1015,7 +1039,7 @@ def test_ticket_action_denial_deletes_rule(opts):
         metadata={"action_response": response_meta},
     )
 
-    result = dispatch_action(ticket, deny_note, response_meta)
+    result = _dispatch_as(user, dispatch_action, ticket, deny_note, response_meta)
     assert result is True, "dispatch_action should return True"
 
     assert not RuleSet.objects.filter(pk=rs_pk).exists(), \
@@ -1048,6 +1072,7 @@ def test_ticket_action_double_approval(opts):
         handler="block://?ttl=3600", is_active=False,
         metadata={"llm_proposed": True},
     )
+    ruleset.refresh_from_db()
 
     ticket = Ticket.objects.create(
         title="[Rule Proposal] Double test",
@@ -1064,7 +1089,12 @@ def test_ticket_action_double_approval(opts):
                 "type": "approval",
                 "handler": "incident.rule_approval",
                 "label": "Approve rule?",
-                "context": {"target": {"model": "incident.RuleSet", "pk": ruleset.pk}},
+                "context": {
+                    "target": {"model": "incident.RuleSet", "pk": ruleset.pk},
+                    "expected_modified": ruleset.modified.isoformat(),
+                    "confirm": f"ACTIVATE RULESET {ruleset.pk}",
+                    "confirm_catch_all": f"ACTIVATE CATCH-ALL RULESET {ruleset.pk}",
+                },
             }
         },
     )
@@ -1079,7 +1109,7 @@ def test_ticket_action_double_approval(opts):
         parent=ticket, user=user, note="Approved",
         metadata={"action_response": response_meta},
     )
-    dispatch_action(ticket, note1, response_meta)
+    _dispatch_as(user, dispatch_action, ticket, note1, response_meta)
 
     ruleset.refresh_from_db()
     assert ruleset.is_active, "RuleSet should be active after first approval"
@@ -1090,7 +1120,7 @@ def test_ticket_action_double_approval(opts):
         parent=ticket, user=user, note="Approved again",
         metadata={"action_response": response_meta},
     )
-    result = dispatch_action(ticket, note2, response_meta)
+    result = _dispatch_as(user, dispatch_action, ticket, note2, response_meta)
     assert result is False, "Second approval should be blocked (ticket already resolved)"
 
     ruleset.refresh_from_db()
@@ -1147,7 +1177,7 @@ def test_suggest_rule_update_creates_ticket(opts):
         "Action handler should be incident.rule_update"
     assert action_note.metadata["action"]["context"]["target"]["pk"] == ruleset.pk, \
         "Action context should reference the target ruleset"
-    assert len(action_note.metadata["action"]["context"]["proposed_rules"]) == 2, \
+    assert len(action_note.metadata["action"]["context"]["ruleset"]["rules"]) == 2, \
         "Should have 2 proposed rules in context"
 
 
@@ -1243,7 +1273,7 @@ def test_create_rule_includes_action_block(opts):
     result = _tool_create_rule({
         "name": "Action block test rule",
         "category": "action_block_test",
-        "handler": "block://?ttl=3600",
+        "handlers": [{"type": "block", "ttl_seconds": 3600, "fleet_wide": True}],
         "rules": [
             {"name": "Level", "field": "level", "comparator": ">=", "value": "9", "value_type": "int"},
         ],
@@ -1299,6 +1329,7 @@ def test_rule_update_approval(opts):
         parent=ruleset, name="Old condition", index=0,
         field_name="level", comparator=">=", value="9", value_type="int",
     )
+    ruleset.refresh_from_db()
 
     ticket = Ticket.objects.create(
         title="[Rule Update] Updatable rule",
@@ -1310,6 +1341,18 @@ def test_rule_update_approval(opts):
         {"name": "Wider level", "field_name": "level", "comparator": ">=", "value": "7", "value_type": "int"},
         {"name": "IP filter", "field_name": "source_ip", "comparator": "regex", "value": "10\\..*"},
     ]
+    replacement = {
+        "name": ruleset.name, "category": ruleset.category,
+        "priority": ruleset.priority, "bundle_minutes": ruleset.bundle_minutes,
+        "bundle_by": ruleset.bundle_by,
+        "bundle_by_rule_set": ruleset.bundle_by_rule_set,
+        "match_by": ruleset.match_by, "trigger_count": ruleset.trigger_count,
+        "trigger_window": ruleset.trigger_window,
+        "retrigger_every": ruleset.retrigger_every,
+        "handlers": [{"type": "block", "ttl_seconds": 3600,
+                      "fleet_wide": True}],
+        "rules": proposed_rules, "is_active": False,
+    }
 
     # Create the original action note (required for dispatch validation)
     TicketNote.objects.create(
@@ -1322,7 +1365,9 @@ def test_rule_update_approval(opts):
                 "label": "Update rule?",
                 "context": {
                     "target": {"model": "incident.RuleSet", "pk": ruleset.pk},
-                    "proposed_rules": proposed_rules,
+                    "ruleset": replacement,
+                    "expected_modified": ruleset.modified.isoformat(),
+                    "confirm": f"REPLACE RULESET {ruleset.pk}",
                 },
             }
         },
@@ -1342,7 +1387,7 @@ def test_rule_update_approval(opts):
         metadata={"action_response": response_meta},
     )
 
-    result = dispatch_action(ticket, note, response_meta)
+    result = _dispatch_as(user, dispatch_action, ticket, note, response_meta)
     assert result is True, "dispatch_action should succeed"
 
     new_rules = list(ruleset.rules.all().order_by("index"))
@@ -1352,7 +1397,7 @@ def test_rule_update_approval(opts):
     assert new_rules[1].field_name == "source_ip", f"Second rule should match source_ip, got {new_rules[1].field_name}"
 
     ticket.refresh_from_db()
-    assert ticket.status == "resolved", f"Ticket should be resolved, got {ticket.status}"
+    assert ticket.status == "closed", f"Ticket should be closed, got {ticket.status}"
 
 
 @th.django_unit_test("LLM tool: add_ticket_note with context references")

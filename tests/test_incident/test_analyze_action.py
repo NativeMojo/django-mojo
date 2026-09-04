@@ -462,12 +462,15 @@ def test_llm_analysis_full_loop(opts):
             _tool_use_block("t4", "create_rule", {
                 "name": "Auto-block SSH brute force",
                 "category": "analyze_test_full",
-                "handler": "block://?ttl=3600",
+                "handlers": [
+                    {"type": "block", "ttl_seconds": 3600,
+                     "fleet_wide": True},
+                ],
                 "bundle_by": 4,
                 "bundle_minutes": 30,
                 "reasoning": "Recurring SSH brute force pattern — block source IP.",
                 "rules": [
-                    {"field": "level", "operator": "gte", "value": "7"},
+                    {"field": "level", "operator": ">=", "value": "7"},
                 ],
             }),
         ]),

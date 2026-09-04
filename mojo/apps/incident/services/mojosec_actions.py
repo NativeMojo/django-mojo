@@ -278,8 +278,10 @@ def approve(recommendation, actor, note=""):
             "state", "approved_by", "approved_at", "approval_note",
             "modified"])
         _transition(locked, "approved", "human_approval", from_state, actor)
+        # State and durable job publication commit together. A crash cannot
+        # strand an approved recommendation between these two facts.
+        _queue_execution(locked)
     _record_metric("recommendations_approved")
-    _queue_execution(locked)
     return locked
 
 
@@ -326,8 +328,8 @@ def _maybe_auto_approve(recommendation):
         locked.save(update_fields=[
             "state", "approved_at", "approval_note", "modified"])
         _transition(locked, "auto_approved", "policy_auto_approval", from_state)
+        _queue_execution(locked)
     _record_metric("recommendations_auto_approved")
-    _queue_execution(locked)
     return True
 
 
@@ -456,7 +458,7 @@ def execute_recommendation(job):
 
 
 def reverse(recommendation, actor, note=""):
-    """Operator rollback: unblock every applied target, audited per try."""
+    """Operator rollback, remaining retryable until every target succeeds."""
     from mojo.apps.incident.models import MojoSecRecommendation
 
     with transaction.atomic():
@@ -475,6 +477,9 @@ def reverse(recommendation, actor, note=""):
             geo = GeoLocatedIP.objects.filter(ip_address=target.ip).first()
             try:
                 if geo is not None and geo.block_active:
+                    owner = f"mojosec:rec:{locked.pk}|case:"
+                    if not (geo.blocked_reason or "").startswith(owner):
+                        raise ValueError("block ownership changed")
                     geo.unblock(reason=f"mojosec:rec:{locked.pk}:reversed")
                 target.outcome = "reversed"
                 target.reversed_at = dates.utcnow()
@@ -487,14 +492,19 @@ def reverse(recommendation, actor, note=""):
                 target.save()
                 _attempt(locked, target, "reverse_failed",
                          target.last_error, started)
-        from_state = locked.state
-        locked.state = MojoSecRecommendation.STATE_REVERSED
         locked.approval_note = note[:256] or locked.approval_note
         _refresh_counts(locked)
+        remaining = locked.targets.filter(outcome="applied").exists()
+        from_state = locked.state
+        if not remaining:
+            locked.state = MojoSecRecommendation.STATE_REVERSED
         locked.save()
-        _transition(locked, "reversed", note or "operator_reversal",
-                    from_state, actor)
-    _record_metric("recommendations_reversed")
+        _transition(
+            locked, "reversal_incomplete" if remaining else "reversed",
+            ("one_or_more_targets_remain_applied" if remaining else
+             (note or "operator_reversal")), from_state, actor)
+    if not remaining:
+        _record_metric("recommendations_reversed")
     return locked
 
 
@@ -636,6 +646,23 @@ def action_sweep(job=None, now=None, limit=100, lookback_seconds=900):
         expired += 1
         _record_metric("recommendations_expired")
     retried = 0
+    # Approved rows can exist without a live job after an old process crashed
+    # before publication. Requeueing is idempotent by execution round; executing
+    # rows are run inline so per-target retry state remains authoritative.
+    approved = MojoSecRecommendation.objects.filter(
+        state__in=(MojoSecRecommendation.STATE_APPROVED,
+                   MojoSecRecommendation.STATE_AUTO_APPROVED),
+        modified__lt=now - datetime.timedelta(seconds=60))[:limit]
+    for recommendation in approved:
+        with transaction.atomic():
+            locked = MojoSecRecommendation.objects.select_for_update().get(
+                pk=recommendation.pk)
+            if locked.state not in (
+                    MojoSecRecommendation.STATE_APPROVED,
+                    MojoSecRecommendation.STATE_AUTO_APPROVED):
+                continue
+            _queue_execution(locked)
+        retried += 1
     stalled = MojoSecRecommendation.objects.filter(
         state=MojoSecRecommendation.STATE_EXECUTING,
         modified__lt=now - datetime.timedelta(seconds=60))[:limit]

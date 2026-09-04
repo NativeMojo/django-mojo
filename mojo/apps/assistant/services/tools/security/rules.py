@@ -1,395 +1,254 @@
-"""Rule set query, detail, create, update, delete, and condition tools."""
+"""Governed, redacted RuleSet tools for the Assistant."""
+
 from mojo.apps.assistant import tool
 
+
+FRESH_AUTH = 600
+WRITE_PERMS = ["manage_security", "security"]
 MAX_RESULTS = 50
 
 
-@tool(
-    name="query_rulesets",
-    domain="security",
-    permission="view_security",
-    description="List rule sets and their configurations, optionally filtered by category or active status.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "category": {"type": "string", "description": "Filter by category"},
-            "is_active": {"type": "boolean", "description": "Filter by active status"},
-            "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
-        },
-    },
-)
-def _tool_query_rulesets(params, user):
-    from mojo.apps.incident.models import RuleSet
+def _service():
+    from mojo.apps.incident.services import admin_security
+    return admin_security
 
+
+def _ruleset(pk):
+    from django.db.models import Prefetch
+    from mojo.apps.incident.models import Rule, RuleSet
+    return RuleSet.objects.prefetch_related(Prefetch(
+        "rules", queryset=Rule.objects.order_by("index", "id"),
+        to_attr="_admin_security_rules")).filter(pk=pk).first()
+
+
+def _revision(row):
+    return row.modified.isoformat()
+
+
+def _refuse(message, code="action_refused"):
+    return {"error": message, "error_code": code}
+
+
+def _invoke(payload, user):
+    try:
+        return _service().apply_action(payload, user)
+    except Exception as error:
+        from mojo.apps.incident.services.admin_security import SecurityActionError
+        if isinstance(error, SecurityActionError):
+            return _refuse(str(error), error.code)
+        raise
+
+
+@tool(
+    name="query_rulesets", domain="security", permission="view_security",
+    description="List bounded, redacted rule policy summaries.",
+    input_schema={"type": "object", "properties": {
+        "category": {"type": "string"}, "is_active": {"type": "boolean"},
+        "limit": {"type": "integer", "minimum": 1, "maximum": MAX_RESULTS}}})
+def _tool_query_rulesets(params, user):
+    from django.db.models import Prefetch
+    from mojo.apps.incident.models import Rule, RuleSet
     criteria = {}
     if params.get("category"):
         criteria["category"] = params["category"]
     if params.get("is_active") is not None:
         criteria["is_active"] = params["is_active"]
-
-    limit = min(params.get("limit", MAX_RESULTS), MAX_RESULTS)
-    rulesets = RuleSet.objects.filter(**criteria).order_by("-id")[:limit]
-
-    return [
-        {
-            "id": rs.pk,
-            "name": rs.name,
-            "category": rs.category,
-            "priority": rs.priority,
-            "handler": rs.handler,
-            "bundle_by": rs.bundle_by,
-            "bundle_minutes": rs.bundle_minutes,
-            "match_by": rs.match_by,
-            "trigger_count": rs.trigger_count,
-            "trigger_window": rs.trigger_window,
-            "is_active": rs.is_active,
-        }
-        for rs in rulesets
-    ]
+    limit = params.get("limit", MAX_RESULTS)
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        return _refuse("limit must be an integer", "invalid_input")
+    limit = max(1, min(limit, MAX_RESULTS))
+    queryset = RuleSet.objects.filter(**criteria).prefetch_related(Prefetch(
+        "rules", queryset=Rule.objects.order_by("index", "id"),
+        to_attr="_admin_security_rules"))
+    return [_service()._safe_rule_set(row) for row in
+            queryset.order_by("priority", "id")[:limit]]
 
 
 @tool(
-    name="get_ruleset",
-    domain="security",
-    permission="view_security",
-    description="Get full details of a rule set including all child rules (field conditions).",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "ruleset_id": {"type": "integer", "description": "The rule set ID"},
-        },
-        "required": ["ruleset_id"],
-    },
-)
+    name="get_ruleset", domain="security", permission="view_security",
+    description="Get one redacted rule policy and its typed governed fields.",
+    input_schema={"type": "object", "properties": {
+        "ruleset_id": {"type": "integer"}}, "required": ["ruleset_id"]})
 def _tool_get_ruleset(params, user):
-    from mojo.apps.incident.models import RuleSet
+    row = _ruleset(params.get("ruleset_id"))
+    if row is None:
+        return _refuse("RuleSet not found", "not_found")
+    return _service()._safe_rule_set(row, detail=True)
 
-    try:
-        rs = RuleSet.objects.get(pk=params["ruleset_id"])
-    except RuleSet.DoesNotExist:
-        return {"error": f"RuleSet {params['ruleset_id']} not found"}
 
-    rules = rs.rules.order_by("index")
+RULESET_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "maxLength": 160},
+        "category": {"type": "string", "maxLength": 124},
+        "priority": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "bundle_minutes": {"type": ["integer", "null"]},
+        "bundle_by": {"type": "integer", "minimum": 0, "maximum": 13},
+        "bundle_by_rule_set": {"type": "boolean"},
+        "match_by": {"type": "integer", "enum": [0, 1]},
+        "trigger_count": {"type": ["integer", "null"]},
+        "trigger_window": {"type": ["integer", "null"]},
+        "retrigger_every": {"type": ["integer", "null"]},
+        "delete_on_resolution": {"type": "boolean"},
+        "is_active": {"type": "boolean"},
+        "handlers": {"type": "array", "maxItems": 8, "items": {
+            "type": "object", "description": (
+                "A server-allowlisted typed handler. Read the security schema "
+                "for allowed types and arguments; job/Python/LLM handlers are forbidden.")}},
+        "rules": {"type": "array", "maxItems": 32, "items": {
+            "type": "object", "properties": {
+                "name": {"type": "string"}, "field": {"type": "string"},
+                "operator": {"type": "string"}, "value": {},
+                "value_type": {"type": "string"},
+                "is_required": {"type": "boolean"}},
+            "required": ["field", "operator", "value"]}},
+    },
+    "required": ["name", "category", "handlers", "rules"],
+}
+
+
+def _preview_create(params, user):
+    from mojo.apps.incident.services import rule_validation
+    normalized = rule_validation.normalize_ruleset(dict(params.get("ruleset") or {}))
+    return {"summary": "Create an inactive governed RuleSet.",
+            "details": {"name": normalized["name"],
+                        "category": normalized["category"],
+                        "rule_count": len(normalized["rules"])},
+            "revision": "new-ruleset-v1"}
+
+
+@tool(
+    name="create_rule", domain="security", permission=WRITE_PERMS,
+    description=("Create a validated inactive RuleSet proposal. Requires an "
+                 "operator approval card and fresh authentication."),
+    input_schema={"type": "object", "properties": {
+        "ruleset": RULESET_SCHEMA,
+        "confirm": {"type": "string", "enum": ["CREATE RULESET"]}},
+        "required": ["ruleset", "confirm"]},
+    mutates=True, fresh_auth_seconds=FRESH_AUTH, preview=_preview_create)
+def _tool_create_rule(params, user, approval=None):
+    payload = dict(params)
+    payload["action"] = "ruleset.create"
+    return _invoke(payload, user)
+
+
+def _preview_existing(params, user):
+    from mojo.apps.incident.services import rule_validation
+
+    row = _ruleset(params.get("ruleset_id"))
+    if row is None:
+        raise ValueError("RuleSet not found")
+    if params.get("expected_modified") != _revision(row):
+        raise ValueError("RuleSet changed; reload it before approval")
+    if params.get("action") == "replace":
+        replacement = dict(params.get("ruleset") or {})
+        if replacement.get("is_active") is not False:
+            raise ValueError("Replacement RuleSet must be inactive")
+        rule_validation.normalize_ruleset(replacement)
+    elif params.get("action") == "activate":
+        rule_validation.validate_existing(row)
+    return {"summary": f"Apply {params.get('action', 'delete')} to RuleSet {row.pk}.",
+            "details": _service()._safe_rule_set(row),
+            "revision": _revision(row)}
+
+
+@tool(
+    name="update_ruleset", domain="security", permission=WRITE_PERMS,
+    description=("Fully replace, activate, or deactivate a RuleSet through the "
+                 "versioned Admin Security authority. Partial updates are refused."),
+    input_schema={"type": "object", "properties": {
+        "ruleset_id": {"type": "integer"},
+        "action": {"type": "string", "enum": ["replace", "activate", "deactivate"]},
+        "expected_modified": {"type": "string"}, "confirm": {"type": "string"},
+        "confirm_catch_all": {"type": "string"}, "ruleset": RULESET_SCHEMA},
+        "required": ["ruleset_id", "action", "expected_modified", "confirm"]},
+    mutates=True, fresh_auth_seconds=FRESH_AUTH, preview=_preview_existing)
+def _tool_update_ruleset(params, user, approval=None):
+    payload = dict(params)
+    payload["action"] = f"ruleset.{params.get('action')}"
+    return _invoke(payload, user)
+
+
+@tool(
+    name="delete_ruleset", domain="security", permission=WRITE_PERMS,
+    description="Delete a version-bound RuleSet after fresh operator approval.",
+    input_schema={"type": "object", "properties": {
+        "ruleset_id": {"type": "integer"}, "expected_modified": {"type": "string"},
+        "confirm": {"type": "string"}},
+        "required": ["ruleset_id", "expected_modified", "confirm"]},
+    mutates=True, fresh_auth_seconds=FRESH_AUTH, preview=_preview_existing)
+def _tool_delete_ruleset(params, user, approval=None):
+    payload = dict(params)
+    payload["action"] = "ruleset.delete"
+    return _invoke(payload, user)
+
+
+def _retired_partial(params, user, approval=None):
+    return _refuse(
+        "Partial rule mutations are retired. Read the current RuleSet and use "
+        "update_ruleset with a complete inactive replacement and its revision.",
+        "full_replacement_required")
+
+
+@tool(
+    name="add_rule_condition", domain="security", permission=WRITE_PERMS,
+    description="Retired: use update_ruleset with a complete inactive replacement.",
+    input_schema={"type": "object", "properties": {
+        "ruleset_id": {"type": "integer"}}, "required": ["ruleset_id"]},
+    mutates=True, fresh_auth_seconds=FRESH_AUTH)
+def _tool_add_rule_condition(params, user, approval=None):
+    return _retired_partial(params, user, approval)
+
+
+@tool(
+    name="delete_rule", domain="security", permission=WRITE_PERMS,
+    description="Retired: use update_ruleset with a complete inactive replacement.",
+    input_schema={"type": "object", "properties": {
+        "rule_id": {"type": "integer"}}, "required": ["rule_id"]},
+    mutates=True, fresh_auth_seconds=FRESH_AUTH)
+def _tool_delete_rule(params, user, approval=None):
+    return _retired_partial(params, user, approval)
+
+
+def _recommendation(pk):
+    from mojo.apps.incident.models import MojoSecRecommendation
+    return MojoSecRecommendation.objects.filter(pk=pk).first()
+
+
+def _preview_recommendation(params, user):
+    row = _recommendation(params.get("recommendation_id"))
+    if row is None:
+        raise ValueError("Recommendation not found")
+    if params.get("expected_modified") != row.modified.isoformat():
+        raise ValueError("Recommendation changed; reload it before approval")
+    actual_targets = row.targets.count()
+    if (actual_targets != row.target_count or
+            actual_targets > _service().MAX_ACTION_TARGETS):
+        raise ValueError(
+            "Recommendation scope is inconsistent or too large to review")
     return {
-        "id": rs.pk,
-        "name": rs.name,
-        "category": rs.category,
-        "priority": rs.priority,
-        "handler": rs.handler,
-        "bundle_by": rs.bundle_by,
-        "bundle_minutes": rs.bundle_minutes,
-        "match_by": rs.match_by,
-        "trigger_count": rs.trigger_count,
-        "trigger_window": rs.trigger_window,
-        "is_active": rs.is_active,
-        "metadata": rs.metadata or {},
-        "rules": [
-            {
-                "id": r.pk,
-                "name": r.name,
-                "index": r.index,
-                "field_name": r.field_name,
-                "comparator": r.comparator,
-                "value": r.value,
-                "value_type": r.value_type,
-            }
-            for r in rules
-        ],
+        "summary": f"{params.get('action')} recommendation {row.pk} exactly as proposed.",
+        "details": _service()._safe_recommendation(row, detail=True),
+        "revision": row.modified.isoformat(),
     }
 
 
 @tool(
-    name="create_rule",
-    domain="security",
-    permission="manage_security",
-    description="Create a new event rule set (created DISABLED for human review). Use to auto-handle recurring event patterns. Requires operator approval: calling this tool creates an approval card and does not execute.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "name": {"type": "string", "description": "Rule name describing the pattern"},
-            "category": {"type": "string", "description": "Event category to match"},
-            "handler": {
-                "type": "string",
-                "description": (
-                    "Handler chain: comma-separated handler specs executed in order. "
-                    "Schemes: "
-                    "notify://perm@<perm> — in-app/push notification; "
-                    "email://perm@<perm> — email users with that permission; "
-                    "sms://perm@<perm> — SMS users with that permission; "
-                    "block://?ttl=3600 — fleet-wide IP block; "
-                    "ticket://?priority=8&status=open&category=security — create a support ticket; "
-                    "resolve://?status=resolved&note=... — resolve (or close) the incident automatically; "
-                    "job://module.function — publish a custom async job; "
-                    "llm:// — invoke LLM agent to triage. "
-                    "Example: 'ticket://?priority=8,resolve://' creates a ticket then auto-resolves the incident. "
-                    "Example: 'block://?ttl=3600,notify://perm@manage_security' blocks the IP and alerts admins."
-                ),
-            },
-            "rules": {
-                "type": "array",
-                "description": "Field match rules (conditions that events must satisfy)",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "Short description of this rule condition"},
-                        "field": {"type": "string", "description": "Event field or metadata key to match (e.g. 'level', 'rule_id', 'source_ip', 'details', 'http_url')"},
-                        "comparator": {"type": "string", "enum": ["==", ">", ">=", "<", "<=", "contains", "regex"], "description": "Comparison operator"},
-                        "value": {"type": "string", "description": "Value to compare against (always a string, converted per value_type)"},
-                        "value_type": {"type": "string", "enum": ["int", "float", "str", "bool"], "description": "Type to convert value to before comparison. Default: str", "default": "str"},
-                    },
-                    "required": ["field", "comparator", "value"],
-                },
-            },
-            "bundle_by": {
-                "type": "integer",
-                "description": (
-                    "How to group events into one incident. "
-                    "0=none (each event = own incident), "
-                    "1=hostname, "
-                    "2=model_name, "
-                    "3=model_name+id, "
-                    "4=source_ip, "
-                    "5=hostname+model_name, "
-                    "6=hostname+model_name+id, "
-                    "7=source_ip+model_name, "
-                    "8=source_ip+model_name+id, "
-                    "9=source_ip+hostname, "
-                    "10=group (per-tenant), "
-                    "11=group+model_name, "
-                    "12=group+model_name+id, "
-                    "13=group+source_ip (multi-tenant attack patterns). "
-                    "For multi-tenant deployments use 13 so one tenant's flood "
-                    "does not drown out signal from another. Otherwise 4 is the "
-                    "default for security rules. Default 4."
-                ),
-                "default": 4,
-            },
-            "bundle_minutes": {"type": "integer", "description": "Time window for bundling (default 30 min)", "default": 30},
-            "min_count": {"type": "integer", "description": "Minimum events before triggering (optional)"},
-            "window_minutes": {"type": "integer", "description": "Time window for threshold counting (optional)"},
-            "reasoning": {"type": "string", "description": "Why this rule is being created"},
-        },
-        "required": ["name", "category"],
-    },
-    mutates=True,
-)
-def _tool_create_rule(params, user):
-    from mojo.apps.incident.models import RuleSet, Rule
-
-    metadata = {
-        "assistant_proposed": True,
-        "reasoning": params.get("reasoning", ""),
-    }
-
-    ruleset = RuleSet.objects.create(
-        name=params["name"],
-        category=params["category"],
-        handler=params.get("handler", ""),
-        bundle_by=params.get("bundle_by", 4),
-        bundle_minutes=params.get("bundle_minutes", 30),
-        trigger_count=params.get("min_count"),
-        trigger_window=params.get("window_minutes"),
-        is_active=False,
-        metadata=metadata,
-    )
-
-    for i, rule_data in enumerate(params.get("rules") or []):
-        Rule.objects.create(
-            parent=ruleset,
-            name=rule_data.get("name", ""),
-            index=i,
-            field_name=rule_data.get("field", ""),
-            comparator=rule_data.get("comparator", "=="),
-            value=rule_data.get("value", ""),
-            value_type=rule_data.get("value_type", "str"),
-        )
-
-    return {"ok": True, "ruleset_id": ruleset.pk, "name": params["name"], "disabled": True}
-
-
-@tool(
-    name="add_rule_condition",
-    domain="security",
-    permission="manage_security",
-    description="Add a field-level rule condition to an existing rule set. Requires operator approval: calling this tool creates an approval card and does not execute.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "ruleset_id": {"type": "integer", "description": "The rule set ID to add the condition to"},
-            "name": {"type": "string", "description": "Short description of this condition"},
-            "field": {"type": "string", "description": "Event field or metadata key (e.g. 'level', 'rule_id', 'source_ip', 'details')"},
-            "comparator": {"type": "string", "enum": ["==", ">", ">=", "<", "<=", "contains", "regex"], "description": "Comparison operator"},
-            "value": {"type": "string", "description": "Value to compare against"},
-            "value_type": {"type": "string", "enum": ["int", "float", "str", "bool"], "description": "Type to convert value to. Default: str", "default": "str"},
-        },
-        "required": ["ruleset_id", "field", "comparator", "value"],
-    },
-    mutates=True,
-)
-def _tool_add_rule_condition(params, user):
-    from mojo.apps.incident.models import RuleSet, Rule
-
-    try:
-        ruleset = RuleSet.objects.get(pk=params["ruleset_id"])
-    except RuleSet.DoesNotExist:
-        return {"error": f"RuleSet {params['ruleset_id']} not found"}
-
-    next_index = ruleset.rules.count()
-    rule = Rule.objects.create(
-        parent=ruleset,
-        name=params.get("name", ""),
-        index=next_index,
-        field_name=params["field"],
-        comparator=params.get("comparator", "=="),
-        value=params.get("value", ""),
-        value_type=params.get("value_type", "str"),
-    )
-    return {
-        "ok": True,
-        "rule_id": rule.pk,
-        "ruleset_id": ruleset.pk,
-        "index": next_index,
-    }
-
-
-@tool(
-    name="update_ruleset",
-    domain="security",
-    permission="manage_security",
-    description="Update fields on an existing rule set. Only provided fields are changed. Use to enable assistant-proposed rules after review. Requires operator approval: calling this tool creates an approval card and does not execute.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "ruleset_id": {"type": "integer", "description": "The rule set ID to update"},
-            "name": {"type": "string", "description": "New name"},
-            "handler": {
-                "type": "string",
-                "description": (
-                    "New handler chain: comma-separated handler specs. "
-                    "Schemes: "
-                    "notify://perm@<perm>; "
-                    "email://perm@<perm>; "
-                    "sms://perm@<perm>; "
-                    "block://?ttl=3600; "
-                    "ticket://?priority=8&status=open&category=security; "
-                    "resolve://?status=resolved&note=... (auto-resolve the incident); "
-                    "job://module.function; "
-                    "llm://. "
-                    "Example: 'ticket://?priority=8,resolve://' — create ticket then auto-resolve."
-                ),
-            },
-            "bundle_by": {
-                "type": "integer",
-                "description": (
-                    "New bundle_by value. "
-                    "0=none, 1=hostname, 2=model_name, 3=model_name+id, "
-                    "4=source_ip, 5=hostname+model_name, 6=hostname+model_name+id, "
-                    "7=source_ip+model_name, 8=source_ip+model_name+id, "
-                    "9=source_ip+hostname, "
-                    "10=group, 11=group+model_name, 12=group+model_name+id, "
-                    "13=group+source_ip. Use a GROUP_* mode (10-13) for "
-                    "multi-tenant deployments so per-tenant signal stays separated."
-                ),
-            },
-            "bundle_minutes": {"type": "integer", "description": "New bundle time window in minutes"},
-            "match_by": {"type": "integer", "description": "Rule matching mode (0=ALL must match, 1=ANY can match)"},
-            "trigger_count": {"type": "integer", "description": "Event count threshold for handler execution"},
-            "trigger_window": {"type": "integer", "description": "Time window in minutes for counting events"},
-            "is_active": {"type": "boolean", "description": "Enable or disable the rule set"},
-            "priority": {"type": "integer", "description": "Rule set priority (lower = checked first)"},
-        },
-        "required": ["ruleset_id"],
-    },
-    mutates=True,
-)
-def _tool_update_ruleset(params, user):
-    from mojo.apps.incident.models import RuleSet
-
-    try:
-        rs = RuleSet.objects.get(pk=params["ruleset_id"])
-    except RuleSet.DoesNotExist:
-        return {"error": f"RuleSet {params['ruleset_id']} not found"}
-
-    updatable = [
-        "name", "handler", "bundle_by", "bundle_minutes", "match_by",
-        "trigger_count", "trigger_window", "is_active", "priority",
-    ]
-    changed = []
-    for field in updatable:
-        if field in params:
-            setattr(rs, field, params[field])
-            changed.append(field)
-
-    if not changed:
-        return {"error": "No fields to update"}
-
-    changed.append("modified")
-    rs.save(update_fields=changed)
-    return {"ok": True, "ruleset_id": rs.pk, "updated_fields": changed}
-
-
-@tool(
-    name="delete_ruleset",
-    domain="security",
-    permission="manage_security",
-    description="Delete a rule set and all its child rules. IMPORTANT: Always confirm with the user before executing — this is irreversible.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "ruleset_id": {"type": "integer", "description": "The rule set ID to delete"},
-        },
-        "required": ["ruleset_id"],
-    },
-    mutates=True,
-)
-def _tool_delete_ruleset(params, user):
-    from mojo.apps.incident.models import RuleSet
-
-    try:
-        rs = RuleSet.objects.get(pk=params["ruleset_id"])
-    except RuleSet.DoesNotExist:
-        return {"error": f"RuleSet {params['ruleset_id']} not found"}
-
-    rule_count = rs.rules.count()
-    rs_id = rs.pk
-    rs.delete()
-    return {"ok": True, "ruleset_id": rs_id, "rules_deleted": rule_count}
-
-
-@tool(
-    name="delete_rule",
-    domain="security",
-    permission="manage_security",
-    description=(
-        "Delete a single rule condition from a rule set by rule ID. "
-        "Use get_ruleset first to see the rules and their IDs. "
-        "IMPORTANT: Always confirm with the user before executing — this is irreversible."
-    ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "rule_id": {"type": "integer", "description": "The rule (condition) ID to delete"},
-        },
-        "required": ["rule_id"],
-    },
-    mutates=True,
-)
-def _tool_delete_rule(params, user):
-    from mojo.apps.incident.models import Rule
-
-    try:
-        rule = Rule.objects.select_related("parent").get(pk=params["rule_id"])
-    except Rule.DoesNotExist:
-        return {"error": f"Rule {params['rule_id']} not found"}
-
-    ruleset_id = rule.parent_id
-    rule_id = rule.pk
-    rule.delete()
-
-    remaining = Rule.objects.filter(parent_id=ruleset_id).count()
-    return {
-        "ok": True,
-        "rule_id": rule_id,
-        "ruleset_id": ruleset_id,
-        "remaining_rules": remaining,
-    }
+    name="manage_security_recommendation", domain="security",
+    permission=WRITE_PERMS,
+    description=("Approve, reject, cancel, or reverse exactly one bounded "
+                 "MojoSec recommendation. Requires fresh operator approval."),
+    input_schema={"type": "object", "properties": {
+        "recommendation_id": {"type": "integer"},
+        "action": {"type": "string",
+                   "enum": ["approve", "reject", "cancel", "reverse"]},
+        "expected_modified": {"type": "string"},
+        "confirm": {"type": "string"},
+        "note": {"type": "string", "maxLength": 256}},
+        "required": ["recommendation_id", "action", "expected_modified", "confirm"]},
+    mutates=True, fresh_auth_seconds=FRESH_AUTH,
+    preview=_preview_recommendation)
+def _tool_manage_security_recommendation(params, user, approval=None):
+    payload = dict(params)
+    payload["action"] = f"recommendation.{params.get('action')}"
+    return _invoke(payload, user)

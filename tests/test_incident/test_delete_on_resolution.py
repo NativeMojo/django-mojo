@@ -237,7 +237,9 @@ def test_llm_create_rule_with_delete_on_resolution(opts):
     result = _tool_create_rule({
         "name": "Test LLM Noise Rule",
         "category": f"{CATEGORY}_llm",
-        "handler": "block://?ttl=600",
+        "handlers": [
+            {"type": "block", "ttl_seconds": 600, "fleet_wide": True},
+        ],
         "reasoning": "Test noise pattern",
         "delete_on_resolution": True,
         "bundle_by": 4,
@@ -262,7 +264,7 @@ def test_llm_create_rule_with_conditions(opts):
     result = _tool_create_rule({
         "name": "Test LLM Rule With Conditions",
         "category": f"{CATEGORY}_llm_cond",
-        "handler": "ignore://",
+        "handlers": [{"type": "ignore"}],
         "reasoning": "Test rule with child conditions",
         "rules": [
             {"name": "Level check", "field": "level", "comparator": ">=", "value": "8", "value_type": "int"},

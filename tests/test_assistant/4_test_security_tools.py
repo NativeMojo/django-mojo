@@ -99,8 +99,8 @@ def test_get_ruleset_includes_rules(opts):
     assert_true("rules" in result, "Should include 'rules' key")
     assert_eq(len(result["rules"]), 1, f"Should have 1 rule, got {len(result['rules'])}")
     rule = result["rules"][0]
-    assert_eq(rule["field_name"], "level", "Rule should have field_name 'level'")
-    assert_eq(rule["comparator"], ">=", "Rule should have comparator '>='")
+    assert_eq(rule["field"], "level", "Rule should have field 'level'")
+    assert_eq(rule["operator"], ">=", "Rule should have operator '>='")
     assert_eq(rule["value"], "8", "Rule should have value '8'")
     assert_eq(rule["value_type"], "int", "Rule should have value_type 'int'")
 
@@ -116,9 +116,8 @@ def test_get_ruleset_not_found(opts):
 
 @th.django_unit_test()
 def test_add_rule_condition(opts):
-    """add_rule_condition should create a Rule with correct parent FK and auto-index."""
+    """Partial child writes are retired in favour of full replacement."""
     from mojo.apps.assistant.services.tools.security import _tool_add_rule_condition
-    from mojo.apps.incident.models import Rule
 
     result = _tool_add_rule_condition({
         "ruleset_id": opts.ruleset.pk,
@@ -129,19 +128,13 @@ def test_add_rule_condition(opts):
         "value_type": "str",
     }, opts.admin)
 
-    assert_true(result.get("ok"), f"Should succeed, got {result}")
-    assert_eq(result["ruleset_id"], opts.ruleset.pk, "Should reference correct ruleset")
-    assert_eq(result["index"], 1, "Should auto-index to 1 (second rule)")
-
-    # Verify in DB
-    rule = Rule.objects.get(pk=result["rule_id"])
-    assert_eq(rule.parent_id, opts.ruleset.pk, "Rule parent FK should match")
-    assert_eq(rule.field_name, "source_ip", "field_name should be 'source_ip'")
+    assert_eq(result["error_code"], "full_replacement_required",
+              "Partial child mutations must be refused")
 
 
 @th.django_unit_test()
 def test_update_ruleset_selective(opts):
-    """update_ruleset should only update provided fields."""
+    """Selective updates are refused; full versioned replacement is required."""
     from mojo.apps.assistant.services.tools.security import _tool_update_ruleset
 
     result = _tool_update_ruleset({
@@ -150,16 +143,7 @@ def test_update_ruleset_selective(opts):
         "priority": 99,
     }, opts.admin)
 
-    assert_true(result.get("ok"), f"Should succeed, got {result}")
-    assert_true("is_active" in result["updated_fields"], "Should report is_active updated")
-    assert_true("priority" in result["updated_fields"], "Should report priority updated")
-
-    # Verify in DB
-    opts.ruleset.refresh_from_db()
-    assert_true(opts.ruleset.is_active, "is_active should be True")
-    assert_eq(opts.ruleset.priority, 99, "priority should be 99")
-    # handler should be unchanged
-    assert_eq(opts.ruleset.handler, "block://?ttl=600", "handler should be unchanged")
+    assert_true("error" in result, f"Selective mutation must fail, got {result}")
 
 
 @th.django_unit_test()
@@ -181,11 +165,15 @@ def test_delete_ruleset_cascades(opts):
     rs = RuleSet.objects.create(name="test_asst_delete_me", category="test_del")
     Rule.objects.create(parent=rs, field_name="level", comparator="==", value="1")
     Rule.objects.create(parent=rs, field_name="level", comparator="==", value="2")
+    rs.refresh_from_db()
     rs_id = rs.pk
 
-    result = _tool_delete_ruleset({"ruleset_id": rs_id}, opts.admin)
-    assert_true(result.get("ok"), f"Should succeed, got {result}")
-    assert_eq(result["rules_deleted"], 2, "Should report 2 rules deleted")
+    result = _tool_delete_ruleset({
+        "ruleset_id": rs_id,
+        "expected_modified": rs.modified.isoformat(),
+        "confirm": f"DELETE RULESET {rs_id}",
+    }, opts.admin)
+    assert_eq(result["action"], "ruleset.delete", f"Should succeed, got {result}")
 
     assert_true(
         not RuleSet.objects.filter(pk=rs_id).exists(),

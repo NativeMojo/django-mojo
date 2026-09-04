@@ -457,6 +457,8 @@ def on_mojosec_recommendation(request, pk=None):
 
 
 @md.POST("mojosec/recommendation-action")
+@md.denies_key_backed_session()
+@md.requires_fresh_auth(seconds=600)
 @md.requires_global_perms("manage_security", "security")
 def on_mojosec_recommendation_action(request):
     """Approve/reject/cancel/reverse exactly what was proposed.
@@ -465,44 +467,18 @@ def on_mojosec_recommendation_action(request):
     recommendation rides request.DATA. No parameter can add targets or
     widen scope — approval approves the proposal verbatim.
     """
-    from mojo.apps.incident.models import MojoSecRecommendation
-    from mojo.apps.incident.services import mojosec_actions
+    # Compatibility URL; all mutations use the same version/confirmation
+    # contract as /api/incident/admin/security/action.
+    from mojo.apps.incident.services import admin_security
 
-    recommendation_id = request.DATA.get("recommendation_id")
-    if not (isinstance(recommendation_id, int) or
-            (isinstance(recommendation_id, str) and
-             recommendation_id.isdigit())):
-        raise merrors.ValueException("recommendation_id must be an integer")
-    action = request.DATA.get("action")
-    note = request.DATA.get("note", "")
-    if not isinstance(note, str) or len(note) > 256:
-        raise merrors.ValueException("note must be a string of at most 256")
-    recommendation = MojoSecRecommendation.objects.filter(
-        pk=int(recommendation_id)).first()
-    if recommendation is None:
-        raise merrors.RestErrorException(
-            "MojoSec recommendation does not exist", code=404, status=404)
+    data = dict(request.DATA)
+    action = data.get("action")
+    data["action"] = f"recommendation.{action}"
     try:
-        if action == "approve":
-            recommendation = mojosec_actions.approve(
-                recommendation, request.user, note=note)
-        elif action == "reject":
-            recommendation = mojosec_actions.reject(
-                recommendation, request.user, note=note)
-        elif action == "cancel":
-            recommendation = mojosec_actions.reject(
-                recommendation, request.user, note=note,
-                transition="cancelled")
-        elif action == "reverse":
-            recommendation = mojosec_actions.reverse(
-                recommendation, request.user, note=note)
-        else:
-            raise merrors.ValueException(
-                "action must be approve, reject, cancel or reverse")
-    except ValueError as err:
-        raise merrors.ValueException(str(err)) from err
-    return {"status": True,
-            "data": _recommendation_row(recommendation, detail=True)}
+        return admin_security.apply_action(data, request.user)
+    except admin_security.SecurityActionError as err:
+        raise merrors.ValueException(
+            str(err), code=err.status, status=err.status) from err
 
 
 @md.GET("mojosec/deployment")
