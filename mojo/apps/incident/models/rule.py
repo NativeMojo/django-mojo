@@ -160,7 +160,8 @@ class RuleSet(models.Model, MojoModel):
         }
 
 
-    def run_handler(self, event, incident=None, idempotency_prefix=None, strict=False):
+    def run_handler(self, event, incident=None, idempotency_prefix=None,
+                    strict=False, *, publisher=None):
         """
         Dispatch all handlers configured on this RuleSet as async jobs.
 
@@ -184,7 +185,9 @@ class RuleSet(models.Model, MojoModel):
             # for replacement/deactivation/deletion, but cannot dispatch.
             from mojo.apps.incident.services import rule_validation
             normalized = rule_validation.validate_existing(self)
-            from mojo.apps import jobs
+            if publisher is None:
+                from mojo.apps import jobs
+                publisher = jobs.publish
 
             specs = re.split(
                 r',(?=(?:job|email|sms|notify|ticket|maestro|block|llm|resolve)://)',
@@ -205,7 +208,7 @@ class RuleSet(models.Model, MojoModel):
                     "incident_id": incident.pk if incident else None,
                 }
                 try:
-                    jobs.publish(
+                    publisher(
                         "mojo.apps.incident.handlers.event_handlers.execute_handler",
                         payload,
                         channel="incident_handlers",
