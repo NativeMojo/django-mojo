@@ -58,6 +58,19 @@ def test_name_lifecycle(opts):
         IPSet.objects.create(name="operator_tmp", kind="custom")
 
 
+@th.django_unit_test("configured permanent set name is dynamically reserved")
+def test_configured_permanent_name_collision(opts):
+    from mojo.apps.incident.models import IPSet
+    from mojo import errors as merrors
+
+    _remove("configured_reserved")
+    with mock.patch(
+            "mojo.apps.incident.services.firewall_truth.permanent_set_name",
+            return_value="configured_reserved"):
+        with th.assert_raises(merrors.ValueException):
+            IPSet.objects.create(name="configured_reserved", kind="custom")
+
+
 @th.django_unit_test("generic state mutation and deletion are retired")
 def test_state_and_delete_require_lifecycle(opts):
     from mojo.apps.incident.models import IPSet

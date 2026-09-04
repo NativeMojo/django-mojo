@@ -103,45 +103,65 @@ class IPSet(models.Model, MojoModel):
 
     def save(self, *args, **kwargs):
         """Central lifecycle guard for every model-owned write path."""
+        from mojo.apps.incident.services import firewall_truth
+        lease = getattr(self, "_desired_lease", None)
+        owns_lease = lease is None
         try:
+            if owns_lease:
+                lease = firewall_truth.acquire_desired_state(180)
             self.name = canonical_set_name(self.name)
+            aggregate_name = firewall_truth.permanent_set_name()
+            if self.name == aggregate_name:
+                raise FirewallTruthError(
+                    "reserved_set_name",
+                    "configured permanent firewall set name is reserved")
+            allowed_reserved = bool(getattr(self, "_allow_reserved_name", False))
+            if (self.name in self.THREAT_CACHE_SETS or
+                    self.name.startswith("mojo_")) and not allowed_reserved:
+                raise FirewallTruthError(
+                    "reserved_set_name", "firewall set namespace is reserved")
+            lifecycle = bool(getattr(self, "_lifecycle_write", False))
+            # Any path saving data gets the same all-or-nothing canonical form.
+            if self.data:
+                self.set_data(self.cidrs)
+            else:
+                self.data = ""
+                self.cidr_count = 0
+            prior = None
+            if self.pk is None:
+                # Creation never mutates the kernel. Explicit enable is a separate,
+                # governed operation with a checked outcome.
+                self.is_enabled = False
+            else:
+                prior = type(self).objects.filter(pk=self.pk).values(
+                    "name", "is_enabled", "data").first()
+                if prior:
+                    if prior["name"] != self.name:
+                        raise FirewallTruthError(
+                            "immutable_set_name", "firewall set names are immutable")
+                    if prior["is_enabled"] != self.is_enabled and not lifecycle:
+                        raise FirewallTruthError(
+                            "lifecycle_required",
+                            "firewall set state changes require enable/disable actions")
+                    if prior["data"] != self.data and prior["is_enabled"]:
+                        self.sync_error = "pending checked firewall reconciliation"
+                        if kwargs.get("update_fields") is not None:
+                            fields = set(kwargs["update_fields"])
+                            fields.update(("data", "cidr_count", "sync_error", "modified"))
+                            kwargs["update_fields"] = list(fields)
+            desired_changed = (
+                prior is None or prior["name"] != self.name or
+                prior["is_enabled"] != self.is_enabled or
+                prior["data"] != self.data)
+            if desired_changed:
+                firewall_truth.advance_fences(lease, [("set", self.name)])
+            return super().save(*args, **kwargs)
         except FirewallTruthError as err:
             from mojo import errors as merrors
             raise merrors.ValueException(str(err)) from err
-        allowed_reserved = bool(getattr(self, "_allow_reserved_name", False))
-        if (self.name in self.THREAT_CACHE_SETS or self.name == "mojo_blocked" or
-                self.name.startswith("mojo_")) and not allowed_reserved:
-            from mojo import errors as merrors
-            raise merrors.ValueException("firewall set namespace is reserved")
-        lifecycle = bool(getattr(self, "_lifecycle_write", False))
-        # Any path saving data gets the same all-or-nothing canonical form.
-        if self.data:
-            self.set_data(self.cidrs)
-        else:
-            self.data = ""
-            self.cidr_count = 0
-        if self.pk is None:
-            # Creation never mutates the kernel. Explicit enable is a separate,
-            # governed operation with a checked outcome.
-            self.is_enabled = False
-        else:
-            prior = type(self).objects.filter(pk=self.pk).values(
-                "name", "is_enabled", "data").first()
-            if prior:
-                if prior["name"] != self.name:
-                    from mojo import errors as merrors
-                    raise merrors.ValueException("firewall set names are immutable")
-                if prior["is_enabled"] != self.is_enabled and not lifecycle:
-                    from mojo import errors as merrors
-                    raise merrors.ValueException(
-                        "firewall set state changes require enable/disable actions")
-                if prior["data"] != self.data and prior["is_enabled"]:
-                    self.sync_error = "pending checked firewall reconciliation"
-                    if kwargs.get("update_fields") is not None:
-                        fields = set(kwargs["update_fields"])
-                        fields.update(("data", "cidr_count", "sync_error", "modified"))
-                        kwargs["update_fields"] = list(fields)
-        return super().save(*args, **kwargs)
+        finally:
+            if owns_lease:
+                firewall_truth.release_desired_state(lease)
 
     def delete(self, *args, **kwargs):
         from mojo import errors as merrors
@@ -216,12 +236,35 @@ class IPSet(models.Model, MojoModel):
             raise merrors.ValueException(
                 f"'{self.name}' is a cache-only threat list for geoip "
                 "detection and cannot be enabled")
-        self.set_enabled_desired(True)
-        return self.sync()
+        return self._change_and_sync(True)
 
     def disable(self):
-        self.set_enabled_desired(False)
-        return self.sync()
+        return self._change_and_sync(False)
+
+    def _change_and_sync(self, enabled):
+        from mojo.apps.incident.services import firewall_truth
+        lease = None
+        try:
+            lease = firewall_truth.acquire_desired_state(180)
+            self._desired_lease = lease
+            current = type(self).objects.filter(pk=self.pk).values(
+                "modified").first()
+            if current is None or current["modified"] != self.modified:
+                return {
+                    "status": "partial", "ok": False,
+                    "error": {
+                        "code": "generation_superseded",
+                        "message": "newer IPSet state won before lifecycle write",
+                    },
+                }
+            self.set_enabled_desired(enabled)
+            return self._sync_locked(lease)
+        except firewall_truth.FirewallTruthError as err:
+            return {"status": "unknown", "ok": False,
+                    "error": {"code": err.code, "message": str(err)}}
+        finally:
+            self._desired_lease = None
+            firewall_truth.release_desired_state(lease)
 
     def set_enabled_desired(self, enabled):
         if enabled and self.is_cache_only:
@@ -239,6 +282,19 @@ class IPSet(models.Model, MojoModel):
 
     def sync(self):
         """Dispatch desired state and persist only checked host truth."""
+        from mojo.apps.incident.services import firewall_truth
+        lease = None
+        try:
+            lease = firewall_truth.acquire_desired_state(180)
+            return self._sync_locked(lease)
+        except firewall_truth.FirewallTruthError as err:
+            return {"status": "unknown", "ok": False,
+                    "error": {"code": err.code, "message": str(err)}}
+        finally:
+            firewall_truth.release_desired_state(lease)
+
+    def _sync_locked(self, lease):
+        """Reconcile while the global desired-state generation is stable."""
         # Hard circuit breaker: the cache-only threat lists must never reach
         # the kernel firewall, even if is_enabled was force-set via a generic
         # field save (the enable action also rejects them with a 400).
@@ -268,7 +324,7 @@ class IPSet(models.Model, MojoModel):
         self.modified = dispatched_at
         generation = dispatched_at
         result = firewall_truth.reconcile_set(
-            self.name, self.cidrs, present=self.is_enabled)
+            self.name, self.cidrs, present=self.is_enabled, lease=lease)
         if result.get("status") == "verified" and result.get("ok") is True:
             self.sync_error = None
         else:

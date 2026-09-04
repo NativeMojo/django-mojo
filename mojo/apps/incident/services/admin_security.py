@@ -231,17 +231,27 @@ def _rules(cutoff, window, limit):
 
 def _ipsets(cutoff, window, limit):
     from mojo.apps.incident.models import IPSet
+    from mojo.apps.incident.services import firewall_truth
     rows = list(IPSet.objects.order_by("name", "id")[:limit + 1])
-    data = [{
-        "id": row.pk, "created": _iso(row.created),
-        "modified": _iso(row.modified), "name": row.name, "kind": row.kind,
-        "description": row.description, "source": row.source,
-        "is_enabled": row.is_enabled, "cidr_count": row.cidr_count,
-        "last_synced": _iso(row.last_synced),
-        "enforcement_status": ("verified" if not row.sync_error and
-                               row.last_synced else "pending_or_unknown"),
-        "sync_error": row.sync_error or "",
-    } for row in rows[:limit]]
+    try:
+        hosts = firewall_truth.exact_compatible_hosts()
+    except firewall_truth.FirewallTruthError:
+        hosts = []
+    data = []
+    for row in rows[:limit]:
+        value = _safe_ipset(row, hosts=hosts)
+        value.update(created=_iso(row.created), source=row.source)
+        data.append(value)
+    try:
+        roster_stable = bool(hosts) and (
+            firewall_truth.exact_compatible_hosts() == hosts)
+    except firewall_truth.FirewallTruthError:
+        roster_stable = False
+    if not roster_stable:
+        for value in data:
+            value.update(
+                enforcement_status="unknown", enforcement_ok=False,
+                error_code="runner_roster_changed")
     return _envelope(data, cutoff, window, len(rows) > limit)
 
 
@@ -416,7 +426,10 @@ _ACTION_FIELDS = {
 }
 
 
-def _safe_ipset(row, result=None):
+def _safe_ipset(row, result=None, hosts=None):
+    if result is None:
+        from mojo.apps.incident.services import firewall_truth
+        result = firewall_truth.current_ipset_enforcement(row, hosts=hosts)
     value = {
         "id": row.pk, "modified": _iso(row.modified), "name": row.name,
         "kind": row.kind, "description": row.description,
@@ -444,11 +457,7 @@ def _claim_ipset_action(action, payload):
         _expect_revision(payload, row)
         verb = action.split(".", 1)[1].upper()
         _confirm(payload, f"{verb} IPSET {row.pk}")
-        if action == "ipset.enable":
-            row.set_enabled_desired(True)
-        elif action == "ipset.disable":
-            row.set_enabled_desired(False)
-        elif action != "ipset.sync":
+        if action not in ("ipset.enable", "ipset.disable", "ipset.sync"):
             raise SecurityActionError("unsupported IPSet action")
     return row
 
@@ -587,7 +596,12 @@ def apply_action(payload, actor):
     if action.startswith("ipset."):
         row = _claim_ipset_action(action, payload)
         # Fleet waits must never hold the row lock or a database transaction.
-        result = row.sync()
+        if action == "ipset.enable":
+            result = row.enable()
+        elif action == "ipset.disable":
+            result = row.disable()
+        else:
+            result = row.sync()
         row.refresh_from_db()
         with transaction.atomic():
             _audit(actor, action, "ipset", row.pk)
