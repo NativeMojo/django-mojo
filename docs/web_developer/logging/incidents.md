@@ -2,8 +2,9 @@
 
 ## Permissions Required
 
-- `view_security` — read-only access to incidents, events, history, tickets
-- `manage_security` — create, edit, delete, merge incidents, manage tickets and rules
+- `view_security` (or `security`) — read-only access to incidents, events, history, tickets
+- `manage_security` (or `security`) — create, edit, delete, merge incidents, manage tickets,
+  and use the governed RuleSet action endpoint
 
 ## Endpoints
 
@@ -17,14 +18,10 @@
 | GET | `/api/incident/incident/history` | List incident history |
 | GET | `/api/incident/event/ruleset` | List rule sets |
 | GET | `/api/incident/event/ruleset/<id>` | Get rule set |
-| POST | `/api/incident/event/ruleset` | Create rule set |
-| POST | `/api/incident/event/ruleset/<id>` | Update rule set |
-| DELETE | `/api/incident/event/ruleset/<id>` | Delete rule set |
 | GET | `/api/incident/event/ruleset/rule` | List rules |
 | GET | `/api/incident/event/ruleset/rule/<id>` | Get rule |
-| POST | `/api/incident/event/ruleset/rule` | Create rule |
-| POST | `/api/incident/event/ruleset/rule/<id>` | Update rule |
-| DELETE | `/api/incident/event/ruleset/rule/<id>` | Delete rule |
+| GET | `/api/incident/admin/security` | Read bounded Admin Security sections and the RuleSet input schema |
+| POST | `/api/incident/admin/security/action` | Create, replace, activate, deactivate, or delete a complete RuleSet aggregate |
 | GET | `/api/incident/ticket` | List tickets |
 | GET | `/api/incident/ticket/<id>` | Get ticket |
 | POST | `/api/incident/ticket` | Create ticket |
@@ -383,7 +380,19 @@ note, and group provenance.
 
 ## RuleSet Fields
 
-Rule sets are read and written via `/api/incident/event/ruleset`, and their individual conditions via `/api/incident/event/ruleset/rule`. Reading needs `view_security` (or `security`); creating, updating and deleting need **`manage_security` (or `security`)**.
+The generic `/api/incident/event/ruleset` and
+`/api/incident/event/ruleset/rule` endpoints are read-only compatibility
+surfaces. Human writes go through
+`POST /api/incident/admin/security/action`, which requires a fresh interactive
+session and global **`manage_security` (or `security`)**. API keys and
+group-scoped grants are refused. See [Admin Security client
+contract](../security/README.md#admin-security-client-contract) for the GET
+envelope, confirmation strings, response shape, and errors.
+
+The action payload represents the complete aggregate: RuleSet fields use their
+public names, child conditions live in `rules`, handler URLs become typed
+objects in `handlers`, and `metadata.delete_on_resolution` becomes the top-level
+`delete_on_resolution` boolean.
 
 | Field | Type | Description |
 |---|---|---|
@@ -392,18 +401,44 @@ Rule sets are read and written via `/api/incident/event/ruleset`, and their indi
 | `retrigger_every` | int or null | Re-fire the handler every N additional events after the initial trigger. `null` = fire once only. |
 | `is_active` | bool | `false` takes the rule set out of evaluation entirely without deleting it or losing its rules. Use this to park a rule set you may want back. |
 | `bundle_minutes` | int or null | Time window for grouping events onto one incident. `0` = disabled (every event gets its own incident), `null` = unlimited. |
-| `metadata.delete_on_resolution` | bool | When `true`, incidents created by this RuleSet are auto-deleted the moment they transition to `resolved` or `closed`. Intended for noise patterns (bot scanners, brute-force probes) where the incident has no long-term value. Overridden per-incident by `metadata.do_not_delete`. |
+| `delete_on_resolution` | bool | When `true`, incidents created by this RuleSet are auto-deleted the moment they transition to `resolved` or `closed`. Intended for noise patterns (bot scanners, brute-force probes) where the incident has no long-term value. Overridden per-incident by `metadata.do_not_delete`. |
 
 > **`bundle_minutes` must be at least `trigger_window`.** The threshold counts events on a single incident. With `bundle_minutes: 0` each event lands on its own incident, so the count never climbs past 1 and a `trigger_count` silently **disables** the rule set instead of deferring it.
 
-A rule set whose `handler` contains `block://` and whose `trigger_count` is `null` firewalls the source IP on the **first** matching event. That is only appropriate when no legitimate user can produce the match — on a corporate NAT or CGNAT one address fronts many unrelated people. To retune a rule set that is already installed, POST just the fields you want to change:
+A rule set with a `block` handler and a null `trigger_count` firewalls the
+source IP on the **first** matching event. That is only appropriate when no
+legitimate user can produce the match — on a corporate NAT or CGNAT one
+address fronts many unrelated people. Replacing an installed rule is never a
+partial patch: submit its complete inactive policy against the current
+`modified` revision.
 
 ```
-POST /api/incident/event/ruleset/12
+POST /api/incident/admin/security/action
 {
-  "trigger_count": 25,
-  "trigger_window": 60,
-  "bundle_minutes": 60
+  "action": "ruleset.replace",
+  "ruleset_id": 12,
+  "expected_modified": "2026-09-04T17:18:19.123456+00:00",
+  "confirm": "REPLACE RULESET 12",
+  "ruleset": {
+    "name": "Brute Force Detection",
+    "category": "auth:failed",
+    "priority": 5,
+    "match_by": 0,
+    "bundle_by": 4,
+    "bundle_by_rule_set": true,
+    "bundle_minutes": 60,
+    "trigger_count": 25,
+    "trigger_window": 60,
+    "retrigger_every": null,
+    "handlers": [
+      {"type": "block", "ttl_seconds": 3600, "fleet_wide": true}
+    ],
+    "rules": [
+      {"name": "High severity", "field": "level", "operator": ">=", "value": 8}
+    ],
+    "delete_on_resolution": false,
+    "is_active": false
+  }
 }
 ```
 
@@ -429,20 +464,34 @@ POST /api/incident/event/ruleset/12
 **Example — block after 10 failed logins in 10 minutes, re-alert every 20 more:**
 
 ```
-POST /api/incident/event/ruleset
+POST /api/incident/admin/security/action
 {
-  "category": "auth:failed",
-  "name": "Brute Force Detection",
-  "bundle_by": 4,
-  "bundle_minutes": 10,
-  "handler": "block://?ttl=3600,notify://perm@manage_security",
-  "trigger_count": 10,
-  "trigger_window": 10,
-  "retrigger_every": 20
+  "action": "ruleset.create",
+  "confirm": "CREATE RULESET",
+  "ruleset": {
+    "category": "auth:failed",
+    "name": "Brute Force Detection",
+    "bundle_by": 4,
+    "bundle_minutes": 10,
+    "handlers": [
+      {"type": "block", "ttl_seconds": 3600, "fleet_wide": true},
+      {"type": "notify", "permission": "manage_security"}
+    ],
+    "rules": [
+      {"name": "High severity", "field": "level", "operator": ">=", "value": 8}
+    ],
+    "trigger_count": 10,
+    "trigger_window": 10,
+    "retrigger_every": 20,
+    "is_active": false
+  }
 }
 ```
 
-Incidents stay at `pending` until `trigger_count` is reached, then transition to `new` and the handler fires. With `retrigger_every=20`, the handler fires again at 30 events, 50, 70, and so on.
+Creation always stores the policy inactive. Activate it with a separate
+`ruleset.activate` action after reviewing the returned aggregate. Incidents
+then stay at `pending` until `trigger_count` is reached; with
+`retrigger_every=20`, the handler fires again at 30 events, 50, 70, and so on.
 
 ## Filtering
 

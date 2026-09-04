@@ -353,7 +353,7 @@ credential nobody proved.
 | `query_events` | `view_security` | No | Filter by category, IP, hostname, level, rule_id (OSSEC metadata), incident_id |
 | `query_event_counts` | `view_security` | No | Aggregate counts grouped by category or rule_id |
 | `query_tickets` | `view_security` | No | Filter tickets by status, priority, category |
-| `query_rulesets` | `view_security` | No | List rule sets with is_active, trigger_count, priority, match_by |
+| `query_rulesets` | `view_security` | No | Bounded, redacted RuleSet summaries with revision and validation state |
 | `query_ip_history` | `view_security` | No | IP reputation, block history, geo info, past incidents |
 | `query_blocked_ips` | `view_security` | No | List currently blocked IPs with TTL, reason, block count |
 | `query_ipsets` | `view_security` | No | List bulk IP sets (country/datacenter/abuse) — metadata only |
@@ -361,15 +361,16 @@ credential nobody proved.
 | `get_incident_timeline` | `view_security` | No | Full history/audit trail for an incident |
 | `get_incident_events` | `view_security` | No | Events bundled into an incident with full metadata |
 | `get_event` | `view_security` | No | Full event details including complete metadata |
-| `get_ruleset` | `view_security` | No | Full rule set details including child rules (field conditions) |
+| `get_ruleset` | `view_security` | No | One governed typed aggregate; legacy policies return replacement-required validation without raw handlers |
 | `update_incident` | `manage_security` | Yes | Change incident status with history note |
 | `bulk_update_incidents` | `manage_security` | Yes | Resolve/ignore up to 100 incidents at once |
 | `merge_incidents` | `manage_security` | Yes | Merge source incidents into target (moves events, deletes sources) |
-| `create_rule` | `manage_security` | Yes | Create new rule set with conditions (created disabled) |
-| `add_rule_condition` | `manage_security` | Yes | Add a field-level rule to an existing rule set |
-| `update_ruleset` | `manage_security` | Yes | Edit rule set fields (handler, bundle, trigger, is_active, etc.) |
-| `delete_ruleset` | `manage_security` | Yes | Delete a rule set and cascade-delete child rules |
-| `delete_rule` | `manage_security` | Yes | Delete a single rule condition from a rule set |
+| `create_rule` | `manage_security` / `security` | Yes | Create a validated inactive aggregate from typed handlers/rules; preview + approval + fresh auth (600s) |
+| `add_rule_condition` | `manage_security` / `security` | Yes | Retired compatibility tool; returns `full_replacement_required` |
+| `update_ruleset` | `manage_security` / `security` | Yes | Complete inactive replace, activate, or deactivate against `expected_modified`; preview + approval + fresh auth (600s) |
+| `delete_ruleset` | `manage_security` / `security` | Yes | Revision-bound aggregate delete; preview + approval + fresh auth (600s) |
+| `delete_rule` | `manage_security` / `security` | Yes | Retired compatibility tool; returns `full_replacement_required` |
+| `manage_security_recommendation` | `manage_security` / `security` | Yes | Approve/reject/cancel/reverse a bounded recommendation against its revision and frozen scope; preview + approval + fresh auth (600s) |
 | `block_ip` | `manage_security` | Yes | Block an IP fleet-wide with TTL |
 | `unblock_ip` | `manage_security` | Yes | Unblock a blocked IP fleet-wide |
 | `whitelist_ip` | `manage_security` | Yes | Add IP to whitelist (prevents future auto-blocks, unblocks if blocked) |

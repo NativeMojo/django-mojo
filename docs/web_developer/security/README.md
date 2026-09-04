@@ -42,7 +42,7 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 2. **Events** — every detection creates an Event record with category, level, and metadata
 3. **Rules** — RuleSets match events by category and apply threshold/bundling logic
 4. **Incidents** — matched events are grouped into Incidents for investigation
-5. **Handlers** — rules fire actions: block IPs, send emails/SMS, create tickets, invoke LLM
+5. **Handlers** — governed rules fire allowlisted actions: block IPs, notify, create tickets, or resolve incidents
 6. **Enforcement** — IP blocks propagate fleet-wide via iptables/ipset
 
 ## APIs at a Glance
@@ -55,8 +55,8 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | Health Summary | `/api/incident/health/summary` | Latest event per `system:health:*` category — one row per subsystem |
 | Tickets | `/api/incident/ticket` | Human review items, LLM conversation threads |
 | Ticket Notes | `/api/incident/ticket/note` | Ticket conversation (human + LLM) |
-| RuleSets | `/api/incident/event/ruleset` | Rule engine configuration — categories, bundling, trigger thresholds, handlers |
-| Rules | `/api/incident/event/ruleset/rule` | Conditions within a RuleSet (field comparisons) |
+| RuleSets | `/api/incident/event/ruleset` | Read-only compatibility view of RuleSet summaries |
+| Rules | `/api/incident/event/ruleset/rule` | Read-only compatibility view of Rule conditions |
 | GeoIP | `/api/system/geoip` | IP records, block status, threat level, geolocation |
 | Logs | `/api/logs` | Audit logs, firewall history |
 | Metrics | `/api/metrics/fetch` | Time-series data for dashboards |
@@ -85,25 +85,158 @@ See individual API docs for full details:
 ### Admin Security client contract
 
 Use the Admin Security endpoints for policy-management UI. They require global
-human grants; an API key or group membership is never sufficient. Render each
-section's own `status`, `observed_at`, `cutoff`, `window`, and `truncated`
-fields, and show `unavailable` rather than turning missing metrics into zero.
-Only metrics explicitly labelled exact are suitable for exact totals; case and
-learning projections identify themselves as sampled.
+human grants; an API key or group membership is never sufficient. Reads accept
+global `view_security`, `manage_security`, or `security`. Writes accept global
+`manage_security` or `security` and require authentication within 600 seconds.
+
+#### Read
+
+`GET /api/incident/admin/security` accepts:
+
+| Parameter | Meaning |
+|---|---|
+| `sections` or `section` | A comma-separated string or array drawn from `overview`, `cases`, `incidents`, `events`, `rules`, `ipsets`, `recommendations`, and `schemas`; omitted means all sections |
+| `limit` | Rows per list section; default 50, maximum 100 |
+| `window_hours` | Window for time-bound sections; default 24, maximum 2160 (90 days) |
+| `recommendation_id` | Adds the bounded target projection to the `recommendations` section for one recommendation |
+
+The standard response envelope contains a versioned map. Every requested
+section completes independently:
+
+```json
+{
+  "status": true,
+  "code": 200,
+  "data": {
+    "schema_version": 1,
+    "sections": {
+      "rules": {
+        "status": "available",
+        "observed_at": "2026-09-04T17:18:19.123456+00:00",
+        "cutoff": "2026-09-04T17:18:19.123456+00:00",
+        "window": {
+          "hours": 24,
+          "start": "2026-09-03T17:18:19.123456+00:00",
+          "end": "2026-09-04T17:18:19.123456+00:00"
+        },
+        "truncated": false,
+        "data": []
+      }
+    }
+  }
+}
+```
+
+Render each section's own `status`, `observed_at`, `cutoff`, `window`, and
+`truncated` fields. A failed collector returns `status: "unavailable"`,
+`reason: "collector_unavailable"`, and empty `data`; do not turn that into a
+zero. Only metrics explicitly labelled exact are suitable for exact totals;
+case and learning projections identify themselves as sampled.
+
+The `rules` section is a summary list: it includes the aggregate revision,
+configuration, validation status, `rule_count`, and—for a valid policy—the
+safe typed handlers under `validation.handlers`; it does not inline child
+rules. Successful `ruleset.create` and `ruleset.replace` action responses
+include their validated typed `rules`, top-level `handlers`, and
+`delete_on_resolution`. Do not treat the generic RuleSet read as an editable
+aggregate: its raw handler field is deliberately omitted.
 
 To review a recommendation, request
 `?sections=recommendations&recommendation_id=<id>`. That bounded detail is the
 only Admin Security read that returns target IPs; it intentionally omits
 execution errors and prior block reasons. Bind the returned `modified` revision
-and exact target set into the operator's confirmation.
+and exact target set into the operator's confirmation. The detail list is
+bounded to 1024 targets and reports `targets_truncated`; never offer an action
+when it is true.
+
+`sections=schemas` returns the server-owned `rule_policy.aggregate` object
+contract, condition fields/types/operators, bundling choices, typed handler
+arguments, caps, and the action roster. Build editors from that response;
+never send raw handler URLs.
+
+#### Write
 
 For a write, first read the row, retain its `modified` value, then post the
 selected action with `expected_modified` and the exact confirmation string. A
 409 means the object changed and the UI must reload/review rather than retry
 blindly. Rule edits are complete inactive replacements; activation is another
 action, with a second confirmation for catch-all policies. Do not send raw
-handler URLs: build typed handlers from `schemas.rule_policy`. The older
-RuleSet/Rule URLs are read-only compatibility surfaces. IPSet generic
+handler URLs. The action-specific fields and confirmation strings are:
+
+| Action | Required request fields | `confirm` value |
+|---|---|---|
+| `ruleset.create` | `ruleset` | `CREATE RULESET` |
+| `ruleset.replace` | `ruleset_id`, `expected_modified`, complete inactive `ruleset` | `REPLACE RULESET <id>` |
+| `ruleset.activate` | `ruleset_id`, `expected_modified`; `confirm_catch_all` when applicable | `ACTIVATE RULESET <id>` |
+| `ruleset.deactivate` | `ruleset_id`, `expected_modified` | `DEACTIVATE RULESET <id>` |
+| `ruleset.delete` | `ruleset_id`, `expected_modified` | `DELETE RULESET <id>` |
+| `recommendation.approve`, `.reject`, `.cancel`, `.reverse` | `recommendation_id`, `expected_modified`, optional `note` (maximum 256 characters) | `<VERB> RECOMMENDATION <id>` |
+
+A catch-all activation additionally requires
+`confirm_catch_all: "ACTIVATE CATCH-ALL RULESET <id>"`. Unknown fields are
+rejected. Create always stores the policy inactive; replace requires
+`ruleset.is_active: false`.
+
+```json
+{
+  "action": "ruleset.create",
+  "confirm": "CREATE RULESET",
+  "ruleset": {
+    "name": "High-severity authentication failures",
+    "category": "auth:failed",
+    "priority": 20,
+    "bundle_minutes": 30,
+    "bundle_by": 4,
+    "bundle_by_rule_set": true,
+    "match_by": 0,
+    "trigger_count": 10,
+    "trigger_window": 30,
+    "retrigger_every": null,
+    "handlers": [
+      {"type": "notify", "permission": "manage_security"}
+    ],
+    "rules": [
+      {"name": "High severity", "field": "level", "operator": ">=", "value": 8}
+    ],
+    "delete_on_resolution": false,
+    "is_active": false
+  }
+}
+```
+
+Success returns the action and its safe object projection:
+
+```json
+{
+  "status": true,
+  "code": 200,
+  "data": {
+    "schema_version": 1,
+    "action": "ruleset.create",
+    "data": {
+      "id": 42,
+      "modified": "2026-09-04T17:18:19.123456+00:00",
+      "is_active": false,
+      "handlers": [
+        {"type": "notify", "permission": "manage_security"}
+      ],
+      "rules": [
+        {"name": "High severity", "field": "level", "operator": ">=", "value": "8", "value_type": "int", "is_required": false}
+      ]
+    }
+  }
+}
+```
+
+| HTTP/body `code` | Meaning |
+|---|---|
+| 400 | Unknown action/field, invalid typed policy, bad ID/note, or missing typed confirmation |
+| 403 | The caller lacks a qualifying global human grant or is key-backed |
+| 404 | The named RuleSet or recommendation does not exist |
+| 409 | Stale revision, invalid recommendation state/scope, or a legacy RuleSet that must be replaced before activation |
+| 440 | Reauthentication is required; refreshing the token does not update its authentication time |
+
+The older RuleSet/Rule URLs are read-only compatibility surfaces. IPSet generic
 administration remains writable until the firewall-authority API replaces it.
 
 ## Building a Security Dashboard
@@ -248,7 +381,7 @@ GET /api/logs?kind=firewall:block&sort=-created&size=20
 | `firewall:unblock` | IP unblocked |
 | `firewall:whitelist` | IP whitelisted |
 | `firewall:unwhitelist` | Whitelist removed |
-| `firewall:auto_block` | Auto-blocked by a rule handler (`block://`) |
+| `firewall:auto_block` | Auto-blocked by a governed `block` rule handler |
 
 All firewall logs include structured `payload` JSON with `ip`, `reason`, `trigger`, and action-specific fields. Parse `payload` for dashboard cards.
 
@@ -383,19 +516,40 @@ buttons**, not free text. Tickets with a pending action are flagged
     "type": "approval",
     "handler": "incident.rule_approval",
     "label": "Approve rule proposal?",
-    "context": {"target": {"model": "incident.RuleSet", "pk": 42, "label": "SSH brute force blocker"}}
+    "schema": "incident.ticket_approval",
+    "schema_version": 1,
+    "proposal_note_id": 73,
+    "state": "pending",
+    "resolved": false,
+    "context": {
+      "target": {"model": "incident.RuleSet", "pk": 42, "label": "SSH brute force blocker"},
+      "expected_modified": "2026-09-04T17:18:19.123456+00:00",
+      "confirm": "ACTIVATE RULESET 42",
+      "deny_confirm": "DELETE RULESET 42"
+    },
+    "review": {
+      "target": {"model": "incident.RuleSet", "pk": 42, "label": "SSH brute force blocker"},
+      "revision": "2026-09-04T17:18:19.123456+00:00",
+      "confirmation": {
+        "approve": "ACTIVATE RULESET 42",
+        "deny": "DELETE RULESET 42"
+      }
+    }
   }
 }
 ```
 
-Render `label` as the question, and resolve `context.target` to a link/card
-generically: `model` `"incident.RuleSet"` + `pk` 42 → `/api/incident/ruleset/42`.
+Render `label` as the question and the immutable `review` object as the
+human-visible target, revision, and confirmations. Resolve `review.target` to a link/card
+generically: `model` `"incident.RuleSet"` + `pk` 42 →
+`/api/incident/event/ruleset/42`.
 Once `action.resolved` is `true`, disable the buttons.
 
-To answer, create a new note whose `metadata.action_response` copies
-`handler` and `context` **verbatim** from the action note (the backend
-executes the context you submit — never compose or edit it client-side),
-with `action` set to `"approve"` or `"deny"`:
+To answer, create a new note whose `metadata.action_response` has exactly three
+keys: copy the pending `proposal_note_id` and `handler`, then set `action` to
+`"approve"` or `"deny"`. Do not send context or extra keys. The backend executes
+only the target, revision, confirmation, and policy stored on that exact
+server-authored proposal note.
 
 ```
 POST /api/incident/ticket/note
@@ -404,21 +558,25 @@ POST /api/incident/ticket/note
   "note": "Approved",
   "metadata": {
     "action_response": {
+      "proposal_note_id": 73,
       "handler": "incident.rule_approval",
-      "action": "approve",
-      "context": {"target": {"model": "incident.RuleSet", "pk": 42}}
+      "action": "approve"
     }
   }
 }
 ```
 
-The backend dispatches the handler deterministically — approving a rule
-proposal activates the rule and resolves the ticket; denying deletes the
-proposal and closes it. A structured response never triggers an LLM reply;
-plain notes on an LLM-enabled ticket do. The outcome is posted back to the
-thread as an `[LLM Agent]` system note. Disable the buttons after the first
-click — the backend also guards against double-dispatch (resolved stamp +
-terminal-status skip), so a repeat is a safe no-op.
+Dispatch requires a global `manage_security`/`security` grant, a non-key-backed
+session, and authentication within 600 seconds. Approving a rule proposal
+activates exactly the revision that was reviewed and resolves the ticket;
+denying deletes that same revision and closes it. A stale revision fails closed.
+A structured response never triggers an LLM reply; plain notes on an
+LLM-enabled ticket do. The outcome is posted back to the thread as an
+`[LLM Agent]` system note. Disable the buttons after the first successful click
+— the backend locks the ticket and named proposal while claiming it. A retry of
+the same resolved choice converges without redispatch; a conflicting choice
+cannot replace the committed decision. Failed handlers return the proposal to
+`state: "pending"`.
 
 ### 8. Event Reporting (Client-Side)
 
@@ -475,19 +633,21 @@ browser/admin APIs. They are enabled only when the deployment sets a non-empty
 
 ## Configuring RuleSets
 
-RuleSets are the core of the rule engine. Each RuleSet watches a specific event category, groups related events into incidents, and fires a handler when enough events accumulate. You create and manage them via the REST API — no code deployment required.
+RuleSets are the core of the rule engine. Each RuleSet watches a specific event
+category, groups related events into incidents, and fires a handler when enough
+events accumulate. Human clients mutate the complete RuleSet and its child
+rules through the governed Admin Security action endpoint.
 
 ### Endpoints
 
 | Method | Path | Description | Permission |
 |--------|------|-------------|------------|
-| `GET` | `/api/incident/event/ruleset` | List all rulesets | `view_security` |
-| `GET` | `/api/incident/event/ruleset/<id>` | Get a single ruleset | `view_security` |
-| `POST` | `/api/incident/event/ruleset` | Create a ruleset | `manage_security` |
-| `POST` | `/api/incident/event/ruleset/<id>` | Update a ruleset | `manage_security` |
-| `DELETE` | `/api/incident/event/ruleset/<id>` | Delete a ruleset | `manage_security` |
+| `GET` | `/api/incident/admin/security?sections=rules,schemas` | Bounded RuleSet summaries plus the server-owned input schema | global `view_security`, `manage_security`, or `security`; human only |
+| `POST` | `/api/incident/admin/security/action` | Create/replace/activate/deactivate/delete a complete RuleSet | global `manage_security` or `security`; fresh human session |
+| `GET` | `/api/incident/event/ruleset[/<id>]` | Read-only compatibility RuleSet projection | `view_security` |
+| `GET` | `/api/incident/event/ruleset/rule[/<id>]` | Read-only compatibility child-rule projection | `view_security` |
 
-Rules (the conditions within a ruleset) are managed at `/api/incident/event/ruleset/rule`.
+POST and DELETE requests to the generic RuleSet and Rule URLs are disabled.
 
 ### RuleSet Fields
 
@@ -498,11 +658,15 @@ Rules (the conditions within a ruleset) are managed at `/api/incident/event/rule
 | `priority` | int | Evaluation order — lower number = higher priority. First match wins. |
 | `match_by` | int | `0` = ALL rules must match, `1` = ANY rule can match |
 | `bundle_by` | int | How to group events into one incident (see below) |
-| `bundle_minutes` | int | Time window for bundling. `0` = each event gets its own incident, `null` = bundle forever, `>0` = bundle within N minutes |
-| `handler` | string | Handler chain to fire (see [Handlers](#incident-handlers)) |
-| `trigger_count` | int | Hold incident at `pending` until this many events accumulate. `null` = fire on first event. |
-| `trigger_window` | int | Only count events within this many minutes when evaluating `trigger_count`. `null` = count all events on the incident. |
-| `retrigger_every` | int | Re-fire the handler every N additional events while the incident stays active. `null` = fire once only. |
+| `bundle_minutes` | int or null | Time window for bundling. `0` = each event gets its own incident, `null` = bundle forever, `>0` = bundle within N minutes |
+| `bundle_by_rule_set` | bool | Include the RuleSet in the bundle identity |
+| `handlers` | array | Typed, ordered handler objects; raw URL strings are rejected |
+| `rules` | array | Complete ordered child-rule array; maximum 32 |
+| `trigger_count` | int or null | Hold incident at `pending` until this many events accumulate. `null` = fire on first event. |
+| `trigger_window` | int or null | Only count events within this many minutes when evaluating `trigger_count`. `null` = count all events on the incident. |
+| `retrigger_every` | int or null | Re-fire the handler every N additional events while the incident stays active. `null` = fire once only. |
+| `delete_on_resolution` | bool | Delete incidents created by this RuleSet when they resolve or close, unless the incident is protected |
+| `is_active` | bool | Governed create/replace requires inactive policy; activation is a separate action |
 
 ### bundle_by Values
 
@@ -539,21 +703,33 @@ Without `trigger_count`, the handler fires on the very first event. That's right
 **Example — block after 10 failed logins in 5 minutes:**
 
 ```
-POST /api/incident/event/ruleset
+POST /api/incident/admin/security/action
 {
-  "name": "Brute Force Detection",
-  "category": "auth:failed",
-  "priority": 5,
-  "match_by": 0,
-  "bundle_by": 4,
-  "bundle_minutes": 30,
-  "trigger_count": 10,
-  "trigger_window": 5,
-  "handler": "block://?ttl=3600"
+  "action": "ruleset.create",
+  "confirm": "CREATE RULESET",
+  "ruleset": {
+    "name": "Brute Force Detection",
+    "category": "auth:failed",
+    "priority": 5,
+    "match_by": 0,
+    "bundle_by": 4,
+    "bundle_minutes": 30,
+    "trigger_count": 10,
+    "trigger_window": 5,
+    "handlers": [
+      {"type": "block", "ttl_seconds": 3600, "fleet_wide": true}
+    ],
+    "rules": [
+      {"name": "High severity", "field": "level", "operator": ">=", "value": 8}
+    ],
+    "is_active": false
+  }
 }
 ```
 
-Events 1–9 from the same IP sit quietly at `pending`. Event 10 trips the threshold → incident goes `new` → IP gets blocked fleet-wide.
+After a separate activation, events 1–9 from the same IP sit quietly at
+`pending`. Event 10 trips the threshold → incident goes `new` → IP gets
+blocked fleet-wide.
 
 ### retrigger_every: Keep Alerting as Things Escalate
 
@@ -562,17 +738,28 @@ Sometimes you want the handler to fire again if the attack keeps going. `retrigg
 **Example — ticket at 5 payment failures, then escalate every 10 more:**
 
 ```
-POST /api/incident/event/ruleset
+POST /api/incident/admin/security/action
 {
-  "name": "Payment Failure Escalation",
-  "category": "payment:declined",
-  "priority": 10,
-  "match_by": 0,
-  "bundle_by": 4,
-  "bundle_minutes": 60,
-  "trigger_count": 5,
-  "retrigger_every": 10,
-  "handler": "ticket://?priority=7,email://perm@manage_security"
+  "action": "ruleset.create",
+  "confirm": "CREATE RULESET",
+  "ruleset": {
+    "name": "Payment Failure Escalation",
+    "category": "payment:declined",
+    "priority": 10,
+    "match_by": 0,
+    "bundle_by": 4,
+    "bundle_minutes": 60,
+    "trigger_count": 5,
+    "retrigger_every": 10,
+    "handlers": [
+      {"type": "ticket", "priority": 7, "status": "open", "category": "incident"},
+      {"type": "email", "permission": "manage_security"}
+    ],
+    "rules": [
+      {"name": "Declined", "field": "category", "operator": "==", "value": "payment:declined"}
+    ],
+    "is_active": false
+  }
 }
 ```
 
@@ -585,91 +772,95 @@ Re-triggers add a `handler_retriggered` history entry on the incident so you can
 
 ### Handler Chains
 
-Multiple handlers are chained with commas:
+Send handlers as an ordered array of typed objects. The server validates and
+compiles that array into its private storage format:
 
-```
-block://?ttl=3600,ticket://?priority=9,email://perm@manage_security
+```json
+[
+  {"type": "block", "ttl_seconds": 3600, "fleet_wide": true},
+  {"type": "ticket", "priority": 9, "status": "open", "category": "security"},
+  {"type": "email", "permission": "manage_security"}
+]
 ```
 
 **Block handler parameters:**
 
 | Param | Default | Description |
 |-------|---------|-------------|
-| `ttl` | `600` | Seconds until auto-unblock. `0` = permanent. |
-| `reason` | `auto:ruleset` | Reason recorded on the GeoLocatedIP block record |
+| `ttl_seconds` | required | Seconds until auto-unblock; 300–604800 |
+| `fleet_wide` | `true` | Optional explicit scope declaration; if supplied it must be literal `true` because RuleSet blocks are always broadcast fleet-wide |
 
 **Ticket handler parameters:**
 
 | Param | Description |
 |-------|-------------|
-| `priority` | Ticket priority (1–15, defaults to event level) |
-| `status` | Initial status (`open`, `new`) |
-| `title` | Override ticket title |
+| `priority` | Ticket priority (1–10; default 5) |
+| `status` | Initial status (`open` or `new`; default `open`) |
 | `category` | Ticket category (default: `incident`) |
+| `maestro` | Boolean: report through the configured default Maestro board |
+| `board_id` | Positive remote board id; mutually exclusive with `maestro: true` |
 
-**Notification targets** (for `email://`, `sms://`, `notify://`):
+**Notification targets** (for `email`, `sms`, and `notify`):
 
-| Syntax | Who gets notified |
-|--------|-------------------|
-| `perm@manage_security` | All users with the `manage_security` permission |
-| `protected@alerts` | Users who opted into `metadata.protected.alerts` |
-| `admin` | Specific user by username |
+| `permission` | Who gets notified |
+|---|---|
+| `manage_security` | Users with the `manage_security` permission |
+| `security` | Users with the `security` permission |
+
+The handler array has a maximum of eight entries. `ignore` must be the only
+entry and takes no arguments. Arbitrary recipients, handler URLs, jobs, Python
+paths, and LLM handlers are not part of the governed schema.
 
 ### Common Patterns
 
-| Scenario | bundle_by | trigger_count | trigger_window | retrigger_every | handler |
+| Scenario | bundle_by | trigger_count | trigger_window | retrigger_every | typed handler |
 |----------|-----------|---------------|----------------|-----------------|---------|
-| Block after 10 SSH failures in 5 min | SOURCE_IP (4) | 10 | 5 | — | `block://?ttl=3600` |
-| Block on first credential-stuffing attempt | SOURCE_IP (4) | — | — | — | `block://?ttl=1800` |
-| Ticket after 3 payment declines | SOURCE_IP (4) | 3 | 60 | — | `ticket://?priority=7` |
-| Notify on first health alert | HOSTNAME (1) | — | — | — | `notify://perm@manage_security` |
-| Email at 5 auth failures, re-alert every 10 | SOURCE_IP (4) | 5 | 30 | 10 | `email://perm@manage_security` |
-| Block bot + create ticket for review | SOURCE_IP (4) | — | — | — | `block://?ttl=3600,ticket://?priority=8` |
+| Block after 10 SSH failures in 5 min | SOURCE_IP (4) | 10 | 5 | — | `block` (3600 seconds) |
+| Block on first credential-stuffing attempt | SOURCE_IP (4) | — | — | — | `block` (1800 seconds) |
+| Ticket after 3 payment declines | SOURCE_IP (4) | 3 | 60 | — | `ticket` (priority 7) |
+| Notify on first health alert | HOSTNAME (1) | — | — | — | `notify` (`manage_security`) |
+| Email at 5 auth failures, re-alert every 10 | SOURCE_IP (4) | 5 | 30 | 10 | `email` (`manage_security`) |
+| Block bot + create ticket for review | SOURCE_IP (4) | — | — | — | `block`, then `ticket` |
 | Silent audit (no handler) | MODEL_NAME_AND_ID (3) | — | — | — | — |
 
 ### Rule Conditions
 
-Each ruleset can have zero or more `Rule` records that filter which events it applies to. Create them at `/api/incident/event/ruleset/rule`:
+Each RuleSet action carries the complete ordered `rules` array. Conditions are
+not written independently:
 
-```
-POST /api/incident/event/ruleset/rule
-{
-  "parent": 42,
+```json
+"rules": [{
   "name": "Level >= 7",
-  "field_name": "level",
-  "comparator": ">=",
-  "value": "7",
-  "value_type": "int"
-}
+  "field": "level",
+  "operator": ">=",
+  "value": 7
+}]
 ```
 
-**Comparators**: `==`, `>`, `>=`, `<`, `<=`, `contains`, `regex`
-
-**value_type**: `str`, `int`, `float`, `bool`
-
-`field_name` can be any field on the event (`level`, `source_ip`, `hostname`, `country_code`) or any key in `event.metadata` (e.g. `risk_score`, `http_url`, `rule_id` for OSSEC).
-
-A ruleset with no rules never matches. Always add at least one rule.
+The `schemas.rule_policy.fields` response is the authority for allowed fields,
+their value types, and operators. `field_name`/`comparator` are accepted aliases
+for `field`/`operator`, but the two forms cannot disagree. Regex patterns are
+bounded and reject backreferences, assertions, nested repetition, and other
+unsafe forms. A RuleSet with no rules is a catch-all and needs the additional
+catch-all confirmation before activation.
 
 ## Incident Handlers
 
-Rules can fire these handlers when incidents are created:
+Governed RuleSets can fire these typed handlers when incidents are created:
 
-| Handler | Syntax | What it does |
-|---------|--------|-------------|
-| Block IP | `block://?ttl=3600` | Fleet-wide IP block |
-| Email | `email://perm@manage_security` | Email verified users |
-| SMS | `sms://perm@manage_security` | SMS verified users (critical only) |
-| Notify | `notify://perm@manage_security` | In-app + push notification |
-| Ticket | `ticket://?priority=8` | Create a local ticket; add `maestro=1` or remote `board=3` to report it |
-| Maestro | `maestro://?board=3` | Report the Incident directly; omit `board` for the default |
-| Job | `job://module.function` | Run custom async job |
-| LLM | `llm://` | Autonomous LLM triage agent |
+| Type | What it does |
+|---|---|
+| `block` | Places a bounded temporary IP block |
+| `email` | Emails users holding an allowed security permission |
+| `sms` | Texts users holding an allowed security permission |
+| `notify` | Sends in-app/push notification to users holding an allowed security permission |
+| `ticket` | Creates a local ticket, optionally reported to Maestro |
+| `resolve` | Resolves or closes the incident with an optional bounded note |
+| `ignore` | Explicitly performs no action; must be the only handler |
 
-Handlers resolve notification targets via:
-- `perm@name` — all users with that permission
-- `protected@key` — users who opted in via `metadata.protected.{key}`
-- `username` — specific user by username
+`schemas.rule_policy.handlers` supplies the handler roster, arguments, and
+bounds. Stored legacy chains outside the allowlist remain visible for
+replacement, deactivation, or deletion, but no longer dispatch.
 
 ## LLM Agent
 

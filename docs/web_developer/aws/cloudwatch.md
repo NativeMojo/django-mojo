@@ -363,7 +363,8 @@ Accepted state changes appear in the incident feed with:
 Alarm ingestion is opt-in at the policy layer. Without a CloudWatch-specific
 RuleSet, the Event is retained but no Incident or Ticket is created. With a
 matching rule, `ALARM` can open an incident and run configured handlers such as
-`ticket://?board=<id>`.
+a typed `{"type":"ticket","board_id":<id>}` handler in the governed
+RuleSet aggregate.
 
 System Setup's owned delivery probe is the exception: the persisted transition
 has `is_delivery_probe: true` and is evidence-only, so it never creates an

@@ -12,7 +12,8 @@ incident dispatch.
 Security administration uses `GET /api/incident/admin/security` and
 `POST /api/incident/admin/security/action`. These are platform-global human
 contracts: machine/key-backed and group-scoped identities are refused, and
-writes require a global manage-security grant plus fresh authentication. The
+writes require global `manage_security` or `security` plus fresh
+authentication. The
 read response is versioned and section-bounded; it exposes safe typed policy
 shapes and provenance-labelled metrics, never raw evidence, metadata, handler
 URLs, commands, CIDRs, source credentials, Python paths, or provider exceptions.
@@ -61,7 +62,7 @@ firewall-authority migration.
                            ┌─────────────────────────┐
                            │    Handler Chain         │
                            │  block · email · notify  │
-                           │  ticket · llm · sms · job│
+                           │ ticket · resolve · ignore│
                            └────────────┬─────────────┘
                                         │
                             ┌───────────┼───────────┐
@@ -282,141 +283,56 @@ Example: `bundle_by=SOURCE_IP, bundle_minutes=30` means "group all events from t
 
 ## 3. Handlers
 
-Handlers define what happens when a rule matches. A RuleSet's `handler` field is a comma-separated chain of handler URLs. All handlers in the chain execute for each match.
+Handlers define what happens when a rule matches. The public policy contract is
+an ordered array of typed objects. `services.rule_validation` validates it and
+compiles the accepted values into the legacy comma-separated
+`RuleSet.handler` storage column; callers never submit handler URLs.
 
-```python
-# Single handler
-handler = "block://?ttl=3600"
-
-# Handler chain — block IP, create ticket, and notify
-handler = "block://?ttl=3600,ticket://?priority=9,notify://perm@manage_security"
+```json
+[
+  {"type": "block", "ttl_seconds": 3600, "fleet_wide": true},
+  {"type": "ticket", "priority": 9, "status": "open", "category": "security"},
+  {"type": "notify", "permission": "manage_security"}
+]
 ```
 
 ### Handler Types
 
-#### `block://?ttl=<seconds>`
+| Type | Accepted arguments | Action |
+|---|---|---|
+| `block` | `ttl_seconds` 300–604800; optional `fleet_wide=True` (false is rejected) | Temporarily blocks the event's source address and records the action; enforcement broadcasts fleet-wide |
+| `ticket` | `priority` 1–10; `status` `open`/`new`; bounded `category`; optional, mutually exclusive `maestro` or `board_id` | Creates a Ticket linked to the incident, optionally reported to Maestro |
+| `notify`, `email`, `sms` | `permission`: `manage_security` or `security` | Notifies active users with the selected global permission; email/phone verification still applies |
+| `resolve` | `status` `resolved`/`closed`; optional note up to 160 characters | Resolves or closes the incident |
+| `ignore` | no arguments and no sibling handlers | Explicitly performs no action |
 
-Blocks the event's `source_ip` across the entire fleet. Creates a `GeoLocatedIP` block record, broadcasts an iptables block to all servers, records the action in `IncidentHistory`, and auto-resolves the incident.
+The array caps at eight entries. `rule_validation.public_schema()` and the
+Admin Security `schemas` section publish the handler roster, arguments, and
+bounds.
+Arbitrary recipients, permanent blocks, raw handler URLs, Python/job targets,
+and LLM handlers are refused by the governed writer. Existing legacy handler
+classes remain implementation details for old data and internal workflows, but
+`RuleSet.run_handler()` now revalidates the whole aggregate before publishing:
+an out-of-schema legacy chain cannot dispatch until an administrator replaces
+it with a valid inactive policy and separately activates it.
 
-`geo.block()` is idempotent — if the IP is already actively blocked the call returns `True` without re-broadcasting or incrementing `block_count`.
-
-| Param | Default | Description |
-|-------|---------|-------------|
-| `ttl` | `3600` | Block duration in seconds (0 = permanent) |
-| `reason` | `auto:ruleset` | Base reason string. Incident and event IDs are appended automatically: `auto:ruleset:incident:42:event:87` |
-
-```
-block://?ttl=600      # Block for 10 minutes
-block://?ttl=86400    # Block for 24 hours
-block://?ttl=0        # Permanent block
-```
-
-**Important:** Never use `block://` for health events — health issues are infrastructure problems, not attacks.
-
-#### `ticket://?status=<status>&priority=<n>`
-
-Creates a Ticket linked to the incident for human review.
-
-| Param | Default | Description |
-|-------|---------|-------------|
-| `status` | `open` | Initial ticket status |
-| `priority` | `5` | Priority 1-10 (10 = highest) |
-| `category` | | Optional ticket category |
-| `assignee` | | Optional username to assign to |
-| `maestro` | | Set `1` to also report the Ticket to the configured Maestro default board |
-| `board` | | Remote Maestro board id; also opts the Ticket into Maestro reporting |
-
-```
-ticket://?priority=9&status=open
-ticket://?priority=5&assignee=oncall
-ticket://?priority=9&board=3
-```
-
-#### `maestro://?board=<remote-id>`
-
-Reports the Incident itself to Maestro without creating a local Ticket. Omit
-`board` to use the integration's server-side default:
-
-```
-maestro://
-maestro://?board=3
-```
-
-See [Maestro Workspace Reporting](maestro_board.md).
-
-#### `notify://<targets>`
-
-Sends in-app notification + push notification to resolved targets.
-
-```
-notify://perm@manage_security           # All users with manage_security perm
-notify://alice,bob                       # Specific users
-notify://perm@manage_security,alice      # Mixed
-```
-
-#### `email://<targets>`
-
-Sends email alert to resolved targets. Only sends to users with verified emails.
-
-```
-email://perm@manage_security
-email://alice,oncall
-```
-
-**Requires:** `INCIDENT_EMAIL_FROM` setting.
-
-#### `sms://<targets>`
-
-Sends SMS alert to resolved targets. Only sends to users with verified phone numbers.
-
-```
-sms://perm@manage_security
-sms://oncall
-```
-
-#### `llm://`
-
-Invokes the LLM security agent for explicit RuleSet-driven triage. No
-parameters — the agent receives the event and incident context and decides
-what to do.
-
-```
-llm://
-```
-
-**Requires:** a valid safety-policy route, that route's exact configured
-credential, a clear emergency stop, and the `anthropic` Python package.
-The autonomous catch-all switch is **not** required for an explicit `llm://`
-RuleSet handler; it gates only event catch-all pickup and scheduled sweeps.
-Credential presence alone does not authorize work.
-
-#### `job://<module.function>?<params>`
-
-Dispatches a custom async job.
-
-```
-job://myapp.jobs.analyze_traffic?window=3600
-```
-
-### Target Resolution
-
-Targets in `notify://`, `email://`, and `sms://` handlers support three formats:
-
-| Format | Resolves to |
-|--------|-------------|
-| `perm@permission_name` | All active users with that permission |
-| `protected@metadata_key` | All active users with `metadata.protected.{key} = True` |
-| `username` | Single user by username |
-
-Targets are comma-separated and deduplicated. For `email://`, only users with `is_email_verified=True` receive mail. For `sms://`, only users with `is_phone_verified=True` receive texts.
+`geo.block()` remains idempotent — if an IP is already actively blocked the
+call returns `True` without re-broadcasting or incrementing `block_count`.
+Never use `block` for health events; health issues are infrastructure problems,
+not attacks.
 
 ### Handler Execution
 
 Handlers execute asynchronously via the job queue. When a rule matches:
+
 1. An incident is created (or existing incident is found via bundling)
-2. Each handler in the chain is published as a separate async job
-3. Handler execution is recorded in `IncidentHistory`
-4. Failures are logged but do not block other handlers in the chain
+2. Each handler in the chain is published as a separate async job stamped
+   `handler_schema="incident.governed_handler"` and
+   `handler_schema_version=1`
+3. The worker revalidates the one typed handler against the current schema;
+   unversioned, stale, or newly unsafe durable jobs are refused
+4. Handler execution is recorded in `IncidentHistory`
+5. Failures are logged but do not block other handlers in the chain
 
 ## 4. Incidents
 
@@ -487,7 +403,8 @@ incident.on_action_analyze(None)
 
 ## 5. Tickets
 
-Tickets are actionable work items created by `ticket://` handlers or the LLM agent.
+Tickets are actionable work items created by governed `ticket` handlers or the
+LLM agent.
 
 ### Structure
 
@@ -521,15 +438,19 @@ dispatch guards, and built-in handlers.
 
 ## 6. LLM Security Agent
 
-The LLM agent provides autonomous security triage. When invoked via the `llm://` handler, it investigates the event, takes action, and communicates findings via tickets.
+The LLM agent provides autonomous security triage through the guarded incident
+dispatch service. It is no longer selectable as a RuleSet handler: the
+governed handler schema rejects `llm://` along with arbitrary executable
+targets.
 
 ### How It Works
 
-1. `llm://` handler publishes an async job with event_id, incident_id, ruleset_id
-2. Agent receives the event context + any custom `agent_prompt` from the RuleSet
-3. Agent runs an investigation loop (up to 15 tool calls)
-4. Agent takes action (block IPs, create tickets, update incidents, send alerts)
-5. Agent can persist learnings to `RuleSet.metadata.agent_memory` for future invocations
+1. An eligible unmatched high-level event or the bounded new-incident sweep calls `llm_dispatch.claim_incident()`
+2. The durable attempt publishes a job with `event_id`, `incident_id`, and optional `ruleset_id`
+3. Agent receives the event context + any custom `agent_prompt` from the RuleSet
+4. Agent runs an investigation loop (up to 15 tool calls)
+5. Agent takes action (block IPs, create tickets, update incidents, send alerts)
+6. Agent can persist learnings to `RuleSet.metadata.agent_memory` for future invocations
 
 ### Configuration
 
@@ -591,8 +512,8 @@ The standard triage agent (`execute_llm_handler`) has 16 tools. The analysis age
 
 | Tool | Description | Triage | Analysis |
 |------|-------------|--------|----------|
-| `create_rule` | Create a new RuleSet (created `is_active=False`; its review ticket carries an `incident.rule_approval` action note) | Yes | Yes |
-| `suggest_rule_update` | Propose widening an existing active rule instead of duplicating it — opens an `incident.rule_update` approval ticket with a rule diff | Yes | Yes |
+| `create_rule` | Validate typed handlers/rules and create an inactive aggregate; its review ticket binds the revision and activation/deletion confirmations | Yes | Yes |
+| `suggest_rule_update` | Prevalidate a complete inactive replacement instead of duplicating a policy; opens a revision-bound `incident.rule_update` approval | Yes | Yes |
 | `update_rule_memory` | Persist learnings to RuleSet metadata for future invocations | Yes | Yes |
 
 **Analysis-only tool details:**
@@ -612,7 +533,17 @@ In both dedup cases the tool response includes `deduplicated: true`. The agent's
 
 `add_ticket_note` — Accepts an optional `incident_id` parameter. When provided, the tool automatically appends a clickable incident reference card to the note's context references, linking the note back to the specific incident that triggered it. This is the preferred approach when the LLM is adding findings from a new incident to an existing ticket.
 
-`create_rule` — Before creating a new `RuleSet`, the tool computes a canonical signature from `category | handler | sorted rule conditions` and compares existing `llm_proposed` RuleSets in the same category. An active proposal is skipped only when both its signature and canonical threshold/bundle policy match. A pending same-category proposal receives an occurrence-count bump only when that policy matches; a different policy gets its own RuleSet and approval ticket so it remains reviewable. Legacy metadata-only threshold aliases do not participate in this comparison because they are not runtime policy. If a matching pending rule's approval ticket has been closed, a fresh ticket is opened on the existing RuleSet.
+`create_rule` — Before creating a new `RuleSet`, the tool validates the complete
+typed policy, computes a canonical signature from `category | compiled typed
+handlers | sorted rule conditions`, and compares existing `llm_proposed`
+RuleSets in the same category. An active proposal is skipped only when both its
+signature and canonical threshold/bundle policy match. A pending same-category
+proposal receives an occurrence-count bump only when that policy matches; a
+different policy gets its own RuleSet and approval ticket so it remains
+reviewable. Legacy metadata-only threshold aliases do not participate in this
+comparison because they are not runtime policy. If a matching pending rule's
+approval ticket has been closed, a fresh ticket is opened on the existing
+RuleSet. Raw `handler` input is rejected with `raw_handler_not_allowed`.
 
 ### LLM-Proposed Rule Thresholds
 
@@ -677,7 +608,7 @@ In addition to the real-time triage agent, there is a separate **analysis job** 
 
 | Aspect | `execute_llm_handler` (triage) | `execute_llm_analysis` (analysis) |
 |--------|-------------------------------|-----------------------------------|
-| Trigger | Explicit `llm://` handler on rule match or catch-all/sweep | Manual — admin POST `{"analyze": 1}` |
+| Trigger | Eligible high-level event or bounded new-incident sweep | Manual — admin POST `{"analyze": 1}` |
 | Prompt | `TRIAGE_PROMPT` — classify, triage, act fast | `ANALYSIS_PROMPT` — deep pattern analysis |
 | Tools | 16 base tools | 18 tools (includes `merge_incidents`, `query_open_incidents`) |
 | Pre-loaded context | Event + incident metadata | Full event list (up to 50) + related open incidents (up to 20) |
@@ -943,7 +874,7 @@ These jobs are dispatched to all servers in the fleet. Broadcast handlers receiv
 | Job | Trigger | What it does |
 |-----|---------|--------------|
 | `execute_handler` | Rule match | Parses handler URL, dispatches to handler class |
-| `execute_llm_handler` | `llm://` handler | Runs LLM triage agent loop (receives `Job` instance) |
+| `execute_llm_handler` | Durable `incident_triage` attempt from event fallback or sweep | Runs LLM triage agent loop (receives `Job` instance) |
 | `execute_llm_analysis` | `analyze` POST_SAVE_ACTION | Deep LLM analysis: merge candidates, pattern detection, rule proposal (receives `Job` instance) |
 | `execute_llm_ticket_reply` | Ticket note added | Re-invokes LLM on ticket conversation (receives `Job` instance) |
 | `learn_from_block` | Bouncer block | Runs signature learning analysis |

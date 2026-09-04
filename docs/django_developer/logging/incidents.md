@@ -18,7 +18,7 @@ Event (raw signal)
     → Rule.check_rule()            (field-level conditions on event.metadata)
   → threshold/bundling logic       (pending → new transition)
   → Incident (correlated group)
-    → handler chain               (job, email, notify, ticket, block)
+    → governed handler chain      (block, notify, email, sms, ticket, resolve, ignore)
     → Ticket (actionable work)
 ```
 
@@ -374,6 +374,18 @@ append-only recommendation transitions are labelled exact; retention-limited
 event/case learning is labelled sampled, and unprovable lifetime rates are
 `unavailable`.
 
+The view delegates to `services.admin_security.overview(request.DATA)`.
+`sections`/`section` selects a comma-separated string or array from the roster
+above, `limit` defaults to 50 and caps at 100, and `window_hours` defaults to 24
+and caps at 2160. `recommendation_id` adds the bounded (maximum 1024) target
+projection to the recommendation section. It returns
+`{schema_version: 1, sections: {name: {status, observed_at, cutoff, window,
+truncated, data}}}` inside the standard REST envelope. Collector exceptions
+degrade only that section to `status="unavailable"` with
+`reason="collector_unavailable"`. The `rules` section does not inline child
+rules; valid typed handlers appear under `validation.handlers`, while action
+responses for create/replace carry top-level typed handlers and children.
+
 `POST /api/incident/admin/security/action` is the only human RuleSet writer.
 Both endpoints reject key-backed/group identities. Reads require global
 `view_security`, `manage_security`, or `security`; writes require global
@@ -384,9 +396,23 @@ and `expected_modified` for an existing object. Actions are
 and inactive; activation is separate, and catch-all activation also requires
 `ACTIVATE CATCH-ALL RULESET <id>`.
 
-The `schemas` section publishes allowed fields, types, operators, bundling,
-typed handler arguments, and caps. Raw handler URLs, `job://`/Python targets,
-unknown fields/operators, and unsafe or oversized regex are rejected. A
+The action view delegates to
+`services.admin_security.apply_action(request.DATA, request.user)` inside an
+atomic transaction and returns `{schema_version: 1, action, data}`. Create
+accepts `{action, confirm, ruleset}`. Existing RuleSet actions add
+`ruleset_id` and `expected_modified`; recommendation actions instead add
+`recommendation_id`, `expected_modified`, and optional `note` (maximum 256
+characters). Exact confirmations are `CREATE RULESET`, `<VERB> RULESET <id>`,
+and `<VERB> RECOMMENDATION <id>`. Unknown request fields are rejected. HTTP
+400 covers malformed actions/policies/confirmations, 404 a missing object, 409
+a stale revision or invalid state/scope, and 440 a required authentication
+step-up. See the [web client contract](../../web_developer/security/README.md#admin-security-client-contract)
+for complete request and response examples.
+
+The `schemas` section publishes the complete aggregate field contract, allowed
+condition fields, types, operators, bundling, typed handler arguments, and
+caps. Raw handler URLs, `job://`/Python targets, unknown fields/operators, and
+unsafe or oversized regex are rejected. A
 malformed legacy policy remains readable, deactivatable and deletable, but
 cannot dispatch or reactivate; replace its complete inactive tree first.
 Generic RuleSet/Rule URLs remain bounded reads but reject mutation. Generic
@@ -944,7 +970,7 @@ A RuleSet defines:
 
 ### Rule
 
-Each Rule checks one field in `event.metadata` against a target value:
+Each Rule checks one allowlisted Event fact against a target value:
 
 | Field | Description |
 |---|---|
@@ -954,20 +980,25 @@ Each Rule checks one field in `event.metadata` against a target value:
 | `value_type` | `str`, `int`, `float`, `bool` |
 | `index` | Evaluation order within the RuleSet |
 
-Rules operate on `event.metadata`. Since `report_event` syncs all standard fields (level, category, source_ip, etc.) into metadata automatically, they are all available for rule matching alongside any custom fields you pass in.
+`Rule.check_rule()` delegates to `services.rule_validation.evaluate_rule()`.
+Model columns are authoritative and metadata is only a fallback for computed
+detector fields, so metadata cannot shadow `level`, `category`, or another
+stored column. A legacy `metadata.` prefix is stripped. Private or malformed
+field names and invalid values/operators fail closed as no-match.
 
-`Rule.check_rule()` looks up the field by first checking `event.metadata[field_name]`, then falling back to `getattr(event, field_name)`. If `field_name` was stored with a `metadata.` prefix (e.g., `"metadata.http_url"`), the prefix is stripped automatically before lookup — so rules created that way still match correctly.
-
-Field names starting with `_` are always refused, so private attributes on
-`Event` can never be addressed from a rule.
+Governed Admin Security writes accept only the fields, value types, and
+operators published by `rule_validation.public_schema()`; this includes the
+standard Event facts and the three IP-rate fields below. The legacy evaluator
+continues to read an older syntactically safe metadata/property name so an
+upgrade does not silently disable an existing defensive rule, but the policy
+must be replaced through the governed writer before it can be reactivated.
 
 ### Rate fields — matching on an IP's recent behaviour
 
-Because `check_rule()` falls through to `getattr(event, field_name)`, **any
-property on `Event` is a matchable rule field**. Three are provided for writing
-rules about a source IP's recent behaviour rather than about the single event in
-hand. All three are scoped to `GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS` (24h)
-and share the allowlists described in
+Three explicitly allowlisted computed properties support rules about a source
+IP's recent behaviour rather than about the single event in hand. All three are
+scoped to `GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS` (24h) and share the
+allowlists described in
 [account/geoip.md](../account/geoip.md#threat-intelligence).
 
 | Field | Value |
@@ -1072,44 +1103,50 @@ With this config: handler fires at 10 events, then again at 30, 50, 70, and so o
 
 ## Handlers
 
-Handlers execute when a RuleSet triggers. Multiple handlers can be chained with commas.
+Handlers execute when a RuleSet triggers. Human and Assistant writers submit an
+ordered array of typed handler objects through the Admin Security service;
+`rule_validation.normalize_handlers()` validates and compiles them into the
+legacy URL-form `RuleSet.handler` storage column.
 
-### Syntax
+### Public typed form
 
-```
-job://app.module.function
-email://admin@example.com
-notify://user_id_or_channel
-ticket://?status=open&priority=8&category=security&title=Investigate
-block://?ttl=3600
-```
-
-Chained example:
-
-```
-block://?ttl=3600,ticket://?status=new&priority=9&category=security,email://security@example.com
+```json
+[
+  {"type": "block", "ttl_seconds": 3600, "fleet_wide": true},
+  {"type": "ticket", "status": "new", "priority": 9, "category": "security"},
+  {"type": "email", "permission": "manage_security"}
+]
 ```
 
 ### Handler Types
 
-| Handler | Action |
-|---|---|
-| `job://` | Queues an async job (function path in netloc) |
-| `email://` | Sends a notification email to the recipient |
-| `notify://` | Sends a push/in-app notification to a user or channel |
-| `ticket://` | Creates a Ticket linked to the incident |
-| `block://` | Blocks the event's `source_ip` fleet-wide via `GeoLocatedIP.block()` |
+| Type | Accepted arguments | Action |
+|---|---|---|
+| `notify`, `email`, `sms` | `permission`: `manage_security` or `security` | Notify users holding that permission |
+| `block` | `ttl_seconds` 300–604800; optional `fleet_wide=True` (false is rejected) | Temporarily block the event's `source_ip` fleet-wide |
+| `ticket` | `priority` 1–10, `status` `open`/`new`, bounded `category`, and either `maestro` or `board_id` | Create a Ticket linked to the incident |
+| `resolve` | `status` `resolved`/`closed`; optional note up to 160 characters | Resolve or close the incident |
+| `ignore` | none; must be the only entry | Explicit no-op |
+
+The array caps at eight entries. `rule_validation.public_schema()` and the
+Admin Security `schemas` section publish the roster, arguments, and bounds.
+Raw recipients, `job://`/Python paths, arbitrary handler URLs, and LLM handlers
+are rejected by governed writers. Before dispatch,
+`RuleSet.run_handler()` validates the entire stored aggregate again; malformed
+legacy rows stay readable for replacement/deactivation/deletion but cannot
+dispatch.
 
 ### Block Handler Parameters
 
 | Param | Default | Description |
 |---|---|---|
-| `ttl` | `600` | Seconds until auto-unblock (0 or omit = permanent) |
-| `reason` | `auto:ruleset` | Base reason string recorded in `GeoLocatedIP.blocked_reason` |
+| `ttl_seconds` | required | Seconds until auto-unblock (300–604800) |
+| `fleet_wide` | `true` | Explicit scope declaration; the current RuleSet block handler still broadcasts fleet-wide |
 
 The block handler extracts `source_ip` from the event, calls `GeoLocatedIP.geolocate()` to get or create the record, then calls `geo.block()` which handles both the DB update and the fleet-wide broadcast.
 
-The final `blocked_reason` value is constructed by appending the incident and event IDs to the base reason for traceability:
+The internal handler constructs `blocked_reason` from the incident and event IDs
+for traceability:
 
 ```
 auto:ruleset:incident:42:event:87
@@ -1123,14 +1160,11 @@ After a successful block, the handler also:
 
 | Param | Description |
 |---|---|
-| `title` | Ticket title (defaults to event title) |
-| `description` | Ticket body (defaults to event details) |
-| `status` | Initial status (`open`, `new`, etc.) |
-| `priority` | Integer priority (defaults to `event.level`) |
+| `status` | Initial status (`open` or `new`) |
+| `priority` | Integer priority from 1–10 (default 5) |
 | `category` | Ticket category (default: `"incident"`) |
-| `assignee` | User ID to assign the ticket to |
-| `maestro` | Set `1` to report the Ticket to the configured Maestro default board |
-| `board` | Remote Maestro board id; also opts the Ticket into Maestro reporting (see [Maestro Workspace Reporting](../security/maestro_board.md)) |
+| `maestro` | Boolean: report the Ticket to the configured Maestro default board |
+| `board_id` | Positive remote Maestro board id; mutually exclusive with `maestro=True` (see [Maestro Workspace Reporting](../security/maestro_board.md)) |
 
 ---
 
@@ -1354,17 +1388,30 @@ On a corporate NAT or CGNAT, "the whole egress" is everybody behind that address
 **Check what you have:**
 
 ```
-GET /api/incident/event/ruleset?size=100
+GET /api/incident/admin/security?sections=rules&limit=100
 ```
 
-Look for any ruleset whose `handler` contains `block://` and whose `trigger_count` is `null`.
+The bounded list deliberately omits raw handlers. Compare the named built-in
+policies and their threshold fields; a row with `validation.status` set to
+`replacement_required` is legacy and cannot be reactivated. Use the trusted
+deployment/default policy as the source for the complete replacement rather
+than trying to reconstruct a handler from a redacted read.
 
-**Apply the current defaults.** POST to the ruleset's id with the fields to change (requires `manage_security` or `security`):
+**Apply the current defaults.** Send a complete inactive
+`ruleset.replace` action against the row's exact `modified` value, then review
+and activate it separately (requires a fresh human session with global
+`manage_security` or `security`):
 
+```text
+POST /api/incident/admin/security/action
+action=ruleset.replace
+ruleset_id=12
+expected_modified=<exact modified value from the read>
+confirm=REPLACE RULESET 12
+ruleset=<complete inactive policy using the documented aggregate fields and schema vocabulary>
 ```
-POST /api/incident/event/ruleset/<id>
-{"trigger_count": 25, "trigger_window": 60, "bundle_minutes": 60}
-```
+
+The writer rejects unknown or partial policy shapes.
 
 The five, with the values the framework now ships:
 
@@ -1377,15 +1424,6 @@ The five, with the values the framework now ships:
 | OSSEC - Generic Web Errors | 10 | 10 | **10 — was 0** |
 
 > **`bundle_minutes` must cover `trigger_window`.** The threshold counts events on *one* incident. `bundle_minutes = 0` disables bundling, so every event lands on its own incident, the count never climbs past 1, and adding a `trigger_count` **disables the rule** rather than loosening it. This is why OSSEC - Generic Web Errors needs its `bundle_minutes` raised alongside the gate.
-
-Equivalent from a Django shell or a deployment script:
-
-```python
-from mojo.apps.incident.models import RuleSet
-
-RuleSet.objects.filter(name="Auth - Credential Stuffing").update(
-    trigger_count=25, trigger_window=60, bundle_minutes=60)
-```
 
 To verify a retune took effect, publish a single matching event and confirm the incident sits at `status="pending"` rather than transitioning to `new`.
 
@@ -1553,17 +1591,32 @@ incident.report_event(
 ### Pattern: auto-block via RuleSet
 
 ```python
-# This RuleSet blocks the IP after 10 failed SSH logins in 5 minutes,
-# creates a ticket, and emails the security team — all from one config.
-RuleSet.objects.create(
-    category="ossec",
-    name="SSH Brute Force",
-    bundle_by=BundleBy.SOURCE_IP,
-    bundle_minutes=5,
-    handler="block://?ttl=3600&reason=ssh_brute_force,ticket://?status=new&priority=9&category=security,email://security@example.com",
-    trigger_count=10,
-    trigger_window=5,
-)
+from mojo.apps.incident.models.rule import BundleBy
+from mojo.apps.incident.services import admin_security
+
+# Creates one validated inactive aggregate. Activation is a separate reviewed
+# action using the returned id and modified revision.
+created = admin_security.apply_action({
+    "action": "ruleset.create",
+    "confirm": "CREATE RULESET",
+    "ruleset": {
+        "category": "ossec",
+        "name": "SSH Brute Force",
+        "bundle_by": BundleBy.SOURCE_IP,
+        "bundle_minutes": 5,
+        "handlers": [
+            {"type": "block", "ttl_seconds": 3600, "fleet_wide": True},
+            {"type": "ticket", "status": "new", "priority": 9,
+             "category": "security"},
+            {"type": "email", "permission": "manage_security"},
+        ],
+        "rules": [{"name": "SSH failure", "field": "rule_id",
+                   "operator": "==", "value": 5710}],
+        "trigger_count": 10,
+        "trigger_window": 5,
+        "is_active": False,
+    },
+}, request.user)
 ```
 
 ---
