@@ -135,6 +135,13 @@ Render each section's own `status`, `observed_at`, `cutoff`, `window`, and
 zero. Only metrics explicitly labelled exact are suitable for exact totals;
 case and learning projections identify themselves as sampled.
 
+The packaged v2 client validates the exact envelope/window contract, bounded
+row fields and types, policy/action schemas, and firewall host lists for every
+requested section. Schema version 2 by itself is not acceptance. A malformed,
+contradictory, duplicate, or oversized value fails that requested view with a
+contract error; it must not be converted to an empty list, rendered as partial
+success, or allowed to expose action controls.
+
 The `rules` section is a summary list: it includes the aggregate revision,
 configuration, validation status, `rule_count`, and—for a valid policy—the
 safe typed handlers under `validation.handlers`; it does not inline child
@@ -164,6 +171,15 @@ bounded captured expected/responded/succeeded/failed/missing host IDs. Treat
 `verified`, `partial`, `missing`, `stale`, and `unavailable` as distinct. CIDRs,
 source keys, runner identities/incarnations, broker output, raw observations,
 and exception text are never returned.
+
+`verified` additionally means the server validated a complete, sorted and
+internally consistent receipt: exact roster/incarnations, desired set
+identity/presence/digest/count, generation fence/fingerprint, direct
+observations, and any checked per-host semantic results. A bare top-level `ok`,
+missing fields, duplicates, contradictions, anomalies, or incomplete host
+coverage is never enough. The projection does not synthesize
+responded/succeeded hosts; it degrades to partial, missing, stale, or
+unavailable while withholding those internal proof fields.
 
 #### Write
 
@@ -240,12 +256,16 @@ Success returns the action and its safe object projection:
 }
 ```
 
-Use the HTTP status for the client state machine. The error body's `code` is
-separate typed detail: governed-action errors use stable strings such as
-`confirmation_required`, `not_found`, `stale_revision`, `invalid_state`, and
-`scope_unavailable`; authentication decorators retain their numeric codes.
+Use the effective status for the client state machine. Normally it is the HTTP
+status. With legacy `MOJO_APP_STATUS_200_ON_ERROR`, a framework error is folded
+onto HTTP 200 with `status: false`; its validated `error_status` carries the
+real 400–599 status. The packaged clients honor folded 401, 409, and 440 exactly
+like native statuses. The body `code` is separate typed detail: governed-action
+errors use stable strings such as `confirmation_required`, `not_found`,
+`stale_revision`, `invalid_state`, and `scope_unavailable`; authentication
+decorators retain their numeric codes.
 
-| HTTP status | Body `code` examples | Meaning |
+| Effective status | Body `code` examples | Meaning |
 |---|---|---|
 | 400 | `invalid_action`, `confirmation_required`, `catch_all_confirmation_required`, or a validator code | Unknown action/field, invalid typed policy, bad ID/note, or missing typed confirmation |
 | 401 | `401` | The interactive session is invalid or expired. A packaged client may refresh and replay a GET/HEAD once; it must never replay this POST. |

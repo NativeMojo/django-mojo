@@ -18,6 +18,12 @@ honor its own `status`, `cutoff`, `window`, and `truncated` values. Display exac
 and sampled metrics separately. An unavailable, partial, missing, or stale
 receipt is not success and is not an empty result.
 
+Treat schema version 2 as necessary but not sufficient. The packaged client
+strictly validates every requested envelope, row collection, action schema,
+and firewall host summary. A malformed, contradictory, or oversized section
+produces a contract-error view with no table or action controls; it is never
+converted into synthetic empty or successful state.
+
 The read is `GET /api/incident/admin/security`; mutations use
 `POST /api/incident/admin/security/action`. Both require global human security
 grants and reject key-backed sessions; actions additionally require recent
@@ -34,14 +40,18 @@ For authentication recovery, retry a 401 once only for GET/HEAD. Do not replay
 a POST after a 401. A 440 indicates the server refused the action before it ran;
 perform recent authentication and retry once. If the session cannot be renewed,
 remove authenticated chrome and send the user to sign-in with the exact current
-path/query/hash as `redirect`.
+path/query/hash as `redirect`. On installations using
+`MOJO_APP_STATUS_200_ON_ERROR`, a framework failure arrives over HTTP 200 with
+`status: false` and its real 400–599 status in `error_status`; the packaged
+client applies the same 401/409/440 behavior to that effective status.
 
 ## QA without security mutations
 
 Deterministic states are available through `bin/admin_preview
 --security-state STATE`; they cover full/empty, unavailable/partial/failed/stale,
-view-only/no-access, 401/440/409, and recovery paths. The opt-in Chrome rider is
-documented in the [framework guide](../../django_developer/account/admin.md#preview-and-browser-proof).
+view-only/no-access, 401/440/409, recovery, and malformed-contract paths. The
+opt-in Chrome rider is documented in the
+[framework guide](../../django_developer/account/admin.md#preview-and-browser-proof).
 
 For acceptance against a real installation, run:
 

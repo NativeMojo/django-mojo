@@ -202,6 +202,17 @@ expected/responded/succeeded/failed/missing host IDs. CIDRs, source keys,
 runner IDs/incarnations, broker replies, raw observations, persisted exception
 text, and recommendation target addresses never enter this projection.
 
+`verified` is derived only from a complete, internally consistent proof: the
+exact sorted host roster and incarnations, desired set
+identity/presence/count/digest, generation fence and fingerprint, and one
+matching direct observation per host. When a checked-execution receipt is
+present, its roster and every
+per-host semantic result must match too. A bare `ok`, missing receipt fields,
+duplicates, contradictions, anomalies, or partial hosts can never be promoted
+to verified. The public projection strips the proof internals and never
+synthesizes responded/succeeded hosts; it returns a safe partial, missing,
+stale, or unavailable status instead.
+
 Collector exceptions become stable `collector_unavailable` envelopes. Action
 state exceptions become stable typed error codes/messages. Keep this boundary
 server-side: adding a browser feature is never a reason to expose an internal

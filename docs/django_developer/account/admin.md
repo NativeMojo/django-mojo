@@ -34,17 +34,26 @@ cutoff/window metadata, and captured checked-host summaries. It never reads
 the generic Incident/Event endpoints, serializes raw rows, or reconstructs
 policy/enforcement rules in JavaScript.
 
+Schema version alone is not trusted. The v2 client validates each requested
+section's envelope, window, bounded row shape, policy/action schemas, and
+firewall host lists before rendering it. A missing, malformed, contradictory,
+or oversized value fails the requested view with a contract error; it is never
+coerced into an empty table and never enables a governed action.
+
 The shared v1 and v2 clients renew a 401 once only for GET/HEAD. A mutation is
 never replayed after an ambiguous 401. HTTP 440 may retry once after the
 pre-action recent-auth ceremony. A terminal 401 tears down authenticated
 chrome and preserves the exact path, query, and hash in the sign-in return.
-Errors retain typed HTTP status/code but render only bounded scalar messages.
+Errors retain typed status/code but render only bounded scalar messages. When
+legacy `MOJO_APP_STATUS_200_ON_ERROR` folds a failure onto HTTP 200, the error
+envelope's validated `error_status` remains authoritative, so folded 401, 409,
+and 440 responses follow the same state machine as native HTTP statuses.
 
 ## Preview and browser proof
 
 `bin/admin_preview --security-state STATE` supports `full`, `empty`,
 `unavailable`, `view-only`, `no-access`, `partial`, `failed`, `stale`,
-`expired-session`, `440`, `conflict`, and `recovery`.
+`expired-session`, `440`, `conflict`, `recovery`, and `malformed`.
 
 The opt-in real-browser rider requires an explicit executable:
 

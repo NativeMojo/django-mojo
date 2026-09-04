@@ -319,6 +319,13 @@ observation, or exception message is included.
 
 The cutoff and captured expected-host IDs belong to that observation. Do not
 compare them with a later roster or relabel an incomplete receipt as success.
+The server labels the projection `verified` only after validating the complete
+sorted roster/incarnations, desired identity/presence/count/digest, generation
+fence/fingerprint, direct observations, and any checked per-host results. A
+top-level `ok` never fills in missing responded/succeeded hosts. Missing fields,
+duplicates, contradictions, anomalies, or incomplete host coverage degrade to
+partial/missing/stale/unavailable while the browser-visible projection still
+omits roster incarnations, runner IDs, fingerprints, and raw receipts.
 A lifecycle action still requires the current `modified` revision and the
 server-advertised typed confirmation. A 409 requires a fresh read and human
 review; clients must not replay it.
