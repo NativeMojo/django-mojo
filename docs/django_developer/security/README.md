@@ -669,10 +669,11 @@ In addition to the real-time triage agent, there is a separate **analysis job** 
 ### Single IP Blocking
 
 When a `block://` handler fires:
-1. `GeoLocatedIP.block_checked()` validates/canonicalizes IPv4 before any desired-state write.
-2. A short row-lock transaction writes desired state, increments `firewall_generation`, and leaves `firewall_pending=True`.
-3. Outside the transaction, a checked request targets one compatible runner per hostname. Each host normalizes both the direct TTL rule and complete permanent `mojo_blocked` set under one root-broker lock.
-4. A generation-CAS update clears pending state and stamps `firewall_observed_at` only after every expected host proves the exact semantic result. Partial/unknown results retain the tombstone and bounded `firewall_sync_error`.
+
+1. `GeoLocatedIP.block_checked()` validates/canonicalizes IPv4 and acquires the global desired-state lease before any desired write.
+2. It advances the IP/permanent Redis fences, then a short row-lock transaction writes desired state, increments `firewall_generation`, and leaves `firewall_pending=True`.
+3. Outside the transaction, a checked request targets one compatible runner per hostname and binds the lease token, desired fingerprint, and fences. Each host verifies them before and after normalizing the direct TTL rule and complete permanent `mojo_blocked` set under one root-broker lock.
+4. Matching host observations plus a generation-CAS update clear pending state and stamp `firewall_observed_at` only after every expected host proves the exact semantic result. Partial/unknown results retain the tombstone and bounded `firewall_sync_error`.
 5. Only a verified, still-owned result writes success history/metrics or resolves the incident. Already-desired blocks are re-observed without incrementing `block_count`.
 
 ### Unblocking
@@ -723,37 +724,82 @@ The hook publishes rather than reconciling inline because every firewall write g
 
 **Propagation boundary — state it plainly:** a node reconciles hourly only if it runs a jobs runner consuming `default`, and recovers at boot only if that engine consumes its own box-direct channel. With `JOBS_HOSTNAME_CHANNEL = False` no engine consumes its box-direct channel, so the fan-out would strand every job; the hourly path detects this and degrades to the pre-existing single-runner reconcile, and boot recovery is disabled with a warning.
 
-**Exact reconciliation:** every run bounds and canonicalizes the complete
-desired snapshot before its first firewall write. It observes, repairs, and
-re-observes the permanent set (including empty membership), every IPSet row
-(enabled presence plus disabled/cache tombstones), every active TTL direct
-rule, and every pending direct-rule absence. There is no skip-unchanged path:
-the last-sync key is evidence of a verified generation, not permission to omit
+**Exact reconciliation:** every run bounds the complete desired-row roster and
+builds canonical plans before its first firewall write. Unsupported rows are
+quarantined per object; they stay pending/error while valid sibling plans
+continue. The run observes, repairs, and re-observes the permanent set
+(including empty membership), every valid IPSet row (enabled presence plus
+disabled/cache tombstones), every valid active TTL direct rule, and every valid
+pending direct-rule absence. There is no skip-unchanged path: the last-sync key
+is evidence of one host's observed valid generation, not permission to omit
 observation.
 
 **Performance:** enabled sets use one `ipset restore` atomic swap rather than
 one process per CIDR. Lists are sorted/deduplicated canonical IPv4 networks and
 bounded to 250,000 entries. Empty desired sets are actively normalized.
 
-**One reconcile at a time per host.** A token-owned, renewed Redis lease
-serializes full local reconciliation. Every root-broker request also takes a
-fixed host lock, so checked web actions and cron repair cannot interleave
-kernel mutations. Set-specific and permanent-aggregate checked requests use
-their own bounded token leases; every release is compare-and-delete.
+**One desired generation and one reconcile at a time.** A token-owned, renewed
+global Redis lease serializes desired snapshots, fence advances, checked
+dispatch, and finalization. Full reconciliation also takes the per-host lock;
+every checked handler validates the global lease/fences before and after its
+root-broker mutation. The broker's fixed host lock keeps local kernel writes
+from interleaving. Every release is compare-and-delete.
 
 **Redis keys are per HOST, not per runner** — two engines on one box share one kernel firewall:
 
 | Key | Purpose |
 |---|---|
-| `mojo:sync_firewall:last_sync:<host>` | Complete-generation verified marker, TTL 7200s |
+| `mojo:sync_firewall:last_sync:<host>` | This host's valid-generation observation marker, TTL 7200s; quarantined rows remain separate |
 | `mojo:sync_firewall:force:<host>` | Pending forced reconcile, set by the startup hook |
 | `mojo:sync_firewall:lock:<host>` | The reconcile lock above |
+| `mojo:firewall:desired-state-lock` | Global lease spanning desired snapshot, fence advance, checked dispatch, and finalization |
+| `mojo:firewall:fence:<kind>:<identity>` | Monotonic desired-state fence for an IP, IPSet, or permanent aggregate |
+| `mojo:firewall:observation:<kind>:<identity>:<fence>:<host>` | Host-scoped matching observation, TTL 7200s |
 
-**Generation fencing:** after network waits, the run compares the complete
-bounded desired generation again. Per-object finalization uses `modified` or
-`firewall_generation` CAS predicates. A mismatch preserves pending/error state,
-suppresses the host marker, and does not clear the force token. The marker and
-force token advance only after every semantic observation and CAS succeeds.
+**Generation fencing:** after network waits, the run compares the bounded
+desired generation, Redis fences, fingerprints, and lease ownership again.
+Per-object shared finalization uses `modified` or `firewall_generation` CAS
+predicates. A stale mismatch preserves pending/error state, suppresses the host
+marker, and does not clear the force token. Quarantined rows remain individually
+pending but do not suppress observations, aggregation, or verification for
+valid siblings.
+
+The hourly/startup job proves only the kernel on the host where it runs. It
+writes a TTL-bounded observation and advances only that host's marker; it never
+clears shared object truth by itself. The aggregator re-reads the exact current
+compatible-host roster and clears a GeoLocatedIP/IPSet pending error only when
+every host observation matches the same fingerprint and fence. A synchronous
+checked action result (`status="verified"`, `ok=true`, and, for a
+GeoLocatedIP, `owned=true`) applies the same exact-host proof directly.
+
+### Upgrade notes
+
+Apply account migration `0054_geolocatedip_firewall_reconciliation` before the
+new code serves traffic. It adds the four firewall reconciliation fields,
+marks every historically firewall-touched or whitelisted GeoLocatedIP row
+pending, and resets every legacy IPSet to unverified state. The migration
+depends on incident migration `0043_incidentllmattempt` so both model states
+exist before that cross-app reset; it does not claim
+that old best-effort broadcasts were observed. Unsupported legacy rows receive
+a bounded quarantine error rather than blocking valid IPv4 repair.
+
+Roll the v1 job engine to at least one runner on every intended hostname before
+using checked actions. An old-only host makes the compatible roster fail
+closed with `unknown` before confirmed dispatch. After the fleet is compatible,
+run reconciliation on every host and use `ipset.sync` (or the GeoLocatedIP
+checked action) when an operator needs a retained exact fleet result.
+
+Preflight legacy desired data before this upgrade. Firewall state accepts only
+canonical IPv4. Migration/reconciliation quarantines an invalid or IPv6 Geo
+row or an IPSet with an invalid/reserved name, an enabled name without suffix
+room, IPv6 CIDRs, or more than 250,000 networks while valid rows continue.
+Migration also forces a quarantined legacy IPSet disabled. Quarantined objects
+remain pending/error and cannot verify until repaired;
+valid siblings still receive host observations and can become verified. The
+configured `FIREWALL_BLOCKED_IPSET_NAME` is dynamically reserved too; an IPSet
+with that name is quarantined so it cannot overwrite the permanent aggregate.
+Resolve legacy collisions before relying on the immutable-name and no-delete
+lifecycle.
 
 ### Firewall Requirements
 
@@ -895,7 +941,7 @@ Default health rules are auto-created on first health check run. They send notif
 | `sweep_mojosec_actions` | Every 5 minutes | Proposes MojoSec block recommendations from correlated cases, auto-approves within bounds, executes/retries validated targets, and expires stale proposals and applied-target TTLs |
 | `prune_events` | Daily 9:45 AM | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` days with level < 6 |
 | `sweep_expired_blocks` | Every 5 minutes | Unblocks IPs where `blocked_until` has passed |
-| `sync_firewall` | Hourly (broadcast — every runner) | Each node observes/repairs/re-observes the complete bounded IPv4 desired generation, including absence tombstones. Boot recovery is the separate `on_engine_start` hook |
+| `sync_firewall` | Hourly (broadcast — every runner) | Each node observes/repairs/re-observes the bounded valid IPv4 desired generation and writes fenced host observations; invalid rows stay quarantined without poisoning valid siblings. Boot recovery is the separate `on_engine_start` hook |
 | `refresh_ipsets` | Weekly (Sunday 3 AM) | Re-fetches IPSet source URLs and syncs CIDRs to fleet |
 | `refresh_threat_lists` | Every 6 hours | Refreshes the cache-only `tor_exits`/`blocklist_de` IPSet rows (`refresh_from_source()` only — never synced to the firewall); see [account/geoip.md](../account/geoip.md#threat-list-caches-tor-exit-list-blocklistde) |
 | `recheck_active_threats` | Daily 4:20 AM | Re-scores up to `GEOLOCATION_RECHECK_THREATS_MAX` (500) recently-active `GeoLocatedIP` rows so a stale `threat_level` can **decay** — everything else only ratchets up. Skips `provider='mojo'` records and external blocklist lookups; see [account/geoip.md](../account/geoip.md#decay) |
@@ -910,10 +956,8 @@ These jobs are dispatched to all servers in the fleet. Broadcast handlers receiv
 | `broadcast_reconcile_firewall_ip` | Checked per-IP action | Exact IPv4 direct-rule presence/absence; returns bounded semantic truth |
 | `broadcast_reconcile_firewall_set` | Checked IPSet action | Exact set membership/digest/rule state; returns bounded semantic truth |
 | `broadcast_reconcile_geolocated_ip` | Checked GeoLocatedIP action | Direct-rule and permanent-set state normalized in one broker transaction |
-| `broadcast_block_ip` | `block://` handler | `{"ips": ["1.2.3.4"], "ttl": 600}` |
-| `broadcast_unblock_ip` | Sweep cron or manual | `{"ips": ["1.2.3.4"]}` |
-| `broadcast_sync_ipset` | IPSet refresh | `{"name": "country_cn", "cidrs": [...]}` |
-| `broadcast_remove_ipset` | IPSet disabled | `{"name": "country_cn"}` |
+| `broadcast_block_ip` / `broadcast_unblock_ip` | Legacy compatibility | Old best-effort direct-rule publishers only; authoritative callers use checked reconciliation |
+| `broadcast_sync_ipset` / `broadcast_remove_ipset` | Legacy compatibility | Old set publishers only; governed lifecycle uses checked presence/absence |
 
 ### Async Jobs (Single Server)
 
@@ -924,6 +968,7 @@ These jobs are dispatched to all servers in the fleet. Broadcast handlers receiv
 | `execute_llm_analysis` | `analyze` POST_SAVE_ACTION | Deep LLM analysis: merge candidates, pattern detection, rule proposal (receives `Job` instance) |
 | `execute_llm_ticket_reply` | Ticket note added | Re-invokes LLM on ticket conversation (receives `Job` instance) |
 | `learn_from_block` | Bouncer block | Runs signature learning analysis |
+| `aggregate_firewall_truth` | Host-reconciliation follow-up | Re-reads the exact current compatible-host roster and finalizes each shared Geo/IPSet truth independently only from matching fresh observations for every host |
 
 Single-server job functions follow the engine's calling convention: `func(job)` where `job` is a `Job` model instance with `job.payload` holding the data. Broadcast handlers use `func(data)` where `data` is a plain dict.
 

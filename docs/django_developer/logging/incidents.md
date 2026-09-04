@@ -330,9 +330,13 @@ a permanent block; central `sweep_expired_blocks` still owns the actual
 unblock at expiry), **`pre_existing`** (an active block already covered the
 IP; its prior reason/expiry are snapshotted and the requested TTL/reason were
 NOT applied — this never counts as execution success), or **`whitelisted`**
-(whitelist always wins). `partial` and `unknown` checked results are failed,
-retryable attempts and never emit success transitions, metrics, ticket
-resolution, or incident history. Failed targets retry bounded
+(whitelist always wins, but this becomes terminal only after a checked fleet
+absence proves no stale rule remains). `partial` and `unknown` checked results
+record failed
+target attempts and never become applied targets or successful ticket/incident
+actions. In a multi-target recommendation, another terminal success/no-op may
+still let the recommendation settle `executed`; `failed_count` and its
+`partial` transition retain the incomplete target. Failed targets retry bounded
 (`MOJOSEC_ACTION_MAX_ATTEMPTS`, default 5); partial failure is visible in the
 counters and a `partial` transition. Unapproved proposals expire after
 `MOJOSEC_ACTION_PROPOSAL_TTL_SECONDS` (default 3 days); applied targets
@@ -391,27 +395,33 @@ degrade only that section to `status="unavailable"` with
 rules; valid typed handlers appear under `validation.handlers`, while action
 responses for create/replace carry top-level typed handlers and children.
 
-`POST /api/incident/admin/security/action` is the only human RuleSet writer.
-Both endpoints reject key-backed/group identities. Reads require global
-`view_security`, `manage_security`, or `security`; writes require global
-`manage_security` or `security`, authentication within 600 seconds (subject to
+`POST /api/incident/admin/security/action` is the only human RuleSet writer;
+`POST /api/incident/ipset/action` is the client-facing alias for governed
+IPSet lifecycle actions. These endpoints reject key-backed/group identities.
+Reads require one of the global `view_security`, `manage_security`, or
+`security` grants; writes require global `manage_security` or `security`,
+authentication within 600 seconds (subject to
 the documented `FRESH_AUTH_ENFORCE` operator kill switch), typed confirmation,
-and `expected_modified` for an existing object. Actions are
-`ruleset.create|replace|activate|deactivate|delete`. Replacement is complete
-and inactive; activation is separate, and catch-all activation also requires
-`ACTIVATE CATCH-ALL RULESET <id>`.
+and `expected_modified` for an existing object. The shared service accepts
+`ruleset.create|replace|activate|deactivate|delete`,
+`recommendation.approve|reject|cancel|reverse`, and
+`ipset.enable|disable|sync`. RuleSet replacement is complete and inactive;
+activation is separate, and catch-all activation also requires `ACTIVATE
+CATCH-ALL RULESET <id>`.
 
 The action view delegates to
-`services.admin_security.apply_action(request.DATA, request.user)` inside an
-atomic transaction and returns `{schema_version: 1, action, data}`. Create
-accepts `{action, confirm, ruleset}`. Existing RuleSet actions add
-`ruleset_id` and `expected_modified`; recommendation actions instead add
-`recommendation_id`, `expected_modified`, and optional `note` (maximum 256
-characters). Exact confirmations are `CREATE RULESET`, `<VERB> RULESET <id>`,
-and `<VERB> RECOMMENDATION <id>`. Unknown request fields are rejected. HTTP
-400 covers malformed actions/policies/confirmations, 404 a missing object, 409
-a stale revision or invalid state/scope, and 440 a required authentication
-step-up. See the [web client contract](../../web_developer/security/README.md#admin-security-client-contract)
+`services.admin_security.apply_action(request.DATA, request.user)` and returns
+`{schema_version: 1, action, data}`. Database claims/finalization use short
+transactions; checked firewall waits run outside them. Create accepts
+`{action, confirm, ruleset}`. Existing RuleSet actions add `ruleset_id` and
+`expected_modified`; recommendation actions instead add `recommendation_id`,
+`expected_modified`, and optional `note` (maximum 256 characters); IPSet
+actions use `{action, ipset_id, expected_modified, confirm}`. Exact
+confirmations are `CREATE RULESET`, `<VERB> RULESET <id>`, `<VERB>
+RECOMMENDATION <id>`, and `<VERB> IPSET <id>`. Unknown request fields are
+rejected. HTTP 400 covers malformed actions/policies/confirmations, 404 a
+missing object, 409 a stale revision or invalid state/scope, and 440 a required
+authentication step-up. See the [web client contract](../../web_developer/security/README.md#admin-security-client-contract)
 for complete request and response examples.
 
 The `schemas` section publishes the complete aggregate field contract, allowed
@@ -506,13 +516,14 @@ success use their detailed checked companions.
 sync_firewall (hourly, minute 0) — BROADCAST on "default"
   → fans out one job per live runner
   → each runner, for its own kernel:
-      → take and renew the token-owned per-host lock
-      → bound/canonicalize the whole desired snapshot before any kernel write
+      → take and renew the global desired-state lease plus per-host lock
+      → bound the whole desired-row roster and quarantine invalid objects per row
       → observe/repair/re-observe complete mojo_blocked membership, including empty
-      → reconcile every IPSet row (enabled presence; disabled/cache absence tombstone)
-      → reconcile active TTL presence and pending direct-rule absence
-      → compare the desired generation again and CAS per-object truth
-      → advance mojo:sync_firewall:last_sync:<host> ONLY if every proof and CAS succeeds
+      → reconcile every valid IPSet row (enabled presence; disabled/cache absence tombstone)
+      → reconcile valid active TTL presence and pending direct-rule absence
+      → write host-scoped observations bound to fences and desired fingerprints
+      → advance mojo:sync_firewall:last_sync:<host> for the observed valid generation
+      → queue aggregate_firewall_truth; invalid siblings stay quarantined/pending
 
 on_engine_start (this node's engine just started) — box-direct, forced
   → set mojo:sync_firewall:force:<host>
@@ -524,6 +535,12 @@ This:
 - **Restores a rebooted node's blocks within seconds**, via the startup hook. The hourly marker lives in shared Redis and survives the reboot, so an unforced reconcile would skip; the force flag is what makes recovery converge even if the queued job never runs.
 - Catches any blocks/removals left pending by partial checked operations.
 - Catches drift on instances that joined after a block was issued.
+
+`aggregate_firewall_truth` re-reads the exact current compatible-host roster.
+Only matching fresh observations from every host clear shared Geo/IPSet
+pending/error state; one successful host cannot overwrite another host's
+failure. Quarantined objects remain pending without preventing valid siblings
+from reaching verified state.
 
 Up to one hour of exposure remains acceptable for a *newly issued* permanent block whose live broadcast a node missed — those target sustained threats, not short-lived TTL blocks that expire on their own. A node that **restarted** no longer waits that hour.
 
@@ -556,12 +573,11 @@ Firewall targets are canonical IPv4 only. IPv6 is refused with
 
 | Job | Type | Description |
 |---|---|---|
-| `broadcast_block_ip` | Broadcast | Applies individual iptables blocks on the local instance (TTL blocks). Receives plain dict: `{"ips": [...], "ttl": 600}` |
-| `broadcast_unblock_ip` | Broadcast | Removes individual iptables blocks on the local instance. Receives plain dict: `{"ips": [...]}` |
-| `broadcast_ipset_add_blocked` | Broadcast | Adds a single IP to the `mojo_blocked` ipset on the local instance (permanent blocks). Receives plain dict: `{"ip": "1.2.3.4"}` |
-| `broadcast_ipset_del_blocked` | Broadcast | Removes a single IP from the `mojo_blocked` ipset on the local instance. Receives plain dict: `{"ip": "1.2.3.4"}` |
-| `sweep_expired_blocks` | Cron (every 5 minutes) | Finds expired blocks in DB, updates DB, broadcasts fleet-wide unblock |
-| `sync_firewall` | Cron (hourly, minute 0), **broadcast** | Each runner exactly observes/repairs/re-observes its host's complete bounded IPv4 desired generation, including absence tombstones. The marker advances only on a clean generation. Also published box-direct by `on_engine_start`. |
+| `broadcast_block_ip` / `broadcast_unblock_ip` | Legacy broadcast | Compatibility handlers retained for old publishers; authoritative callers use checked compound reconciliation |
+| `broadcast_ipset_add_blocked` / `broadcast_ipset_del_blocked` | Legacy broadcast | Compatibility handlers retained for old publishers; permanent membership is now reconciled as a complete checked set |
+| `sweep_expired_blocks` | Cron (every 5 minutes) | Writes one checked absence generation per expired row and counts only fleet-verified removals |
+| `sync_firewall` | Cron (hourly, minute 0), **broadcast** | Each runner exactly observes/repairs/re-observes its host's bounded valid IPv4 desired generation, including absence tombstones, then writes fenced TTL host observations. Invalid siblings stay quarantined; the host marker advances only without operational failures. Also published box-direct by `on_engine_start`. |
+| `aggregate_firewall_truth` | Follow-up job | Re-reads the exact current compatible-host roster and finalizes shared Geo/IPSet truth only from matching fresh fence/fingerprint observations for every host |
 | `on_engine_start` | Job-engine startup hook | Sets this host's force flag and queues a forced `sync_firewall` on its own runner, so a rebooted node recovers without waiting for the hourly broadcast. Publishes rather than touching the firewall directly — the broker refuses outside a JobEngine execution context. |
 | `prune_events` | Cron (daily 9:45) | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` with level < 6 |
 | `prune_incidents` | Cron | Deletes resolved/closed/ignored incidents older than `INCIDENT_PRUNE_DAYS`. Skips incidents with `metadata.do_not_delete = True`. |
@@ -573,7 +589,7 @@ Previously there were `ossec/firewall` and `ossec/firewall/block` endpoints. The
 
 - **Security risk**: Public endpoints that can block arbitrary IPs are an attack surface. Anyone who discovers them could denial-of-service legitimate users.
 - **Single authority**: Block decisions must flow through the incident engine's rule evaluation, not bypass it via direct API calls.
-- **Admin actions use CRUD**: Admins block/unblock via `GeoLocatedIP` POST_SAVE_ACTIONS, which are permission-gated (`manage_users`).
+- **Admin actions use CRUD**: Admins block/unblock via `GeoLocatedIP` POST_SAVE_ACTIONS, which are permission-gated by its documented `SAVE_PERMS` (`manage_users`, `manage_security`, or `security`).
 
 ---
 
@@ -591,10 +607,14 @@ The `IPSet` model manages ipset-based bulk IP blocking for entire countries, dat
 | `source_url` | URL to fetch CIDR data from (auto-populated for known sources) |
 | `source_key` | API key or identifier for the source (e.g., country code, API key) |
 | `data` | TextField containing the CIDR list (one per line) |
-| `is_enabled` | Whether this ipset is active in iptables |
+| `is_enabled` | Desired set presence; it is not proof of observed kernel state |
 | `cidr_count` | Number of CIDRs currently loaded |
-| `last_synced` | Timestamp of the latest checked dispatch attempt |
-| `sync_error` | Empty only after exact fleet verification; otherwise a bounded pending/error code |
+| `last_synced` | Timestamp of the latest checked dispatch or exact aggregated observation; inspect `sync_error`/current evidence rather than treating the timestamp alone as proof |
+| `sync_error` | Bounded pending/quarantine/error code; only checked fleet truth or aggregation of matching fenced observations from the exact current compatible-host roster clears it |
+
+`services.admin_security._ipsets()` recomputes `enforcement_status` from the
+exact current roster and fresh fenced observations on every read; it does not
+promote an old `last_synced`/empty-error pair to verified.
 
 ### Governed lifecycle actions
 
@@ -607,10 +627,11 @@ The `IPSet` model manages ipset-based bulk IP blocking for entire countries, dat
 ### How it works
 
 1. CIDR data is stored as canonical, sorted, deduplicated IPv4 networks (one per line); invalid/IPv6 input refuses the whole update.
-2. A checked sync selects one compatible runner per hostname and refuses before publication if the exact roster cannot be proven compatible.
-3. Each host observes, atomically normalizes, and re-observes the `hash:net` family, full membership count/digest, and exact INPUT/FORWARD rule multiplicity.
-4. Lookups are O(1) regardless of set size, making it practical to block entire countries or large abuse lists.
-5. Names are immutable/reserved, new rows start disabled, generic enable/delete paths are closed, and disabled/cache rows remain reconciliation tombstones.
+2. The lifecycle path holds the global desired-state lease from claim through finalization and advances a per-set fence; the request binds that fence, desired fingerprint, and lease token.
+3. A checked sync selects one compatible runner per hostname and refuses before publication if the exact roster cannot be proven compatible.
+4. Each host validates the fence before and after it observes, atomically normalizes, and re-observes the `hash:net` family, full membership count/digest, and exact INPUT/FORWARD rule multiplicity.
+5. Lookups are O(1) regardless of set size, making it practical to block entire countries or large abuse lists.
+6. Names are immutable/reserved, including the configured permanent-aggregate name; new rows start disabled, generic enable/delete paths are closed, and disabled/cache rows remain reconciliation tombstones.
 
 ### REST Endpoint
 
@@ -1673,7 +1694,7 @@ created = admin_security.apply_action({
 | `INCIDENT_PRUNE_DAYS` | `90` | Days to retain resolved/closed/ignored incidents before pruning. Incidents with `metadata.do_not_delete = True` are exempt. |
 | `INCIDENT_EVENT_METRICS` | — | Enable metrics recording for events and incidents |
 | `INCIDENT_METRICS_MIN_GRANULARITY` | `"hours"` | Granularity for incident metrics |
-| `FIREWALL_BLOCKED_IPSET_NAME` | `"mojo_blocked"` | Name of the kernel ipset used for permanent IP blocks. Change only if you have a naming conflict with an existing ipset. |
+| `FIREWALL_BLOCKED_IPSET_NAME` | `"mojo_blocked"` | Canonical 1–27 character kernel set name for permanent blocks. It is dynamically reserved from operator IPSets; configure it consistently fleet-wide, and remediate any legacy IPSet collision that migration quarantines. |
 | `GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS` | `24` | Window the `ip_recent_*` rule fields and the `is_known_attacker` / `is_known_abuser` predicates count over |
 | `GEOLOCATION_RECHECK_THREATS_MAX` | `500` | Rows the daily `recheck_active_threats` decay cron processes |
 

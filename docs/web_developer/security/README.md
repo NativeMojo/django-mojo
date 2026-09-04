@@ -68,6 +68,7 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | Maestro Item Links | `/api/incident/maestro/item-link` | Remote Maestro items linked to local Tickets or Incidents |
 | Admin Security | `/api/incident/admin/security` | Versioned, bounded and redacted operational sections plus the typed policy schema |
 | Admin Security Actions | `/api/incident/admin/security/action` | Fresh-auth, version-bound RuleSet and recommendation actions |
+| IPSet Actions | `/api/incident/ipset/action` | Fresh-auth, revision-bound enable/disable/sync actions with checked fleet results |
 
 See individual API docs for full details:
 - [MojoSec Sensor Ingestion](mojosec.md) — per-installation authentication,
@@ -171,6 +172,7 @@ handler URLs. The action-specific fields and confirmation strings are:
 | `ruleset.deactivate` | `ruleset_id`, `expected_modified` | `DEACTIVATE RULESET <id>` |
 | `ruleset.delete` | `ruleset_id`, `expected_modified` | `DELETE RULESET <id>` |
 | `recommendation.approve`, `.reject`, `.cancel`, `.reverse` | `recommendation_id`, `expected_modified`, optional `note` (maximum 256 characters) | `<VERB> RECOMMENDATION <id>` |
+| `ipset.enable`, `.disable`, `.sync` | `ipset_id`, `expected_modified` | `<VERB> IPSET <id>` |
 
 A catch-all activation additionally requires
 `confirm_catch_all: "ACTIVATE CATCH-ALL RULESET <id>"`. Unknown fields are
@@ -232,12 +234,13 @@ Success returns the action and its safe object projection:
 |---|---|
 | 400 | Unknown action/field, invalid typed policy, bad ID/note, or missing typed confirmation |
 | 403 | The caller lacks a qualifying global human grant or is key-backed |
-| 404 | The named RuleSet or recommendation does not exist |
+| 404 | The named RuleSet, recommendation, or IPSet does not exist |
 | 409 | Stale revision, invalid recommendation state/scope, or a legacy RuleSet that must be replaced before activation |
 | 440 | Reauthentication is required; refreshing the token does not update its authentication time |
 
-The older RuleSet/Rule URLs are read-only compatibility surfaces. IPSet generic
-administration remains writable until the firewall-authority API replaces it.
+The older RuleSet/Rule URLs are read-only compatibility surfaces. IPSet
+metadata/CIDR writes remain on the generic model URL; lifecycle changes and
+deletion are closed there.
 
 ## Building a Security Dashboard
 
@@ -1076,180 +1079,142 @@ A connection is one of two kinds, shown in the **Access** column: tool-door acce
 
 ## IPSet Bulk Blocking
 
-IPSets are the primary mechanism for blocking entire countries, datacenters, or large abuse lists at the kernel level. Each IPSet record maps to a Linux `ipset` hash:net — lookups are O(1) regardless of set size, making it practical to block tens of thousands of CIDRs without performance impact.
+An IPSet is durable desired state for one Linux `hash:net` set. Creation and
+metadata/CIDR editing use the model endpoint; enable, disable, and sync use a
+fresh-auth governed action. A lifecycle action verifies one compatible runner
+per hostname and returns success only after every host reports the exact set
+type, IPv4 membership digest, and INPUT/FORWARD rule counts.
 
-### Endpoints
+### Endpoints and permissions
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/incident/ipset` | List all IPSets |
-| `GET` | `/api/incident/ipset/<id>` | Get a single IPSet |
-| `POST` | `/api/incident/ipset` | Create a new IPSet |
-| `POST` | `/api/incident/ipset/<id>` | Update an IPSet |
-| `DELETE` | `/api/incident/ipset/<id>` | Delete an IPSet |
+| Method | Path | Permission | Description |
+|---|---|---|---|
+| `GET` | `/api/incident/ipset` | `view_security` or `security` | List IPSets |
+| `GET` | `/api/incident/ipset/<id>` | `view_security` or `security` | Get one IPSet |
+| `POST` | `/api/incident/ipset` | `manage_security` or `security` | Create a disabled IPSet |
+| `POST` | `/api/incident/ipset/<id>` | `manage_security` or `security` | Update writable metadata or CIDRs |
+| `POST` | `/api/incident/ipset/action` | global `manage_security` or `security`; human JWT authenticated within 600 seconds | Enable, disable, or re-check desired state |
 
-### Permissions
+API keys are refused by the action endpoint. `DELETE` is unsupported: disable
+is the durable absence tombstone that lets later reconciliation remove drift.
 
-| Permission | Access |
-|------------|--------|
-| `view_security` or `security` | Read (list, detail) |
-| `manage_security` or `security` | Create, update, actions |
-| `manage_security` (required) | Delete |
-
-### Field Reference
+### Field reference
 
 | Field | Type | Writable | Description |
-|-------|------|----------|-------------|
+|---|---|---|---|
 | `id` | int | No | Primary key |
-| `name` | string | Yes | Unique ipset name, e.g. `country_cn`, `abuse_ips`. Used as the kernel ipset identifier — no spaces or special characters. |
-| `kind` | string | Yes | Type: `country`, `datacenter`, `abuse`, `custom` |
+| `name` | string | Create only | Unique 1–31 character kernel set name using letters, digits, `_`, or `-`; names ending `_tmp` and framework-reserved names are refused, and enabled names must leave room for the atomic `_tmp` suffix |
+| `kind` | string | Yes | `country`, `datacenter`, `abuse`, or `custom` |
 | `description` | string | Yes | Human-readable label |
-| `source` | string | Yes | Data source: `ipdeny`, `abuseipdb`, `tor`, `blocklist_de`, `manual` |
-| `source_url` | string | Yes | URL to fetch CIDR data from (auto-populated for ipdeny country sets) |
-| `source_key` | string | Yes (write-only) | API key or identifier for the source. For AbuseIPDB this is the API key. Never returned in any response graph. |
-| `is_enabled` | bool | Yes | Whether this set is active in iptables on all instances |
-| `cidr_count` | int | No | Number of CIDRs currently loaded (auto-updated on sync) |
-| `last_synced` | datetime | No | Timestamp of last successful fleet sync |
-| `sync_error` | string | No | Last error message if a sync or refresh failed, null on success |
-| `created` | datetime | No | Creation timestamp |
-| `modified` | datetime | No | Last modification timestamp |
+| `source` | string | Yes | `ipdeny`, `abuseipdb`, `tor`, `blocklist_de`, or `manual` |
+| `source_url` | string | Yes | Source URL used by scheduled refresh |
+| `source_key` | string | Yes, write-only | Source credential/identifier; excluded from every response graph |
+| `data` | array of strings on write; newline text on read | Yes | Complete CIDR replacement. Input is validated all-or-nothing, canonicalized, sorted, deduplicated, IPv4-only, and capped at 250,000 networks. |
+| `is_enabled` | bool | No | Desired presence, changed only by governed lifecycle actions; it is not observed kernel proof |
+| `cidr_count` | int | No | Number of canonical stored networks |
+| `last_synced` | datetime | No | Latest checked dispatch or exact aggregated observation; not success proof by itself |
+| `sync_error` | string or null | No | Bounded pending/quarantine/failure detail. One host cannot clear it; shared success requires matching fenced observations from the exact current compatible-host roster. |
+| `created`, `modified` | datetime | No | Creation timestamp and optimistic-concurrency revision |
 
-> **Note**: The `data` field (raw CIDR list) is excluded from the default response graph. Use `?graph=detailed` to include it.
+The default graph excludes `data` and `source_key`. `?graph=detailed` includes
+the stored newline-form CIDR data; `source_key` always remains excluded.
+The Admin Security `ipsets` section recomputes `enforcement_status` from the
+exact current compatible-host roster and fresh fenced observations on every
+read; it does not infer verification from `last_synced` or an empty error.
 
-> **Note**: Listing IPSets may show two system-managed, `is_enabled: false` rows —
-> `tor_exits` and `blocklist_de`. These are cache-only lookups consumed
-> internally by geoip Tor/blocklist.de detection and are refreshed automatically
-> by a background cron. The `enable` action returns 400 for them — pushing the
-> full list into the fleet-wide firewall is not permitted.
+System-managed `tor_exits` and `blocklist_de` rows are cache-only and always
+desired-disabled. Enabling them returns 400; reconciliation treats them as
+absence tombstones so threat-cache data never reaches the kernel firewall.
+The configured permanent-aggregate set name and framework namespaces are also
+reserved, preventing an operator IPSet from overwriting permanent blocks.
 
-### Graphs
+### Governed lifecycle request and response
 
-| Graph | What's included |
-|-------|----------------|
-| `default` (no parameter) | All fields except `data` and `source_key` — suitable for list and summary views |
-| `detailed` (`?graph=detailed`) | All fields including `data` (the full CIDR list, one per line); `source_key` is always excluded |
+Reload the row immediately before the action and send its exact `modified`
+revision plus the typed confirmation:
 
-### Actions (POST_SAVE_ACTIONS)
-
-Trigger actions by POSTing `{"<action_name>": 1}` to `/api/incident/ipset/<id>`:
-
-| Action | Description |
-|--------|-------------|
-| `sync` | Broadcast the current CIDR data to all instances — loads into kernel ipset and adds iptables DROP rule |
-| `enable` | Set `is_enabled=true` and sync fleet-wide |
-| `disable` | Set `is_enabled=false` and remove the ipset + iptables rule from all instances |
-| `refresh_source` | Re-fetch CIDRs from `source_url` or the AbuseIPDB API, update `data` and `cidr_count`, then sync fleet-wide |
-
-**Example — sync after manual CIDR edit:**
-
-```
-POST /api/incident/ipset/3
-{"sync": 1}
+```http
+POST /api/incident/ipset/action
 ```
 
-**Example — disable a country block:**
-
-```
-POST /api/incident/ipset/3
-{"disable": 1}
-```
-
-### Workflow: Block a Country
-
-Block all traffic from China (`cn`):
-
-```
-POST /api/incident/ipset
+```json
 {
-  "name": "country_cn",
-  "kind": "country",
-  "description": "Block country: CN",
-  "source": "ipdeny",
-  "source_url": "https://www.ipdeny.com/ipblocks/data/countries/cn.zone",
-  "is_enabled": true
+  "action": "ipset.enable",
+  "ipset_id": 3,
+  "expected_modified": "2026-09-04T18:15:03.220000+00:00",
+  "confirm": "ENABLE IPSET 3"
 }
 ```
 
-Then fetch the latest CIDRs and load them onto all instances:
+Valid action/confirmation pairs are:
 
-```
-POST /api/incident/ipset/<id>
-{"refresh_source": 1}
-```
+| Action | Confirmation | Effect |
+|---|---|---|
+| `ipset.enable` | `ENABLE IPSET <id>` | Persist desired presence, then reconcile it |
+| `ipset.disable` | `DISABLE IPSET <id>` | Persist desired absence, then remove set/rule drift |
+| `ipset.sync` | `SYNC IPSET <id>` | Re-check the current desired state without changing it |
 
-`refresh_source` fetches the zone file, stores the CIDRs in `data`, and immediately syncs to all instances. A weekly cron also runs `refresh_source` automatically on all enabled IPSets.
+The response data includes the row plus `enforcement_status`,
+`enforcement_ok`, and, on failure, `error_code`:
 
-Common country codes: `cn` (China), `ru` (Russia), `ir` (Iran), `kp` (North Korea).
-
-### Workflow: Block Abuse IPs via AbuseIPDB
-
-Block IPs with 100% confidence score from [AbuseIPDB](https://www.abuseipdb.com/):
-
-```
-POST /api/incident/ipset
+```json
 {
-  "name": "abuse_ips",
-  "kind": "abuse",
-  "description": "AbuseIPDB blacklist (confidence 100%)",
-  "source": "abuseipdb",
-  "source_key": "<your-abuseipdb-api-key>",
-  "is_enabled": true
+  "status": true,
+  "code": 200,
+  "data": {
+    "schema_version": 1,
+    "action": "ipset.enable",
+    "data": {
+      "id": 3,
+      "is_enabled": true,
+      "last_synced": "2026-09-04T18:15:04.020000+00:00",
+      "sync_error": "",
+      "enforcement_status": "verified",
+      "enforcement_ok": true
+    }
+  }
 }
 ```
 
-Then load the current blacklist:
+`verified` plus `enforcement_ok=true` in this action response is the success
+contract. `partial` means at least one checked-command dispatch was confirmed
+but complete host proof was not; it does not prove that a broker mutation ran.
+`unknown` means dispatch/observation was not confirmed. Neither
+proves that no host changed after an ambiguous transport failure. Desired state
+remains durable for repair, and a stale `expected_modified` fails with 409.
 
-```
-POST /api/incident/ipset/<id>
-{"refresh_source": 1}
-```
+### Manual CIDR workflow
 
-This fetches up to 10,000 IPv4 addresses with confidence ≥ 100% and syncs them fleet-wide. The weekly cron refreshes this automatically.
+Create the set (it starts disabled regardless of any submitted
+`is_enabled` value):
 
-### Workflow: Manual CIDR List
-
-For custom ranges (e.g., a specific datacenter or known attacker range):
-
-```
+```http
 POST /api/incident/ipset
+```
+
+```json
 {
   "name": "custom_block",
   "kind": "custom",
   "description": "Blocked datacenter ranges",
   "source": "manual",
-  "is_enabled": true
+  "data": ["192.0.2.0/24", "198.51.100.7", "192.0.2.10/24"]
 }
 ```
 
-Then update with `graph=detailed` to set the CIDR data:
+The stored networks become `192.0.2.0/24` and `198.51.100.7/32`. Reload the
+created row, then call `ipset.enable` with its current revision. Later CIDR
+edits replace the complete stored list and mark an enabled row pending; call
+`ipset.sync` and keep the UI pending unless its checked response verifies.
 
-```
-POST /api/incident/ipset/<id>?graph=detailed
-{
-  "data": "192.0.2.0/24\n198.51.100.0/24\n203.0.113.0/24"
-}
-```
+Configured non-manual sources are refreshed by the weekly `refresh_ipsets`
+job. Source-fetch or checked-reconciliation failure is retained in
+`sync_error`; cache-only threat sources use their separate six-hour refresh.
 
-Then sync to load onto all instances:
+### Listing and filtering
 
-```
-POST /api/incident/ipset/<id>
-{"sync": 1}
-```
-
-The `data` field is plain text, one CIDR per line. Lines starting with `#` are treated as comments and ignored.
-
-### Listing and Filtering
-
-```
-GET /api/incident/ipset
+```http
 GET /api/incident/ipset?kind=country
 GET /api/incident/ipset?is_enabled=true
-GET /api/incident/ipset?search=abuse
-```
-
-Standard sort and pagination apply:
-
-```
-GET /api/incident/ipset?sort=-cidr_count&size=20
+GET /api/incident/ipset?search=abuse&sort=-cidr_count&size=20
 ```

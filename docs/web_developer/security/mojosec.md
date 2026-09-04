@@ -127,8 +127,14 @@ scope. `cancel` is an audited transition to the existing `rejected` state.
 Execution is also fenced by the exposed `execution_generation`: each target is
 claimed in a short transaction, the checked firewall wait occurs outside the
 transaction, and only a still-owned generation/attempt can finalize. Partial or
-unknown compatible-host proof remains failed/retryable and never appears as a
-successful target, recommendation, approval card, ticket, or incident action.
+unknown compatible-host proof records that target attempt as failed and retries
+it up to the configured bound; it never becomes an `applied` target or a
+successful ticket/incident action. A multi-target recommendation can still
+settle as `executed` when another target has a terminal successful/no-op
+outcome, but its failed counter and `partial` transition preserve the gap.
+An already-whitelisted target is a terminal no-op only after checked fleet
+absence proves that no stale block rule remains; whitelist policy alone is not
+synthetic `verified` evidence.
 Partial reversal is nonterminal and retryable; the sweep requeues stranded
 approved/auto-approved work idempotently. Targets are canonical IPv4 only;
 IPv6 receives `unsupported_family` before desired firewall state is written.
@@ -323,7 +329,8 @@ whose targets are always server-derived case sources with per-target
 `applied`/`pre_existing`/`whitelisted`/`failed`/`expired`/`reversed` outcomes
 (`pre_existing` means an active block already covered the IP and the requested
 TTL/reason were **not** applied). `applied`, `reversed`, and `expired` require
-checked exact-host presence/absence; partial/unknown evidence stays retryable.
+checked exact-host presence/absence; `whitelisted` likewise requires checked
+absence. Partial/unknown evidence stays retryable.
 In shadow mode the authoritative
 Event/Incident feed continues unchanged; on an installation cut to
 authoritative mode, digest-tier web/FIM evidence stops projecting per-receipt

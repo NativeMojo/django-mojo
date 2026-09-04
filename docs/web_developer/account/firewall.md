@@ -62,9 +62,9 @@ Response includes block details:
 
 | Field | Description |
 |-------|-------------|
-| `is_blocked` | Currently blocked (may be expired — check `block_active`) |
-| `block_active` | Computed: blocked AND not expired AND no *active* whitelist (an expired whitelist no longer counts) |
-| `blocked_at` | When the current block was applied |
+| `is_blocked` | Desired block state (may be expired — check `block_active`); it is not observed kernel state |
+| `block_active` | Computed desired state: blocked AND not expired AND no *active* whitelist (an expired whitelist no longer counts) |
+| `blocked_at` | When the current desired block was recorded |
 | `blocked_until` | When the block expires (`null` = permanent) |
 | `blocked_reason` | Why — includes trigger info (manual, auto:threat_escalation) |
 | `block_count` | Total times this IP has been blocked |
@@ -75,9 +75,22 @@ Response includes block details:
 | `threat_level` | `low`, `medium`, `high`, `critical` |
 | `risk_score` | 0–100 computed score from threat signals |
 | `firewall_generation` | Monotonic desired-state generation used to reject stale receipts |
-| `firewall_pending` | `true` until the current desired generation has exact compatible-host proof |
+| `firewall_pending` | `true` until a checked action or aggregation of fresh matching host observations proves the current compatible-host snapshot |
 | `firewall_sync_error` | Bounded code/message for partial, unknown, or superseded reconciliation |
-| `firewall_observed_at` | When the current generation last verified on every expected host |
+| `firewall_observed_at` | Latest successful reconciliation observation; it can predate the current generation while `firewall_pending=true` |
+
+A cleared pending flag records the exact compatible-host snapshot finalized at
+`firewall_observed_at`; a host that joins later is not retroactively part of
+that historical proof and must reconcile before the next current-roster
+aggregation verifies.
+
+During a mixed API rollout, a response without these `firewall_*` fields is a
+legacy response, not evidence of enforcement. Migration
+`0054_geolocatedip_firewall_reconciliation` marks every historically
+firewall-touched or whitelisted row pending because the old broadcasts supplied
+no compatible-host observation. One host's periodic repair cannot clear shared
+truth: an exact-current-roster aggregator requires matching fenced observations
+from every compatible host.
 
 ### Block an IP
 
@@ -103,9 +116,11 @@ POST /api/system/geoip/42
 
 The response's `action_response` is a checked result. Treat the action as
 enforced only when `status` is `verified`, `ok` is `true`, and `owned` is
-`true`. `partial` means a mutation was dispatched without complete fleet
-proof; `unknown` means no safe dispatch occurred. Both leave durable pending
-state for repair and must remain failure/pending in the UI.
+`true`. `partial` means at least one checked-command dispatch was confirmed
+without complete fleet proof; it does not prove that a broker mutation ran.
+`unknown` means no dispatch or observation was confirmed. Neither
+is proof that no host changed after a transport failure. Both leave durable
+pending state for repair and must remain failure/pending in the UI.
 
 ### Unblock an IP
 
@@ -200,9 +215,24 @@ POST /api/incident/ipset/action
 The confirmation forms are `ENABLE IPSET <id>`, `DISABLE IPSET <id>`, and
 `SYNC IPSET <id>`. The response includes `enforcement_status`,
 `enforcement_ok`, `last_synced`, and `sync_error`. `last_synced` is the latest
-dispatch time, not proof by itself; only `enforcement_status=verified` plus
-`enforcement_ok=true` is success. API-key-backed and stale-auth sessions are
-refused.
+checked dispatch or exact aggregated observation, not proof by itself. Shared
+success is finalized only from exact current-roster observations; the same
+action response with `enforcement_status=verified` plus
+`enforcement_ok=true` is the direct compatible-host proof. API-key-backed and
+stale-auth sessions are refused.
+
+Migration `0054_geolocatedip_firewall_reconciliation` resets legacy IPSet
+dispatch fields to unverified state. Wait until at least one v1 checked-capable
+job engine is live on every intended host, then call `ipset.sync` to establish
+new fleet proof. An invalid or IPv6 Geo row or legacy IPSet with an
+invalid/reserved name, an enabled name over 27 characters, IPv6 CIDRs, or more
+than 250,000 networks is quarantined individually while valid rows continue.
+The configured permanent-aggregate set name is reserved dynamically too.
+Migration forces a quarantined legacy IPSet disabled. Valid sibling rows can
+still verify. Quarantined rows remain pending/error;
+have the backend operator repair them
+before expecting their action to verify. Names are immutable and deletion is
+unsupported after cutover.
 
 ## Refresh Threat Data
 

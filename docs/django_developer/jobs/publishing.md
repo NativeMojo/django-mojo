@@ -373,20 +373,32 @@ result = jobs.broadcast_execute_checked(
 )
 ```
 
-The v1 protocol is capability-negotiated and intentionally distinct from the
-legacy `execute` command. It reads one exact live runner roster, groups runners
-by hostname, deterministically selects one compatible runner per hostname, and
-refuses before publication if any host has no compatible runner. Multiple
-engines on one host therefore represent one machine-local state, not multiple
-independent targets.
+The v1 protocol (`protocol: 1`, heartbeat capability `execute_checked: 1`) is
+capability-negotiated and intentionally distinct from the legacy `execute`
+command. It reads the channel's dedicated runner index from the Redis primary,
+refuses more than 128 live runner rows, validates every indexed heartbeat, and
+groups runners by lowercased hostname. It deterministically selects the
+lowest-id compatible runner
+per hostname, and refuses before publication if any host has no compatible
+runner. Multiple engines on one host therefore represent one machine-local
+state, not multiple independent targets. The snapshot is the live jobs-channel
+roster at read time; it is not an AWS/serving-topology inventory and does not
+include a host that joins after the snapshot.
+
+During a rolling upgrade, a host represented only by a legacy heartbeat has no
+`execute_checked: 1` capability. The call returns `unknown` before any
+confirmed publication. A host with both legacy and v1 engines is compatible
+because its v1 engine can represent the shared machine state. Put at least one
+v1 engine on every intended host before expecting checked mutations to verify;
+new engines continue to accept the legacy `execute` command.
 
 The result status is one of:
 
 | Status | Meaning |
 |---|---|
 | `verified` | Exactly one identity-correlated success reply was accepted from every expected host, with no anomaly. The application must still validate each returned semantic result. |
-| `partial` | At least one mutation was dispatched, but a host was missing, failed, duplicated, malformed, or returned mismatched semantic evidence. Never report success. |
-| `unknown` | No mutation was dispatched because the roster, channel, correlation identity, payload, timeout, or protocol compatibility could not be proven. |
+| `partial` | At least one checked command was dispatched, but a host was missing, failed, duplicated, malformed, or returned mismatched semantic evidence. Dispatch alone does not prove that a mutation ran. Never report success. |
+| `unknown` | No dispatch was confirmed because the roster, channel, correlation identity, payload, timeout, or protocol compatibility could not be proven. There is no usable observation; callers must not infer that no host changed after an ambiguous transport failure. |
 
 Calls require an explicit channel. Payloads, host rosters, replies, anomalies,
 timeouts, correlation IDs, and returned semantic results are bounded. The
