@@ -393,6 +393,9 @@ The action payload represents the complete aggregate: RuleSet fields use their
 public names, child conditions live in `rules`, handler URLs become typed
 objects in `handlers`, and `metadata.delete_on_resolution` becomes the top-level
 `delete_on_resolution` boolean.
+Use `name` for the human-readable policy label because RuleSet has no persisted
+`description`; use canonical `match_by`, not `match_type`. Both non-fields are
+rejected.
 
 | Field | Type | Description |
 |---|---|---|

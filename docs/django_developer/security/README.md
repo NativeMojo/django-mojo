@@ -186,6 +186,10 @@ Rules match incoming events and determine what happens next. The rule engine is 
 ### RuleSet
 
 A RuleSet groups one or more Rules together with a handler chain. When an event arrives, the engine finds matching RuleSets by category and evaluates their rules.
+The governed aggregate calls its human-readable field `name`; RuleSet has no
+separately persisted `description`. Its condition combiner is the canonical
+`match_by` integer choice, not `match_type`. The Admin Security schema rejects
+both non-fields explicitly.
 
 ```python
 from mojo.apps.incident.models import RuleSet

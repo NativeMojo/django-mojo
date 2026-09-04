@@ -26,16 +26,64 @@ A `TicketNote` whose `metadata` carries an `action` block:
     "schema": "incident.ticket_approval",
     "schema_version": 1,
     "proposal_note_id": 73,
+    "proposal_digest": "28e3fb760c71d0d2f4247688c8bc16d354699fccfdcec1f1ba9bd51bed0b959b",
     "state": "pending",
     "resolved": false,
     "context": {
       "target": {"model": "incident.RuleSet", "pk": 42},
+      "ruleset": {
+        "name": "SSH brute force blocker",
+        "category": "auth:failed",
+        "priority": 50,
+        "bundle_minutes": 30,
+        "bundle_by": 4,
+        "bundle_by_rule_set": true,
+        "match_by": 0,
+        "trigger_count": 10,
+        "trigger_window": 5,
+        "retrigger_every": null,
+        "handlers": [
+          {"type": "block", "ttl_seconds": 3600, "fleet_wide": true}
+        ],
+        "delete_on_resolution": false,
+        "is_active": false,
+        "rules": [
+          {"name": "High severity", "field": "level", "operator": ">=", "value": "8", "value_type": "int", "is_required": false}
+        ]
+      },
       "expected_modified": "2026-09-04T17:18:19.123456+00:00",
       "confirm": "ACTIVATE RULESET 42",
       "confirm_catch_all": "ACTIVATE CATCH-ALL RULESET 42",
       "deny_confirm": "DELETE RULESET 42"
     },
     "review": {
+      "proposal": {
+        "target": {"model": "incident.RuleSet", "pk": 42},
+        "ruleset": {
+          "name": "SSH brute force blocker",
+          "category": "auth:failed",
+          "priority": 50,
+          "bundle_minutes": 30,
+          "bundle_by": 4,
+          "bundle_by_rule_set": true,
+          "match_by": 0,
+          "trigger_count": 10,
+          "trigger_window": 5,
+          "retrigger_every": null,
+          "handlers": [
+            {"type": "block", "ttl_seconds": 3600, "fleet_wide": true}
+          ],
+          "delete_on_resolution": false,
+          "is_active": false,
+          "rules": [
+            {"name": "High severity", "field": "level", "operator": ">=", "value": "8", "value_type": "int", "is_required": false}
+          ]
+        },
+        "expected_modified": "2026-09-04T17:18:19.123456+00:00",
+        "confirm": "ACTIVATE RULESET 42",
+        "confirm_catch_all": "ACTIVATE CATCH-ALL RULESET 42",
+        "deny_confirm": "DELETE RULESET 42"
+      },
       "target": {"model": "incident.RuleSet", "pk": 42},
       "revision": "2026-09-04T17:18:19.123456+00:00",
       "confirmation": {
@@ -56,12 +104,19 @@ A `TicketNote` whose `metadata` carries an `action` block:
 | `context` | Handler-specific payload (model refs, IPs, proposed rules) |
 | `schema`, `schema_version` | Durable action contract (`incident.ticket_approval`, version 1) |
 | `proposal_note_id` | Immutable identity of the saved server-authored proposal note |
-| `review` | Copy of the exact target, revision, and confirmation strings rendered for review |
+| `proposal_digest` | SHA-256 of the canonical complete `review`; clients copy it back rather than recomputing it |
+| `review.proposal` | Complete bounded JSON-safe copy of the server-authored `context`, including every action parameter or complete RuleSet aggregate the operator reviews |
+| `review.target`, `review.revision`, `review.confirmation` | Convenience projections for generic approval-card rendering |
 | `state` | `pending`, transiently `claimed`, then `resolved` after success |
 | `resolved` | Stamped `true` only after a successful dispatch |
 
 Action producers save the note, then call `bind_action_note()` to stamp these
-server-owned fields. A proposal lacking them is not executable.
+server-owned fields. Review data is limited to 64 KiB of canonical JSON, eight
+levels of nesting, 64 entries per array/object, 4096 characters per string,
+and 80 characters per key. Non-JSON values and non-finite numbers are refused.
+Rule approvals additionally require a complete `context.ruleset`; its canonical
+field is `match_by`, not `match_type`, and RuleSet has no persisted
+`description`. A proposal lacking the binding fields is not executable.
 
 Tickets created around an approval also carry `metadata.requires_approval:
 true` for UI filtering.
@@ -70,8 +125,8 @@ true` for UI filtering.
 
 The UI answers by creating a new note whose `metadata` carries an
 `action_response`. Its object must contain exactly the pending proposal note
-ID, handler name, and the operator's choice; the server reloads context from
-that exact proposal note:
+ID, proposal digest, handler name, and the operator's choice; the server reloads
+context from that exact proposal note:
 
 ```
 POST /api/incident/ticket/note
@@ -81,6 +136,7 @@ POST /api/incident/ticket/note
   "metadata": {
     "action_response": {
       "proposal_note_id": 73,
+      "proposal_digest": "28e3fb760c71d0d2f4247688c8bc16d354699fccfdcec1f1ba9bd51bed0b959b",
       "handler": "incident.rule_approval",
       "action": "approve"
     }
@@ -94,17 +150,20 @@ structured response never triggers a conversational reply.
 
 The response cannot replace the target, revision, confirmation, or proposed
 policy. Extra keys (including response-side `context`) invalidate the response.
-The server-stored action note is the authority for all of those values.
+The digest binds the card to the complete displayed review, but the
+server-stored `context` remains the execution authority; the dispatcher
+rebuilds `review` from it and verifies both stored and echoed digests.
 
 ## Dispatch flow and guards
 
 `dispatch_action(ticket, note, response_meta)`:
 
-1. **The response is bound** — its shape is exact, the response note belongs
-   to the ticket, and the named handler is registered.
+1. **The response is bound** — its four-key shape is exact, the response note
+   belongs to the ticket, and the named handler is registered.
 2. **The ticket and exact proposal are locked** — `select_for_update()` locks
    the ticket and `proposal_note_id` on that ticket. The proposal's schema,
-   version, ID, handler, and derived `review` must match its stored context.
+   version, ID, handler, digest, and derived complete `review` must match its
+   stored context.
 3. **Terminal tickets are skipped** — a ticket already `closed`/`resolved`
    cannot execute an unresolved proposal.
 4. **Global interactive authority is re-proved at dispatch** — the note must

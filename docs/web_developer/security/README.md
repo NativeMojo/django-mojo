@@ -519,19 +519,69 @@ buttons**, not free text. Tickets with a pending action are flagged
     "schema": "incident.ticket_approval",
     "schema_version": 1,
     "proposal_note_id": 73,
+    "proposal_digest": "28e3fb760c71d0d2f4247688c8bc16d354699fccfdcec1f1ba9bd51bed0b959b",
     "state": "pending",
     "resolved": false,
     "context": {
-      "target": {"model": "incident.RuleSet", "pk": 42, "label": "SSH brute force blocker"},
+      "target": {"model": "incident.RuleSet", "pk": 42},
+      "ruleset": {
+        "name": "SSH brute force blocker",
+        "category": "auth:failed",
+        "priority": 50,
+        "bundle_minutes": 30,
+        "bundle_by": 4,
+        "bundle_by_rule_set": true,
+        "match_by": 0,
+        "trigger_count": 10,
+        "trigger_window": 5,
+        "retrigger_every": null,
+        "handlers": [
+          {"type": "block", "ttl_seconds": 3600, "fleet_wide": true}
+        ],
+        "delete_on_resolution": false,
+        "is_active": false,
+        "rules": [
+          {"name": "High severity", "field": "level", "operator": ">=", "value": "8", "value_type": "int", "is_required": false}
+        ]
+      },
       "expected_modified": "2026-09-04T17:18:19.123456+00:00",
       "confirm": "ACTIVATE RULESET 42",
+      "confirm_catch_all": "ACTIVATE CATCH-ALL RULESET 42",
       "deny_confirm": "DELETE RULESET 42"
     },
     "review": {
-      "target": {"model": "incident.RuleSet", "pk": 42, "label": "SSH brute force blocker"},
+      "proposal": {
+        "target": {"model": "incident.RuleSet", "pk": 42},
+        "ruleset": {
+          "name": "SSH brute force blocker",
+          "category": "auth:failed",
+          "priority": 50,
+          "bundle_minutes": 30,
+          "bundle_by": 4,
+          "bundle_by_rule_set": true,
+          "match_by": 0,
+          "trigger_count": 10,
+          "trigger_window": 5,
+          "retrigger_every": null,
+          "handlers": [
+            {"type": "block", "ttl_seconds": 3600, "fleet_wide": true}
+          ],
+          "delete_on_resolution": false,
+          "is_active": false,
+          "rules": [
+            {"name": "High severity", "field": "level", "operator": ">=", "value": "8", "value_type": "int", "is_required": false}
+          ]
+        },
+        "expected_modified": "2026-09-04T17:18:19.123456+00:00",
+        "confirm": "ACTIVATE RULESET 42",
+        "confirm_catch_all": "ACTIVATE CATCH-ALL RULESET 42",
+        "deny_confirm": "DELETE RULESET 42"
+      },
+      "target": {"model": "incident.RuleSet", "pk": 42},
       "revision": "2026-09-04T17:18:19.123456+00:00",
       "confirmation": {
         "approve": "ACTIVATE RULESET 42",
+        "approve_catch_all": "ACTIVATE CATCH-ALL RULESET 42",
         "deny": "DELETE RULESET 42"
       }
     }
@@ -539,17 +589,25 @@ buttons**, not free text. Tickets with a pending action are flagged
 }
 ```
 
-Render `label` as the question and the immutable `review` object as the
-human-visible target, revision, and confirmations. Resolve `review.target` to a link/card
-generically: `model` `"incident.RuleSet"` + `pk` 42 →
+Render `label` as the question and render the complete bounded
+`review.proposal` as the action parameters the human is approving. Preserve
+its JSON types and show the complete RuleSet aggregate, including handlers and
+child rules; RuleSet uses `name` (there is no persisted `description`) and
+canonical `match_by` (not `match_type`). `review.target`, `review.revision`, and
+`review.confirmation` are convenience projections for generic cards. Resolve
+`review.target` to a link/card generically: `model` `"incident.RuleSet"` + `pk` 42 →
 `/api/incident/event/ruleset/42`.
+Render all proposal strings as text, never HTML. The server caps canonical
+review JSON at 64 KiB, nesting at eight levels, each array/object at 64 entries,
+strings at 4096 characters, and keys at 80 characters.
 Once `action.resolved` is `true`, disable the buttons.
 
-To answer, create a new note whose `metadata.action_response` has exactly three
-keys: copy the pending `proposal_note_id` and `handler`, then set `action` to
-`"approve"` or `"deny"`. Do not send context or extra keys. The backend executes
-only the target, revision, confirmation, and policy stored on that exact
-server-authored proposal note.
+To answer, create a new note whose `metadata.action_response` has exactly four
+keys: copy the pending `proposal_note_id`, `proposal_digest`, and `handler`, then
+set `action` to `"approve"` or `"deny"`. Do not recompute the digest and do not
+send context or extra keys. The digest binds the response to the complete
+displayed review; the backend still executes only the context stored on that
+exact server-authored proposal note.
 
 ```
 POST /api/incident/ticket/note
@@ -559,6 +617,7 @@ POST /api/incident/ticket/note
   "metadata": {
     "action_response": {
       "proposal_note_id": 73,
+      "proposal_digest": "28e3fb760c71d0d2f4247688c8bc16d354699fccfdcec1f1ba9bd51bed0b959b",
       "handler": "incident.rule_approval",
       "action": "approve"
     }
@@ -667,6 +726,10 @@ POST and DELETE requests to the generic RuleSet and Rule URLs are disabled.
 | `retrigger_every` | int or null | Re-fire the handler every N additional events while the incident stays active. `null` = fire once only. |
 | `delete_on_resolution` | bool | Delete incidents created by this RuleSet when they resolve or close, unless the incident is protected |
 | `is_active` | bool | Governed create/replace requires inactive policy; activation is a separate action |
+
+RuleSet has no separately persisted `description`; use `name`. The canonical
+condition-combiner field is `match_by`, not `match_type`. The server rejects
+both unknown names rather than silently translating them.
 
 ### bundle_by Values
 

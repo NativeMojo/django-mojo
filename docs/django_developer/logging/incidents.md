@@ -958,6 +958,8 @@ The rule engine evaluates each event against configured RuleSets. It is the mech
 
 A RuleSet defines:
 
+- **`name`** — Human-readable policy name. There is no separately persisted
+  RuleSet `description` field.
 - **`category`** — Which event category it applies to (matched by `scope` first, then `category`)
 - **`priority`** — Evaluation order (lower = higher priority). First matching RuleSet wins. Hand-crafted defaults use 1–50; the LLM agent defaults new rulesets to priority 50, leaving room below for rules that must match first.
 - **`match_by`** — `ALL` (all rules must match) or `ANY` (any rule can match)
@@ -967,6 +969,9 @@ A RuleSet defines:
 - **`trigger_count`** — Fire the handler when the incident reaches this many events. `null` = fire immediately on the first event.
 - **`trigger_window`** — Only count events within this many minutes when checking `trigger_count`. `null` = count all events on the incident regardless of age.
 - **`retrigger_every`** — Re-fire the handler every N additional events after the initial trigger. `null` = fire once only.
+
+The governed aggregate accepts canonical `match_by`; `match_type` is not an
+alias and is rejected alongside `description`.
 
 ### Rule
 
