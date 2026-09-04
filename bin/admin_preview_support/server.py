@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from .gallery import bootstrap, reset
-from .features import activity, advanced, assistant, capacity, email, maintenance, platform, settings, sms, webapps
+from .features import activity, advanced, assistant, capacity, email, maintenance, platform, security, settings, sms, webapps
 from .features import dashboard
 
 
@@ -638,7 +638,12 @@ class PreviewHandler(BaseHTTPRequestHandler):
             memberships = [] if self.onboarding_state == "new_group" else None
             return self._send(bootstrap(
                 self.groups, membership_groups=memberships,
-                infrastructure_mode=getattr(self, "infrastructure_mode", "managed")))
+                infrastructure_mode=getattr(self, "infrastructure_mode", "managed"),
+                security_state=getattr(self, "security_state", "full")))
+        security_response = security.get(self, parsed)
+        if security_response is not None:
+            status, payload = security_response
+            return self._send(payload, status=status)
         activity_response = activity.get(self, parsed)
         if activity_response is not None:
             status, payload = activity_response
@@ -779,7 +784,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         payload = self._read_body()
         self._record_event(path, payload)
-        for provider in (webapps, platform, advanced, settings, sms, email, maintenance, capacity, assistant):
+        for provider in (webapps, platform, advanced, security, settings, sms, email, maintenance, capacity, assistant):
             response = provider.post(self, path, payload)
             if response is not None:
                 status, body = response
@@ -979,6 +984,7 @@ def main():
     parser.add_argument("--key-state", choices=("missing", "active", "rotated", "revoked"), default="active")
     parser.add_argument("--setup-state", choices=("idle", "choice", "delay", "error", "fresh", "ambiguous"), default="idle")
     parser.add_argument("--activity-state", choices=("full", "empty", "unavailable"), default="full")
+    parser.add_argument("--security-state", choices=("full", "empty", "unavailable", "view-only", "no-access", "partial", "failed", "stale", "expired-session", "440", "conflict", "recovery"), default="full")
     parser.add_argument("--dashboard-state", choices=("healthy", "degraded", "down", "jobs_stalled", "sanity_failed", "denied", "unknown", "unconfigured"), default="healthy")
     parser.add_argument("--onboarding-state", choices=("idle", "address", "github", "verify", "complete", "lost_key", "new_group"), default="idle")
     parser.add_argument("--settings-state", choices=("normal", "duplicate", "invalid", "provider_failed", "unset", "restricted", "delay", "error", "fresh"), default="normal")
@@ -1013,6 +1019,7 @@ def main():
         "webapp_onboarding": webapp_onboarding_operation,
     }, key_state=args.key_state, setup_state=args.setup_state,
        activity_state=args.activity_state,
+       security_state=args.security_state,
        dashboard_state=args.dashboard_state,
        onboarding_state=args.onboarding_state,
        settings_state=args.settings_state,

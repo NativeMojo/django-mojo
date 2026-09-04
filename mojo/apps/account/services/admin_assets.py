@@ -20,7 +20,8 @@ FEATURES = (
 
 ROOT_V2 = Path(__file__).resolve().parents[1] / "admin_portal_v2"
 V2_FEATURES = (
-    "home", "apps", "infrastructure", "domains", "access", "settings")
+    "home", "apps", "infrastructure", "domains", "access", "security",
+    "settings")
 V2_PREFIX = "v2/"
 
 

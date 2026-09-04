@@ -67,7 +67,9 @@ ENDPOINTS = {
 def describe(capabilities):
     values = {"view_logs": capabilities["view_logs"],
               "view_security": capabilities["view_security"],
-              "manage_security": capabilities["manage_security"]}
+              "manage_security": capabilities["manage_security"],
+              "view_tickets": capabilities["view_tickets"],
+              "manage_tickets": capabilities["manage_security"]}
     return {"id": NAME, "enabled": any(values.values()), "capabilities": values}
 
 

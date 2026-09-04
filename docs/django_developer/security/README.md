@@ -193,6 +193,20 @@ separately persisted `description`. Its condition combiner is the canonical
 `match_by` integer choice, not `match_type`. The Admin Security schema rejects
 both non-fields explicitly.
 
+The packaged Admin v2 Security workspace is a strict client of
+`services.admin_security` schema version 2. The `schemas` section publishes a
+bounded typed object schema for every action, including optimistic revision and
+independent catch-all confirmation inputs. The `ipsets` section projects only
+desired/observed status, generation, observation cutoff, and bounded captured
+expected/responded/succeeded/failed/missing host IDs. CIDRs, source keys,
+runner IDs/incarnations, broker replies, raw observations, persisted exception
+text, and recommendation target addresses never enter this projection.
+
+Collector exceptions become stable `collector_unavailable` envelopes. Action
+state exceptions become stable typed error codes/messages. Keep this boundary
+server-side: adding a browser feature is never a reason to expose an internal
+row or teach JavaScript to interpret firewall receipts.
+
 ```python
 from mojo.apps.incident.models import RuleSet
 

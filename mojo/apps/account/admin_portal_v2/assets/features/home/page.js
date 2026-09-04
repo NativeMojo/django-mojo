@@ -10,13 +10,13 @@
 //   /api/account/admin/dashboard   the availability envelope + one envelope per
 //                                  source (v1 Dashboard's own read)
 //   /api/edge/webapp/summaries     the Apps tile (v1 Apps list's own read)
-//   /api/logs | /api/incident/event  the newest few activity rows, capability-gated
+//   /api/logs | /api/incident/ticket the newest few activity rows, capability-gated
 //
 // Each read fails on its own. One dead source never blanks the page.
 
 import {api, apiEnvelope, h, icon} from '../../core.js';
 import {runAction} from '../../components/actions.js';
-import {routeHref} from '../../components/routes.js';
+import {activityHref, routeHref} from '../../components/routes.js';
 import {errorState, loadingState} from '../../components/views.js';
 import {activityTabVisible} from './activity.js';
 import {openApiSetup} from './setup.js';
@@ -117,7 +117,7 @@ function elapsedText(startedAt) {
 // ── destinations ───────────────────────────────────────────────────────────
 
 /**
- * A link into the portal that owns the fix. v2 owns six destinations; anything
+ * A link into the portal that owns the fix. v2 owns seven destinations; anything
  * whose screen has not been built here yet links into v1 instead, and says so
  * out loud rather than dropping the operator into different chrome unannounced.
  */
@@ -188,8 +188,13 @@ function infrastructureAction(ctx, label, tab, fallback) {
 // A tab this caller cannot read is not offered here — the link falls back to
 // the current Admin, which refuses it in exactly the words it does today.
 function activityAction(ctx, label, tab) {
+  if ((tab === 'incidents' || tab === 'events')
+      && ctx.features?.security?.enabled === true
+      && ctx.features.security.capabilities?.view === true) {
+    return {label, href: activityHref(tab), external: false};
+  }
   if (activityTabVisible(ctx, tab)) {
-    return {label, href: routeHref('activity', {tab}), external: false};
+    return {label, href: activityHref(tab), external: false};
   }
   return v1Action(ctx, label, `activity?tab=${tab}`);
 }
@@ -653,12 +658,12 @@ function activityModel(ctx) {
       }),
     };
   }
-  if (capabilities.view_security === true) {
+  if (capabilities.view_tickets === true) {
     return {
-      endpoint: '/api/incident/event', tab: 'events',
+      endpoint: '/api/incident/ticket', tab: 'tickets',
       line: (row) => ({
-        text: row.title || row.category || `Event ${row.id}`,
-        who: row.source_ip || row.hostname || '',
+        text: row.title || row.category || `Ticket ${row.id}`,
+        who: row.activity_assignee_label || '',
       }),
     };
   }

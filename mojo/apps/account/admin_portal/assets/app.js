@@ -115,11 +115,26 @@ async function start() {
 }
 
 function showFatal(error) {
-  if (error?.code === 'fresh_auth_required') return;
+  if (error?.code === 'fresh_auth_required' || error?.code === 'session_expired') return;
   controller?.abort(); dispose?.(); disposeAssistant?.(); disposeAssistant = null; closeAllOverlays();
   const adminPath = `/${location.pathname.split('/').filter(Boolean)[0] || 'admin'}/`;
   setDocumentTitle('Could not load');
-  app.replaceChildren(h('div', {class: 'fatal'}, icon('alert'), h('h1', {text: 'Admin could not load'}), h('p', {text: error.message}), h('a', {class: 'button primary', href: `/auth?redirect=${encodeURIComponent(adminPath)}`}, 'Sign in again')));
+  const message = typeof error?.message === 'string' ? error.message.slice(0, 512) : 'The request could not be completed.';
+  app.replaceChildren(h('div', {class: 'fatal'}, icon('alert'), h('h1', {text: 'Admin could not load'}), h('p', {text: message}), h('a', {class: 'button primary', href: `/auth?redirect=${encodeURIComponent(adminPath)}`}, 'Sign in again')));
+}
+
+function showSessionExpired(event) {
+  controller?.abort(); dispose?.(); dispose = null; disposeAssistant?.(); disposeAssistant = null;
+  reauthClose?.(); reauthClose = null; closeAllOverlays(); context = null;
+  window.MojoAuth?.logout?.();
+  const supplied = event.detail?.returnPath;
+  const returnPath = typeof supplied === 'string' && supplied.startsWith('/')
+    && supplied.length <= 1000 ? supplied : `${location.pathname}${location.search}${location.hash}`;
+  setDocumentTitle('Session expired');
+  app.replaceChildren(h('div', {class: 'fatal'}, icon('lock'),
+    h('h1', {text: 'Your Admin session expired'}),
+    h('p', {text: 'Sign in again to return to the same Admin page.'}),
+    h('a', {class: 'button primary', href: `/auth?redirect=${encodeURIComponent(returnPath)}`}, 'Sign in again')));
 }
 
 function showFreshAuth(event) {
@@ -177,4 +192,5 @@ function showFreshAuth(event) {
 
 window.addEventListener('hashchange', () => render().catch(showFatal));
 window.addEventListener('mojo-admin:fresh-auth', showFreshAuth);
+window.addEventListener('mojo-admin:session-expired', showSessionExpired);
 start().catch(showFatal);

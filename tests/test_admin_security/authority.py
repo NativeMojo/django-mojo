@@ -50,8 +50,10 @@ def setup_admin_security(opts):
 
 @th.django_unit_test("Admin Security routes pin human and fresh-auth authority")
 def test_route_authority(opts):
+    from mojo import errors as merrors
     from mojo.apps.incident.rest import admin_security as views
     from mojo.apps.incident.rest import ipset as ipset_views
+    from mojo.apps.incident.services import admin_security
     assert views.on_admin_security.__url__ == ("GET", "admin/security")
     assert views.on_admin_security_action.__url__ == (
         "POST", "admin/security/action")
@@ -68,6 +70,14 @@ def test_route_authority(opts):
     assert set(ipset_views.on_ipset_action._mojo_required_permissions) == {
         "manage_security", "security"}
     assert ipset_views.on_ipset_action._mojo_requires_fresh_auth
+    try:
+        views._translate(lambda: (_ for _ in ()).throw(
+            admin_security.SecurityActionError(
+                "revision changed", code="stale_revision", status=409)))
+    except merrors.ValueException as error:
+        assert error.status == 409 and error.code == "stale_revision"
+    else:
+        assert False, "the REST adapter must retain typed security error codes"
 
 
 @th.django_unit_test("generic rule and IPSet lifecycle writes retire")
@@ -310,7 +320,7 @@ def test_bounded_redacted_overview(opts):
                          source_key="fixture-key", data="8.8.8.8/32")
     result = admin_security.overview({"limit": 100})
     rendered = str(result)
-    assert result["schema_version"] == 1
+    assert result["schema_version"] == 2
     assert "fixture-secret" not in rendered
     assert "fixture-key" not in rendered
     assert "8.8.8.8/32" not in rendered
@@ -320,6 +330,49 @@ def test_bounded_redacted_overview(opts):
     assert metrics["accuracy"]["resolution_rate"] == "unavailable"
     for section in result["sections"].values():
         assert {"status", "observed_at", "cutoff", "window", "truncated", "data"} <= set(section)
+
+
+@th.django_unit_test("schema v2 advertises bounded actions and redacted checked receipts")
+def test_action_schema_and_checked_receipt_projection(opts):
+    from types import SimpleNamespace
+    from mojo.apps.incident.services import admin_security
+
+    schemas = admin_security._action_schemas()
+    assert set(schemas) == set(admin_security.ACTIONS)
+    for action, schema in schemas.items():
+        assert schema["additional_properties"] is False
+        assert schema["properties"]["action"]["const"] == action
+        assert {"confirm"} <= set(schema["properties"])
+    row = SimpleNamespace(
+        pk=91, modified=None, name="safe_set", kind="custom",
+        description="safe", is_enabled=True, cidr_count=2,
+        last_synced=None, sync_error="raw provider exception text")
+    result = {
+        "status": "partial", "ok": False, "fence": 7,
+        "desired": {"name": "safe_set", "present": True, "count": 2,
+                    "digest": "a" * 64, "cidrs": ["8.8.8.8/32"]},
+        "error": {"code": "missing_host", "message": "raw broker exception"},
+        "checked": {
+            "expected_hosts": ["edge-a", "edge-b", "8.8.8.8"],
+            "responded_hosts": ["edge-a"], "succeeded_hosts": ["edge-a"],
+            "failed_hosts": [], "missing_hosts": ["edge-b"],
+            "expected_roster": [{"host": "edge-a", "started": "secret-incarnation"}],
+            "results": [{"host": "edge-a", "runner_id": "secret-runner",
+                         "result": {"cidrs": ["8.8.8.8/32"]}}],
+        },
+    }
+    projected = admin_security._safe_ipset(
+        row, result=result, observation_cutoff="2026-08-10T17:10:00Z")
+    assert projected["enforcement"]["status"] == "missing"
+    assert projected["enforcement"]["expected_host_ids"] == ["edge-a", "edge-b"]
+    rendered = str(projected)
+    for secret in ("8.8.8.8/32", "secret-incarnation", "secret-runner",
+                   "raw broker exception", "raw provider exception text"):
+        assert secret not in rendered
+    stale = dict(result, error={"code": "generation_superseded"})
+    assert admin_security._safe_ipset(row, result=stale)[
+        "enforcement_status"] == "stale", (
+            "a superseded generation must not be mislabeled as merely missing")
 
 
 @th.django_unit_test("Assistant rule mutations bind fresh auth and previews")

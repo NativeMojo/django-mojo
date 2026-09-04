@@ -2,12 +2,12 @@
 
 from .features import (
     activity, advanced, assistant, capacity, dashboard, email, maintenance,
-    people, platform, settings, sms, webapps,
+    people, platform, security, settings, sms, webapps,
 )
 
 
-PROVIDERS = (dashboard, people, webapps, activity, platform, advanced, settings,
-             sms, email, assistant)
+PROVIDERS = (dashboard, people, webapps, activity, platform, advanced, security,
+             settings, sms, email, assistant)
 # Providers that serve pages but publish no feature lane of their own. They
 # still hold scenario state, so reset must reach them; bootstrap must not,
 # or the shell would learn about a feature its registry has never heard of.
@@ -15,7 +15,7 @@ RESET_ONLY = (maintenance, capacity)
 
 
 def bootstrap(groups, membership_groups=None, can_create_webapp_group=True,
-              infrastructure_mode="managed"):
+              infrastructure_mode="managed", security_state="full"):
     # Default managed so every existing caller — the tests included — keeps the
     # payload it had. The key is ALWAYS present because the feature providers
     # index it directly.
@@ -42,6 +42,11 @@ def bootstrap(groups, membership_groups=None, can_create_webapp_group=True,
         "assistant_mcp": True,
         "infrastructure_managed": infrastructure_mode == "managed",
     }
+    if security_state == "view-only":
+        capabilities["manage_security"] = False
+    elif security_state == "no-access":
+        capabilities["view_security"] = False
+        capabilities["manage_security"] = False
     return {
         "version": "1.9.0", "admin_path": "/",
         "groups": groups if membership_groups is None else membership_groups,
@@ -67,7 +72,7 @@ def reset(handler, fixtures, *, key_state="active", setup_state="idle",
           deployments_state="mixed", capacity_state="healthy",
           sms_state="configured", email_state="configured",
           assistant_state="configured", assistant_mcp_state="connected",
-          infrastructure_mode="managed"):
+          infrastructure_mode="managed", security_state="full"):
     """Reset every stateful provider so scenarios never leak across runs."""
     # An installation-wide property rather than a provider scenario, so it is
     # stamped on the handler here instead of being threaded through resets.
@@ -86,4 +91,5 @@ def reset(handler, fixtures, *, key_state="active", setup_state="idle",
                        sms_state=sms_state,
                        email_state=email_state,
                        assistant_state=assistant_state,
-                       assistant_mcp_state=assistant_mcp_state)
+                       assistant_mcp_state=assistant_mcp_state,
+                       security_state=security_state)

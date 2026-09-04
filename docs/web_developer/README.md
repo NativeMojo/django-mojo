@@ -25,6 +25,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | Section | Description |
 |---|---|
 | [account/](account/README.md) | Login, users, groups, API keys, push notifications |
+| [account/admin](account/admin.md) | Packaged Admin Security client — disclosure, typed actions, conflicts, auth recovery, and v1 compatibility |
 | [logging/](logging/README.md) | Log queries, incident management |
 | [fileman/](fileman/README.md) | File uploads, downloads, management |
 | [email/](email/README.md) | Email templates, mailboxes, sent messages |

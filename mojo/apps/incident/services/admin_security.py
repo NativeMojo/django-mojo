@@ -6,6 +6,7 @@ credentials, Python paths, commands, or exception text.
 """
 
 from datetime import timedelta
+import re
 
 from django.db import transaction
 from django.db.models import Count, Prefetch
@@ -16,12 +17,15 @@ from mojo import errors as merrors
 from . import mojosec_actions, rule_validation
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
 DEFAULT_WINDOW_HOURS = 24
 MAX_WINDOW_HOURS = 24 * 90
 MAX_ACTION_TARGETS = 1024
+MAX_RECEIPT_HOSTS = 128
+MAX_RECEIPT_MEMBER_COUNT = 1000000
+MAX_OBJECT_ID = 2147483647
 SECTIONS = (
     "overview", "cases", "incidents", "events", "rules", "ipsets",
     "recommendations", "schemas",
@@ -115,9 +119,8 @@ def _safe_recommendation(row, detail=False):
     if detail:
         targets = list(row.targets.order_by("id")[:MAX_ACTION_TARGETS + 1])
         value["targets"] = [{
-            "id": target.pk, "ip": target.ip, "kind": target.kind,
+            "id": target.pk, "kind": target.kind,
             "validation_state": target.validation_state,
-            "validation_reason": target.validation_reason,
             "outcome": target.outcome, "attempts": target.attempts,
             "applied_at": _iso(target.applied_at),
             "expires_at": _iso(target.expires_at),
@@ -218,14 +221,17 @@ def _events(cutoff, window, end, limit):
     return _envelope(data, cutoff, window, len(rows) > limit)
 
 
-def _rules(cutoff, window, limit):
+def _rules(cutoff, window, limit, ruleset_id=None):
     from mojo.apps.incident.models import Rule, RuleSet
-    rows = list(
-        RuleSet.objects.prefetch_related(Prefetch(
+    queryset = RuleSet.objects.prefetch_related(Prefetch(
             "rules", queryset=Rule.objects.order_by("index", "id"),
             to_attr="_admin_security_rules"))
-        .order_by("priority", "id")[:limit + 1])
-    return _envelope([_safe_rule_set(row) for row in rows[:limit]], cutoff,
+    detail = ruleset_id is not None
+    if detail:
+        queryset = queryset.filter(pk=_id(ruleset_id, "ruleset_id"))
+    rows = list(queryset.order_by("priority", "id")[:limit + 1])
+    return _envelope([
+        _safe_rule_set(row, detail=detail) for row in rows[:limit]], cutoff,
                      window, len(rows) > limit)
 
 
@@ -235,23 +241,28 @@ def _ipsets(cutoff, window, limit):
     rows = list(IPSet.objects.order_by("name", "id")[:limit + 1])
     try:
         roster = firewall_truth.exact_compatible_roster()
+        roster_available = True
     except firewall_truth.FirewallTruthError:
         roster = []
+        roster_available = False
     data = []
     for row in rows[:limit]:
-        value = _safe_ipset(row, roster=roster)
-        value.update(created=_iso(row.created), source=row.source)
+        value = _safe_ipset(
+            row, roster=roster, observation_cutoff=window["end"])
+        value.update(created=_iso(row.created))
         data.append(value)
-    try:
-        roster_stable = bool(roster) and (
-            firewall_truth.exact_compatible_roster() == roster)
-    except firewall_truth.FirewallTruthError:
-        roster_stable = False
+    roster_stable = True
+    if roster_available:
+        try:
+            roster_stable = firewall_truth.exact_compatible_roster() == roster
+        except firewall_truth.FirewallTruthError:
+            roster_stable = False
     if not roster_stable:
         for value in data:
             value.update(
-                enforcement_status="unknown", enforcement_ok=False,
+                enforcement_status="stale", enforcement_ok=False,
                 error_code="runner_roster_changed")
+            value["enforcement"].update(status="stale", observed="stale")
     return _envelope(data, cutoff, window, len(rows) > limit)
 
 
@@ -282,26 +293,35 @@ def overview(params=None):
         recommendation_id = _id(recommendation_id, "recommendation_id")
     else:
         recommendation_id = None
+    ruleset_id = params.get("ruleset_id")
+    if ruleset_id not in (None, ""):
+        ruleset_id = _id(ruleset_id, "ruleset_id")
+    else:
+        ruleset_id = None
     requested = params.get("sections") or params.get("section") or SECTIONS
     if isinstance(requested, str):
         requested = [part.strip() for part in requested.split(",") if part.strip()]
     if not isinstance(requested, (list, tuple)) or not requested:
         raise SecurityActionError("sections must be a non-empty array or comma-separated string")
+    if len(requested) > len(SECTIONS) or any(
+            not isinstance(name, str) or len(name) > 32 for name in requested):
+        raise SecurityActionError("sections contains an invalid security section")
     unknown = sorted(set(requested) - set(SECTIONS))
     if unknown:
-        raise SecurityActionError(f"unknown security section: {', '.join(unknown)}")
+        raise SecurityActionError("request contains an unknown security section")
     collectors = {
         "overview": lambda: _overview(cutoff, window, now),
         "cases": lambda: _cases(cutoff, window, now, limit),
         "incidents": lambda: _incidents(cutoff, window, now, limit),
         "events": lambda: _events(cutoff, window, now, limit),
-        "rules": lambda: _rules(cutoff, window, limit),
+        "rules": lambda: _rules(cutoff, window, limit, ruleset_id),
         "ipsets": lambda: _ipsets(cutoff, window, limit),
         "recommendations": lambda: _recommendations(
             cutoff, window, now, limit, recommendation_id),
         "schemas": lambda: _envelope({
             "rule_policy": rule_validation.public_schema(),
-            "actions": list(ACTIONS),
+            "actions": _action_schemas(),
+            "action_names": list(ACTIONS),
         }, cutoff, window),
     }
     sections = {}
@@ -318,6 +338,8 @@ def _id(value, name):
         value = int(value)
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise SecurityActionError(f"{name} must be a positive integer")
+    if value > MAX_OBJECT_ID:
+        raise SecurityActionError(f"{name} must be at most {MAX_OBJECT_ID}")
     return value
 
 
@@ -374,7 +396,7 @@ def _validated_ruleset(value):
         return rule_validation.normalize_ruleset(value)
     except rule_validation.RuleValidationError as error:
         raise SecurityActionError(
-            str(error), code=error.code, status=400) from error
+            "RuleSet policy is invalid.", code=error.code, status=400) from error
 
 
 def _validated_existing(row):
@@ -426,7 +448,165 @@ _ACTION_FIELDS = {
 }
 
 
-def _safe_ipset(row, result=None, roster=None):
+def _field_schema(kind, **values):
+    schema = {"type": kind}
+    schema.update(values)
+    return schema
+
+
+def _action_schema(action, required, properties, confirmation):
+    return {
+        "type": "object",
+        "additional_properties": False,
+        "required": list(required),
+        "properties": {
+            "action": _field_schema("string", const=action),
+            **properties,
+        },
+        "confirmation": confirmation,
+    }
+
+
+def _action_schemas():
+    """Return the complete public input contract for governed mutations.
+
+    These schemas are deliberately descriptive JSON rather than Python or
+    model metadata.  A browser can render bounded controls from them without
+    learning handler strings, target addresses, source keys, or any other
+    internal enforcement material.
+    """
+    identity = _field_schema("integer", minimum=1, maximum=MAX_OBJECT_ID)
+    revision = _field_schema("string", format="date-time", max_length=64)
+    confirm = _field_schema("string", min_length=1, max_length=128)
+    note = _field_schema("string", max_length=256, default="")
+    ruleset = {"$ref": "rule_policy.aggregate"}
+
+    return {
+        "ruleset.create": _action_schema(
+            "ruleset.create", ("action", "confirm", "ruleset"),
+            {"confirm": confirm, "ruleset": ruleset},
+            {"kind": "exact", "value": "CREATE RULESET"}),
+        "ruleset.replace": _action_schema(
+            "ruleset.replace",
+            ("action", "ruleset_id", "expected_modified", "confirm", "ruleset"),
+            {"ruleset_id": identity, "expected_modified": revision,
+             "confirm": confirm, "ruleset": ruleset},
+            {"kind": "template", "value": "REPLACE RULESET {id}"}),
+        "ruleset.activate": _action_schema(
+            "ruleset.activate",
+            ("action", "ruleset_id", "expected_modified", "confirm"),
+            {"ruleset_id": identity, "expected_modified": revision,
+             "confirm": confirm,
+             "confirm_catch_all": _field_schema(
+                 "string", max_length=128, required_when="ruleset.rules is empty")},
+            {"kind": "template", "value": "ACTIVATE RULESET {id}",
+             "catch_all_value": "ACTIVATE CATCH-ALL RULESET {id}"}),
+        "ruleset.deactivate": _action_schema(
+            "ruleset.deactivate",
+            ("action", "ruleset_id", "expected_modified", "confirm"),
+            {"ruleset_id": identity, "expected_modified": revision,
+             "confirm": confirm},
+            {"kind": "template", "value": "DEACTIVATE RULESET {id}"}),
+        "ruleset.delete": _action_schema(
+            "ruleset.delete",
+            ("action", "ruleset_id", "expected_modified", "confirm"),
+            {"ruleset_id": identity, "expected_modified": revision,
+             "confirm": confirm},
+            {"kind": "template", "value": "DELETE RULESET {id}"}),
+        **{
+            f"recommendation.{verb}": _action_schema(
+                f"recommendation.{verb}",
+                ("action", "recommendation_id", "expected_modified", "confirm"),
+                {"recommendation_id": identity,
+                 "expected_modified": revision, "confirm": confirm,
+                 "note": note},
+                {"kind": "template",
+                 "value": f"{verb.upper()} RECOMMENDATION {{id}}"})
+            for verb in ("approve", "reject", "cancel", "reverse")
+        },
+        **{
+            f"ipset.{verb}": _action_schema(
+                f"ipset.{verb}",
+                ("action", "ipset_id", "expected_modified", "confirm"),
+                {"ipset_id": identity, "expected_modified": revision,
+                 "confirm": confirm},
+                {"kind": "template",
+                 "value": f"{verb.upper()} IPSET {{id}}"})
+            for verb in ("sync", "enable", "disable")
+        },
+    }
+
+
+def _safe_host_list(value):
+    if not isinstance(value, list):
+        return []
+    return [host for host in value[:MAX_RECEIPT_HOSTS]
+            if isinstance(host, str) and
+            re.fullmatch(r"(?=.*[a-z])[a-z0-9][a-z0-9.\-]{0,253}", host)]
+
+
+def _safe_enforcement(result, roster=None, observation_cutoff=None):
+    """Project checked fleet truth without exposing its raw receipt plane."""
+    result = result if isinstance(result, dict) else {}
+    checked = result.get("checked")
+    checked = checked if isinstance(checked, dict) else result
+    expected = _safe_host_list(checked.get("expected_hosts"))
+    if not expected and isinstance(roster, list):
+        expected = _safe_host_list([
+            item.get("host") for item in roster if isinstance(item, dict)])
+    responded = _safe_host_list(checked.get("responded_hosts"))
+    succeeded = _safe_host_list(checked.get("succeeded_hosts"))
+    failed = _safe_host_list(checked.get("failed_hosts"))
+    missing = _safe_host_list(checked.get("missing_hosts"))
+    if result.get("ok") is True and expected and not responded:
+        responded = list(expected)
+        succeeded = list(expected)
+    if expected and not result.get("ok") and not responded and not missing:
+        missing = list(expected)
+    error = result.get("error") if isinstance(result.get("error"), dict) else {}
+    code = error.get("code") if isinstance(error.get("code"), str) else ""
+    if result.get("ok") is True:
+        status = "verified"
+    elif code in {"generation_superseded", "runner_roster_changed",
+                  "host_observation_mismatch"}:
+        status = "stale"
+    elif missing:
+        status = "missing"
+    elif result.get("status") == "partial" or responded or failed:
+        status = "partial"
+    else:
+        status = "unavailable"
+    desired = result.get("desired")
+    safe_desired = {}
+    if isinstance(desired, dict):
+        for key in ("present", "count", "digest"):
+            value = desired.get(key)
+            if ((key == "present" and isinstance(value, bool)) or
+                    (key == "count" and not isinstance(value, bool) and
+                     isinstance(value, int) and
+                     0 <= value <= MAX_RECEIPT_MEMBER_COUNT) or
+                    (key == "digest" and isinstance(value, str) and
+                     re.fullmatch(r"[0-9a-f]{64}", value))):
+                safe_desired[key] = value
+    generation = result.get("fence")
+    if (isinstance(generation, bool) or not isinstance(generation, int) or
+            not 1 <= generation <= 9223372036854775807):
+        generation = None
+    return {
+        "status": status,
+        "desired": safe_desired,
+        "observed": status,
+        "generation": generation,
+        "observation_cutoff": observation_cutoff or _iso(timezone.now()),
+        "expected_host_ids": expected,
+        "responded_host_ids": responded,
+        "succeeded_host_ids": succeeded,
+        "failed_host_ids": failed,
+        "missing_host_ids": missing,
+    }
+
+
+def _safe_ipset(row, result=None, roster=None, observation_cutoff=None):
     if result is None:
         from mojo.apps.incident.services import firewall_truth
         result = firewall_truth.current_ipset_enforcement(row, roster=roster)
@@ -435,14 +615,21 @@ def _safe_ipset(row, result=None, roster=None):
         "kind": row.kind, "description": row.description,
         "is_enabled": row.is_enabled, "cidr_count": row.cidr_count,
         "last_synced": _iso(row.last_synced),
-        "sync_error": row.sync_error or "",
+        "has_sync_error": bool(row.sync_error),
     }
     if isinstance(result, dict):
-        value["enforcement_status"] = result.get("status", "unknown")
-        value["enforcement_ok"] = result.get("ok") is True
+        enforcement = _safe_enforcement(
+            result, roster=roster, observation_cutoff=observation_cutoff)
+        value["enforcement"] = enforcement
+        value["enforcement_status"] = enforcement["status"]
+        value["enforcement_ok"] = enforcement["status"] == "verified"
         if result.get("ok") is not True:
             error = result.get("error") or {}
-            value["error_code"] = str(error.get("code") or "fleet_unverified")[:64]
+            code = error.get("code")
+            value["error_code"] = (
+                code if isinstance(code, str) and
+                re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code)
+                else "fleet_unverified")
     return value
 
 
@@ -536,7 +723,8 @@ def _recommendation_action(action, payload, actor):
                 expected_modified=payload["expected_modified"])
         except ValueError as error:
             raise SecurityActionError(
-                str(error), code="invalid_state", status=409) from error
+                "Recommendation state does not allow reversal.",
+                code="invalid_state", status=409) from error
         with transaction.atomic():
             _audit(actor, action, "recommendation", row.pk)
         return _safe_recommendation(row, detail=True)
@@ -569,7 +757,9 @@ def _recommendation_action(action, payload, actor):
         else:
             raise SecurityActionError("unsupported recommendation action")
     except ValueError as error:
-        raise SecurityActionError(str(error), code="invalid_state", status=409) from error
+        raise SecurityActionError(
+            "Recommendation state does not allow this action.",
+            code="invalid_state", status=409) from error
     _audit(actor, action, "recommendation", row.pk)
     return _safe_recommendation(row, detail=True)
 
@@ -591,8 +781,7 @@ def apply_action(payload, actor):
         raise SecurityActionError("unknown Admin Security action")
     unknown = sorted(set(payload) - _ACTION_FIELDS[action])
     if unknown:
-        raise SecurityActionError(
-            f"unknown fields for {action}: {', '.join(unknown)}")
+        raise SecurityActionError("action payload contains unsupported fields")
     if action.startswith("ipset."):
         row = _claim_ipset_action(action, payload)
         # Fleet waits must never hold the row lock or a database transaction.
@@ -605,7 +794,8 @@ def apply_action(payload, actor):
         row.refresh_from_db()
         with transaction.atomic():
             _audit(actor, action, "ipset", row.pk)
-        data = _safe_ipset(row, result)
+        data = _safe_ipset(
+            row, result, observation_cutoff=_iso(timezone.now()))
     elif action == "recommendation.reverse":
         # reverse() owns short claim/finalize transactions around its network
         # wait; an outer transaction would defeat that boundary.

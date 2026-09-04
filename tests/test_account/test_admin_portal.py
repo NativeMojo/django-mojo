@@ -84,14 +84,19 @@ def test_authenticated_admin_delivery(opts):
     # has no route and no registry descriptor (see test_admin_portal_assets).
     assert tuple(data.get("features", {})) == (
         "dashboard", "people", "webapps", "activity", "platform", "advanced",
-        "settings", "sms", "email", "assistant"), data.get("features")
+        "security", "settings", "sms", "email", "assistant"), data.get("features")
     assert data["features"]["activity"] == {
         "id": "activity", "enabled": True,
         "capabilities": {
-            "view_logs": True, "view_security": True,
-            "manage_security": True,
+            "view_security": True, "manage_security": True,
+            "view_logs": True, "view_tickets": True,
+            "manage_tickets": True,
         },
     }, data["features"]["activity"]
+    assert data["features"]["security"] == {
+        "id": "security", "enabled": True,
+        "capabilities": {"view": True, "manage": True},
+    }, data["features"]["security"]
     assert data["features"]["platform"]["capabilities"]["setup"] is True, data["features"]["platform"]
     assert data["features"]["advanced"]["capabilities"]["manage"] is True, data["features"]["advanced"]
     assert data["features"]["settings"]["capabilities"]["owner_edit"] is True, data["features"]["settings"]
@@ -173,6 +178,7 @@ def test_private_asset_manifest_is_exact(opts):
         admin_assets.ROOT_V2,
         admin_assets.V2_FEATURES) == admin_assets.PRIVATE_ASSETS_V2
     assert "assets/features/home/feature.js" in admin_assets.PRIVATE_ASSETS_V2
+    assert "assets/features/security/page.js" in admin_assets.PRIVATE_ASSETS_V2
     assert admin_assets.asset_path("v2/assets/features/home/feature.js").is_file()
     for value in ("v2/manifest.json", "v2/assets/pages.js", "v2/../memory.md",
                   "v2/assets/features/home/../apps/page.js",

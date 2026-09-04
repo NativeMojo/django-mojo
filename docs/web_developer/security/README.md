@@ -99,7 +99,8 @@ global `view_security`, `manage_security`, or `security`. Writes accept global
 | `sections` or `section` | A comma-separated string or array drawn from `overview`, `cases`, `incidents`, `events`, `rules`, `ipsets`, `recommendations`, and `schemas`; omitted means all sections |
 | `limit` | Rows per list section; default 50, maximum 100 |
 | `window_hours` | Window for time-bound sections; default 24, maximum 2160 (90 days) |
-| `recommendation_id` | Adds the bounded target projection to the `recommendations` section for one recommendation |
+| `recommendation_id` | Selects one recommendation's bounded, address-free target outcome summary |
+| `ruleset_id` | Selects one RuleSet's complete safe typed policy for editing |
 
 The standard response envelope contains a versioned map. Every requested
 section completes independently:
@@ -109,7 +110,7 @@ section completes independently:
   "status": true,
   "code": 200,
   "data": {
-    "schema_version": 1,
+    "schema_version": 2,
     "sections": {
       "rules": {
         "status": "available",
@@ -140,20 +141,29 @@ safe typed handlers under `validation.handlers`; it does not inline child
 rules. Successful `ruleset.create` and `ruleset.replace` action responses
 include their validated typed `rules`, top-level `handlers`, and
 `delete_on_resolution`. Do not treat the generic RuleSet read as an editable
-aggregate: its raw handler field is deliberately omitted.
+aggregate: its raw handler field is deliberately omitted. Request
+`?sections=rules&ruleset_id=<id>` for the complete safe editable aggregate.
 
 To review a recommendation, request
-`?sections=recommendations&recommendation_id=<id>`. That bounded detail is the
-only Admin Security read that returns target IPs; it intentionally omits
-execution errors and prior block reasons. Bind the returned `modified` revision
-and exact target set into the operator's confirmation. The detail list is
-bounded to 1024 targets and reports `targets_truncated`; never offer an action
-when it is true.
+`?sections=recommendations&recommendation_id=<id>`. Its optional target list is
+bounded to 1024 and carries only IDs, kind, validation state, outcome, attempts,
+and lifecycle timestamps. Target addresses, validation reasons, execution
+errors, and prior block reasons are absent. Bind the returned `modified`
+revision into the operator's confirmation. Never offer an action when
+`targets_truncated` is true.
 
 `sections=schemas` returns the server-owned `rule_policy.aggregate` object
 contract, condition fields/types/operators, bundling choices, typed handler
-arguments, caps, and the action roster. Build editors from that response;
-never send raw handler URLs.
+arguments, caps, and `actions`: one complete typed schema per governed action
+(plus `action_names` for ordered discovery). Build editors and confirmations
+from that response; never send raw handler URLs.
+
+The `ipsets` projection includes an `enforcement` summary with desired
+presence/count/digest, observed status, generation, observation cutoff, and
+bounded captured expected/responded/succeeded/failed/missing host IDs. Treat
+`verified`, `partial`, `missing`, `stale`, and `unavailable` as distinct. CIDRs,
+source keys, runner identities/incarnations, broker output, raw observations,
+and exception text are never returned.
 
 #### Write
 

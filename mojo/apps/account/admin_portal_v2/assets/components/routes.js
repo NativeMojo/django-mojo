@@ -55,6 +55,11 @@ export function activityHref(tab, subject = {}, options = {}) {
   if (subject.type) state.subject_type = subject.type;
   if (subject.id != null) state.subject_id = subject.id;
   if (subject.model) state.subject_model = subject.model;
+  if (tab === 'incidents' || tab === 'events') {
+    delete state.size; delete state.sort;
+    state.tab = 'activity';
+    return routeHref('security-operations', state);
+  }
   return routeHref('activity', state);
 }
 

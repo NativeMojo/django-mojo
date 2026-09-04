@@ -169,6 +169,11 @@ def on_admin_bootstrap(request):
     # provider contract accepts named booleans only), and as its own top-level
     # key so a page can name the mode in words without re-deriving it.
     mode = infrastructure.infrastructure_mode()
+    incident_available = apps.is_installed("mojo.apps.incident")
+    can_view_security = bool(incident_available and has([
+        "view_security", "manage_security", "security", "admin"]))
+    can_manage_security = bool(incident_available and has([
+        "manage_security", "security", "admin"]))
     capabilities = {
         "setup": bool(request.user.is_superuser),
         # System Setup left the primary page grid, so the one unmissable
@@ -185,9 +190,11 @@ def on_admin_bootstrap(request):
             "manage_groups", "manage_users", "groups", "users", "admin"]),
         "view_logins": has(["manage_users", "security", "users", "admin"]),
         "view_logs": has(["view_logs", "manage_logs", "security", "admin"]),
-        "view_events": has(["view_security", "manage_security", "security", "admin"]),
-        "view_incidents": has(["view_security", "manage_security", "security", "admin"]),
-        "view_tickets": has(["view_security", "manage_security", "security", "admin"]),
+        "view_events": can_view_security,
+        "view_incidents": can_view_security,
+        "view_tickets": can_view_security,
+        "view_security": can_view_security,
+        "manage_security": can_manage_security,
         "network": has(["view_dns", "manage_dns", "security"]),
         "manage_network": has(["manage_dns", "security"]),
         "webapps": bool(
