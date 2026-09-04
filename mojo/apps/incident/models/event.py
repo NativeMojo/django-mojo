@@ -148,6 +148,24 @@ class Event(models.Model, MojoModel):
             ]
         }
 
+    def admin_security_projection(self):
+        """Bounded safe projection for the Admin Security authority.
+
+        Metadata, evidence, addresses, free-form details and commands are
+        deliberately absent. Keep this contract beside the source model so a
+        future field addition cannot silently widen the admin envelope.
+        """
+        return {
+            "id": self.pk,
+            "created": self.created.isoformat() if self.created else None,
+            "level": self.level,
+            "scope": self.scope,
+            "category": self.category,
+            "country_code": self.country_code,
+            "group_id": self.group_id,
+            "incident_id": self.incident_id,
+        }
+
     # kind → human-readable summary for the security events graph
     _SECURITY_SUMMARIES = {
         "login": "Successful login",
