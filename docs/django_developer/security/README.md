@@ -7,6 +7,28 @@ External LLM features use the mandatory provider-neutral
 durable ledger, credential-scoped breaker, emergency stop, and duplicate-safe
 incident dispatch.
 
+## Administrative policy authority
+
+Security administration uses `GET /api/incident/admin/security` and
+`POST /api/incident/admin/security/action`. These are platform-global human
+contracts: machine/key-backed and group-scoped identities are refused, and
+writes require a global manage-security grant plus fresh authentication. The
+read response is versioned and section-bounded; it exposes safe typed policy
+shapes and provenance-labelled metrics, never raw evidence, metadata, handler
+URLs, commands, CIDRs, source credentials, Python paths, or provider exceptions.
+The recommendation detail query (`sections=recommendations&recommendation_id=…`)
+returns its bounded frozen target IPs because an operator must review the exact
+scope being approved; event and case source-address material remains redacted.
+
+RuleSet mutation is aggregate-based. Callers send the complete policy for
+create/replace, use the row's `modified` value as `expected_modified`, and echo
+the action-specific confirmation text. Replacements are inactive and activation
+is separate. Child changes advance the parent's revision, so a stale UI,
+ticket, or Assistant approval fails closed. Generic RuleSet/Rule REST writers
+and generic Assistant model writers are disabled; their reads remain for
+compatibility. IPSet's generic writer remains available during the staged
+firewall-authority migration.
+
 ```
                            ┌─────────────────────────┐
                            │     Event Sources        │

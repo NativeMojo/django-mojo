@@ -66,6 +66,8 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | Bot Signatures | `/api/account/bouncer/signature` | Manage bot signatures (auto-learned + manual) |
 | IPSet | `/api/incident/ipset` | Bulk CIDR blocking: countries, datacenters, abuse lists |
 | Maestro Item Links | `/api/incident/maestro/item-link` | Remote Maestro items linked to local Tickets or Incidents |
+| Admin Security | `/api/incident/admin/security` | Versioned, bounded and redacted operational sections plus the typed policy schema |
+| Admin Security Actions | `/api/incident/admin/security/action` | Fresh-auth, version-bound RuleSet and recommendation actions |
 
 See individual API docs for full details:
 - [MojoSec Sensor Ingestion](mojosec.md) — per-installation authentication,
@@ -79,6 +81,30 @@ See individual API docs for full details:
 - [Metrics](../metrics/metrics.md)
 - [Bouncer](../account/bouncer.md)
 - [GeoIP](../account/geoip.md)
+
+### Admin Security client contract
+
+Use the Admin Security endpoints for policy-management UI. They require global
+human grants; an API key or group membership is never sufficient. Render each
+section's own `status`, `observed_at`, `cutoff`, `window`, and `truncated`
+fields, and show `unavailable` rather than turning missing metrics into zero.
+Only metrics explicitly labelled exact are suitable for exact totals; case and
+learning projections identify themselves as sampled.
+
+To review a recommendation, request
+`?sections=recommendations&recommendation_id=<id>`. That bounded detail is the
+only Admin Security read that returns target IPs; it intentionally omits
+execution errors and prior block reasons. Bind the returned `modified` revision
+and exact target set into the operator's confirmation.
+
+For a write, first read the row, retain its `modified` value, then post the
+selected action with `expected_modified` and the exact confirmation string. A
+409 means the object changed and the UI must reload/review rather than retry
+blindly. Rule edits are complete inactive replacements; activation is another
+action, with a second confirmation for catch-all policies. Do not send raw
+handler URLs: build typed handlers from `schemas.rule_policy`. The older
+RuleSet/Rule URLs are read-only compatibility surfaces. IPSet generic
+administration remains writable until the firewall-authority API replaces it.
 
 ## Building a Security Dashboard
 

@@ -334,12 +334,19 @@ counters and a `partial` transition. Unapproved proposals expire after
 settle to `expired` when their TTL passes, and an all-expired recommendation
 follows.
 
-**Operator runbook** — all through
-`POST /api/incident/mojosec/recommendation-action` with
-`{recommendation_id, action, note}` (`manage_security`/`security`):
+**Operator runbook** — the authoritative writer is
+`POST /api/incident/admin/security/action`; the compatibility
+`POST /api/incident/mojosec/recommendation-action` URL delegates to it. Send
+`{action: "recommendation.<verb>", recommendation_id, expected_modified,
+confirm, note}` (`manage_security`/`security`), where `confirm` is the exact
+uppercase typed echo such as `APPROVE RECOMMENDATION 42`:
 `approve` executes exactly what was proposed (no parameter can add targets or
-widen scope), `reject`/`cancel` decline it, `reverse` unblocks every applied
-target and audits each reversal. Read the queue with
+widen scope), `reject`/`cancel` decline it (`cancel` records a `cancelled`
+transition into the existing `rejected` state), and `reverse` unblocks every
+applied target and audits each reversal. An incomplete reversal remains in its
+prior executed/expired state with a `reversal_incomplete` transition so it can
+be retried. The sweep idempotently requeues stranded approved/auto-approved
+rows. Read the queue with
 `GET /api/incident/mojosec/recommendation?state=proposed`; detail exposes
 per-target validation/outcome rows, the last 50 transitions and attempts.
 The ticket approve-block flow rides the same validation
@@ -351,6 +358,40 @@ reversed`, `targets_applied|pre_existing|whitelisted|failed`,
 `block_handlers_suppressed`, `manual_*`), and correlation adds
 `mojosec:shadow:corroborations` and `campaigns_opened`.
 
+### Admin Security authority and RuleSet governance
+
+`GET /api/incident/admin/security` is the versioned, global-human-only read
+contract for operations clients. It returns independently bounded envelopes
+for `overview`, `cases`, `incidents`, `events`, `rules`, `ipsets`,
+`recommendations`, and `schemas`. Every section carries status, observed time,
+cutoff/window, and truncation. The envelope never includes raw event/case
+evidence or metadata, event source-address fields, CIDR material, IPSet source
+keys, raw handler strings, commands, Python paths, or exception text.
+Recommendation target IPs are the narrow exception: request the
+`recommendations` section with `recommendation_id=<id>` to review its exact,
+bounded frozen scope before approval. Current row counts and
+append-only recommendation transitions are labelled exact; retention-limited
+event/case learning is labelled sampled, and unprovable lifetime rates are
+`unavailable`.
+
+`POST /api/incident/admin/security/action` is the only human RuleSet writer.
+Both endpoints reject key-backed/group identities. Reads require global
+`view_security`, `manage_security`, or `security`; writes require global
+`manage_security` or `security`, authentication within 600 seconds (subject to
+the documented `FRESH_AUTH_ENFORCE` operator kill switch), typed confirmation,
+and `expected_modified` for an existing object. Actions are
+`ruleset.create|replace|activate|deactivate|delete`. Replacement is complete
+and inactive; activation is separate, and catch-all activation also requires
+`ACTIVATE CATCH-ALL RULESET <id>`.
+
+The `schemas` section publishes allowed fields, types, operators, bundling,
+typed handler arguments, and caps. Raw handler URLs, `job://`/Python targets,
+unknown fields/operators, and unsafe or oversized regex are rejected. A
+malformed legacy policy remains readable, deactivatable and deletable, but
+cannot dispatch or reactivate; replace its complete inactive tree first.
+Generic RuleSet/Rule URLs remain bounded reads but reject mutation. Generic
+IPSet administration intentionally remains available until its governed
+replacement ships.
 ---
 
 ## Fleet-Wide IP Blocking
