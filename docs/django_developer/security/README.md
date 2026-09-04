@@ -232,14 +232,21 @@ Rule.objects.create(
 | `<` | Less than | |
 | `<=` | Less or equal | |
 | `contains` | Substring match | `field_name="http_path"`, `value=".php"` |
-| `regex` | Regex match (case-insensitive) | `field_name="http_path"`, `value="\\.(php|asp|env)"` |
+| `regex` | Safe-subset regex match (case-insensitive) | `field_name="hostname"`, `value="^node-[A-Z0-9]+$"` |
 
 Governed regex is capped at 256 pattern characters and a 4096-character
-subject. Validation rejects assertions, backreferences, nested or repeated
-groups, and multiple repetitions whose case-insensitive character domains
-overlap or cannot be proved disjoint—even when literals separate them (for
-example, `a*aa*aa*$`). The overlap check includes Python's special Unicode
-`IGNORECASE` equivalences.
+subject. The accepted subset preserves simple literals, character classes,
+anchors, and safe repetition; for example, `^node-[A-Z0-9]+$`. An escaped pipe
+or a pipe in a class remains a literal (`\\|` or `[|]`), not alternation.
+
+Validation rejects every unescaped alternation, every capturing or flag-scoped
+group, assertions, backreferences, nested/group repetition, and unknown parser
+operations. It also rejects multiple repetitions whose case-insensitive
+character domains overlap or cannot be proved disjoint—even when literals
+separate them (for example, `a*aa*aa*$`). The overlap check includes Python's
+special Unicode `IGNORECASE` equivalences. Governed writes and legacy runtime
+evaluation use the same validator: an older pattern outside this subset fails
+closed as no-match and its RuleSet requires complete governed replacement.
 
 ### Value Types
 

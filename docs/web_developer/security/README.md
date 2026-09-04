@@ -910,11 +910,18 @@ not written independently:
 The `schemas.rule_policy.fields` response is the authority for allowed fields,
 their value types, and operators. `field_name`/`comparator` are accepted aliases
 for `field`/`operator`, but the two forms cannot disagree. Regex patterns are
-bounded and reject backreferences, assertions, nested/group repetition, and
-broader ambiguous repetition. In particular, repeated atoms with overlapping
-or unprovable case-insensitive character domains are rejected even when
-literals separate them; Unicode `IGNORECASE` equivalences are included in that
-check. A RuleSet with no rules is a catch-all and needs the additional catch-all
+bounded to a deliberately small safe subset. Simple literal, character-class,
+anchor, and safe-repetition patterns such as `^node-[A-Z0-9]+$` remain valid.
+Use `\\|` or `[|]` for a literal pipe; every unescaped `|` is rejected as
+alternation.
+
+The validator also rejects capturing and flag-scoped groups, assertions,
+backreferences, nested/group repetition, unknown parser operations, and
+broader ambiguous repetition. Repeated atoms with overlapping or unprovable
+case-insensitive character domains are rejected even when literals separate
+them; Unicode `IGNORECASE` equivalences are included in that check. The same
+boundary applies to stored legacy rules, which fail closed until replaced. A
+RuleSet with no rules is a catch-all and needs the additional catch-all
 confirmation before activation.
 
 ## Incident Handlers
