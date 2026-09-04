@@ -125,6 +125,11 @@ Actions are gated by the model's `SAVE_PERMS`: `manage_users`,
 `manage_security`, or `security` — and the combined `users` term (it includes
 `manage_users` by definition).
 
+`block`, `unblock`, `whitelist`, and `unwhitelist` return their checked result
+in `action_response`. Treat firewall enforcement as successful only when it has
+`status="verified"`, `ok=true`, and `owned=true`; partial/unknown results leave
+durable pending state even when the desired row fields already changed.
+
 **`threat_level` after `refresh` / `threat_analysis`.** Both actions run the
 threat-intelligence pass, and the resulting `threat_level` now reflects
 blocklist and known-attacker signals in addition to Tor/VPN/proxy detection.

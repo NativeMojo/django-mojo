@@ -758,6 +758,11 @@ is compare-and-delete. Fleet aggregation likewise brackets its per-row CAS
 writes with short batched generation checks; superseded publication
 pessimistically re-marks the plan pending before retry.
 
+The hourly, startup, and aggregator jobs use `max_retries=8`, a base-2 backoff
+capped at 300 seconds, and a 7,200-second expiry. JobEngine applies 0.8–1.2x
+jitter to each retry delay. A falsey handler return would complete the job, so
+uncertain reconciliation deliberately raises instead.
+
 **Redis keys are per HOST, not per runner** — two engines on one box share one kernel firewall:
 
 | Key | Purpose |

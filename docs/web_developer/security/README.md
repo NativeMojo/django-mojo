@@ -1103,7 +1103,7 @@ is the durable absence tombstone that lets later reconciliation remove drift.
 | Field | Type | Writable | Description |
 |---|---|---|---|
 | `id` | int | No | Primary key |
-| `name` | string | Create only | Unique 1–31 character kernel set name using letters, digits, `_`, or `-`; names ending `_tmp` and framework-reserved names are refused, and enabled names must leave room for the atomic `_tmp` suffix |
+| `name` | string | Create only | Unique 1–27 character kernel set name using letters, digits, `_`, or `-`; names ending `_tmp` and framework-reserved names are refused. Every name must leave room for the atomic `_tmp` suffix, including a disabled absence tombstone. |
 | `kind` | string | Yes | `country`, `datacenter`, `abuse`, or `custom` |
 | `description` | string | Yes | Human-readable label |
 | `source` | string | Yes | `ipdeny`, `abuseipdb`, `tor`, `blocklist_de`, or `manual` |

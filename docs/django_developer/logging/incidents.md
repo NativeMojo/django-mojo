@@ -583,9 +583,9 @@ Firewall targets are canonical IPv4 only. IPv6 is refused with
 | `broadcast_block_ip` / `broadcast_unblock_ip` | Legacy broadcast | Compatibility handlers retained for old publishers; authoritative callers use checked compound reconciliation |
 | `broadcast_ipset_add_blocked` / `broadcast_ipset_del_blocked` | Legacy broadcast | Compatibility handlers retained for old publishers; permanent membership is now reconciled as a complete checked set |
 | `sweep_expired_blocks` | Cron (every 5 minutes) | Writes one checked absence generation per expired row and counts only fleet-verified removals |
-| `sync_firewall` | Cron (hourly, minute 0), selected per host | The checked roster's one deterministic runner per hostname observes/repairs/re-observes that host's bounded valid IPv4 desired generation, including absence tombstones, then writes incarnation-bound fenced TTL observations. Busy, expired, oversized, or unverified work raises into durable jittered job retry. Invalid siblings stay quarantined; the host marker advances only without operational failures. Also published box-direct by `on_engine_start`. |
+| `sync_firewall` | Cron (hourly, minute 0), selected per host | The checked roster's one deterministic runner per hostname observes/repairs/re-observes that host's bounded valid IPv4 desired generation, including absence tombstones, then writes incarnation-bound fenced TTL observations. Busy, lease-expired, oversized, or unverified work raises into durable jittered job retry. Invalid siblings stay quarantined; the host marker advances only without operational failures. Also published box-direct by `on_engine_start`. |
 | `aggregate_firewall_truth` | Follow-up job | Re-reads the exact current compatible-host roster and finalizes shared Geo/IPSet truth only from matching fresh fence/fingerprint observations for every host |
-| `on_engine_start` | Job-engine startup hook | Sets this host's force flag and queues a forced `sync_firewall` on its own runner, so a rebooted node recovers without waiting for the hourly broadcast. Publishes rather than touching the firewall directly — the broker refuses outside a JobEngine execution context. |
+| `on_engine_start` | Job-engine startup hook | Sets this host's force flag and queues a forced `sync_firewall` on its own runner, so a rebooted node recovers without waiting for the hourly roster fanout. Publishes rather than touching the firewall directly — the broker refuses outside a JobEngine execution context. |
 | `prune_events` | Cron (daily 9:45) | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` with level < 6 |
 | `prune_incidents` | Cron | Deletes resolved/closed/ignored incidents older than `INCIDENT_PRUNE_DAYS`. Skips incidents with `metadata.do_not_delete = True`. |
 | `recheck_active_threats` | Cron (daily 4:20) | Re-scores up to `GEOLOCATION_RECHECK_THREATS_MAX` recently-active `GeoLocatedIP` rows so `threat_level` can decay. Skips `provider='mojo'` records and external blocklist lookups. |
@@ -608,7 +608,7 @@ The `IPSet` model manages ipset-based bulk IP blocking for entire countries, dat
 
 | Field | Description |
 |---|---|
-| `name` | Unique ipset name (e.g., `country_cn`, `abuse_abuseipdb`) |
+| `name` | Unique immutable 1–27 character ipset name (e.g., `country_cn`, `abuse_abuseipdb`); framework namespaces and the permanent aggregate are reserved |
 | `kind` | Type of set: `country`, `datacenter`, `abuse`, `custom` |
 | `source` | Data source: `ipdeny`, `abuseipdb`, `tor`, `blocklist_de`, `manual` |
 | `source_url` | URL to fetch CIDR data from (auto-populated for known sources) |
