@@ -19,6 +19,10 @@ def test_security_feature_provider(opts):
         "id": "security", "enabled": False,
         "capabilities": {"view": False, "manage": False},
     }
+    assert security.describe(None, {"admin": True}) == {
+        "id": "security", "enabled": False,
+        "capabilities": {"view": False, "manage": False},
+    }, "literal portal admission must not disclose Security"
     assert security.describe(None, {"view_security": True}) == {
         "id": "security", "enabled": True,
         "capabilities": {"view": True, "manage": False},

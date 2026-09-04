@@ -171,9 +171,9 @@ def on_admin_bootstrap(request):
     mode = infrastructure.infrastructure_mode()
     incident_available = apps.is_installed("mojo.apps.incident")
     can_view_security = bool(incident_available and has([
-        "view_security", "manage_security", "security", "admin"]))
+        "view_security", "manage_security", "security"]))
     can_manage_security = bool(incident_available and has([
-        "manage_security", "security", "admin"]))
+        "manage_security", "security"]))
     capabilities = {
         "setup": bool(request.user.is_superuser),
         # System Setup left the primary page grid, so the one unmissable

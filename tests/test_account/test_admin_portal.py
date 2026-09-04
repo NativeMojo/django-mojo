@@ -17,6 +17,8 @@ ADMIN_EMAIL = "admin_portal@test.com"
 ADMIN_PASSWORD = "Admin_portal_pw_99"
 USER_EMAIL = "admin_portal_regular@test.com"
 USER_PASSWORD = "Admin_portal_regular_pw_99"
+ADMIN_ONLY_EMAIL = "admin_portal_admission_only@test.com"
+SECURITY_VIEWER_EMAIL = "admin_portal_security_viewer@test.com"
 
 
 @th.django_unit_setup()
@@ -25,7 +27,9 @@ def setup_admin_portal_foundation(opts):
     from mojo.apps.account.models import User
 
     cache.clear()
-    User.objects.filter(email__in=[ADMIN_EMAIL, USER_EMAIL]).delete()
+    User.objects.filter(email__in=[
+        ADMIN_EMAIL, USER_EMAIL, ADMIN_ONLY_EMAIL, SECURITY_VIEWER_EMAIL,
+    ]).delete()
     user = User.objects.create_user(username=ADMIN_EMAIL, email=ADMIN_EMAIL,
                                     password=ADMIN_PASSWORD)
     user.display_name = "Portal Admin"
@@ -41,6 +45,16 @@ def setup_admin_portal_foundation(opts):
     regular.is_email_verified = True
     regular.requires_mfa = False
     regular.save()
+    for email, permissions in (
+            (ADMIN_ONLY_EMAIL, {"admin": True}),
+            (SECURITY_VIEWER_EMAIL, {"admin": True, "view_security": True})):
+        persona = User.objects.create_user(
+            username=email, email=email, password=USER_PASSWORD)
+        persona.is_active = True
+        persona.is_email_verified = True
+        persona.requires_mfa = False
+        persona.permissions = permissions
+        persona.save()
 
 
 @th.django_unit_test("anonymous Admin delivery contains only the Bouncer handoff gate")
@@ -132,6 +146,39 @@ def test_auth_key_rotation_revokes_source(opts):
 def test_non_admin_source_session_denied(opts):
     assert opts.client.login(USER_EMAIL, USER_PASSWORD)
     assert opts.client.post("/api/account/admin/session", json={}).status_code == 403
+
+
+@th.django_unit_test("portal admission never substitutes for fine-grained Security")
+def test_admin_only_security_admission_denied(opts):
+    assert opts.client.login(ADMIN_ONLY_EMAIL, USER_PASSWORD)
+    assert opts.client.post("/api/account/admin/session", json={}).status_code == 200
+    bootstrap = opts.client.get("/api/account/admin/bootstrap")
+    assert bootstrap.status_code == 200, bootstrap.body
+    data = bootstrap.json["data"]
+    assert data["features"]["security"] == {
+        "id": "security", "enabled": False,
+        "capabilities": {"view": False, "manage": False},
+    }
+    assert data["features"]["activity"]["capabilities"]["view_security"] is False
+    assert data["features"]["activity"]["capabilities"]["view_tickets"] is False
+    assert opts.client.get(
+        "/api/incident/admin/security").status_code == 403
+    opts.client.logout()
+
+    assert opts.client.login(SECURITY_VIEWER_EMAIL, USER_PASSWORD)
+    assert opts.client.post("/api/account/admin/session", json={}).status_code == 200
+    data = opts.client.get("/api/account/admin/bootstrap").json["data"]
+    assert data["features"]["security"] == {
+        "id": "security", "enabled": True,
+        "capabilities": {"view": True, "manage": False},
+    }
+    assert opts.client.get(
+        "/api/incident/admin/security", params={"sections": "schemas"}
+    ).status_code == 200
+    assert opts.client.post(
+        "/api/incident/admin/security/action", json={"action": "unknown"}
+    ).status_code == 403
+    opts.client.logout()
 
 
 @th.django_unit_test("forced Bouncer reauth suppresses silent refresh loops")
