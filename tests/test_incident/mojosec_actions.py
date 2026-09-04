@@ -610,6 +610,25 @@ def test_block_handler_suppression_is_scoped_to_routed_categories(opts):
             "shadow installations keep today's per-receipt blocking")
 
 
+@th.django_unit_test("whitelisted MojoSec target requires checked fleet absence")
+def test_whitelisted_target_never_synthesizes_success(opts):
+    from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident.services import mojosec_actions
+
+    geo = GeoLocatedIP.objects.get(ip_address=WHITELISTED_IP)
+    partial = {"status": "partial", "ok": False,
+               "error": {"code": "host_observation_missing"}}
+    with mock.patch.object(
+            geo, "verify_absence_checked", return_value=partial) as verify:
+        result = mojosec_actions._apply_block(
+            WHITELISTED_IP, "mojosec:test", 600)
+    verify.assert_called_once_with()
+    th.assert_eq(result["outcome"], "failed",
+                 "unproved whitelist absence became a terminal skip")
+    th.assert_true(result["ok"] is False,
+                   "partial whitelist evidence became ok=true")
+
+
 @th.django_unit_test()
 def test_recommendation_rest_contract_and_permissions(opts):
     from mojo.decorators.limits import clear_rate_limits

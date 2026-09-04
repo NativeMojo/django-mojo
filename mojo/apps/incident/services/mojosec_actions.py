@@ -344,16 +344,13 @@ def _apply_block(ip, reason, ttl):
         GeoLocatedIP.geolocate(ip, auto_refresh=False)
         geo = GeoLocatedIP.objects.get(ip_address=ip)
     if geo.whitelist_active:
-        return {"status": "verified", "ok": True, "outcome": "whitelisted",
-                "prior_until": geo.whitelisted_until,
-                "prior_reason": geo.whitelisted_reason or ""}
+        return _verify_whitelisted_absence(geo)
     result = geo.block_checked(reason=reason, ttl=ttl)
     error = result.get("error") or {}
     if (result.get("outcome") == "refused" and
             error.get("code") == "whitelisted"):
-        return {"status": "verified", "ok": True, "outcome": "whitelisted",
-                "prior_until": geo.whitelisted_until,
-                "prior_reason": geo.whitelisted_reason or ""}
+        geo.refresh_from_db()
+        return _verify_whitelisted_absence(geo)
     if result.get("status") != "verified" or result.get("ok") is not True:
         return {"status": result.get("status", "unknown"), "ok": False,
                 "outcome": "failed", "prior_until": result.get("prior_until"),
@@ -364,6 +361,23 @@ def _apply_block(ip, reason, ttl):
         result["outcome"] = "pre_existing"
     else:
         result["outcome"] = "applied"
+    return result
+
+
+def _verify_whitelisted_absence(geo):
+    """A whitelist is terminal only after every current host proves absence."""
+    if not geo.whitelist_active:
+        return {"status": "unknown", "ok": False, "outcome": "failed",
+                "error": {"code": "whitelist_changed"}}
+    result = geo.verify_absence_checked()
+    result["prior_until"] = geo.whitelisted_until
+    result["prior_reason"] = geo.whitelisted_reason or ""
+    if result.get("status") == "verified" and result.get("ok") is True:
+        result["outcome"] = "whitelisted"
+        return result
+    result["outcome"] = "failed"
+    if not result.get("error"):
+        result["error"] = {"code": "fleet_unverified"}
     return result
 
 
@@ -424,10 +438,17 @@ def _execute(recommendation_id, generation=None):
                           "outcome": "failed",
                           "error": {"code": "execution_error"}}
         else:
-            result = {"status": "verified", "ok": True,
-                      "outcome": "whitelisted" if why == "whitelisted" else "failed",
-                      "prior_until": None, "prior_reason": why,
-                      "error": None if why == "whitelisted" else {"code": why}}
+            if why == "whitelisted" and canonical:
+                from mojo.apps.account.models import GeoLocatedIP
+                geo = GeoLocatedIP.objects.filter(ip_address=canonical).first()
+                result = (_verify_whitelisted_absence(geo) if geo is not None
+                          else {"status": "unknown", "ok": False,
+                                "outcome": "failed",
+                                "error": {"code": "target_missing"}})
+            else:
+                result = {"status": "unknown", "ok": False,
+                          "outcome": "failed", "prior_until": None,
+                          "prior_reason": why, "error": {"code": why}}
 
         with transaction.atomic():
             recommendation = MojoSecRecommendation.objects.select_for_update().get(
