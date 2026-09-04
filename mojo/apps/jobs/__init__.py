@@ -1292,6 +1292,15 @@ def broadcast_execute(func_path, data=None, timeout=2.0, collect_replies=False):
     manager = get_manager()
     return manager.broadcast_execute(func_path, data, timeout, collect_replies)
 
+
+def broadcast_execute_checked(func_path, data=None, timeout=5.0, channel=None,
+                              correlation_id=None):
+    """Capability-negotiated, exact-host companion to broadcast_execute()."""
+    from .manager import get_manager
+    return get_manager().broadcast_execute_checked(
+        func_path, data=data, timeout=timeout, channel=channel,
+        correlation_id=correlation_id)
+
 def ping(runnder_id, timeout=2.0):
     from .manager import get_manager
     manager = get_manager()

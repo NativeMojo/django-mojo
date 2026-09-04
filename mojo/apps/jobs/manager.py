@@ -19,6 +19,14 @@ from .adapters import get_adapter
 from .models import Job, JobEvent
 
 
+CHECKED_EXECUTE_PROTOCOL = 1
+CHECKED_EXECUTE_MAX_HOSTS = 128
+CHECKED_EXECUTE_MAX_REPLY_BYTES = 65536
+CHECKED_EXECUTE_MAX_ANOMALIES = 64
+_HOSTNAME_RE = __import__("re").compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9.\-]{0,251}[A-Za-z0-9])?$")
+
+
 class JobManager:
     """
     Management interface for the jobs system.
@@ -649,6 +657,227 @@ class JobManager:
             # Fire-and-forget
             self.redis.publish(self.keys.runners_broadcast(), json.dumps(message))
             return []
+
+    def broadcast_execute_checked(self, func_path, data=None, timeout=5.0,
+                                  channel=None, roster=None,
+                                  correlation_id=None):
+        """Execute once per compatible host and prove the exact replies.
+
+        This is deliberately a different wire command from legacy ``execute``.
+        Old engines ignore it, and this method refuses before publication when
+        the exact channel roster contains a host with no compatible runner.
+        One deterministic compatible runner represents each hostname because
+        all runners on that hostname share the same machine-local state.
+
+        The result is evidence, not an exception-shaped best effort. ``unknown``
+        means no mutation was dispatched; ``partial`` means dispatch happened
+        but the complete host snapshot was not proven; only ``verified`` means
+        one valid success receipt arrived from every expected host.
+        """
+        started = time.monotonic()
+        try:
+            timeout = float(timeout)
+        except (TypeError, ValueError):
+            timeout = 0
+        if timeout <= 0 or timeout > 300:
+            return self._checked_result(
+                "unknown", correlation_id, channel, [], [], [], [], [],
+                ["invalid_timeout"], [], started)
+        if not isinstance(channel, str) or not channel:
+            return self._checked_result(
+                "unknown", correlation_id, channel, [], [], [], [], [],
+                ["concrete_channel_required"], [], started)
+        if correlation_id is None:
+            correlation_id = uuid.uuid4().hex
+        if (not isinstance(correlation_id, str) or len(correlation_id) < 32 or
+                len(correlation_id) > 128 or
+                not all(ch.isalnum() or ch in "-_" for ch in correlation_id)):
+            return self._checked_result(
+                "unknown", "", channel, [], [], [], [], [],
+                ["invalid_correlation_id"], [], started)
+        if not isinstance(data or {}, dict):
+            return self._checked_result(
+                "unknown", correlation_id, channel, [], [], [], [], [],
+                ["payload_must_be_object"], [], started)
+        try:
+            payload_bytes = len(json.dumps(
+                data or {}, sort_keys=True, separators=(",", ":")).encode())
+        except (TypeError, ValueError):
+            payload_bytes = CHECKED_EXECUTE_MAX_REPLY_BYTES + 1
+        if payload_bytes > CHECKED_EXECUTE_MAX_REPLY_BYTES:
+            return self._checked_result(
+                "unknown", correlation_id, channel, [], [], [], [], [],
+                ["payload_overflow"], [], started)
+
+        try:
+            rows = (self.get_runners_bounded(
+                channel, limit=CHECKED_EXECUTE_MAX_HOSTS, timeout=min(timeout, 2.0))
+                    if roster is None else list(roster))
+            selected, expected, incompatibilities = self._checked_host_roster(
+                rows, channel)
+        except Exception:
+            return self._checked_result(
+                "unknown", correlation_id, channel, [], [], [], [], [],
+                ["runner_roster_unreadable"], [], started)
+        if not expected:
+            return self._checked_result(
+                "unknown", correlation_id, channel, [], [], [], [], [],
+                ["runner_roster_empty"], [], started)
+        if incompatibilities:
+            return self._checked_result(
+                "unknown", correlation_id, channel, expected, [], [], [],
+                expected, incompatibilities, [], started)
+
+        reply_channel = self.keys.reply_channel(correlation_id)
+        pubsub = self.redis.pubsub()
+        anomalies = []
+        replies = {}
+        try:
+            pubsub.subscribe(reply_channel)
+            message = {
+                "command": "execute_checked",
+                "protocol": CHECKED_EXECUTE_PROTOCOL,
+                "correlation_id": correlation_id,
+                "channel": channel,
+                "func": func_path,
+                "data": data or {},
+                "reply_channel": reply_channel,
+            }
+            encoded = json.dumps(message, sort_keys=True, separators=(",", ":"))
+            for host in expected:
+                runner = selected[host]
+                self.redis.publish(
+                    self.keys.runner_ctl(runner["runner_id"]), encoded)
+
+            deadline = started + timeout
+            while time.monotonic() < deadline and len(replies) < len(expected):
+                remaining = deadline - time.monotonic()
+                msg = pubsub.get_message(timeout=min(0.1, max(0.0, remaining)))
+                if not msg or msg.get("type") != "message":
+                    continue
+                parsed, anomaly = self._parse_checked_reply(
+                    msg.get("data"), correlation_id, func_path, selected)
+                if anomaly:
+                    if len(anomalies) < CHECKED_EXECUTE_MAX_ANOMALIES:
+                        anomalies.append(anomaly)
+                    continue
+                host = parsed["hostname"]
+                if host in replies:
+                    if len(anomalies) < CHECKED_EXECUTE_MAX_ANOMALIES:
+                        anomalies.append(f"duplicate_reply:{host}")
+                    continue
+                replies[host] = parsed
+        except Exception:
+            if len(anomalies) < CHECKED_EXECUTE_MAX_ANOMALIES:
+                anomalies.append("dispatch_or_reply_unavailable")
+        finally:
+            pubsub.close()
+
+        responded = sorted(replies)
+        succeeded = sorted(
+            host for host, row in replies.items() if row["status"] == "success")
+        failed = sorted(set(responded) - set(succeeded))
+        missing = sorted(set(expected) - set(responded))
+        status = "verified" if not anomalies and not failed and not missing else "partial"
+        semantic = [{
+            "host": host,
+            "runner_id": replies[host]["runner_id"],
+            "status": replies[host]["status"],
+            "result": replies[host].get("result"),
+            "error": replies[host].get("error"),
+        } for host in responded]
+        return self._checked_result(
+            status, correlation_id, channel, expected, responded, succeeded,
+            failed, missing, anomalies, semantic, started)
+
+    @staticmethod
+    def _checked_host_roster(rows, channel):
+        if not isinstance(rows, list) or len(rows) > CHECKED_EXECUTE_MAX_HOSTS:
+            raise ValueError("runner_roster_overflow")
+        by_host = {}
+        expected = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("runner_roster_invalid")
+            runner_id = row.get("runner_id")
+            hostname = row.get("hostname")
+            channels = row.get("channels")
+            if (not isinstance(runner_id, str) or not runner_id or
+                    len(runner_id) > 128 or
+                    not isinstance(hostname, str) or
+                    not _HOSTNAME_RE.fullmatch(hostname) or
+                    not isinstance(channels, list) or channel not in channels):
+                raise ValueError("runner_roster_invalid")
+            hostname = hostname.lower()
+            expected.add(hostname)
+            capabilities = row.get("capabilities")
+            compatible = (isinstance(capabilities, dict) and
+                          capabilities.get("execute_checked") ==
+                          CHECKED_EXECUTE_PROTOCOL)
+            if compatible:
+                current = by_host.get(hostname)
+                if current is None or runner_id < current["runner_id"]:
+                    by_host[hostname] = row
+        missing = [f"incompatible_host:{host}" for host in
+                   sorted(expected - set(by_host))]
+        return by_host, sorted(expected), missing
+
+    @staticmethod
+    def _parse_checked_reply(raw, correlation_id, func_path, selected):
+        try:
+            if isinstance(raw, bytes):
+                if len(raw) > CHECKED_EXECUTE_MAX_REPLY_BYTES:
+                    return None, "reply_overflow"
+                raw = raw.decode("utf-8")
+            elif not isinstance(raw, str):
+                return None, "reply_not_text"
+            if len(raw.encode()) > CHECKED_EXECUTE_MAX_REPLY_BYTES:
+                return None, "reply_overflow"
+            row = json.loads(raw)
+        except (UnicodeError, ValueError, TypeError):
+            return None, "malformed_reply"
+        if not isinstance(row, dict):
+            return None, "malformed_reply"
+        hostname = row.get("hostname")
+        if isinstance(hostname, str):
+            hostname = hostname.lower()
+        expected = selected.get(hostname)
+        if (row.get("schema") != "mojo.jobs.execute-checked-reply" or
+                row.get("version") != CHECKED_EXECUTE_PROTOCOL or
+                row.get("correlation_id") != correlation_id or
+                row.get("func") != func_path or expected is None or
+                row.get("runner_id") != expected.get("runner_id") or
+                row.get("status") not in ("success", "error")):
+            return None, "identity_mismatch"
+        if row["status"] == "success":
+            if not isinstance(row.get("result"), dict):
+                return None, f"semantic_result_invalid:{hostname}"
+        else:
+            if row.get("error") not in (
+                    "invalid_request", "function_unavailable",
+                    "execution_failed", "result_unserializable"):
+                return None, f"error_code_invalid:{hostname}"
+        row["hostname"] = hostname
+        return row, None
+
+    @staticmethod
+    def _checked_result(status, correlation_id, channel, expected, responded,
+                        succeeded, failed, missing, anomalies, results, started):
+        return {
+            "schema": "mojo.jobs.execute-checked",
+            "version": CHECKED_EXECUTE_PROTOCOL,
+            "status": status,
+            "correlation_id": correlation_id or "",
+            "channel": channel if isinstance(channel, str) else "",
+            "expected_hosts": list(expected)[:CHECKED_EXECUTE_MAX_HOSTS],
+            "responded_hosts": list(responded)[:CHECKED_EXECUTE_MAX_HOSTS],
+            "succeeded_hosts": list(succeeded)[:CHECKED_EXECUTE_MAX_HOSTS],
+            "failed_hosts": list(failed)[:CHECKED_EXECUTE_MAX_HOSTS],
+            "missing_hosts": list(missing)[:CHECKED_EXECUTE_MAX_HOSTS],
+            "anomalies": list(anomalies)[:CHECKED_EXECUTE_MAX_ANOMALIES],
+            "results": list(results)[:CHECKED_EXECUTE_MAX_HOSTS],
+            "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
+        }
 
     def execute_on_runner(self, runner_id: str, func_path: str, data: Dict = None,
                           timeout: float = 2.0, wait_for_reply: bool = True) -> Optional[Dict]:
