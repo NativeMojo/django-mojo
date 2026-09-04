@@ -140,6 +140,9 @@ def test_checked_ip_reconcile_receipt(opts):
     redis, fingerprint = _checked_state("ip", "192.0.2.8", desired)
     with mock.patch("mojo.apps.incident.asyncjobs._raw_redis",
                     return_value=redis), \
+            mock.patch(
+                "mojo.apps.incident.services.firewall_truth._redis_client",
+                return_value=redis), \
             mock.patch("mojo.apps.incident.firewall.normalize_ip",
                        return_value=broker), \
             mock.patch(
@@ -194,6 +197,9 @@ def test_checked_geolocated_reconcile_is_compound(opts):
     }
     with mock.patch(
             "mojo.apps.incident.asyncjobs._raw_redis", return_value=redis), \
+            mock.patch(
+                "mojo.apps.incident.services.firewall_truth._redis_client",
+                return_value=redis), \
             mock.patch(
                 "mojo.apps.incident.services.firewall_truth.geolocated_snapshot",
                 return_value=snapshot), \
@@ -280,6 +286,9 @@ def test_checked_broker_io_is_between_short_lease_phases(opts):
 
     with mock.patch("mojo.apps.incident.asyncjobs._raw_redis",
                     return_value=redis), \
+            mock.patch(
+                "mojo.apps.incident.services.firewall_truth._redis_client",
+                return_value=redis), \
             mock.patch("mojo.apps.incident.firewall.normalize_ip",
                        side_effect=normalize), \
             mock.patch.object(firewall_truth, "record_host_observation"):

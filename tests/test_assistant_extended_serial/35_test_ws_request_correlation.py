@@ -76,6 +76,9 @@ def test_request_id_is_echoed_on_ack_and_streamed_events(opts):
                 with mock.patch(
                     "mojo.apps.assistant.services.agent.run_assistant_ws",
                     side_effect=run_assistant,
+                ), mock.patch(
+                    "mojo.apps.account.services.llm_safety.route_state",
+                    return_value={"ready": True, "error": ""},
                 ):
                     with mock.patch(
                         "mojo.apps.realtime.manager.send_event_to_user",

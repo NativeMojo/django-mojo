@@ -61,7 +61,7 @@ def _capture_events():
 
 @contextmanager
 def _enable_assistant():
-    """Patch settings + llm so run_assistant_ws executes its main body."""
+    """Patch deployment readiness + llm so the stream body executes."""
     from mojo.helpers.settings import settings
     from mojo.helpers import llm
 
@@ -73,7 +73,10 @@ def _enable_assistant():
         return orig_get(name, *args, **kwargs)
 
     with mock.patch.object(settings, "get", side_effect=patched_get):
-        with mock.patch.object(llm, "get_api_key", return_value="test-key"):
+        with mock.patch.object(llm, "get_api_key", return_value="test-key"), \
+                mock.patch(
+                    "mojo.apps.account.services.llm_safety.route_state",
+                    return_value={"ready": True, "error": ""}):
             yield
 
 

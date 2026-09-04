@@ -2,12 +2,14 @@
 
 from datetime import timedelta
 from copy import deepcopy
+import importlib
 import uuid
 
 from testit import helpers as th
 
 
 PREFIX = f"admin-security-{uuid.uuid4().hex[:10]}"
+IPSET_NAME = f"as_{uuid.uuid4().hex[:10]}"
 
 
 def _policy(name="Governed policy", category=None, handlers=None, rules=None):
@@ -30,7 +32,7 @@ def setup_admin_security(opts):
     from mojo.apps.incident.models import Event, IPSet, RuleSet
     Event.objects.filter(category__startswith=PREFIX).delete()
     RuleSet.objects.filter(category__startswith=PREFIX).delete()
-    IPSet.objects.filter(name__startswith=PREFIX).delete()
+    IPSet.objects.filter(name__in=[IPSET_NAME]).delete()
     User.objects.filter(username__startswith=PREFIX).delete()
     operator = User.objects.create_user(
         username=f"{PREFIX}-operator", email=f"{PREFIX}@example.test",
@@ -51,7 +53,7 @@ def setup_admin_security(opts):
 @th.django_unit_test("Admin Security routes pin human and fresh-auth authority")
 def test_route_authority(opts):
     from mojo import errors as merrors
-    from mojo.apps.incident.rest import admin_security as views
+    views = importlib.import_module("mojo.apps.incident.rest.admin_security")
     from mojo.apps.incident.rest import ipset as ipset_views
     from mojo.apps.incident.services import admin_security
     assert views.on_admin_security.__url__ == ("GET", "admin/security")
@@ -318,7 +320,7 @@ def test_bounded_redacted_overview(opts):
         "evidence": "fixture-secret", "command": "rm fixture"})
     RuleSet.objects.create(
         name="raw", category=f"{PREFIX}:raw", handler="job://secret.module")
-    IPSet.objects.create(name=f"{PREFIX}-set", kind="custom", source="manual",
+    IPSet.objects.create(name=IPSET_NAME, kind="custom", source="manual",
                          source_key="fixture-key", data="8.8.8.8/32")
     result = admin_security.overview({"limit": 100})
     rendered = str(result)

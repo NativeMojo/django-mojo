@@ -163,6 +163,20 @@ class JobEngine:
         it — inside the implicitly-allowed publish namespace."""
         return f"{host_channel()}{ENGINE_CHANNEL_SUFFIX}"
 
+    def _runner_started(self) -> str:
+        """Return this engine object's stable execution incarnation.
+
+        A daemon assigns ``start_time`` during ``initialize()`` before it can
+        consume work or advertise a heartbeat.  The synchronous JobEngine
+        execution seam used by testit and other in-process callers deliberately
+        never initializes a daemon, but it is still a real execution context
+        and therefore needs a stable incarnation value.  Allocate that value
+        lazily without publishing a runner heartbeat.
+        """
+        if self.start_time is None:
+            self.start_time = dates.utcnow()
+        return self.start_time.isoformat()
+
     def initialize(self):
         if (self.is_initialized):
             logger.warning("JobEngine already initialized")
@@ -500,7 +514,7 @@ class JobEngine:
                                 broadcast_job_id, func_path, 1,
                                 str(message.get("channel") or "broadcast"),
                                 self.runner_id, broadcast=True,
-                                runner_started=self.start_time.isoformat()):
+                                runner_started=self._runner_started()):
                             result = func(message.get('data', {}))
                         logger.info(f"Executed broadcast function {func_path}: {result}")
 
@@ -568,7 +582,7 @@ class JobEngine:
                         'channels': self.channels,
                         'jobs_processed': self.jobs_processed,
                         'jobs_failed': self.jobs_failed,
-                        'started': self.start_time.isoformat() if self.start_time else None,
+                        'started': self._runner_started(),
                         'timestamp': dates.utcnow().isoformat(),
                     }
                     try:
@@ -610,7 +624,11 @@ class JobEngine:
                 separators=(",", ":"), allow_nan=False).encode())
         except (TypeError, ValueError):
             payload_size = CHECKED_EXECUTE_MAX_PAYLOAD_BYTES + 1
+        runner_started = (
+            self.start_time.isoformat() if self.start_time is not None else None)
         valid = (
+            getattr(self, "is_initialized", False) and
+            runner_started is not None and
             message.get("protocol") == CHECKED_EXECUTE_PROTOCOL and
             isinstance(reply_channel, str) and reply_channel and
             valid_checked_correlation(correlation_id) and
@@ -622,7 +640,7 @@ class JobEngine:
             message.get("target") == {
                 "runner_id": self.runner_id,
                 "hostname": host_channel(),
-                "started": self.start_time.isoformat(),
+                "started": runner_started,
             } and
             payload_size <= CHECKED_EXECUTE_MAX_PAYLOAD_BYTES)
         if not valid:
@@ -633,7 +651,7 @@ class JobEngine:
             "correlation_id": correlation_id,
             "runner_id": self.runner_id,
             "hostname": host_channel(),
-            "started": self.start_time.isoformat(),
+            "started": runner_started,
             "func": func_path,
         }
         try:
@@ -645,7 +663,7 @@ class JobEngine:
                 with execution(
                         correlation_id, func_path, 1,
                         message["channel"], self.runner_id, broadcast=True,
-                        runner_started=self.start_time.isoformat()):
+                        runner_started=runner_started):
                     result = func(message.get("data", {}))
                 if not isinstance(result, dict):
                     raise TypeError("checked result must be an object")
@@ -846,7 +864,7 @@ class JobEngine:
             with execution(
                     job.id, job.func, job.attempt, job.channel,
                     self.runner_id, broadcast=bool(job.broadcast),
-                    runner_started=self.start_time.isoformat()):
+                    runner_started=self._runner_started()):
                 func(job)
             if JOBS_DEBUG:
                 logger.info(f"Completed job {job_id} from channel {channel}")

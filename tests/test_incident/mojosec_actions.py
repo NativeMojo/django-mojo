@@ -61,6 +61,20 @@ def _inline_execution():
         yield
 
 
+@contextlib.contextmanager
+def _active_user(user):
+    """Bind the model request context used by ticket action handlers."""
+    from mojo.models import rest as rest_module
+
+    request = th.get_mock_request(ip="127.0.0.1", path="/test/ticket-action")
+    request.user = user
+    token = rest_module.ACTIVE_REQUEST.set(request)
+    try:
+        yield
+    finally:
+        rest_module.ACTIVE_REQUEST.reset(token)
+
+
 def _case(opts, sensor_kind="web", family="wordpress", urgency="warning",
           urgency_reason="trusted_impossible_path", occurrences=20,
           sources=None, distinct_sources=None, resource_id="vhost:5150",
@@ -615,11 +629,12 @@ def test_whitelisted_target_never_synthesizes_success(opts):
     from mojo.apps.account.models import GeoLocatedIP
     from mojo.apps.incident.services import mojosec_actions
 
-    geo = GeoLocatedIP.objects.get(ip_address=WHITELISTED_IP)
+    GeoLocatedIP.objects.get(ip_address=WHITELISTED_IP)
     partial = {"status": "partial", "ok": False,
                "error": {"code": "host_observation_missing"}}
     with mock.patch.object(
-            geo, "verify_absence_checked", return_value=partial) as verify:
+            GeoLocatedIP, "verify_absence_checked",
+            return_value=partial) as verify:
         result = mojosec_actions._apply_block(
             WHITELISTED_IP, "mojosec:test", 600)
     verify.assert_called_once_with()
@@ -644,8 +659,11 @@ def test_recommendation_rest_contract_and_permissions(opts):
         "sections": "recommendations",
         "recommendation_id": recommendation.pk,
     })["sections"]["recommendations"]["data"][0]
-    th.assert_eq(governed["targets"][0]["ip"], SECOND_IP,
-                 "governed review must show the exact frozen target scope")
+    target = recommendation.targets.get()
+    th.assert_eq(governed["targets"][0]["id"], target.pk,
+                 "governed review must identify the frozen target row")
+    th.assert_true("ip" not in governed["targets"][0],
+                   "governed overview exposed a sensitive source address")
     th.assert_true("last_error" not in governed["targets"][0],
                    "governed review must redact execution exceptions")
     th.assert_true("prior_reason" not in governed["targets"][0],
@@ -697,7 +715,7 @@ def test_recommendation_rest_contract_and_permissions(opts):
          "note": "ok"})
     th.assert_eq(approved.status_code, 200,
                  f"manage_security may approve: {approved.response}")
-    th.assert_true(approved.response.data["state"] in
+    th.assert_true(approved.response.data["data"]["state"] in
                    ("approved", "executing", "executed"),
                    "approval must advance the lifecycle")
     recommendation.refresh_from_db()
@@ -742,9 +760,10 @@ def test_ticket_approve_block_regression(opts):
     ticket, note = make_ticket()
     with mock.patch(
             "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
-            return_value={"status": "verified", "ok": True}):
-        _handler_block_confirm(ticket, note, "approve",
-                               {"ip": TICKET_IP, "reason": "scanner"})
+            return_value={"status": "verified", "ok": True}), \
+            _active_user(opts.action_approver):
+        _handler_block_confirm(
+            ticket, note, "approve", {"ip": TICKET_IP, "reason": "scanner"})
     ticket.refresh_from_db()
     geo = GeoLocatedIP.objects.get(ip_address=TICKET_IP)
     th.assert_true(geo.block_active,
@@ -757,8 +776,9 @@ def test_ticket_approve_block_regression(opts):
 
     # A protected target is refused and the ticket stays open.
     ticket2, note2 = make_ticket()
-    _handler_block_confirm(ticket2, note2, "approve",
-                           {"ip": "10.1.2.3", "reason": "scanner"})
+    with _active_user(opts.action_approver):
+        _handler_block_confirm(
+            ticket2, note2, "approve", {"ip": "10.1.2.3", "reason": "scanner"})
     ticket2.refresh_from_db()
     th.assert_eq(ticket2.status, "open",
                  "a refused block must never resolve the ticket as success")
@@ -770,8 +790,9 @@ def test_ticket_approve_block_regression(opts):
     note3 = TicketNote.objects.create(
         parent=ticket3, user=opts.action_bystander, note="approve",
         group=opts.action_group)
-    _handler_block_confirm(ticket3, note3, "approve",
-                           {"ip": TICKET_IP, "reason": "scanner"})
+    with _active_user(opts.action_bystander):
+        _handler_block_confirm(
+            ticket3, note3, "approve", {"ip": TICKET_IP, "reason": "scanner"})
     ticket3.refresh_from_db()
     th.assert_eq(ticket3.status, "open",
                  "an unprivileged approver must be refused")

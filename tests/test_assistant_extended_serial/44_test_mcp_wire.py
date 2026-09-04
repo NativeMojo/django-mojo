@@ -35,7 +35,7 @@ CLIENT_ID = "testit-mcp-wire-client"
 API_KEY_NAME = "testit mcp wire key"
 API_KEY_GROUP = "testit mcp wire group"
 
-BLOCK_IP = "198.51.100.81"
+MUTATION_TITLE = "testit MCP approval completion"
 SHADOWING_KEYS = ("BASE_URL", "ASSISTANT_MCP_ENABLED")
 RATE_BUCKET = "assistant_mcp"
 
@@ -78,7 +78,8 @@ def _rate_keys():
 def setup_mcp_wire(opts):
     from mojo.decorators.limits import clear_rate_limits
     from mojo.apps.account.models import (
-        ApiKey, GeoLocatedIP, Group, OAuthClient, User)
+        ApiKey, Group, OAuthClient, User)
+    from mojo.apps.incident.models import Ticket
     from mojo.apps.account.services.oauth_server import tokens
 
     _clear_shadowing_rows()
@@ -90,7 +91,7 @@ def setup_mcp_wire(opts):
     OAuthClient.objects.filter(client_id=CLIENT_ID).delete()
     ApiKey.objects.filter(name=API_KEY_NAME).delete()
     Group.objects.filter(name=API_KEY_GROUP).delete()
-    GeoLocatedIP.objects.filter(ip_address=BLOCK_IP).delete()
+    Ticket.objects.filter(title=MUTATION_TITLE).delete()
 
     admin = User(username=ADMIN_USER, display_name=ADMIN_USER,
                  email=f"{ADMIN_USER}@example.com")
@@ -281,9 +282,9 @@ def test_transport_and_challenges(opts):
 
 @th.django_unit_test("a mutating call over MCP becomes the real card only the operator can resolve")
 def test_tool_flow(opts):
-    from mojo.apps.account.models import GeoLocatedIP
     from mojo.apps.assistant.mcp import server
     from mojo.apps.assistant.models import Conversation, PendingAction
+    from mojo.apps.incident.models import Ticket
 
     _clear_shadowing_rows()
     try:
@@ -319,9 +320,11 @@ def test_tool_flow(opts):
             resp = opts.client.post(
                 MCP_PATH,
                 _rpc(3, "tools/call", {
-                    "name": "block_ip",
-                    "arguments": {"ip": BLOCK_IP,
-                                  "reason": "testit mcp wire"}}),
+                    "name": "create_ticket",
+                    "arguments": {
+                        "title": MUTATION_TITLE,
+                        "description": "MCP approval completion probe",
+                    }}),
                 headers=_auth(opts.token))
             assert_eq(resp.status_code, 200,
                       f"a mutating call must answer 200 with a card, got "
@@ -339,10 +342,9 @@ def test_tool_flow(opts):
             assert_eq((conversation.metadata or {}).get("transport"), "mcp",
                       f"the card must be bound to an MCP conversation, got "
                       f"{conversation.metadata}")
-            blocked = GeoLocatedIP.objects.filter(
-                ip_address=BLOCK_IP, is_blocked=True).exists()
-            assert_true(not blocked,
-                        "proposing must NOT have blocked the IP")
+            assert_true(not Ticket.objects.filter(
+                title=MUTATION_TITLE).exists(),
+                "proposing must not have created the ticket")
 
             resp = opts.client.post(
                 MCP_PATH,
@@ -371,10 +373,9 @@ def test_tool_flow(opts):
             assert_eq(resp.status_code, 401,
                       f"an mcp token must not authenticate at the resolution "
                       f"endpoint, got {resp.status_code}")
-            blocked = GeoLocatedIP.objects.filter(
-                ip_address=BLOCK_IP, is_blocked=True).exists()
-            assert_true(not blocked,
-                        "a refused resolution must not have blocked the IP")
+            assert_true(not Ticket.objects.filter(
+                title=MUTATION_TITLE).exists(),
+                "a refused resolution must not have created the ticket")
 
             # The operator resolves it in the Admin, over an ordinary session.
             assert_true(opts.client.login(ADMIN_USER, TEST_PWORD),
@@ -392,10 +393,10 @@ def test_tool_flow(opts):
             finally:
                 opts.client.logout()
 
-            assert_true(GeoLocatedIP.objects.filter(
-                ip_address=BLOCK_IP, is_blocked=True).exists(),
-                "the card an MCP client proposes must be the real, resolvable "
-                "card — approving it must actually block the IP")
+            assert_true(Ticket.objects.filter(
+                title=MUTATION_TITLE).exists(),
+                        "the card an MCP client proposes must be the real, resolvable "
+                        "card — approving it must create the ticket")
     finally:
         _clear_shadowing_rows()
 

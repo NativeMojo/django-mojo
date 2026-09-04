@@ -71,16 +71,20 @@ def test_restore_script_invalid_name(opts):
     assert count == 0, f"Should return 0 count for invalid name, got {count}"
 
 
-@th.unit_test("restore script handles IPv6 CIDRs")
+@th.unit_test("restore script refuses IPv6 CIDRs")
 def test_restore_script_ipv6(opts):
     from mojo.apps.incident.firewall import _build_restore_script
 
     cidrs = ["2001:db8::/32", "fe80::1"]
     script, count = _build_restore_script("v6_set", cidrs)
 
-    assert count == 2, f"Expected 2 valid IPv6 CIDRs, got {count}"
-    assert "add v6_set_tmp 2001:db8::/32" in script, "Should include IPv6 CIDR"
-    assert "add v6_set_tmp fe80::1" in script, "Should include IPv6 address"
+    assert count == 0, f"IPv4-only restore accepted {count} IPv6 CIDRs"
+    assert "add " not in script, \
+        f"IPv6 input reached an ipset add command: {script!r}"
+    assert "swap " not in script, \
+        f"IPv6-only input must never replace the live set: {script!r}"
+    assert script.endswith("destroy v6_set_tmp\n"), \
+        f"the rejected restore must clean up its empty temporary set: {script!r}"
 
 
 @th.unit_test("restore script handles large CIDR list")

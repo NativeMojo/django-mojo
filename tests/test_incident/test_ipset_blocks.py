@@ -13,10 +13,30 @@ def _verified():
     return {"status": "verified", "ok": True}
 
 
-@th.django_unit_setup()
-def setup_ipset_blocks(opts):
+def _fresh_geo():
+    """Return an independent desired-state row for each ordered module test."""
     from mojo.apps.account.models import GeoLocatedIP
 
+    GeoLocatedIP.objects.filter(ip_address=TEST_IP).delete()
+    return GeoLocatedIP.objects.create(
+        ip_address=TEST_IP, country_code="US")
+
+
+@th.django_unit_setup()
+def setup_ipset_blocks(opts):
+    from django.db.models import Q
+    from mojo.apps.account.models import GeoLocatedIP
+
+    # The production snapshot is intentionally fleet-global.  This serial
+    # package owns that state while it runs, so neutralize historical rows
+    # left by earlier packages before asserting an exact one-row generation.
+    GeoLocatedIP.objects.filter(
+        Q(is_blocked=True) | Q(is_whitelisted=True) |
+        Q(firewall_pending=True)
+    ).update(
+        is_blocked=False, blocked_until=None, is_whitelisted=False,
+        whitelisted_until=None, firewall_pending=False,
+        firewall_sync_error="")
     GeoLocatedIP.objects.filter(
         ip_address__in=(TEST_IP, "2001:db8::99")).delete()
     opts.geo = GeoLocatedIP.objects.create(
@@ -27,14 +47,15 @@ def setup_ipset_blocks(opts):
 def test_permanent_block_checked(opts):
     from mojo.apps.account.models import GeoLocatedIP
 
-    geo = GeoLocatedIP.objects.get(ip_address=TEST_IP)
+    geo = _fresh_geo()
     with mock.patch(
             "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
             return_value=_verified()) as reconcile:
         result = geo.block_checked(reason="test", ttl=None)
     assert result["status"] == "verified", f"checked block failed: {result!r}"
     args = reconcile.call_args.args
-    assert args[0] == TEST_IP and TEST_IP in args[1] and args[2] is False, \
+    assert (args[0] == TEST_IP and TEST_IP + "/32" in args[1] and
+            args[2] is False), \
         f"permanent desired state was not exact: {reconcile.call_args!r}"
     geo.refresh_from_db()
     assert geo.firewall_pending is False and geo.firewall_observed_at is not None, \
@@ -45,7 +66,7 @@ def test_permanent_block_checked(opts):
 def test_ttl_block_checked(opts):
     from mojo.apps.account.models import GeoLocatedIP
 
-    geo = GeoLocatedIP.objects.get(ip_address=TEST_IP)
+    geo = _fresh_geo()
     with mock.patch(
             "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
             return_value=_verified()) as reconcile:
@@ -59,7 +80,7 @@ def test_ttl_block_checked(opts):
 def test_unblock_checked_tombstone(opts):
     from mojo.apps.account.models import GeoLocatedIP
 
-    geo = GeoLocatedIP.objects.get(ip_address=TEST_IP)
+    geo = _fresh_geo()
     geo.is_blocked = True
     geo.blocked_reason = "test"
     geo.save(update_fields=["is_blocked", "blocked_reason"])
@@ -82,7 +103,7 @@ def test_idempotent_block_reobserves(opts):
     from mojo.apps.account.models import GeoLocatedIP
     from mojo.helpers import dates
 
-    geo = GeoLocatedIP.objects.get(ip_address=TEST_IP)
+    geo = _fresh_geo()
     geo.is_blocked = True
     geo.blocked_until = dates.utcnow() + datetime.timedelta(minutes=5)
     geo.block_count = 1
@@ -101,7 +122,7 @@ def test_idempotent_block_reobserves(opts):
 def test_block_generation_cas_suppresses_success(opts):
     from mojo.apps.account.models import GeoLocatedIP
 
-    geo = GeoLocatedIP.objects.get(ip_address=TEST_IP)
+    geo = _fresh_geo()
 
     def supersede(*unused_args):
         GeoLocatedIP.objects.filter(pk=geo.pk).update(
@@ -126,7 +147,7 @@ def test_block_generation_cas_suppresses_success(opts):
 def test_legacy_block_broadcast_false(opts):
     from mojo.apps.account.models import GeoLocatedIP
 
-    geo = GeoLocatedIP.objects.get(ip_address=TEST_IP)
+    geo = _fresh_geo()
     with mock.patch(
             "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip") as reconcile:
         result = geo.block(reason="db only", ttl=None, broadcast=False)
@@ -189,7 +210,7 @@ def test_expired_sweep_truthful_count(opts):
     from mojo.helpers import dates
     from objict import objict
 
-    geo = GeoLocatedIP.objects.get(ip_address=TEST_IP)
+    geo = _fresh_geo()
     geo.is_blocked = True
     geo.blocked_until = dates.utcnow() - datetime.timedelta(seconds=1)
     geo.save(update_fields=["is_blocked", "blocked_until"])

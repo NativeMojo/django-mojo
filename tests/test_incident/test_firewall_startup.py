@@ -19,7 +19,9 @@ SYNC_JOB = "mojo.apps.incident.asyncjobs.sync_firewall"
 def _engine(runner_id="test-node-engine", channels=None):
     if channels is None:
         channels = ["default", runner_id]
-    return mock.Mock(runner_id=runner_id, channels=channels)
+    engine = mock.Mock(runner_id=runner_id, channels=channels)
+    engine.start_time.isoformat.return_value = "2026-09-04T12:00:00+00:00"
+    return engine
 
 
 def _mock_redis():
@@ -46,12 +48,16 @@ def test_startup_hook_publishes_box_direct_force_sync(opts):
     assert len(calls) == 1, f"expected exactly one startup publish, got {calls}"
     assert calls[0].get("channel") == "test-node-engine", \
         f"recovery must be addressed to this engine only, got {calls[0]}"
-    assert calls[0].get("payload") == {"force": True}, \
-        f"an unforced startup reconcile would skip on the surviving marker: {calls[0]}"
+    assert calls[0].get("payload") == {"target": {
+        "host": asyncjobs._firewall_host(),
+        "runner_id": "test-node-engine",
+        "started": "2026-09-04T12:00:00+00:00",
+    }}, f"startup repair was not bound to this incarnation: {calls[0]}"
     assert not calls[0].get("broadcast"), \
         f"the startup hook must publish locally, never fan out: {calls[0]}"
-    assert redis_client.get(force_key) == "1", \
-        "the force flag must be set before publishing so a lost job still converges"
+    force_token = redis_client.get(force_key)
+    assert isinstance(force_token, str) and len(force_token) == 32, \
+        "startup repair must persist an opaque force token before publishing"
     assert "queued" in result, f"the hook should report what it queued, got {result!r}"
 
 
