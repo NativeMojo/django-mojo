@@ -57,7 +57,7 @@ Arrives in three places, always the same shape:
 | `title`, `description` | string | Human-readable header and one-sentence summary. |
 | `args` | object | The exact arguments that will run, **redacted**. |
 | `preview` | object or null | `{summary, details, revision}` when the tool provides one. |
-| `requires_fresh_auth` | boolean | `true` ⇒ resolve over **REST only**, after a step-up. |
+| `requires_fresh_auth` | boolean | `true` ⇒ a positive freshness window is bound to the card, so resolve over **REST only**. Interactive/OAuth sessions must be recent; a validated per-user `UserAPIKey` has no interactive step-up and is recognized separately by the server. |
 | `requires_superuser` | boolean | Informational — the server enforces it regardless. |
 | `expires_at` | string | ISO 8601. After this the card is dead. |
 | `state` | string | `pending` \| `executing` \| `completed` \| `failed` \| `canceled` \| `expired` \| `superseded` |
@@ -74,8 +74,8 @@ Arrives in three places, always the same shape:
   confused with the legacy `action` quick-reply block.
 - Show `args` — the operator is approving *these arguments*, and showing them is
   the whole point of the card.
-- When `requires_fresh_auth` is `true`, expect to be asked to re-authenticate.
-  Say so on the card so the prompt is not a surprise.
+- When `requires_fresh_auth` is `true`, require REST resolution and tell an
+  interactive operator that reauthentication may be required.
 - Only `state: "pending"` is actionable. Every other state renders **inert** —
   disabled controls plus a status line. Re-check `expires_at` on render: a card
   can be past it before you get a chance to touch it.
@@ -85,7 +85,12 @@ Arrives in three places, always the same shape:
 ## Resolving over REST
 
 The only path for a card with `requires_fresh_auth: true`, and a perfectly good
-path for all the others.
+path for all the others. For Admin Security tools this flag follows the
+deployment's configured freshness policy; its default window is `0`, so those
+cards carry `false` unless the deployment opts in. With a positive window, a
+stale interactive/OAuth token gets HTTP 440. A positively validated per-user
+`UserAPIKey` can resolve over REST without an impossible interactive ceremony;
+group API keys and group tokens remain refused.
 
 ```http
 POST /api/assistant/action
@@ -264,7 +269,7 @@ function renderApproval(block) {
   card.appendChild(renderArgsAsText(block.args));                // never innerHTML
 
   if (block.requires_fresh_auth) {
-    card.appendChild(el('p', 'hint', 'You will be asked to confirm your password.'));
+    card.appendChild(el('p', 'hint', 'Approve over REST; an interactive session may need recent authentication.'));
   }
 
   if (!live) {
