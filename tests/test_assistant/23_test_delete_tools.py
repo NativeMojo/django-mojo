@@ -81,7 +81,7 @@ def test_delete_rule_not_found(opts):
 @th.django_unit_test()
 def test_delete_rule_registered(opts):
     """delete_rule should be registered with correct metadata."""
-    from mojo.apps.assistant import get_registry
+    from mojo.apps.assistant import CONFIGURED_FRESH_AUTH, get_registry
 
     registry = get_registry()
     assert "delete_rule" in registry, "delete_rule should be in registry"
@@ -89,7 +89,8 @@ def test_delete_rule_registered(opts):
     assert entry["mutates"] is True, "delete_rule should have mutates=True"
     assert entry["permission"] == ["manage_security", "security"], \
         f"Permission should be global security authority, got {entry['permission']}"
-    assert entry["fresh_auth_seconds"] == 600
+    assert entry["fresh_auth_seconds"] == CONFIGURED_FRESH_AUTH, (
+        "delete_rule must follow the deployment freshness setting")
     assert entry["domain"] == "security", f"Domain should be security, got {entry['domain']}"
 
 

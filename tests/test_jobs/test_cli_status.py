@@ -1,6 +1,5 @@
 """Status output must distinguish CLI daemons from deployed jobman workers."""
 
-import contextlib
 import io
 import tempfile
 
@@ -13,8 +12,7 @@ def test_empty_status_names_the_daemon_process_plane(opts):
 
     output = io.StringIO()
     with tempfile.TemporaryDirectory() as pid_root:
-        with contextlib.redirect_stdout(output):
-            running = cli.status_command(pid_root=pid_root)
+        running = cli.status_command(pid_root=pid_root, output=output)
 
     th.assert_true(not running, "an empty daemon pid directory reported a process")
     th.assert_eq(

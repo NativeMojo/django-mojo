@@ -333,7 +333,7 @@ def start_scheduler_foreground(verbose=False, channels=None):
         return False
 
 
-def status_command(verbose=False, *, pid_root="/tmp"):
+def status_command(verbose=False, *, pid_root="/tmp", output=None):
     """Check status of jobs CLI daemon-mode processes."""
     from mojo.apps.jobs.daemon import DaemonRunner
 
@@ -358,11 +358,12 @@ def status_command(verbose=False, *, pid_root="/tmp"):
 
     if results:
         for result in results:
-            print(result)
+            print(result, file=output)
     else:
         print(
             "No jobs CLI daemon-mode processes running; check deployed foreground "
-            "processes with: python3 -m mojo.deploy.jobman status"
+            "processes with: python3 -m mojo.deploy.jobman status",
+            file=output,
         )
 
     return len(results) > 0
