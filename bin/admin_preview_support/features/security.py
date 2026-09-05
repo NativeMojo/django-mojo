@@ -1,6 +1,8 @@
 """Deterministic Admin Security preview with permissioned operational evidence."""
 
 from copy import deepcopy
+import hashlib
+import json
 from urllib.parse import parse_qs
 
 
@@ -34,14 +36,27 @@ def _owner(handler):
     return handler if isinstance(handler, type) else type(handler)
 
 
-def _envelope(data, status="available", reason=None):
+def _envelope(data, status="available", reason=None, truncated=False,
+              next_cursor=None):
     value = {
         "status": status, "observed_at": NOW, "cutoff": NOW,
-        "window": WINDOW, "truncated": False, "data": data,
+        "window": WINDOW, "truncated": bool(truncated),
+        "next_cursor": next_cursor, "data": data,
     }
     if reason:
         value["reason"] = reason
     return value
+
+
+def _chunk(value):
+    encoding = "text" if isinstance(value, str) else "json"
+    text = value if encoding == "text" else json.dumps(
+        value, sort_keys=True, separators=(",", ":"))
+    raw = text.encode("utf-8")
+    return {"encoding": encoding, "chunk": text, "offset": 0,
+            "next_offset": len(raw), "byte_length": len(raw),
+            "complete": True, "next_cursor": None,
+            "digest": hashlib.sha256(raw).hexdigest()}
 
 
 CASES = [
@@ -246,6 +261,9 @@ def get(handler, parsed):
             "source_url": "https://feeds.example.test/hostile.txt",
             "data": "203.0.113.0/24\n2001:db8::/32",
             "sync_error": "provider command /usr/bin/ipset-sync exited 1",
+            "checked_proof": {"status": "verified", "expected_hosts": ["edge-a"],
+                              "results": [{"host": "edge-a", "runner_id": "runner-a",
+                                           "status": "success", "error": None}]},
         }),
         "recommendations": ("recommendation_id", "targets", {
             "explanation": "Repeated failures from 203.0.113.7",
@@ -253,9 +271,17 @@ def get(handler, parsed):
             "targets": [{"ip": "203.0.113.7", "validation_reason": "public source",
                          "last_error": None, "prior_blocked_until": None,
                          "prior_reason": None}], "targets_truncated": False,
+            "transitions": [{"transition": "proposed", "reason": "threshold"}],
+            "attempts": [{"target_id": 1, "attempt_number": 1,
+                           "outcome": "failed", "detail": "runner timeout"}],
         }),
     }
     sections = {}
+    try:
+        limit = max(1, min(100, int(query.get("limit", [100])[0])))
+    except (TypeError, ValueError):
+        limit = 100
+    page_cursor = query.get("page_cursor", [None])[0]
     for name in wanted:
         if name not in data:
             continue
@@ -288,8 +314,40 @@ def get(handler, parsed):
                           if str(row["id"]) == str(identity_value)]
             for row in data[name]:
                 row.update(deepcopy(identity[2]))
-        sections[name] = _envelope({} if status in ("unavailable", "failed") else data[name],
-                                   status=status, reason=reason)
+                detail_fields = {
+                    "cases": ("samples", "observed_sources", "breakdown"),
+                    "incidents": ("title", "details", "metadata"),
+                    "events": ("title", "details", "metadata"),
+                    "rules": ("handler", "metadata", "rules"),
+                    "ipsets": ("data", "sync_error", "checked_proof"),
+                    "recommendations": ("explanation", "approval_note",
+                                        "collateral", "targets", "transitions",
+                                        "attempts"),
+                }.get(name, ())
+                for field in detail_fields:
+                    if field in row:
+                        row[field] = _chunk(row[field])
+        truncated = False
+        next_cursor = None
+        if (identity_value is None and isinstance(data[name], list) and
+                status not in ("unavailable", "failed")):
+            offset = 0
+            if page_cursor:
+                prefix = f"preview:{name}:"
+                if page_cursor.startswith(prefix):
+                    try:
+                        offset = max(0, int(page_cursor[len(prefix):]))
+                    except ValueError:
+                        offset = 0
+            values = data[name]
+            data[name] = values[offset:offset + limit]
+            truncated = offset + limit < len(values)
+            if truncated:
+                next_cursor = f"preview:{name}:{offset + limit}"
+        sections[name] = _envelope(
+            {} if status in ("unavailable", "failed") else data[name],
+            status=status, reason=reason, truncated=truncated,
+            next_cursor=next_cursor)
     capabilities = deepcopy(CAPABILITIES)
     if state == "view-only":
         capabilities["manage"] = False

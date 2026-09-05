@@ -132,6 +132,57 @@ def read_cursor(cursor):
     return value
 
 
+def issue_page_cursor(authority, section, window, position, limit):
+    """Issue an opaque discovery cursor bound to scope and one snapshot."""
+    return issue_cursor({
+        "v": CURSOR_VERSION, "purpose": "rows",
+        "scope": authority.cursor_scope, "section": section,
+        "start": window["start"], "end": window["end"],
+        "hours": window["hours"],
+        "position": list(position), "limit": limit,
+    })
+
+
+def read_page_cursor(cursor):
+    """Validate and return a signed discovery-list cursor."""
+    if not isinstance(cursor, str) or len(cursor) > 4096 or cursor.count(".") != 1:
+        raise TransportError("Admin Security page cursor is invalid")
+    encoded, signature = cursor.split(".", 1)
+    if not verify_signature(encoded, signature):
+        raise TransportError("Admin Security page cursor is invalid")
+    try:
+        value = json.loads(_b64decode(encoded).decode("utf-8"))
+    except Exception as error:
+        raise TransportError("Admin Security page cursor is invalid") from error
+    required = {
+        "v", "purpose", "scope", "section", "start", "end", "hours",
+        "position", "limit"}
+    position = value.get("position") if isinstance(value, dict) else None
+    if (not isinstance(value, dict) or set(value) != required or
+            value.get("v") != CURSOR_VERSION or
+            value.get("purpose") != "rows" or
+            not isinstance(value.get("scope"), str) or
+            not isinstance(value.get("section"), str) or
+            not 1 <= len(value["section"]) <= 32 or
+            not isinstance(value.get("start"), str) or
+            not 1 <= len(value["start"]) <= 64 or
+            not isinstance(value.get("end"), str) or
+            not 1 <= len(value["end"]) <= 64 or
+            isinstance(value.get("hours"), bool) or
+            not isinstance(value.get("hours"), int) or
+            not 1 <= value["hours"] <= 2160 or
+            not isinstance(position, list) or len(position) != 2 or
+            isinstance(position[1], bool) or not isinstance(position[1], int) or
+            position[1] < 1 or
+            isinstance(value.get("limit"), bool) or
+            not isinstance(value.get("limit"), int) or
+            not 1 <= value["limit"] <= 100 or
+            not isinstance(position[0], (str, int)) or
+            isinstance(position[0], bool)):
+        raise TransportError("Admin Security page cursor is invalid")
+    return value
+
+
 def _utf8_slice(raw, offset, maximum):
     end = min(len(raw), offset + maximum)
     while end > offset:

@@ -1,4 +1,5 @@
 import {badge, formatDate, h, statusTone, TableView} from '../../core.js';
+import {runAction} from '../../components/actions.js';
 import {openModal} from '../../components/overlays.js';
 import {readSecurityDetail, sectionRows} from './api.js';
 
@@ -80,7 +81,7 @@ async function caseDetail(row) {
         h('pre', {class: 'security-evidence', text: JSON.stringify(row, null, 2)})));
 }
 
-export function renderCases({report}) {
+export function renderCases({report, loadPage}) {
   const envelope = report.sections.cases;
   const notice = envelopeNotice(envelope, 'No cases in this window');
   if (notice && ['unavailable', 'failed'].includes(envelope.status)) return notice;
@@ -109,7 +110,12 @@ export function renderCases({report}) {
       h('footer', {class: 'security-pager'}, h('span', {text: `${filtered.length} cases · page ${page + 1} of ${pages}`}), previous, next));
   };
   search.addEventListener('input', () => { page = 0; paint(); }); paint();
+  const more = envelope.next_cursor
+    ? h('button', {class: 'button ghost compact', type: 'button'}, 'Load more cases') : null;
+  more?.addEventListener('click', () => runAction(
+    more, () => loadPage('cases'), {pendingLabel: 'Loading…'}));
   return h('div', {class: 'security-stack'}, notice,
     h('div', {class: 'security-toolbar'}, search,
-      h('span', {class: 'muted', text: `Sampled through ${formatDate(envelope.cutoff)}`})), body);
+      h('span', {class: 'muted', text: `Sampled through ${formatDate(envelope.cutoff)}`}),
+      more), body);
 }

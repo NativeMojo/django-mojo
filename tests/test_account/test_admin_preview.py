@@ -220,6 +220,22 @@ def test_security_preview_states(opts):
 
     server = _server()
     provider = server.security
+    class Paged:
+        pass
+    provider.reset(Paged, {}, security_state="full")
+    _, first_page = provider.get(
+        Paged, urlparse(
+            "/api/incident/admin/security?sections=cases&limit=5"))
+    first_cases = first_page["sections"]["cases"]
+    assert len(first_cases["data"]) == 5 and first_cases["next_cursor"]
+    _, second_page = provider.get(
+        Paged, urlparse(
+            "/api/incident/admin/security?sections=cases&page_cursor="
+            + first_cases["next_cursor"]))
+    second_cases = second_page["sections"]["cases"]
+    assert not ({row["id"] for row in first_cases["data"]} &
+                {row["id"] for row in second_cases["data"]})
+
     for state in ("full", "empty", "unavailable", "partial", "failed",
                   "stale", "recovery", "malformed"):
         class Handler:

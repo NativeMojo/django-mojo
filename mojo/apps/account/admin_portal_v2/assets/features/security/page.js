@@ -1,7 +1,7 @@
 import {h} from '../../core.js';
 import {decodeRouteState, routeHref} from '../../components/routes.js';
 import {errorState, loadingState, sectionTabs} from '../../components/views.js';
-import {readSecurity} from './api.js';
+import {readNextSecurityPage, readSecurity} from './api.js';
 import {renderCases, renderOverview} from './mojosec.js';
 import {renderIncidentEvents} from './activity.js';
 import {renderRules} from './rules.js';
@@ -39,6 +39,23 @@ export async function securityPage(ctx, parentSignal) {
       return refresh();
     }}), body);
 
+  const renderReport = async () => {
+    const node = active.render({ctx, report, refresh, loadPage, signal: controller?.signal});
+    const freshness = report.capabilities.fresh_auth;
+    body.replaceChildren(h('div', {class: 'security-capability'},
+      h('strong', {text: `Scope: ${report.capabilities.scope}`}),
+      h('span', {text: freshness.enabled
+        ? `Fresh authentication: ${freshness.window_seconds} seconds${freshness.applies_to_credential ? '' : ' (not applicable to this machine credential)'}`
+        : 'Fresh authentication: disabled'})), await node);
+  };
+
+  const loadPage = async (section) => {
+    const current = controller;
+    report = await readNextSecurityPage(report, section, {signal: current?.signal});
+    if (disposed || current?.signal.aborted || current !== controller) return;
+    await renderReport();
+  };
+
   const refresh = async () => {
     controller?.abort(); const current = new AbortController(); controller = current;
     if (parentSignal?.aborted) current.abort();
@@ -46,13 +63,7 @@ export async function securityPage(ctx, parentSignal) {
     try {
       report = await readSecurity(active.sections, {signal: current.signal});
       if (disposed || current.signal.aborted || current !== controller) return;
-      const node = active.render({ctx, report, refresh, signal: current.signal});
-      const freshness = report.capabilities.fresh_auth;
-      body.replaceChildren(h('div', {class: 'security-capability'},
-        h('strong', {text: `Scope: ${report.capabilities.scope}`}),
-        h('span', {text: freshness.enabled
-          ? `Fresh authentication: ${freshness.window_seconds} seconds${freshness.applies_to_credential ? '' : ' (not applicable to this machine credential)'}`
-          : 'Fresh authentication: disabled'})), await node);
+      await renderReport();
     } catch (error) {
       if (!disposed && !current.signal.aborted && current === controller) {
         body.replaceChildren(errorState(error, refresh));

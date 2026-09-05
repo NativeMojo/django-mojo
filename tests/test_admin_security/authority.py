@@ -364,6 +364,24 @@ def test_complete_secret_scrubbed_overview(opts):
     assert "8.8.8.8/32" in ipset_detail["data"]["chunk"]
     assert "fixture-key" not in str(ipset_detail)
 
+    checked = {
+        "status": "partial", "ok": False,
+        "expected_hosts": ["edge-a"], "responded_hosts": ["edge-a"],
+        "succeeded_hosts": [], "failed_hosts": ["edge-a"],
+        "missing_hosts": [], "desired": {"present": True, "count": 1,
+                                           "digest": "a" * 64},
+        "fence": 4, "error": {"code": "runner_error",
+                                "message": "ipset command failed"},
+        "checked": {"results": [{"host": "edge-a", "runner_id": "runner-a",
+                                   "status": "failed", "error": "exit 1"}]},
+    }
+    proof_detail = admin_security._bounded_ipset(
+        ipset, admin_security.SecurityAuthority("global", "internal", None),
+        checked, [{"host": "edge-a", "started": "boot-a"}],
+        "2026-08-10T17:10:00Z")
+    assert "runner-a" in proof_detail["checked_proof"]["chunk"]
+    assert "ipset command failed" in proof_detail["checked_proof"]["chunk"]
+
 
 @th.django_unit_test("schema v3 advertises governed actions and bounded checked receipts")
 def test_action_schema_and_checked_receipt_projection(opts):

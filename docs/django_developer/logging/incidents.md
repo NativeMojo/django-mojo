@@ -392,13 +392,20 @@ above, `limit` defaults to 50 and caps at 100, and `window_hours` defaults to 24
 and caps at 2160. `case_id`, `incident_id`, `event_id`, `ruleset_id`,
 `ipset_id`, and `recommendation_id` select direct detail; direct historical
 lookup is not constrained by the list window. `chunk_cursor` resumes a large
-detail value. It returns
-`{schema_version: 3, capabilities, sections: {name: {status, observed_at, cutoff, window,
-truncated, data}}}` inside the standard REST envelope. Collector exceptions
-degrade only that section to `status="unavailable"` with
+detail value. A truncated discovery-list envelope includes an opaque
+`next_cursor`; send it back as `page_cursor` to continue the same scope-bound
+window snapshot with keyset pagination. It returns
+`{schema_version: 3, capabilities, sections: {name: {status, observed_at,
+cutoff, window, truncated, next_cursor, data}}}` inside the standard REST
+envelope. Collector exceptions degrade only that section to
+`status="unavailable"` with
 `reason="collector_unavailable"`. The `rules` section does not inline child
 rules; valid typed handlers appear under `validation.handlers`, while action
 responses for create/replace carry top-level typed handlers and children.
+Direct recommendation detail also chunks the complete append-only transition
+and execution-attempt evidence. Direct IPSet detail includes the checked proof
+plane as retained by the truth service; its verified/partial/unknown label is
+not recomputed or promoted by the transport.
 
 `POST /api/incident/admin/security/action` is the governed RuleSet writer;
 `POST /api/incident/ipset/action` is the client-facing alias for governed

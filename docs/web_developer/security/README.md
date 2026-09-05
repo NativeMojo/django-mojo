@@ -109,6 +109,7 @@ interactive login event and therefore bypass the freshness check.
 | `ruleset_id` | Selects one RuleSet's complete policy, including legacy handler text |
 | `ipset_id` | Selects one IPSet with source URL, CIDR data, and sync error detail |
 | `chunk_cursor` | Continues one signed detail field; the cursor is bound to authority scope, object, field, revision, digest, and byte offset |
+| `page_cursor` | Continues one truncated discovery list using its opaque `next_cursor`; scope, section, page size, and fixed window snapshot are server-bound |
 
 The standard response envelope contains a versioned map. Every requested
 section completes independently:
@@ -138,6 +139,7 @@ section completes independently:
           "end": "2026-09-04T17:18:19.123456+00:00"
         },
         "truncated": false,
+        "next_cursor": null,
         "data": []
       }
     }
@@ -166,6 +168,11 @@ cursor is rejected. Scrubbing is deliberately narrow: authentication secrets
 `[redacted secret]`; operational IP addresses, CIDRs, commands, paths, handler
 URLs, titles, metadata, validation reasons, errors, and evidence remain intact.
 
+Discovery lists use keyset pagination. When `truncated=true`, follow the
+section's `next_cursor` through `page_cursor`; do not synthesize numeric pages.
+The packaged client rejects repeated row IDs or a page whose authority/window
+does not match the first page.
+
 The `rules` section is a summary list: it includes the aggregate revision,
 configuration, validation status, `rule_count`, and—for a valid policy—the
 safe typed handlers under `validation.handlers`; it does not inline child
@@ -182,9 +189,10 @@ Admin Security detail and use the action schema when opting into governance.
 To review a recommendation, request
 `?sections=recommendations&recommendation_id=<id>`. Its target detail includes
 the frozen addresses, validation reasons, execution errors, prior block state,
-and lifecycle timestamps (up to 1024 targets, explicitly marked if truncated).
-Bind the returned `modified` revision into the operator's confirmation. Never
-offer an action when `targets_truncated` is true.
+lifecycle timestamps, complete append-only transitions, and execution attempts
+without transport truncation. Governed action creation itself accepts at most
+1024 targets. Bind the returned `modified` revision into the operator's
+confirmation.
 
 `sections=schemas` returns the server-owned `rule_policy.aggregate` object
 contract, condition fields/types/operators, bundling choices, typed handler
@@ -197,7 +205,9 @@ presence/count/digest, observed status, generation, observation cutoff, and
 bounded captured expected/responded/succeeded/failed/missing host IDs. Treat
 `verified`, `partial`, `missing`, `stale`, and `unavailable` as distinct. A
 direct `ipset_id` detail adds retained CIDRs, source URL, and sync errors;
-authentication source keys remain scrubbed. The reconciliation/fencing and
+authentication source keys remain scrubbed. It also returns the retained
+checked proof plane so an operator can inspect runner and error evidence. The
+reconciliation/fencing and
 checked-truth rules below are unchanged.
 
 `verified` additionally means the server validated a complete, sorted and
@@ -205,9 +215,10 @@ internally consistent receipt: exact roster/incarnations, desired set
 identity/presence/digest/count, generation fence/fingerprint, direct
 observations, and any checked per-host semantic results. A bare top-level `ok`,
 missing fields, duplicates, contradictions, anomalies, or incomplete host
-coverage is never enough. The projection does not synthesize
+coverage is never enough. The list projection does not synthesize
 responded/succeeded hosts; it degrades to partial, missing, stale, or
-unavailable while withholding those internal proof fields.
+unavailable. Authorized direct detail exposes the underlying checked proof
+without changing that classification.
 
 #### Write
 

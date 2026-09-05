@@ -5,12 +5,12 @@ operational evidence administrators need, with only authentication secrets
 removed at the final serialization boundary.
 """
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 import re
 from types import MappingProxyType
 
 from django.db import transaction
-from django.db.models import Count, Prefetch
+from django.db.models import Count, Prefetch, Q
 from django.utils import timezone
 
 from mojo import errors as merrors
@@ -178,13 +178,14 @@ def _positive(value, default, maximum, name):
 
 
 def _envelope(data, cutoff, window, truncated=False, status="available",
-              reason=None):
+              reason=None, next_cursor=None):
     row = {
         "status": status,
         "observed_at": _iso(timezone.now()),
         "cutoff": window.get("end") if isinstance(window, dict) else _iso(cutoff),
         "window": window,
         "truncated": bool(truncated),
+        "next_cursor": next_cursor,
         "data": data,
     }
     if reason:
@@ -194,6 +195,27 @@ def _envelope(data, cutoff, window, truncated=False, status="available",
 
 def _unavailable(cutoff, window, reason):
     return _envelope({}, cutoff, window, status="unavailable", reason=reason)
+
+
+def _page_cursor(authority, section, window, rows, truncated, limit,
+                 position):
+    if not truncated or not rows:
+        return None
+    return transport.issue_page_cursor(
+        authority, section, window, position(rows[-1]), limit)
+
+
+def _cursor_time(value):
+    if not isinstance(value, str) or len(value) > 64:
+        raise SecurityActionError("Admin Security page cursor is invalid")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise SecurityActionError(
+            "Admin Security page cursor is invalid") from error
+    if timezone.is_naive(parsed):
+        raise SecurityActionError("Admin Security page cursor is invalid")
+    return parsed
 
 
 def _scope_queryset(queryset, authority, field="group_id"):
@@ -280,7 +302,10 @@ def _safe_recommendation(row, detail=False):
         "evaluator_version": row.evaluator_version,
     }
     if detail:
-        targets = list(row.targets.order_by("id")[:MAX_ACTION_TARGETS + 1])
+        # Action creation is capped at MAX_ACTION_TARGETS, while the detail
+        # transport chunks the serialized value. Read every persisted row so
+        # direct review remains complete even for imported or legacy data.
+        targets = list(row.targets.order_by("id"))
         value["targets"] = [{
             "id": target.pk, "ip": target.ip, "kind": target.kind,
             "validation_state": target.validation_state,
@@ -292,9 +317,38 @@ def _safe_recommendation(row, detail=False):
             "reversed_at": _iso(target.reversed_at),
             "prior_blocked_until": _iso(target.prior_blocked_until),
             "prior_reason": target.prior_reason,
-        } for target in targets[:MAX_ACTION_TARGETS]]
-        value["targets_truncated"] = len(targets) > MAX_ACTION_TARGETS
+        } for target in targets]
+        value["targets_truncated"] = False
+        value.update(_recommendation_history(row))
     return value
+
+
+def _recommendation_history(row):
+    """Return append-only recommendation evidence for chunked detail."""
+    return {
+        "transitions": [{
+            "id": item.pk, "created": _iso(item.created),
+            "modified": _iso(item.modified), "transition": item.transition,
+            "reason": item.reason, "from_state": item.from_state,
+            "to_state": item.to_state, "actor_id": item.actor_id,
+            "actor_id_snapshot": item.actor_id_snapshot,
+            "target_count": item.target_count,
+            "validated_count": item.validated_count,
+            "protected_count": item.protected_count,
+            "executed_count": item.executed_count,
+            "failed_count": item.failed_count,
+            "reversed_count": item.reversed_count,
+            "row_digest": item.row_digest,
+        } for item in row.transitions.order_by("created", "id")],
+        "attempts": [{
+            "id": item.pk, "created": _iso(item.created),
+            "modified": _iso(item.modified), "target_id": item.target_id,
+            "attempt_number": item.attempt_number,
+            "started_at": _iso(item.started_at),
+            "finished_at": _iso(item.finished_at), "outcome": item.outcome,
+            "detail": item.detail, "row_digest": item.row_digest,
+        } for item in row.attempts.order_by("created", "id")],
+    }
 
 
 def _bounded_rule_set(row, authority):
@@ -367,7 +421,21 @@ def _bounded_recommendation(row, authority):
         installation_key_id=row.installation_key_id)
     return transport.bounded_detail(
         values, authority, "recommendation", row.pk, _revision(row),
-        ("explanation", "approval_note", "collateral", "targets"))
+        ("explanation", "approval_note", "collateral", "targets",
+         "transitions", "attempts"))
+
+
+def _bounded_ipset(row, authority, result, roster, observation_cutoff):
+    value = _safe_ipset(
+        row, result=result, roster=roster,
+        observation_cutoff=observation_cutoff)
+    value.update(
+        created=_iso(row.created), source=row.source,
+        source_url=row.source_url, source_key=row.source_key, data=row.data,
+        sync_error=row.sync_error, checked_proof=result)
+    return transport.bounded_detail(
+        value, authority, "ipset", row.pk, _revision(row),
+        ("data", "sync_error", "checked_proof"))
 
 
 def _overview(cutoff, window, end):
@@ -417,13 +485,19 @@ def _overview(cutoff, window, end):
     return _envelope(data, cutoff, window)
 
 
-def _cases(cutoff, window, end, limit, authority, case_id=None):
+def _cases(cutoff, window, end, limit, authority, case_id=None,
+           page_position=None):
     from mojo.apps.incident.models import MojoSecCase
     qs = _scope_queryset(MojoSecCase.objects.all(), authority)
     if case_id is not None:
         qs = qs.filter(pk=_id(case_id, "case_id"))
     else:
         qs = qs.filter(last_seen__gte=cutoff, last_seen__lte=end)
+        if page_position is not None:
+            stamp, pk = _cursor_time(page_position[0]), _id(
+                page_position[1], "page cursor id")
+            qs = qs.filter(
+                Q(last_seen__lt=stamp) | Q(last_seen=stamp, pk__lt=pk))
     qs = qs.order_by("-last_seen", "-id")
     rows = list(qs[:limit + 1])
     if case_id is not None:
@@ -444,16 +518,26 @@ def _cases(cutoff, window, end, limit, authority, case_id=None):
         "evaluator_version": row.evaluator_version,
         "accuracy": "sampled_learning_projection", "group_id": row.group_id,
     } for row in rows[:limit]]
-    return _envelope(data, cutoff, window, len(rows) > limit)
+    truncated = len(rows) > limit
+    cursor = (None if case_id is not None else _page_cursor(
+        authority, "cases", window, rows[:limit], truncated, limit,
+        lambda item: (_iso(item.last_seen), item.pk)))
+    return _envelope(data, cutoff, window, truncated, next_cursor=cursor)
 
 
-def _incidents(cutoff, window, end, limit, authority, incident_id=None):
+def _incidents(cutoff, window, end, limit, authority, incident_id=None,
+               page_position=None):
     from mojo.apps.incident.models import Incident
     queryset = _scope_queryset(Incident.objects.all(), authority)
     if incident_id is not None:
         queryset = queryset.filter(pk=_id(incident_id, "incident_id"))
     else:
         queryset = queryset.filter(created__gte=cutoff, created__lte=end)
+        if page_position is not None:
+            stamp, pk = _cursor_time(page_position[0]), _id(
+                page_position[1], "page cursor id")
+            queryset = queryset.filter(
+                Q(created__lt=stamp) | Q(created=stamp, pk__lt=pk))
     rows = list(queryset.order_by("-created", "-id")[:limit + 1])
     if incident_id is not None:
         data = [_bounded_incident(row, authority) for row in rows[:limit]]
@@ -465,25 +549,40 @@ def _incidents(cutoff, window, end, limit, authority, incident_id=None):
         "rule_set_id": row.rule_set_id, "source_ip": row.source_ip,
         "hostname": row.hostname, "title": (row.title or "")[:512],
     } for row in rows[:limit]]
-    return _envelope(data, cutoff, window, len(rows) > limit)
+    truncated = len(rows) > limit
+    cursor = (None if incident_id is not None else _page_cursor(
+        authority, "incidents", window, rows[:limit], truncated, limit,
+        lambda item: (_iso(item.created), item.pk)))
+    return _envelope(data, cutoff, window, truncated, next_cursor=cursor)
 
 
-def _events(cutoff, window, end, limit, authority, event_id=None):
+def _events(cutoff, window, end, limit, authority, event_id=None,
+            page_position=None):
     from mojo.apps.incident.models import Event
     queryset = _scope_queryset(Event.objects.all(), authority)
     if event_id is not None:
         queryset = queryset.filter(pk=_id(event_id, "event_id"))
     else:
         queryset = queryset.filter(created__gte=cutoff, created__lte=end)
+        if page_position is not None:
+            stamp, pk = _cursor_time(page_position[0]), _id(
+                page_position[1], "page cursor id")
+            queryset = queryset.filter(
+                Q(created__lt=stamp) | Q(created=stamp, pk__lt=pk))
     rows = list(queryset.order_by("-created", "-id")[:limit + 1])
     data = ([_bounded_event(row, authority) for row in rows[:limit]]
             if event_id is not None else
             [transport.scrub(row.admin_security_projection(detail=False))
              for row in rows[:limit]])
-    return _envelope(data, cutoff, window, len(rows) > limit)
+    truncated = len(rows) > limit
+    cursor = (None if event_id is not None else _page_cursor(
+        authority, "events", window, rows[:limit], truncated, limit,
+        lambda item: (_iso(item.created), item.pk)))
+    return _envelope(data, cutoff, window, truncated, next_cursor=cursor)
 
 
-def _rules(cutoff, window, limit, authority, ruleset_id=None):
+def _rules(cutoff, window, limit, authority, ruleset_id=None,
+           page_position=None):
     from mojo.apps.incident.models import Rule, RuleSet
     queryset = RuleSet.objects.prefetch_related(Prefetch(
             "rules", queryset=Rule.objects.order_by("index", "id"),
@@ -491,20 +590,44 @@ def _rules(cutoff, window, limit, authority, ruleset_id=None):
     detail = ruleset_id is not None
     if detail:
         queryset = queryset.filter(pk=_id(ruleset_id, "ruleset_id"))
+    else:
+        queryset = queryset.filter(created__lte=_cursor_time(window["end"]))
+        if page_position is not None:
+            priority, pk = page_position
+            if isinstance(priority, bool) or not isinstance(priority, int):
+                raise SecurityActionError("Admin Security page cursor is invalid")
+            pk = _id(pk, "page cursor id")
+            queryset = queryset.filter(
+                Q(priority__gt=priority) | Q(priority=priority, pk__gt=pk))
     rows = list(queryset.order_by("priority", "id")[:limit + 1])
-    return _envelope([
+    data = [
         (_bounded_rule_set(row, authority) if detail else
          transport.scrub(_safe_rule_set(row, detail=False)))
-        for row in rows[:limit]], cutoff,
-                     window, len(rows) > limit)
+        for row in rows[:limit]]
+    truncated = len(rows) > limit
+    cursor = (None if detail else _page_cursor(
+        authority, "rules", window, rows[:limit], truncated, limit,
+        lambda item: (item.priority, item.pk)))
+    return _envelope(
+        data, cutoff, window, truncated, next_cursor=cursor)
 
 
-def _ipsets(cutoff, window, limit, authority, ipset_id=None):
+def _ipsets(cutoff, window, limit, authority, ipset_id=None,
+            page_position=None):
     from mojo.apps.incident.models import IPSet
     from mojo.apps.incident.services import firewall_truth
     queryset = IPSet.objects.all()
     if ipset_id is not None:
         queryset = queryset.filter(pk=_id(ipset_id, "ipset_id"))
+    else:
+        queryset = queryset.filter(created__lte=_cursor_time(window["end"]))
+        if page_position is not None:
+            name, pk = page_position
+            if not isinstance(name, str) or len(name) > 64:
+                raise SecurityActionError("Admin Security page cursor is invalid")
+            pk = _id(pk, "page cursor id")
+            queryset = queryset.filter(
+                Q(name__gt=name) | Q(name=name, pk__gt=pk))
     rows = list(queryset.order_by("name", "id")[:limit + 1])
     try:
         roster = firewall_truth.exact_compatible_roster()
@@ -514,17 +637,14 @@ def _ipsets(cutoff, window, limit, authority, ipset_id=None):
         roster_available = False
     data = []
     for row in rows[:limit]:
+        result = firewall_truth.current_ipset_enforcement(row, roster=roster)
         value = _safe_ipset(
-            row, roster=roster, observation_cutoff=window["end"])
+            row, result=result, roster=roster,
+            observation_cutoff=window["end"])
         value.update(created=_iso(row.created))
         if ipset_id is not None:
-            value.update(
-                source=row.source, source_url=row.source_url,
-                source_key=row.source_key, data=row.data,
-                sync_error=row.sync_error)
-            value = transport.bounded_detail(
-                value, authority, "ipset", row.pk, _revision(row),
-                ("data", "sync_error"))
+            value = _bounded_ipset(
+                row, authority, result, roster, window["end"])
         else:
             value = transport.scrub(value)
         data.append(value)
@@ -540,11 +660,15 @@ def _ipsets(cutoff, window, limit, authority, ipset_id=None):
                 enforcement_status="stale", enforcement_ok=False,
                 error_code="runner_roster_changed")
             value["enforcement"].update(status="stale", observed="stale")
-    return _envelope(data, cutoff, window, len(rows) > limit)
+    truncated = len(rows) > limit
+    cursor = (None if ipset_id is not None else _page_cursor(
+        authority, "ipsets", window, rows[:limit], truncated, limit,
+        lambda item: (item.name, item.pk)))
+    return _envelope(data, cutoff, window, truncated, next_cursor=cursor)
 
 
 def _recommendations(cutoff, window, end, limit, authority,
-                     recommendation_id=None):
+                     recommendation_id=None, page_position=None):
     from mojo.apps.incident.models import MojoSecRecommendation
     queryset = _scope_queryset(MojoSecRecommendation.objects.all(), authority)
     detail = recommendation_id is not None
@@ -553,12 +677,22 @@ def _recommendations(cutoff, window, end, limit, authority,
             pk=_id(recommendation_id, "recommendation_id"))
     else:
         queryset = queryset.filter(created__gte=cutoff, created__lte=end)
+        if page_position is not None:
+            stamp, pk = _cursor_time(page_position[0]), _id(
+                page_position[1], "page cursor id")
+            queryset = queryset.filter(
+                Q(created__lt=stamp) | Q(created=stamp, pk__lt=pk))
     rows = list(queryset.order_by("-created", "-id")[:limit + 1])
-    return _envelope([
+    data = [
         (_bounded_recommendation(row, authority) if detail else
          transport.scrub(_safe_recommendation(row, detail=False)))
-        for row in rows[:limit]],
-                     cutoff, window, len(rows) > limit)
+        for row in rows[:limit]]
+    truncated = len(rows) > limit
+    cursor = (None if detail else _page_cursor(
+        authority, "recommendations", window, rows[:limit], truncated, limit,
+        lambda item: (_iso(item.created), item.pk)))
+    return _envelope(
+        data, cutoff, window, truncated, next_cursor=cursor)
 
 
 def _chunk_value(authority, cursor):
@@ -594,11 +728,12 @@ def _chunk_value(authority, cursor):
         from mojo.apps.incident.models import MojoSecRecommendation
         row = _scope_queryset(
             MojoSecRecommendation.objects.all(), authority).filter(pk=pk).first()
-        allowed = {"explanation", "approval_note", "collateral", "targets"}
+        allowed = {"explanation", "approval_note", "collateral", "targets",
+                   "transitions", "attempts"}
         revision = _revision(row) if row else None
         if row and field in allowed:
-            if field == "targets":
-                value = _safe_recommendation(row, detail=True)["targets"]
+            if field in {"targets", "transitions", "attempts"}:
+                value = _safe_recommendation(row, detail=True)[field]
             else:
                 value = getattr(row, field)
     elif authority.is_global and kind == "ruleset":
@@ -613,10 +748,13 @@ def _chunk_value(authority, cursor):
                  if row and field in allowed else None)
     elif authority.is_global and kind == "ipset":
         from mojo.apps.incident.models import IPSet
+        from mojo.apps.incident.services import firewall_truth
         row = IPSet.objects.filter(pk=pk).first()
-        allowed = {"data", "sync_error"}
+        allowed = {"data", "sync_error", "checked_proof"}
         revision = _revision(row) if row else None
-        value = getattr(row, field, None) if row and field in allowed else None
+        if row and field in allowed:
+            value = (firewall_truth.current_ipset_enforcement(row)
+                     if field == "checked_proof" else getattr(row, field, None))
     if revision is None or field not in allowed:
         # The same response covers absent and out-of-scope objects, so a group
         # credential cannot use cursor replay as an existence oracle.
@@ -639,12 +777,35 @@ def overview(params=None, authority=None):
         return transport.scrub({
             "schema_version": SCHEMA_VERSION,
             "capabilities": _capabilities(authority), "chunk": data})
-    limit = _positive(params.get("limit"), DEFAULT_LIMIT, MAX_LIMIT, "limit")
-    hours = _positive(params.get("window_hours"), DEFAULT_WINDOW_HOURS,
-                      MAX_WINDOW_HOURS, "window_hours")
-    now = timezone.now()
-    cutoff = now - timedelta(hours=hours)
-    window = {"hours": hours, "start": _iso(cutoff), "end": _iso(now)}
+    page_token = None
+    page_cursor = params.get("page_cursor")
+    if page_cursor not in (None, ""):
+        try:
+            page_token = transport.read_page_cursor(page_cursor)
+        except transport.TransportError as error:
+            raise SecurityActionError(
+                str(error), code=error.code, status=error.status) from error
+        if page_token["scope"] != authority.cursor_scope:
+            raise SecurityActionError(
+                "Admin Security page cursor is invalid",
+                code="invalid_cursor", status=400)
+        limit = page_token["limit"]
+        hours = page_token["hours"]
+        cutoff = _cursor_time(page_token["start"])
+        now = _cursor_time(page_token["end"])
+        if cutoff >= now:
+            raise SecurityActionError(
+                "Admin Security page cursor is invalid",
+                code="invalid_cursor", status=400)
+        window = {"hours": hours, "start": page_token["start"],
+                  "end": page_token["end"]}
+    else:
+        limit = _positive(params.get("limit"), DEFAULT_LIMIT, MAX_LIMIT, "limit")
+        hours = _positive(params.get("window_hours"), DEFAULT_WINDOW_HOURS,
+                          MAX_WINDOW_HOURS, "window_hours")
+        now = timezone.now()
+        cutoff = now - timedelta(hours=hours)
+        window = {"hours": hours, "start": _iso(cutoff), "end": _iso(now)}
     recommendation_id = params.get("recommendation_id")
     if recommendation_id not in (None, ""):
         recommendation_id = _id(recommendation_id, "recommendation_id")
@@ -673,6 +834,16 @@ def overview(params=None, authority=None):
     unknown = sorted(set(requested) - set(SECTIONS))
     if unknown:
         raise SecurityActionError("request contains an unknown security section")
+    page_section = page_token["section"] if page_token is not None else None
+    if page_token is not None:
+        if (page_section not in {
+                "cases", "incidents", "events", "rules", "ipsets",
+                "recommendations"} or requested != [page_section] or
+                recommendation_id is not None or ruleset_id is not None or
+                any(value is not None for value in detail_ids.values())):
+            raise SecurityActionError(
+                "Admin Security page cursor is invalid",
+                code="invalid_cursor", status=400)
     group_allowed = {"cases", "incidents", "events", "recommendations"}
     if not authority.is_global and set(requested) - group_allowed:
         raise SecurityActionError(
@@ -681,17 +852,23 @@ def overview(params=None, authority=None):
     collectors = {
         "overview": lambda: _overview(cutoff, window, now),
         "cases": lambda: _cases(
-            cutoff, window, now, limit, authority, detail_ids["case"]),
+            cutoff, window, now, limit, authority, detail_ids["case"],
+            page_token["position"] if page_section == "cases" else None),
         "incidents": lambda: _incidents(
-            cutoff, window, now, limit, authority, detail_ids["incident"]),
+            cutoff, window, now, limit, authority, detail_ids["incident"],
+            page_token["position"] if page_section == "incidents" else None),
         "events": lambda: _events(
-            cutoff, window, now, limit, authority, detail_ids["event"]),
+            cutoff, window, now, limit, authority, detail_ids["event"],
+            page_token["position"] if page_section == "events" else None),
         "rules": lambda: _rules(
-            cutoff, window, limit, authority, ruleset_id),
+            cutoff, window, limit, authority, ruleset_id,
+            page_token["position"] if page_section == "rules" else None),
         "ipsets": lambda: _ipsets(
-            cutoff, window, limit, authority, detail_ids["ipset"]),
+            cutoff, window, limit, authority, detail_ids["ipset"],
+            page_token["position"] if page_section == "ipsets" else None),
         "recommendations": lambda: _recommendations(
-            cutoff, window, now, limit, authority, recommendation_id),
+            cutoff, window, now, limit, authority, recommendation_id,
+            page_token["position"] if page_section == "recommendations" else None),
         "schemas": lambda: _envelope({
             "rule_policy": rule_validation.public_schema(),
             "actions": _action_schemas(),
@@ -702,6 +879,8 @@ def overview(params=None, authority=None):
     for name in requested:
         try:
             sections[name] = collectors[name]()
+        except SecurityActionError:
+            raise
         except Exception:
             sections[name] = _unavailable(cutoff, window, "collector_unavailable")
     return transport.scrub({
@@ -1049,7 +1228,7 @@ def _verified_enforcement_proof(result, required_roster=None):
 
 
 def _safe_enforcement(result, roster=None, observation_cutoff=None):
-    """Project checked fleet truth without exposing its raw receipt plane."""
+    """Project a compact list view from complete checked fleet truth."""
     result = result if isinstance(result, dict) else {}
     checked = result.get("checked") if isinstance(result.get("checked"), dict) else {}
     receipt = checked or result

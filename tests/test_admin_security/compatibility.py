@@ -286,3 +286,54 @@ def test_governed_marker_lifecycle_hooks(opts):
         value_type="int")
     with th.assert_raises(Exception):
         child.on_rest_pre_save({}, True)
+
+
+@th.django_unit_test("discovery pagination is snapshot-stable and scope-bound")
+def test_discovery_page_cursor_contract(opts):
+    from mojo.apps.account.models import Group
+    from mojo.apps.incident.models import Event
+    from mojo.apps.incident.services import admin_security
+
+    group = Group.objects.create(
+        name=f"{PREFIX}-page-group", kind="organization")
+    other = Group.objects.create(
+        name=f"{PREFIX}-page-other", kind="organization")
+    expected = [Event.objects.create(
+        group=group, category=f"{PREFIX}:page:{index}").pk
+        for index in range(5)]
+    authority = admin_security.SecurityAuthority(
+        "group", "api_key", None, group_id=group.pk)
+
+    report = admin_security.overview(
+        {"sections": "events", "limit": 2}, authority=authority)
+    envelope = report["sections"]["events"]
+    assert envelope["truncated"] is True and envelope["next_cursor"], (
+        "a truncated discovery list must provide its opaque retrieval path")
+    cursor = envelope["next_cursor"]
+
+    # A row created after the cursor snapshot must not move into later pages.
+    inserted_later = Event.objects.create(
+        group=group, category=f"{PREFIX}:page:later")
+    found = [row["id"] for row in envelope["data"]]
+    while envelope["next_cursor"]:
+        report = admin_security.overview({
+            "sections": "events", "page_cursor": envelope["next_cursor"],
+        }, authority=authority)
+        envelope = report["sections"]["events"]
+        found.extend(row["id"] for row in envelope["data"])
+    assert len(found) == len(set(found)), "keyset traversal repeated a row"
+    assert set(found) == set(expected), (
+        "stable snapshot traversal skipped an original row or admitted a later row")
+    assert inserted_later.pk not in found
+
+    tampered = cursor[:-1] + ("A" if cursor[-1] != "A" else "B")
+    with th.assert_raises(admin_security.SecurityActionError):
+        admin_security.overview(
+            {"sections": "events", "page_cursor": tampered},
+            authority=authority)
+    cross_scope = admin_security.SecurityAuthority(
+        "group", "api_key", None, group_id=other.pk)
+    with th.assert_raises(admin_security.SecurityActionError):
+        admin_security.overview(
+            {"sections": "events", "page_cursor": cursor},
+            authority=cross_scope)

@@ -156,7 +156,7 @@ async function openEditor({report, row, refresh}) {
     content: h('div', {class: 'security-stack'}, legacyEvidence, editor.form), wide: true});
 }
 
-export function renderRules({ctx, report, refresh}) {
+export function renderRules({ctx, report, refresh, loadPage}) {
   const envelope = report.sections.rules;
   if (['unavailable', 'failed'].includes(envelope.status)) {
     return h('div', {class: 'security-state unavailable', role: 'status'},
@@ -179,7 +179,11 @@ export function renderRules({ctx, report, refresh}) {
       actionButton({report, row, action: row.is_active ? 'ruleset.deactivate' : 'ruleset.activate', label: row.is_active ? 'Deactivate' : 'Activate', refresh}),
       actionButton({report, row, action: 'ruleset.delete', label: 'Delete', refresh})) : 'View only'},
   ]}).render();
+  const more = envelope.next_cursor
+    ? h('button', {class: 'button ghost compact', type: 'button'}, 'Load more rule sets') : null;
+  more?.addEventListener('click', () => runAction(
+    more, () => loadPage('rules'), {pendingLabel: 'Loading…'}));
   return h('div', {class: 'security-stack'},
     h('div', {class: 'security-toolbar'},
-      h('p', {class: 'muted', text: manage ? 'Writes use the deployment-configured authentication freshness window, the current revision and typed confirmation.' : 'View-only security access.'}), create), table);
+      h('p', {class: 'muted', text: manage ? 'Writes use the deployment-configured authentication freshness window, the current revision and typed confirmation.' : 'View-only security access.'}), create), table, more);
 }

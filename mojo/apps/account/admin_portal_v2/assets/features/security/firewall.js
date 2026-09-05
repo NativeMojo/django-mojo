@@ -76,11 +76,12 @@ async function enforcementDetail(row) {
         h('pre', {class: 'security-evidence', text: JSON.stringify({
           source: row.source, source_url: row.source_url,
           source_key: row.source_key, data: row.data, sync_error: row.sync_error,
+          checked_proof: row.checked_proof,
         }, null, 2)})),
       h('p', {class: 'muted', text: `Observed through ${formatDate(truth.observation_cutoff)}. Authentication secrets are hidden; operational addresses, CIDRs, paths, errors and evidence remain visible.`}));
 }
 
-export function renderFirewall({ctx, report, refresh}) {
+export function renderFirewall({ctx, report, refresh, loadPage}) {
   const envelope = report.sections.ipsets;
   if (['unavailable', 'failed'].includes(envelope.status)) {
     return h('div', {class: 'security-state unavailable', role: 'status'},
@@ -99,12 +100,17 @@ export function renderFirewall({ctx, report, refresh}) {
         governedAction({report, row, idKey: 'ipset_id', action: row.is_enabled ? 'ipset.disable' : 'ipset.enable', label: row.is_enabled ? 'Disable' : 'Enable', refresh}),
         governedAction({report, row, idKey: 'ipset_id', action: 'ipset.sync', label: 'Sync', refresh})) : 'View only'},
     ]}).render();
+  const more = envelope.next_cursor
+    ? h('button', {class: 'button ghost compact', type: 'button'}, 'Load more IPSets') : null;
+  more?.addEventListener('click', () => runAction(
+    more, () => loadPage('ipsets'), {pendingLabel: 'Loading…'}));
   return h('div', {class: 'security-stack'},
     envelope.status === 'partial' || envelope.status === 'stale'
       ? h('div', {class: 'security-state warning', role: 'status'},
         h('strong', {text: `Fleet evidence is ${envelope.status}`}),
         h('p', {text: `Bound to ${formatDate(envelope.cutoff)}. Missing hosts remain visible.`})) : null,
-    h('p', {class: 'muted', text: 'Select a row for desired-versus-observed state and its captured checked-host receipt summary.'}), table);
+    h('p', {class: 'muted', text: 'Select a row for desired-versus-observed state and its captured checked-host receipt summary.'}),
+    table, more);
 }
 
 function recommendationActions(ctx, report, row, refresh) {
@@ -147,11 +153,15 @@ async function recommendationDetail(row) {
         h('dt', {text: label}), h('dd', {text: String(value ?? 'Unavailable')}),
       ])),
       h('section', {}, h('h3', {text: 'Explanation and target evidence'}),
-        h('pre', {class: 'security-evidence', text: JSON.stringify(row, null, 2)})),
+        h('pre', {class: 'security-evidence', text: JSON.stringify({
+          explanation: row.explanation, approval_note: row.approval_note,
+          collateral: row.collateral, targets: row.targets,
+          transitions: row.transitions, attempts: row.attempts,
+        }, null, 2)})),
       h('p', {class: 'muted', text: 'Authentication secrets are hidden; operational addresses, reasons and enforcement errors remain visible.'}));
 }
 
-export function renderRecommendations({ctx, report, refresh}) {
+export function renderRecommendations({ctx, report, refresh, loadPage}) {
   const envelope = report.sections.recommendations;
   if (['unavailable', 'failed'].includes(envelope.status)) {
     return h('div', {class: 'security-state unavailable', role: 'status'},
@@ -159,6 +169,10 @@ export function renderRecommendations({ctx, report, refresh}) {
       h('p', {text: 'No recommendation state is inferred.'}));
   }
   const rows = sectionRows(envelope);
+  const more = envelope.next_cursor
+    ? h('button', {class: 'button ghost compact', type: 'button'}, 'Load more recommendations') : null;
+  more?.addEventListener('click', () => runAction(
+    more, () => loadPage('recommendations'), {pendingLabel: 'Loading…'}));
   return h('div', {class: 'security-stack'},
     h('p', {class: 'muted', text: 'Execution and reversal use current revisions, the deployment-configured authentication freshness window and exact typed confirmation.'}),
     new TableView({rows, empty: 'No recommendations in this window.',
@@ -168,5 +182,5 @@ export function renderRecommendations({ctx, report, refresh}) {
         {label: 'Urgency', render: (row) => badge(row.urgency || 'unknown', statusTone(row.urgency))},
         {label: 'Targets', key: 'target_count'},
         {label: 'Actions', render: (row) => recommendationActions(ctx, report, row, refresh)},
-      ]}).render());
+      ]}).render(), more);
 }

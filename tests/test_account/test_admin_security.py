@@ -76,8 +76,13 @@ def test_security_browser_authority(opts):
         "a malformed available list must not become an authoritative empty table")
     assert "readSecurityDetail" in sources and "completeChunk" in api, (
         "authorized operators must be able to retrieve complete retained evidence")
+    assert "readNextSecurityPage" in api and "page_cursor" in api, (
+        "truncated discovery lists must have opaque server-side traversal")
+    assert "Load more" in sources, (
+        "the browser must expose the server's next-page retrieval path")
     for required in ("source_ip", "details", "metadata",
-                     "source_url", "sync_error"):
+                     "source_url", "sync_error", "checked_proof",
+                     "transitions", "attempts"):
         assert required in sources, f"browser Security omits operational evidence: {required}"
     assert "source_key: row.source_key" in sources, (
         "the browser should make the server's explicit secret placeholder visible")

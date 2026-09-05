@@ -239,6 +239,9 @@ function validateIPSets(data, name) {
           || JSON.stringify(proof.expected_host_ids) !== JSON.stringify(proof.responded_host_ids)
           || JSON.stringify(proof.expected_host_ids) !== JSON.stringify(proof.succeeded_host_ids)
           || proof.failed_host_ids.length || proof.missing_host_ids.length)) invalid(name);
+    for (const field of ['data', 'sync_error', 'checked_proof']) {
+      if (hasOwn(row, field) && !validChunk(row[field])) invalid(name);
+    }
   }
 }
 
@@ -261,6 +264,10 @@ function validateRecommendations(data, name) {
         && (!Array.isArray(row.targets) || row.targets.length > TARGET_LIMIT
           || typeof row.targets_truncated !== 'boolean'
           || row.targets.some((target) => !plainObject(target)))) invalid(name);
+    for (const field of ['explanation', 'approval_note', 'collateral',
+      'transitions', 'attempts']) {
+      if (hasOwn(row, field) && !validChunk(row[field])) invalid(name);
+    }
   }
 }
 
@@ -405,6 +412,9 @@ function sectionEnvelope(name, value) {
       || !validString(value.cutoff, 64)
       || !validWindow(value.window)
       || typeof value.truncated !== 'boolean'
+      || !validString(value.next_cursor, 4096, true)
+      || (value.truncated && !value.next_cursor
+        && !['overview', 'schemas'].includes(name))
       || (hasOwn(value, 'reason') && !validString(value.reason, 128))
       || !Object.prototype.hasOwnProperty.call(value, 'data')) {
     throw new SecurityContractError(`The ${name} security section is malformed.`);
@@ -414,7 +424,7 @@ function sectionEnvelope(name, value) {
     status: value.status, observed_at: typeof value.observed_at === 'string' ? value.observed_at : null,
     cutoff: value.cutoff, window: Object.freeze({...value.window}),
     truncated: value.truncated, reason: typeof value.reason === 'string' ? value.reason : '',
-    data: value.data,
+    next_cursor: value.next_cursor || null, data: value.data,
   });
 }
 
@@ -435,6 +445,30 @@ export async function readSecurity(sections, {signal, limit = 100, params = {}} 
   for (const name of names) values[name] = sectionEnvelope(name, result.sections[name]);
   return Object.freeze({schema_version: result.schema_version,
     capabilities: Object.freeze({...result.capabilities}), sections: Object.freeze(values)});
+}
+
+export async function readNextSecurityPage(report, section, {signal} = {}) {
+  const current = report?.sections?.[section];
+  if (!current?.next_cursor || !Array.isArray(current.data)) return report;
+  const next = await readSecurity(
+    [section], {signal, params: {page_cursor: current.next_cursor}});
+  const page = next.sections[section];
+  if (next.capabilities.scope !== report.capabilities.scope
+      || next.capabilities.group_id !== report.capabilities.group_id
+      || next.capabilities.credential_kind !== report.capabilities.credential_kind
+      || page.window.start !== current.window.start
+      || page.window.end !== current.window.end) {
+    throw new SecurityContractError('Security evidence page changed authority or snapshot.');
+  }
+  const known = new Set(current.data.map((row) => row.id));
+  if (page.data.some((row) => known.has(row.id))) {
+    throw new SecurityContractError('Security evidence page repeated a row.');
+  }
+  const mergedSection = Object.freeze({...page,
+    data: Object.freeze([...current.data, ...page.data])});
+  return Object.freeze({...report, sections: Object.freeze({
+    ...report.sections, [section]: mergedSection,
+  })});
 }
 
 export async function readSecurityChunk(cursor, {signal} = {}) {

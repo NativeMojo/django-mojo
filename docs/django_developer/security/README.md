@@ -25,6 +25,11 @@ field, revision, digest, and offset. Final serialization removes only
 authentication secrets. It deliberately preserves addresses, CIDRs, commands,
 paths, raw handler text, metadata, validation reasons, provider errors, and
 other retained operational evidence.
+Truncated discovery envelopes carry an opaque `next_cursor`; `page_cursor`
+continues the same server-fixed window using a scope/section/snapshot-bound
+keyset. Recommendation detail includes targets, transitions, and execution
+attempts. IPSet detail includes the checked proof without changing its truth
+classification.
 
 RuleSet mutation is aggregate-based. Callers send the complete policy for
 create/replace, use the row's `modified` value as `expected_modified`, and echo
