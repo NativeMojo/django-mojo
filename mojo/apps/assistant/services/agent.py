@@ -52,6 +52,10 @@ def _build_request_meta(request):
         key_backed = bool(request_helpers.is_key_backed_session(request))
     except Exception:
         key_backed = True
+    try:
+        actor = request_helpers.safe_actor_context(request)
+    except Exception:
+        actor = {"credential_kind": "unknown"}
     # An OAuth grant is the marker for a remote MCP caller. request.bearer
     # stays "bearer" (the middleware overwrites it, and changing it would make
     # fresh_auth skip step-up for these callers), so the grant attribute is
@@ -65,6 +69,9 @@ def _build_request_meta(request):
         method=getattr(request, "method", ""),
         bearer=bearer,
         key_backed=key_backed,
+        credential_kind=actor.get("credential_kind", "unknown"),
+        user_api_key_id=actor.get("user_api_key_id"),
+        user_api_key_label=actor.get("user_api_key_label", ""),
     )
 
 
@@ -79,6 +86,8 @@ def build_ws_request_meta(bearer):
     return objict.objict(
         ip="websocket", user_agent="", path="websocket", method="websocket",
         bearer=bearer, key_backed=bearer != "bearer",
+        credential_kind="user" if bearer == "bearer" else "unknown",
+        user_api_key_id=None, user_api_key_label="",
     )
 
 

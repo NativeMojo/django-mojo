@@ -33,8 +33,10 @@ than creating another. A missing deployment key or malformed selector returns
 ## Governed RuleSet reporting
 
 The governed RuleSet schema no longer accepts the direct `maestro://` handler.
-A legacy policy containing it fails validation and does not dispatch; replace
-that policy before activation.
+A markerless legacy policy containing it continues its established dispatch,
+and already queued legacy handler jobs remain compatible. Replacing that policy
+through the governed action opts it into the strict schema, where direct
+`maestro://` is refused.
 
 Create/reuse a local Ticket and report that Ticket by including a typed handler
 in the complete Admin Security RuleSet payload:

@@ -13,21 +13,30 @@ Security. Portal admission (`view_admin`, `manage_users`, `manage_settings`, or
 literal `admin`) is a separate prerequisite and never substitutes for
 `view_security`, `manage_security`, or `security`.
 
-All content comes from the version-2 Admin Security envelope. Every panel must
+All content comes from the version-3 Admin Security envelope. Every panel must
 honor its own `status`, `cutoff`, `window`, and `truncated` values. Display exact
 and sampled metrics separately. An unavailable, partial, missing, or stale
 receipt is not success and is not an empty result.
+For a truncated discovery list, the UI follows the opaque `next_cursor` through
+`sections=<the same section>&page_cursor=<next_cursor>`; cursors are
+server-bound to the authenticated scope, section, page size, and original
+window snapshot. Large detail fields use a separate `chunk_cursor` and are
+reassembled according to their `encoding` and digest.
 
-Treat schema version 2 as necessary but not sufficient. The packaged client
+Treat schema version 3 as necessary but not sufficient. The packaged client
 strictly validates every requested envelope, row collection, action schema,
 and firewall host summary. A malformed, contradictory, or oversized section
 produces a contract-error view with no table or action controls; it is never
 converted into synthetic empty or successful state.
 
 The read is `GET /api/incident/admin/security`; mutations use
-`POST /api/incident/admin/security/action`. Both require global human security
-grants and reject key-backed sessions; actions additionally require recent
-authentication. The complete parameters, response envelopes, typed action
+`POST /api/incident/admin/security/action`. Validated per-user API keys retain
+their user's global-or-default-group read permissions. Group API keys/tokens
+may read the exact authenticated group's evidence and cannot choose another
+group in query data.
+Writes remain global and use the deployment-configured freshness policy;
+machine credentials do not need an interactive reauthentication they cannot
+perform. The complete parameters, response envelopes, typed action
 schemas, and error contract are in the
 [Admin Security client contract](../security/README.md#admin-security-client-contract).
 
@@ -62,6 +71,6 @@ bin/admin_preview --port 8766 --upstream https://api.example.com
 
 Use a global `view_admin` + `view_security` operator without
 `manage_security` when possible. Exercise navigation, status rendering,
-redaction, legacy links, and session recovery only. Do not submit RuleSet,
+complete evidence with secret-only scrubbing, legacy links, and session recovery only. Do not submit RuleSet,
 recommendation, or IPSet confirmations; live-preview API calls reach the real
 installation.

@@ -1,6 +1,7 @@
 import {badge, formatDate, h, statusTone, TableView} from '../../core.js';
+import {runAction} from '../../components/actions.js';
 import {openModal} from '../../components/overlays.js';
-import {sectionRows} from './api.js';
+import {readSecurityDetail, sectionRows} from './api.js';
 
 function envelopeNotice(envelope, emptyCopy) {
   if (envelope.status === 'unavailable' || envelope.status === 'failed') {
@@ -53,7 +54,16 @@ export function renderOverview({report}) {
         : h('p', {class: 'muted', text: 'No transitions in this window.'})));
 }
 
-function caseDetail(row) {
+async function caseDetail(row) {
+  const content = h('div', {class: 'security-stack'}, h('p', {text: 'Loading complete evidence…'}));
+  openModal({title: `Case ${row.id}`, subtitle: row.family || row.sensor_kind || '',
+    content, wide: true});
+  try {
+    row = await readSecurityDetail('cases', row.id);
+  } catch (error) {
+    content.replaceChildren(h('p', {class: 'form-message', text: error.message}));
+    return;
+  }
   const fields = [
     ['State', row.state], ['Urgency', row.urgency], ['Sensor', row.sensor_kind],
     ['Family', row.family], ['Resource', row.resource_id],
@@ -62,17 +72,16 @@ function caseDetail(row) {
     ['Samples', row.sample_count], ['Overflow', row.overflow_count],
     ['First seen', formatDate(row.first_seen)], ['Last seen', formatDate(row.last_seen)],
   ];
-  openModal({title: `Case ${row.id}`, subtitle: row.family || row.sensor_kind || '',
-    content: h('div', {class: 'security-stack'},
+  content.replaceChildren(
       h('dl', {class: 'security-definition-list'}, ...fields.flatMap(([label, value]) => [
         h('dt', {text: label}), h('dd', {text: String(value ?? 'Unavailable')}),
       ])),
       h('section', {class: 'security-samples'},
-        h('h3', {text: 'Bounded evidence samples'}),
-        h('p', {text: 'Raw sensor evidence is intentionally not exposed here. The sampled counters above are the complete browser-safe projection.'})))});
+        h('h3', {text: 'Complete retained evidence'}),
+        h('pre', {class: 'security-evidence', text: JSON.stringify(row, null, 2)})));
 }
 
-export function renderCases({report}) {
+export function renderCases({report, loadPage}) {
   const envelope = report.sections.cases;
   const notice = envelopeNotice(envelope, 'No cases in this window');
   if (notice && ['unavailable', 'failed'].includes(envelope.status)) return notice;
@@ -101,7 +110,12 @@ export function renderCases({report}) {
       h('footer', {class: 'security-pager'}, h('span', {text: `${filtered.length} cases · page ${page + 1} of ${pages}`}), previous, next));
   };
   search.addEventListener('input', () => { page = 0; paint(); }); paint();
+  const more = envelope.next_cursor
+    ? h('button', {class: 'button ghost compact', type: 'button'}, 'Load more cases') : null;
+  more?.addEventListener('click', () => runAction(
+    more, () => loadPage('cases'), {pendingLabel: 'Loading…'}));
   return h('div', {class: 'security-stack'}, notice,
     h('div', {class: 'security-toolbar'}, search,
-      h('span', {class: 'muted', text: `Sampled through ${formatDate(envelope.cutoff)}`})), body);
+      h('span', {class: 'muted', text: `Sampled through ${formatDate(envelope.cutoff)}`}),
+      more), body);
 }

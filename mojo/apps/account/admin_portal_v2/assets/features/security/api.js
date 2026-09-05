@@ -1,6 +1,6 @@
 import {api, apiOnce} from '../../core.js';
 
-export const SECURITY_SCHEMA_VERSION = 2;
+export const SECURITY_SCHEMA_VERSION = 3;
 export const SECURITY_SECTIONS = Object.freeze([
   'overview', 'cases', 'incidents', 'events', 'rules', 'ipsets',
   'recommendations', 'schemas',
@@ -83,6 +83,29 @@ function validInteger(value, maximum = 1000000, minimum = 0) {
   return Number.isInteger(value) && value >= minimum && value <= maximum;
 }
 
+function validChunk(value) {
+  return plainObject(value) && ['text', 'json'].includes(value.encoding)
+    && typeof value.chunk === 'string' && validInteger(value.offset, Number.MAX_SAFE_INTEGER)
+    && validInteger(value.next_offset, Number.MAX_SAFE_INTEGER)
+    && validInteger(value.byte_length, Number.MAX_SAFE_INTEGER)
+    && typeof value.complete === 'boolean'
+    && validString(value.next_cursor, 4096, true)
+    && typeof value.digest === 'string' && /^[0-9a-f]{64}$/.test(value.digest);
+}
+
+function validateCapabilities(value) {
+  if (!plainObject(value) || !['global', 'group'].includes(value.scope)
+      || !validString(value.credential_kind, 64)
+      || typeof value.view !== 'boolean' || typeof value.manage !== 'boolean'
+      || !plainObject(value.fresh_auth)
+      || typeof value.fresh_auth.enabled !== 'boolean'
+      || !validInteger(value.fresh_auth.window_seconds, 86400 * 30)
+      || typeof value.fresh_auth.applies_to_credential !== 'boolean'
+      || (value.group_id != null && !validInteger(value.group_id, OBJECT_ID_LIMIT, 1))) {
+    throw new SecurityContractError('Security capabilities are malformed.');
+  }
+}
+
 function sameMembers(left, right) {
   return Array.isArray(left) && left.length === right.length
     && new Set(left).size === left.length
@@ -139,9 +162,10 @@ function validateIncidents(data, name) {
 function validateEvents(data, name) {
   const strings = ['created', 'scope', 'category', 'country_code'];
   for (const row of data) {
-    requireFields(row, ['id', 'level', 'group_id', 'incident_id', ...strings], name);
+    requireFields(row, ['id', 'level', 'title', 'group_id', 'incident_id', ...strings], name);
     if (!validInteger(row.id, OBJECT_ID_LIMIT, 1)
         || !validInteger(row.level, 10000)
+        || !(validString(row.title, 512, true) || validChunk(row.title))
         || strings.some((field) => !validString(row[field], 512, true))
         || (row.group_id != null && !validInteger(row.group_id, OBJECT_ID_LIMIT, 1))
         || (row.incident_id != null && !validInteger(row.incident_id, OBJECT_ID_LIMIT, 1))) invalid(name);
@@ -149,7 +173,7 @@ function validateEvents(data, name) {
 }
 
 function validateRules(data, name) {
-  const strings = ['created', 'modified', 'name', 'category'];
+  const strings = ['created', 'modified', 'category'];
   const integers = ['priority', 'bundle_minutes', 'bundle_by', 'match_by',
     'trigger_count', 'trigger_window', 'retrigger_every'];
   for (const row of data) {
@@ -157,20 +181,24 @@ function validateRules(data, name) {
       'bundle_by_rule_set', 'validation'], name);
     if (!validInteger(row.id, OBJECT_ID_LIMIT, 1)
         || strings.some((field) => !validString(row[field]))
+        || !(validString(row.name) || validChunk(row.name))
         || integers.some((field) => row[field] != null && !validInteger(row[field], 1000000))
         || typeof row.is_active !== 'boolean'
         || typeof row.bundle_by_rule_set !== 'boolean'
         || !plainObject(row.validation)
-        || !['valid', 'replacement_required'].includes(row.validation.status)
+        || !['valid', 'legacy', 'replacement_required'].includes(row.validation.status)
         || typeof row.validation.legacy !== 'boolean'
         || !Array.isArray(row.validation.handlers)
         || row.validation.handlers.length > 8
         || row.validation.handlers.some((handler) => !plainObject(handler))) invalid(name);
-    const summary = validInteger(row.rule_count, 32);
-    const detail = Array.isArray(row.handlers) && row.handlers.length <= 8
-      && row.handlers.every(plainObject) && Array.isArray(row.rules)
-      && row.rules.length <= 32 && row.rules.every(plainObject)
-      && typeof row.delete_on_resolution === 'boolean';
+    const summary = validInteger(row.rule_count);
+    const hasDetail = ['handler', 'metadata', 'rules', 'delete_on_resolution']
+      .some((field) => hasOwn(row, field));
+    const detail = !hasDetail || (validChunk(row.handler)
+      && validChunk(row.metadata) && validChunk(row.rules)
+      && (!hasOwn(row, 'handlers') || (Array.isArray(row.handlers)
+        && row.handlers.length <= 8 && row.handlers.every(plainObject)))
+      && typeof row.delete_on_resolution === 'boolean');
     if (!summary && !detail) invalid(name);
   }
 }
@@ -216,6 +244,9 @@ function validateIPSets(data, name) {
           || JSON.stringify(proof.expected_host_ids) !== JSON.stringify(proof.responded_host_ids)
           || JSON.stringify(proof.expected_host_ids) !== JSON.stringify(proof.succeeded_host_ids)
           || proof.failed_host_ids.length || proof.missing_host_ids.length)) invalid(name);
+    for (const field of ['data', 'sync_error', 'checked_proof']) {
+      if (hasOwn(row, field) && !validChunk(row[field])) invalid(name);
+    }
   }
 }
 
@@ -226,17 +257,22 @@ function validateRecommendations(data, name) {
     'protected_count', 'executed_count', 'failed_count', 'reversed_count',
     'policy_version', 'evaluator_version'];
   for (const row of data) {
-    requireFields(row, ['id', 'case_id', ...strings, ...counts, 'expires_at', 'approved_at'], name);
+    requireFields(row, ['id', 'case_id', 'group_id', ...strings, ...counts, 'expires_at', 'approved_at'], name);
     if (!validInteger(row.id, OBJECT_ID_LIMIT, 1)
         || !validInteger(row.case_id, OBJECT_ID_LIMIT, 1)
+        || (row.group_id != null && !validInteger(row.group_id, OBJECT_ID_LIMIT, 1))
         || strings.some((field) => !validString(row[field]))
         || counts.some((field) => row[field] != null && !validInteger(row[field]))
         || !validString(row.expires_at, 64, true)
         || !validString(row.approved_at, 64, true)) invalid(name);
-    if (hasOwn(row, 'targets')
+    if (hasOwn(row, 'targets') && !validChunk(row.targets)
         && (!Array.isArray(row.targets) || row.targets.length > TARGET_LIMIT
           || typeof row.targets_truncated !== 'boolean'
           || row.targets.some((target) => !plainObject(target)))) invalid(name);
+    for (const field of ['explanation', 'approval_note', 'collateral',
+      'transitions', 'attempts']) {
+      if (hasOwn(row, field) && !validChunk(row[field])) invalid(name);
+    }
   }
 }
 
@@ -381,6 +417,9 @@ function sectionEnvelope(name, value) {
       || !validString(value.cutoff, 64)
       || !validWindow(value.window)
       || typeof value.truncated !== 'boolean'
+      || !validString(value.next_cursor, 4096, true)
+      || (value.truncated && !value.next_cursor
+        && !['overview', 'schemas'].includes(name))
       || (hasOwn(value, 'reason') && !validString(value.reason, 128))
       || !Object.prototype.hasOwnProperty.call(value, 'data')) {
     throw new SecurityContractError(`The ${name} security section is malformed.`);
@@ -390,7 +429,7 @@ function sectionEnvelope(name, value) {
     status: value.status, observed_at: typeof value.observed_at === 'string' ? value.observed_at : null,
     cutoff: value.cutoff, window: Object.freeze({...value.window}),
     truncated: value.truncated, reason: typeof value.reason === 'string' ? value.reason : '',
-    data: value.data,
+    next_cursor: value.next_cursor || null, data: value.data,
   });
 }
 
@@ -406,9 +445,78 @@ export async function readSecurity(sections, {signal, limit = 100, params = {}} 
       || !result.sections || typeof result.sections !== 'object') {
     throw new SecurityContractError();
   }
+  validateCapabilities(result.capabilities);
   const values = {};
   for (const name of names) values[name] = sectionEnvelope(name, result.sections[name]);
-  return Object.freeze({schema_version: result.schema_version, sections: Object.freeze(values)});
+  return Object.freeze({schema_version: result.schema_version,
+    capabilities: Object.freeze({...result.capabilities}), sections: Object.freeze(values)});
+}
+
+export async function readNextSecurityPage(report, section, {signal} = {}) {
+  const current = report?.sections?.[section];
+  if (!current?.next_cursor || !Array.isArray(current.data)) return report;
+  const next = await readSecurity(
+    [section], {signal, params: {page_cursor: current.next_cursor}});
+  const page = next.sections[section];
+  if (next.capabilities.scope !== report.capabilities.scope
+      || next.capabilities.group_id !== report.capabilities.group_id
+      || next.capabilities.credential_kind !== report.capabilities.credential_kind
+      || page.window.start !== current.window.start
+      || page.window.end !== current.window.end) {
+    throw new SecurityContractError('Security evidence page changed authority or snapshot.');
+  }
+  const known = new Set(current.data.map((row) => row.id));
+  if (page.data.some((row) => known.has(row.id))) {
+    throw new SecurityContractError('Security evidence page repeated a row.');
+  }
+  const mergedSection = Object.freeze({...page,
+    data: Object.freeze([...current.data, ...page.data])});
+  return Object.freeze({...report, sections: Object.freeze({
+    ...report.sections, [section]: mergedSection,
+  })});
+}
+
+export async function readSecurityChunk(cursor, {signal} = {}) {
+  const query = new URLSearchParams({chunk_cursor: cursor});
+  const result = await api(`/api/incident/admin/security?${query}`, {signal});
+  if (!result || result.schema_version !== SECURITY_SCHEMA_VERSION
+      || !validChunk(result.chunk)) throw new SecurityContractError('Security evidence chunk is malformed.');
+  validateCapabilities(result.capabilities);
+  return result.chunk;
+}
+
+export async function completeChunk(first, {signal} = {}) {
+  if (!validChunk(first)) throw new SecurityContractError('Security evidence chunk is malformed.');
+  let value = first.chunk; let current = first; let count = 0;
+  while (!current.complete) {
+    if (!current.next_cursor || ++count > 4096) {
+      throw new SecurityContractError('Security evidence pagination did not terminate.');
+    }
+    current = await readSecurityChunk(current.next_cursor, {signal});
+    if (current.digest !== first.digest) {
+      throw new SecurityContractError('Security evidence changed during retrieval.');
+    }
+    value += current.chunk;
+  }
+  if (first.encoding === 'json') {
+    try { return JSON.parse(value); } catch { throw new SecurityContractError('Security evidence JSON is malformed.'); }
+  }
+  return value;
+}
+
+export async function readSecurityDetail(section, id, {signal} = {}) {
+  const idNames = {cases: 'case_id', incidents: 'incident_id', events: 'event_id',
+    rules: 'ruleset_id', ipsets: 'ipset_id', recommendations: 'recommendation_id'};
+  const idName = idNames[section];
+  if (!idName || !validInteger(id, OBJECT_ID_LIMIT, 1)) throw new SecurityContractError();
+  const report = await readSecurity([section], {signal, params: {[idName]: id}});
+  const row = sectionRows(report.sections[section])[0];
+  if (!row) throw new SecurityContractError('Security record is unavailable.');
+  const expanded = {...row};
+  for (const [field, value] of Object.entries(expanded)) {
+    if (validChunk(value)) expanded[field] = await completeChunk(value, {signal});
+  }
+  return expanded;
 }
 
 export function actionSchemas(report) {

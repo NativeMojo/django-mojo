@@ -1,13 +1,21 @@
-"""Deterministic, redacted Admin Security preview authority."""
+"""Deterministic Admin Security preview with permissioned operational evidence."""
 
 from copy import deepcopy
+import hashlib
+import json
 from urllib.parse import parse_qs
 
 
 NAME = "security"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 NOW = "2026-08-10T17:10:00Z"
 WINDOW = {"hours": 24, "start": "2026-08-09T17:10:00Z", "end": NOW}
+CAPABILITIES = {
+    "scope": "global", "group_id": None, "credential_kind": "user",
+    "view": True, "manage": True,
+    "fresh_auth": {"enabled": False, "window_seconds": 0,
+                   "applies_to_credential": True},
+}
 
 
 def describe(capabilities):
@@ -28,14 +36,27 @@ def _owner(handler):
     return handler if isinstance(handler, type) else type(handler)
 
 
-def _envelope(data, status="available", reason=None):
+def _envelope(data, status="available", reason=None, truncated=False,
+              next_cursor=None):
     value = {
         "status": status, "observed_at": NOW, "cutoff": NOW,
-        "window": WINDOW, "truncated": False, "data": data,
+        "window": WINDOW, "truncated": bool(truncated),
+        "next_cursor": next_cursor, "data": data,
     }
     if reason:
         value["reason"] = reason
     return value
+
+
+def _chunk(value):
+    encoding = "text" if isinstance(value, str) else "json"
+    text = value if encoding == "text" else json.dumps(
+        value, sort_keys=True, separators=(",", ":"))
+    raw = text.encode("utf-8")
+    return {"encoding": encoding, "chunk": text, "offset": 0,
+            "next_offset": len(raw), "byte_length": len(raw),
+            "complete": True, "next_cursor": None,
+            "digest": hashlib.sha256(raw).hexdigest()}
 
 
 CASES = [
@@ -81,7 +102,7 @@ IPSETS = [
 ]
 RECOMMENDATIONS = [
     {"id": 1001, "created": "2026-08-10T16:30:00Z", "modified": NOW,
-     "case_id": 701, "action": "block", "state": "proposed",
+     "case_id": 701, "group_id": 9, "action": "block", "state": "proposed",
      "reason_code": "repeated_auth_failures", "confidence": "high", "urgency": "high",
      "requested_scope": "temporary", "requested_ttl_seconds": 3600,
      "expires_at": "2026-08-10T18:10:00Z", "approved_at": None,
@@ -209,8 +230,58 @@ def get(handler, parsed):
     data = _sections("empty" if state == "empty" else "full")
     query = parse_qs(parsed.query)
     wanted = query.get("sections", ["overview"])[0].split(",")
-    ruleset_id = query.get("ruleset_id", [None])[0]
+    identities = {
+        "cases": ("case_id", "samples", {
+            "samples": [{"source_ip": "203.0.113.7", "command": "/usr/bin/check-login"}],
+            "observed_sources": ["203.0.113.7"], "breakdown": {"country": {"US": 12}},
+        }),
+        "incidents": ("incident_id", "details", {
+            "source_ip": "203.0.113.7", "hostname": "edge-a",
+            "model_name": "account.User", "model_id": 42,
+            "title": "Repeated login failures",
+            "details": "Evidence in /var/log/auth.log from 203.0.113.7",
+            "metadata": {"command": "/usr/bin/check-login", "cidr": "203.0.113.0/24"},
+        }),
+        "events": ("event_id", "details", {
+            "source_ip": "203.0.113.7", "hostname": "edge-a", "uid": "auth-401",
+            "model_name": "account.User", "model_id": 42,
+            "title": "Invalid password",
+            "details": "Authentication failed at /api/login",
+            "metadata": {"path": "/var/log/auth.log"},
+        }),
+        "rules": ("ruleset_id", "handlers", {
+            "handlers": [{"type": "notify", "permission": "manage_security"}],
+            "rules": [{"name": "serious", "field": "level",
+                       "operator": ">=", "value": 8, "value_type": "int"}],
+            "delete_on_resolution": False,
+            "metadata": {"owner": "security-operations"},
+            "handler": "notify://perm@manage_security",
+        }),
+        "ipsets": ("ipset_id", "data", {
+            "source_url": "https://feeds.example.test/hostile.txt",
+            "data": "203.0.113.0/24\n2001:db8::/32",
+            "sync_error": "provider command /usr/bin/ipset-sync exited 1",
+            "checked_proof": {"status": "verified", "expected_hosts": ["edge-a"],
+                              "results": [{"host": "edge-a", "runner_id": "runner-a",
+                                           "status": "success", "error": None}]},
+        }),
+        "recommendations": ("recommendation_id", "targets", {
+            "explanation": "Repeated failures from 203.0.113.7",
+            "approval_note": "reviewed /var/log/auth.log", "collateral": {"count": 0},
+            "targets": [{"ip": "203.0.113.7", "validation_reason": "public source",
+                         "last_error": None, "prior_blocked_until": None,
+                         "prior_reason": None}], "targets_truncated": False,
+            "transitions": [{"transition": "proposed", "reason": "threshold"}],
+            "attempts": [{"target_id": 1, "attempt_number": 1,
+                           "outcome": "failed", "detail": "runner timeout"}],
+        }),
+    }
     sections = {}
+    try:
+        limit = max(1, min(100, int(query.get("limit", [100])[0])))
+    except (TypeError, ValueError):
+        limit = 100
+    page_cursor = query.get("page_cursor", [None])[0]
     for name in wanted:
         if name not in data:
             continue
@@ -236,20 +307,52 @@ def get(handler, parsed):
                               "action_names": list(ACTIONS)}
             else:
                 data[name] = {"not": "a bounded row array"}
-        if name == "rules" and ruleset_id is not None:
+        identity = identities.get(name)
+        identity_value = query.get(identity[0], [None])[0] if identity else None
+        if identity_value is not None:
             data[name] = [row for row in data[name]
-                          if str(row["id"]) == str(ruleset_id)]
+                          if str(row["id"]) == str(identity_value)]
             for row in data[name]:
-                row.pop("rule_count", None)
-                row.update(
-                    handlers=[{"type": "notify", "permission": "manage_security"}],
-                    rules=[{"name": "serious", "field": "level",
-                            "operator": ">=", "value": 8,
-                            "value_type": "int"}],
-                    delete_on_resolution=False)
-        sections[name] = _envelope({} if status in ("unavailable", "failed") else data[name],
-                                   status=status, reason=reason)
-    return 200, {"schema_version": SCHEMA_VERSION, "sections": sections}
+                row.update(deepcopy(identity[2]))
+                detail_fields = {
+                    "cases": ("samples", "observed_sources", "breakdown"),
+                    "incidents": ("title", "details", "metadata"),
+                    "events": ("title", "details", "metadata"),
+                    "rules": ("handler", "metadata", "rules"),
+                    "ipsets": ("data", "sync_error", "checked_proof"),
+                    "recommendations": ("explanation", "approval_note",
+                                        "collateral", "targets", "transitions",
+                                        "attempts"),
+                }.get(name, ())
+                for field in detail_fields:
+                    if field in row:
+                        row[field] = _chunk(row[field])
+        truncated = False
+        next_cursor = None
+        if (identity_value is None and isinstance(data[name], list) and
+                status not in ("unavailable", "failed")):
+            offset = 0
+            if page_cursor:
+                prefix = f"preview:{name}:"
+                if page_cursor.startswith(prefix):
+                    try:
+                        offset = max(0, int(page_cursor[len(prefix):]))
+                    except ValueError:
+                        offset = 0
+            values = data[name]
+            data[name] = values[offset:offset + limit]
+            truncated = offset + limit < len(values)
+            if truncated:
+                next_cursor = f"preview:{name}:{offset + limit}"
+        sections[name] = _envelope(
+            {} if status in ("unavailable", "failed") else data[name],
+            status=status, reason=reason, truncated=truncated,
+            next_cursor=next_cursor)
+    capabilities = deepcopy(CAPABILITIES)
+    if state == "view-only":
+        capabilities["manage"] = False
+    return 200, {"schema_version": SCHEMA_VERSION,
+                 "capabilities": capabilities, "sections": sections}
 
 
 def post(handler, path, payload):

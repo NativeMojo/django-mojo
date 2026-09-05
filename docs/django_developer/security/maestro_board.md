@@ -67,9 +67,12 @@ the validator compiles it to the legacy handler query key `board`.
 ### Incident only
 
 Direct `maestro://` RuleSet handlers are outside the governed schema. A legacy
-aggregate containing one is replacement-required and cannot dispatch. Existing
-direct Incident links remain readable and keep their retention/merge behavior,
-but new RuleSet policy should use the Ticket route below.
+markerless aggregate containing one retains its established dispatch behavior
+after upgrade, as do already queued legacy handler jobs. Replacing that policy
+through the governed action opts it into the strict schema, where direct
+`maestro://` is refused; new governed policy should use the Ticket route below.
+Existing direct Incident links remain readable and keep their retention/merge
+behavior.
 
 ### Local Ticket plus Maestro
 

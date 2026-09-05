@@ -1,7 +1,7 @@
 import {badge, formatDate, h, statusTone, TableView} from '../../core.js';
 import {runAction} from '../../components/actions.js';
 import {openModal} from '../../components/overlays.js';
-import {actionSchemas, performSecurityAction, sectionRows} from './api.js';
+import {actionSchemas, performSecurityAction, readSecurityDetail, sectionRows} from './api.js';
 
 function actionConfirmation(schema, id) {
   return String(schema?.confirmation?.value || '').replace('{id}', String(id));
@@ -48,12 +48,19 @@ function hostLine(label, hosts) {
     h('span', {text: safe.length ? safe.join(', ') : 'None'}));
 }
 
-function enforcementDetail(row) {
+async function enforcementDetail(row) {
+  const content = h('div', {class: 'security-stack'}, h('p', {text: 'Loading complete evidence…'}));
+  openModal({title: `${row.name || 'IPSet'} enforcement`, subtitle: row.description || '',
+    content, wide: true});
+  try {
+    row = await readSecurityDetail('ipsets', row.id);
+  } catch (error) {
+    content.replaceChildren(h('p', {class: 'form-message', text: error.message}));
+    return;
+  }
   const truth = row.enforcement && typeof row.enforcement === 'object' ? row.enforcement : {};
   const desired = truth.desired && typeof truth.desired === 'object' ? truth.desired : {};
-  openModal({title: `${row.name || 'IPSet'} enforcement`,
-    subtitle: `Observed through ${formatDate(truth.observation_cutoff)}`,
-    content: h('div', {class: 'security-stack'},
+  content.replaceChildren(
       h('section', {class: 'security-truth'},
         h('div', {}, h('span', {text: 'Desired'}), h('strong', {text: desired.present === true ? 'Present' : desired.present === false ? 'Absent' : 'Unknown'})),
         h('div', {}, h('span', {text: 'Observed'}), h('strong', {text: truth.observed || 'unknown'})),
@@ -65,10 +72,16 @@ function enforcementDetail(row) {
         hostLine('Succeeded', truth.succeeded_host_ids),
         hostLine('Failed', truth.failed_host_ids),
         hostLine('Missing', truth.missing_host_ids)),
-      h('p', {class: 'muted', text: 'Host identities are captured by the server operation. Runner IDs, incarnations, broker output, source keys and network members are not exposed.'}))});
+      h('section', {}, h('h3', {text: 'Configuration and retained evidence'}),
+        h('pre', {class: 'security-evidence', text: JSON.stringify({
+          source: row.source, source_url: row.source_url,
+          source_key: row.source_key, data: row.data, sync_error: row.sync_error,
+          checked_proof: row.checked_proof,
+        }, null, 2)})),
+      h('p', {class: 'muted', text: `Observed through ${formatDate(truth.observation_cutoff)}. Authentication secrets are hidden; operational addresses, CIDRs, paths, errors and evidence remain visible.`}));
 }
 
-export function renderFirewall({ctx, report, refresh}) {
+export function renderFirewall({ctx, report, refresh, loadPage}) {
   const envelope = report.sections.ipsets;
   if (['unavailable', 'failed'].includes(envelope.status)) {
     return h('div', {class: 'security-state unavailable', role: 'status'},
@@ -87,12 +100,17 @@ export function renderFirewall({ctx, report, refresh}) {
         governedAction({report, row, idKey: 'ipset_id', action: row.is_enabled ? 'ipset.disable' : 'ipset.enable', label: row.is_enabled ? 'Disable' : 'Enable', refresh}),
         governedAction({report, row, idKey: 'ipset_id', action: 'ipset.sync', label: 'Sync', refresh})) : 'View only'},
     ]}).render();
+  const more = envelope.next_cursor
+    ? h('button', {class: 'button ghost compact', type: 'button'}, 'Load more IPSets') : null;
+  more?.addEventListener('click', () => runAction(
+    more, () => loadPage('ipsets'), {pendingLabel: 'Loading…'}));
   return h('div', {class: 'security-stack'},
     envelope.status === 'partial' || envelope.status === 'stale'
       ? h('div', {class: 'security-state warning', role: 'status'},
         h('strong', {text: `Fleet evidence is ${envelope.status}`}),
         h('p', {text: `Bound to ${formatDate(envelope.cutoff)}. Missing hosts remain visible.`})) : null,
-    h('p', {class: 'muted', text: 'Select a row for desired-versus-observed state and its captured checked-host receipt summary.'}), table);
+    h('p', {class: 'muted', text: 'Select a row for desired-versus-observed state and its captured checked-host receipt summary.'}),
+    table, more);
 }
 
 function recommendationActions(ctx, report, row, refresh) {
@@ -110,7 +128,15 @@ function recommendationActions(ctx, report, row, refresh) {
   })));
 }
 
-function recommendationDetail(row) {
+async function recommendationDetail(row) {
+  const content = h('div', {class: 'security-stack'}, h('p', {text: 'Loading complete evidence…'}));
+  openModal({title: `Recommendation ${row.id}`, subtitle: row.action || '', content, wide: true});
+  try {
+    row = await readSecurityDetail('recommendations', row.id);
+  } catch (error) {
+    content.replaceChildren(h('p', {class: 'form-message', text: error.message}));
+    return;
+  }
   const expired = row.expires_at && new Date(row.expires_at).valueOf() <= Date.now();
   const fields = [
     ['State', expired ? 'expired' : row.state], ['Action', row.action],
@@ -122,14 +148,20 @@ function recommendationDetail(row) {
     ['Failed', row.failed_count], ['Reversed', row.reversed_count],
     ['Expires', formatDate(row.expires_at)],
   ];
-  openModal({title: `Recommendation ${row.id}`, subtitle: row.action || '',
-    content: h('div', {class: 'security-stack'},
+  content.replaceChildren(
       h('dl', {class: 'security-definition-list'}, ...fields.flatMap(([label, value]) => [
         h('dt', {text: label}), h('dd', {text: String(value ?? 'Unavailable')}),
-      ])), h('p', {class: 'muted', text: 'Targets and raw enforcement evidence are withheld from this browser projection.'}))});
+      ])),
+      h('section', {}, h('h3', {text: 'Explanation and target evidence'}),
+        h('pre', {class: 'security-evidence', text: JSON.stringify({
+          explanation: row.explanation, approval_note: row.approval_note,
+          collateral: row.collateral, targets: row.targets,
+          transitions: row.transitions, attempts: row.attempts,
+        }, null, 2)})),
+      h('p', {class: 'muted', text: 'Authentication secrets are hidden; operational addresses, reasons and enforcement errors remain visible.'}));
 }
 
-export function renderRecommendations({ctx, report, refresh}) {
+export function renderRecommendations({ctx, report, refresh, loadPage}) {
   const envelope = report.sections.recommendations;
   if (['unavailable', 'failed'].includes(envelope.status)) {
     return h('div', {class: 'security-state unavailable', role: 'status'},
@@ -137,8 +169,12 @@ export function renderRecommendations({ctx, report, refresh}) {
       h('p', {text: 'No recommendation state is inferred.'}));
   }
   const rows = sectionRows(envelope);
+  const more = envelope.next_cursor
+    ? h('button', {class: 'button ghost compact', type: 'button'}, 'Load more recommendations') : null;
+  more?.addEventListener('click', () => runAction(
+    more, () => loadPage('recommendations'), {pendingLabel: 'Loading…'}));
   return h('div', {class: 'security-stack'},
-    h('p', {class: 'muted', text: 'Execution and reversal use current revisions, fresh authentication and exact typed confirmation.'}),
+    h('p', {class: 'muted', text: 'Execution and reversal use current revisions, the deployment-configured authentication freshness window and exact typed confirmation.'}),
     new TableView({rows, empty: 'No recommendations in this window.',
       onSelect: recommendationDetail, columns: [
         {label: 'Recommendation', render: (row) => row.action || `Recommendation ${row.id}`},
@@ -146,5 +182,5 @@ export function renderRecommendations({ctx, report, refresh}) {
         {label: 'Urgency', render: (row) => badge(row.urgency || 'unknown', statusTone(row.urgency))},
         {label: 'Targets', key: 'target_count'},
         {label: 'Actions', render: (row) => recommendationActions(ctx, report, row, refresh)},
-      ]}).render());
+      ]}).render(), more);
 }

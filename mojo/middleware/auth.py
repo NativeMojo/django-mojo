@@ -22,6 +22,10 @@ AUTH_BEARER_NAME_MAP = settings.get_static("AUTH_BEARER_NAME_MAP", {"bearer": "u
 class AuthenticationMiddleware(MiddlewareMixin):
     def process_request(self, request):
         request.bearer = None
+        # Authentication handlers may positively stamp these after validating
+        # a credential. Initialize them here so request objects never retain
+        # provenance from an earlier synthetic middleware pass.
+        request.user_api_key = None
         token = request.META.get('HTTP_AUTHORIZATION', None)
         if token is None:
             return

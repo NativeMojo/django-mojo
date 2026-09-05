@@ -126,6 +126,15 @@ def on_read_throttle(request):
 @md.strict_rate_limit("refresh_token", ip_limit=30)
 @md.requires_params("refresh_token")
 def on_refresh_token(request):
+    # Token purpose is checked before user resolution or minting. validate_jwt
+    # intentionally validates access, refresh and per-user API-key JWTs for
+    # middleware use; the refresh exchange is the narrower boundary.
+    try:
+        prior = JWToken().decode(request.DATA.refresh_token, validate=False)
+    except Exception:
+        raise merrors.PermissionDeniedException("Invalid refresh token", 401, 401)
+    if prior.get("token_type") != "refresh":
+        raise merrors.PermissionDeniedException("Invalid refresh token", 401, 401)
     user, error = User.validate_jwt(request.DATA.refresh_token)
     if error is not None:
         raise merrors.PermissionDeniedException(error, 401, 401)
@@ -138,7 +147,6 @@ def on_refresh_token(request):
     # Carry the ORIGINAL auth_time forward unchanged — a refresh is NOT a fresh
     # authentication. Resetting it would defeat the step-up freshness gate; dropping
     # it would force a needless re-auth. Absent on legacy refresh tokens => omit.
-    prior = JWToken().decode(request.DATA.refresh_token, validate=False)
     if prior.get("auth_time") is not None:
         keys["auth_time"] = prior.get("auth_time")
     token_package = JWToken(user.get_auth_key()).create(**keys)

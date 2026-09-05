@@ -1,7 +1,7 @@
 import {h} from '../../core.js';
 import {decodeRouteState, routeHref} from '../../components/routes.js';
 import {errorState, loadingState, sectionTabs} from '../../components/views.js';
-import {readSecurity} from './api.js';
+import {readNextSecurityPage, readSecurity} from './api.js';
 import {renderCases, renderOverview} from './mojosec.js';
 import {renderIncidentEvents} from './activity.js';
 import {renderRules} from './rules.js';
@@ -33,11 +33,28 @@ export async function securityPage(ctx, parentSignal) {
     h('header', {class: 'page-header'}, h('div', {},
       h('div', {class: 'eyebrow', text: 'Security operations'}),
       h('h1', {text: 'Security', tabindex: '-1'}),
-      h('p', {text: 'Server-governed cases, policy and fleet enforcement truth. Missing evidence stays visibly unknown.'}))),
+      h('p', {text: 'Complete permissioned evidence, policy and fleet enforcement truth. Authentication secrets remain hidden.'}))),
     sectionTabs({items: TABS, active: active.id, label: 'Security views', onChange: (id) => {
       active = TABS.find((tab) => tab.id === id) || TABS[0]; writeTab(active.id);
       return refresh();
     }}), body);
+
+  const renderReport = async () => {
+    const node = active.render({ctx, report, refresh, loadPage, signal: controller?.signal});
+    const freshness = report.capabilities.fresh_auth;
+    body.replaceChildren(h('div', {class: 'security-capability'},
+      h('strong', {text: `Scope: ${report.capabilities.scope}`}),
+      h('span', {text: freshness.enabled
+        ? `Fresh authentication: ${freshness.window_seconds} seconds${freshness.applies_to_credential ? '' : ' (not applicable to this machine credential)'}`
+        : 'Fresh authentication: disabled'})), await node);
+  };
+
+  const loadPage = async (section) => {
+    const current = controller;
+    report = await readNextSecurityPage(report, section, {signal: current?.signal});
+    if (disposed || current?.signal.aborted || current !== controller) return;
+    await renderReport();
+  };
 
   const refresh = async () => {
     controller?.abort(); const current = new AbortController(); controller = current;
@@ -46,8 +63,7 @@ export async function securityPage(ctx, parentSignal) {
     try {
       report = await readSecurity(active.sections, {signal: current.signal});
       if (disposed || current.signal.aborted || current !== controller) return;
-      const node = active.render({ctx, report, refresh, signal: current.signal});
-      body.replaceChildren(await node);
+      await renderReport();
     } catch (error) {
       if (!disposed && !current.signal.aborted && current === controller) {
         body.replaceChildren(errorState(error, refresh));

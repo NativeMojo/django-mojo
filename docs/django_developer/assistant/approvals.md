@@ -139,9 +139,9 @@ automatically.
 stricter, never looser.** Execution re-reads `get_registry()[tool_name]` and
 re-checks every gate against it; for `requires_superuser`,
 `requires_managed_infrastructure` and `fresh_auth_seconds` the live entry is
-combined with the snapshot (OR, and the shorter window), so removing a gate from
-the registry cannot silently un-gate a pending card that already told the
-operator it would ask. A tool that was
+resolved and combined with the snapshot (OR, and the shorter positive window),
+so removing a gate from the registry cannot silently un-gate a pending card
+that already told the operator it would ask. A tool that was
 unregistered, or whose `mutates` flag was removed, resolves to the generic
 failure; a tool whose permission changed is checked against the *live* value.
 Trusting the snapshot would let a downgrade at deploy time execute under
@@ -158,7 +158,7 @@ All seven arguments are accepted by both `register_tool()` and `@tool(...)`.
 
 | Argument | Meaning |
 |---|---|
-| `fresh_auth_seconds=None` | Recency window in seconds; mirrors `@md.requires_fresh_auth(seconds=N)` on the matching Admin endpoint. When set, the action can be resolved **over REST only**. |
+| `fresh_auth_seconds=None` | A positive recency window mirroring `@md.requires_fresh_auth(seconds=N)`, or `"configured"` to resolve `FRESH_AUTH_WINDOW`/`FRESH_AUTH_ENFORCE` at proposal and execution. A positive resolved window requires **REST-only** resolution; configured `0` adds no gate. |
 | `requires_superuser=False` | AND-check for a live literal `User.is_superuser`, mirroring the hand-written superuser checks in the Admin REST layer (`aws/rest/capacity.py:79`). Enforced inside `user_can_use_tool`, so a non-superuser never sees the tool listed, never has the model call it, and never receives a card they could not approve. |
 | `requires_managed_infrastructure=False` | Tool is hidden from the model and refused at proposal and execution when `infrastructure.is_external()`. |
 | `summarize=None` | `(params, user) -> str`. One operator-facing sentence for the card. Must contain no secret. Default: `"<tool_name> will run with the arguments below."` |
@@ -168,7 +168,8 @@ All seven arguments are accepted by both `register_tool()` and `@tool(...)`.
 
 **Passing any of the first six without `mutates=True` raises `ValueError` at
 import time.** A misdeclared tool breaks the import rather than degrading
-silently. `fresh_auth_seconds` must be a positive `int` or `None`;
+silently. `fresh_auth_seconds` must be a positive `int`, `"configured"`, or
+`None`;
 `summarize`/`preview`/`owner_state`/`authorize` must be callable or `None`.
 
 **`owner_state` cannot be combined with `fresh_auth_seconds`,
@@ -279,6 +280,7 @@ At execution the handler is invoked exactly as it is today —
 |---|---|
 | `user` | The freshly re-read **active** `User` row — never the object the socket authenticated with hours ago. |
 | `args` | `PendingAction.args`. Never anything the client or the model sent at approve time. |
+| `request_meta` | Server-built request and credential context when the handler opts in. Admin Security handlers derive their audit actor from its `credential_kind`; a validated per-user key also contributes its record id and bounded label. These values do not come from tool arguments. |
 | `approval.uuid` | Use `str(approval.uuid)` as the idempotency key for the underlying service — `webapp_keys.link_once` and `deploy.request_deploy` already accept one. |
 | `approval.revision` | The bound `preview` revision. |
 | `approval.conversation`, `approval.group` | The binding. |
@@ -356,8 +358,9 @@ authority for what runs.
 8. **Literal superuser**, when the live entry **or the row snapshot** declares it.
 9. **Permission + `authorize`** against that live actor.
 10. **Group activity** — `group.is_effectively_active()`.
-11. **Fresh auth**, when the live entry **or the row snapshot** declares it —
-    the stricter (shorter) of the two windows (see below).
+11. **Fresh auth**, when the live entry resolves to a positive window **or the
+    row snapshot** contains one — the stricter (shorter) of the two windows
+    (see below).
 12. **Bound revision** — `preview` re-run and compared.
 13. **Atomic claim** — `filter(pk=…, state="pending", expires_at__gt=now).update(state="executing", modified=now)`.
 14. **Dispatch**, then persist the outcome and write the message.
@@ -376,21 +379,31 @@ The `expires_at__gt=now` predicate rides along so the atomic claim and the lazy
 
 ### Fresh auth, and why it is never delegated
 
-`auth_time` is a claim on the access token, so the REST endpoint proves recency
-from the `Authorization` header with zero new transport.
+`auth_time` is a claim on an interactive or OAuth access token, so the REST
+endpoint proves recency from the `Authorization` header with zero new transport.
+For a `fresh_auth_seconds="configured"` declaration, the service resolves the
+deployment policy when the card is proposed and again when it executes. A
+configured window of `0` (the default) stores no gate. If configuration becomes
+stricter before execution, the live positive window applies; a positive gate
+already snapshotted on a card is not loosened by a later zero/longer window or
+registry change. `FRESH_AUTH_ENFORCE=False` remains the deliberate master
+override and disables every freshness gate, including a snapshot.
 
-The WebSocket authenticates once at connect and holds no per-message token, so it
-**cannot** prove recency — and putting a token in a message body is exactly what
-must not happen. A WS approval of an action with `fresh_auth_seconds` set is
-refused with `reauth_required`; the client re-authenticates and re-submits over
-REST.
+The WebSocket authenticates once at connect and holds no per-message token, so
+it **cannot** prove recency — and putting a token in a message body is exactly
+what must not happen. A WS approval carrying a positive resolved freshness gate
+is refused with `reauth_required`; the client re-authenticates and re-submits
+over REST.
 
 The service refuses **before** `fresh_auth.is_fresh` is consulted whenever
-`request is None` or `getattr(request, "bearer", None) != "bearer"`. Both of
-those cases return `True` from `is_fresh` **by design** (machine credentials have
-no interactive login to be recent), so delegating them would be the bypass.
+`request is None` or `getattr(request, "bearer", None) != "bearer"`. A stale
+interactive or OAuth bearer is then refused by `fresh_auth.require_fresh` when
+the resolved window is positive. A positively validated per-user `UserAPIKey`
+also uses the Bearer scheme, but `fresh_auth` recognizes its server-stamped
+record provenance and bypasses the impossible interactive ceremony. Confined
+group `ApiKey` and group-token sessions remain refused by the REST action gate.
 
-`require_fresh` is called with the tool's declared window, which means the
+`require_fresh` is called with the resolved numeric window, which means the
 `X-Mojo-Test-Fresh-Auth-Window` header is inert here — `resolve_window` consults
 it only when `seconds is None`.
 
@@ -493,8 +506,8 @@ portal.
 | `block_ip`, `unblock_ip`, `whitelist_ip`, `unwhitelist_ip` | security | `manage_security` | `incident/rest/ipset.py` — RestMeta CRUD | — |
 | `update_incident`, `bulk_update_incidents`, `merge_incidents` | security | `manage_security` | `incident/rest/event.py` — RestMeta CRUD | — |
 | `create_ticket`, `update_ticket`, `add_ticket_note` | security | `manage_security` | `incident/rest/ticket.py` — RestMeta CRUD | — |
-| `create_rule`, `update_ruleset`, `delete_ruleset`, `manage_security_recommendation` | security | `manage_security`, `security` | `incident/rest/admin_security.py` governed action authority | `fresh_auth_seconds=600`, preview, bound object revision/confirmation; recommendation preview binds the frozen target scope |
-| `add_rule_condition`, `delete_rule` | security | `manage_security`, `security` | Retired compatibility tools; aggregate-only Admin Security has no partial-write twin | `fresh_auth_seconds=600`; always returns `full_replacement_required` |
+| `create_rule`, `update_ruleset`, `delete_ruleset`, `manage_security_recommendation` | security | `manage_security`, `security` | `incident/rest/admin_security.py` governed action authority | `fresh_auth_seconds="configured"`, preview, bound object revision/confirmation; recommendation preview binds the frozen target scope |
+| `add_rule_condition`, `delete_rule` | security | `manage_security`, `security` | Retired compatibility tools; aggregate-only Admin Security has no partial-write twin | `fresh_auth_seconds="configured"`; always returns `full_replacement_required` |
 | `cancel_job`, `retry_job`, `run_job`, `run_scheduled_task_now` | jobs | `manage_jobs` | `jobs/rest/control.py` — `requires_global_perms('manage_jobs','jobs')` | — |
 | `create_scheduled_task`, `update_scheduled_task`, `delete_scheduled_task` | jobs | `manage_jobs` | `jobs/rest/scheduled_task.py` — RestMeta CRUD | — |
 | `create_group`, `invite_to_group` | groups | `manage_groups` | `account/rest/group.py` — RestMeta CRUD + `group/member/invite` | — |

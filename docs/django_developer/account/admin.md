@@ -21,18 +21,26 @@ capabilities are independent:
 {"id":"security","enabled":true,"capabilities":{"view":true,"manage":false}}
 ```
 
-Reads use `view_security|manage_security|security`; writes use
-`manage_security|security` and recent authentication. Activity's ticket
-capabilities are also Incident-aware. Do not infer either provider from a
-generic Admin grant in a client.
+The browser workspace still uses this interactive portal admission. The REST
+authority is broader: validated per-user API keys retain the user's global or
+default-group security permissions, and group API keys/tokens may read only
+evidence owned by their exact authenticated group. Client-supplied group parameters never
+select or widen that scope. Mutations require global `manage_security` or
+`security`; their freshness window comes from deployment configuration, and
+machine credentials do not face an impossible interactive reauthentication.
 
 ## Browser boundary
 
-Security consumes only `/api/incident/admin/security` schema version 2 and its
+Security consumes only `/api/incident/admin/security` schema version 3 and its
 governed action endpoint. It renders server-curated fields, action schemas,
-cutoff/window metadata, and captured checked-host summaries. It never reads
-the generic Incident/Event endpoints, serializes raw rows, or reconstructs
-policy/enforcement rules in JavaScript.
+cutoff/window metadata, captured checked-host summaries, and complete
+permissioned detail. Large detail fields use signed scope/object/revision-bound
+cursors; the client follows each field's `chunk_cursor` to completion. A
+discovery-list `next_cursor` is continued separately with
+`sections=<the same section>&page_cursor=<next_cursor>`. Only authentication
+secrets are scrubbed. Addresses, CIDRs, commands, paths, handler text, provider
+errors, and other retained operational evidence remain visible to an
+authorized operator.
 
 Schema version alone is not trusted. The v2 client validates each requested
 section's envelope, window, bounded row shape, policy/action schemas, and
@@ -76,7 +84,7 @@ bin/admin_preview --port 8766 --upstream https://api.example.com
 ```
 
 Prefer an operator with global `view_admin` and `view_security` but no
-`manage_security`. Verify admission, all six tabs, schema-v2 status/cutoff
-rendering, redaction, legacy Activity links, and session recovery using reads
+`manage_security`. Verify admission, all six tabs, schema-v3 status/cutoff
+rendering, complete evidence with secret-only scrubbing, legacy Activity links, and session recovery using reads
 only. Do not submit any RuleSet, recommendation, or IPSet confirmation: those
 requests target the real installation and may change policy or fleet state.

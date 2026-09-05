@@ -148,23 +148,35 @@ class Event(models.Model, MojoModel):
             ]
         }
 
-    def admin_security_projection(self):
-        """Bounded safe projection for the Admin Security authority.
+    def admin_security_projection(self, detail=True):
+        """Operational projection for an authorized Admin Security caller.
 
-        Metadata, evidence, addresses, free-form details and commands are
-        deliberately absent. Keep this contract beside the source model so a
-        future field addition cannot silently widen the admin envelope.
+        List callers may request ``detail=False`` to omit the unbounded text
+        and JSON fields. Secret-only scrubbing happens at the final Admin
+        Security serialization boundary, not here, so useful evidence is not
+        silently destroyed before transport can chunk it.
         """
-        return {
+        value = {
             "id": self.pk,
             "created": self.created.isoformat() if self.created else None,
             "level": self.level,
             "scope": self.scope,
             "category": self.category,
+            "source_ip": self.source_ip,
+            "hostname": self.hostname,
+            "uid": self.uid,
             "country_code": self.country_code,
+            # Discovery rows stay bounded; an authorized detail request returns
+            # the complete title through the signed chunk transport.
+            "title": self.title if detail else (self.title or "")[:512],
+            "model_name": self.model_name,
+            "model_id": self.model_id,
             "group_id": self.group_id,
             "incident_id": self.incident_id,
         }
+        if detail:
+            value.update(details=self.details, metadata=self.metadata)
+        return value
 
     # kind → human-readable summary for the security events graph
     _SECURITY_SUMMARIES = {

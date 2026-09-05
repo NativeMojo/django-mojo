@@ -50,28 +50,41 @@ def setup_admin_security(opts):
     opts.security_viewer = viewer.pk
 
 
-@th.django_unit_test("Admin Security routes pin human and fresh-auth authority")
+@th.django_unit_test("Admin Security routes use server-derived authority and configured freshness")
 def test_route_authority(opts):
+    import inspect
+    from types import SimpleNamespace
     from mojo import errors as merrors
+    from mojo.apps.account.models import User
     views = importlib.import_module("mojo.apps.incident.rest.admin_security")
     from mojo.apps.incident.rest import ipset as ipset_views
+    from mojo.apps.incident.handlers import ticket_actions
     from mojo.apps.incident.services import admin_security
     assert views.on_admin_security.__url__ == ("GET", "admin/security")
     assert views.on_admin_security_action.__url__ == (
         "POST", "admin/security/action")
-    assert views.on_admin_security._mojo_denies_key_backed_session
-    assert set(views.on_admin_security._mojo_required_permissions) == {
-        "view_security", "manage_security", "security"}
-    assert views.on_admin_security_action._mojo_denies_key_backed_session
-    assert set(views.on_admin_security_action._mojo_required_permissions) == {
-        "manage_security", "security"}
+    assert not getattr(views.on_admin_security, "_mojo_denies_key_backed_session", False), (
+        "validated API credentials must not be rejected before authority is derived")
+    assert not getattr(
+        views.on_admin_security_action, "_mojo_denies_key_backed_session", False), (
+        "validated per-user API keys may carry global operator authority")
     assert views.on_admin_security_action._mojo_requires_fresh_auth
-    assert views.on_admin_security_action._mojo_fresh_auth_seconds == 600
+    assert views.on_admin_security_action._mojo_fresh_auth_seconds is None
     assert ipset_views.on_ipset_action.__url__ == ("POST", "ipset/action")
-    assert ipset_views.on_ipset_action._mojo_denies_key_backed_session
-    assert set(ipset_views.on_ipset_action._mojo_required_permissions) == {
-        "manage_security", "security"}
+    assert not getattr(ipset_views.on_ipset_action, "_mojo_denies_key_backed_session", False)
     assert ipset_views.on_ipset_action._mojo_requires_fresh_auth
+    ticket_authority = inspect.getsource(ticket_actions._has_global_authority)
+    assert "require_fresh(request)" in ticket_authority
+    assert "seconds=600" not in ticket_authority, (
+        "ticket-governed security actions must use configured freshness")
+    actor = User.objects.get(pk=opts.security_operator)
+    machine_request = SimpleNamespace(
+        user=actor, user_api_key=SimpleNamespace(pk=23, label="operator"),
+        api_key=None, group_token=None, bearer="bearer", META={})
+    assert ticket_actions._has_global_authority(
+        SimpleNamespace(active_request=machine_request),
+        "incident.rule_approval") == actor, (
+            "validated per-user API keys must retain ticket action authority")
     try:
         views._translate(lambda: (_ for _ in ()).throw(
             admin_security.SecurityActionError(
@@ -82,13 +95,13 @@ def test_route_authority(opts):
         assert False, "the REST adapter must retain typed security error codes"
 
 
-@th.django_unit_test("generic rule and IPSet lifecycle writes retire")
+@th.django_unit_test("legacy rule CRUD remains while governed rows stay protected")
 def test_generic_compatibility(opts):
     from mojo.apps.incident.models import IPSet, Rule, RuleSet
     for model in (RuleSet, Rule):
-        assert model.RestMeta.CAN_CREATE is False
-        assert model.RestMeta.CAN_UPDATE is False
-        assert model.RestMeta.CAN_DELETE is False
+        assert model.RestMeta.CAN_CREATE is True
+        assert model.RestMeta.CAN_UPDATE is True
+        assert model.RestMeta.CAN_DELETE is True
         assert model.RestMeta.DENY_AI is True
     assert getattr(IPSet.RestMeta, "CAN_CREATE", True) is True
     assert IPSet.RestMeta.CAN_DELETE is False
@@ -232,7 +245,7 @@ def test_durable_handler_schema(opts):
         "a current safe durable handler should canonicalize without widening")
 
 
-@th.django_unit_test("malformed legacy rules no-match and cannot dispatch")
+@th.django_unit_test("legacy rules retain established evaluation and dispatch")
 def test_legacy_runtime_fails_closed(opts):
     from mojo.apps.incident.models import Event, Rule, RuleSet
     event = Event.objects.create(category=f"{PREFIX}:legacy", level=9)
@@ -252,8 +265,11 @@ def test_legacy_runtime_fails_closed(opts):
     def publish(*args, **kwargs):
         published.append((args, kwargs))
 
-    assert row.run_handler(event, publisher=publish) is False
-    assert published == []
+    assert row.run_handler(event, publisher=publish) is True
+    assert len(published) == 1
+    payload = published[0][0][1]
+    assert payload["execution_mode"] == "legacy"
+    assert "handler_schema" not in payload
 
 
 @th.django_unit_test("RuleSet actions require version and typed confirmations")
@@ -312,31 +328,62 @@ def test_child_bumps_parent_revision(opts):
     assert row.modified > old
 
 
-@th.django_unit_test("new envelope redacts raw security material and labels provenance")
-def test_bounded_redacted_overview(opts):
+@th.django_unit_test("new envelope preserves evidence while scrubbing authentication secrets")
+def test_complete_secret_scrubbed_overview(opts):
     from mojo.apps.incident.models import Event, IPSet, RuleSet
     from mojo.apps.incident.services import admin_security
-    Event.objects.create(category=f"{PREFIX}:secret", metadata={
-        "evidence": "fixture-secret", "command": "rm fixture"})
-    RuleSet.objects.create(
+    event = Event.objects.create(category=f"{PREFIX}:secret", metadata={
+        "evidence": "fixture-secret", "command": "rm fixture",
+        "password": "credential-secret"})
+    ruleset = RuleSet.objects.create(
         name="raw", category=f"{PREFIX}:raw", handler="job://secret.module")
-    IPSet.objects.create(name=f"{IPSET_PREFIX}_raw", kind="custom", source="manual",
-                         source_key="fixture-key", data="8.8.8.8/32")
-    result = admin_security.overview({"limit": 100})
+    ipset = IPSet.objects.create(name=f"{IPSET_PREFIX}_raw", kind="custom", source="manual",
+                                 source_key="fixture-key", data="8.8.8.8/32")
+    result = admin_security.overview({"limit": 100, "sections": "overview"})
     rendered = str(result)
-    assert result["schema_version"] == 2
-    assert "fixture-secret" not in rendered
+    assert result["schema_version"] == 3
     assert "fixture-key" not in rendered
-    assert "8.8.8.8/32" not in rendered
-    assert "job://secret.module" not in rendered
     metrics = result["sections"]["overview"]["data"]
     assert metrics["accuracy"]["current"] == "exact_current_rows"
     assert metrics["accuracy"]["resolution_rate"] == "unavailable"
     for section in result["sections"].values():
         assert {"status", "observed_at", "cutoff", "window", "truncated", "data"} <= set(section)
 
+    event_detail = admin_security.overview({
+        "sections": "events", "event_id": event.pk})["sections"]["events"]["data"][0]
+    metadata = event_detail["metadata"]["chunk"]
+    assert "fixture-secret" in metadata and "rm fixture" in metadata, (
+        "authorized event detail must preserve operational evidence")
+    assert "credential-secret" not in metadata and "[redacted secret]" in metadata, (
+        "only authentication secrets should be scrubbed")
+    rule_detail = admin_security.overview({
+        "sections": "rules", "ruleset_id": ruleset.pk})["sections"]["rules"]["data"][0]
+    assert "job://secret.module" in rule_detail["handler"]["chunk"]
+    ipset_detail = admin_security.overview({
+        "sections": "ipsets", "ipset_id": ipset.pk})["sections"]["ipsets"]["data"][0]
+    assert "8.8.8.8/32" in ipset_detail["data"]["chunk"]
+    assert "fixture-key" not in str(ipset_detail)
 
-@th.django_unit_test("schema v2 advertises bounded actions and redacted checked receipts")
+    checked = {
+        "status": "partial", "ok": False,
+        "expected_hosts": ["edge-a"], "responded_hosts": ["edge-a"],
+        "succeeded_hosts": [], "failed_hosts": ["edge-a"],
+        "missing_hosts": [], "desired": {"present": True, "count": 1,
+                                           "digest": "a" * 64},
+        "fence": 4, "error": {"code": "runner_error",
+                                "message": "ipset command failed"},
+        "checked": {"results": [{"host": "edge-a", "runner_id": "runner-a",
+                                   "status": "failed", "error": "exit 1"}]},
+    }
+    proof_detail = admin_security._bounded_ipset(
+        ipset, admin_security.SecurityAuthority("global", "internal", None),
+        checked, [{"host": "edge-a", "started": "boot-a"}],
+        "2026-08-10T17:10:00Z")
+    assert "runner-a" in proof_detail["checked_proof"]["chunk"]
+    assert "ipset command failed" in proof_detail["checked_proof"]["chunk"]
+
+
+@th.django_unit_test("schema v3 advertises governed actions and bounded checked receipts")
 def test_action_schema_and_checked_receipt_projection(opts):
     from types import SimpleNamespace
     from mojo.apps.incident.services import admin_security
@@ -442,15 +489,15 @@ def test_action_schema_and_checked_receipt_projection(opts):
         assert projection["error_code"] == "fleet_unverified", (case, projection)
 
 
-@th.django_unit_test("Assistant rule mutations bind fresh auth and previews")
+@th.django_unit_test("Assistant rule mutations use configured freshness and previews")
 def test_assistant_registry_contract(opts):
-    from mojo.apps.assistant import get_registry
+    from mojo.apps.assistant import CONFIGURED_FRESH_AUTH, get_registry
     registry = get_registry()
     for name in ("create_rule", "update_ruleset", "delete_ruleset",
                  "manage_security_recommendation"):
         entry = registry[name]
         assert entry["mutates"] is True
-        assert entry["fresh_auth_seconds"] == 600
+        assert entry["fresh_auth_seconds"] == CONFIGURED_FRESH_AUTH
     assert registry["create_rule"]["preview"] is not None
     assert registry["update_ruleset"]["preview"] is not None
     assert registry["delete_ruleset"]["preview"] is not None

@@ -361,16 +361,16 @@ credential nobody proved.
 | `get_incident_timeline` | `view_security` | No | Full history/audit trail for an incident |
 | `get_incident_events` | `view_security` | No | Events bundled into an incident with full metadata |
 | `get_event` | `view_security` | No | Full event details including complete metadata |
-| `get_ruleset` | `view_security` | No | One governed typed aggregate; legacy policies return replacement-required validation without raw handlers |
+| `get_ruleset` | `view_security` | No | One governed or legacy/compatibility aggregate with validation plus stored handler, metadata, and condition detail |
 | `update_incident` | `manage_security` | Yes | Change incident status with history note |
 | `bulk_update_incidents` | `manage_security` | Yes | Resolve/ignore up to 100 incidents at once |
 | `merge_incidents` | `manage_security` | Yes | Merge source incidents into target (moves events, deletes sources) |
-| `create_rule` | `manage_security` / `security` | Yes | Create a validated inactive aggregate from typed handlers/rules; preview + approval + fresh auth (600s) |
+| `create_rule` | `manage_security` / `security` | Yes | Create a validated inactive aggregate from typed handlers/rules; preview + approval + deployment-configured freshness |
 | `add_rule_condition` | `manage_security` / `security` | Yes | Retired compatibility tool; returns `full_replacement_required` |
-| `update_ruleset` | `manage_security` / `security` | Yes | Complete inactive replace, activate, or deactivate against `expected_modified`; preview + approval + fresh auth (600s) |
-| `delete_ruleset` | `manage_security` / `security` | Yes | Revision-bound aggregate delete; preview + approval + fresh auth (600s) |
+| `update_ruleset` | `manage_security` / `security` | Yes | Complete inactive replace, activate, or deactivate against `expected_modified`; preview + approval + deployment-configured freshness |
+| `delete_ruleset` | `manage_security` / `security` | Yes | Revision-bound aggregate delete; preview + approval + deployment-configured freshness |
 | `delete_rule` | `manage_security` / `security` | Yes | Retired compatibility tool; returns `full_replacement_required` |
-| `manage_security_recommendation` | `manage_security` / `security` | Yes | Approve/reject/cancel/reverse a bounded recommendation against its revision and frozen scope; preview + approval + fresh auth (600s) |
+| `manage_security_recommendation` | `manage_security` / `security` | Yes | Approve/reject/cancel/reverse a bounded recommendation against its revision and frozen scope; preview + approval + deployment-configured freshness |
 | `block_ip` | `manage_security` | Yes | Block an IP fleet-wide with TTL |
 | `unblock_ip` | `manage_security` | Yes | Unblock a blocked IP fleet-wide |
 | `whitelist_ip` | `manage_security` | Yes | Add IP to whitelist (prevents future auto-blocks, unblocks if blocked) |
@@ -382,6 +382,20 @@ compatible-host result. In particular, `unwhitelist_ip` can persist desired
 whitelist removal while returning `ok=false`, the bounded firewall error code,
 and `enforcement_status=partial|unknown`; the approval record becomes failed
 rather than completed. Later reconciliation establishes fleet state separately.
+
+RuleSet and recommendation mutations declare
+`fresh_auth_seconds="configured"`. The approval service resolves
+`FRESH_AUTH_WINDOW`/`FRESH_AUTH_ENFORCE` when the card is proposed and again
+when it executes. The default window is `0`, so no recent-login gate is added
+unless the deployment opts in. With a positive window, stale interactive and
+OAuth sessions are refused; a positively validated per-user `UserAPIKey`
+bypasses an interactive ceremony that a machine credential cannot perform.
+This does not grant group `ApiKey` or group-token credentials global authority.
+
+On execution, these tools pass server-derived credential provenance into the
+Admin Security action audit: credential kind and User id, plus the per-user key
+id and bounded label for a validated `UserAPIKey`. Tool arguments cannot supply
+or override that actor context.
 
 ### Jobs Domain (`view_jobs` / `manage_jobs`)
 
@@ -1085,7 +1099,7 @@ def _tool_query_orders(params, user):
 | `input_schema` | Yes | JSON Schema dict for the tool's parameters |
 | `mutates` | No | Default `False`. If `True`, the tool **cannot execute on the model's call** — it produces an approval the operator must resolve, unless an `owner_state` predicate returns `True` for that call. See [Approvals](approvals.md). |
 | `core` | No | Default `False`. If `True`, tool is always sent to the LLM (two-tier tier 1). Set this for tools that should be available in every conversation without loading a domain. |
-| `fresh_auth_seconds` | No | Mutating only. Recency window mirroring `@md.requires_fresh_auth(seconds=N)` on the Admin twin. Forces REST-only resolution. |
+| `fresh_auth_seconds` | No | Mutating only. A positive recency window mirroring `@md.requires_fresh_auth(seconds=N)`, or `"configured"` to resolve the deployment's freshness policy at proposal and execution. A positive resolved window forces REST-only resolution; configured `0` adds no gate. |
 | `requires_superuser` | No | Mutating only. AND-check for a live literal `User.is_superuser`. |
 | `requires_managed_infrastructure` | No | Mutating only. Hidden and refused when `INFRASTRUCTURE_MODE=external`. |
 | `summarize` | No | Mutating only. `(params, user) -> str` — the card's one sentence. |
@@ -1164,7 +1178,7 @@ The dispatcher inspects handler signatures at first call (result is cached). Han
 
 | Kwarg | Type | Description |
 |---|---|---|
-| `request_meta` | `objict` or `None` | Slim transport context: `ip`, `user_agent`, `path`, `method`, plus `bearer` (the credential prefix — only `"bearer"` is an interactive JWT) and `key_backed` (an ApiKey or group-scoped token, whoever it acts as). `None` only for a programmatic call with no request at all. The last two **fail closed**: an unreadable request reads as key-backed. |
+| `request_meta` | `objict` or `None` | Server-built transport context: `ip`, `user_agent`, `path`, `method`, `bearer`, `key_backed`, and `credential_kind`; a validated per-user key also carries its record id and bounded label. `bearer="mcp"` identifies OAuth/MCP, while `credential_kind` distinguishes an interactive User from a `UserAPIKey` even though both use the Bearer scheme. `key_backed` identifies a confined group `ApiKey`/group token. `None` means no originating request. |
 | `conversation` | `Conversation` instance | The active Conversation model instance. Use to read metadata or to associate audit records with the conversation. |
 | `approval` | `PendingAction` or `None` | The consumed approval record, on the approval path only (`None` for read-only tools, which never have one). `str(approval.uuid)` is the idempotency key to hand the underlying service; `approval.revision` is the bound `preview` revision. See [Approvals](approvals.md). |
 

@@ -850,7 +850,10 @@ Key consequences for a client:
 
 - **The `action` quick-reply block carries no authority.** It never executes anything; its `action_id` is discarded server-side. Do not build mutation confirmations on it.
 - **The model cannot emit an `approval` block.** A model-generated one is dropped before it reaches you, so a card in your UI is always server-issued.
-- **A card may require step-up auth** (`requires_fresh_auth: true`). Those resolve over REST only, after re-authentication.
+- **A card may require step-up auth** (`requires_fresh_auth: true`). Those
+  resolve over REST only. A stale interactive/OAuth session must reauthenticate;
+  a validated per-user `UserAPIKey` is recognized as a machine credential and
+  does not face an impossible interactive ceremony.
 - **A multi-step procedure pauses at the card** and resumes from the operator's next message — the approval path never calls the language model.
 
 Full contract, including the block schema, both transports, the single failure body and the code → status table: **[Approvals](approvals.md)**.
@@ -915,7 +918,15 @@ ws.send(JSON.stringify({
 }));
 ```
 
-Available only for cards with `requires_fresh_auth: false`; the socket authenticates once at connect and holds no per-message token, so a step-up card is refused with `{"type": "assistant_error", "code": "reauth_required", "action_id": …}` and must be re-submitted to `POST /api/assistant/action` after re-authentication. Never put a token in this message — one that is present is ignored, not honoured. See [Approvals](approvals.md).
+Available only for cards with `requires_fresh_auth: false`; the socket
+authenticates once at connect and holds no per-message token, so a step-up card
+is refused with `{"type": "assistant_error", "code": "reauth_required",
+"action_id": …}` and must be re-submitted to
+`POST /api/assistant/action` over REST. An interactive/OAuth session must first
+reauthenticate if stale; a validated per-user `UserAPIKey` is checked as a
+machine credential and bypasses interactive freshness. Never put a token in
+this message — one that is present is ignored, not honoured. See
+[Approvals](approvals.md).
 
 `request_id` is optional for older clients, but new clients should send a fresh canonical UUID for every message, action or approval. The server rejects malformed IDs before doing any work and echoes a valid ID on every event for that turn.
 

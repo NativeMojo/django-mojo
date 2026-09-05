@@ -214,12 +214,28 @@ def test_setup_preview_states(opts):
         "preview failure states do not have stable non-secret messages"
 
 
-@th.django_unit_test("preview renders every Admin Security state without raw material")
+@th.django_unit_test("preview renders every Admin Security state with permissioned evidence")
 def test_security_preview_states(opts):
     from urllib.parse import urlparse
 
     server = _server()
     provider = server.security
+    class Paged:
+        pass
+    provider.reset(Paged, {}, security_state="full")
+    _, first_page = provider.get(
+        Paged, urlparse(
+            "/api/incident/admin/security?sections=cases&limit=5"))
+    first_cases = first_page["sections"]["cases"]
+    assert len(first_cases["data"]) == 5 and first_cases["next_cursor"]
+    _, second_page = provider.get(
+        Paged, urlparse(
+            "/api/incident/admin/security?sections=cases&page_cursor="
+            + first_cases["next_cursor"]))
+    second_cases = second_page["sections"]["cases"]
+    assert not ({row["id"] for row in first_cases["data"]} &
+                {row["id"] for row in second_cases["data"]})
+
     for state in ("full", "empty", "unavailable", "partial", "failed",
                   "stale", "recovery", "malformed"):
         class Handler:
@@ -228,10 +244,10 @@ def test_security_preview_states(opts):
         provider.reset(Handler, {}, security_state=state)
         code, body = provider.get(
             Handler, urlparse("/api/incident/admin/security?sections=ipsets,schemas"))
-        assert code == 200 and body["schema_version"] == 2, state
+        assert code == 200 and body["schema_version"] == 3, state
+        assert body["capabilities"]["scope"] == "global", state
         rendered = json.dumps(body)
-        for forbidden in ("source_key", "expected_roster", "runner_id",
-                          "incarnation", "broker", "8.8.8.8/32"):
+        for forbidden in ("source_key", "refresh_token", "access_token"):
             assert forbidden not in rendered, f"{state} leaked {forbidden}"
         if state == "partial":
             truth = body["sections"]["ipsets"]["data"][0]["enforcement"]

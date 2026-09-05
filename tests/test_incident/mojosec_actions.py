@@ -2,6 +2,7 @@
 
 import datetime
 import contextlib
+import json
 import uuid
 from unittest import mock
 
@@ -646,8 +647,10 @@ def test_whitelisted_target_never_synthesizes_success(opts):
 
 @th.django_unit_test()
 def test_recommendation_rest_contract_and_permissions(opts):
+    from django.utils import timezone
     from mojo.decorators.limits import clear_rate_limits
-    from mojo.apps.incident.models import MojoSecRecommendation
+    from mojo.apps.incident.models import (
+        MojoSecExecutionAttempt, MojoSecRecommendation)
     from mojo.apps.incident.services import admin_security, mojosec_actions
 
     case = _case(opts, sources=[SECOND_IP], key_suffix="rest",
@@ -655,19 +658,39 @@ def test_recommendation_rest_contract_and_permissions(opts):
     recommendation, _created = mojosec_actions.propose(
         case, MojoSecRecommendation.ACTION_BLOCK_IP,
         "repeated_impossible_paths", "rest fixture", "high", [SECOND_IP])
+    target = recommendation.targets.get()
+    MojoSecExecutionAttempt.objects.create(
+        recommendation=recommendation, target=target, attempt_number=1,
+        started_at=timezone.now(), finished_at=timezone.now(),
+        outcome="failed", detail="runner timeout on edge-a")
     governed = admin_security.overview({
         "sections": "recommendations",
         "recommendation_id": recommendation.pk,
     })["sections"]["recommendations"]["data"][0]
-    target = recommendation.targets.get()
-    th.assert_eq(governed["targets"][0]["id"], target.pk,
+    def complete(field):
+        chunk = governed[field]
+        serialized = chunk["chunk"]
+        while chunk["next_cursor"]:
+            chunk = admin_security.overview({
+                "chunk_cursor": chunk["next_cursor"]})["chunk"]
+            serialized += chunk["chunk"]
+        return json.loads(serialized)
+
+    targets = complete("targets")
+    th.assert_eq(targets[0]["id"], target.pk,
                  "governed review must identify the frozen target row")
-    th.assert_true("ip" not in governed["targets"][0],
-                   "governed overview exposed a sensitive source address")
-    th.assert_true("last_error" not in governed["targets"][0],
-                   "governed review must redact execution exceptions")
-    th.assert_true("prior_reason" not in governed["targets"][0],
-                   "governed review must redact prior free-form block reasons")
+    th.assert_eq(targets[0]["ip"], SECOND_IP,
+                 "permissioned review must expose the actionable source address")
+    th.assert_true("last_error" in targets[0],
+                   "permissioned review must retain execution exceptions")
+    th.assert_true("prior_reason" in targets[0],
+                   "permissioned review must retain prior block reasons")
+    transitions = complete("transitions")
+    th.assert_true(any(row["transition"] == "proposed" for row in transitions),
+                   "permissioned review must retain append-only transitions")
+    attempts = complete("attempts")
+    th.assert_eq(attempts[0]["detail"], "runner timeout on edge-a",
+                 "permissioned review must retain actionable attempt evidence")
 
     opts.client.logout()
     clear_rate_limits(ip="127.0.0.1", key="login")

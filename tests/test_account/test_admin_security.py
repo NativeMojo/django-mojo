@@ -33,7 +33,7 @@ def test_security_feature_provider(opts):
     }, "manage may never imply view inside a malformed bootstrap capability set"
 
 
-@th.django_unit_test("Admin v2 packages exactly seven destinations with bounded Security")
+@th.django_unit_test("Admin v2 packages exactly seven destinations with complete Security detail")
 def test_security_packaging_and_routes(opts):
     registry = (V2 / "features/registry.js").read_text()
     routes = (V2 / "components/routes.js").read_text()
@@ -65,7 +65,7 @@ def test_security_browser_authority(opts):
     assert "/api/incident/admin/security" in api
     assert "/api/incident/incident" not in sources
     assert "/api/incident/event" not in sources
-    assert "SECURITY_SCHEMA_VERSION = 2" in api
+    assert "SECURITY_SCHEMA_VERSION = 3" in api
     assert "actionSchemas(report)" in rules and "policySchema(report)" in rules
     assert "confirm_catch_all = catchAllInput.value" in rules
     assert "await reread?.()" in api and "SecurityConflictError" in api
@@ -74,10 +74,18 @@ def test_security_browser_authority(opts):
     assert "validators[name](data, name)" in api
     assert "if (!Array.isArray(envelope?.data))" in api, (
         "a malformed available list must not become an authoritative empty table")
-    for forbidden in ("expected_roster", "row.runner_id", "row.incarnation",
-                      "row.source_key", "row.broker", "row.title", ".cidrs",
-                      "validation_reason"):
-        assert forbidden not in sources, f"browser Security source names forbidden material: {forbidden}"
+    assert "readSecurityDetail" in sources and "completeChunk" in api, (
+        "authorized operators must be able to retrieve complete retained evidence")
+    assert "readNextSecurityPage" in api and "page_cursor" in api, (
+        "truncated discovery lists must have opaque server-side traversal")
+    assert "Load more" in sources, (
+        "the browser must expose the server's next-page retrieval path")
+    for required in ("source_ip", "details", "metadata",
+                     "source_url", "sync_error", "checked_proof",
+                     "transitions", "attempts"):
+        assert required in sources, f"browser Security omits operational evidence: {required}"
+    assert "source_key: row.source_key" in sources, (
+        "the browser should make the server's explicit secret placeholder visible")
 
 
 @th.django_unit_test("both Admin clients preserve return hashes and never replay mutations on 401")
@@ -109,7 +117,10 @@ def test_security_preview_contract(opts):
                   "conflict", "recovery", "malformed"):
         assert f'"{state}"' in server
     assert "expected_host_ids" in preview and "missing_host_ids" in preview
-    for forbidden in ("source_key", "runner_id", "expected_roster", "cidrs"):
+    assert "SCHEMA_VERSION = 3" in preview and "CAPABILITIES" in preview
+    for required in ("203.0.113.7", "203.0.113.0/24", "/var/log/auth.log"):
+        assert required in preview, f"preview omits operator evidence: {required}"
+    for forbidden in ("source_key", "refresh_token", "access_token"):
         assert forbidden not in preview
     assert "security.get(self, parsed)" in server
     assert "security" in (ROOT / "bin/admin_preview_support/gallery.py").read_text()
@@ -122,7 +133,7 @@ def test_security_browser_harness_contract(opts):
     assert "--remote-debugging-port" in harness and "--user-data-dir" in harness
     assert "TemporaryDirectory" in harness and "DEADLINE_SECONDS" in harness
     assert "Runtime.exceptionThrown" in harness and "Log.entryAdded" in harness
-    for proof in ("case paging", "case filtering", "bounded case detail",
+    for proof in ("case paging", "case filtering", "complete case detail",
                   "narrow viewport", "dark theme", "keyboard focus",
                   "malformed contract"):
         assert proof in harness

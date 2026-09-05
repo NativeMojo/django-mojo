@@ -1,12 +1,26 @@
 import hashlib
 import re
-from django.db import models
+from django.db import models, transaction
 from django.core.validators import MinValueValidator
 from mojo.models import MojoModel
 from urllib.parse import urlparse, parse_qs
 from mojo.helpers import logit
 
 logger = logit.get_logger(__name__, "incident.log")
+
+
+def _rest_boundary_queryset(model):
+    """Lock persisted state when the REST endpoint owns a transaction.
+
+    Model hooks are also called directly by some framework integrations. They
+    still get a persisted-state comparison outside a transaction, while the
+    real REST writer always enters its outer atomic block and therefore gets a
+    row lock here.
+    """
+    queryset = model.objects.all()
+    if transaction.get_connection().in_atomic_block:
+        queryset = queryset.select_for_update()
+    return queryset
 
 
 class BundleBy:
@@ -139,11 +153,12 @@ class RuleSet(models.Model, MojoModel):
         CREATE_PERMS = ["manage_security", "security"]
         SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security", "security"]
-        # Human mutations are owned by /api/incident/admin/security/action. These
-        # flags do not affect internal defaults/provisioning, which use the ORM.
-        CAN_CREATE = False
-        CAN_UPDATE = False
-        CAN_DELETE = False
+        # Established REST administration remains available for markerless
+        # legacy policy. Governed rows add stricter aggregate lifecycle checks
+        # in the model hooks below.
+        CAN_CREATE = True
+        CAN_UPDATE = True
+        CAN_DELETE = True
         # The Assistant has dedicated, governed projections and tools.  The
         # generic model tools must never expose handler strings or mutate a
         # policy around the approval/revision boundary.
@@ -154,10 +169,86 @@ class RuleSet(models.Model, MojoModel):
                     "id", "created", "modified", "priority", "category",
                     "name", "bundle_minutes", "bundle_by",
                     "bundle_by_rule_set", "match_by", "trigger_count",
-                    "trigger_window", "retrigger_every", "is_active",
+                    "trigger_window", "retrigger_every", "handler",
+                    "metadata", "is_active",
                 ],
             },
         }
+
+    def on_rest_pre_save(self, changed_fields, created):
+        """Enforce policy mode from the locked persisted row.
+
+        The endpoint owns an outer transaction. Re-reading with
+        ``select_for_update`` here means JSON replace, non-dict metadata, and a
+        stale in-memory instance cannot forge or erase a server-owned marker.
+        ``changed_fields`` is intentionally ignored: JSON updates do not
+        reliably populate it.
+        """
+        from mojo import errors as merrors
+        from mojo.apps.incident.services import rule_validation
+
+        try:
+            new_mode = rule_validation.policy_mode(self.metadata)
+        except rule_validation.RuleValidationError as error:
+            raise merrors.ValueException(
+                "the policy mode marker is invalid") from error
+        if created:
+            if new_mode != "compatibility":
+                raise merrors.ValueException(
+                    "new generic RuleSets require the server-owned "
+                    "compatibility marker")
+            return
+
+        persisted = _rest_boundary_queryset(type(self)).filter(
+            pk=self.pk).values_list("metadata", flat=True).first()
+        if persisted is None:
+            raise merrors.ValueException("RuleSet no longer exists")
+        try:
+            old_mode = rule_validation.policy_mode(persisted)
+        except rule_validation.RuleValidationError as error:
+            raise merrors.ValueException(
+                "the stored policy mode marker is invalid") from error
+        if old_mode == "governed":
+            raise merrors.ValueException(
+                "governed RuleSets require the versioned aggregate action")
+        marker_keys = (
+            rule_validation.GOVERNED_METADATA_KEY,
+            rule_validation.COMPATIBILITY_METADATA_KEY)
+        old_markers = ({key: persisted[key] for key in marker_keys
+                        if isinstance(persisted, dict) and key in persisted})
+        new_markers = ({key: self.metadata[key] for key in marker_keys
+                        if isinstance(self.metadata, dict) and key in self.metadata})
+        if old_mode != new_mode or old_markers != new_markers:
+            raise merrors.ValueException(
+                "the policy mode marker is server-owned")
+
+    def on_rest_pre_delete(self):
+        from mojo import errors as merrors
+        from mojo.apps.incident.services import rule_validation
+        persisted = _rest_boundary_queryset(type(self)).filter(
+            pk=self.pk).values_list("metadata", flat=True).first()
+        if persisted is None:
+            raise merrors.ValueException("RuleSet no longer exists")
+        try:
+            mode = rule_validation.policy_mode(persisted)
+        except rule_validation.RuleValidationError as error:
+            raise merrors.ValueException(
+                "the stored policy mode marker is invalid") from error
+        if mode == "governed":
+            raise merrors.ValueException(
+                "governed RuleSets require the versioned aggregate action")
+
+    def atomic_save(self):
+        """Let the compatibility endpoint own the aggregate transaction.
+
+        MojoModel's legacy implementation commits after every save, which is
+        intentionally impossible inside the endpoint's locking atomic block.
+        Direct callers keep that behavior; REST compatibility writes defer the
+        commit to their outer marker/audit transaction.
+        """
+        self.save()
+        if not transaction.get_connection().in_atomic_block:
+            transaction.commit()
 
 
     def run_handler(self, event, incident=None, idempotency_prefix=None,
@@ -180,18 +271,23 @@ class RuleSet(models.Model, MojoModel):
             return False
 
         try:
-            # Stored legacy policies are data, not trusted code. A malformed
-            # or non-allowlisted aggregate remains visible to administrators
-            # for replacement/deactivation/deletion, but cannot dispatch.
             from mojo.apps.incident.services import rule_validation
-            normalized = rule_validation.validate_existing(self)
+            mode = rule_validation.policy_mode(self.metadata)
+            governed = mode == "governed"
+            if governed:
+                normalized = rule_validation.validate_existing(self)
+                handler_chain = normalized["handler"]
+            else:
+                # Compatibility path: markerless policies keep their existing
+                # URL handler chains and are durably labelled as legacy work.
+                handler_chain = self.handler
             if publisher is None:
                 from mojo.apps import jobs
                 publisher = jobs.publish
 
             specs = re.split(
                 r',(?=(?:job|email|sms|notify|ticket|maestro|block|llm|resolve)://)',
-                normalized["handler"])
+                handler_chain)
             published = False
 
             for index, spec in enumerate(filter(None, [s.strip() for s in specs])):
@@ -201,12 +297,15 @@ class RuleSet(models.Model, MojoModel):
 
                 payload = {
                     "handler_spec": spec,
-                    "handler_schema": rule_validation.HANDLER_JOB_SCHEMA,
-                    "handler_schema_version": (
-                        rule_validation.HANDLER_JOB_SCHEMA_VERSION),
+                    "execution_mode": "governed" if governed else "legacy",
                     "event_id": event.pk,
                     "incident_id": incident.pk if incident else None,
                 }
+                if governed:
+                    payload.update(
+                        handler_schema=rule_validation.HANDLER_JOB_SCHEMA,
+                        handler_schema_version=(
+                            rule_validation.HANDLER_JOB_SCHEMA_VERSION))
                 try:
                     publisher(
                         "mojo.apps.incident.handlers.event_handlers.execute_handler",
@@ -1008,9 +1107,9 @@ class Rule(models.Model, MojoModel):
         CREATE_PERMS = ["manage_security", "security"]
         SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security", "security"]
-        CAN_CREATE = False
-        CAN_UPDATE = False
-        CAN_DELETE = False
+        CAN_CREATE = True
+        CAN_UPDATE = True
+        CAN_DELETE = True
         DENY_AI = True
         GRAPHS = {
             "default": {
@@ -1023,29 +1122,113 @@ class Rule(models.Model, MojoModel):
             },
         }
 
+    @staticmethod
+    def _assert_legacy_rest_parents(parent_ids):
+        from mojo import errors as merrors
+        from mojo.apps.incident.services import rule_validation
+        parents = list(_rest_boundary_queryset(RuleSet).filter(
+            pk__in=parent_ids).order_by("pk").values("pk", "metadata"))
+        if len(parents) != len(parent_ids):
+            raise merrors.ValueException("RuleSet parent no longer exists")
+        for parent in parents:
+            try:
+                mode = rule_validation.policy_mode(parent["metadata"])
+            except rule_validation.RuleValidationError as error:
+                raise merrors.ValueException(
+                    "the stored parent policy mode marker is invalid") from error
+            if mode == "governed":
+                raise merrors.ValueException(
+                    "governed RuleSets require the versioned aggregate action")
+
+    @staticmethod
+    def _lock_parent_rows(parent_ids):
+        """Lock every affected aggregate in one canonical parent-first order."""
+        from mojo import errors as merrors
+
+        expected = sorted(set(parent_ids))
+        locked = list(RuleSet.objects.select_for_update().filter(
+            pk__in=expected).order_by("pk").values_list("pk", flat=True))
+        if locked != expected:
+            raise merrors.ValueException("RuleSet parent no longer exists")
+
+    @classmethod
+    def _lock_and_revalidate(cls, pk, observed_parent_id):
+        """Acquire the child after its parents and reject stale discovery."""
+        from mojo import errors as merrors
+
+        persisted_parent_id = cls.objects.select_for_update().filter(
+            pk=pk).values_list("parent_id", flat=True).first()
+        if persisted_parent_id is None:
+            raise merrors.ValueException("Rule no longer exists")
+        if persisted_parent_id != observed_parent_id:
+            raise merrors.ValueException(
+                "Rule parent changed; reload and retry", code=409, status=409)
+        return persisted_parent_id
+
+    def on_rest_pre_save(self, changed_fields, created):
+        old_parent_id = None
+        if not created:
+            # Discovery is intentionally unlocked. The real boundary locks
+            # sorted parents first, then the child, and revalidates this value.
+            old_parent_id = type(self).objects.filter(
+                pk=self.pk).values_list("parent_id", flat=True).first()
+        parent_ids = {value for value in (old_parent_id, self.parent_id)
+                      if value is not None}
+        self._assert_legacy_rest_parents(parent_ids)
+        if not created and transaction.get_connection().in_atomic_block:
+            self._lock_and_revalidate(self.pk, old_parent_id)
+
+    def on_rest_pre_delete(self):
+        from mojo import errors as merrors
+        parent_id = type(self).objects.filter(
+            pk=self.pk).values_list("parent_id", flat=True).first()
+        if parent_id is None:
+            raise merrors.ValueException("Rule no longer exists")
+        self._assert_legacy_rest_parents({parent_id})
+        if transaction.get_connection().in_atomic_block:
+            self._lock_and_revalidate(self.pk, parent_id)
+
+    def atomic_save(self):
+        """Defer commit to the endpoint's parent/marker locking boundary."""
+        self.save()
+        if not transaction.get_connection().in_atomic_block:
+            transaction.commit()
+
     def save(self, *args, **kwargs):
-        """Persist the condition and advance the aggregate revision."""
-        from django.db import transaction
+        """Persist the condition and advance both aggregate revisions."""
         from django.utils import timezone
 
         with transaction.atomic():
+            old_parent_id = None
+            if self.pk and not self._state.adding:
+                old_parent_id = type(self).objects.filter(
+                    pk=self.pk).values_list("parent_id", flat=True).first()
+            parent_ids = {value for value in (
+                old_parent_id, self.parent_id) if value is not None}
+            self._lock_parent_rows(parent_ids)
+            if old_parent_id is not None:
+                self._lock_and_revalidate(self.pk, old_parent_id)
             result = super().save(*args, **kwargs)
-            if self.parent_id:
-                RuleSet.objects.filter(pk=self.parent_id).update(
+            if parent_ids:
+                RuleSet.objects.filter(pk__in=parent_ids).update(
                     modified=timezone.now())
         return result
 
     def delete(self, *args, **kwargs):
         """Delete the condition and advance the surviving parent revision."""
-        from django.db import transaction
         from django.utils import timezone
 
-        parent_id = self.parent_id
         with transaction.atomic():
+            parent_id = type(self).objects.filter(pk=self.pk).values_list(
+                "parent_id", flat=True).first()
+            if parent_id is None:
+                from mojo import errors as merrors
+                raise merrors.ValueException("Rule no longer exists")
+            self._lock_parent_rows({parent_id})
+            self._lock_and_revalidate(self.pk, parent_id)
             result = super().delete(*args, **kwargs)
-            if parent_id:
-                RuleSet.objects.filter(pk=parent_id).update(
-                    modified=timezone.now())
+            RuleSet.objects.filter(pk=parent_id).update(
+                modified=timezone.now())
         return result
 
     def check_rule(self, event):

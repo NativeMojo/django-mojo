@@ -681,14 +681,26 @@ def execute_handler(job):
     from urllib.parse import urlparse, parse_qs
 
     payload = job.payload
-    try:
-        from mojo.apps.incident.services import rule_validation
-        spec = rule_validation.normalize_queued_handler(
-            payload.get("handler_spec"), payload.get("handler_schema"),
-            payload.get("handler_schema_version"))
-    except (AttributeError, rule_validation.RuleValidationError):
-        logger.warning(
-            "execute_handler: refusing unversioned, stale, or unsafe handler job")
+    mode = payload.get("execution_mode")
+    from mojo.apps.incident.services import rule_validation
+    if mode == "governed" or payload.get("handler_schema") is not None:
+        try:
+            spec = rule_validation.normalize_queued_handler(
+                payload.get("handler_spec"), payload.get("handler_schema"),
+                payload.get("handler_schema_version"))
+        except (AttributeError, rule_validation.RuleValidationError):
+            logger.warning(
+                "execute_handler: refusing stale or unsafe governed handler job")
+            return False
+    elif mode in (None, "legacy"):
+        # Queued work created before the governed marker shipped carries no
+        # execution_mode. It remains on the established handler path.
+        spec = payload.get("handler_spec")
+        if not isinstance(spec, str) or len(spec) > 4096:
+            logger.warning("execute_handler: invalid legacy handler job")
+            return False
+    else:
+        logger.warning("execute_handler: unknown handler execution mode")
         return False
     event_id = payload.get("event_id")
     incident_id = payload.get("incident_id")

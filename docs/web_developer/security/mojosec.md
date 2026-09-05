@@ -1,9 +1,10 @@
 # MojoSec Sensor Ingestion
 
-> The sensor receiver below is machine-facing. Human operations clients use
-> `GET /api/incident/admin/security` and
-> `POST /api/incident/admin/security/action`; API keys are deliberately refused
-> there.
+> The sensor receiver below is machine-facing. Operator clients, including
+> validated per-user automation, use `GET /api/incident/admin/security` and
+> `POST /api/incident/admin/security/action`. Those Admin Security REST routes
+> also recognize validated per-user API keys, while group credentials are
+> confined to exact-group reads.
 
 `POST /api/incident/mojosec/batch` is the machine-facing receiver for dedicated
 EC2 host sensors. It is not a browser/admin ingestion endpoint and does not use
@@ -112,17 +113,18 @@ callers — one outage is one growing event per failure shape — and their
 failure, not an actor attribution. The source alone still performs no action:
 only an exact active central RuleSet may create an Incident or run a handler.
 
-RuleSets are written only through the Admin Security aggregate authority.
-Generic `/api/incident/event/ruleset` and child-rule URLs remain readable but
-reject mutation. The action writer requires the exact parent revision and
+Governed RuleSets are written through the Admin Security aggregate authority.
+Generic `/api/incident/event/ruleset` and child-rule URLs retain existing CRUD
+for markerless legacy policies but reject mutation of governed aggregates. The action writer requires the exact parent revision and
 typed confirmation; a complete replacement is saved inactive and must pass
 the server-owned field/operator/handler schema before separate activation.
-Raw handler strings, arbitrary jobs/Python paths, unsafe regex, and stale
-ticket or Assistant approvals fail closed. Malformed legacy rows remain
-visible for deactivation/deletion but evaluate as no-match and cannot dispatch.
+Raw handler strings, arbitrary jobs/Python paths, and broad regexes remain
+invalid for governed writes; stale ticket or Assistant approvals fail closed.
+Markerless legacy rows keep their established evaluator and handler dispatch
+until explicitly replaced into governed policy.
 
 The packaged Admin v2 uses the same authority for its Security destination.
-Its six tabs consume only schema-version-2 curated envelopes; v2 Activity keeps
+Its six tabs consume only schema-version-3 curated envelopes; v2 Activity keeps
 tickets/logs and makes no generic Incident/Event request. RuleSet and
 recommendation/IPSet controls are built from the returned action schemas,
 require the current `modified` revision plus typed confirmation, and never
@@ -309,9 +311,11 @@ direct, SSH-attributed, or audit-unhealthy activity is sent as an ordinary
 Event. A diagnostic window uses the existing eventless local-only receipt
 contract and does not create an Incident or enter learning/feedback metrics.
 
-The browser-facing learning endpoints are separate from machine ingestion.
-They require a human JWT with global security permissions; API keys are always
-rejected and group/member grants never authorize this platform-wide surface.
+The operator-facing learning endpoints are separate from machine ingestion.
+They require a User with global security permissions. That authority may come
+from an interactive JWT or a positively validated per-user `UserAPIKey` Bearer
+token. Group `ApiKey`/group-token credentials and group/member grants never
+authorize this platform-wide surface.
 
 | Method | Path | Permission | Purpose |
 |---|---|---|---|
@@ -325,12 +329,13 @@ rejected and group/member grants never authorize this platform-wide surface.
 | `GET` | `/api/incident/mojosec/case-metrics` | global `view_security` or `security` | Bounded aggregate case metrics |
 | `GET` | `/api/incident/mojosec/recommendation` | global `view_security`, `manage_security` or `security` | Paginated recommendation list (`state`, `action`, `urgency`, `confidence`, `case_id` filters) |
 | `GET` | `/api/incident/mojosec/recommendation/<id>` | global `view_security`, `manage_security` or `security` | One recommendation with `execution_generation`, at most 512 ordered target rows plus `targets_truncated`, and the last 50 transitions/attempts |
-| `POST` | `/api/incident/mojosec/recommendation-action` | global `manage_security` or `security` | Fresh human session only; `{recommendation_id, action: approve\|reject\|cancel\|reverse, expected_modified, confirm, note}` delegates to the governed authority and cannot add targets or widen scope |
+| `POST` | `/api/incident/mojosec/recommendation-action` | global `manage_security` or `security` | Deployment-configured freshness for interactive sessions; validated per-user API keys retain global authority. The payload `{recommendation_id, action: approve\|reject\|cancel\|reverse, expected_modified, confirm, note}` cannot add targets or widen scope |
 | `GET` | `/api/incident/mojosec/deployment` | global `view_security`, `manage_security` or `security` | Driver-side deployment registrations (optional `installation_key_id` filter) |
 | `POST` | `/api/incident/mojosec/deployment` | global `manage_security` or `security` | Pre-register `{installation_key_id, deployment_id, ttl_seconds, note}` before a deploy |
 
-The case surfaces are platform/global security-admin reads. API keys and group
-member grants do not authorize them, and there are no case mutation endpoints —
+The case surfaces are platform/global security-admin reads. A validated
+per-user `UserAPIKey` retains its User's global grant; group credentials and
+group member grants do not authorize them. There are no case mutation endpoints —
 enforcement flows exclusively through the recommendation lifecycle above,
 whose targets are always server-derived case sources with per-target
 `validated`/`protected`/`invalid` validation and honest

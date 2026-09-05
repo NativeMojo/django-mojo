@@ -5,16 +5,19 @@ from mojo.apps.incident.services import admin_security
 
 
 @md.POST('ipset/action')
-@md.denies_key_backed_session()
-@md.requires_fresh_auth(seconds=600)
-@md.requires_global_perms("manage_security", "security")
+@md.requires_auth()
+@md.requires_fresh_auth()
+@md.custom_security("global User or validated UserAPIKey IPSet mutation")
 def on_ipset_action(request):
     data = dict(request.DATA)
     action = data.get("action")
     if isinstance(action, str) and not action.startswith("ipset."):
         data["action"] = f"ipset.{action}"
     try:
-        return admin_security.apply_action(data, request.user)
+        authority = admin_security.build_authority(request, write=True)
+        return admin_security.apply_action(
+            data, request.user, authority=authority,
+            actor_context=authority.actor_context)
     except admin_security.SecurityActionError as err:
         raise merrors.ValueException(
             str(err), code=err.code, status=err.status) from err

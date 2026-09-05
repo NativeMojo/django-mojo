@@ -85,7 +85,15 @@ def is_fresh(request, seconds=None):
     window = resolve_window(request, seconds)
     if window <= 0:
         return True  # feature disabled — full bypass
-    # Only interactive JWT logins carry auth_time; API-key/other auth bypass.
+    # Proven machine credentials have no interactive login event to repeat.
+    # A UserAPIKey uses the Bearer scheme, so checking only request.bearer
+    # would accidentally force it through an impossible reauthentication flow.
+    from mojo.helpers.request import (
+        restricted_identity, validated_user_api_key)
+    if (validated_user_api_key(request) is not None or
+            restricted_identity(request) is not None):
+        return True
+    # Only interactive JWT logins carry auth_time; other auth bypasses.
     if getattr(request, "bearer", None) != "bearer":
         return True
     at = token_auth_time(request)

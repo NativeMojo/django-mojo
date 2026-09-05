@@ -20,6 +20,7 @@ in any installed app and calling :func:`register_tool`.
 # ---------------------------------------------------------------------------
 
 _REGISTRY = {}
+CONFIGURED_FRESH_AUTH = "configured"
 
 # Domain descriptions for load_tools listing
 DOMAIN_DESCRIPTIONS = {
@@ -128,12 +129,17 @@ def register_tool(name, description, input_schema, handler,
                 f"apply to mutating tools; a gate on a read-only tool never runs."
             )
     if fresh_auth_seconds is not None:
-        if isinstance(fresh_auth_seconds, bool) or not isinstance(fresh_auth_seconds, int):
+        configured = fresh_auth_seconds == CONFIGURED_FRESH_AUTH
+        if (not configured and (
+                isinstance(fresh_auth_seconds, bool) or
+                not isinstance(fresh_auth_seconds, int))):
             raise ValueError(
-                f"Assistant tool '{name}': fresh_auth_seconds must be a positive int or None")
-        if fresh_auth_seconds <= 0:
+                f"Assistant tool '{name}': fresh_auth_seconds must be a "
+                "positive int, 'configured', or None")
+        if not configured and fresh_auth_seconds <= 0:
             raise ValueError(
-                f"Assistant tool '{name}': fresh_auth_seconds must be a positive int or None")
+                f"Assistant tool '{name}': fresh_auth_seconds must be a "
+                "positive int, 'configured', or None")
     for key in ("summarize", "preview", "owner_state"):
         if gates[key] is not None and not callable(gates[key]):
             raise ValueError(f"Assistant tool '{name}': {key} must be callable or None")

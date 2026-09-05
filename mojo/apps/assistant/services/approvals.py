@@ -384,6 +384,20 @@ def render_block(row, now=None):
     }
 
 
+def resolve_fresh_auth_window(value, configured_window=None):
+    """Resolve a registry freshness declaration to a persisted numeric gate."""
+    from mojo.apps.assistant import CONFIGURED_FRESH_AUTH
+
+    if value == CONFIGURED_FRESH_AUTH:
+        if configured_window is None:
+            from mojo.apps.account.services import fresh_auth
+            configured_window = fresh_auth.resolve_window()
+        value = configured_window
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
 def states_for_conversation(conversation, limit=50):
     """Current state of a conversation's most recent approvals, oldest first.
 
@@ -492,7 +506,8 @@ def propose(user, conversation, tool_name, entry, raw_args,
         args_fingerprint=args_fingerprint,
         summary=safe_summary(entry, args, user),
         preview=preview,
-        fresh_auth_seconds=entry.get("fresh_auth_seconds"),
+        fresh_auth_seconds=resolve_fresh_auth_window(
+            entry.get("fresh_auth_seconds")),
         requires_superuser=bool(entry.get("requires_superuser")),
         requires_managed_infrastructure=bool(entry.get("requires_managed_infrastructure")),
         revision=(preview or {}).get("revision") or "",
@@ -554,6 +569,10 @@ def resolve(user, action_id, decision, request=None, conversation_id=None,
     """
     from mojo.apps.assistant import get_registry, user_can_use_tool
     from mojo.apps.assistant.models import PendingAction
+
+    if request_meta is None and request is not None:
+        from mojo.apps.assistant.services.agent import _build_request_meta
+        request_meta = _build_request_meta(request)
 
     if decision not in ("approve", "cancel"):
         _deny(user, None, CODE_UNAVAILABLE, _reporter=_reporter)
@@ -713,7 +732,8 @@ def _require_fresh_auth(entry, row, live_user, request, _reporter=None):
     # Snapshot OR live entry, and the STRICTER (shorter) of the two windows.
     # Dropping `fresh_auth_seconds` from the registry must not silently un-gate a
     # pending card that told the operator it would ask for a step-up.
-    windows = [w for w in (row.fresh_auth_seconds, entry.get("fresh_auth_seconds")) if w]
+    live_window = resolve_fresh_auth_window(entry.get("fresh_auth_seconds"))
+    windows = [w for w in (row.fresh_auth_seconds, live_window) if w]
     window = min(windows) if windows else None
     if not window:
         return
