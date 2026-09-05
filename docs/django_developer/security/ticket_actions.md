@@ -166,10 +166,12 @@ rebuilds `review` from it and verifies both stored and echoed digests.
    stored context.
 3. **Terminal tickets are skipped** — a ticket already `closed`/`resolved`
    cannot execute an unresolved proposal.
-4. **Global interactive authority is re-proved at dispatch** — the note must
+4. **Global authority is re-proved at dispatch** — the note must
    carry its active request, the actor must hold global `manage_security` or
    `security`, key-backed sessions are refused, and authentication must be
-   within 600 seconds.
+   within the deployment-configured freshness window. A positively validated
+   per-user API key may carry the user's global permission without an
+   impossible interactive reauthentication; group credentials remain denied.
 5. **The claim commits before side effects** — `_claim_dispatch()` uses an
    outermost `transaction.atomic(durable=True)` to stamp `state="claimed"`
    before the handler runs. The claim records response/actor identity plus a

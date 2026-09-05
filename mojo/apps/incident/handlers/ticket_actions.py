@@ -122,7 +122,7 @@ def bind_action_note(note, metadata):
     return note
 
 
-def _has_interactive_authority(note, handler_name):
+def _has_global_authority(note, handler_name):
     request = getattr(note, "active_request", None)
     actor = getattr(request, "user", None) if request is not None else None
     try:
@@ -133,10 +133,13 @@ def _has_interactive_authority(note, handler_name):
                 is_key_backed_session(request) or
                 not actor.has_permission(["manage_security", "security"])):
             logger.warning(
-                "Ticket action %s lacked interactive global authority",
+                "Ticket action %s lacked global authority",
                 handler_name)
             return None
-        fresh_auth.require_fresh(request, seconds=600)
+        # The deployment owns the interactive freshness policy. Positively
+        # validated UserAPIKeys bypass it in fresh_auth because a machine
+        # credential has no interactive login ceremony to repeat.
+        fresh_auth.require_fresh(request)
     except Exception:
         logger.warning(
             "Ticket action %s failed fresh-auth authority", handler_name)
@@ -305,7 +308,7 @@ def dispatch_action(ticket, note, response_meta):
         logger.warning("Action response note is not bound to ticket %s", ticket.pk)
         return False
 
-    actor = _has_interactive_authority(note, handler_name)
+    actor = _has_global_authority(note, handler_name)
     if actor is None:
         return False
 
@@ -426,6 +429,8 @@ def _handler_rule_approval(ticket, note, action, context):
         return False
 
     actor = note.active_request.user
+    from mojo.helpers.request import safe_actor_context
+    actor_context = safe_actor_context(note.active_request)
     if action == "approve":
         from mojo.apps.incident.services import admin_security
         admin_security.apply_action({
@@ -433,7 +438,7 @@ def _handler_rule_approval(ticket, note, action, context):
             "expected_modified": context.get("expected_modified"),
             "confirm": context.get("confirm"),
             "confirm_catch_all": context.get("confirm_catch_all"),
-        }, actor)
+        }, actor, actor_context=actor_context)
         _add_system_note(
             ticket,
             f"Rule approved and activated. RuleSet #{ruleset.pk} \"{ruleset.name}\" is now live.",
@@ -448,7 +453,7 @@ def _handler_rule_approval(ticket, note, action, context):
             "action": "ruleset.delete", "ruleset_id": ruleset.pk,
             "expected_modified": context.get("expected_modified"),
             "confirm": context.get("deny_confirm"),
-        }, actor)
+        }, actor, actor_context=actor_context)
         _add_system_note(ticket, f"Rule denied and deleted. RuleSet \"{name}\" has been removed.")
         ticket.status = "closed"
         ticket.save(update_fields=["status"])
@@ -476,11 +481,13 @@ def _handler_rule_update(ticket, note, action, context):
         proposed = context.get("ruleset")
         if proposed:
             from mojo.apps.incident.services import admin_security
+            from mojo.helpers.request import safe_actor_context
             admin_security.apply_action({
                 "action": "ruleset.replace", "ruleset_id": ruleset.pk,
                 "expected_modified": context.get("expected_modified"),
                 "confirm": context.get("confirm"), "ruleset": proposed,
-            }, note.active_request.user)
+            }, note.active_request.user,
+                actor_context=safe_actor_context(note.active_request))
             _add_system_note(
                 ticket,
                 f"Rule update approved. RuleSet #{ruleset.pk} \"{ruleset.name}\" "

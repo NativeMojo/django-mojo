@@ -1174,7 +1174,7 @@ def _rule_action(action, payload, actor, actor_context=None):
         verb = action.split(".", 1)[1].upper()
         _confirm(payload, f"{verb} RULESET {row.pk}")
         if action == "ruleset.replace":
-            if row.is_active:
+            if rule_validation.is_governed(row) and row.is_active:
                 raise SecurityActionError(
                     "deactivate the governed RuleSet before replacement",
                     code="active_ruleset", status=409)

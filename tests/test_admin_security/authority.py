@@ -52,9 +52,13 @@ def setup_admin_security(opts):
 
 @th.django_unit_test("Admin Security routes use server-derived authority and configured freshness")
 def test_route_authority(opts):
+    import inspect
+    from types import SimpleNamespace
     from mojo import errors as merrors
+    from mojo.apps.account.models import User
     views = importlib.import_module("mojo.apps.incident.rest.admin_security")
     from mojo.apps.incident.rest import ipset as ipset_views
+    from mojo.apps.incident.handlers import ticket_actions
     from mojo.apps.incident.services import admin_security
     assert views.on_admin_security.__url__ == ("GET", "admin/security")
     assert views.on_admin_security_action.__url__ == (
@@ -69,6 +73,18 @@ def test_route_authority(opts):
     assert ipset_views.on_ipset_action.__url__ == ("POST", "ipset/action")
     assert not getattr(ipset_views.on_ipset_action, "_mojo_denies_key_backed_session", False)
     assert ipset_views.on_ipset_action._mojo_requires_fresh_auth
+    ticket_authority = inspect.getsource(ticket_actions._has_global_authority)
+    assert "require_fresh(request)" in ticket_authority
+    assert "seconds=600" not in ticket_authority, (
+        "ticket-governed security actions must use configured freshness")
+    actor = User.objects.get(pk=opts.security_operator)
+    machine_request = SimpleNamespace(
+        user=actor, user_api_key=SimpleNamespace(pk=23, label="operator"),
+        api_key=None, group_token=None, bearer="bearer", META={})
+    assert ticket_actions._has_global_authority(
+        SimpleNamespace(active_request=machine_request),
+        "incident.rule_approval") == actor, (
+            "validated per-user API keys must retain ticket action authority")
     try:
         views._translate(lambda: (_ for _ in ()).throw(
             admin_security.SecurityActionError(

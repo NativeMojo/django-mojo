@@ -696,8 +696,10 @@ POST /api/incident/ticket/note
 }
 ```
 
-Dispatch requires a global `manage_security`/`security` grant, a non-key-backed
-session, and authentication within 600 seconds. Approving a rule proposal
+Dispatch requires a global `manage_security`/`security` grant. Interactive
+sessions use the deployment-configured freshness policy; validated per-user
+API keys retain global authority, while group credentials remain denied.
+Approving a rule proposal
 activates exactly the revision that was reviewed and resolves the ticket;
 denying deletes that same revision and closes it. A stale revision fails closed.
 A structured response never triggers an LLM reply; plain notes on an
