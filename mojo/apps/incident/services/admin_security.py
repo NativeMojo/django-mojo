@@ -7,11 +7,12 @@ removed at the final serialization boundary.
 
 from datetime import datetime, timedelta
 import hashlib
+import json
 import re
 from types import MappingProxyType
 
 from django.db import transaction
-from django.db.models import Count, Max, Prefetch, Q
+from django.db.models import Count, Prefetch, Q
 from django.utils import timezone
 
 from mojo import errors as merrors
@@ -207,16 +208,30 @@ def _page_cursor(authority, section, window, rows, truncated, limit,
         snapshot or ("0" * 64))
 
 
-def _query_snapshot(queryset):
-    """Digest membership/revision for a list ordered by mutable columns."""
-    state = queryset.aggregate(
-        row_count=Count("pk", distinct=True), last_modified=Max("modified"))
-    raw = f"{state['row_count']}:{_iso(state['last_modified'])}".encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
+def _query_snapshot(queryset, ordering):
+    """Digest the actual ordered membership used by one discovery list.
+
+    Count/max(modified) is not a snapshot: two rows can exchange order without
+    touching ``modified``, and an insert/delete pair can retain both aggregate
+    values. Hash the ordered primary keys and every ordering value instead.
+    ``iterator`` keeps memory bounded even for a large administrative roster.
+    """
+    fields = [name.lstrip("-") for name in ordering]
+    digest = hashlib.sha256(b"admin-security-row-snapshot-v2\x00")
+    rows = queryset.order_by(*ordering).values_list(*fields).iterator(
+        chunk_size=1000)
+    for row in rows:
+        values = [(_iso(value) if isinstance(value, datetime) else value)
+                  for value in row]
+        digest.update(json.dumps(
+            values, ensure_ascii=False, separators=(",", ":"),
+            default=str).encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
 
 
-def _snapshot_guard(queryset, expected=None):
-    actual = _query_snapshot(queryset)
+def _snapshot_guard(queryset, ordering, expected=None):
+    actual = _query_snapshot(queryset, ordering)
     if expected is not None and actual != expected:
         raise SecurityActionError(
             "Admin Security evidence changed; restart list retrieval",
@@ -522,7 +537,8 @@ def _cases(cutoff, window, end, limit, authority, case_id=None,
     else:
         qs = qs.filter(last_seen__gte=cutoff, last_seen__lte=end)
         base = qs
-        snapshot = _snapshot_guard(base, page_snapshot)
+        snapshot = _snapshot_guard(
+            base, ("-last_seen", "-pk"), page_snapshot)
         if page_position is not None:
             stamp, pk = _cursor_time(page_position[0]), _id(
                 page_position[1], "page cursor id")
@@ -531,7 +547,7 @@ def _cases(cutoff, window, end, limit, authority, case_id=None,
     qs = qs.order_by("-last_seen", "-id")
     rows = list(qs[:limit + 1])
     if case_id is None:
-        _snapshot_guard(base, snapshot)
+        _snapshot_guard(base, ("-last_seen", "-pk"), snapshot)
     if case_id is not None:
         data = [_bounded_case(row, authority) for row in rows[:limit]]
     else:
@@ -626,7 +642,7 @@ def _rules(cutoff, window, limit, authority, ruleset_id=None,
         queryset = RuleSet.objects.filter(
             created__lte=_cursor_time(window["end"]))
         base = queryset
-        snapshot = _snapshot_guard(base, page_snapshot)
+        snapshot = _snapshot_guard(base, ("priority", "pk"), page_snapshot)
         if page_position is not None:
             priority, pk = page_position
             if isinstance(priority, bool) or not isinstance(priority, int):
@@ -638,7 +654,7 @@ def _rules(cutoff, window, limit, authority, ruleset_id=None,
             _admin_security_rule_count=Count("rules"))
     rows = list(queryset.order_by("priority", "id")[:limit + 1])
     if not detail:
-        _snapshot_guard(base, snapshot)
+        _snapshot_guard(base, ("priority", "pk"), snapshot)
     data = [
         (_bounded_rule_set(row, authority) if detail else
          transport.scrub(_safe_rule_set(row, detail=False)))
@@ -661,7 +677,7 @@ def _ipsets(cutoff, window, limit, authority, ipset_id=None,
     else:
         queryset = queryset.filter(created__lte=_cursor_time(window["end"]))
         base = queryset
-        snapshot = _snapshot_guard(base, page_snapshot)
+        snapshot = _snapshot_guard(base, ("name", "pk"), page_snapshot)
         if page_position is not None:
             name, pk = page_position
             if not isinstance(name, str) or len(name) > 64:
@@ -671,7 +687,7 @@ def _ipsets(cutoff, window, limit, authority, ipset_id=None,
                 Q(name__gt=name) | Q(name=name, pk__gt=pk))
     rows = list(queryset.order_by("name", "id")[:limit + 1])
     if ipset_id is None:
-        _snapshot_guard(base, snapshot)
+        _snapshot_guard(base, ("name", "pk"), snapshot)
     try:
         roster = firewall_truth.exact_compatible_roster()
         roster_available = True
@@ -964,24 +980,47 @@ def _expect_revision(payload, row):
 
 def _persist_ruleset(normalized, existing=None):
     from mojo.apps.incident.models import Rule, RuleSet
+    if existing is not None:
+        # Aggregate writers always acquire the parent before any child. Read
+        # membership, lock children by primary key, then revalidate both their
+        # persisted parent and the complete membership while the parent lock
+        # fences compliant direct Rule writers.
+        row = RuleSet.objects.select_for_update().filter(pk=existing.pk).first()
+        if row is None:
+            raise SecurityActionError(
+                "RuleSet does not exist", code="not_found", status=404)
+        observed_ids = list(Rule.objects.filter(parent_id=row.pk).order_by(
+            "pk").values_list("pk", flat=True))
+        locked_children = list(Rule.objects.select_for_update().filter(
+            pk__in=observed_ids).order_by("pk").values_list(
+                "pk", "parent_id"))
+        if ([pk for pk, _parent_id in locked_children] != observed_ids or
+                any(parent_id != row.pk
+                    for _pk, parent_id in locked_children) or
+                list(Rule.objects.filter(parent_id=row.pk).order_by(
+                    "pk").values_list("pk", flat=True)) != observed_ids):
+            raise SecurityActionError(
+                "RuleSet conditions changed; reload and retry",
+                code="stale_revision", status=409)
+    else:
+        row = None
     metadata = rule_validation.mark_governed(normalized["metadata"])
-    if existing is not None and isinstance(existing.metadata, dict):
+    if row is not None and isinstance(row.metadata, dict):
         # These values are internal LLM workflow state, not public policy
         # input. A complete policy replacement must not silently discard them.
         for key in (
                 "agent_memory", "agent_prompt", "assistant_proposed",
                 "llm_proposed", "llm_reasoning", "occurrence_count"):
-            if key in existing.metadata:
-                metadata[key] = existing.metadata[key]
+            if key in row.metadata:
+                metadata[key] = row.metadata[key]
     values = {key: normalized[key] for key in (
         "name", "category", "priority", "bundle_minutes", "bundle_by",
         "bundle_by_rule_set", "match_by", "trigger_count", "trigger_window",
         "retrigger_every", "handler", "is_active")}
     values["metadata"] = metadata
-    if existing is None:
+    if row is None:
         row = RuleSet.objects.create(**values)
     else:
-        row = existing
         for key, value in values.items():
             setattr(row, key, value)
         row.save()

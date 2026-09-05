@@ -82,13 +82,13 @@ def test_generic_compatibility_rest_boundary(opts):
         "credential_kind": "user", "user_id": user.pk}, (
         "generic policy writes need safe server-derived actor provenance")
 
-    replaced = opts.client.post(f"/api/incident/event/ruleset/{row.pk}", {
+    replaced = opts.client.put(f"/api/incident/event/ruleset/{row.pk}", {
         "metadata": {"__replace": True, "operator_note": "drop marker"}})
     assert replaced.status_code == 400, replaced.response
-    non_dict = opts.client.post(
+    non_dict = opts.client.put(
         f"/api/incident/event/ruleset/{row.pk}", {"metadata": ["drop marker"]})
     assert non_dict.status_code == 400, non_dict.response
-    changed = opts.client.post(f"/api/incident/event/ruleset/{row.pk}", {
+    changed = opts.client.put(f"/api/incident/event/ruleset/{row.pk}", {
         "metadata": {"__replace": True,
                      rule_validation.COMPATIBILITY_METADATA_KEY: {"version": 2}},
     })
@@ -116,7 +116,7 @@ def test_generic_compatibility_rest_boundary(opts):
         "Authorization": f"Bearer {stale_token}",
         "X-Mojo-Test-Fresh-Auth-Window": "300",
     }
-    stale_update = opts.client.post(
+    stale_update = opts.client.put(
         f"/api/incident/event/ruleset/{row.pk}",
         {"name": "must not change"}, headers=stale_headers)
     stale_delete = opts.client.delete(
@@ -167,13 +167,13 @@ def test_persisted_marker_boundary_and_reparent(opts):
         parent=legacy, field_name="level", comparator=">=", value="5",
         value_type="int")
 
-    ok = opts.client.post(
+    ok = opts.client.put(
         f"/api/incident/event/ruleset/{legacy.pk}", {"name": "still legacy"})
     assert ok.status_code == 200, ok.response
     assert not rule_validation.has_reserved_marker(
         RuleSet.objects.get(pk=legacy.pk).metadata), "grandfather marker changed"
 
-    ignored = opts.client.post(
+    ignored = opts.client.put(
         f"/api/incident/event/ruleset/rule/{child.pk}",
         {"parent": governed.pk})
     # The stock graph does not make ``parent`` writable, so a wire attempt is

@@ -18,6 +18,12 @@ def _compatibility_audit(request, action, object_type, object_id):
         actor_context=safe_actor_context(request))
 
 
+def _method_not_allowed():
+    return JsonResponse({
+        "status": False, "error": "Method not allowed", "code": 405,
+    }, status=405)
+
+
 def _create_compatibility_ruleset(request):
     """Create one explicitly marked compatibility policy."""
     from mojo.apps.incident.services import rule_validation
@@ -46,6 +52,9 @@ def _compatibility_ruleset_request(request, pk=None):
     """Generic compatibility CRUD with a locked server-owned mode boundary."""
     if request.method == "GET":
         return RuleSet.on_rest_request(request, pk)
+    if ((pk is None and request.method != "POST") or
+            (pk is not None and request.method not in ("PUT", "PATCH", "DELETE"))):
+        return _method_not_allowed()
     from mojo.apps.account.services import fresh_auth
 
     fresh_auth.require_fresh(request)
@@ -80,6 +89,9 @@ def _compatibility_rule_request(request, pk=None):
     """Child CRUD with old/new parents locked in the same REST transaction."""
     if request.method == "GET":
         return Rule.on_rest_request(request, pk)
+    if ((pk is None and request.method != "POST") or
+            (pk is not None and request.method not in ("PUT", "PATCH", "DELETE"))):
+        return _method_not_allowed()
     from mojo.apps.account.services import fresh_auth
 
     fresh_auth.require_fresh(request)

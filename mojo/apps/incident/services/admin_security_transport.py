@@ -22,18 +22,23 @@ _SECRET_KEYS = frozenset({
     "refresh_token", "auth_token", "authorization", "bearer",
     "private_key", "private_key_pem", "signing_key", "source_key",
     "secret_key", "aws_secret_access_key", "otp", "otp_code", "totp",
-    "totp_code", "mfa", "mfa_code", "one_time_password", "session",
+    "totp_code", "mfa_code", "one_time_password", "api_secret", "id_token",
+    "x_amz_security_token",
     "sessionid", "session_id", "session_token", "csrf_token",
     "csrfmiddlewaretoken",
 })
 _SECRET_CONTAINERS = frozenset({"credential", "credentials", "headers", "cookies"})
+_CONTEXT_SECRET_KEYS = frozenset({"mfa", "session"})
 _ASSIGNMENT_RE = re.compile(
     r"(?i)(\b(?:password|passwd|passphrase|client_secret|provider_secret|"
-    r"webhook_secret|signing_secret|secret[_-]?key|aws_secret_access_key|"
+    r"webhook_secret|signing_secret|api[_-]?secret|secret[_-]?key|"
+    r"aws_secret_access_key|x[_-]?amz[_-]?security[_-]?token|"
     r"api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|"
-    r"bearer[_-]?token|auth[_-]?key|encryption[_-]?key|"
+    r"id[_-]?token|security[_-]?token|bearer[_-]?token|"
+    r"auth[_-]?key|encryption[_-]?key|"
     r"private[_-]?key|otp(?:[_-]?code)?|totp(?:[_-]?code)?|"
-    r"mfa(?:[_-]?code)?|one[_-]?time[_-]?password|session(?:id|[_-]?id|[_-]?token)?|"
+    r"mfa[_-]?code|one[_-]?time[_-]?password|"
+    r"session(?:id|[_-]?id|[_-]?token)|"
     r"csrf(?:middleware)?token)\b\s*[:=]\s*)"
     r"([^\s,;&]+)")
 _AUTH_HEADER_RE = re.compile(
@@ -45,8 +50,9 @@ _PRIVATE_KEY_RE = re.compile(
 _URL_USERINFO_RE = re.compile(
     r"(?i)(\b[a-z][a-z0-9+.-]*://[^/@:\s]*:)([^/@\s]+)(@)")
 _AUTH_QUERY_RE = re.compile(
-    r"(?i)([?&](?:access_token|refresh_token|api[_-]?key|auth(?:orization)?|"
-    r"token|signature|x-amz-signature)=)([^&#\s]*)")
+    r"(?i)([?&](?:access_token|refresh_token|id[_-]?token|api[_-]?key|"
+    r"api[_-]?secret|auth(?:orization)?|token|signature|x-amz-signature|"
+    r"x-amz-security-token)=)([^&#\s]*)")
 _COOKIE_SECRET_RE = re.compile(
     r"(?i)(\b(?:sessionid|session_id|session|session_token|"
     r"csrftoken|csrfmiddlewaretoken|otp|totp|mfa)\s*=\s*)"
@@ -60,17 +66,19 @@ class TransportError(ValueError):
         super().__init__(message)
 
 
-def _secret_key(name):
+def _secret_key(name, context=None):
     normalized = str(name).strip().lower().replace("-", "_")
-    return (normalized in _SECRET_KEYS or normalized.endswith("_password") or
+    return ((normalized in _CONTEXT_SECRET_KEYS and
+             context in _SECRET_CONTAINERS) or
+            normalized in _SECRET_KEYS or normalized.endswith("_password") or
             normalized.endswith("_secret") or normalized.endswith("_token") or
             normalized.endswith("_private_key") or
             normalized.endswith("_secret_key") or
             normalized.endswith("_api_key") or
-            normalized.endswith("_otp") or normalized.endswith("_mfa"))
+            normalized.endswith("_otp"))
 
 
-def scrub_text(value):
+def scrub_text(value, context=None):
     """Remove embedded authentication material but preserve surrounding text."""
     sentinel = "\x00MOJO_ADMIN_SECRET_REDACTED\x00"
     value = value.replace(REDACTED, sentinel)
@@ -81,38 +89,37 @@ def scrub_text(value):
         lambda match: match.group(1) + sentinel, value)
     value = _AUTH_HEADER_RE.sub(
         lambda match: match.group(1) + sentinel, value)
-    value = _COOKIE_SECRET_RE.sub(
-        lambda match: match.group(1) + sentinel, value)
+    if context in {"headers", "cookies", "credential", "credentials"}:
+        value = _COOKIE_SECRET_RE.sub(
+            lambda match: match.group(1) + sentinel, value)
     value = _ASSIGNMENT_RE.sub(lambda match: match.group(1) + sentinel, value)
     return value.replace(sentinel, REDACTED)
 
 
-def scrub(value, key=None):
+def scrub(value, key=None, context=None):
     """Recursively scrub only authentication-secret values."""
     normalized = (str(key).strip().lower().replace("-", "_")
                   if key is not None else None)
+    active_context = (
+        normalized if normalized in _SECRET_CONTAINERS else context)
     if normalized in {"credential", "credentials"}:
         if not isinstance(value, (dict, list, tuple)):
             return REDACTED
         if isinstance(value, (list, tuple)):
-            return [scrub(item) if isinstance(item, (dict, list, tuple))
+            return [scrub(item, context=active_context)
+                    if isinstance(item, (dict, list, tuple))
                     else REDACTED for item in value]
-    if (normalized in _SECRET_CONTAINERS and
-            isinstance(value, (dict, list, tuple))):
-        # A credentials/headers/cookies object mixes secrets with operational
-        # siblings. Walk it instead of erasing usernames, hosts, paths, or
-        # harmless cookie preferences with the container label.
-        key = None
-    if key is not None and _secret_key(key):
+    if key is not None and _secret_key(key, context=context):
         return REDACTED
     if isinstance(value, dict):
-        return {str(name): scrub(item, key=name) for name, item in value.items()}
+        return {str(name): scrub(item, key=name, context=active_context)
+                for name, item in value.items()}
     if isinstance(value, list):
-        return [scrub(item) for item in value]
+        return [scrub(item, context=active_context) for item in value]
     if isinstance(value, tuple):
-        return [scrub(item) for item in value]
+        return [scrub(item, context=active_context) for item in value]
     if isinstance(value, str):
-        return scrub_text(value)
+        return scrub_text(value, context=active_context)
     return value
 
 

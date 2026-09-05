@@ -1140,22 +1140,53 @@ class Rule(models.Model, MojoModel):
                 raise merrors.ValueException(
                     "governed RuleSets require the versioned aggregate action")
 
+    @staticmethod
+    def _lock_parent_rows(parent_ids):
+        """Lock every affected aggregate in one canonical parent-first order."""
+        from mojo import errors as merrors
+
+        expected = sorted(set(parent_ids))
+        locked = list(RuleSet.objects.select_for_update().filter(
+            pk__in=expected).order_by("pk").values_list("pk", flat=True))
+        if locked != expected:
+            raise merrors.ValueException("RuleSet parent no longer exists")
+
+    @classmethod
+    def _lock_and_revalidate(cls, pk, observed_parent_id):
+        """Acquire the child after its parents and reject stale discovery."""
+        from mojo import errors as merrors
+
+        persisted_parent_id = cls.objects.select_for_update().filter(
+            pk=pk).values_list("parent_id", flat=True).first()
+        if persisted_parent_id is None:
+            raise merrors.ValueException("Rule no longer exists")
+        if persisted_parent_id != observed_parent_id:
+            raise merrors.ValueException(
+                "Rule parent changed; reload and retry", code=409, status=409)
+        return persisted_parent_id
+
     def on_rest_pre_save(self, changed_fields, created):
         old_parent_id = None
         if not created:
-            old_parent_id = _rest_boundary_queryset(type(self)).filter(
+            # Discovery is intentionally unlocked. The real boundary locks
+            # sorted parents first, then the child, and revalidates this value.
+            old_parent_id = type(self).objects.filter(
                 pk=self.pk).values_list("parent_id", flat=True).first()
         parent_ids = {value for value in (old_parent_id, self.parent_id)
                       if value is not None}
         self._assert_legacy_rest_parents(parent_ids)
+        if not created and transaction.get_connection().in_atomic_block:
+            self._lock_and_revalidate(self.pk, old_parent_id)
 
     def on_rest_pre_delete(self):
         from mojo import errors as merrors
-        parent_id = _rest_boundary_queryset(type(self)).filter(
+        parent_id = type(self).objects.filter(
             pk=self.pk).values_list("parent_id", flat=True).first()
         if parent_id is None:
             raise merrors.ValueException("Rule no longer exists")
         self._assert_legacy_rest_parents({parent_id})
+        if transaction.get_connection().in_atomic_block:
+            self._lock_and_revalidate(self.pk, parent_id)
 
     def atomic_save(self):
         """Defer commit to the endpoint's parent/marker locking boundary."""
@@ -1165,37 +1196,39 @@ class Rule(models.Model, MojoModel):
 
     def save(self, *args, **kwargs):
         """Persist the condition and advance both aggregate revisions."""
-        from django.db import transaction
         from django.utils import timezone
 
         with transaction.atomic():
             old_parent_id = None
-            if self.pk:
-                old_parent_id = type(self).objects.select_for_update().filter(
+            if self.pk and not self._state.adding:
+                old_parent_id = type(self).objects.filter(
                     pk=self.pk).values_list("parent_id", flat=True).first()
-            result = super().save(*args, **kwargs)
             parent_ids = {value for value in (
                 old_parent_id, self.parent_id) if value is not None}
+            self._lock_parent_rows(parent_ids)
+            if old_parent_id is not None:
+                self._lock_and_revalidate(self.pk, old_parent_id)
+            result = super().save(*args, **kwargs)
             if parent_ids:
-                # Lock both sides of a reparent before advancing either
-                # revision so no observer can accept a half-moved aggregate.
-                list(RuleSet.objects.select_for_update().filter(
-                    pk__in=parent_ids).values_list("pk", flat=True))
                 RuleSet.objects.filter(pk__in=parent_ids).update(
                     modified=timezone.now())
         return result
 
     def delete(self, *args, **kwargs):
         """Delete the condition and advance the surviving parent revision."""
-        from django.db import transaction
         from django.utils import timezone
 
-        parent_id = self.parent_id
         with transaction.atomic():
+            parent_id = type(self).objects.filter(pk=self.pk).values_list(
+                "parent_id", flat=True).first()
+            if parent_id is None:
+                from mojo import errors as merrors
+                raise merrors.ValueException("Rule no longer exists")
+            self._lock_parent_rows({parent_id})
+            self._lock_and_revalidate(self.pk, parent_id)
             result = super().delete(*args, **kwargs)
-            if parent_id:
-                RuleSet.objects.filter(pk=parent_id).update(
-                    modified=timezone.now())
+            RuleSet.objects.filter(pk=parent_id).update(
+                modified=timezone.now())
         return result
 
     def check_rule(self, event):
