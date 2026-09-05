@@ -5,6 +5,17 @@ from testit import helpers as th
 
 
 @th.django_unit_test()
+def test_anthropic_provider_disables_sdk_retries(opts):
+    """The adapter must disable retries so the governed caller owns them."""
+    from mojo.helpers.llm_providers.anthropic import AnthropicProvider
+
+    with mock.patch("anthropic.Anthropic") as constructor:
+        adapter = AnthropicProvider(api_key="candidate")
+        adapter._client()
+    constructor.assert_called_once_with(api_key="candidate", max_retries=0)
+
+
+@th.django_unit_test()
 def test_explicit_admin_credential_never_falls_back_to_handler(opts):
     from mojo.apps.account.services import llm_safety
 

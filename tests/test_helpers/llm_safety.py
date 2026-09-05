@@ -202,12 +202,6 @@ def test_candidate_permits_are_single_flight_across_fingerprints(opts):
         llm_safety.release_permit(redis, first, actual_tokens=4)
 
 
-@th.django_unit_test()
-def test_anthropic_provider_disables_sdk_retries(opts):
-    from unittest import mock
-    from mojo.helpers.llm_providers.anthropic import AnthropicProvider
-
-    with mock.patch("anthropic.Anthropic") as constructor:
-        adapter = AnthropicProvider(api_key="candidate")
-        adapter._client()
-    constructor.assert_called_once_with(api_key="candidate", max_retries=0)
+# The Anthropic constructor-patch test lives in
+# tests/test_helpers_extended_serial/llm_safety.py. The SDK constructor is a
+# process-global symbol shared by every LLM test module.
