@@ -33,7 +33,7 @@ export async function securityPage(ctx, parentSignal) {
     h('header', {class: 'page-header'}, h('div', {},
       h('div', {class: 'eyebrow', text: 'Security operations'}),
       h('h1', {text: 'Security', tabindex: '-1'}),
-      h('p', {text: 'Server-governed cases, policy and fleet enforcement truth. Missing evidence stays visibly unknown.'}))),
+      h('p', {text: 'Complete permissioned evidence, policy and fleet enforcement truth. Authentication secrets remain hidden.'}))),
     sectionTabs({items: TABS, active: active.id, label: 'Security views', onChange: (id) => {
       active = TABS.find((tab) => tab.id === id) || TABS[0]; writeTab(active.id);
       return refresh();
@@ -47,7 +47,12 @@ export async function securityPage(ctx, parentSignal) {
       report = await readSecurity(active.sections, {signal: current.signal});
       if (disposed || current.signal.aborted || current !== controller) return;
       const node = active.render({ctx, report, refresh, signal: current.signal});
-      body.replaceChildren(await node);
+      const freshness = report.capabilities.fresh_auth;
+      body.replaceChildren(h('div', {class: 'security-capability'},
+        h('strong', {text: `Scope: ${report.capabilities.scope}`}),
+        h('span', {text: freshness.enabled
+          ? `Fresh authentication: ${freshness.window_seconds} seconds${freshness.applies_to_credential ? '' : ' (not applicable to this machine credential)'}`
+          : 'Fresh authentication: disabled'})), await node);
     } catch (error) {
       if (!disposed && !current.signal.aborted && current === controller) {
         body.replaceChildren(errorState(error, refresh));

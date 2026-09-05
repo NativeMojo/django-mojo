@@ -139,11 +139,12 @@ class RuleSet(models.Model, MojoModel):
         CREATE_PERMS = ["manage_security", "security"]
         SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security", "security"]
-        # Human mutations are owned by /api/incident/admin/security/action. These
-        # flags do not affect internal defaults/provisioning, which use the ORM.
-        CAN_CREATE = False
-        CAN_UPDATE = False
-        CAN_DELETE = False
+        # Established REST administration remains available for markerless
+        # legacy policy. Governed rows add stricter aggregate lifecycle checks
+        # in the model hooks below.
+        CAN_CREATE = True
+        CAN_UPDATE = True
+        CAN_DELETE = True
         # The Assistant has dedicated, governed projections and tools.  The
         # generic model tools must never expose handler strings or mutate a
         # policy around the approval/revision boundary.
@@ -154,10 +155,39 @@ class RuleSet(models.Model, MojoModel):
                     "id", "created", "modified", "priority", "category",
                     "name", "bundle_minutes", "bundle_by",
                     "bundle_by_rule_set", "match_by", "trigger_count",
-                    "trigger_window", "retrigger_every", "is_active",
+                    "trigger_window", "retrigger_every", "handler",
+                    "metadata", "is_active",
                 ],
             },
         }
+
+    def on_rest_pre_save(self, changed_fields, created):
+        """Keep the governed marker server-owned and aggregate-only."""
+        from mojo import errors as merrors
+        from mojo.apps.incident.services import rule_validation
+
+        old_metadata = changed_fields.get("metadata")
+        old_marker = rule_validation.governed_marker(old_metadata)
+        new_marker = rule_validation.governed_marker(self.metadata)
+        marker_key = rule_validation.GOVERNED_METADATA_KEY
+        old_has_marker = isinstance(old_metadata, dict) and marker_key in old_metadata
+        new_has_marker = isinstance(self.metadata, dict) and marker_key in self.metadata
+        if old_has_marker != new_has_marker:
+            raise merrors.ValueException(
+                "the governed policy marker is server-owned")
+        if old_marker != new_marker:
+            raise merrors.ValueException(
+                "the governed policy marker is server-owned")
+        if new_marker is not None:
+            raise merrors.ValueException(
+                "governed RuleSets require the versioned aggregate action")
+
+    def on_rest_pre_delete(self):
+        from mojo import errors as merrors
+        from mojo.apps.incident.services import rule_validation
+        if rule_validation.is_governed(self):
+            raise merrors.ValueException(
+                "governed RuleSets require the versioned aggregate action")
 
 
     def run_handler(self, event, incident=None, idempotency_prefix=None,
@@ -180,18 +210,22 @@ class RuleSet(models.Model, MojoModel):
             return False
 
         try:
-            # Stored legacy policies are data, not trusted code. A malformed
-            # or non-allowlisted aggregate remains visible to administrators
-            # for replacement/deactivation/deletion, but cannot dispatch.
             from mojo.apps.incident.services import rule_validation
-            normalized = rule_validation.validate_existing(self)
+            governed = rule_validation.is_governed(self)
+            if governed:
+                normalized = rule_validation.validate_existing(self)
+                handler_chain = normalized["handler"]
+            else:
+                # Compatibility path: markerless policies keep their existing
+                # URL handler chains and are durably labelled as legacy work.
+                handler_chain = self.handler
             if publisher is None:
                 from mojo.apps import jobs
                 publisher = jobs.publish
 
             specs = re.split(
                 r',(?=(?:job|email|sms|notify|ticket|maestro|block|llm|resolve)://)',
-                normalized["handler"])
+                handler_chain)
             published = False
 
             for index, spec in enumerate(filter(None, [s.strip() for s in specs])):
@@ -201,12 +235,15 @@ class RuleSet(models.Model, MojoModel):
 
                 payload = {
                     "handler_spec": spec,
-                    "handler_schema": rule_validation.HANDLER_JOB_SCHEMA,
-                    "handler_schema_version": (
-                        rule_validation.HANDLER_JOB_SCHEMA_VERSION),
+                    "execution_mode": "governed" if governed else "legacy",
                     "event_id": event.pk,
                     "incident_id": incident.pk if incident else None,
                 }
+                if governed:
+                    payload.update(
+                        handler_schema=rule_validation.HANDLER_JOB_SCHEMA,
+                        handler_schema_version=(
+                            rule_validation.HANDLER_JOB_SCHEMA_VERSION))
                 try:
                     publisher(
                         "mojo.apps.incident.handlers.event_handlers.execute_handler",
@@ -1008,9 +1045,9 @@ class Rule(models.Model, MojoModel):
         CREATE_PERMS = ["manage_security", "security"]
         SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security", "security"]
-        CAN_CREATE = False
-        CAN_UPDATE = False
-        CAN_DELETE = False
+        CAN_CREATE = True
+        CAN_UPDATE = True
+        CAN_DELETE = True
         DENY_AI = True
         GRAPHS = {
             "default": {
@@ -1023,15 +1060,45 @@ class Rule(models.Model, MojoModel):
             },
         }
 
+    def _assert_legacy_rest_parent(self):
+        from mojo import errors as merrors
+        from mojo.apps.incident.services import rule_validation
+        if self.parent_id and rule_validation.is_governed(self.parent):
+            raise merrors.ValueException(
+                "governed RuleSets require the versioned aggregate action")
+
+    def on_rest_pre_save(self, changed_fields, created):
+        self._assert_legacy_rest_parent()
+        if not created and "parent" in changed_fields:
+            from mojo.apps.incident.services import rule_validation
+            old_parent = changed_fields.get("parent")
+            if old_parent is not None and rule_validation.is_governed(old_parent):
+                from mojo import errors as merrors
+                raise merrors.ValueException(
+                    "governed RuleSets require the versioned aggregate action")
+
+    def on_rest_pre_delete(self):
+        self._assert_legacy_rest_parent()
+
     def save(self, *args, **kwargs):
-        """Persist the condition and advance the aggregate revision."""
+        """Persist the condition and advance both aggregate revisions."""
         from django.db import transaction
         from django.utils import timezone
 
         with transaction.atomic():
+            old_parent_id = None
+            if self.pk:
+                old_parent_id = type(self).objects.select_for_update().filter(
+                    pk=self.pk).values_list("parent_id", flat=True).first()
             result = super().save(*args, **kwargs)
-            if self.parent_id:
-                RuleSet.objects.filter(pk=self.parent_id).update(
+            parent_ids = {value for value in (
+                old_parent_id, self.parent_id) if value is not None}
+            if parent_ids:
+                # Lock both sides of a reparent before advancing either
+                # revision so no observer can accept a half-moved aggregate.
+                list(RuleSet.objects.select_for_update().filter(
+                    pk__in=parent_ids).values_list("pk", flat=True))
+                RuleSet.objects.filter(pk__in=parent_ids).update(
                     modified=timezone.now())
         return result
 

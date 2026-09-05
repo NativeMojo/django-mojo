@@ -154,7 +154,7 @@ def test_admin_security_real_chrome(opts):
             cdp.wait("document.body.textContent.includes('No cases match this filter')", "case filtering")
             cdp.evaluate("(()=>{const x=document.querySelector('input[aria-label=\"Filter cases\"]');x.value='';x.dispatchEvent(new Event('input',{bubbles:true}));return true})()")
             cdp.evaluate("document.querySelector('tbody tr').click()")
-            cdp.wait("document.body.textContent.includes('Bounded evidence samples')", "bounded case detail")
+            cdp.wait("document.body.textContent.includes('Complete retained evidence')", "complete case detail")
             cdp.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape"})
             cdp.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Escape", "code": "Escape"})
 

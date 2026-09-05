@@ -460,9 +460,9 @@ def on_mojosec_recommendation(request, pk=None):
 
 
 @md.POST("mojosec/recommendation-action")
-@md.denies_key_backed_session()
-@md.requires_fresh_auth(seconds=600)
-@md.requires_global_perms("manage_security", "security")
+@md.requires_auth()
+@md.requires_fresh_auth()
+@md.custom_security("global User or validated UserAPIKey recommendation mutation")
 def on_mojosec_recommendation_action(request):
     """Approve/reject/cancel/reverse exactly what was proposed.
 
@@ -478,7 +478,10 @@ def on_mojosec_recommendation_action(request):
     action = data.get("action")
     data["action"] = f"recommendation.{action}"
     try:
-        return admin_security.apply_action(data, request.user)
+        authority = admin_security.build_authority(request, write=True)
+        return admin_security.apply_action(
+            data, request.user, authority=authority,
+            actor_context=authority.actor_context)
     except admin_security.SecurityActionError as err:
         raise merrors.ValueException(
             str(err), code=err.code, status=err.status) from err

@@ -15,6 +15,8 @@ from mojo.apps.incident.models.rule import BundleBy, MatchBy
 SCHEMA_VERSION = 1
 HANDLER_JOB_SCHEMA = "incident.governed_handler"
 HANDLER_JOB_SCHEMA_VERSION = 1
+GOVERNED_METADATA_KEY = "_admin_security_governed"
+GOVERNED_METADATA_VERSION = 1
 MAX_RULES = 32
 MAX_HANDLERS = 8
 MAX_NAME = 160
@@ -58,6 +60,26 @@ class RuleValidationError(ValueError):
         self.code = code
         self.path = path
         super().__init__(message)
+
+
+def governed_marker(metadata):
+    """Return the canonical server-owned marker or ``None`` for legacy rows."""
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get(GOVERNED_METADATA_KEY)
+    if value == {"version": GOVERNED_METADATA_VERSION}:
+        return value
+    return None
+
+
+def is_governed(rule_set):
+    return governed_marker(getattr(rule_set, "metadata", None)) is not None
+
+
+def mark_governed(metadata=None):
+    value = dict(metadata or {})
+    value[GOVERNED_METADATA_KEY] = {"version": GOVERNED_METADATA_VERSION}
+    return value
 
 
 # These are the event facts the governed writer may turn into an action.  The
@@ -838,6 +860,8 @@ def validate_existing(rule_set):
 
 
 def validation_summary(rule_set):
+    if not is_governed(rule_set):
+        return {"status": "legacy", "legacy": True, "handlers": []}
     try:
         normalized = validate_existing(rule_set)
         return {"status": "valid", "legacy": False,
@@ -845,7 +869,7 @@ def validation_summary(rule_set):
     except RuleValidationError as error:
         return {
             "status": "replacement_required",
-            "legacy": True,
+            "legacy": False,
             "handlers": [],
             "issues": [{"code": error.code, "path": error.path}],
         }
@@ -881,6 +905,15 @@ def evaluate_rule(rule, event):
         field_value = _legacy_field_value(rule, event)
         if field_value is None:
             return False
+        # Markerless rows retain the evaluator semantics they had before the
+        # governed writer shipped. Strict field and regex validation applies
+        # only to server-marked governed policies.
+        parent = rule.parent if getattr(rule, "parent_id", None) is not None else None
+        if parent is None or not is_governed(parent):
+            left, right = rule._convert_values(field_value, rule.value)
+            if left is None:
+                return False
+            return bool(rule._compare(left, right))
         value_type = rule.value_type
         operator = rule.comparator
         if value_type not in OPERATORS or operator not in OPERATORS[value_type]:

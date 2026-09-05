@@ -222,6 +222,11 @@ handoff.
 
 Refresh before the access token expires. The refresh token itself has a longer TTL (typically 7 days).
 
+Only the issued `refresh_token` is valid at this endpoint. Do not send the
+access token or a user API key in the `refresh_token` field: the server checks
+the token's purpose and refuses either credential instead of upgrading it into
+a new session token pair.
+
 ## App Boot / Page Reload Session Check
 
 On every app load:

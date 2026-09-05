@@ -692,6 +692,10 @@ reasoning: [edge README](../edge/README.md#settings),
 - `FRESH_AUTH_WINDOW` — int seconds, default `0` (off). The global freshness
   window for endpoints that do **not** name their own. An endpoint that passes
   an explicit `seconds` ignores this; only `FRESH_AUTH_ENFORCE` overrides those.
+  Admin Security RuleSet, recommendation, and IPSet actions use this configured
+  window rather than imposing a framework-owned ten-minute value. Validated
+  machine credentials have no interactive authentication timestamp and bypass
+  the freshness check; their normal permission and scope checks still apply.
 
 ### GEOFENCE
 

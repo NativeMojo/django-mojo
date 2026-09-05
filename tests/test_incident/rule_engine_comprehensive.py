@@ -1276,8 +1276,7 @@ def test_handler_ticket_creation(opts):
     event.incident = incident
     event.save(update_fields=["incident"])
 
-    # An old node's unversioned durable payload must fail closed even when the
-    # handler text itself happens to be in the current allowlist.
+    # Work queued before execution modes shipped must retain the legacy path.
     jobs.publish(
         "mojo.apps.incident.handlers.event_handlers.execute_handler",
         {
@@ -1290,10 +1289,14 @@ def test_handler_ticket_creation(opts):
     legacy_executed = th.run_pending_jobs(channel="default")
     assert legacy_executed >= 1, (
         f"Expected the stale job to be consumed, got {legacy_executed}")
-    assert Ticket.objects.filter(category="ticket_test").count() == 0, (
-        "an unversioned durable handler must never execute")
+    assert Ticket.objects.filter(category="ticket_test").count() == 1, (
+        "an unversioned legacy handler must continue to execute after upgrade")
+    Ticket.objects.filter(category="ticket_test").delete()
 
-    # The RuleSet producer stamps the current governed job schema.
+    # Once explicitly governed, the producer stamps the current job schema.
+    from mojo.apps.incident.services import rule_validation
+    ruleset.metadata = rule_validation.mark_governed(ruleset.metadata)
+    ruleset.save(update_fields=["metadata", "modified"])
     assert ruleset.run_handler(event, incident=incident) is True, (
         "a validated RuleSet should enqueue its governed handler")
 

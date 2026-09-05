@@ -1,23 +1,28 @@
 """Versioned read and write authority for Admin Security.
 
-Every response is bounded and JSON-safe.  In particular this module never
-returns event metadata/evidence, rule handler strings, IPSet CIDRs/source
-credentials, Python paths, commands, or exception text.
+Discovery responses stay bounded. Authorized detail responses preserve the
+operational evidence administrators need, with only authentication secrets
+removed at the final serialization boundary.
 """
 
 from datetime import timedelta
 import re
+from types import MappingProxyType
 
 from django.db import transaction
 from django.db.models import Count, Prefetch
 from django.utils import timezone
 
 from mojo import errors as merrors
+from mojo.helpers.request import (
+    credential_kind, restricted_identity, safe_actor_context,
+    validated_user_api_key)
 
+from . import admin_security_transport as transport
 from . import mojosec_actions, rule_validation
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
 DEFAULT_WINDOW_HOURS = 24
@@ -30,6 +35,123 @@ SECTIONS = (
     "overview", "cases", "incidents", "events", "rules", "ipsets",
     "recommendations", "schemas",
 )
+
+
+class SecurityAuthority:
+    """Immutable, server-derived authority for one Admin Security request."""
+
+    __slots__ = (
+        "scope", "group_id", "credential", "actor", "actor_context",
+        "freshness_window")
+
+    def __init__(self, scope, credential, actor, group_id=None,
+                 actor_context=None, freshness_window=0):
+        if scope not in ("global", "group"):
+            raise ValueError("Admin Security authority scope is invalid")
+        if scope == "group" and (
+                isinstance(group_id, bool) or not isinstance(group_id, int) or
+                group_id < 1):
+            raise ValueError("Admin Security group authority requires a group id")
+        object.__setattr__(self, "scope", scope)
+        object.__setattr__(self, "group_id", group_id)
+        object.__setattr__(self, "credential", credential)
+        object.__setattr__(self, "actor", actor)
+        object.__setattr__(self, "actor_context", MappingProxyType(
+            dict(actor_context or {})))
+        object.__setattr__(self, "freshness_window", max(0, int(freshness_window)))
+
+    def __setattr__(self, name, value):
+        raise AttributeError("SecurityAuthority is immutable")
+
+    @property
+    def is_global(self):
+        return self.scope == "global"
+
+    @property
+    def cursor_scope(self):
+        return "global" if self.is_global else f"group:{self.group_id}"
+
+
+def _global_internal_authority(actor=None):
+    """Trusted compatibility scope for internal service callers."""
+    return SecurityAuthority(
+        "global", "internal", actor,
+        actor_context={"credential_kind": "internal",
+                       "user_id": getattr(actor, "pk", None)})
+
+
+def build_authority(request, write=False):
+    """Resolve one request to global authority or an exact group read scope.
+
+    Client-supplied group parameters never choose the group. Restricted
+    credentials carry an authenticated group; ordinary users use their
+    server-owned default organization. Group authority is read-only.
+    """
+    actor = getattr(request, "user", None)
+    if actor is None or not getattr(actor, "is_authenticated", False):
+        raise merrors.PermissionDeniedException()
+    context = safe_actor_context(request)
+    from mojo.apps.account.services import fresh_auth
+    freshness_window = fresh_auth.resolve_window(request)
+    kind = credential_kind(request)
+    global_perms = (["manage_security", "security"] if write else
+                    ["view_security", "manage_security", "security"])
+    restricted = restricted_identity(request)
+
+    # A validated UserAPIKey is a User credential, not an account.ApiKey. Its
+    # positive record provenance was stamped only after full JWT validation.
+    if validated_user_api_key(request) is not None:
+        if actor.has_permission(global_perms):
+            return SecurityAuthority(
+                "global", kind, actor, actor_context=context,
+                freshness_window=freshness_window)
+        if write:
+            raise merrors.PermissionDeniedException()
+        group = getattr(actor, "org", None)
+        if (group is None or not group.is_effectively_active() or
+                not group.user_has_permission(
+                    actor, global_perms, check_user=False)):
+            raise merrors.PermissionDeniedException()
+        return SecurityAuthority(
+            "group", kind, actor, group_id=group.pk, actor_context=context,
+            freshness_window=freshness_window)
+
+    # Ordinary interactive/OAuth user sessions retain their existing global
+    # permission behavior. Unknown custom bearer identities fail closed.
+    if restricted is None and kind in ("user", "oauth"):
+        if actor.has_permission(global_perms):
+            return SecurityAuthority(
+                "global", kind, actor, actor_context=context,
+                freshness_window=freshness_window)
+        if write:
+            raise merrors.PermissionDeniedException()
+        group = getattr(actor, "org", None)
+        if (group is None or not group.is_effectively_active() or
+                not group.user_has_permission(
+                    actor, global_perms, check_user=False)):
+            raise merrors.PermissionDeniedException()
+        return SecurityAuthority(
+            "group", kind, actor, group_id=group.pk, actor_context=context,
+            freshness_window=freshness_window)
+
+    if restricted is None or write:
+        raise merrors.PermissionDeniedException()
+    group = getattr(restricted, "group", None)
+    if group is None:
+        group = getattr(request, "group", None)
+    if (group is None or getattr(restricted, "group_id", None) != group.pk or
+            not group.is_effectively_active()):
+        raise merrors.PermissionDeniedException()
+    if getattr(restricted, "override_user", False):
+        allowed = group.user_has_permission(
+            actor, global_perms, check_user=False)
+    else:
+        allowed = restricted.has_permission(global_perms)
+    if not allowed:
+        raise merrors.PermissionDeniedException()
+    return SecurityAuthority(
+        "group", kind, actor, group_id=group.pk, actor_context=context,
+        freshness_window=freshness_window)
 
 
 class SecurityActionError(ValueError):
@@ -74,8 +196,34 @@ def _unavailable(cutoff, window, reason):
     return _envelope({}, cutoff, window, status="unavailable", reason=reason)
 
 
+def _scope_queryset(queryset, authority, field="group_id"):
+    if authority.is_global:
+        return queryset
+    return queryset.filter(**{field: authority.group_id})
+
+
+def _capabilities(authority):
+    return {
+        "scope": authority.scope,
+        "group_id": authority.group_id,
+        "credential_kind": authority.credential,
+        "view": True,
+        "manage": authority.is_global and bool(
+            authority.actor is None or authority.actor.has_permission(
+                ["manage_security", "security"])),
+        "fresh_auth": {
+            "enabled": authority.freshness_window > 0,
+            "window_seconds": authority.freshness_window,
+            "applies_to_credential": (
+                authority.credential not in (
+                    "user_api_key", "api_key", "group_token", "internal")),
+        },
+    }
+
+
 def _safe_rule_set(row, detail=False):
     validation = rule_validation.validation_summary(row)
+    prefetched = getattr(row, "_admin_security_rules", None)
     value = {
         "id": row.pk, "created": _iso(row.created),
         "modified": _iso(row.modified), "name": row.name or "",
@@ -86,16 +234,30 @@ def _safe_rule_set(row, detail=False):
         "trigger_window": row.trigger_window,
         "retrigger_every": row.retrigger_every,
         "validation": validation,
+        "rule_count": (
+            len(prefetched) if prefetched is not None else row.rules.count()),
     }
     if detail and not validation.get("legacy"):
         payload = rule_validation.ruleset_payload(row)
         value["handlers"] = payload["handlers"]
+        value["handler"] = row.handler or ""
         value["rules"] = payload["rules"]
+        value["metadata"] = row.metadata or {}
         value["delete_on_resolution"] = payload["delete_on_resolution"]
-    else:
-        prefetched = getattr(row, "_admin_security_rules", None)
-        value["rule_count"] = (
-            len(prefetched) if prefetched is not None else row.rules.count())
+    elif detail:
+        rules = prefetched if prefetched is not None else list(
+            row.rules.order_by("index", "id")[:MAX_ACTION_TARGETS])
+        value.update(
+            handler=row.handler or "", metadata=row.metadata or {},
+            rules=[{
+                "id": item.pk, "name": item.name or "", "index": item.index,
+                "field_name": item.field_name, "comparator": item.comparator,
+                "value": item.value, "value_type": item.value_type,
+                "is_required": item.is_required,
+            } for item in rules],
+            delete_on_resolution=bool(
+                isinstance(row.metadata, dict) and
+                row.metadata.get("delete_on_resolution") is True))
     return value
 
 
@@ -103,6 +265,7 @@ def _safe_recommendation(row, detail=False):
     value = {
         "id": row.pk, "created": _iso(row.created),
         "modified": _iso(row.modified), "case_id": row.case_id,
+        "group_id": row.group_id,
         "action": row.action, "state": row.state,
         "reason_code": row.reason_code, "confidence": row.confidence,
         "urgency": row.urgency, "requested_scope": row.requested_scope,
@@ -119,15 +282,92 @@ def _safe_recommendation(row, detail=False):
     if detail:
         targets = list(row.targets.order_by("id")[:MAX_ACTION_TARGETS + 1])
         value["targets"] = [{
-            "id": target.pk, "kind": target.kind,
+            "id": target.pk, "ip": target.ip, "kind": target.kind,
             "validation_state": target.validation_state,
+            "validation_reason": target.validation_reason,
             "outcome": target.outcome, "attempts": target.attempts,
+            "last_error": target.last_error,
             "applied_at": _iso(target.applied_at),
             "expires_at": _iso(target.expires_at),
             "reversed_at": _iso(target.reversed_at),
+            "prior_blocked_until": _iso(target.prior_blocked_until),
+            "prior_reason": target.prior_reason,
         } for target in targets[:MAX_ACTION_TARGETS]]
         value["targets_truncated"] = len(targets) > MAX_ACTION_TARGETS
     return value
+
+
+def _bounded_rule_set(row, authority):
+    values = _safe_rule_set(row, detail=True)
+    return transport.bounded_detail(
+        values, authority, "ruleset", row.pk, _revision(row),
+        ("handler", "metadata", "rules"))
+
+
+def _bounded_case(row, authority):
+    values = {
+        "id": row.pk, "created": _iso(row.created),
+        "modified": _iso(row.modified), "first_seen": _iso(row.first_seen),
+        "last_seen": _iso(row.last_seen), "window_start": _iso(row.window_start),
+        "window_end": _iso(row.window_end), "group_id": row.group_id,
+        "installation_key_id": row.installation_key_id,
+        "sensor_id": row.sensor_id, "sensor_kind": row.sensor_kind,
+        "resource_id": row.resource_id, "family": row.family,
+        "network": row.network, "deployment_id": row.deployment_id,
+        "campaign_id": row.campaign_id, "correlation_key": row.correlation_key,
+        "window_key": row.window_key, "state": row.state,
+        "state_reason": row.state_reason, "urgency": row.urgency,
+        "urgency_reason": row.urgency_reason, "settled_at": _iso(row.settled_at),
+        "projected_urgency": row.projected_urgency,
+        "projection_dispatched_at": _iso(row.projection_dispatched_at),
+        "occurrence_count": row.occurrence_count,
+        "receipt_count": row.receipt_count,
+        "projected_event_count": row.projected_event_count,
+        "distinct_count": row.distinct_count, "sample_count": row.sample_count,
+        "overflow_count": row.overflow_count,
+        "distinct_source_count": row.distinct_source_count,
+        "policy_version": row.policy_version,
+        "evaluator_version": row.evaluator_version,
+        "accuracy": "sampled_learning_projection",
+        "samples": row.samples, "observed_sources": row.observed_sources,
+        "breakdown": row.breakdown,
+    }
+    return transport.bounded_detail(
+        values, authority, "case", row.pk, _revision(row),
+        ("samples", "observed_sources", "breakdown"))
+
+
+def _bounded_incident(row, authority):
+    values = {
+        "id": row.pk, "created": _iso(row.created), "priority": row.priority,
+        "state": row.state, "status": row.status, "scope": row.scope,
+        "category": row.category, "country_code": row.country_code,
+        "group_id": row.group_id, "rule_set_id": row.rule_set_id,
+        "source_ip": row.source_ip, "hostname": row.hostname,
+        "model_name": row.model_name, "model_id": row.model_id,
+        "title": row.title, "details": row.details, "metadata": row.metadata,
+    }
+    return transport.bounded_detail(
+        values, authority, "incident", row.pk, _iso(row.created),
+        ("title", "details", "metadata"))
+
+
+def _bounded_event(row, authority):
+    values = row.admin_security_projection(detail=True)
+    return transport.bounded_detail(
+        values, authority, "event", row.pk, _iso(row.created),
+        ("title", "details", "metadata"))
+
+
+def _bounded_recommendation(row, authority):
+    values = _safe_recommendation(row, detail=True)
+    values.update(
+        explanation=row.explanation, approval_note=row.approval_note,
+        collateral=row.collateral,
+        installation_key_id=row.installation_key_id)
+    return transport.bounded_detail(
+        values, authority, "recommendation", row.pk, _revision(row),
+        ("explanation", "approval_note", "collateral", "targets"))
 
 
 def _overview(cutoff, window, end):
@@ -177,12 +417,19 @@ def _overview(cutoff, window, end):
     return _envelope(data, cutoff, window)
 
 
-def _cases(cutoff, window, end, limit):
+def _cases(cutoff, window, end, limit, authority, case_id=None):
     from mojo.apps.incident.models import MojoSecCase
-    qs = MojoSecCase.objects.filter(
-        last_seen__gte=cutoff, last_seen__lte=end).order_by("-last_seen", "-id")
+    qs = _scope_queryset(MojoSecCase.objects.all(), authority)
+    if case_id is not None:
+        qs = qs.filter(pk=_id(case_id, "case_id"))
+    else:
+        qs = qs.filter(last_seen__gte=cutoff, last_seen__lte=end)
+    qs = qs.order_by("-last_seen", "-id")
     rows = list(qs[:limit + 1])
-    data = [{
+    if case_id is not None:
+        data = [_bounded_case(row, authority) for row in rows[:limit]]
+    else:
+        data = [{
         "id": row.pk, "created": _iso(row.created),
         "first_seen": _iso(row.first_seen), "last_seen": _iso(row.last_seen),
         "sensor_kind": row.sensor_kind, "resource_id": row.resource_id,
@@ -195,33 +442,48 @@ def _cases(cutoff, window, end, limit):
         "distinct_source_count": row.distinct_source_count,
         "policy_version": row.policy_version,
         "evaluator_version": row.evaluator_version,
-        "accuracy": "sampled_learning_projection",
+        "accuracy": "sampled_learning_projection", "group_id": row.group_id,
     } for row in rows[:limit]]
     return _envelope(data, cutoff, window, len(rows) > limit)
 
 
-def _incidents(cutoff, window, end, limit):
+def _incidents(cutoff, window, end, limit, authority, incident_id=None):
     from mojo.apps.incident.models import Incident
-    rows = list(Incident.objects.filter(created__gte=cutoff, created__lte=end).order_by(
-        "-created", "-id")[:limit + 1])
-    data = [{
+    queryset = _scope_queryset(Incident.objects.all(), authority)
+    if incident_id is not None:
+        queryset = queryset.filter(pk=_id(incident_id, "incident_id"))
+    else:
+        queryset = queryset.filter(created__gte=cutoff, created__lte=end)
+    rows = list(queryset.order_by("-created", "-id")[:limit + 1])
+    if incident_id is not None:
+        data = [_bounded_incident(row, authority) for row in rows[:limit]]
+    else:
+        data = [{
         "id": row.pk, "created": _iso(row.created), "priority": row.priority,
         "state": row.state, "status": row.status, "scope": row.scope,
         "category": row.category, "group_id": row.group_id,
-        "rule_set_id": row.rule_set_id,
+        "rule_set_id": row.rule_set_id, "source_ip": row.source_ip,
+        "hostname": row.hostname, "title": (row.title or "")[:512],
     } for row in rows[:limit]]
     return _envelope(data, cutoff, window, len(rows) > limit)
 
 
-def _events(cutoff, window, end, limit):
+def _events(cutoff, window, end, limit, authority, event_id=None):
     from mojo.apps.incident.models import Event
-    rows = list(Event.objects.filter(created__gte=cutoff, created__lte=end).order_by(
-        "-created", "-id")[:limit + 1])
-    data = [row.admin_security_projection() for row in rows[:limit]]
+    queryset = _scope_queryset(Event.objects.all(), authority)
+    if event_id is not None:
+        queryset = queryset.filter(pk=_id(event_id, "event_id"))
+    else:
+        queryset = queryset.filter(created__gte=cutoff, created__lte=end)
+    rows = list(queryset.order_by("-created", "-id")[:limit + 1])
+    data = ([_bounded_event(row, authority) for row in rows[:limit]]
+            if event_id is not None else
+            [transport.scrub(row.admin_security_projection(detail=False))
+             for row in rows[:limit]])
     return _envelope(data, cutoff, window, len(rows) > limit)
 
 
-def _rules(cutoff, window, limit, ruleset_id=None):
+def _rules(cutoff, window, limit, authority, ruleset_id=None):
     from mojo.apps.incident.models import Rule, RuleSet
     queryset = RuleSet.objects.prefetch_related(Prefetch(
             "rules", queryset=Rule.objects.order_by("index", "id"),
@@ -231,14 +493,19 @@ def _rules(cutoff, window, limit, ruleset_id=None):
         queryset = queryset.filter(pk=_id(ruleset_id, "ruleset_id"))
     rows = list(queryset.order_by("priority", "id")[:limit + 1])
     return _envelope([
-        _safe_rule_set(row, detail=detail) for row in rows[:limit]], cutoff,
+        (_bounded_rule_set(row, authority) if detail else
+         transport.scrub(_safe_rule_set(row, detail=False)))
+        for row in rows[:limit]], cutoff,
                      window, len(rows) > limit)
 
 
-def _ipsets(cutoff, window, limit):
+def _ipsets(cutoff, window, limit, authority, ipset_id=None):
     from mojo.apps.incident.models import IPSet
     from mojo.apps.incident.services import firewall_truth
-    rows = list(IPSet.objects.order_by("name", "id")[:limit + 1])
+    queryset = IPSet.objects.all()
+    if ipset_id is not None:
+        queryset = queryset.filter(pk=_id(ipset_id, "ipset_id"))
+    rows = list(queryset.order_by("name", "id")[:limit + 1])
     try:
         roster = firewall_truth.exact_compatible_roster()
         roster_available = True
@@ -250,6 +517,16 @@ def _ipsets(cutoff, window, limit):
         value = _safe_ipset(
             row, roster=roster, observation_cutoff=window["end"])
         value.update(created=_iso(row.created))
+        if ipset_id is not None:
+            value.update(
+                source=row.source, source_url=row.source_url,
+                source_key=row.source_key, data=row.data,
+                sync_error=row.sync_error)
+            value = transport.bounded_detail(
+                value, authority, "ipset", row.pk, _revision(row),
+                ("data", "sync_error"))
+        else:
+            value = transport.scrub(value)
         data.append(value)
     roster_stable = True
     if roster_available:
@@ -266,22 +543,102 @@ def _ipsets(cutoff, window, limit):
     return _envelope(data, cutoff, window, len(rows) > limit)
 
 
-def _recommendations(cutoff, window, end, limit, recommendation_id=None):
+def _recommendations(cutoff, window, end, limit, authority,
+                     recommendation_id=None):
     from mojo.apps.incident.models import MojoSecRecommendation
-    queryset = MojoSecRecommendation.objects.filter(
-        created__gte=cutoff, created__lte=end)
+    queryset = _scope_queryset(MojoSecRecommendation.objects.all(), authority)
     detail = recommendation_id is not None
     if detail:
         queryset = queryset.filter(
             pk=_id(recommendation_id, "recommendation_id"))
+    else:
+        queryset = queryset.filter(created__gte=cutoff, created__lte=end)
     rows = list(queryset.order_by("-created", "-id")[:limit + 1])
     return _envelope([
-        _safe_recommendation(row, detail=detail) for row in rows[:limit]],
+        (_bounded_recommendation(row, authority) if detail else
+         transport.scrub(_safe_recommendation(row, detail=False)))
+        for row in rows[:limit]],
                      cutoff, window, len(rows) > limit)
 
 
-def overview(params=None):
+def _chunk_value(authority, cursor):
+    """Resume one authorized detail field after validating its signed cursor."""
+    token = transport.read_cursor(cursor)
+    if token["scope"] != authority.cursor_scope:
+        raise transport.TransportError("Admin Security cursor is invalid")
+    kind = token["kind"]
+    pk = _id(token["id"], "cursor id")
+    field = token["field"]
+    value = revision = None
+    allowed = set()
+
+    if kind == "event":
+        from mojo.apps.incident.models import Event
+        row = _scope_queryset(Event.objects.all(), authority).filter(pk=pk).first()
+        allowed = {"title", "details", "metadata"}
+        revision = _iso(row.created) if row else None
+        value = getattr(row, field, None) if row and field in allowed else None
+    elif kind == "incident":
+        from mojo.apps.incident.models import Incident
+        row = _scope_queryset(Incident.objects.all(), authority).filter(pk=pk).first()
+        allowed = {"title", "details", "metadata"}
+        revision = _iso(row.created) if row else None
+        value = getattr(row, field, None) if row and field in allowed else None
+    elif kind == "case":
+        from mojo.apps.incident.models import MojoSecCase
+        row = _scope_queryset(MojoSecCase.objects.all(), authority).filter(pk=pk).first()
+        allowed = {"samples", "observed_sources", "breakdown"}
+        revision = _revision(row) if row else None
+        value = getattr(row, field, None) if row and field in allowed else None
+    elif kind == "recommendation":
+        from mojo.apps.incident.models import MojoSecRecommendation
+        row = _scope_queryset(
+            MojoSecRecommendation.objects.all(), authority).filter(pk=pk).first()
+        allowed = {"explanation", "approval_note", "collateral", "targets"}
+        revision = _revision(row) if row else None
+        if row and field in allowed:
+            if field == "targets":
+                value = _safe_recommendation(row, detail=True)["targets"]
+            else:
+                value = getattr(row, field)
+    elif authority.is_global and kind == "ruleset":
+        from django.db.models import Prefetch
+        from mojo.apps.incident.models import Rule, RuleSet
+        row = RuleSet.objects.prefetch_related(Prefetch(
+            "rules", queryset=Rule.objects.order_by("index", "id"),
+            to_attr="_admin_security_rules")).filter(pk=pk).first()
+        allowed = {"handler", "metadata", "rules"}
+        revision = _revision(row) if row else None
+        value = (_safe_rule_set(row, detail=True).get(field)
+                 if row and field in allowed else None)
+    elif authority.is_global and kind == "ipset":
+        from mojo.apps.incident.models import IPSet
+        row = IPSet.objects.filter(pk=pk).first()
+        allowed = {"data", "sync_error"}
+        revision = _revision(row) if row else None
+        value = getattr(row, field, None) if row and field in allowed else None
+    if revision is None or field not in allowed:
+        # The same response covers absent and out-of-scope objects, so a group
+        # credential cannot use cursor replay as an existence oracle.
+        raise transport.TransportError(
+            "Admin Security evidence is unavailable", code="not_found", status=404)
+    return transport.chunk(
+        value, authority, kind, pk, field, revision, cursor=cursor)
+
+
+def overview(params=None, authority=None):
     params = params or {}
+    authority = authority or _global_internal_authority()
+    cursor = params.get("chunk_cursor")
+    if cursor not in (None, ""):
+        try:
+            data = _chunk_value(authority, cursor)
+        except transport.TransportError as error:
+            raise SecurityActionError(
+                str(error), code=error.code, status=error.status) from error
+        return transport.scrub({
+            "schema_version": SCHEMA_VERSION,
+            "capabilities": _capabilities(authority), "chunk": data})
     limit = _positive(params.get("limit"), DEFAULT_LIMIT, MAX_LIMIT, "limit")
     hours = _positive(params.get("window_hours"), DEFAULT_WINDOW_HOURS,
                       MAX_WINDOW_HOURS, "window_hours")
@@ -298,7 +655,14 @@ def overview(params=None):
         ruleset_id = _id(ruleset_id, "ruleset_id")
     else:
         ruleset_id = None
-    requested = params.get("sections") or params.get("section") or SECTIONS
+    detail_ids = {}
+    for name in ("case", "incident", "event", "ipset"):
+        value = params.get(f"{name}_id")
+        detail_ids[name] = (
+            _id(value, f"{name}_id") if value not in (None, "") else None)
+    default_sections = (SECTIONS if authority.is_global else
+                        ("cases", "incidents", "events", "recommendations"))
+    requested = params.get("sections") or params.get("section") or default_sections
     if isinstance(requested, str):
         requested = [part.strip() for part in requested.split(",") if part.strip()]
     if not isinstance(requested, (list, tuple)) or not requested:
@@ -309,15 +673,25 @@ def overview(params=None):
     unknown = sorted(set(requested) - set(SECTIONS))
     if unknown:
         raise SecurityActionError("request contains an unknown security section")
+    group_allowed = {"cases", "incidents", "events", "recommendations"}
+    if not authority.is_global and set(requested) - group_allowed:
+        raise SecurityActionError(
+            "group-scoped Admin Security access is limited to group evidence",
+            code="permission_denied", status=403)
     collectors = {
         "overview": lambda: _overview(cutoff, window, now),
-        "cases": lambda: _cases(cutoff, window, now, limit),
-        "incidents": lambda: _incidents(cutoff, window, now, limit),
-        "events": lambda: _events(cutoff, window, now, limit),
-        "rules": lambda: _rules(cutoff, window, limit, ruleset_id),
-        "ipsets": lambda: _ipsets(cutoff, window, limit),
+        "cases": lambda: _cases(
+            cutoff, window, now, limit, authority, detail_ids["case"]),
+        "incidents": lambda: _incidents(
+            cutoff, window, now, limit, authority, detail_ids["incident"]),
+        "events": lambda: _events(
+            cutoff, window, now, limit, authority, detail_ids["event"]),
+        "rules": lambda: _rules(
+            cutoff, window, limit, authority, ruleset_id),
+        "ipsets": lambda: _ipsets(
+            cutoff, window, limit, authority, detail_ids["ipset"]),
         "recommendations": lambda: _recommendations(
-            cutoff, window, now, limit, recommendation_id),
+            cutoff, window, now, limit, authority, recommendation_id),
         "schemas": lambda: _envelope({
             "rule_policy": rule_validation.public_schema(),
             "actions": _action_schemas(),
@@ -330,7 +704,9 @@ def overview(params=None):
             sections[name] = collectors[name]()
         except Exception:
             sections[name] = _unavailable(cutoff, window, "collector_unavailable")
-    return {"schema_version": SCHEMA_VERSION, "sections": sections}
+    return transport.scrub({
+        "schema_version": SCHEMA_VERSION,
+        "capabilities": _capabilities(authority), "sections": sections})
 
 
 def _id(value, name):
@@ -363,7 +739,7 @@ def _expect_revision(payload, row):
 
 def _persist_ruleset(normalized, existing=None):
     from mojo.apps.incident.models import Rule, RuleSet
-    metadata = dict(normalized["metadata"])
+    metadata = rule_validation.mark_governed(normalized["metadata"])
     if existing is not None and isinstance(existing.metadata, dict):
         # These values are internal LLM workflow state, not public policy
         # input. A complete policy replacement must not silently discard them.
@@ -400,6 +776,8 @@ def _validated_ruleset(value):
 
 
 def _validated_existing(row):
+    if not rule_validation.is_governed(row):
+        return {"legacy": True}
     try:
         return rule_validation.validate_existing(row)
     except rule_validation.RuleValidationError as error:
@@ -408,15 +786,18 @@ def _validated_existing(row):
             code=error.code, status=409) from error
 
 
-def _audit(actor, action, object_type, object_id):
+def _audit(actor, action, object_type, object_id, actor_context=None):
     from mojo.apps.incident.models import Event
+    provenance = dict(actor_context or {
+        "credential_kind": "internal", "user_id": getattr(actor, "pk", None)})
     Event.objects.create(
         level=5, scope="global", category="security:admin_action",
         title="Admin Security policy action",
         details=f"{action} {object_type} {object_id}",
         uid=getattr(actor, "pk", None),
         metadata={"schema_version": SCHEMA_VERSION, "action": action,
-                  "object_type": object_type, "object_id": object_id})
+                  "object_type": object_type, "object_id": object_id,
+                  "actor": provenance})
 
 
 ACTIONS = (
@@ -776,7 +1157,7 @@ def _claim_ipset_action(action, payload):
     return row
 
 
-def _rule_action(action, payload, actor):
+def _rule_action(action, payload, actor, actor_context=None):
     from mojo.apps.incident.models import RuleSet
     if action == "ruleset.create":
         _confirm(payload, "CREATE RULESET")
@@ -793,6 +1174,10 @@ def _rule_action(action, payload, actor):
         verb = action.split(".", 1)[1].upper()
         _confirm(payload, f"{verb} RULESET {row.pk}")
         if action == "ruleset.replace":
+            if row.is_active:
+                raise SecurityActionError(
+                    "deactivate the governed RuleSet before replacement",
+                    code="active_ruleset", status=409)
             proposed = dict(payload.get("ruleset") or {})
             if proposed.get("is_active") is not False:
                 raise SecurityActionError("replacement ruleset must be inactive")
@@ -811,17 +1196,21 @@ def _rule_action(action, payload, actor):
             row.is_active = False
             row.save(update_fields=["is_active", "modified"])
         elif action == "ruleset.delete":
+            if rule_validation.is_governed(row) and row.is_active:
+                raise SecurityActionError(
+                    "deactivate the governed RuleSet before deletion",
+                    code="active_ruleset", status=409)
             result = {"id": row.pk, "deleted": True}
-            _audit(actor, action, "ruleset", row.pk)
+            _audit(actor, action, "ruleset", row.pk, actor_context)
             row.delete()
             return result
         else:
             raise SecurityActionError("unsupported ruleset action")
-    _audit(actor, action, "ruleset", row.pk)
+    _audit(actor, action, "ruleset", row.pk, actor_context)
     return _safe_rule_set(row, detail=True)
 
 
-def _recommendation_action(action, payload, actor):
+def _recommendation_action(action, payload, actor, actor_context=None):
     from mojo.apps.incident.models import MojoSecRecommendation
     if action == "recommendation.reverse":
         pk = _id(payload.get("recommendation_id"), "recommendation_id")
@@ -853,7 +1242,7 @@ def _recommendation_action(action, payload, actor):
                 "Recommendation state does not allow reversal.",
                 code="invalid_state", status=409) from error
         with transaction.atomic():
-            _audit(actor, action, "recommendation", row.pk)
+            _audit(actor, action, "recommendation", row.pk, actor_context)
         return _safe_recommendation(row, detail=True)
     pk = _id(payload.get("recommendation_id"), "recommendation_id")
     row = MojoSecRecommendation.objects.select_for_update().filter(pk=pk).first()
@@ -887,17 +1276,20 @@ def _recommendation_action(action, payload, actor):
         raise SecurityActionError(
             "Recommendation state does not allow this action.",
             code="invalid_state", status=409) from error
-    _audit(actor, action, "recommendation", row.pk)
+    _audit(actor, action, "recommendation", row.pk, actor_context)
     return _safe_recommendation(row, detail=True)
 
 
-def apply_action(payload, actor, *, reconcile_ipset=None):
+def apply_action(payload, actor, *, reconcile_ipset=None, authority=None,
+                 actor_context=None):
     """Apply one typed action under a locked, auditable transaction.
 
     HTTP/Assistant/ticket callers own identity and fresh-auth verification;
     this service re-checks the global grant so an internal adapter cannot
     accidentally widen authority.
     """
+    if authority is not None and not authority.is_global:
+        raise merrors.PermissionDeniedException()
     if not getattr(actor, "is_authenticated", False) or not actor.has_permission(
             ["manage_security", "security"]):
         raise merrors.PermissionDeniedException()
@@ -920,20 +1312,24 @@ def apply_action(payload, actor, *, reconcile_ipset=None):
             result = row.sync(reconciler=reconcile_ipset)
         row.refresh_from_db()
         with transaction.atomic():
-            _audit(actor, action, "ipset", row.pk)
+            _audit(actor, action, "ipset", row.pk, actor_context)
         data = _safe_ipset(
             row, result, observation_cutoff=_iso(timezone.now()))
     elif action == "recommendation.reverse":
         # reverse() owns short claim/finalize transactions around its network
         # wait; an outer transaction would defeat that boundary.
-        data = _recommendation_action(action, payload, actor)
+        data = _recommendation_action(
+            action, payload, actor, actor_context=actor_context)
     else:
         with transaction.atomic():
             if action.startswith("ruleset."):
-                data = _rule_action(action, payload, actor)
+                data = _rule_action(
+                    action, payload, actor, actor_context=actor_context)
             else:
-                data = _recommendation_action(action, payload, actor)
-    return {"schema_version": SCHEMA_VERSION, "action": action, "data": data}
+                data = _recommendation_action(
+                    action, payload, actor, actor_context=actor_context)
+    return transport.scrub(
+        {"schema_version": SCHEMA_VERSION, "action": action, "data": data})
 
 
 def create_inactive_proposal(ruleset, metadata=None):

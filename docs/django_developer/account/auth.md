@@ -102,7 +102,17 @@ The `mfa_token` is single-use and expires in `expires_in` seconds (default 300).
 
 Required param: `refresh_token`
 
-Validates the refresh token and issues a new token pair.
+Validates the refresh token and issues a new token pair. The endpoint enforces
+token purpose before minting: only a JWT whose `token_type` is `refresh` is
+accepted. An access token or a user API-key token cannot be exchanged for a
+new access/refresh pair, even when it is otherwise valid and signed by the
+same server.
+
+For authenticated requests, user API-key provenance is server-derived. The
+request is marked as using a user API key only after the corresponding
+database row, expiry, signature, and IP restriction have all passed. Code
+which applies credential-specific policy must use that validated request
+marker rather than trusting an unverified JWT claim.
 
 ## Password Reset
 
@@ -1256,4 +1266,3 @@ The endpoint also accepts `ip`, `duid`, and `muid` to clear other tiers independ
 ## Incident Reporting
 
 Failed login attempts, unknown usernames, and invalid password resets are automatically reported to the incident system with appropriate severity levels. `invalid_password` events are emitted at level 5 once the username resolves (level 1 from `set_new_password`).
-

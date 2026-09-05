@@ -2,6 +2,7 @@
 
 import datetime
 import contextlib
+import json
 import uuid
 from unittest import mock
 
@@ -659,15 +660,22 @@ def test_recommendation_rest_contract_and_permissions(opts):
         "sections": "recommendations",
         "recommendation_id": recommendation.pk,
     })["sections"]["recommendations"]["data"][0]
+    chunk = governed["targets"]
+    serialized = chunk["chunk"]
+    while chunk["next_cursor"]:
+        chunk = admin_security.overview({
+            "chunk_cursor": chunk["next_cursor"]})["chunk"]
+        serialized += chunk["chunk"]
+    targets = json.loads(serialized)
     target = recommendation.targets.get()
-    th.assert_eq(governed["targets"][0]["id"], target.pk,
+    th.assert_eq(targets[0]["id"], target.pk,
                  "governed review must identify the frozen target row")
-    th.assert_true("ip" not in governed["targets"][0],
-                   "governed overview exposed a sensitive source address")
-    th.assert_true("last_error" not in governed["targets"][0],
-                   "governed review must redact execution exceptions")
-    th.assert_true("prior_reason" not in governed["targets"][0],
-                   "governed review must redact prior free-form block reasons")
+    th.assert_eq(targets[0]["ip"], SECOND_IP,
+                 "permissioned review must expose the actionable source address")
+    th.assert_true("last_error" in targets[0],
+                   "permissioned review must retain execution exceptions")
+    th.assert_true("prior_reason" in targets[0],
+                   "permissioned review must retain prior block reasons")
 
     opts.client.logout()
     clear_rate_limits(ip="127.0.0.1", key="login")

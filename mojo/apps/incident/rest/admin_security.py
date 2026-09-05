@@ -14,16 +14,21 @@ def _translate(call):
 
 
 @md.GET("admin/security")
-@md.denies_key_backed_session()
-@md.requires_global_perms("view_security", "manage_security", "security")
+@md.requires_auth()
+@md.custom_security("server-derived global or exact-group Admin Security scope")
 def on_admin_security(request):
-    return _translate(lambda: admin_security.overview(request.DATA))
+    authority = admin_security.build_authority(request)
+    return _translate(
+        lambda: admin_security.overview(request.DATA, authority=authority))
 
 
 @md.POST("admin/security/action")
-@md.denies_key_backed_session()
-@md.requires_fresh_auth(seconds=600)
-@md.requires_global_perms("manage_security", "security")
+@md.requires_auth()
+@md.requires_fresh_auth()
+@md.custom_security("global User or validated UserAPIKey Admin Security mutation")
 def on_admin_security_action(request):
+    authority = admin_security.build_authority(request, write=True)
     return _translate(
-        lambda: admin_security.apply_action(request.DATA, request.user))
+        lambda: admin_security.apply_action(
+            request.DATA, request.user, authority=authority,
+            actor_context=authority.actor_context))

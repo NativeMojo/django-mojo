@@ -332,6 +332,7 @@ def test_ruleset_with_no_rules_is_a_category_catch_all(opts):
 @th.django_unit_test()
 def test_ruleset_run_handler(opts):
     from mojo.apps.incident.models.rule import RuleSet
+    from mojo.apps.incident.services import rule_validation
 
     # Delete existing rulesets and rules with category 'testing'
     RuleSet.objects.filter(category="testing").delete()
@@ -359,9 +360,9 @@ def test_ruleset_run_handler(opts):
         handler="job://incident_handler?severity=high&notify=true"
     )
 
-    # Arbitrary stored jobs are legacy policy code and fail closed.
-    assert ruleset_job.run_handler(event) is False, (
-        "An arbitrary job handler must not dispatch")
+    # Markerless handlers are established legacy policy and remain dispatchable.
+    assert ruleset_job.run_handler(event) is True, (
+        "An established legacy job handler must continue to dispatch")
 
     # Create RuleSet with email handler
     ruleset_email = RuleSet.objects.create(
@@ -371,9 +372,8 @@ def test_ruleset_run_handler(opts):
         handler="email://admin@example.com"
     )
 
-    # Direct recipients are outside the governed permission-only schema.
-    assert ruleset_email.run_handler(event) is False, (
-        "A direct-recipient email handler must not dispatch")
+    assert ruleset_email.run_handler(event) is True, (
+        "An established direct-recipient email handler must continue to dispatch")
 
     # Create RuleSet with notify handler
     ruleset_notify = RuleSet.objects.create(
@@ -383,8 +383,8 @@ def test_ruleset_run_handler(opts):
         handler="notify://security-team"
     )
 
-    assert ruleset_notify.run_handler(event) is False, (
-        "A direct-recipient notification handler must not dispatch")
+    assert ruleset_notify.run_handler(event) is True, (
+        "An established direct-recipient notification handler must continue to dispatch")
 
     # A typed, permission-scoped handler remains dispatchable.
     ruleset_governed = RuleSet.objects.create(
@@ -392,6 +392,7 @@ def test_ruleset_run_handler(opts):
         category="testing",
         priority=4,
         handler="notify://perm@manage_security",
+        metadata=rule_validation.mark_governed(),
     )
     assert ruleset_governed.run_handler(event) is True, (
         "A governed notification handler should dispatch")

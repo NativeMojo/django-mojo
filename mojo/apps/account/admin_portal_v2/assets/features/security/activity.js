@@ -1,19 +1,31 @@
 import {badge, formatDate, h, statusTone, TableView} from '../../core.js';
 import {openModal} from '../../components/overlays.js';
-import {sectionRows} from './api.js';
+import {readSecurityDetail, sectionRows} from './api.js';
 
 const TABS = ['incidents', 'events'];
 
-function showRecord(kind, row) {
-  const names = kind === 'incidents'
-    ? ['id', 'created', 'priority', 'state', 'status', 'scope', 'category', 'group_id', 'rule_set_id']
-    : ['id', 'created', 'level', 'scope', 'category', 'country_code', 'group_id', 'incident_id'];
+async function showRecord(kind, row) {
+  const content = h('div', {class: 'security-stack'}, h('p', {text: 'Loading complete evidence…'}));
   openModal({title: `${kind === 'incidents' ? 'Incident' : 'Event'} ${row.id}`,
-    subtitle: row.category || '', content: h('dl', {class: 'security-definition-list'},
-      ...names.filter((name) => row[name] != null).flatMap((name) => [
-        h('dt', {text: name.replaceAll('_', ' ')}),
-        h('dd', {text: name === 'created' ? formatDate(row[name]) : String(row[name])}),
-      ]))});
+    subtitle: row.category || '', content, wide: true});
+  try {
+    row = await readSecurityDetail(kind, row.id);
+  } catch (error) {
+    content.replaceChildren(h('p', {class: 'form-message', text: error.message}));
+    return;
+  }
+  const names = kind === 'incidents'
+    ? ['id', 'created', 'priority', 'state', 'status', 'scope', 'category', 'group_id',
+      'rule_set_id', 'source_ip', 'hostname', 'model_name', 'model_id', 'title', 'details', 'metadata']
+    : ['id', 'created', 'level', 'scope', 'category', 'country_code', 'group_id',
+      'incident_id', 'source_ip', 'hostname', 'uid', 'model_name', 'model_id', 'title', 'details', 'metadata'];
+  content.replaceChildren(h('dl', {class: 'security-definition-list'},
+    ...names.filter((name) => row[name] != null).flatMap((name) => [
+      h('dt', {text: name.replaceAll('_', ' ')}),
+      h('dd', {class: ['details', 'metadata'].includes(name) ? 'security-evidence' : '',
+        text: name === 'created' ? formatDate(row[name])
+          : typeof row[name] === 'object' ? JSON.stringify(row[name], null, 2) : String(row[name])}),
+    ])));
 }
 
 function table(kind, envelope) {

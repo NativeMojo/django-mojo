@@ -63,6 +63,47 @@ def restricted_identity(request):
     return getattr(request, "api_key", None) or getattr(request, "group_token", None)
 
 
+def validated_user_api_key(request):
+    """Return a positively validated per-user API-key record, if present.
+
+    The account JWT validator stamps this only after record, revocation,
+    expiry, signature and allowed-IP validation. Never infer this credential
+    kind from the unverified token payload or from the ``bearer`` scheme.
+    """
+    return getattr(request, "user_api_key", None)
+
+
+def credential_kind(request):
+    """Return the server-authored request credential kind."""
+    if validated_user_api_key(request) is not None:
+        return "user_api_key"
+    if getattr(request, "group_token", None) is not None:
+        return "group_token"
+    if getattr(request, "api_key", None) is not None:
+        return "api_key"
+    if is_request_user(request):
+        if getattr(request, "oauth_grant", None) is not None:
+            return "oauth"
+        return "user"
+    return "unknown"
+
+
+def safe_actor_context(request):
+    """Non-secret, server-derived attribution for sensitive action audits."""
+    user = getattr(request, "user", None)
+    kind = credential_kind(request)
+    value = {"credential_kind": kind, "user_id": getattr(user, "pk", None)}
+    key = validated_user_api_key(request)
+    if key is not None:
+        value.update(user_api_key_id=key.pk, user_api_key_label=key.label or "")
+    restricted = restricted_identity(request)
+    if restricted is not None:
+        value.update(group_id=getattr(restricted, "group_id", None))
+        if kind == "api_key":
+            value["api_key_id"] = getattr(restricted, "pk", None)
+    return value
+
+
 def identity_allows_group(request, group):
     # Fail-closed tenant check for endpoints that authorize against an
     # ARBITRARY caller-named group (metrics account=group-<id>, the chat room

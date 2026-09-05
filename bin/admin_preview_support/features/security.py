@@ -1,13 +1,19 @@
-"""Deterministic, redacted Admin Security preview authority."""
+"""Deterministic Admin Security preview with permissioned operational evidence."""
 
 from copy import deepcopy
 from urllib.parse import parse_qs
 
 
 NAME = "security"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 NOW = "2026-08-10T17:10:00Z"
 WINDOW = {"hours": 24, "start": "2026-08-09T17:10:00Z", "end": NOW}
+CAPABILITIES = {
+    "scope": "global", "group_id": None, "credential_kind": "user",
+    "view": True, "manage": True,
+    "fresh_auth": {"enabled": False, "window_seconds": 0,
+                   "applies_to_credential": True},
+}
 
 
 def describe(capabilities):
@@ -81,7 +87,7 @@ IPSETS = [
 ]
 RECOMMENDATIONS = [
     {"id": 1001, "created": "2026-08-10T16:30:00Z", "modified": NOW,
-     "case_id": 701, "action": "block", "state": "proposed",
+     "case_id": 701, "group_id": 9, "action": "block", "state": "proposed",
      "reason_code": "repeated_auth_failures", "confidence": "high", "urgency": "high",
      "requested_scope": "temporary", "requested_ttl_seconds": 3600,
      "expires_at": "2026-08-10T18:10:00Z", "approved_at": None,
@@ -209,7 +215,46 @@ def get(handler, parsed):
     data = _sections("empty" if state == "empty" else "full")
     query = parse_qs(parsed.query)
     wanted = query.get("sections", ["overview"])[0].split(",")
-    ruleset_id = query.get("ruleset_id", [None])[0]
+    identities = {
+        "cases": ("case_id", "samples", {
+            "samples": [{"source_ip": "203.0.113.7", "command": "/usr/bin/check-login"}],
+            "observed_sources": ["203.0.113.7"], "breakdown": {"country": {"US": 12}},
+        }),
+        "incidents": ("incident_id", "details", {
+            "source_ip": "203.0.113.7", "hostname": "edge-a",
+            "model_name": "account.User", "model_id": 42,
+            "title": "Repeated login failures",
+            "details": "Evidence in /var/log/auth.log from 203.0.113.7",
+            "metadata": {"command": "/usr/bin/check-login", "cidr": "203.0.113.0/24"},
+        }),
+        "events": ("event_id", "details", {
+            "source_ip": "203.0.113.7", "hostname": "edge-a", "uid": "auth-401",
+            "model_name": "account.User", "model_id": 42,
+            "title": "Invalid password",
+            "details": "Authentication failed at /api/login",
+            "metadata": {"path": "/var/log/auth.log"},
+        }),
+        "rules": ("ruleset_id", "handlers", {
+            "handlers": [{"type": "notify", "permission": "manage_security"}],
+            "rules": [{"name": "serious", "field": "level",
+                       "operator": ">=", "value": 8, "value_type": "int"}],
+            "delete_on_resolution": False,
+            "metadata": {"owner": "security-operations"},
+            "handler": "notify://perm@manage_security",
+        }),
+        "ipsets": ("ipset_id", "data", {
+            "source_url": "https://feeds.example.test/hostile.txt",
+            "data": "203.0.113.0/24\n2001:db8::/32",
+            "sync_error": "provider command /usr/bin/ipset-sync exited 1",
+        }),
+        "recommendations": ("recommendation_id", "targets", {
+            "explanation": "Repeated failures from 203.0.113.7",
+            "approval_note": "reviewed /var/log/auth.log", "collateral": {"count": 0},
+            "targets": [{"ip": "203.0.113.7", "validation_reason": "public source",
+                         "last_error": None, "prior_blocked_until": None,
+                         "prior_reason": None}], "targets_truncated": False,
+        }),
+    }
     sections = {}
     for name in wanted:
         if name not in data:
@@ -236,20 +281,20 @@ def get(handler, parsed):
                               "action_names": list(ACTIONS)}
             else:
                 data[name] = {"not": "a bounded row array"}
-        if name == "rules" and ruleset_id is not None:
+        identity = identities.get(name)
+        identity_value = query.get(identity[0], [None])[0] if identity else None
+        if identity_value is not None:
             data[name] = [row for row in data[name]
-                          if str(row["id"]) == str(ruleset_id)]
+                          if str(row["id"]) == str(identity_value)]
             for row in data[name]:
-                row.pop("rule_count", None)
-                row.update(
-                    handlers=[{"type": "notify", "permission": "manage_security"}],
-                    rules=[{"name": "serious", "field": "level",
-                            "operator": ">=", "value": 8,
-                            "value_type": "int"}],
-                    delete_on_resolution=False)
+                row.update(deepcopy(identity[2]))
         sections[name] = _envelope({} if status in ("unavailable", "failed") else data[name],
                                    status=status, reason=reason)
-    return 200, {"schema_version": SCHEMA_VERSION, "sections": sections}
+    capabilities = deepcopy(CAPABILITIES)
+    if state == "view-only":
+        capabilities["manage"] = False
+    return 200, {"schema_version": SCHEMA_VERSION,
+                 "capabilities": capabilities, "sections": sections}
 
 
 def post(handler, path, payload):

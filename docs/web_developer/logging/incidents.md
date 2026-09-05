@@ -381,11 +381,13 @@ note, and group provenance.
 ## RuleSet Fields
 
 The generic `/api/incident/event/ruleset` and
-`/api/incident/event/ruleset/rule` endpoints are read-only compatibility
-surfaces. Human writes go through
-`POST /api/incident/admin/security/action`, which requires a fresh interactive
-session and global **`manage_security` (or `security`)**. API keys and
-group-scoped grants are refused. See [Admin Security client
+`/api/incident/event/ruleset/rule` endpoints retain CRUD for markerless legacy
+policies. Governed aggregates and their children reject generic writes; use
+`POST /api/incident/admin/security/action` for them. This action requires
+global **`manage_security` (or `security`)** and the deployment-configured
+freshness policy for interactive sessions. Validated per-user API keys retain
+the user's global permissions; group credentials are read-only and exact-group
+scoped. See [Admin Security client
 contract](../security/README.md#admin-security-client-contract) for the GET
 envelope, confirmation strings, response shape, and errors.
 

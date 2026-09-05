@@ -1,7 +1,7 @@
 import {badge, h, statusTone, TableView} from '../../core.js';
 import {runAction} from '../../components/actions.js';
 import {openModal} from '../../components/overlays.js';
-import {actionSchemas, performSecurityAction, readSecurity, sectionRows} from './api.js';
+import {actionSchemas, performSecurityAction, readSecurityDetail, sectionRows} from './api.js';
 
 function policySchema(report) {
   const schema = report.sections.schemas?.data?.rule_policy;
@@ -127,8 +127,7 @@ function actionButton({report, row, action, label, refresh}) {
 }
 
 async function openEditor({report, row, refresh}) {
-  const detail = row ? await readSecurity(['rules'], {params: {ruleset_id: row.id}}) : null;
-  const current = detail ? sectionRows(detail.sections.rules)[0] : {};
+  const current = row ? await readSecurityDetail('rules', row.id) : {};
   const action = row ? 'ruleset.replace' : 'ruleset.create';
   const schema = actionSchemas(report)[action];
   let close;
@@ -146,8 +145,15 @@ async function openEditor({report, row, refresh}) {
     close(); await refresh();
   });
   editor.confirmation.placeholder = confirmationFor(schema, row?.id);
+  const legacyEvidence = current.validation?.legacy === true
+    ? h('section', {class: 'security-state warning'},
+      h('strong', {text: 'Legacy policy — still active under established semantics'}),
+      h('p', {text: 'Replacing this policy opts it into the governed schema. Its retained handler and metadata are shown below.'}),
+      h('pre', {class: 'security-evidence', text: JSON.stringify({
+        handler: current.handler, metadata: current.metadata,
+      }, null, 2)})) : null;
   close = openModal({title: row ? `Replace ${row.name}` : 'Create rule set',
-    content: editor.form, wide: true});
+    content: h('div', {class: 'security-stack'}, legacyEvidence, editor.form), wide: true});
 }
 
 export function renderRules({ctx, report, refresh}) {
@@ -175,5 +181,5 @@ export function renderRules({ctx, report, refresh}) {
   ]}).render();
   return h('div', {class: 'security-stack'},
     h('div', {class: 'security-toolbar'},
-      h('p', {class: 'muted', text: manage ? 'Writes require a fresh human session, the current revision and typed confirmation.' : 'View-only security access.'}), create), table);
+      h('p', {class: 'muted', text: manage ? 'Writes use the deployment-configured authentication freshness window, the current revision and typed confirmation.' : 'View-only security access.'}), create), table);
 }

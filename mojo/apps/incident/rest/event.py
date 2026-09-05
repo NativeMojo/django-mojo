@@ -79,15 +79,14 @@ def on_health_summary(request):
 
 @md.URL('event/ruleset')
 @md.URL('event/ruleset/<int:pk>')
+@md.uses_model_security(RuleSet)
 def on_event_ruleset(request, pk=None):
-    # Explicit compatibility read. RuleSet.RestMeta hard-disables create,
-    # update and delete; governed writes live at
-    # /api/incident/admin/security/action.
+    # Compatibility CRUD remains available for established policies. The
+    # governed Admin Security aggregate is an additional opt-in lifecycle.
     return RuleSet.on_rest_request(request, pk)
 
 @md.URL('event/ruleset/rule')
 @md.URL('event/ruleset/rule/<int:pk>')
+@md.uses_model_security(Rule)
 def on_event_ruleset_rule(request, pk=None):
-    # Explicit compatibility read. Child writes must replace the complete
-    # aggregate under its parent revision through Admin Security.
     return Rule.on_rest_request(request, pk)

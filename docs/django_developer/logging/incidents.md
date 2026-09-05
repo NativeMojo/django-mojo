@@ -369,16 +369,19 @@ reversed`, `targets_applied|pre_existing|whitelisted|failed`,
 
 ### Admin Security authority and RuleSet governance
 
-`GET /api/incident/admin/security` is the versioned, global-human-only read
-contract for operations clients. It returns independently bounded envelopes
+`GET /api/incident/admin/security` is the versioned operations read contract.
+Global users and validated per-user API keys retain global permission
+authority. Group API keys/tokens receive exact-group, read-only case, incident,
+event, and recommendation data; the group comes from the credential, never a
+client parameter. It returns independently bounded envelopes
 for `overview`, `cases`, `incidents`, `events`, `rules`, `ipsets`,
 `recommendations`, and `schemas`. Every section carries status, observed time,
-cutoff/window, and truncation. The envelope never includes raw event/case
-evidence or metadata, event source-address fields, CIDR material, IPSet source
-keys, raw handler strings, commands, Python paths, or exception text.
-Recommendation target IPs are the narrow exception: request the
-`recommendations` section with `recommendation_id=<id>` to review its exact,
-bounded frozen scope before approval. Current row counts and
+cutoff/window, and truncation. Lists remain bounded. Direct IDs return complete
+retained detail through signed UTF-8-safe cursors bound to scope, object, field,
+revision, digest, and offset. The final serializer scrubs authentication
+secrets only; addresses, CIDRs, commands, paths, raw handler strings, metadata,
+validation reasons, exceptions, and other operational evidence remain visible.
+Current row counts and
 append-only recommendation transitions are labelled exact; retention-limited
 event/case learning is labelled sampled, and unprovable lifetime rates are
 `unavailable`.
@@ -386,22 +389,23 @@ event/case learning is labelled sampled, and unprovable lifetime rates are
 The view delegates to `services.admin_security.overview(request.DATA)`.
 `sections`/`section` selects a comma-separated string or array from the roster
 above, `limit` defaults to 50 and caps at 100, and `window_hours` defaults to 24
-and caps at 2160. `recommendation_id` adds the bounded (maximum 1024) target
-projection to the recommendation section. It returns
-`{schema_version: 1, sections: {name: {status, observed_at, cutoff, window,
+and caps at 2160. `case_id`, `incident_id`, `event_id`, `ruleset_id`,
+`ipset_id`, and `recommendation_id` select direct detail; direct historical
+lookup is not constrained by the list window. `chunk_cursor` resumes a large
+detail value. It returns
+`{schema_version: 3, capabilities, sections: {name: {status, observed_at, cutoff, window,
 truncated, data}}}` inside the standard REST envelope. Collector exceptions
 degrade only that section to `status="unavailable"` with
 `reason="collector_unavailable"`. The `rules` section does not inline child
 rules; valid typed handlers appear under `validation.handlers`, while action
 responses for create/replace carry top-level typed handlers and children.
 
-`POST /api/incident/admin/security/action` is the only human RuleSet writer;
+`POST /api/incident/admin/security/action` is the governed RuleSet writer;
 `POST /api/incident/ipset/action` is the client-facing alias for governed
-IPSet lifecycle actions. These endpoints reject key-backed/group identities.
-Reads require one of the global `view_security`, `manage_security`, or
-`security` grants; writes require global `manage_security` or `security`,
-authentication within 600 seconds (subject to
-the documented `FRESH_AUTH_ENFORCE` operator kill switch), typed confirmation,
+IPSet lifecycle actions. Group identities are read-only and cannot reach these
+global mutations. Validated per-user API keys keep the user's global write
+permissions. Interactive writes use the deployment's configured
+`FRESH_AUTH_WINDOW`/`FRESH_AUTH_ENFORCE` policy, plus typed confirmation,
 and `expected_modified` for an existing object. The shared service accepts
 `ruleset.create|replace|activate|deactivate|delete`,
 `recommendation.approve|reject|cancel|reverse`, and
@@ -409,9 +413,9 @@ and `expected_modified` for an existing object. The shared service accepts
 activation is separate, and catch-all activation also requires `ACTIVATE
 CATCH-ALL RULESET <id>`.
 
-The action view delegates to
-`services.admin_security.apply_action(request.DATA, request.user)` and returns
-`{schema_version: 1, action, data}`. Database claims/finalization use short
+The action view builds server-derived authority and delegates to
+`services.admin_security.apply_action(...)`, returning
+`{schema_version: 3, action, data}`. Database claims/finalization use short
 transactions; checked firewall waits run outside them. Create accepts
 `{action, confirm, ruleset}`. Existing RuleSet actions add `ruleset_id` and
 `expected_modified`; recommendation actions instead add `recommendation_id`,
@@ -436,15 +440,11 @@ group, assertion, backreference, and unknown parser operation. Simple
 literal/class/anchor patterns remain valid, and `\\|` or `[|]` matches a
 literal pipe. Governed input always uses this atomic subset.
 
-Legacy runtime validation has one exact-value exception for the five audited
-regex strings emitted by `RuleSet.ensure_ossec_rules()`: the three Bot/Scanner
-conditions plus Login Session Noise and Generic Web Errors. The immutable
-`TRUSTED_DEFAULT_REGEXES` set, not a RuleSet name or mutable metadata, grants
-that compatibility; a one-character change is refused, and a governed/user
-write cannot claim the exception. Any other malformed legacy policy remains
-readable, deactivatable and deletable, but cannot match, dispatch, or
-reactivate; replace its complete inactive tree first.
-Generic RuleSet/Rule URLs remain bounded reads but reject mutation. IPSet
+The strict subset is enforced for server-marked governed policies. Markerless
+legacy policies retain their established comparator, regex, and dispatch
+semantics, including custom handler paths. The generic RuleSet/Rule URLs retain
+CRUD for those legacy rows but reject mutation or deletion of governed
+aggregates and their children. IPSet
 lifecycle uses the same authority through `ipset.enable`, `ipset.disable`, and
 `ipset.sync`. The writer requires `expected_modified` and exact confirmation,
 claims desired state under a short row lock, then waits for checked fleet truth
@@ -645,7 +645,7 @@ promote an old `last_synced`/empty-error pair to verified.
 | Endpoint | Auth | Description |
 |---|---|---|
 | `/api/incident/ipset` | `view_security` / `security` (read), `manage_security` / `security` (metadata/CIDR write) | Bounded model surface; lifecycle fields and deletion are closed |
-| `/api/incident/ipset/action` | global `manage_security` / `security`; fresh human session; no API key | `{action, ipset_id, expected_modified, confirm}` governed lifecycle writer |
+| `/api/incident/ipset/action` | global `manage_security` / `security`; configured freshness for interactive sessions; validated per-user API keys retain global permission | `{action, ipset_id, expected_modified, confirm}` governed lifecycle writer |
 
 ### Setup Examples
 
@@ -1056,8 +1056,9 @@ Each Rule checks one allowlisted Event fact against a target value:
 `Rule.check_rule()` delegates to `services.rule_validation.evaluate_rule()`.
 Model columns are authoritative and metadata is only a fallback for computed
 detector fields, so metadata cannot shadow `level`, `category`, or another
-stored column. A legacy `metadata.` prefix is stripped. Private or malformed
-field names and invalid values/operators fail closed as no-match.
+stored column. A legacy `metadata.` prefix is stripped. Server-marked governed
+policies use strict field/operator/regex validation. Markerless legacy policies
+retain their established evaluator semantics after upgrade.
 
 Governed Admin Security writes accept only the fields, value types, and
 operators published by `rule_validation.public_schema()`; this includes the
@@ -1204,10 +1205,11 @@ legacy URL-form `RuleSet.handler` storage column.
 The array caps at eight entries. `rule_validation.public_schema()` and the
 Admin Security `schemas` section publish the roster, arguments, and bounds.
 Raw recipients, `job://`/Python paths, arbitrary handler URLs, and LLM handlers
-are rejected by governed writers. Before dispatch,
-`RuleSet.run_handler()` validates the entire stored aggregate again; malformed
-legacy rows stay readable for replacement/deactivation/deletion but cannot
-dispatch.
+are rejected by governed writers. Before dispatch, a governed RuleSet validates
+the entire stored aggregate again. Markerless legacy RuleSets continue to
+dispatch their established handler strings and queued work is durably labelled
+`execution_mode=legacy`; only explicit governed replacement opts them into the
+strict handler schema.
 
 ### Block Handler Parameters
 
@@ -1464,16 +1466,16 @@ On a corporate NAT or CGNAT, "the whole egress" is everybody behind that address
 GET /api/incident/admin/security?sections=rules&limit=100
 ```
 
-The bounded list deliberately omits raw handlers. Compare the named built-in
-policies and their threshold fields; a row with `validation.status` set to
-`replacement_required` is legacy and cannot be reactivated. Use the trusted
-deployment/default policy as the source for the complete replacement rather
-than trying to reconstruct a handler from a redacted read.
+The bounded list omits raw handlers. A markerless row reports
+`validation.status=legacy` and continues to run unchanged. Fetch its direct
+`ruleset_id` detail when the operator needs the complete handler and conditions.
+Use governed replacement only when deliberately opting that row into the strict
+schema.
 
 **Apply the current defaults.** Send a complete inactive
 `ruleset.replace` action against the row's exact `modified` value, then review
-and activate it separately (requires a fresh human session with global
-`manage_security` or `security`):
+and activate it separately (requires global `manage_security` or `security` and
+the configured freshness policy for interactive sessions):
 
 ```text
 POST /api/incident/admin/security/action

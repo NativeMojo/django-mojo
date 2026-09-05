@@ -3,7 +3,9 @@
 from mojo.apps.assistant import tool
 
 
-FRESH_AUTH = 600
+# None delegates to the deployment's FRESH_AUTH_WINDOW. Default 0 keeps the
+# step-up posture opt-in instead of silently imposing a ten-minute window.
+FRESH_AUTH = None
 WRITE_PERMS = ["manage_security", "security"]
 MAX_RESULTS = 50
 

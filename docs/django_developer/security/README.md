@@ -10,24 +10,31 @@ incident dispatch.
 ## Administrative policy authority
 
 Security administration uses `GET /api/incident/admin/security` and
-`POST /api/incident/admin/security/action`. These are platform-global human
-contracts: machine/key-backed and group-scoped identities are refused, and
-writes require global `manage_security` or `security` plus fresh
-authentication. The
-read response is versioned and section-bounded; it exposes safe typed policy
-shapes and provenance-labelled metrics, never raw evidence, metadata, handler
-URLs, commands, CIDRs, source credentials, Python paths, or provider exceptions.
-The recommendation detail query (`sections=recommendations&recommendation_id=…`)
-returns its bounded frozen target IPs because an operator must review the exact
-scope being approved; event and case source-address material remains redacted.
+`POST /api/incident/admin/security/action`. Positively validated per-user API
+keys retain the same global-or-default-group read authority as their user. Group
+API keys/tokens get read-only access to case, incident, event, and
+recommendation evidence for the credential's exact server-derived group;
+client group parameters never choose that scope. Writes require global
+`manage_security` or `security` and use deployment-configured authentication
+freshness. Machine credentials bypass interactive freshness because they have
+no login event to repeat.
+
+The schema-v3 response keeps discovery lists bounded and exposes complete
+authorized detail through signed UTF-8-safe cursors bound to scope, object,
+field, revision, digest, and offset. Final serialization removes only
+authentication secrets. It deliberately preserves addresses, CIDRs, commands,
+paths, raw handler text, metadata, validation reasons, provider errors, and
+other retained operational evidence.
 
 RuleSet mutation is aggregate-based. Callers send the complete policy for
 create/replace, use the row's `modified` value as `expected_modified`, and echo
 the action-specific confirmation text. Replacements are inactive and activation
 is separate. Child changes advance the parent's revision, so a stale UI,
 ticket, or Assistant approval fails closed. Generic RuleSet/Rule REST writers
-and generic Assistant model writers are disabled; their reads remain for
-compatibility. IPSet metadata/CIDR writes remain bounded, but lifecycle changes
+remain available for markerless legacy policy. They cannot add/remove the
+server-owned governed marker or mutate a governed aggregate; governed policy
+uses the versioned action service. Generic Assistant model writers remain
+disabled. IPSet metadata/CIDR writes remain bounded, but lifecycle changes
 use the governed `ipset.enable`, `ipset.disable`, and `ipset.sync` actions.
 Names are immutable, active rows become durable disable tombstones instead of
 being deleted, and source credentials are excluded from generic output.
@@ -194,13 +201,14 @@ separately persisted `description`. Its condition combiner is the canonical
 both non-fields explicitly.
 
 The packaged Admin v2 Security workspace is a strict client of
-`services.admin_security` schema version 2. The `schemas` section publishes a
+`services.admin_security` schema version 3. The `schemas` section publishes a
 bounded typed object schema for every action, including optimistic revision and
-independent catch-all confirmation inputs. The `ipsets` section projects only
+independent catch-all confirmation inputs. The IPSet list projects only
 desired/observed status, generation, observation cutoff, and bounded captured
-expected/responded/succeeded/failed/missing host IDs. CIDRs, source keys,
-runner IDs/incarnations, broker replies, raw observations, persisted exception
-text, and recommendation target addresses never enter this projection.
+expected/responded/succeeded/failed/missing host IDs. A direct `ipset_id`
+detail adds CIDR data, source URL, and sync errors while its source credential
+is scrubbed. Direct recommendation detail includes its frozen addresses,
+validation reasons, errors, and prior block state.
 
 `verified` is derived only from a complete, internally consistent proof: the
 exact sorted host roster and incarnations, desired set
@@ -271,20 +279,10 @@ group, assertions, backreferences, nested/group repetition, and unknown parser
 operations. It also rejects multiple repetitions whose case-insensitive
 character domains overlap or cannot be proved disjoint—even when literals
 separate them (for example, `a*aa*aa*$`). The overlap check includes Python's
-special Unicode `IGNORECASE` equivalences. Governed writes and legacy runtime
-evaluation normally share this subset.
-
-Runtime compatibility has one closed exception: the five audited pattern
-strings shipped by `RuleSet.ensure_ossec_rules()` (three Bot/Scanner patterns,
-Login Session Noise, and Generic Web Errors) remain executable through
-`validate_runtime_regex()`. `TRUSTED_DEFAULT_REGEXES` is an immutable exact-value
-set drift-tested against those server defaults. Trust does not come from the
-RuleSet name, category, metadata, or creator; changing even one character loses
-the exception, while runtime membership depends only on exact string equality.
-The governed writer always uses `validate_regex()`, so even those five values
-cannot be submitted as new/user policy. Any other stored pattern outside the
-atomic subset fails closed as no-match and requires complete governed
-replacement.
+special Unicode `IGNORECASE` equivalences. This subset applies to server-marked
+governed policies. Markerless legacy policies retain their established
+comparator and regex behavior after upgrade; replacing one through the
+governed action API deliberately opts it into this stricter contract.
 
 ### Value Types
 
@@ -366,11 +364,11 @@ The array caps at eight entries. `rule_validation.public_schema()` and the
 Admin Security `schemas` section publish the handler roster, arguments, and
 bounds.
 Arbitrary recipients, permanent blocks, raw handler URLs, Python/job targets,
-and LLM handlers are refused by the governed writer. Existing legacy handler
-classes remain implementation details for old data and internal workflows, but
-`RuleSet.run_handler()` now revalidates the whole aggregate before publishing:
-an out-of-schema legacy chain cannot dispatch until an administrator replaces
-it with a valid inactive policy and separately activates it.
+and LLM handlers are refused by the governed writer. A server-marked governed
+RuleSet revalidates the whole aggregate before publishing. Markerless legacy
+rows keep their established handler chains and publish jobs durably labelled
+`execution_mode=legacy`; they enter the strict schema only after an explicit
+complete inactive replacement and separate activation.
 
 `geo.block()` keeps its bool-compatible signature. Its checked companion
 re-observes an already-desired block without incrementing `block_count`, so
@@ -383,11 +381,14 @@ not attacks.
 Handlers execute asynchronously via the job queue. When a rule matches:
 
 1. An incident is created (or existing incident is found via bundling)
-2. Each handler in the chain is published as a separate async job stamped
-   `handler_schema="incident.governed_handler"` and
-   `handler_schema_version=1`
-3. The worker revalidates the one typed handler against the current schema;
-   unversioned, stale, or newly unsafe durable jobs are refused
+2. Each handler in the chain is published as a separate async job. Governed
+   policy stamps `execution_mode="governed"`,
+   `handler_schema="incident.governed_handler"`, and
+   `handler_schema_version=1`; markerless policy stamps
+   `execution_mode="legacy"` and preserves its established raw handler.
+3. The worker revalidates governed handlers against the current schema. Legacy
+   jobs, including markerless jobs queued before `execution_mode` existed,
+   follow the bounded compatibility path.
 4. Handler execution is recorded in `IncidentHistory`
 5. Failures are logged but do not block other handlers in the chain
 

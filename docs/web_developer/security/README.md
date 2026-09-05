@@ -55,8 +55,8 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | Health Summary | `/api/incident/health/summary` | Latest event per `system:health:*` category — one row per subsystem |
 | Tickets | `/api/incident/ticket` | Human review items, LLM conversation threads |
 | Ticket Notes | `/api/incident/ticket/note` | Ticket conversation (human + LLM) |
-| RuleSets | `/api/incident/event/ruleset` | Read-only compatibility view of RuleSet summaries |
-| Rules | `/api/incident/event/ruleset/rule` | Read-only compatibility view of Rule conditions |
+| RuleSets | `/api/incident/event/ruleset` | Legacy-compatible RuleSet CRUD; governed rows require the aggregate action API |
+| Rules | `/api/incident/event/ruleset/rule` | Legacy-compatible condition CRUD; governed parents require the aggregate action API |
 | GeoIP | `/api/system/geoip` | IP records, block status, threat level, geolocation |
 | Logs | `/api/logs` | Audit logs, firewall history |
 | Metrics | `/api/metrics/fetch` | Time-series data for dashboards |
@@ -66,9 +66,9 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | Bot Signatures | `/api/account/bouncer/signature` | Manage bot signatures (auto-learned + manual) |
 | IPSet | `/api/incident/ipset` | Bulk CIDR blocking: countries, datacenters, abuse lists |
 | Maestro Item Links | `/api/incident/maestro/item-link` | Remote Maestro items linked to local Tickets or Incidents |
-| Admin Security | `/api/incident/admin/security` | Versioned, bounded and redacted operational sections plus the typed policy schema |
-| Admin Security Actions | `/api/incident/admin/security/action` | Fresh-auth, version-bound RuleSet, recommendation, and IPSet actions |
-| IPSet Actions | `/api/incident/ipset/action` | Fresh-auth, revision-bound enable/disable/sync actions with checked fleet results |
+| Admin Security | `/api/incident/admin/security` | Versioned summaries plus complete permissioned detail with secret-only scrubbing |
+| Admin Security Actions | `/api/incident/admin/security/action` | Configured-freshness, version-bound RuleSet, recommendation, and IPSet actions |
+| IPSet Actions | `/api/incident/ipset/action` | Configured-freshness, revision-bound enable/disable/sync actions with checked fleet results |
 
 See individual API docs for full details:
 - [MojoSec Sensor Ingestion](mojosec.md) — per-installation authentication,
@@ -85,10 +85,15 @@ See individual API docs for full details:
 
 ### Admin Security client contract
 
-Use the Admin Security endpoints for policy-management UI. They require global
-human grants; an API key or group membership is never sufficient. Reads accept
-global `view_security`, `manage_security`, or `security`. Writes accept global
-`manage_security` or `security` and require authentication within 600 seconds.
+Use the Admin Security endpoints for policy-management and operational clients.
+Users and validated per-user API keys use their existing global-or-default-group
+`view_security`, `manage_security`, or `security` permissions. A group API key
+or group token may read only case, incident, event, and recommendation evidence
+owned by its exact authenticated group; a request parameter cannot select or
+widen that scope. Writes require global `manage_security` or `security`.
+Their authentication-freshness window is the deployment's configured
+`FRESH_AUTH_WINDOW`/`FRESH_AUTH_ENFORCE` policy. Machine credentials have no
+interactive login event and therefore bypass the freshness check.
 
 #### Read
 
@@ -99,8 +104,11 @@ global `view_security`, `manage_security`, or `security`. Writes accept global
 | `sections` or `section` | A comma-separated string or array drawn from `overview`, `cases`, `incidents`, `events`, `rules`, `ipsets`, `recommendations`, and `schemas`; omitted means all sections |
 | `limit` | Rows per list section; default 50, maximum 100 |
 | `window_hours` | Window for time-bound sections; default 24, maximum 2160 (90 days) |
-| `recommendation_id` | Selects one recommendation's bounded, address-free target outcome summary |
-| `ruleset_id` | Selects one RuleSet's complete safe typed policy for editing |
+| `case_id`, `incident_id`, `event_id` | Selects one authorized record directly, including records older than the list window |
+| `recommendation_id` | Selects one recommendation with its complete frozen target evidence |
+| `ruleset_id` | Selects one RuleSet's complete policy, including legacy handler text |
+| `ipset_id` | Selects one IPSet with source URL, CIDR data, and sync error detail |
+| `chunk_cursor` | Continues one signed detail field; the cursor is bound to authority scope, object, field, revision, digest, and byte offset |
 
 The standard response envelope contains a versioned map. Every requested
 section completes independently:
@@ -110,7 +118,15 @@ section completes independently:
   "status": true,
   "code": 200,
   "data": {
-    "schema_version": 2,
+    "schema_version": 3,
+    "capabilities": {
+      "scope": "global",
+      "group_id": null,
+      "credential_kind": "user",
+      "view": true,
+      "manage": false,
+      "fresh_auth": {"enabled": false, "window_seconds": 0, "applies_to_credential": true}
+    },
     "sections": {
       "rules": {
         "status": "available",
@@ -137,27 +153,38 @@ case and learning projections identify themselves as sampled.
 
 The packaged v2 client validates the exact envelope/window contract, bounded
 row fields and types, policy/action schemas, and firewall host lists for every
-requested section. Schema version 2 by itself is not acceptance. A malformed,
+requested section. Schema version 3 by itself is not acceptance. A malformed,
 contradictory, duplicate, or oversized value fails that requested view with a
 contract error; it must not be converted to an empty list, rendered as partial
 success, or allowed to expose action controls.
 
+List sections remain bounded. Direct detail fields that can be large arrive as
+UTF-8-safe chunks. Follow `next_cursor` until `complete=true`, requiring the
+same digest on every page. A tampered, cross-scope, cross-object, or stale
+cursor is rejected. Scrubbing is deliberately narrow: authentication secrets
+(passwords, tokens, authorization values, API/private/signing keys) become
+`[redacted secret]`; operational IP addresses, CIDRs, commands, paths, handler
+URLs, titles, metadata, validation reasons, errors, and evidence remain intact.
+
 The `rules` section is a summary list: it includes the aggregate revision,
 configuration, validation status, `rule_count`, and—for a valid policy—the
 safe typed handlers under `validation.handlers`; it does not inline child
-rules. Successful `ruleset.create` and `ruleset.replace` action responses
+rules. Markerless policies report `validation.status="legacy"`; direct detail
+returns their established raw handler and conditions. Successful governed
+`ruleset.create` and `ruleset.replace` action responses
 include their validated typed `rules`, top-level `handlers`, and
 `delete_on_resolution`. Do not treat the generic RuleSet read as an editable
-aggregate: its raw handler field is deliberately omitted. Request
-`?sections=rules&ruleset_id=<id>` for the complete safe editable aggregate.
+governed aggregate. The generic compatibility graph exposes the raw handler
+and metadata needed to administer markerless legacy rows, but governed rows
+reject writes there. Request `?sections=rules&ruleset_id=<id>` for complete
+Admin Security detail and use the action schema when opting into governance.
 
 To review a recommendation, request
-`?sections=recommendations&recommendation_id=<id>`. Its optional target list is
-bounded to 1024 and carries only IDs, kind, validation state, outcome, attempts,
-and lifecycle timestamps. Target addresses, validation reasons, execution
-errors, and prior block reasons are absent. Bind the returned `modified`
-revision into the operator's confirmation. Never offer an action when
-`targets_truncated` is true.
+`?sections=recommendations&recommendation_id=<id>`. Its target detail includes
+the frozen addresses, validation reasons, execution errors, prior block state,
+and lifecycle timestamps (up to 1024 targets, explicitly marked if truncated).
+Bind the returned `modified` revision into the operator's confirmation. Never
+offer an action when `targets_truncated` is true.
 
 `sections=schemas` returns the server-owned `rule_policy.aggregate` object
 contract, condition fields/types/operators, bundling choices, typed handler
@@ -165,12 +192,13 @@ arguments, caps, and `actions`: one complete typed schema per governed action
 (plus `action_names` for ordered discovery). Build editors and confirmations
 from that response; never send raw handler URLs.
 
-The `ipsets` projection includes an `enforcement` summary with desired
+The IPSet list projection includes an `enforcement` summary with desired
 presence/count/digest, observed status, generation, observation cutoff, and
 bounded captured expected/responded/succeeded/failed/missing host IDs. Treat
-`verified`, `partial`, `missing`, `stale`, and `unavailable` as distinct. CIDRs,
-source keys, runner identities/incarnations, broker output, raw observations,
-and exception text are never returned.
+`verified`, `partial`, `missing`, `stale`, and `unavailable` as distinct. A
+direct `ipset_id` detail adds retained CIDRs, source URL, and sync errors;
+authentication source keys remain scrubbed. The reconciliation/fencing and
+checked-truth rules below are unchanged.
 
 `verified` additionally means the server validated a complete, sorted and
 internally consistent receipt: exact roster/incarnations, desired set
@@ -239,7 +267,7 @@ Success returns the action and its safe object projection:
   "status": true,
   "code": 200,
   "data": {
-    "schema_version": 2,
+    "schema_version": 3,
     "action": "ruleset.create",
     "data": {
       "id": 42,
@@ -269,14 +297,16 @@ decorators retain their numeric codes.
 |---|---|---|
 | 400 | `invalid_action`, `confirmation_required`, `catch_all_confirmation_required`, or a validator code | Unknown action/field, invalid typed policy, bad ID/note, or missing typed confirmation |
 | 401 | `401` | The interactive session is invalid or expired. A packaged client may refresh and replay a GET/HEAD once; it must never replay this POST. |
-| 403 | `403` | The caller lacks a qualifying global human grant or is key-backed |
+| 403 | `403` | The caller lacks permission, requests a global section with group scope, or tries a write without global authority |
 | 404 | `not_found` | The named RuleSet, recommendation, or IPSet does not exist |
 | 409 | `stale_revision`, `invalid_state`, `scope_unavailable`, or a validation code | Reload authoritative state and require review plus confirmation again; never replay automatically |
-| 440 | `440` | The server refused the action before execution because recent authentication is required. Reauthenticate and retry at most once. Refreshing a token does not update its authentication time. |
+| 440 | `440` | The configured freshness policy refused an interactive session before execution. Reauthenticate and retry at most once. Refreshing a token does not update its authentication time. |
 
-The older RuleSet/Rule URLs are read-only compatibility surfaces. IPSet
-metadata/CIDR writes remain on the generic model URL; lifecycle changes and
-deletion are closed there.
+The older RuleSet/Rule URLs retain CRUD for markerless legacy policies so an
+upgrade does not disable established integrations. The server-owned governed
+marker cannot be added, removed, or edited there, and governed aggregates or
+their children reject generic mutation/deletion. IPSet metadata/CIDR writes
+remain on the generic model URL; lifecycle changes and deletion are closed there.
 
 ## Building a Security Dashboard
 
@@ -747,12 +777,14 @@ rules through the governed Admin Security action endpoint.
 
 | Method | Path | Description | Permission |
 |--------|------|-------------|------------|
-| `GET` | `/api/incident/admin/security?sections=rules,schemas` | Bounded RuleSet summaries plus the server-owned input schema | global `view_security`, `manage_security`, or `security`; human only |
-| `POST` | `/api/incident/admin/security/action` | Create/replace/activate/deactivate/delete a complete RuleSet | global `manage_security` or `security`; fresh human session |
-| `GET` | `/api/incident/event/ruleset[/<id>]` | Read-only compatibility RuleSet projection | `view_security` |
-| `GET` | `/api/incident/event/ruleset/rule[/<id>]` | Read-only compatibility child-rule projection | `view_security` |
+| `GET` | `/api/incident/admin/security?sections=rules,schemas` | Bounded RuleSet summaries plus the server-owned input schema | global user/UserAPIKey permission |
+| `POST` | `/api/incident/admin/security/action` | Create/replace/activate/deactivate/delete a governed RuleSet | global `manage_security` or `security`; configured freshness |
+| `GET`, `POST`, `DELETE` | `/api/incident/event/ruleset[/<id>]` | Legacy-compatible RuleSet CRUD; governed rows reject generic writes | `view_security` / `manage_security` |
+| `GET`, `POST`, `DELETE` | `/api/incident/event/ruleset/rule[/<id>]` | Legacy-compatible child CRUD; governed parents reject generic writes | `view_security` / `manage_security` |
 
-POST and DELETE requests to the generic RuleSet and Rule URLs are disabled.
+Markerless legacy rows accept the generic `POST`/`DELETE` operations shown
+above. A server-owned governed marker cannot be added, changed, or removed
+there; governed aggregates and their children require the action API.
 
 ### RuleSet Fields
 
@@ -934,8 +966,9 @@ paths, and LLM handlers are not part of the governed schema.
 
 ### Rule Conditions
 
-Each RuleSet action carries the complete ordered `rules` array. Conditions are
-not written independently:
+Each governed RuleSet action carries the complete ordered `rules` array;
+governed conditions are not written independently. Markerless legacy policies
+retain their established child REST operations:
 
 ```json
 "rules": [{
@@ -961,14 +994,12 @@ case-insensitive character domains are rejected even when literals separate
 them; Unicode `IGNORECASE` equivalences are included in that check. This atomic
 boundary applies to every governed/user write.
 
-The only runtime compatibility exception is the five exact audited regex
-values installed by `RuleSet.ensure_ossec_rules()`—three Bot/Scanner
-conditions, Login Session Noise, and Generic Web Errors. Existing server
-defaults continue to match, but clients cannot submit those non-atomic patterns
-through a governed action. Compatibility is keyed only to the immutable exact
-pattern value, never the RuleSet name, category, or metadata; changing a single
-character removes it. Other stored legacy regexes fail closed until replaced
-with the strict subset. A RuleSet with no rules is a catch-all and needs the
+The strict regex subset applies to server-marked governed policies. Markerless
+legacy rows continue to evaluate their established fields, comparators, regexes,
+and handlers after upgrade, including custom handler paths. They are not
+silently promoted into governed policy. Replace one through the governed action
+API to opt into strict validation; the replacement is inactive until separately
+activated. A governed RuleSet with no rules is a catch-all and needs the
 additional catch-all confirmation before activation.
 
 ## Incident Handlers
@@ -1117,7 +1148,7 @@ A connection is one of two kinds, shown in the **Access** column: tool-door acce
 
 An IPSet is durable desired state for one Linux `hash:net` set. Creation and
 metadata/CIDR editing use the model endpoint; enable, disable, and sync use a
-fresh-auth governed action. A lifecycle action verifies one compatible runner
+configured-freshness governed action. A lifecycle action verifies one compatible runner
 per hostname and returns success only after every host reports the exact set
 type, IPv4 membership digest, and INPUT/FORWARD rule counts.
 
@@ -1129,10 +1160,11 @@ type, IPv4 membership digest, and INPUT/FORWARD rule counts.
 | `GET` | `/api/incident/ipset/<id>` | `view_security` or `security` | Get one IPSet |
 | `POST` | `/api/incident/ipset` | `manage_security` or `security` | Create a disabled IPSet |
 | `POST` | `/api/incident/ipset/<id>` | `manage_security` or `security` | Update writable metadata or CIDRs |
-| `POST` | `/api/incident/ipset/action` | global `manage_security` or `security`; human JWT authenticated within 600 seconds | Enable, disable, or re-check desired state |
+| `POST` | `/api/incident/ipset/action` | global `manage_security` or `security`; deployment-configured freshness for interactive sessions | Enable, disable, or re-check desired state |
 
-API keys are refused by the action endpoint. `DELETE` is unsupported: disable
-is the durable absence tombstone that lets later reconciliation remove drift.
+Validated per-user API keys retain their user's global action permission;
+group API keys/tokens remain read-only. `DELETE` is unsupported: disable is the
+durable absence tombstone that lets later reconciliation remove drift.
 
 ### Field reference
 
@@ -1144,7 +1176,7 @@ is the durable absence tombstone that lets later reconciliation remove drift.
 | `description` | string | Yes | Human-readable label |
 | `source` | string | Yes | `ipdeny`, `abuseipdb`, `tor`, `blocklist_de`, or `manual` |
 | `source_url` | string | Yes | Source URL used by scheduled refresh |
-| `source_key` | string | Yes, write-only | Source credential/identifier; excluded from every response graph |
+| `source_key` | string | Yes, write-only | Source credential/identifier; excluded from generic response graphs. Admin Security direct detail reports only `[redacted secret]`, never the value. |
 | `data` | array of strings on write; newline text on read | Yes | Complete CIDR replacement. Input is validated all-or-nothing, canonicalized, sorted, deduplicated, IPv4-only, and capped at 250,000 networks. |
 | `is_enabled` | bool | No | Desired presence, changed only by governed lifecycle actions; it is not observed kernel proof |
 | `cidr_count` | int | No | Number of canonical stored networks |
@@ -1153,7 +1185,9 @@ is the durable absence tombstone that lets later reconciliation remove drift.
 | `created`, `modified` | datetime | No | Creation timestamp and optimistic-concurrency revision |
 
 The default graph excludes `data` and `source_key`. `?graph=detailed` includes
-the stored newline-form CIDR data; `source_key` always remains excluded.
+the stored newline-form CIDR data; `source_key` remains excluded from generic
+graphs. Admin Security direct detail returns complete CIDR data and sync errors
+but replaces the source credential with a secret placeholder.
 The Admin Security `ipsets` section recomputes `enforcement_status` from the
 exact current compatible-host roster and fresh fenced observations on every
 read; it does not infer verification from `last_synced` or an empty error.

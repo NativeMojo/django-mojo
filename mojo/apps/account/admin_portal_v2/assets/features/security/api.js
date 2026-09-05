@@ -1,6 +1,6 @@
 import {api, apiOnce} from '../../core.js';
 
-export const SECURITY_SCHEMA_VERSION = 2;
+export const SECURITY_SCHEMA_VERSION = 3;
 export const SECURITY_SECTIONS = Object.freeze([
   'overview', 'cases', 'incidents', 'events', 'rules', 'ipsets',
   'recommendations', 'schemas',
@@ -83,6 +83,29 @@ function validInteger(value, maximum = 1000000, minimum = 0) {
   return Number.isInteger(value) && value >= minimum && value <= maximum;
 }
 
+function validChunk(value) {
+  return plainObject(value) && ['text', 'json'].includes(value.encoding)
+    && typeof value.chunk === 'string' && validInteger(value.offset, Number.MAX_SAFE_INTEGER)
+    && validInteger(value.next_offset, Number.MAX_SAFE_INTEGER)
+    && validInteger(value.byte_length, Number.MAX_SAFE_INTEGER)
+    && typeof value.complete === 'boolean'
+    && validString(value.next_cursor, 4096, true)
+    && typeof value.digest === 'string' && /^[0-9a-f]{64}$/.test(value.digest);
+}
+
+function validateCapabilities(value) {
+  if (!plainObject(value) || !['global', 'group'].includes(value.scope)
+      || !validString(value.credential_kind, 64)
+      || typeof value.view !== 'boolean' || typeof value.manage !== 'boolean'
+      || !plainObject(value.fresh_auth)
+      || typeof value.fresh_auth.enabled !== 'boolean'
+      || !validInteger(value.fresh_auth.window_seconds, 86400 * 30)
+      || typeof value.fresh_auth.applies_to_credential !== 'boolean'
+      || (value.group_id != null && !validInteger(value.group_id, OBJECT_ID_LIMIT, 1))) {
+    throw new SecurityContractError('Security capabilities are malformed.');
+  }
+}
+
 function sameMembers(left, right) {
   return Array.isArray(left) && left.length === right.length
     && new Set(left).size === left.length
@@ -161,7 +184,7 @@ function validateRules(data, name) {
         || typeof row.is_active !== 'boolean'
         || typeof row.bundle_by_rule_set !== 'boolean'
         || !plainObject(row.validation)
-        || !['valid', 'replacement_required'].includes(row.validation.status)
+        || !['valid', 'legacy', 'replacement_required'].includes(row.validation.status)
         || typeof row.validation.legacy !== 'boolean'
         || !Array.isArray(row.validation.handlers)
         || row.validation.handlers.length > 8
@@ -226,14 +249,15 @@ function validateRecommendations(data, name) {
     'protected_count', 'executed_count', 'failed_count', 'reversed_count',
     'policy_version', 'evaluator_version'];
   for (const row of data) {
-    requireFields(row, ['id', 'case_id', ...strings, ...counts, 'expires_at', 'approved_at'], name);
+    requireFields(row, ['id', 'case_id', 'group_id', ...strings, ...counts, 'expires_at', 'approved_at'], name);
     if (!validInteger(row.id, OBJECT_ID_LIMIT, 1)
         || !validInteger(row.case_id, OBJECT_ID_LIMIT, 1)
+        || (row.group_id != null && !validInteger(row.group_id, OBJECT_ID_LIMIT, 1))
         || strings.some((field) => !validString(row[field]))
         || counts.some((field) => row[field] != null && !validInteger(row[field]))
         || !validString(row.expires_at, 64, true)
         || !validString(row.approved_at, 64, true)) invalid(name);
-    if (hasOwn(row, 'targets')
+    if (hasOwn(row, 'targets') && !validChunk(row.targets)
         && (!Array.isArray(row.targets) || row.targets.length > TARGET_LIMIT
           || typeof row.targets_truncated !== 'boolean'
           || row.targets.some((target) => !plainObject(target)))) invalid(name);
@@ -406,9 +430,54 @@ export async function readSecurity(sections, {signal, limit = 100, params = {}} 
       || !result.sections || typeof result.sections !== 'object') {
     throw new SecurityContractError();
   }
+  validateCapabilities(result.capabilities);
   const values = {};
   for (const name of names) values[name] = sectionEnvelope(name, result.sections[name]);
-  return Object.freeze({schema_version: result.schema_version, sections: Object.freeze(values)});
+  return Object.freeze({schema_version: result.schema_version,
+    capabilities: Object.freeze({...result.capabilities}), sections: Object.freeze(values)});
+}
+
+export async function readSecurityChunk(cursor, {signal} = {}) {
+  const query = new URLSearchParams({chunk_cursor: cursor});
+  const result = await api(`/api/incident/admin/security?${query}`, {signal});
+  if (!result || result.schema_version !== SECURITY_SCHEMA_VERSION
+      || !validChunk(result.chunk)) throw new SecurityContractError('Security evidence chunk is malformed.');
+  validateCapabilities(result.capabilities);
+  return result.chunk;
+}
+
+export async function completeChunk(first, {signal} = {}) {
+  if (!validChunk(first)) throw new SecurityContractError('Security evidence chunk is malformed.');
+  let value = first.chunk; let current = first; let count = 0;
+  while (!current.complete) {
+    if (!current.next_cursor || ++count > 4096) {
+      throw new SecurityContractError('Security evidence pagination did not terminate.');
+    }
+    current = await readSecurityChunk(current.next_cursor, {signal});
+    if (current.digest !== first.digest) {
+      throw new SecurityContractError('Security evidence changed during retrieval.');
+    }
+    value += current.chunk;
+  }
+  if (first.encoding === 'json') {
+    try { return JSON.parse(value); } catch { throw new SecurityContractError('Security evidence JSON is malformed.'); }
+  }
+  return value;
+}
+
+export async function readSecurityDetail(section, id, {signal} = {}) {
+  const idNames = {cases: 'case_id', incidents: 'incident_id', events: 'event_id',
+    rules: 'ruleset_id', ipsets: 'ipset_id', recommendations: 'recommendation_id'};
+  const idName = idNames[section];
+  if (!idName || !validInteger(id, OBJECT_ID_LIMIT, 1)) throw new SecurityContractError();
+  const report = await readSecurity([section], {signal, params: {[idName]: id}});
+  const row = sectionRows(report.sections[section])[0];
+  if (!row) throw new SecurityContractError('Security record is unavailable.');
+  const expanded = {...row};
+  for (const [field, value] of Object.entries(expanded)) {
+    if (validChunk(value)) expanded[field] = await completeChunk(value, {signal});
+  }
+  return expanded;
 }
 
 export function actionSchemas(report) {

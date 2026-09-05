@@ -1771,6 +1771,13 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 return None, "Token has invalid signature"
             if key_record.allowed_ips and request and request.ip not in key_record.allowed_ips:
                 return None, "Not allowed from this location"
+            # Positive provenance is stamped only after the record, expiry,
+            # signature and location checks all pass. Downstream global
+            # authorities may distinguish this per-user machine credential
+            # from group ApiKeys and unknown custom bearer identities without
+            # trusting the client-visible JWT claims.
+            if request is not None:
+                request.user_api_key = key_record
             try:
                 UserAPIKey.objects.filter(pk=key_record.pk).update(last_used=dates.utcnow())
             except Exception:
