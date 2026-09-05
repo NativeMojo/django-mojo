@@ -169,11 +169,13 @@ command apply the matching upper bound of server time plus allowed skew.
 
 ### Read-only case API and metrics
 
-The custom case endpoints require a human JWT with global `view_security` or
-`security`. API keys and group/member grants are rejected. There are no case
-create, update, delete, or direct-execute endpoints — case-driven enforcement
-runs exclusively through the recommendation lifecycle (below), a separate
-read/act surface gated by its own permissions.
+The custom case endpoints require a User with global `view_security` or
+`security`. An interactive JWT or a positively validated per-user `UserAPIKey`
+Bearer token may carry that authority. Group `ApiKey`/group-token credentials
+and group/member grants are rejected. There are no case create, update, delete,
+or direct-execute endpoints — case-driven enforcement runs exclusively through
+the recommendation lifecycle (below), a separate read/act surface gated by its
+own permissions.
 
 | Method | Path | Input | Response |
 |---|---|---|---|
@@ -370,8 +372,9 @@ reversed`, `targets_applied|pre_existing|whitelisted|failed`,
 ### Admin Security authority and RuleSet governance
 
 `GET /api/incident/admin/security` is the versioned operations read contract.
-Global users and validated per-user API keys retain global permission
-authority. Group API keys/tokens receive exact-group, read-only case, incident,
+Users and validated per-user API keys retain their global permission authority
+or, without it, the permitted read scope of the user's server-owned default
+group. Group API keys/tokens receive exact-group, read-only case, incident,
 event, and recommendation data; the group comes from the credential, never a
 client parameter. It returns independently bounded envelopes
 for `overview`, `cases`, `incidents`, `events`, `rules`, `ipsets`,
@@ -392,9 +395,12 @@ above, `limit` defaults to 50 and caps at 100, and `window_hours` defaults to 24
 and caps at 2160. `case_id`, `incident_id`, `event_id`, `ruleset_id`,
 `ipset_id`, and `recommendation_id` select direct detail; direct historical
 lookup is not constrained by the list window. `chunk_cursor` resumes a large
-detail value. A truncated discovery-list envelope includes an opaque
-`next_cursor`; send it back as `page_cursor` to continue the same scope-bound
-window snapshot with keyset pagination. It returns
+detail value and returns `{schema_version, capabilities, chunk}`; concatenate
+the chunk text until `complete=true`, then JSON-decode it when
+`encoding="json"`. A truncated discovery-list envelope includes an opaque
+`next_cursor`; continue with `sections=<the same section>` and
+`page_cursor=<next_cursor>` to preserve the same scope-bound window snapshot
+with keyset pagination. It returns
 `{schema_version: 3, capabilities, sections: {name: {status, observed_at,
 cutoff, window, truncated, next_cursor, data}}}` inside the standard REST
 envelope. Collector exceptions degrade only that section to

@@ -35,9 +35,12 @@ Security consumes only `/api/incident/admin/security` schema version 3 and its
 governed action endpoint. It renders server-curated fields, action schemas,
 cutoff/window metadata, captured checked-host summaries, and complete
 permissioned detail. Large detail fields use signed scope/object/revision-bound
-cursors; the client follows them to completion. Only authentication secrets are
-scrubbed. Addresses, CIDRs, commands, paths, handler text, provider errors, and
-other retained operational evidence remain visible to an authorized operator.
+cursors; the client follows each field's `chunk_cursor` to completion. A
+discovery-list `next_cursor` is continued separately with
+`sections=<the same section>&page_cursor=<next_cursor>`. Only authentication
+secrets are scrubbed. Addresses, CIDRs, commands, paths, handler text, provider
+errors, and other retained operational evidence remain visible to an
+authorized operator.
 
 Schema version alone is not trusted. The v2 client validates each requested
 section's envelope, window, bounded row shape, policy/action schemas, and

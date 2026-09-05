@@ -18,8 +18,10 @@ honor its own `status`, `cutoff`, `window`, and `truncated` values. Display exac
 and sampled metrics separately. An unavailable, partial, missing, or stale
 receipt is not success and is not an empty result.
 For a truncated discovery list, the UI follows the opaque `next_cursor` through
-`page_cursor`; cursors are server-bound to the authenticated scope, section,
-page size, and original window snapshot.
+`sections=<the same section>&page_cursor=<next_cursor>`; cursors are
+server-bound to the authenticated scope, section, page size, and original
+window snapshot. Large detail fields use a separate `chunk_cursor` and are
+reassembled according to their `encoding` and digest.
 
 Treat schema version 3 as necessary but not sufficient. The packaged client
 strictly validates every requested envelope, row collection, action schema,

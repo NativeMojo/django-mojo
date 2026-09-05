@@ -11,13 +11,16 @@ incident dispatch.
 
 Security administration uses `GET /api/incident/admin/security` and
 `POST /api/incident/admin/security/action`. Positively validated per-user API
-keys retain the same global-or-default-group read authority as their user. Group
-API keys/tokens get read-only access to case, incident, event, and
+keys (`account.UserAPIKey`, presented as Bearer credentials) retain the same
+global-or-default-group read authority as their user. Group credentials
+(`account.ApiKey` and group-scoped tokens) get read-only access to case,
+incident, event, and
 recommendation evidence for the credential's exact server-derived group;
 client group parameters never choose that scope. Writes require global
 `manage_security` or `security` and use deployment-configured authentication
 freshness. Machine credentials bypass interactive freshness because they have
-no login event to repeat.
+no login event to repeat. `FRESH_AUTH_WINDOW` defaults to `0`, so Admin Security
+does not add a recent-login requirement unless the deployment opts in.
 
 The schema-v3 response keeps discovery lists bounded and exposes complete
 authorized detail through signed UTF-8-safe cursors bound to scope, object,
@@ -25,11 +28,14 @@ field, revision, digest, and offset. Final serialization removes only
 authentication secrets. It deliberately preserves addresses, CIDRs, commands,
 paths, raw handler text, metadata, validation reasons, provider errors, and
 other retained operational evidence.
-Truncated discovery envelopes carry an opaque `next_cursor`; `page_cursor`
-continues the same server-fixed window using a scope/section/snapshot-bound
-keyset. Recommendation detail includes targets, transitions, and execution
-attempts. IPSet detail includes the checked proof without changing its truth
-classification.
+Truncated discovery envelopes carry an opaque `next_cursor`; continue with
+`sections=<the same section>&page_cursor=<next_cursor>`. The cursor fixes the
+scope, section, page size, and original window snapshot and uses keyset
+pagination. A large detail field is always a chunk descriptor; continue that
+one field with `chunk_cursor=<field.next_cursor>`, concatenate the returned
+`chunk` text, then parse it as JSON when `encoding="json"`. Recommendation
+detail includes targets, transitions, and execution attempts. IPSet detail
+includes the checked proof without changing its truth classification.
 
 RuleSet mutation is aggregate-based. Callers send the complete policy for
 create/replace, use the row's `modified` value as `expected_modified`, and echo
@@ -211,9 +217,10 @@ bounded typed object schema for every action, including optimistic revision and
 independent catch-all confirmation inputs. The IPSet list projects only
 desired/observed status, generation, observation cutoff, and bounded captured
 expected/responded/succeeded/failed/missing host IDs. A direct `ipset_id`
-detail adds CIDR data, source URL, and sync errors while its source credential
-is scrubbed. Direct recommendation detail includes its frozen addresses,
-validation reasons, errors, and prior block state.
+detail adds CIDR data, source URL, sync errors, and the retained checked proof
+plane while its source credential is scrubbed. Direct recommendation detail
+includes its frozen addresses, validation reasons, errors, and prior block
+state.
 
 `verified` is derived only from a complete, internally consistent proof: the
 exact sorted host roster and incarnations, desired set
@@ -222,9 +229,10 @@ matching direct observation per host. When a checked-execution receipt is
 present, its roster and every
 per-host semantic result must match too. A bare `ok`, missing receipt fields,
 duplicates, contradictions, anomalies, or partial hosts can never be promoted
-to verified. The public projection strips the proof internals and never
-synthesizes responded/succeeded hosts; it returns a safe partial, missing,
-stale, or unavailable status instead.
+to verified. The bounded IPSet list projection strips the proof internals and
+never synthesizes responded/succeeded hosts; it returns a safe partial,
+missing, stale, or unavailable status instead. Authorized direct detail exposes
+the retained checked proof for investigation without changing that status.
 
 Collector exceptions become stable `collector_unavailable` envelopes. Action
 state exceptions become stable typed error codes/messages. Keep this boundary
@@ -305,10 +313,14 @@ If casting fails, the rule does not match (returns False).
 ### Field Resolution
 
 When checking a rule, the engine looks for the field in this order:
-1. `event.metadata.get(field_name)` — custom metadata fields
-2. `getattr(event, field_name)` — model fields (level, category, source_ip, etc.)
+1. `getattr(event, field_name)` — authoritative model fields (level, category,
+   source_ip, etc.)
+2. `event.metadata.get(field_name)` — fallback for custom metadata when the
+   model field is absent or `None`
 
-This means you can match on any metadata key you pass to `report_event()`.
+The optional `metadata.` prefix is stripped before lookup. Metadata therefore
+supports custom detector fields without being able to shadow an Event model
+column that already has a value.
 
 ### Matching Flow
 

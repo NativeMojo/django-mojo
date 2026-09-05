@@ -86,14 +86,18 @@ See individual API docs for full details:
 ### Admin Security client contract
 
 Use the Admin Security endpoints for policy-management and operational clients.
-Users and validated per-user API keys use their existing global-or-default-group
-`view_security`, `manage_security`, or `security` permissions. A group API key
-or group token may read only case, incident, event, and recommendation evidence
-owned by its exact authenticated group; a request parameter cannot select or
-widen that scope. Writes require global `manage_security` or `security`.
+Users and validated per-user API keys (`UserAPIKey`, sent with the Bearer
+scheme) use their existing global-or-default-group `view_security`,
+`manage_security`, or `security` permissions. A group API key (`ApiKey`, sent
+with the `apikey` scheme) or group-scoped token may read only case, incident,
+event, and recommendation evidence owned by its exact authenticated group; a
+request parameter cannot select or widen that scope. Writes require global
+`manage_security` or `security`.
 Their authentication-freshness window is the deployment's configured
 `FRESH_AUTH_WINDOW`/`FRESH_AUTH_ENFORCE` policy. Machine credentials have no
 interactive login event and therefore bypass the freshness check.
+`FRESH_AUTH_WINDOW` defaults to `0` (off), so a deployment must opt in before
+these actions require a recent interactive login.
 
 #### Read
 
@@ -101,7 +105,7 @@ interactive login event and therefore bypass the freshness check.
 
 | Parameter | Meaning |
 |---|---|
-| `sections` or `section` | A comma-separated string or array drawn from `overview`, `cases`, `incidents`, `events`, `rules`, `ipsets`, `recommendations`, and `schemas`; omitted means all sections |
+| `sections` or `section` | A comma-separated string or array drawn from `overview`, `cases`, `incidents`, `events`, `rules`, `ipsets`, `recommendations`, and `schemas`; omitted means all sections for global authority, or the four allowed evidence sections for group authority |
 | `limit` | Rows per list section; default 50, maximum 100 |
 | `window_hours` | Window for time-bound sections; default 24, maximum 2160 (90 days) |
 | `case_id`, `incident_id`, `event_id` | Selects one authorized record directly, including records older than the list window |
@@ -160,18 +164,38 @@ contradictory, duplicate, or oversized value fails that requested view with a
 contract error; it must not be converted to an empty list, rendered as partial
 success, or allowed to expose action controls.
 
-List sections remain bounded. Direct detail fields that can be large arrive as
-UTF-8-safe chunks. Follow `next_cursor` until `complete=true`, requiring the
-same digest on every page. A tampered, cross-scope, cross-object, or stale
-cursor is rejected. Scrubbing is deliberately narrow: authentication secrets
+List sections remain bounded. Every potentially large direct-detail field is a
+UTF-8-safe chunk descriptor, even when its first chunk is complete:
+
+```json
+{
+  "encoding": "json",
+  "chunk": "{\"command\":\"sudo systemctl status api\"}",
+  "offset": 0,
+  "next_offset": 39,
+  "byte_length": 39,
+  "complete": true,
+  "next_cursor": null,
+  "digest": "<sha256>"
+}
+```
+
+Append the descriptor's `chunk` text. While `complete` is false, call
+`GET /api/incident/admin/security?chunk_cursor=<next_cursor>` and append
+`data.chunk.chunk`, requiring the same digest each time. When complete, use the
+concatenated text directly for `encoding="text"`, or JSON-decode it for
+`encoding="json"`. A tampered, cross-scope, cross-object, or stale cursor is
+rejected. Scrubbing is deliberately narrow: authentication secrets
 (passwords, tokens, authorization values, API/private/signing keys) become
 `[redacted secret]`; operational IP addresses, CIDRs, commands, paths, handler
 URLs, titles, metadata, validation reasons, errors, and evidence remain intact.
 
 Discovery lists use keyset pagination. When `truncated=true`, follow the
-section's `next_cursor` through `page_cursor`; do not synthesize numeric pages.
-The packaged client rejects repeated row IDs or a page whose authority/window
-does not match the first page.
+section's `next_cursor` with
+`GET /api/incident/admin/security?sections=<same-section>&page_cursor=<next_cursor>`;
+the same-section parameter is required. Do not synthesize numeric pages or
+send detail IDs with a page cursor. The packaged client rejects repeated row
+IDs or a page whose authority/window does not match the first page.
 
 The `rules` section is a summary list: it includes the aggregate revision,
 configuration, validation status, `rule_count`, and—for a valid policy—the
@@ -783,8 +807,9 @@ browser/admin APIs. They are enabled only when the deployment sets a non-empty
 
 RuleSets are the core of the rule engine. Each RuleSet watches a specific event
 category, groups related events into incidents, and fires a handler when enough
-events accumulate. Human clients mutate the complete RuleSet and its child
-rules through the governed Admin Security action endpoint.
+events accumulate. Operator clients, including validated per-user automation,
+mutate a complete governed RuleSet and its child rules through the Admin
+Security action endpoint.
 
 ### Endpoints
 
@@ -999,6 +1024,11 @@ bounded to a deliberately small safe subset. Simple literal, character-class,
 anchor, and safe-repetition patterns such as `^node-[A-Z0-9]+$` remain valid.
 Use `\\|` or `[|]` for a literal pipe; every unescaped `|` is rejected as
 alternation.
+
+At evaluation time, an Event model column is authoritative. Metadata is used
+only when that column is absent or `null`, so a metadata key cannot shadow
+values such as `level`, `category`, or `source_ip`. The optional `metadata.`
+field prefix is accepted for compatibility and is stripped before lookup.
 
 The validator also rejects capturing and flag-scoped groups, assertions,
 backreferences, nested/group repetition, unknown parser operations, and

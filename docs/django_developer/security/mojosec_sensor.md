@@ -1005,11 +1005,12 @@ receipts are never removed by that retention job.
 
 MojoSec's learning loop is an operator-only, infrastructure-global control
 plane. Every learning endpoint uses global `view_security` or
-`manage_security`/`security` authorization and rejects API keys, including
-keys that otherwise carry those permissions. Feedback is never tenant-owned:
-it has no `group`, and sensor identity is snapshotted from the protected
-`MojoSecReceipt.sensor_id` and installation API-key ID rather than an Event
-group or a payload claim.
+`manage_security`/`security` authorization. A positively validated per-user
+`UserAPIKey` Bearer credential retains its User's global authority; a group
+`ApiKey`, group-scoped token, or group/member grant is rejected. Feedback is
+never tenant-owned: it has no `group`, and sensor identity is snapshotted from
+the protected `MojoSecReceipt.sensor_id` and installation API-key ID rather
+than an Event group or a payload claim.
 
 `MojoSecDetectorFeedback` is append-only. A disposition is exactly one of
 `confirmed_threat`, `expected_administrative`, `benign_noise`,
@@ -1048,9 +1049,11 @@ predicates. Extra keys are rejected, so proposal content cannot carry code,
 regex, URLs, jobs, handlers, or actions. It never becomes a `RuleSet`, and
 manually authored live RuleSet/regex behavior is unchanged. The prototype has
 no assistant/LLM learning tools: feedback, proposal creation, replay, and
-shadow evaluation are human-only REST/service operations until a structural
-server-side human-approval boundary exists. Existing incident-triage and live
-RuleSet assistant tools are unchanged.
+shadow evaluation remain global-admin REST/service operations until a
+structural server-side approval boundary exists. Interactive JWTs and validated
+per-user `UserAPIKey` credentials retain the same global User permission;
+group credentials cannot reach them. Existing incident-triage and live RuleSet
+assistant tools are unchanged.
 
 Replay and shadow are explicit offline operations. The operator must supply a
 non-empty, duplicate-free set of at most 100 retained receipt IDs. IDs are

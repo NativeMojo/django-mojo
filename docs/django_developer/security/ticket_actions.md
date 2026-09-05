@@ -168,10 +168,10 @@ rebuilds `review` from it and verifies both stored and echoed digests.
    cannot execute an unresolved proposal.
 4. **Global authority is re-proved at dispatch** — the note must
    carry its active request, the actor must hold global `manage_security` or
-   `security`, key-backed sessions are refused, and authentication must be
-   within the deployment-configured freshness window. A positively validated
-   per-user API key may carry the user's global permission without an
-   impossible interactive reauthentication; group credentials remain denied.
+   `security`, and group `ApiKey`/group-token sessions are refused. Interactive
+   authentication must be within the deployment-configured freshness window.
+   A positively validated per-user `UserAPIKey` may carry the user's global
+   permission without an impossible interactive reauthentication.
 5. **The claim commits before side effects** — `_claim_dispatch()` uses an
    outermost `transaction.atomic(durable=True)` to stamp `state="claimed"`
    before the handler runs. The claim records response/actor identity plus a
@@ -283,8 +283,11 @@ LLM; a structured `action_response` always dispatches instead.
 ## Security notes
 
 - Creating notes requires `manage_security`/`security` (`TicketNote`
-  `SAVE_PERMS`), and dispatch separately requires a fresh, global, interactive
-  grant. A programmatic note without `active_request` cannot execute an action.
+  `SAVE_PERMS`), and dispatch separately requires a global grant. Interactive
+  sessions use the deployment-configured freshness policy; a validated
+  per-user `UserAPIKey` can carry the global grant without interactive
+  reauthentication, while group credentials are refused. A programmatic note
+  without `active_request` cannot execute an action.
 - Model resolution is whitelist-only. `incident.rule_approval` additionally
   refuses any RuleSet not flagged `metadata.llm_proposed`, so *that* handler
   cannot activate an arbitrary ruleset. `incident.rule_update` has no

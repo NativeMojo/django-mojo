@@ -1,7 +1,7 @@
 # MojoSec Sensor Ingestion
 
-> The sensor receiver below is machine-facing. Human operations clients use
-> `GET /api/incident/admin/security` and
+> The sensor receiver below is machine-facing. Operator clients, including
+> validated per-user automation, use `GET /api/incident/admin/security` and
 > `POST /api/incident/admin/security/action`. Those Admin Security REST routes
 > also recognize validated per-user API keys, while group credentials are
 > confined to exact-group reads.
@@ -311,9 +311,11 @@ direct, SSH-attributed, or audit-unhealthy activity is sent as an ordinary
 Event. A diagnostic window uses the existing eventless local-only receipt
 contract and does not create an Incident or enter learning/feedback metrics.
 
-The browser-facing learning endpoints are separate from machine ingestion.
-They require a human JWT with global security permissions; API keys are always
-rejected and group/member grants never authorize this platform-wide surface.
+The operator-facing learning endpoints are separate from machine ingestion.
+They require a User with global security permissions. That authority may come
+from an interactive JWT or a positively validated per-user `UserAPIKey` Bearer
+token. Group `ApiKey`/group-token credentials and group/member grants never
+authorize this platform-wide surface.
 
 | Method | Path | Permission | Purpose |
 |---|---|---|---|
@@ -331,8 +333,9 @@ rejected and group/member grants never authorize this platform-wide surface.
 | `GET` | `/api/incident/mojosec/deployment` | global `view_security`, `manage_security` or `security` | Driver-side deployment registrations (optional `installation_key_id` filter) |
 | `POST` | `/api/incident/mojosec/deployment` | global `manage_security` or `security` | Pre-register `{installation_key_id, deployment_id, ttl_seconds, note}` before a deploy |
 
-The case surfaces are platform/global security-admin reads. API keys and group
-member grants do not authorize them, and there are no case mutation endpoints —
+The case surfaces are platform/global security-admin reads. A validated
+per-user `UserAPIKey` retains its User's global grant; group credentials and
+group member grants do not authorize them. There are no case mutation endpoints —
 enforcement flows exclusively through the recommendation lifecycle above,
 whose targets are always server-derived case sources with per-target
 `validated`/`protected`/`invalid` validation and honest
