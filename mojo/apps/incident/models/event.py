@@ -166,7 +166,9 @@ class Event(models.Model, MojoModel):
             "hostname": self.hostname,
             "uid": self.uid,
             "country_code": self.country_code,
-            "title": self.title,
+            # Discovery rows stay bounded; an authorized detail request returns
+            # the complete title through the signed chunk transport.
+            "title": self.title if detail else (self.title or "")[:512],
             "model_name": self.model_name,
             "model_id": self.model_id,
             "group_id": self.group_id,

@@ -1,12 +1,26 @@
 import hashlib
 import re
-from django.db import models
+from django.db import models, transaction
 from django.core.validators import MinValueValidator
 from mojo.models import MojoModel
 from urllib.parse import urlparse, parse_qs
 from mojo.helpers import logit
 
 logger = logit.get_logger(__name__, "incident.log")
+
+
+def _rest_boundary_queryset(model):
+    """Lock persisted state when the REST endpoint owns a transaction.
+
+    Model hooks are also called directly by some framework integrations. They
+    still get a persisted-state comparison outside a transaction, while the
+    real REST writer always enters its outer atomic block and therefore gets a
+    row lock here.
+    """
+    queryset = model.objects.all()
+    if transaction.get_connection().in_atomic_block:
+        queryset = queryset.select_for_update()
+    return queryset
 
 
 class BundleBy:
@@ -162,32 +176,79 @@ class RuleSet(models.Model, MojoModel):
         }
 
     def on_rest_pre_save(self, changed_fields, created):
-        """Keep the governed marker server-owned and aggregate-only."""
+        """Enforce policy mode from the locked persisted row.
+
+        The endpoint owns an outer transaction. Re-reading with
+        ``select_for_update`` here means JSON replace, non-dict metadata, and a
+        stale in-memory instance cannot forge or erase a server-owned marker.
+        ``changed_fields`` is intentionally ignored: JSON updates do not
+        reliably populate it.
+        """
         from mojo import errors as merrors
         from mojo.apps.incident.services import rule_validation
 
-        old_metadata = changed_fields.get("metadata")
-        old_marker = rule_validation.governed_marker(old_metadata)
-        new_marker = rule_validation.governed_marker(self.metadata)
-        marker_key = rule_validation.GOVERNED_METADATA_KEY
-        old_has_marker = isinstance(old_metadata, dict) and marker_key in old_metadata
-        new_has_marker = isinstance(self.metadata, dict) and marker_key in self.metadata
-        if old_has_marker != new_has_marker:
+        try:
+            new_mode = rule_validation.policy_mode(self.metadata)
+        except rule_validation.RuleValidationError as error:
             raise merrors.ValueException(
-                "the governed policy marker is server-owned")
-        if old_marker != new_marker:
+                "the policy mode marker is invalid") from error
+        if created:
+            if new_mode != "compatibility":
+                raise merrors.ValueException(
+                    "new generic RuleSets require the server-owned "
+                    "compatibility marker")
+            return
+
+        persisted = _rest_boundary_queryset(type(self)).filter(
+            pk=self.pk).values_list("metadata", flat=True).first()
+        if persisted is None:
+            raise merrors.ValueException("RuleSet no longer exists")
+        try:
+            old_mode = rule_validation.policy_mode(persisted)
+        except rule_validation.RuleValidationError as error:
             raise merrors.ValueException(
-                "the governed policy marker is server-owned")
-        if new_marker is not None:
+                "the stored policy mode marker is invalid") from error
+        if old_mode == "governed":
             raise merrors.ValueException(
                 "governed RuleSets require the versioned aggregate action")
+        marker_keys = (
+            rule_validation.GOVERNED_METADATA_KEY,
+            rule_validation.COMPATIBILITY_METADATA_KEY)
+        old_markers = ({key: persisted[key] for key in marker_keys
+                        if isinstance(persisted, dict) and key in persisted})
+        new_markers = ({key: self.metadata[key] for key in marker_keys
+                        if isinstance(self.metadata, dict) and key in self.metadata})
+        if old_mode != new_mode or old_markers != new_markers:
+            raise merrors.ValueException(
+                "the policy mode marker is server-owned")
 
     def on_rest_pre_delete(self):
         from mojo import errors as merrors
         from mojo.apps.incident.services import rule_validation
-        if rule_validation.is_governed(self):
+        persisted = _rest_boundary_queryset(type(self)).filter(
+            pk=self.pk).values_list("metadata", flat=True).first()
+        if persisted is None:
+            raise merrors.ValueException("RuleSet no longer exists")
+        try:
+            mode = rule_validation.policy_mode(persisted)
+        except rule_validation.RuleValidationError as error:
+            raise merrors.ValueException(
+                "the stored policy mode marker is invalid") from error
+        if mode == "governed":
             raise merrors.ValueException(
                 "governed RuleSets require the versioned aggregate action")
+
+    def atomic_save(self):
+        """Let the compatibility endpoint own the aggregate transaction.
+
+        MojoModel's legacy implementation commits after every save, which is
+        intentionally impossible inside the endpoint's locking atomic block.
+        Direct callers keep that behavior; REST compatibility writes defer the
+        commit to their outer marker/audit transaction.
+        """
+        self.save()
+        if not transaction.get_connection().in_atomic_block:
+            transaction.commit()
 
 
     def run_handler(self, event, incident=None, idempotency_prefix=None,
@@ -211,7 +272,8 @@ class RuleSet(models.Model, MojoModel):
 
         try:
             from mojo.apps.incident.services import rule_validation
-            governed = rule_validation.is_governed(self)
+            mode = rule_validation.policy_mode(self.metadata)
+            governed = mode == "governed"
             if governed:
                 normalized = rule_validation.validate_existing(self)
                 handler_chain = normalized["handler"]
@@ -1060,25 +1122,46 @@ class Rule(models.Model, MojoModel):
             },
         }
 
-    def _assert_legacy_rest_parent(self):
+    @staticmethod
+    def _assert_legacy_rest_parents(parent_ids):
         from mojo import errors as merrors
         from mojo.apps.incident.services import rule_validation
-        if self.parent_id and rule_validation.is_governed(self.parent):
-            raise merrors.ValueException(
-                "governed RuleSets require the versioned aggregate action")
-
-    def on_rest_pre_save(self, changed_fields, created):
-        self._assert_legacy_rest_parent()
-        if not created and "parent" in changed_fields:
-            from mojo.apps.incident.services import rule_validation
-            old_parent = changed_fields.get("parent")
-            if old_parent is not None and rule_validation.is_governed(old_parent):
-                from mojo import errors as merrors
+        parents = list(_rest_boundary_queryset(RuleSet).filter(
+            pk__in=parent_ids).order_by("pk").values("pk", "metadata"))
+        if len(parents) != len(parent_ids):
+            raise merrors.ValueException("RuleSet parent no longer exists")
+        for parent in parents:
+            try:
+                mode = rule_validation.policy_mode(parent["metadata"])
+            except rule_validation.RuleValidationError as error:
+                raise merrors.ValueException(
+                    "the stored parent policy mode marker is invalid") from error
+            if mode == "governed":
                 raise merrors.ValueException(
                     "governed RuleSets require the versioned aggregate action")
 
+    def on_rest_pre_save(self, changed_fields, created):
+        old_parent_id = None
+        if not created:
+            old_parent_id = _rest_boundary_queryset(type(self)).filter(
+                pk=self.pk).values_list("parent_id", flat=True).first()
+        parent_ids = {value for value in (old_parent_id, self.parent_id)
+                      if value is not None}
+        self._assert_legacy_rest_parents(parent_ids)
+
     def on_rest_pre_delete(self):
-        self._assert_legacy_rest_parent()
+        from mojo import errors as merrors
+        parent_id = _rest_boundary_queryset(type(self)).filter(
+            pk=self.pk).values_list("parent_id", flat=True).first()
+        if parent_id is None:
+            raise merrors.ValueException("Rule no longer exists")
+        self._assert_legacy_rest_parents({parent_id})
+
+    def atomic_save(self):
+        """Defer commit to the endpoint's parent/marker locking boundary."""
+        self.save()
+        if not transaction.get_connection().in_atomic_block:
+            transaction.commit()
 
     def save(self, *args, **kwargs):
         """Persist the condition and advance both aggregate revisions."""

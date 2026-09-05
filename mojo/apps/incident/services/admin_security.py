@@ -6,11 +6,12 @@ removed at the final serialization boundary.
 """
 
 from datetime import datetime, timedelta
+import hashlib
 import re
 from types import MappingProxyType
 
 from django.db import transaction
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Count, Max, Prefetch, Q
 from django.utils import timezone
 
 from mojo import errors as merrors
@@ -198,11 +199,29 @@ def _unavailable(cutoff, window, reason):
 
 
 def _page_cursor(authority, section, window, rows, truncated, limit,
-                 position):
+                 position, snapshot=None):
     if not truncated or not rows:
         return None
     return transport.issue_page_cursor(
-        authority, section, window, position(rows[-1]), limit)
+        authority, section, window, position(rows[-1]), limit,
+        snapshot or ("0" * 64))
+
+
+def _query_snapshot(queryset):
+    """Digest membership/revision for a list ordered by mutable columns."""
+    state = queryset.aggregate(
+        row_count=Count("pk", distinct=True), last_modified=Max("modified"))
+    raw = f"{state['row_count']}:{_iso(state['last_modified'])}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _snapshot_guard(queryset, expected=None):
+    actual = _query_snapshot(queryset)
+    if expected is not None and actual != expected:
+        raise SecurityActionError(
+            "Admin Security evidence changed; restart list retrieval",
+            code="stale_cursor", status=409)
+    return actual
 
 
 def _cursor_time(value):
@@ -244,11 +263,15 @@ def _capabilities(authority):
 
 
 def _safe_rule_set(row, detail=False):
-    validation = rule_validation.validation_summary(row)
+    validation = rule_validation.validation_summary(row, include_rules=detail)
     prefetched = getattr(row, "_admin_security_rules", None)
+    annotated_count = getattr(row, "_admin_security_rule_count", None)
+    raw_name = row.name or ""
     value = {
         "id": row.pk, "created": _iso(row.created),
-        "modified": _iso(row.modified), "name": row.name or "",
+        "modified": _iso(row.modified),
+        "name": raw_name if detail else raw_name[:512],
+        "name_truncated": not detail and len(raw_name) > 512,
         "category": row.category, "priority": row.priority,
         "is_active": row.is_active, "bundle_minutes": row.bundle_minutes,
         "bundle_by": row.bundle_by, "bundle_by_rule_set": row.bundle_by_rule_set,
@@ -257,22 +280,27 @@ def _safe_rule_set(row, detail=False):
         "retrigger_every": row.retrigger_every,
         "validation": validation,
         "rule_count": (
-            len(prefetched) if prefetched is not None else row.rules.count()),
+            len(prefetched) if prefetched is not None else
+            annotated_count if annotated_count is not None else
+            row.rules.count()),
     }
-    if detail and not validation.get("legacy"):
+    if detail and validation.get("status") == "valid":
         payload = rule_validation.ruleset_payload(row)
         value["handlers"] = payload["handlers"]
         value["handler"] = row.handler or ""
         value["rules"] = payload["rules"]
-        value["metadata"] = row.metadata or {}
+        value["metadata"] = (
+            row.metadata if row.metadata is not None else {})
         value["delete_on_resolution"] = payload["delete_on_resolution"]
     elif detail:
         rules = prefetched if prefetched is not None else list(
             row.rules.order_by("index", "id")[:MAX_ACTION_TARGETS])
         value.update(
-            handler=row.handler or "", metadata=row.metadata or {},
+            handler=row.handler or "",
+            metadata=(row.metadata if row.metadata is not None else {}),
             rules=[{
                 "id": item.pk, "name": item.name or "", "index": item.index,
+                "field": item.field_name, "operator": item.comparator,
                 "field_name": item.field_name, "comparator": item.comparator,
                 "value": item.value, "value_type": item.value_type,
                 "is_required": item.is_required,
@@ -355,7 +383,7 @@ def _bounded_rule_set(row, authority):
     values = _safe_rule_set(row, detail=True)
     return transport.bounded_detail(
         values, authority, "ruleset", row.pk, _revision(row),
-        ("handler", "metadata", "rules"))
+        ("name", "handler", "metadata", "rules"))
 
 
 def _bounded_case(row, authority):
@@ -486,13 +514,15 @@ def _overview(cutoff, window, end):
 
 
 def _cases(cutoff, window, end, limit, authority, case_id=None,
-           page_position=None):
+           page_position=None, page_snapshot=None):
     from mojo.apps.incident.models import MojoSecCase
     qs = _scope_queryset(MojoSecCase.objects.all(), authority)
     if case_id is not None:
         qs = qs.filter(pk=_id(case_id, "case_id"))
     else:
         qs = qs.filter(last_seen__gte=cutoff, last_seen__lte=end)
+        base = qs
+        snapshot = _snapshot_guard(base, page_snapshot)
         if page_position is not None:
             stamp, pk = _cursor_time(page_position[0]), _id(
                 page_position[1], "page cursor id")
@@ -500,6 +530,8 @@ def _cases(cutoff, window, end, limit, authority, case_id=None,
                 Q(last_seen__lt=stamp) | Q(last_seen=stamp, pk__lt=pk))
     qs = qs.order_by("-last_seen", "-id")
     rows = list(qs[:limit + 1])
+    if case_id is None:
+        _snapshot_guard(base, snapshot)
     if case_id is not None:
         data = [_bounded_case(row, authority) for row in rows[:limit]]
     else:
@@ -521,7 +553,7 @@ def _cases(cutoff, window, end, limit, authority, case_id=None,
     truncated = len(rows) > limit
     cursor = (None if case_id is not None else _page_cursor(
         authority, "cases", window, rows[:limit], truncated, limit,
-        lambda item: (_iso(item.last_seen), item.pk)))
+        lambda item: (_iso(item.last_seen), item.pk), snapshot))
     return _envelope(data, cutoff, window, truncated, next_cursor=cursor)
 
 
@@ -582,16 +614,19 @@ def _events(cutoff, window, end, limit, authority, event_id=None,
 
 
 def _rules(cutoff, window, limit, authority, ruleset_id=None,
-           page_position=None):
+           page_position=None, page_snapshot=None):
     from mojo.apps.incident.models import Rule, RuleSet
-    queryset = RuleSet.objects.prefetch_related(Prefetch(
-            "rules", queryset=Rule.objects.order_by("index", "id"),
-            to_attr="_admin_security_rules"))
     detail = ruleset_id is not None
     if detail:
+        queryset = RuleSet.objects.prefetch_related(Prefetch(
+            "rules", queryset=Rule.objects.order_by("index", "id"),
+            to_attr="_admin_security_rules"))
         queryset = queryset.filter(pk=_id(ruleset_id, "ruleset_id"))
     else:
-        queryset = queryset.filter(created__lte=_cursor_time(window["end"]))
+        queryset = RuleSet.objects.filter(
+            created__lte=_cursor_time(window["end"]))
+        base = queryset
+        snapshot = _snapshot_guard(base, page_snapshot)
         if page_position is not None:
             priority, pk = page_position
             if isinstance(priority, bool) or not isinstance(priority, int):
@@ -599,7 +634,11 @@ def _rules(cutoff, window, limit, authority, ruleset_id=None,
             pk = _id(pk, "page cursor id")
             queryset = queryset.filter(
                 Q(priority__gt=priority) | Q(priority=priority, pk__gt=pk))
+        queryset = queryset.annotate(
+            _admin_security_rule_count=Count("rules"))
     rows = list(queryset.order_by("priority", "id")[:limit + 1])
+    if not detail:
+        _snapshot_guard(base, snapshot)
     data = [
         (_bounded_rule_set(row, authority) if detail else
          transport.scrub(_safe_rule_set(row, detail=False)))
@@ -607,13 +646,13 @@ def _rules(cutoff, window, limit, authority, ruleset_id=None,
     truncated = len(rows) > limit
     cursor = (None if detail else _page_cursor(
         authority, "rules", window, rows[:limit], truncated, limit,
-        lambda item: (item.priority, item.pk)))
+        lambda item: (item.priority, item.pk), snapshot))
     return _envelope(
         data, cutoff, window, truncated, next_cursor=cursor)
 
 
 def _ipsets(cutoff, window, limit, authority, ipset_id=None,
-            page_position=None):
+            page_position=None, page_snapshot=None):
     from mojo.apps.incident.models import IPSet
     from mojo.apps.incident.services import firewall_truth
     queryset = IPSet.objects.all()
@@ -621,6 +660,8 @@ def _ipsets(cutoff, window, limit, authority, ipset_id=None,
         queryset = queryset.filter(pk=_id(ipset_id, "ipset_id"))
     else:
         queryset = queryset.filter(created__lte=_cursor_time(window["end"]))
+        base = queryset
+        snapshot = _snapshot_guard(base, page_snapshot)
         if page_position is not None:
             name, pk = page_position
             if not isinstance(name, str) or len(name) > 64:
@@ -629,6 +670,8 @@ def _ipsets(cutoff, window, limit, authority, ipset_id=None,
             queryset = queryset.filter(
                 Q(name__gt=name) | Q(name=name, pk__gt=pk))
     rows = list(queryset.order_by("name", "id")[:limit + 1])
+    if ipset_id is None:
+        _snapshot_guard(base, snapshot)
     try:
         roster = firewall_truth.exact_compatible_roster()
         roster_available = True
@@ -663,7 +706,7 @@ def _ipsets(cutoff, window, limit, authority, ipset_id=None,
     truncated = len(rows) > limit
     cursor = (None if ipset_id is not None else _page_cursor(
         authority, "ipsets", window, rows[:limit], truncated, limit,
-        lambda item: (item.name, item.pk)))
+        lambda item: (item.name, item.pk), snapshot))
     return _envelope(data, cutoff, window, truncated, next_cursor=cursor)
 
 
@@ -742,7 +785,7 @@ def _chunk_value(authority, cursor):
         row = RuleSet.objects.prefetch_related(Prefetch(
             "rules", queryset=Rule.objects.order_by("index", "id"),
             to_attr="_admin_security_rules")).filter(pk=pk).first()
-        allowed = {"handler", "metadata", "rules"}
+        allowed = {"name", "handler", "metadata", "rules"}
         revision = _revision(row) if row else None
         value = (_safe_rule_set(row, detail=True).get(field)
                  if row and field in allowed else None)
@@ -853,7 +896,8 @@ def overview(params=None, authority=None):
         "overview": lambda: _overview(cutoff, window, now),
         "cases": lambda: _cases(
             cutoff, window, now, limit, authority, detail_ids["case"],
-            page_token["position"] if page_section == "cases" else None),
+            page_token["position"] if page_section == "cases" else None,
+            page_token["snapshot"] if page_section == "cases" else None),
         "incidents": lambda: _incidents(
             cutoff, window, now, limit, authority, detail_ids["incident"],
             page_token["position"] if page_section == "incidents" else None),
@@ -862,10 +906,12 @@ def overview(params=None, authority=None):
             page_token["position"] if page_section == "events" else None),
         "rules": lambda: _rules(
             cutoff, window, limit, authority, ruleset_id,
-            page_token["position"] if page_section == "rules" else None),
+            page_token["position"] if page_section == "rules" else None,
+            page_token["snapshot"] if page_section == "rules" else None),
         "ipsets": lambda: _ipsets(
             cutoff, window, limit, authority, detail_ids["ipset"],
-            page_token["position"] if page_section == "ipsets" else None),
+            page_token["position"] if page_section == "ipsets" else None,
+            page_token["snapshot"] if page_section == "ipsets" else None),
         "recommendations": lambda: _recommendations(
             cutoff, window, now, limit, authority, recommendation_id,
             page_token["position"] if page_section == "recommendations" else None),
@@ -955,7 +1001,13 @@ def _validated_ruleset(value):
 
 
 def _validated_existing(row):
-    if not rule_validation.is_governed(row):
+    try:
+        mode = rule_validation.policy_mode(row.metadata)
+    except rule_validation.RuleValidationError as error:
+        raise SecurityActionError(
+            "RuleSet has an invalid server-owned policy marker",
+            code=error.code, status=409) from error
+    if mode != "governed":
         return {"legacy": True}
     try:
         return rule_validation.validate_existing(row)
@@ -1353,7 +1405,7 @@ def _rule_action(action, payload, actor, actor_context=None):
         verb = action.split(".", 1)[1].upper()
         _confirm(payload, f"{verb} RULESET {row.pk}")
         if action == "ruleset.replace":
-            if rule_validation.is_governed(row) and row.is_active:
+            if rule_validation.requires_governed_action(row) and row.is_active:
                 raise SecurityActionError(
                     "deactivate the governed RuleSet before replacement",
                     code="active_ruleset", status=409)
@@ -1375,7 +1427,7 @@ def _rule_action(action, payload, actor, actor_context=None):
             row.is_active = False
             row.save(update_fields=["is_active", "modified"])
         elif action == "ruleset.delete":
-            if rule_validation.is_governed(row) and row.is_active:
+            if rule_validation.requires_governed_action(row) and row.is_active:
                 raise SecurityActionError(
                     "deactivate the governed RuleSet before deletion",
                     code="active_ruleset", status=409)

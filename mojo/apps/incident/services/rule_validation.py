@@ -17,6 +17,8 @@ HANDLER_JOB_SCHEMA = "incident.governed_handler"
 HANDLER_JOB_SCHEMA_VERSION = 1
 GOVERNED_METADATA_KEY = "_admin_security_governed"
 GOVERNED_METADATA_VERSION = 1
+COMPATIBILITY_METADATA_KEY = "_admin_security_compatibility"
+COMPATIBILITY_METADATA_VERSION = 1
 MAX_RULES = 32
 MAX_HANDLERS = 8
 MAX_NAME = 160
@@ -64,21 +66,75 @@ class RuleValidationError(ValueError):
 
 def governed_marker(metadata):
     """Return the canonical server-owned marker or ``None`` for legacy rows."""
-    if not isinstance(metadata, dict):
+    if (not isinstance(metadata, dict) or
+            GOVERNED_METADATA_KEY not in metadata):
         return None
-    value = metadata.get(GOVERNED_METADATA_KEY)
-    if value == {"version": GOVERNED_METADATA_VERSION}:
-        return value
-    return None
+    # Once the reserved key is present, malformed or conflicting marker data
+    # must raise rather than presenting itself to older callers as legacy.
+    return ({"version": GOVERNED_METADATA_VERSION}
+            if policy_mode(metadata) == "governed" else None)
 
 
 def is_governed(rule_set):
-    return governed_marker(getattr(rule_set, "metadata", None)) is not None
+    return policy_mode(getattr(rule_set, "metadata", None)) == "governed"
+
+
+def has_reserved_marker(metadata):
+    """Whether either server-owned policy marker key is present."""
+    return isinstance(metadata, dict) and any(
+        key in metadata for key in (
+            GOVERNED_METADATA_KEY, COMPATIBILITY_METADATA_KEY))
+
+
+def policy_mode(metadata):
+    """Classify a stored policy without treating malformed markers as legacy.
+
+    Marker absence is the one grandfathering signal for rows which predate
+    Admin Security. Once a reserved key exists, its complete value must be the
+    server-owned canonical marker; unknown versions, wrong types, and dual
+    markers fail closed.
+    """
+    if not isinstance(metadata, dict):
+        return "legacy"
+    governed = metadata.get(GOVERNED_METADATA_KEY, Ellipsis)
+    compatible = metadata.get(COMPATIBILITY_METADATA_KEY, Ellipsis)
+    if governed is not Ellipsis and compatible is not Ellipsis:
+        raise RuleValidationError(
+            "stored policy has conflicting server-owned markers",
+            code="invalid_policy_marker", path="ruleset.metadata")
+    if governed is not Ellipsis:
+        if governed == {"version": GOVERNED_METADATA_VERSION}:
+            return "governed"
+        raise RuleValidationError(
+            "stored governed policy marker is invalid",
+            code="invalid_policy_marker", path="ruleset.metadata")
+    if compatible is not Ellipsis:
+        if compatible == {"version": COMPATIBILITY_METADATA_VERSION}:
+            return "compatibility"
+        raise RuleValidationError(
+            "stored compatibility policy marker is invalid",
+            code="invalid_policy_marker", path="ruleset.metadata")
+    return "legacy"
+
+
+def requires_governed_action(rule_set):
+    """Reserved-marker rows never enter the generic compatibility writer."""
+    return has_reserved_marker(getattr(rule_set, "metadata", None))
 
 
 def mark_governed(metadata=None):
     value = dict(metadata or {})
+    value.pop(COMPATIBILITY_METADATA_KEY, None)
     value[GOVERNED_METADATA_KEY] = {"version": GOVERNED_METADATA_VERSION}
+    return value
+
+
+def mark_compatible(metadata=None):
+    """Stamp a new generic REST policy as explicitly compatibility-mode."""
+    value = dict(metadata or {})
+    value.pop(GOVERNED_METADATA_KEY, None)
+    value[COMPATIBILITY_METADATA_KEY] = {
+        "version": COMPATIBILITY_METADATA_VERSION}
     return value
 
 
@@ -859,9 +915,34 @@ def validate_existing(rule_set):
     return _normalize_ruleset(payload, validate_runtime_regex)
 
 
-def validation_summary(rule_set):
-    if not is_governed(rule_set):
-        return {"status": "legacy", "legacy": True, "handlers": []}
+def validation_summary(rule_set, include_rules=True):
+    try:
+        mode = policy_mode(getattr(rule_set, "metadata", None))
+    except RuleValidationError as error:
+        return {
+            "status": "replacement_required",
+            "legacy": False,
+            "handlers": [],
+            "issues": [{"code": error.code, "path": error.path}],
+        }
+    if mode != "governed":
+        return {"status": "legacy", "legacy": True, "handlers": [],
+                "compatibility_mode": mode == "compatibility"}
+    if not include_rules:
+        # A governed marker is only stamped after complete mutation-time
+        # validation. Discovery can therefore report that durable state and
+        # parse its bounded handler chain without loading every child rule;
+        # detail and activation still revalidate the complete aggregate.
+        handlers = parse_handlers(rule_set.handler)
+        if handlers is not None:
+            return {"status": "valid", "legacy": False,
+                    "handlers": handlers}
+        return {
+            "status": "replacement_required", "legacy": False,
+            "handlers": [],
+            "issues": [{"code": "legacy_handler",
+                        "path": "ruleset.handlers"}],
+        }
     try:
         normalized = validate_existing(rule_set)
         return {"status": "valid", "legacy": False,
@@ -909,7 +990,12 @@ def evaluate_rule(rule, event):
         # governed writer shipped. Strict field and regex validation applies
         # only to server-marked governed policies.
         parent = rule.parent if getattr(rule, "parent_id", None) is not None else None
-        if parent is None or not is_governed(parent):
+        try:
+            mode = (policy_mode(getattr(parent, "metadata", None))
+                    if parent is not None else "legacy")
+        except RuleValidationError:
+            return False
+        if mode != "governed":
             left, right = rule._convert_values(field_value, rule.value)
             if left is None:
                 return False

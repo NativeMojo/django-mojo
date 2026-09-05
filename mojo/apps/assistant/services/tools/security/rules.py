@@ -1,11 +1,11 @@
 """Governed, redacted RuleSet tools for the Assistant."""
 
-from mojo.apps.assistant import tool
+from mojo.apps.assistant import CONFIGURED_FRESH_AUTH, tool
 
 
-# None delegates to the deployment's FRESH_AUTH_WINDOW. Default 0 keeps the
-# step-up posture opt-in instead of silently imposing a ten-minute window.
-FRESH_AUTH = None
+# Resolve the deployment's FRESH_AUTH_WINDOW when an approval is proposed and
+# again when it executes. Default 0 keeps the gate explicitly disabled.
+FRESH_AUTH = CONFIGURED_FRESH_AUTH
 WRITE_PERMS = ["manage_security", "security"]
 MAX_RESULTS = 50
 
@@ -31,9 +31,28 @@ def _refuse(message, code="action_refused"):
     return {"error": message, "error_code": code}
 
 
-def _invoke(payload, user):
+def _actor_context(user, request_meta=None, **_ignored):
+    """Bounded action attribution from server-built Assistant metadata."""
+    kinds = {"user", "user_api_key", "oauth", "api_key", "group_token",
+             "internal", "unknown"}
+    kind = request_meta.get("credential_kind") if request_meta is not None else None
+    if kind not in kinds:
+        kind = "unknown"
+    value = {"credential_kind": kind, "user_id": getattr(user, "pk", None)}
+    if kind == "user_api_key":
+        key_id = request_meta.get("user_api_key_id")
+        label = request_meta.get("user_api_key_label")
+        if isinstance(key_id, int) and not isinstance(key_id, bool) and key_id > 0:
+            value["user_api_key_id"] = key_id
+        if isinstance(label, str):
+            value["user_api_key_label"] = label[:160]
+    return value
+
+
+def _invoke(payload, user, request_meta=None):
     try:
-        return _service().apply_action(payload, user)
+        return _service().apply_action(
+            payload, user, actor_context=_actor_context(user, request_meta))
     except Exception as error:
         from mojo.apps.incident.services.admin_security import SecurityActionError
         if isinstance(error, SecurityActionError):
@@ -48,8 +67,8 @@ def _invoke(payload, user):
         "category": {"type": "string"}, "is_active": {"type": "boolean"},
         "limit": {"type": "integer", "minimum": 1, "maximum": MAX_RESULTS}}})
 def _tool_query_rulesets(params, user):
-    from django.db.models import Prefetch
-    from mojo.apps.incident.models import Rule, RuleSet
+    from django.db.models import Count
+    from mojo.apps.incident.models import RuleSet
     criteria = {}
     if params.get("category"):
         criteria["category"] = params["category"]
@@ -59,9 +78,10 @@ def _tool_query_rulesets(params, user):
     if isinstance(limit, bool) or not isinstance(limit, int):
         return _refuse("limit must be an integer", "invalid_input")
     limit = max(1, min(limit, MAX_RESULTS))
-    queryset = RuleSet.objects.filter(**criteria).prefetch_related(Prefetch(
-        "rules", queryset=Rule.objects.order_by("index", "id"),
-        to_attr="_admin_security_rules"))
+    # The discovery shape only needs a count. Loading every condition here
+    # makes one old, large compatibility RuleSet dominate the list request.
+    queryset = RuleSet.objects.filter(**criteria).annotate(
+        _admin_security_rule_count=Count("rules"))
     return [_service()._safe_rule_set(row) for row in
             queryset.order_by("priority", "id")[:limit]]
 
@@ -128,10 +148,10 @@ def _preview_create(params, user):
         "confirm": {"type": "string", "enum": ["CREATE RULESET"]}},
         "required": ["ruleset", "confirm"]},
     mutates=True, fresh_auth_seconds=FRESH_AUTH, preview=_preview_create)
-def _tool_create_rule(params, user, approval=None):
+def _tool_create_rule(params, user, approval=None, *, request_meta=None):
     payload = dict(params)
     payload["action"] = "ruleset.create"
-    return _invoke(payload, user)
+    return _invoke(payload, user, request_meta=request_meta)
 
 
 def _preview_existing(params, user):
@@ -165,10 +185,10 @@ def _preview_existing(params, user):
         "confirm_catch_all": {"type": "string"}, "ruleset": RULESET_SCHEMA},
         "required": ["ruleset_id", "action", "expected_modified", "confirm"]},
     mutates=True, fresh_auth_seconds=FRESH_AUTH, preview=_preview_existing)
-def _tool_update_ruleset(params, user, approval=None):
+def _tool_update_ruleset(params, user, approval=None, *, request_meta=None):
     payload = dict(params)
     payload["action"] = f"ruleset.{params.get('action')}"
-    return _invoke(payload, user)
+    return _invoke(payload, user, request_meta=request_meta)
 
 
 @tool(
@@ -179,10 +199,10 @@ def _tool_update_ruleset(params, user, approval=None):
         "confirm": {"type": "string"}},
         "required": ["ruleset_id", "expected_modified", "confirm"]},
     mutates=True, fresh_auth_seconds=FRESH_AUTH, preview=_preview_existing)
-def _tool_delete_ruleset(params, user, approval=None):
+def _tool_delete_ruleset(params, user, approval=None, *, request_meta=None):
     payload = dict(params)
     payload["action"] = "ruleset.delete"
-    return _invoke(payload, user)
+    return _invoke(payload, user, request_meta=request_meta)
 
 
 def _retired_partial(params, user, approval=None):
@@ -250,7 +270,8 @@ def _preview_recommendation(params, user):
         "required": ["recommendation_id", "action", "expected_modified", "confirm"]},
     mutates=True, fresh_auth_seconds=FRESH_AUTH,
     preview=_preview_recommendation)
-def _tool_manage_security_recommendation(params, user, approval=None):
+def _tool_manage_security_recommendation(
+        params, user, approval=None, *, request_meta=None):
     payload = dict(params)
     payload["action"] = f"recommendation.{params.get('action')}"
-    return _invoke(payload, user)
+    return _invoke(payload, user, request_meta=request_meta)

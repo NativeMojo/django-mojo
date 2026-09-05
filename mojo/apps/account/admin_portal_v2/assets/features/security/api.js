@@ -162,9 +162,10 @@ function validateIncidents(data, name) {
 function validateEvents(data, name) {
   const strings = ['created', 'scope', 'category', 'country_code'];
   for (const row of data) {
-    requireFields(row, ['id', 'level', 'group_id', 'incident_id', ...strings], name);
+    requireFields(row, ['id', 'level', 'title', 'group_id', 'incident_id', ...strings], name);
     if (!validInteger(row.id, OBJECT_ID_LIMIT, 1)
         || !validInteger(row.level, 10000)
+        || !(validString(row.title, 512, true) || validChunk(row.title))
         || strings.some((field) => !validString(row[field], 512, true))
         || (row.group_id != null && !validInteger(row.group_id, OBJECT_ID_LIMIT, 1))
         || (row.incident_id != null && !validInteger(row.incident_id, OBJECT_ID_LIMIT, 1))) invalid(name);
@@ -172,7 +173,7 @@ function validateEvents(data, name) {
 }
 
 function validateRules(data, name) {
-  const strings = ['created', 'modified', 'name', 'category'];
+  const strings = ['created', 'modified', 'category'];
   const integers = ['priority', 'bundle_minutes', 'bundle_by', 'match_by',
     'trigger_count', 'trigger_window', 'retrigger_every'];
   for (const row of data) {
@@ -180,6 +181,7 @@ function validateRules(data, name) {
       'bundle_by_rule_set', 'validation'], name);
     if (!validInteger(row.id, OBJECT_ID_LIMIT, 1)
         || strings.some((field) => !validString(row[field]))
+        || !(validString(row.name) || validChunk(row.name))
         || integers.some((field) => row[field] != null && !validInteger(row[field], 1000000))
         || typeof row.is_active !== 'boolean'
         || typeof row.bundle_by_rule_set !== 'boolean'
@@ -189,11 +191,14 @@ function validateRules(data, name) {
         || !Array.isArray(row.validation.handlers)
         || row.validation.handlers.length > 8
         || row.validation.handlers.some((handler) => !plainObject(handler))) invalid(name);
-    const summary = validInteger(row.rule_count, 32);
-    const detail = Array.isArray(row.handlers) && row.handlers.length <= 8
-      && row.handlers.every(plainObject) && Array.isArray(row.rules)
-      && row.rules.length <= 32 && row.rules.every(plainObject)
-      && typeof row.delete_on_resolution === 'boolean';
+    const summary = validInteger(row.rule_count);
+    const hasDetail = ['handler', 'metadata', 'rules', 'delete_on_resolution']
+      .some((field) => hasOwn(row, field));
+    const detail = !hasDetail || (validChunk(row.handler)
+      && validChunk(row.metadata) && validChunk(row.rules)
+      && (!hasOwn(row, 'handlers') || (Array.isArray(row.handlers)
+        && row.handlers.length <= 8 && row.handlers.every(plainObject)))
+      && typeof row.delete_on_resolution === 'boolean');
     if (!summary && !detail) invalid(name);
   }
 }

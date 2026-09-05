@@ -21,20 +21,36 @@ _SECRET_KEYS = frozenset({
     "auth_key", "encryption_key", "access_token",
     "refresh_token", "auth_token", "authorization", "bearer",
     "private_key", "private_key_pem", "signing_key", "source_key",
-    "credential", "credentials",
+    "secret_key", "aws_secret_access_key", "otp", "otp_code", "totp",
+    "totp_code", "mfa", "mfa_code", "one_time_password", "session",
+    "sessionid", "session_id", "session_token", "csrf_token",
+    "csrfmiddlewaretoken",
 })
+_SECRET_CONTAINERS = frozenset({"credential", "credentials", "headers", "cookies"})
 _ASSIGNMENT_RE = re.compile(
     r"(?i)(\b(?:password|passwd|passphrase|client_secret|provider_secret|"
+    r"webhook_secret|signing_secret|secret[_-]?key|aws_secret_access_key|"
     r"api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|"
     r"bearer[_-]?token|auth[_-]?key|encryption[_-]?key|"
-    r"private[_-]?key)\b\s*[:=]\s*)"
+    r"private[_-]?key|otp(?:[_-]?code)?|totp(?:[_-]?code)?|"
+    r"mfa(?:[_-]?code)?|one[_-]?time[_-]?password|session(?:id|[_-]?id|[_-]?token)?|"
+    r"csrf(?:middleware)?token)\b\s*[:=]\s*)"
     r"([^\s,;&]+)")
 _AUTH_HEADER_RE = re.compile(
-    r"(?i)(\bauthorization\s*:\s*(?:basic|bearer|digest)\s+)[^\s,;]+|"
-    r"(\bbearer\s+)[^\s,;]+")
+    r"(?i)(\b(?:proxy-)?authorization\s*:\s*"
+    r"(?:basic|bearer|digest)\s+)[^\s,;]+")
 _PRIVATE_KEY_RE = re.compile(
     r"-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----.*?"
     r"-----END(?: [A-Z0-9]+)? PRIVATE KEY-----", re.DOTALL)
+_URL_USERINFO_RE = re.compile(
+    r"(?i)(\b[a-z][a-z0-9+.-]*://[^/@:\s]*:)([^/@\s]+)(@)")
+_AUTH_QUERY_RE = re.compile(
+    r"(?i)([?&](?:access_token|refresh_token|api[_-]?key|auth(?:orization)?|"
+    r"token|signature|x-amz-signature)=)([^&#\s]*)")
+_COOKIE_SECRET_RE = re.compile(
+    r"(?i)(\b(?:sessionid|session_id|session|session_token|"
+    r"csrftoken|csrfmiddlewaretoken|otp|totp|mfa)\s*=\s*)"
+    r"([^;,&\s]+)")
 
 
 class TransportError(ValueError):
@@ -48,22 +64,45 @@ def _secret_key(name):
     normalized = str(name).strip().lower().replace("-", "_")
     return (normalized in _SECRET_KEYS or normalized.endswith("_password") or
             normalized.endswith("_secret") or normalized.endswith("_token") or
-            normalized.endswith("_private_key"))
+            normalized.endswith("_private_key") or
+            normalized.endswith("_secret_key") or
+            normalized.endswith("_api_key") or
+            normalized.endswith("_otp") or normalized.endswith("_mfa"))
 
 
 def scrub_text(value):
     """Remove embedded authentication material but preserve surrounding text."""
     sentinel = "\x00MOJO_ADMIN_SECRET_REDACTED\x00"
     value = value.replace(REDACTED, sentinel)
-    value = _PRIVATE_KEY_RE.sub(REDACTED, value)
+    value = _PRIVATE_KEY_RE.sub(sentinel, value)
+    value = _URL_USERINFO_RE.sub(
+        lambda match: match.group(1) + sentinel + match.group(3), value)
+    value = _AUTH_QUERY_RE.sub(
+        lambda match: match.group(1) + sentinel, value)
     value = _AUTH_HEADER_RE.sub(
-        lambda match: (match.group(1) or match.group(2)) + REDACTED, value)
-    value = _ASSIGNMENT_RE.sub(lambda match: match.group(1) + REDACTED, value)
+        lambda match: match.group(1) + sentinel, value)
+    value = _COOKIE_SECRET_RE.sub(
+        lambda match: match.group(1) + sentinel, value)
+    value = _ASSIGNMENT_RE.sub(lambda match: match.group(1) + sentinel, value)
     return value.replace(sentinel, REDACTED)
 
 
 def scrub(value, key=None):
     """Recursively scrub only authentication-secret values."""
+    normalized = (str(key).strip().lower().replace("-", "_")
+                  if key is not None else None)
+    if normalized in {"credential", "credentials"}:
+        if not isinstance(value, (dict, list, tuple)):
+            return REDACTED
+        if isinstance(value, (list, tuple)):
+            return [scrub(item) if isinstance(item, (dict, list, tuple))
+                    else REDACTED for item in value]
+    if (normalized in _SECRET_CONTAINERS and
+            isinstance(value, (dict, list, tuple))):
+        # A credentials/headers/cookies object mixes secrets with operational
+        # siblings. Walk it instead of erasing usernames, hosts, paths, or
+        # harmless cookie preferences with the container label.
+        key = None
     if key is not None and _secret_key(key):
         return REDACTED
     if isinstance(value, dict):
@@ -132,14 +171,14 @@ def read_cursor(cursor):
     return value
 
 
-def issue_page_cursor(authority, section, window, position, limit):
+def issue_page_cursor(authority, section, window, position, limit, snapshot):
     """Issue an opaque discovery cursor bound to scope and one snapshot."""
     return issue_cursor({
         "v": CURSOR_VERSION, "purpose": "rows",
         "scope": authority.cursor_scope, "section": section,
         "start": window["start"], "end": window["end"],
         "hours": window["hours"],
-        "position": list(position), "limit": limit,
+        "position": list(position), "limit": limit, "snapshot": snapshot,
     })
 
 
@@ -156,7 +195,7 @@ def read_page_cursor(cursor):
         raise TransportError("Admin Security page cursor is invalid") from error
     required = {
         "v", "purpose", "scope", "section", "start", "end", "hours",
-        "position", "limit"}
+        "position", "limit", "snapshot"}
     position = value.get("position") if isinstance(value, dict) else None
     if (not isinstance(value, dict) or set(value) != required or
             value.get("v") != CURSOR_VERSION or
@@ -177,6 +216,8 @@ def read_page_cursor(cursor):
             isinstance(value.get("limit"), bool) or
             not isinstance(value.get("limit"), int) or
             not 1 <= value["limit"] <= 100 or
+            not isinstance(value.get("snapshot"), str) or
+            not re.fullmatch(r"[0-9a-f]{64}", value["snapshot"]) or
             not isinstance(position[0], (str, int)) or
             isinstance(position[0], bool)):
         raise TransportError("Admin Security page cursor is invalid")

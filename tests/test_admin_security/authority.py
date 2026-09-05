@@ -491,13 +491,13 @@ def test_action_schema_and_checked_receipt_projection(opts):
 
 @th.django_unit_test("Assistant rule mutations use configured freshness and previews")
 def test_assistant_registry_contract(opts):
-    from mojo.apps.assistant import get_registry
+    from mojo.apps.assistant import CONFIGURED_FRESH_AUTH, get_registry
     registry = get_registry()
     for name in ("create_rule", "update_ruleset", "delete_ruleset",
                  "manage_security_recommendation"):
         entry = registry[name]
         assert entry["mutates"] is True
-        assert entry["fresh_auth_seconds"] is None
+        assert entry["fresh_auth_seconds"] == CONFIGURED_FRESH_AUTH
     assert registry["create_rule"]["preview"] is not None
     assert registry["update_ruleset"]["preview"] is not None
     assert registry["delete_ruleset"]["preview"] is not None
