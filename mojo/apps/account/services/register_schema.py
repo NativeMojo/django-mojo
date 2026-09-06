@@ -32,6 +32,10 @@ Public surface:
         Group adjacent first_name + last_name into a 2-column row for the
         template; everything else is a 1-element row. Lets the template
         render a single loop without per-field positional logic.
+
+    extract_extra_values(data, names) -> dict
+        Shared safe-value policy for hosted-page forwarding and registration
+        capture. Rejects ambiguous, malformed, reserved, and oversize values.
 """
 import datetime
 import json
@@ -51,6 +55,19 @@ from mojo.helpers import test_mode as _tm
 # dropped from AUTH_REGISTER_FIELDS — consumer-specific data belongs in
 # REGISTRATION_EXTRA_FIELDS (existing extras allowlist).
 CANONICAL_FIELDS = ("first_name", "last_name", "email", "phone", "dob", "password")
+
+# Extra fields are browser-carried attribution data, never auth/navigation
+# controls. Keeping this denylist beside the extra schema makes config writes,
+# legacy config normalization, hosted-page forwarding, and API capture agree.
+RESERVED_EXTRA_FIELDS = frozenset(CANONICAL_FIELDS + (
+    "group", "group_uuid", "redirect", "next", "returnTo", "back",
+    "force_reauth", "auth_theme", "auth_appearance", "token", "code",
+    "state",
+))
+
+# A declared field may cross more than one URL hop before registration. Bound
+# each value, reject malformed data, and never truncate attribution silently.
+EXTRA_VALUE_MAX_LENGTH = 512
 
 
 # Default config preserves today's email-based form when AUTH_REGISTER_FIELDS
@@ -197,7 +214,7 @@ def _normalize_extra_entry(entry):
     if not isinstance(name, str):
         return None
     name = name.strip()
-    if not name or name in CANONICAL_FIELDS or not _EXTRA_NAME_RE.match(name):
+    if not name or name in RESERVED_EXTRA_FIELDS or not _EXTRA_NAME_RE.match(name):
         return None
     label = entry.get("label")
     if not isinstance(label, str) or not label.strip():
@@ -225,7 +242,7 @@ def _normalize_extra_entry(entry):
 def _normalize_extra_field_list(raw):
     """Normalize raw extra fields into presentation-schema dictionaries.
 
-    Drops unknown/duplicate/canonical-colliding entries. Returns `[]` when
+    Drops unknown/duplicate/reserved-name entries. Returns `[]` when
     `raw` is empty or unusable (the default — no extra fields).
     """
     if not raw or not isinstance(raw, (list, tuple)):
@@ -273,6 +290,42 @@ def extra_field_names(extra_fields):
     return [ef["name"] for ef in extra_fields]
 
 
+def extract_extra_values(data, names):
+    """Return safe declared extra-field values from request-shaped data.
+
+    Values must be one non-empty scalar string, at most 512 characters, with
+    no ASCII control characters. QueryDict repeats and parser-produced
+    list/tuple values are rejected rather than choosing an attacker-controlled
+    first/last value. Names reserved for canonical fields, auth callbacks, or
+    navigation controls are always ignored, including when a legacy global
+    allowlist contains one.
+    """
+    if data is None:
+        return {}
+    out = {}
+    for name in names or ():
+        if not isinstance(name, str) or name in RESERVED_EXTRA_FIELDS:
+            continue
+        if not _EXTRA_NAME_RE.match(name):
+            continue
+        getlist = getattr(data, "getlist", None)
+        if callable(getlist):
+            values = getlist(name)
+            if len(values) != 1:
+                continue
+            value = values[0]
+        else:
+            value = data.get(name)
+        if not isinstance(value, str) or not value:
+            continue
+        if len(value) > EXTRA_VALUE_MAX_LENGTH:
+            continue
+        if any(ord(char) < 32 or ord(char) == 127 for char in value):
+            continue
+        out[name] = value
+    return out
+
+
 def validate_extra_fields_config(raw):
     """Validate an auth-config `registration.extra_fields` list. Raises
     ValueException on bad config. Returns the normalized list."""
@@ -289,10 +342,10 @@ def validate_extra_fields_config(raw):
         if not isinstance(name, str) or not name.strip():
             raise merrors.ValueException(
                 "each registration.extra_fields entry needs a non-empty 'name'")
-        if name.strip() in CANONICAL_FIELDS:
+        if name.strip() in RESERVED_EXTRA_FIELDS:
             raise merrors.ValueException(
-                f"registration.extra_fields name '{name}' collides with a canonical "
-                f"field — declare canonical fields in registration.fields instead")
+                f"registration.extra_fields name '{name}' is reserved for a "
+                f"canonical field, auth callback, or navigation control")
         if not _EXTRA_NAME_RE.match(name.strip()):
             raise merrors.ValueException(
                 f"registration.extra_fields name '{name}' must be a simple identifier "

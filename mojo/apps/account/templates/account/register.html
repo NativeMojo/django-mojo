@@ -134,6 +134,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
 {% block page_script %}
 {{ register_fields|json_script:"reg-fields-data" }}
 {{ register_extra_fields|json_script:"reg-extra-fields-data" }}
+{{ register_extra_values|json_script:"reg-extra-values-data" }}
 <script nonce="{{ csp_nonce }}">
 (function () {
     var m = window._mat;
@@ -148,36 +149,43 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
 
     // Extra (non-canonical) fields include presentation policy. Visible fields
     // render a hidden text input (#reg-extra-{name}) that is revealed when no
-    // query value exists. Capture-only fields render no input; their matching
-    // non-empty query value is still collected directly below.
+    // safe query value exists. Capture-only fields render no input. Values
+    // come from the server's shared sanitizer so duplicates and malformed
+    // query input cannot be reinterpreted differently in the browser.
     var REG_EXTRA_FIELDS = JSON.parse(document.getElementById("reg-extra-fields-data").textContent || "[]");
-    var URL_PARAMS = new URLSearchParams(window.location.search);
+    var REG_EXTRA_VALUES = JSON.parse(document.getElementById("reg-extra-values-data").textContent || "{}") || {};
+    var REG_EXTRA_MAX_LENGTH = {{ register_extra_value_max_length|default:512 }};
+    function hasExtraValue(name) {
+        return Object.prototype.hasOwnProperty.call(REG_EXTRA_VALUES, name);
+    }
     for (var _x = 0; _x < REG_EXTRA_FIELDS.length; _x++) {
         var _ef = REG_EXTRA_FIELDS[_x];
-        var _fromUrl = URL_PARAMS.get(_ef.name);
         var _el = $("reg-extra-" + _ef.name);
         var _row = $("reg-extra-row-" + _ef.name);
-        if (_fromUrl !== null && _fromUrl !== "") {
-            if (_el) _el.value = _fromUrl;   // captured silently; row stays hidden
+        if (hasExtraValue(_ef.name)) {
+            if (_el) _el.value = REG_EXTRA_VALUES[_ef.name];
         } else if (_row) {
-            _row.style.display = "";          // no URL value -> ask for it
+            _row.style.display = "";
         }
     }
 
-    // Add extra-field values to a register payload. URL param wins over the
-    // optional input. Returns false (after a message) if a required visible
-    // extra is missing — required is a client-side UX hint; the server stays
-    // lenient.
+    // Add extra-field values to a register payload. A server-sanitized query
+    // value wins over the optional input. Returns false after a friendly
+    // client-side validation message; the registration endpoint applies the
+    // same authoritative sanitizer again.
     function collectExtras(payload) {
         for (var i = 0; i < REG_EXTRA_FIELDS.length; i++) {
             var ef = REG_EXTRA_FIELDS[i];
-            var fromUrl = URL_PARAMS.get(ef.name);
             var el = $("reg-extra-" + ef.name);
-            var v = (fromUrl !== null && fromUrl !== "")
-                ? fromUrl
+            var v = hasExtraValue(ef.name)
+                ? REG_EXTRA_VALUES[ef.name]
                 : (el ? (el.value || "").trim() : "");
             if (ef.required && !v) {
                 m.showMessage("Please fill in all required fields.", "error");
+                return false;
+            }
+            if (v.length > REG_EXTRA_MAX_LENGTH) {
+                m.showMessage("An extra registration value is too long.", "error");
                 return false;
             }
             if (v) payload[ef.name] = v;

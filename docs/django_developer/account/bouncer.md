@@ -32,7 +32,7 @@ Request → GET BOUNCER_LOGIN_PATH (default: /auth)
         block         → no token, BotLearner job queued
               ↓
      JS stores token, redirects to login URL
-     (redirect, next, returnTo, and back params forwarded through)
+     (navigation controls and safe schema-declared registration extras forwarded)
               ↓
      GET BOUNCER_LOGIN_PATH again — pass cookie present
               ↓
@@ -306,10 +306,26 @@ reads and emits.
 
 ### Query params forwarded through the challenge
 
-`_serve_challenge()` preserves these params when building the post-challenge
-login redirect URL: `group_uuid`, `redirect` (and aliases `next`, `returnTo`),
-and `back`. Any param missing from the original request is omitted from the
-forwarded query string.
+`_serve_challenge()` preserves `group_uuid`, `redirect` (and aliases `next`,
+`returnTo`), `back`, `force_reauth`, and valid theme/appearance selections when
+building the post-challenge login or registration URL. For `/auth` and
+`/register`, it also preserves values whose names are declared by the resolved
+`registration.extra_fields` schema. Resolution includes deployment-wide
+`AUTH_CONFIG` and inherited group config; string and object entries normalize
+to the same name allowlist. Legacy `REGISTRATION_EXTRA_FIELDS` alone does not
+make a query parameter eligible for a browser hop.
+
+Each extra value must be one non-empty scalar string of at most 512 characters
+with no ASCII control character. Repeated query values, list-shaped values,
+empty strings, controls, and oversize values are dropped rather than truncated.
+Canonical registration fields and the auth/navigation names `group`,
+`group_uuid`, `redirect`, `next`, `returnTo`, `back`, `force_reauth`,
+`auth_theme`, `auth_appearance`, `token`, `code`, and `state` cannot be extras.
+All values are encoded with `urlencode`; they cannot alter the server-selected
+root-relative destination path. Undeclared parameters (including `utm_*`) are
+not forwarded. Contact and passkey pages and OAuth-consent destinations do not
+receive registration extras. Password-reset `mat_reset_token` handling and
+redirect canonicalization are unchanged.
 
 ### Configuring a white-label group
 
@@ -851,4 +867,3 @@ and message fields at submit time. A `decision='block'` result raises
 `ValueError('<field>:blocked')` which the endpoint maps to 400. Any exception
 inside content_guard is swallowed and logged (fail-open) so a broken
 moderation engine cannot take contact submissions offline.
-

@@ -285,6 +285,16 @@ visitor landed on the group's `success_redirect` (or `/`) instead of where they
 came from. Nothing changes on your side — links that already worked keep
 working, and a `?group_uuid=` with no second param was never affected.
 
+The resolved `registration.extra_fields` names also ride the Bouncer redirect
+and login ↔ register switcher. This includes visible and `capture_only` fields
+from deployment-wide or inherited group auth config. It does not include keys
+that exist only in the legacy server capture allowlist, undeclared keys such as
+`utm_*`, or reserved canonical/auth/navigation names. Each forwarded value must
+be one non-empty string of at most 512 characters with no ASCII control;
+duplicates/lists and invalid values are dropped rather than truncated. These
+attribution values do not ride the `/passkey`, `/contact`, or OAuth-consent
+links. They are URL-encoded data and cannot replace the destination path.
+
 **Group forwarded on submit** — when the auth page resolves a group, the
 rendered forms automatically include `group_uuid` in the POST body. This
 satisfies servers configured with `REQUIRE_GROUP_ON_REGISTRATION = True`.

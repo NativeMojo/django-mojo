@@ -1,9 +1,252 @@
 """Regression coverage for hosted registration extra-field presentation."""
 
+import json
+import re
+from urllib.parse import parse_qs, urlsplit
+
 from testit import helpers as th
 
 
 TESTIT_TIER = "bug"
+
+
+def _request(path, query, extra_fields):
+    from django.test import RequestFactory
+
+    return RequestFactory(REMOTE_ADDR="127.0.0.1").get(
+        path, query,
+        HTTP_X_MOJO_TEST_REGISTER_EXTRA_FIELDS=json.dumps(extra_fields),
+    )
+
+
+def _challenge_destination(request, page_type="registration", tier=1):
+    from mojo.apps.account.rest.bouncer.views import _serve_challenge
+
+    html = _serve_challenge(
+        request, challenge_tier=tier, page_type=page_type,
+    ).content.decode("utf-8")
+    match = re.search(r'redirectUrl:\s*"([^"]*)"', html)
+    assert match is not None, "the challenge must render one redirectUrl string"
+    return json.loads(f'"{match.group(1)}"'), html
+
+
+@th.django_unit_test("bouncer challenge preserves schema-declared registration attribution")
+def test_challenge_preserves_declared_registration_extras(opts):
+    import objict
+
+    query = {
+        "ref": "partner 42",
+        "promo": "WELCOME&100",
+        "tracking": "https://tracker.test/a?b=1",
+        "utm_source": "must-drop",
+    }
+    request = _request("/register", query, [
+        "ref",
+        {"name": "promo", "capture_only": True},
+        {"name": "tracking"},
+    ])
+    request.DATA = objict.objict(query)
+
+    destination, _ = _challenge_destination(request)
+    params = parse_qs(urlsplit(destination).query)
+
+    assert params.get("ref") == ["partner 42"], \
+        f"the challenge must preserve a declared referral value, got {destination!r}"
+    assert params.get("promo") == ["WELCOME&100"], \
+        f"capture-only promo attribution must survive the challenge, got {destination!r}"
+    assert params.get("tracking") == ["https://tracker.test/a?b=1"], \
+        f"scheme-looking values must remain encoded data, got {destination!r}"
+    assert "utm_source" not in params, \
+        f"undeclared campaign parameters must not be forwarded, got {destination!r}"
+
+    from django.test import RequestFactory
+    repeated_request = RequestFactory(REMOTE_ADDR="127.0.0.1").get(
+        "/register?ref=first&ref=second",
+        HTTP_X_MOJO_TEST_REGISTER_EXTRA_FIELDS=json.dumps(["ref"]),
+    )
+    repeated_destination, _ = _challenge_destination(repeated_request)
+    assert "ref=" not in repeated_destination, \
+        f"a repeated real query param must be dropped, got {repeated_destination!r}"
+
+
+@th.django_unit_test("legacy capture allowlist alone does not authorize a challenge hop")
+def test_legacy_capture_allowlist_does_not_forward(opts):
+    import objict
+    from django.test import RequestFactory
+
+    request = RequestFactory(REMOTE_ADDR="127.0.0.1").get(
+        "/register", {"legacy_ref": "partner-42"},
+        HTTP_X_MOJO_TEST_REGISTRATION_EXTRA_FIELDS=json.dumps(["legacy_ref"]),
+    )
+    request.DATA = objict.objict({"legacy_ref": "partner-42"})
+    destination, _ = _challenge_destination(request)
+    assert "legacy_ref=" not in destination, \
+        f"REGISTRATION_EXTRA_FIELDS must capture at POST only, got {destination!r}"
+
+
+@th.django_unit_test("challenge uses deployment and inherited registration-extra config")
+def test_challenge_uses_resolved_extra_field_config(opts):
+    import objict
+    from django.test import RequestFactory
+    from mojo.apps.account.models import Group
+
+    parent_uuid = "attr-parent-3699"
+    child_uuid = "attr-child-3699"
+    Group.objects.filter(uuid__in=[parent_uuid, child_uuid]).delete()
+    parent = Group.objects.create(
+        name="Attribution parent 3699", uuid=parent_uuid, kind="platform",
+        metadata={"auth_config": {"registration": {
+            "extra_fields": ["ref", {"name": "promo", "capture_only": True}],
+        }}},
+    )
+    child = Group.objects.create(
+        name="Attribution child 3699", uuid=child_uuid, kind="operator",
+        parent=parent,
+    )
+    try:
+        query = {"ref": "inherited-ref", "promo": "inherited-promo"}
+        deployment_request = RequestFactory(REMOTE_ADDR="127.0.0.1").get(
+            "/register", query,
+            HTTP_X_MOJO_TEST_AUTH_CONFIG=json.dumps({
+                "registration": {"extra_fields": ["ref", {"name": "promo"}]},
+            }),
+        )
+        deployment_request.DATA = objict.objict(query)
+        deployment_destination, _ = _challenge_destination(deployment_request)
+        deployment_params = parse_qs(urlsplit(deployment_destination).query)
+        assert deployment_params.get("ref") == ["inherited-ref"] \
+            and deployment_params.get("promo") == ["inherited-promo"], \
+            f"deployment-wide resolved config must authorize both wire shapes, got {deployment_destination!r}"
+
+        request = RequestFactory(REMOTE_ADDR="127.0.0.1").get("/register", query)
+        request.DATA = objict.objict(query)
+        destination, _ = _challenge_destination(request)
+        no_group_params = parse_qs(urlsplit(destination).query)
+        assert "ref" not in no_group_params and "promo" not in no_group_params, \
+            f"group config must not leak into deployment-wide resolution, got {destination!r}"
+
+        from mojo.apps.account.rest.bouncer.views import _serve_challenge
+        html = _serve_challenge(
+            request, challenge_tier=1, page_type="registration", group=child,
+        ).content.decode("utf-8")
+        match = re.search(r'redirectUrl:\s*"([^"]*)"', html)
+        assert match is not None, "the inherited-config challenge must render redirectUrl"
+        inherited_destination = json.loads(f'"{match.group(1)}"')
+        params = parse_qs(urlsplit(inherited_destination).query)
+        assert params.get("ref") == ["inherited-ref"], \
+            f"string shorthand inherited from a parent must forward, got {inherited_destination!r}"
+        assert params.get("promo") == ["inherited-promo"], \
+            f"object-form capture_only config inherited from a parent must forward, got {inherited_destination!r}"
+    finally:
+        parent.delete()
+
+
+@th.django_unit_test("all challenge tiers share one safe attribution destination")
+def test_all_challenge_tiers_share_safe_destination(opts):
+    import objict
+
+    query = {"ref": "partner-42"}
+    destinations = []
+    for tier in (1, 2, 3):
+        request = _request("/auth", query, ["ref"])
+        request.DATA = objict.objict(query)
+        destination, html = _challenge_destination(
+            request, page_type="login", tier=tier)
+        destinations.append(destination)
+        assert html.count("window.location.href = CFG.redirectUrl") == 2, \
+            f"tier {tier} success and error paths must use CFG.redirectUrl"
+
+    assert destinations == ["/auth?ref=partner-42"] * 3, \
+        f"all challenge tiers must use the same destination, got {destinations!r}"
+
+
+@th.django_unit_test("auth/register switchers preserve extras but passkey does not")
+def test_switchers_preserve_extras_without_passkey_leak(opts):
+    import objict
+    from mojo.apps.account.rest.bouncer.views import _auth_context
+
+    query = {"ref": "partner 42", "redirect": "/lobby"}
+    request = _request("/auth", query, ["ref"])
+    request.DATA = objict.objict(query)
+    context = _auth_context(
+        request, group=None, include_registration_extras=True)
+
+    assert "ref=partner+42" in context["register_url"], \
+        f"the auth-to-register switcher must preserve the extra, got {context['register_url']!r}"
+    assert "ref=partner+42" in context["auth_url"], \
+        f"the register-to-auth switcher must preserve the extra, got {context['auth_url']!r}"
+    assert "ref=" not in context["passkey_url"], \
+        f"passkey destinations must not receive attribution, got {context['passkey_url']!r}"
+    assert context["register_extra_values"] == {"ref": "partner 42"}, \
+        f"the template must receive the server-sanitized extra map, got {context['register_extra_values']!r}"
+
+
+@th.django_unit_test("contact and OAuth contexts never propagate registration extras")
+def test_non_registration_contexts_drop_extras(opts):
+    import objict
+    from mojo.apps.account.rest.bouncer.views import _auth_context
+
+    for path in ("/contact", "/api/auth/oauth/consent"):
+        request = _request(path, {"ref": "partner-42"}, ["ref"])
+        request.DATA = objict.objict({"ref": "partner-42"})
+        context = _auth_context(request, group=None)
+        assert "ref=" not in context["auth_url"], \
+            f"{path} must not propagate extras to auth, got {context['auth_url']!r}"
+        assert "ref=" not in context["register_url"], \
+            f"{path} must not propagate extras to register, got {context['register_url']!r}"
+
+    contact_request = _request("/contact", {"ref": "partner-42"}, ["ref"])
+    contact_request.DATA = objict.objict({"ref": "partner-42"})
+    destination, _ = _challenge_destination(
+        contact_request, page_type="public_message")
+    assert "ref=" not in destination, \
+        f"the public-message challenge must drop registration extras, got {destination!r}"
+
+
+@th.django_unit_test("extra-value sanitizer rejects ambiguity, controls, and oversize values")
+def test_extra_value_sanitizer_contract(opts):
+    from django.http import QueryDict
+    from mojo.apps.account.services import register_schema as schema
+
+    repeated = QueryDict("ref=first&ref=second")
+    assert schema.extract_extra_values(repeated, ["ref"]) == {}, \
+        "a repeated query value must be rejected, not resolved first- or last-wins"
+
+    values = {
+        "empty": "",
+        "list_value": ["one", "two"],
+        "control": "line\nbreak",
+        "delete": "bad\x7fvalue",
+        "too_long": "x" * 513,
+        "boundary": "x" * 512,
+        "unicode": "café-🎟️",
+        "scheme": "javascript:alert(1)",
+        "token": "must-not-capture",
+    }
+    safe = schema.extract_extra_values(values, values.keys())
+
+    assert safe == {
+        "boundary": "x" * 512,
+        "unicode": "café-🎟️",
+        "scheme": "javascript:alert(1)",
+    }, f"sanitizer must preserve only valid scalar data without interpreting it, got {safe!r}"
+
+
+@th.django_unit_test("reserved registration-extra names are rejected and normalized away")
+def test_reserved_extra_names_are_invalid(opts):
+    from mojo import errors as merrors
+    from mojo.apps.account.services import register_schema as schema
+
+    for name in sorted(schema.RESERVED_EXTRA_FIELDS):
+        normalized = schema._normalize_extra_field_list([name])
+        assert normalized == [], \
+            f"legacy/deployment config must normalize reserved name {name!r} away"
+        try:
+            schema.validate_extra_fields_config([name])
+            assert False, f"config writes must reject reserved name {name!r}"
+        except merrors.ValueException as exc:
+            assert "reserved" in str(exc), \
+                f"reserved-name error must explain the rejection, got {exc!s}"
 
 
 def _render(extra_fields):
@@ -13,7 +256,8 @@ def _render(extra_fields):
     from mojo.apps.account.services import register_schema
 
     request = RequestFactory().get("/register?ref=partner-42")
-    context = _auth_context(request, group=None)
+    context = _auth_context(
+        request, group=None, include_registration_extras=True)
     context["page_mode"] = "register"
     context["page_title"] = "Create Account"
     context["register_extra_fields"] = \
@@ -140,7 +384,11 @@ def test_hosted_register_extra_field_presentation(opts):
         "capture-only fields must emit no editable row or input"
     assert '"name": "ref"' in html and '"capture_only": true' in html, \
         "capture-only fields must remain in the serialized collector config"
-    assert "var fromUrl = URL_PARAMS.get(ef.name);" in html, \
-        "the hosted collector must read the matching query parameter directly"
+    assert "var REG_EXTRA_VALUES = JSON.parse" in html, \
+        "the hosted collector must consume the server-sanitized extra map"
+    assert "new URLSearchParams(window.location.search)" not in html, \
+        "the browser must not choose a value again from an ambiguous query string"
+    assert 'maxlength="512"' in html, \
+        "visible extra-field inputs must expose the shared 512-character cap"
     assert "if (v) payload[ef.name] = v;" in html, \
         "a non-empty query value must still be submitted without a DOM input"

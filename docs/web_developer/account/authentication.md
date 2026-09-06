@@ -607,6 +607,18 @@ declared key in the register payload.
 Captured values are stored on the new user under `metadata.registration` (a
 `name → value` map) and passed to the server's registration handler.
 
+The Bouncer and login/register switcher preserve a declared extra from
+`/auth` or `/register` until the hosted registration form loads. The field name
+must be in the resolved `registration.extra_fields` schema; a legacy global
+capture allowlist by itself does not enable browser forwarding. Each value must
+be one non-empty scalar string of at most 512 characters with no ASCII control.
+Repeated/list-shaped, empty, control-bearing, and oversize values are dropped,
+not truncated. Undeclared keys such as `utm_*` and reserved canonical,
+navigation, callback, and credential names are not forwarded. Extras do not
+propagate into passkey, contact, or OAuth-consent destinations. URL encoding
+keeps even URL- or scheme-looking values inert beneath the fixed auth/register
+path.
+
 `capture_only` is not a security or integrity check. The endpoint accepts any
 allowlisted extra-field value a client submits, whether or not that client
 rendered an input. Validate referral/promo values in the server-side

@@ -284,7 +284,7 @@ def _render_with_csp(request, template, ctx, frame_ancestors="'none'"):
                      frame_ancestors=frame_ancestors)
 
 
-def _auth_context(request, group=None):
+def _auth_context(request, group=None, include_registration_extras=False):
     """Build the shared template context for auth pages from the group's
     resolved auth config.
 
@@ -292,7 +292,9 @@ def _auth_context(request, group=None):
     `auth_config.resolve_auth_config(group)` — code defaults, overlaid
     by the AUTH_CONFIG setting, overlaid by `group.metadata["auth_config"]`
     down the parent chain. Single-tenant deployments (group=None) get the
-    deployment default.
+    deployment default. `include_registration_extras` is enabled only by the
+    hosted login/register renderer; contact, passkey, and OAuth consent keep
+    their destinations free of registration attribution.
     """
     from mojo.apps.account.services import register_schema
     from mojo.apps.account.services import auth_config
@@ -317,10 +319,10 @@ def _auth_context(request, group=None):
     group_uuid = group.uuid if group else ''
     # Preserve ?group_uuid= plus the post-auth forwarding params on the
     # switcher links so a user who lands at /auth?redirect=/x and clicks
-    # "Create one" carries the redirect onto /register. Whitelisted keys
-    # only — OAuth callback (`code`, `state`), magic-link `token`, and
-    # reset tokens must NOT bleed across the switch. Mirrors the precedent
-    # in _serve_challenge (group_uuid + redirect + back through urlencode).
+    # "Create one" carries the redirect onto /register. Auth/register page
+    # callers may also include schema-declared, sanitized registration extras.
+    # OAuth callback (`code`, `state`), magic-link `token`, reset tokens, and
+    # undeclared query params must NOT bleed across the switch.
     fwd_params = {}
     if group_uuid:
         fwd_params['group_uuid'] = group_uuid
@@ -332,7 +334,6 @@ def _auth_context(request, group=None):
         fwd_params['auth_theme'] = auth_layout
     if requested_appearance and auth_config.normalize_appearance(requested_appearance, ''):
         fwd_params['auth_appearance'] = auth_appearance
-    group_qs = f'?{urlencode(fwd_params)}' if fwd_params else ''
 
     # Schema-driven register form. The same schema drives the server-side
     # validator, so what the form collects matches what the API will accept.
@@ -342,7 +343,17 @@ def _auth_context(request, group=None):
     # empty: no extra inputs, no behavior change. Rendered after the canonical
     # fields; the template's JS captures a matching URL query param silently or
     # asks for the value as a plain text input.
-    register_extra_fields = register_schema.resolve_extra_fields(group=group, request=request)
+    register_extra_fields = register_schema.resolve_extra_fields(
+        group=group, request=request)
+    register_extra_values = {}
+    switcher_params = dict(fwd_params)
+    if include_registration_extras:
+        register_extra_values = register_schema.extract_extra_values(
+            request_data, register_schema.extra_field_names(register_extra_fields))
+        for key, value in register_extra_values.items():
+            switcher_params.setdefault(key, value)
+    switcher_qs = f'?{urlencode(switcher_params)}' if switcher_params else ''
+    passkey_qs = f'?{urlencode(fwd_params)}' if fwd_params else ''
     try:
         identity_field = register_schema.resolve_identity_field(register_fields, group=group)
     except Exception:
@@ -391,9 +402,9 @@ def _auth_context(request, group=None):
         'registration_methods': registration_methods,
         'registration_enabled': bool(cfg.registration.enabled),
         'passkey_prompt': cfg.registration.passkey_prompt or 'off',
-        'auth_url': f'/{login_path}{group_qs}',
-        'register_url': f'/{register_path}{group_qs}',
-        'passkey_url': f'/{passkey_path}{group_qs}',
+        'auth_url': f'/{login_path}{switcher_qs}',
+        'register_url': f'/{register_path}{switcher_qs}',
+        'passkey_url': f'/{passkey_path}{passkey_qs}',
         'auth_layout': auth_layout,
         'auth_appearance': auth_appearance,
         'accent_color': auth_config.normalize_accent_color(theme.accent_color),
@@ -404,6 +415,8 @@ def _auth_context(request, group=None):
         'register_fields': register_fields,
         'register_field_rows': register_field_rows,
         'register_extra_fields': register_extra_fields,
+        'register_extra_values': register_extra_values,
+        'register_extra_value_max_length': register_schema.EXTRA_VALUE_MAX_LENGTH,
         'register_step1_fields': step1_fields,
         'register_step2_active': step2_active,
         'register_step3_field_rows': step3_field_rows,
@@ -419,7 +432,8 @@ def _auth_context(request, group=None):
 
 
 def _serve_login(request, page_mode='login', group=None):
-    ctx = _auth_context(request, group=group)
+    ctx = _auth_context(
+        request, group=group, include_registration_extras=True)
     ctx['page_mode'] = page_mode
     if page_mode == 'register':
         ctx['page_title'] = 'Create Account'
@@ -432,6 +446,7 @@ def _serve_login(request, page_mode='login', group=None):
 
 def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
     from mojo.apps.account.services import auth_config
+    from mojo.apps.account.services import register_schema
 
     render_ctx = {
         'css_nonce': secrets.token_hex(6),
@@ -469,6 +484,13 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
         fwd_params['auth_theme'] = auth_config.normalize_layout(requested_layout)
     if auth_config.normalize_appearance(requested_appearance, ''):
         fwd_params['auth_appearance'] = requested_appearance
+    if page_type in ('login', 'registration'):
+        extra_fields = register_schema.resolve_extra_fields(
+            group=group, request=request)
+        extra_values = register_schema.extract_extra_values(
+            request_data, register_schema.extra_field_names(extra_fields))
+        for key, value in extra_values.items():
+            fwd_params.setdefault(key, value)
     group_qs = f'?{urlencode(fwd_params)}' if fwd_params else ''
     # Challenge page: default branding from settings, opt-in override per group
     cfg = auth_config.resolve_auth_config(group=group, request=request)

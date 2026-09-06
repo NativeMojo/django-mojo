@@ -140,3 +140,43 @@ def test_no_extras_no_registration_metadata(opts):
     assert user is not None, "user row must exist after register"
     assert not (user.metadata or {}).get("registration"), \
         f"no extras configured must leave metadata.registration unset, got {user.metadata!r}"
+
+
+@th.django_unit_test("extra fields: registration API applies the shared safe-value policy")
+def test_registration_api_sanitizes_extra_values(opts):
+    from mojo.apps.account.models import User
+
+    email = _fresh_email("sanitize")
+    boundary = "x" * 512
+    payload = {
+        "email": email,
+        "password": "RegPass##99",
+        "boundary": boundary,
+        "unicode": "café-🎟️",
+        "scheme": "javascript:alert(1)",
+        "empty": "",
+        "list_value": ["one", "two"],
+        "control": "line\nbreak",
+        "too_long": "x" * 513,
+        "number": 42,
+        "token": "reserved-auth-token",
+    }
+    allow = [
+        "boundary", "unicode", "scheme", "empty", "list_value", "control",
+        "too_long", "number", "token",
+    ]
+    resp, capture_id = _post(opts, payload, global_extras=allow)
+
+    assert resp.status_code == 200, \
+        f"invalid optional extras must be dropped without failing registration, got {resp.status_code}: {opts.client.last_response.body}"
+    extra = _capture.read_capture(capture_id).get("register", [])[0]["extra"]
+    assert extra == {
+        "boundary": boundary,
+        "unicode": "café-🎟️",
+        "scheme": "javascript:alert(1)",
+    }, f"registration capture must use the shared safe-value policy, got {extra!r}"
+
+    user = User.objects.filter(email=email).first()
+    reg_meta = (user.metadata or {}).get("registration") or {}
+    assert reg_meta == extra, \
+        f"only sanitized extras may persist to metadata.registration, got {reg_meta!r}"

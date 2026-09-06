@@ -689,7 +689,10 @@ new presentation properties are strict: `capture_only` is a boolean and
 title-cased name. Config validation rejects a capture-only field marked
 required. If unvalidated deployment or legacy persisted config contains that
 contradiction, the runtime fails safe by treating it as optional. Names that
-collide with a canonical field are rejected at config-write time. Like
+collide with a canonical field or an auth/navigation control (`group`,
+`group_uuid`, `redirect`, `next`, `returnTo`, `back`, `force_reauth`,
+`auth_theme`, `auth_appearance`, `token`, `code`, `state`) are rejected at
+config-write time and normalized away from unvalidated config. Like
 `registration.fields`, this resolves per-group down the parent chain.
 
 **Render behavior** (hosted register page): a visible field renders an explicit
@@ -698,8 +701,20 @@ label and, when configured, escaped help text connected to its input with
 `/register?promo=WELCOME100`), the value is captured silently and the row stays
 hidden; otherwise the page reveals the input. A `capture_only` field never
 emits a row or editable input, even when its query value is absent. The hosted
-collector reads a matching non-empty query value directly and includes it in
-the registration payload. `required` remains a client-side UX hint only.
+collector receives a server-sanitized matching query value and includes it in
+the registration payload. One value is accepted only when it is a non-empty
+scalar string no longer than 512 characters and contains no ASCII controls.
+Repeated/list-shaped, empty, control-bearing, and oversize values are dropped,
+never truncated. Visible inputs expose the same 512-character maximum.
+`required` remains a client-side UX hint only.
+
+Safe declared values survive a Bouncer challenge on `/register` and `/auth`
+and the login/register switcher in either direction. They do not propagate to
+passkey, public-contact, or OAuth-consent destinations. The allowlist is the
+resolved `registration.extra_fields` schema; the legacy
+`REGISTRATION_EXTRA_FIELDS` capture setting does not authorize URL forwarding,
+and undeclared `utm_*` or other query keys remain absent. Values are encoded as
+query data with `urlencode` beneath a fixed server-selected root-relative path.
 
 Template overrides must keep capture-only fields out of editable DOM while
 retaining them in the collector schema. A custom client may choose its own
@@ -714,7 +729,9 @@ group's declared `extra_fields` names and the legacy global
 Captured values are persisted to `user.metadata["registration"]` (a
 `name → value` dict) **and** passed in the `extra=` kwarg to the
 `USER_REGISTERED_HANDLER`, so a consumer handler can act on them
-(e.g. validate/grant a promo).
+(e.g. validate/grant a promo). The endpoint applies the same scalar/control/
+length sanitizer as the hosted-page hops, so direct, pass-cookie, and
+challenge-driven registrations cannot disagree about an accepted value.
 
 ---
 

@@ -126,6 +126,20 @@ matching non-empty query value, forward it in the registration payload.
 clients can still submit the allowlisted key, so the server-side registration
 handler must validate it before granting a referral or promotional benefit.
 
+On `/auth` and `/register`, the Bouncer redirect and login/register switcher
+preserve only values whose names appear in this resolved list. Both string and
+object entries, including `capture_only` entries, participate. A value must be
+one non-empty string no longer than 512 characters with no ASCII control;
+duplicates/list values and invalid values are dropped, never truncated. The
+legacy server capture allowlist does not authorize browser-hop forwarding, and
+undeclared keys such as `utm_*` remain absent. Extras do not propagate to
+passkey, contact, or OAuth-consent destinations.
+
+Canonical fields and `group`, `group_uuid`, `redirect`, `next`, `returnTo`,
+`back`, `force_reauth`, `auth_theme`, `auth_appearance`, `token`, `code`, and
+`state` are reserved and cannot be extra-field names. Forwarded values are
+URL-encoded data beneath a fixed auth/register path.
+
 `registration.fields: null` means the deployment default (email + password) is
 in effect. A non-null `fields` list may omit `password` — when it does,
 registration is **passwordless**: the account is created without a usable

@@ -6,7 +6,7 @@ register_schema.resolve_extra_fields(); see register_schema.py.
 Visible fields are hidden initially: page_script reveals the input when there
 is no matching URL query param, or pre-sets its value (still hidden) when there
 is. Capture-only fields intentionally emit no editable DOM at all; page_script
-collects their matching query parameter directly from URLSearchParams.
+collects their matching query parameter from the server-sanitized value map.
 
 Input context:
     ef.name      — the extra field name (e.g. "promo")
@@ -19,7 +19,7 @@ Input context:
 {% if not ef.capture_only %}
 <div class="mat-field" id="reg-extra-row-{{ ef.name }}" style="display:none">
     <label class="mat-label" for="reg-extra-{{ ef.name }}">{{ ef.label }}</label>
-    <input class="mat-input" type="text" id="reg-extra-{{ ef.name }}" autocomplete="off" placeholder="{{ ef.label }}"{% if ef.required %} data-required="1"{% endif %}{% if ef.help_text %} aria-describedby="reg-extra-help-{{ ef.name }}"{% endif %} />
+    <input class="mat-input" type="text" id="reg-extra-{{ ef.name }}" autocomplete="off" maxlength="{{ register_extra_value_max_length|default:512 }}" placeholder="{{ ef.label }}"{% if ef.required %} data-required="1"{% endif %}{% if ef.help_text %} aria-describedby="reg-extra-help-{{ ef.name }}"{% endif %} />
     {% if ef.help_text %}<p class="mat-field-help" id="reg-extra-help-{{ ef.name }}">{{ ef.help_text }}</p>{% endif %}
 </div>
 {% endif %}

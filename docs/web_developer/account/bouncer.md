@@ -27,7 +27,7 @@ When `BOUNCER_LOGIN_PATH` is configured (e.g. `access`), the login flow has thre
       User clicks the moving target button
       POST /api/account/bouncer/assess → decision + bouncer_token
       JS stores token in localStorage, redirects to /{BOUNCER_LOGIN_PATH}
-      redirect, next, returnTo, and back params are forwarded through this redirect
+      navigation controls and safe schema-declared registration extras are forwarded
 
 3. Full login page (after passing challenge or on valid pass cookie)
       mojo-auth.js webapp loads — login form, OAuth, passkeys, magic link
@@ -325,7 +325,22 @@ original request are forwarded to the post-challenge login redirect:
 |-------|---------|
 | `redirect` / `next` / `returnTo` | Post-login redirect URL (relative or absolute) |
 | `back` | Override for the "Back to website" hero link |
-| `group` | Group UUID for per-group branding |
+| `group_uuid` | Group UUID for per-group branding |
+| Declared `registration.extra_fields` name | Registration attribution on `/auth` and `/register` only |
+
+An attribution name is eligible only when the resolved auth config declares it;
+the legacy server capture setting alone is not enough. Both visible and
+`capture_only` extras use the same rule. Values must be a single non-empty
+string, at most 512 characters, with no ASCII control character. Empty,
+repeated/list-shaped, control-bearing, and oversize values are dropped, never
+truncated. Undeclared keys such as `utm_*` are dropped.
+
+Canonical registration fields and auth/navigation controls (`group`,
+`group_uuid`, `redirect`, `next`, `returnTo`, `back`, `force_reauth`,
+`auth_theme`, `auth_appearance`, `token`, `code`, `state`) cannot be declared as
+extras. Values are URL-encoded and cannot change the fixed `/auth` or
+`/register` destination. Registration extras do not propagate to `/passkey`,
+`/contact`, or OAuth-consent destinations.
 
 ---
 

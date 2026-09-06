@@ -62,7 +62,7 @@ rather than appending to it.
 |-----|------|---------|-------------|
 | `enabled` | bool | `true` | Whether the registration page is shown |
 | `fields` | list\|null | `null` | Field schema (null → default email form) — see register_schema |
-| `extra_fields` | list | `[]` | Per-group non-canonical fields (promo/ref/tracking). An entry may be a name string or `{"name", "label"?, "required"?, "capture_only"?, "help_text"?}`. Hosted-page normalization defaults `required` and `capture_only` to `false`, `help_text` to `""`, and a missing label to the title-cased name. Names colliding with canonical fields are rejected. Default empty — no extra inputs, no behavior change for other tenants. |
+| `extra_fields` | list | `[]` | Per-group non-canonical fields (promo/ref/tracking). An entry may be a name string or `{"name", "label"?, "required"?, "capture_only"?, "help_text"?}`. Hosted-page normalization defaults `required` and `capture_only` to `false`, `help_text` to `""`, and a missing label to the title-cased name. Canonical and auth/navigation-reserved names are rejected. Safe declared values survive Bouncer and login/register switcher hops. Default empty — no extra inputs, no behavior change for other tenants. |
 | `identity_field` | string | `""` | `"email"` or `"phone"` (empty → auto-pick) |
 | `min_age` | int\|null | `null` | Minimum age gate (years) applied when `dob` is a field |
 | `methods` | list | `["password","google","apple","github"]` | Offered signup methods |
@@ -155,7 +155,7 @@ time. Validated constraints:
 - `registration.methods` must be a list of valid tokens
 - `registration.passkey_prompt` must be `"off"`, `"optional"`, or `"required"`
 - `registration.fields` is validated via `register_schema.validate_fields_config` — a schema that omits `password` is accepted only when it also includes a `phone` field with `verify: "sms"` (see Passwordless Registration below)
-- `registration.extra_fields` is validated via `register_schema.validate_extra_fields_config` — each entry must have a non-empty `name` string; `label` and `help_text` (if present) must be strings; `required` and `capture_only` (if present) must be booleans; a capture-only field cannot also be required; names colliding with canonical fields are rejected
+- `registration.extra_fields` is validated via `register_schema.validate_extra_fields_config` — each entry must have a non-empty `name` string; `label` and `help_text` (if present) must be strings; `required` and `capture_only` (if present) must be booleans; a capture-only field cannot also be required; canonical and auth/navigation names (`group`, `group_uuid`, `redirect`, `next`, `returnTo`, `back`, `force_reauth`, `auth_theme`, `auth_appearance`, `token`, `code`, `state`) are reserved
 
 ---
 
@@ -193,6 +193,16 @@ to `false`. That normalization does not rewrite the public raw response.
 `capture_only` is presentation policy, not an integrity or security boundary:
 the register endpoint still accepts an allowlisted value supplied by any
 client, so referral and promo validation belongs in the registration handler.
+
+The hosted Bouncer and login/register switcher forward only names declared by
+this resolved schema (not names present only in `REGISTRATION_EXTRA_FIELDS`).
+The shared forwarding/capture sanitizer accepts one non-empty scalar string no
+longer than 512 characters with no ASCII controls. Empty, repeated/list-shaped,
+control-bearing, and oversize values are dropped without truncation. Extras do
+not propagate to passkey, contact, or OAuth-consent destinations; encoded values
+remain data beneath the server-selected auth/register path. Canonical fields and
+`group`, `group_uuid`, `redirect`, `next`, `returnTo`, `back`, `force_reauth`,
+`auth_theme`, `auth_appearance`, `token`, `code`, and `state` are reserved.
 
 The `request` parameter on `resolve_auth_config` enables the
 `X-Mojo-Test-Auth-Config` header override in test mode (loopback + test flag

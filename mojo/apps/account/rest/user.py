@@ -537,8 +537,8 @@ def on_register(request):
         request, "X-Mojo-Test-Registration-Extra-Fields",
         "REGISTRATION_EXTRA_FIELDS", [])
     group_extra_fields = register_schema.resolve_extra_fields(group=group, request=request)
-    allow = set(extras_allow) | set(register_schema.extra_field_names(group_extra_fields))
-    extra = {key: request.DATA.get(key) for key in allow if key in request.DATA}
+    allow = list(extras_allow) + register_schema.extra_field_names(group_extra_fields)
+    extra = register_schema.extract_extra_values(request.DATA, allow)
 
     # ---- Existing-account short-circuit (phone identity) -------------------
     # Detect an account that already owns this phone BEFORE full payload
