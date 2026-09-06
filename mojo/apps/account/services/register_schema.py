@@ -56,13 +56,23 @@ from mojo.helpers import test_mode as _tm
 # REGISTRATION_EXTRA_FIELDS (existing extras allowlist).
 CANONICAL_FIELDS = ("first_name", "last_name", "email", "phone", "dob", "password")
 
-# Extra fields are browser-carried attribution data, never auth/navigation
-# controls. Keeping this denylist beside the extra schema makes config writes,
-# legacy config normalization, hosted-page forwarding, and API capture agree.
+# Extra fields are browser-carried attribution data, never canonical identity,
+# device, credential, OAuth, or navigation controls. Keeping this denylist
+# beside the extra schema makes config writes, legacy config normalization,
+# hosted-page forwarding, and API capture agree.
 RESERVED_EXTRA_FIELDS = frozenset(CANONICAL_FIELDS + (
-    "group", "group_uuid", "redirect", "next", "returnTo", "back",
-    "force_reauth", "auth_theme", "auth_appearance", "token", "code",
-    "state",
+    "username", "phone_number",
+    "group", "group_uuid",
+    "redirect", "next", "returnTo", "back", "webapp_base_url",
+    "redirect_uri",
+    "force_reauth", "auth_theme", "auth_appearance",
+    "token", "code", "state", "auth_code", "bouncer_token",
+    "verified_phone_token", "session_token", "mfa_token", "access_token",
+    "refresh_token", "recovery_code", "current_password", "new_password",
+    "duid", "muid", "fp",
+    "client_id", "response_type", "scope", "code_challenge",
+    "code_challenge_method", "code_verifier", "grant_type", "resource",
+    "challenge_id", "credential",
 ))
 
 # A declared field may cross more than one URL hop before registration. Bound

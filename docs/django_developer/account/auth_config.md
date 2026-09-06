@@ -155,7 +155,7 @@ time. Validated constraints:
 - `registration.methods` must be a list of valid tokens
 - `registration.passkey_prompt` must be `"off"`, `"optional"`, or `"required"`
 - `registration.fields` is validated via `register_schema.validate_fields_config` — a schema that omits `password` is accepted only when it also includes a `phone` field with `verify: "sms"` (see Passwordless Registration below)
-- `registration.extra_fields` is validated via `register_schema.validate_extra_fields_config` — each entry must have a non-empty `name` string; `label` and `help_text` (if present) must be strings; `required` and `capture_only` (if present) must be booleans; a capture-only field cannot also be required; canonical and auth/navigation names (`group`, `group_uuid`, `redirect`, `next`, `returnTo`, `back`, `force_reauth`, `auth_theme`, `auth_appearance`, `token`, `code`, `state`) are reserved
+- `registration.extra_fields` is validated via `register_schema.validate_extra_fields_config` — each entry must have a non-empty `name` string; `label` and `help_text` (if present) must be strings; `required` and `capture_only` (if present) must be booleans; a capture-only field cannot also be required; canonical/identity, tenancy/navigation/display, credential/device, and OAuth/passkey request-control names are reserved (complete list below)
 
 ---
 
@@ -200,9 +200,17 @@ The shared forwarding/capture sanitizer accepts one non-empty scalar string no
 longer than 512 characters with no ASCII controls. Empty, repeated/list-shaped,
 control-bearing, and oversize values are dropped without truncation. Extras do
 not propagate to passkey, contact, or OAuth-consent destinations; encoded values
-remain data beneath the server-selected auth/register path. Canonical fields and
-`group`, `group_uuid`, `redirect`, `next`, `returnTo`, `back`, `force_reauth`,
-`auth_theme`, `auth_appearance`, `token`, `code`, and `state` are reserved.
+remain data beneath the server-selected auth/register path. Reserved names are:
+canonical/identity (`first_name`, `last_name`, `email`, `phone`, `dob`,
+`password`, `username`, `phone_number`); tenancy/navigation/display (`group`,
+`group_uuid`, `redirect`, `next`, `returnTo`, `back`, `webapp_base_url`,
+`redirect_uri`, `force_reauth`, `auth_theme`, `auth_appearance`);
+credential/device (`token`, `code`, `state`, `auth_code`, `bouncer_token`,
+`verified_phone_token`, `session_token`, `mfa_token`, `access_token`,
+`refresh_token`, `recovery_code`, `current_password`, `new_password`, `duid`,
+`muid`, `fp`); and OAuth/passkey (`client_id`, `response_type`, `scope`,
+`code_challenge`, `code_challenge_method`, `code_verifier`, `grant_type`,
+`resource`, `challenge_id`, `credential`).
 
 The `request` parameter on `resolve_auth_config` enables the
 `X-Mojo-Test-Auth-Config` header override in test mode (loopback + test flag

@@ -689,11 +689,19 @@ new presentation properties are strict: `capture_only` is a boolean and
 title-cased name. Config validation rejects a capture-only field marked
 required. If unvalidated deployment or legacy persisted config contains that
 contradiction, the runtime fails safe by treating it as optional. Names that
-collide with a canonical field or an auth/navigation control (`group`,
-`group_uuid`, `redirect`, `next`, `returnTo`, `back`, `force_reauth`,
-`auth_theme`, `auth_appearance`, `token`, `code`, `state`) are rejected at
-config-write time and normalized away from unvalidated config. Like
-`registration.fields`, this resolves per-group down the parent chain.
+collide with canonical/identity fields (`first_name`, `last_name`, `email`,
+`phone`, `dob`, `password`, `username`, `phone_number`); tenancy, navigation,
+or display controls (`group`, `group_uuid`, `redirect`, `next`, `returnTo`,
+`back`, `webapp_base_url`, `redirect_uri`, `force_reauth`, `auth_theme`,
+`auth_appearance`); credential/device controls (`token`, `code`, `state`,
+`auth_code`, `bouncer_token`, `verified_phone_token`, `session_token`,
+`mfa_token`, `access_token`, `refresh_token`, `recovery_code`,
+`current_password`, `new_password`, `duid`, `muid`, `fp`); or OAuth/passkey
+controls (`client_id`, `response_type`, `scope`, `code_challenge`,
+`code_challenge_method`, `code_verifier`, `grant_type`, `resource`,
+`challenge_id`, `credential`) are rejected at config-write time and normalized
+away from unvalidated config. Like `registration.fields`, this resolves
+per-group down the parent chain.
 
 **Render behavior** (hosted register page): a visible field renders an explicit
 label and, when configured, escaped help text connected to its input with

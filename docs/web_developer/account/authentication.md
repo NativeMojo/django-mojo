@@ -614,7 +614,8 @@ capture allowlist by itself does not enable browser forwarding. Each value must
 be one non-empty scalar string of at most 512 characters with no ASCII control.
 Repeated/list-shaped, empty, control-bearing, and oversize values are dropped,
 not truncated. Undeclared keys such as `utm_*` and reserved canonical,
-navigation, callback, and credential names are not forwarded. Extras do not
+identity, device, navigation, callback, credential, OAuth, and passkey names
+are not forwarded. Extras do not
 propagate into passkey, contact, or OAuth-consent destinations. URL encoding
 keeps even URL- or scheme-looking values inert beneath the fixed auth/register
 path.

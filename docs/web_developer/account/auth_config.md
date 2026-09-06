@@ -135,10 +135,18 @@ legacy server capture allowlist does not authorize browser-hop forwarding, and
 undeclared keys such as `utm_*` remain absent. Extras do not propagate to
 passkey, contact, or OAuth-consent destinations.
 
-Canonical fields and `group`, `group_uuid`, `redirect`, `next`, `returnTo`,
-`back`, `force_reauth`, `auth_theme`, `auth_appearance`, `token`, `code`, and
-`state` are reserved and cannot be extra-field names. Forwarded values are
-URL-encoded data beneath a fixed auth/register path.
+Reserved names cannot be extra fields: canonical/identity (`first_name`,
+`last_name`, `email`, `phone`, `dob`, `password`, `username`, `phone_number`);
+tenancy/navigation/display (`group`, `group_uuid`, `redirect`, `next`,
+`returnTo`, `back`, `webapp_base_url`, `redirect_uri`, `force_reauth`,
+`auth_theme`, `auth_appearance`); credential/device (`token`, `code`, `state`,
+`auth_code`, `bouncer_token`, `verified_phone_token`, `session_token`,
+`mfa_token`, `access_token`, `refresh_token`, `recovery_code`,
+`current_password`, `new_password`, `duid`, `muid`, `fp`); and OAuth/passkey
+(`client_id`, `response_type`, `scope`, `code_challenge`,
+`code_challenge_method`, `code_verifier`, `grant_type`, `resource`,
+`challenge_id`, `credential`). Forwarded values are URL-encoded data beneath a
+fixed auth/register path.
 
 `registration.fields: null` means the deployment default (email + password) is
 in effect. A non-null `fields` list may omit `password` — when it does,

@@ -10,6 +10,37 @@ from testit import helpers as th
 TESTIT_TIER = "bug"
 
 
+# Deliberately independent of register_schema.RESERVED_EXTRA_FIELDS: changing
+# the production constant cannot make the expected namespace test itself.
+EXPECTED_RESERVED_EXTRA_NAMES = (
+    "first_name", "last_name", "email", "phone", "dob", "password",
+    "username", "phone_number",
+    "group", "group_uuid",
+    "redirect", "next", "returnTo", "back", "webapp_base_url",
+    "redirect_uri",
+    "force_reauth", "auth_theme", "auth_appearance",
+    "token", "code", "state", "auth_code", "bouncer_token",
+    "verified_phone_token", "session_token", "mfa_token", "access_token",
+    "refresh_token", "recovery_code", "current_password", "new_password",
+    "duid", "muid", "fp",
+    "client_id", "response_type", "scope", "code_challenge",
+    "code_challenge_method", "code_verifier", "grant_type", "resource",
+    "challenge_id", "credential",
+)
+
+# These controls are not among the separately handled challenge navigation
+# parameters, so none may appear in a challenge destination even if a broken
+# deployment attempts to declare them as extras.
+NON_FORWARDABLE_RESERVED_NAMES = (
+    "username", "phone_number", "webapp_base_url", "redirect_uri",
+    "auth_code", "bouncer_token", "verified_phone_token", "session_token",
+    "mfa_token", "access_token", "refresh_token", "recovery_code",
+    "current_password", "new_password", "duid", "muid", "fp", "client_id",
+    "response_type", "scope", "code_challenge", "code_challenge_method",
+    "code_verifier", "grant_type", "resource", "challenge_id", "credential",
+)
+
+
 def _request(path, query, extra_fields):
     from django.test import RequestFactory
 
@@ -237,7 +268,10 @@ def test_reserved_extra_names_are_invalid(opts):
     from mojo import errors as merrors
     from mojo.apps.account.services import register_schema as schema
 
-    for name in sorted(schema.RESERVED_EXTRA_FIELDS):
+    assert schema.RESERVED_EXTRA_FIELDS == frozenset(EXPECTED_RESERVED_EXTRA_NAMES), \
+        "the production reserved namespace must match the independently audited contract"
+
+    for name in EXPECTED_RESERVED_EXTRA_NAMES:
         normalized = schema._normalize_extra_field_list([name])
         assert normalized == [], \
             f"legacy/deployment config must normalize reserved name {name!r} away"
@@ -247,6 +281,24 @@ def test_reserved_extra_names_are_invalid(opts):
         except merrors.ValueException as exc:
             assert "reserved" in str(exc), \
                 f"reserved-name error must explain the rejection, got {exc!s}"
+
+
+@th.django_unit_test("credential and control names never forward as registration extras")
+def test_reserved_controls_do_not_forward(opts):
+    import objict
+
+    query = {name: f"value-for-{name}" for name in NON_FORWARDABLE_RESERVED_NAMES}
+    configured = [
+        name if index % 2 == 0 else {"name": name, "capture_only": True}
+        for index, name in enumerate(NON_FORWARDABLE_RESERVED_NAMES)
+    ]
+    request = _request("/register", query, configured)
+    request.DATA = objict.objict(query)
+
+    destination, _ = _challenge_destination(request)
+    params = parse_qs(urlsplit(destination).query)
+    assert not set(NON_FORWARDABLE_RESERVED_NAMES).intersection(params), \
+        f"reserved credential/control names must not reach the destination, got {destination!r}"
 
 
 def _render(extra_fields):

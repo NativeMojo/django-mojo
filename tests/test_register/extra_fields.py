@@ -25,6 +25,18 @@ TESTIT_TIER = "extended"
 HANDLER_REGISTER_OK = "tests.test_register._capture.capture_register"
 
 
+# Independent regression roster for credential/control keys that must never be
+# captured as registration metadata, even through the legacy allowlist.
+NON_PERSISTABLE_RESERVED_NAMES = (
+    "username", "phone_number", "webapp_base_url", "redirect_uri",
+    "auth_code", "bouncer_token", "verified_phone_token", "session_token",
+    "mfa_token", "access_token", "refresh_token", "recovery_code",
+    "current_password", "new_password", "duid", "muid", "fp", "client_id",
+    "response_type", "scope", "code_challenge", "code_challenge_method",
+    "code_verifier", "grant_type", "resource", "challenge_id", "credential",
+)
+
+
 def _fresh_email(suffix):
     return f"regx_{suffix}_{_uuid.uuid4().hex[:8]}@register.test"
 
@@ -161,10 +173,13 @@ def test_registration_api_sanitizes_extra_values(opts):
         "number": 42,
         "token": "reserved-auth-token",
     }
+    payload.update({
+        name: f"reserved-{name}" for name in NON_PERSISTABLE_RESERVED_NAMES
+    })
     allow = [
         "boundary", "unicode", "scheme", "empty", "list_value", "control",
         "too_long", "number", "token",
-    ]
+    ] + list(NON_PERSISTABLE_RESERVED_NAMES)
     resp, capture_id = _post(opts, payload, global_extras=allow)
 
     assert resp.status_code == 200, \
@@ -180,3 +195,5 @@ def test_registration_api_sanitizes_extra_values(opts):
     reg_meta = (user.metadata or {}).get("registration") or {}
     assert reg_meta == extra, \
         f"only sanitized extras may persist to metadata.registration, got {reg_meta!r}"
+    assert not set(NON_PERSISTABLE_RESERVED_NAMES).intersection(reg_meta), \
+        f"credential/control keys must not persist through on_register, got {reg_meta!r}"

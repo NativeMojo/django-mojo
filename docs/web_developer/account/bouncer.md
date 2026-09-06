@@ -326,6 +326,9 @@ original request are forwarded to the post-challenge login redirect:
 | `redirect` / `next` / `returnTo` | Post-login redirect URL (relative or absolute) |
 | `back` | Override for the "Back to website" hero link |
 | `group_uuid` | Group UUID for per-group branding |
+| `force_reauth` | Force the credential form instead of accepting an existing session |
+| `auth_theme` | Valid hosted-auth layout override |
+| `auth_appearance` | Valid hosted-auth appearance override |
 | Declared `registration.extra_fields` name | Registration attribution on `/auth` and `/register` only |
 
 An attribution name is eligible only when the resolved auth config declares it;
@@ -335,12 +338,20 @@ string, at most 512 characters, with no ASCII control character. Empty,
 repeated/list-shaped, control-bearing, and oversize values are dropped, never
 truncated. Undeclared keys such as `utm_*` are dropped.
 
-Canonical registration fields and auth/navigation controls (`group`,
-`group_uuid`, `redirect`, `next`, `returnTo`, `back`, `force_reauth`,
-`auth_theme`, `auth_appearance`, `token`, `code`, `state`) cannot be declared as
-extras. Values are URL-encoded and cannot change the fixed `/auth` or
-`/register` destination. Registration extras do not propagate to `/passkey`,
-`/contact`, or OAuth-consent destinations.
+Canonical/identity names (`first_name`, `last_name`, `email`, `phone`, `dob`,
+`password`, `username`, `phone_number`); tenancy, navigation, and display names
+(`group`, `group_uuid`, `redirect`, `next`, `returnTo`, `back`,
+`webapp_base_url`, `redirect_uri`, `force_reauth`, `auth_theme`,
+`auth_appearance`); credential/device names (`token`, `code`, `state`,
+`auth_code`, `bouncer_token`, `verified_phone_token`, `session_token`,
+`mfa_token`, `access_token`, `refresh_token`, `recovery_code`,
+`current_password`, `new_password`, `duid`, `muid`, `fp`); and OAuth/passkey
+names (`client_id`, `response_type`, `scope`, `code_challenge`,
+`code_challenge_method`, `code_verifier`, `grant_type`, `resource`,
+`challenge_id`, `credential`) cannot be declared as extras. Values are
+URL-encoded and cannot change the fixed `/auth` or `/register` destination.
+Registration extras do not propagate to `/passkey`, `/contact`, or
+OAuth-consent destinations.
 
 ---
 

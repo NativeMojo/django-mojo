@@ -289,8 +289,9 @@ The resolved `registration.extra_fields` names also ride the Bouncer redirect
 and login ↔ register switcher. This includes visible and `capture_only` fields
 from deployment-wide or inherited group auth config. It does not include keys
 that exist only in the legacy server capture allowlist, undeclared keys such as
-`utm_*`, or reserved canonical/auth/navigation names. Each forwarded value must
-be one non-empty string of at most 512 characters with no ASCII control;
+`utm_*`, or reserved canonical, identity, device, credential, OAuth, passkey,
+and navigation names. Each forwarded value must be one non-empty string of at
+most 512 characters with no ASCII control;
 duplicates/lists and invalid values are dropped rather than truncated. These
 attribution values do not ride the `/passkey`, `/contact`, or OAuth-consent
 links. They are URL-encoded data and cannot replace the destination path.

@@ -318,9 +318,17 @@ make a query parameter eligible for a browser hop.
 Each extra value must be one non-empty scalar string of at most 512 characters
 with no ASCII control character. Repeated query values, list-shaped values,
 empty strings, controls, and oversize values are dropped rather than truncated.
-Canonical registration fields and the auth/navigation names `group`,
-`group_uuid`, `redirect`, `next`, `returnTo`, `back`, `force_reauth`,
-`auth_theme`, `auth_appearance`, `token`, `code`, and `state` cannot be extras.
+Canonical/identity names (`first_name`, `last_name`, `email`, `phone`, `dob`,
+`password`, `username`, `phone_number`); tenancy, navigation, and display names
+(`group`, `group_uuid`, `redirect`, `next`, `returnTo`, `back`,
+`webapp_base_url`, `redirect_uri`, `force_reauth`, `auth_theme`,
+`auth_appearance`); credential/device names (`token`, `code`, `state`,
+`auth_code`, `bouncer_token`, `verified_phone_token`, `session_token`,
+`mfa_token`, `access_token`, `refresh_token`, `recovery_code`,
+`current_password`, `new_password`, `duid`, `muid`, `fp`); and OAuth/passkey
+names (`client_id`, `response_type`, `scope`, `code_challenge`,
+`code_challenge_method`, `code_verifier`, `grant_type`, `resource`,
+`challenge_id`, `credential`) cannot be extras.
 All values are encoded with `urlencode`; they cannot alter the server-selected
 root-relative destination path. Undeclared parameters (including `utm_*`) are
 not forwarded. Contact and passkey pages and OAuth-consent destinations do not
