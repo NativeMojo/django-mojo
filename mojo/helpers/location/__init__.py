@@ -1,9 +1,45 @@
+from collections.abc import Mapping
+
+from mojo.helpers import logit
 from mojo.helpers.settings import settings
+
+
+def _failure(provider, result=None, error=None):
+    if error is not None:
+        message = str(error) or f"{provider.title()} address validation failed"
+        return {}, message, error.__class__.__name__, False
+
+    if not isinstance(result, Mapping):
+        message = f"{provider.title()} address validator returned an invalid response"
+        return {}, message, "InvalidResponse", False
+
+    payload = dict(result)
+    message = payload.get("error") or f"{provider.title()} address validation failed"
+    status = payload.get("status", False)
+    if not isinstance(status, (bool, int)) and status is not None:
+        status = "unknown"
+    return payload, str(message), "ValidationFailure", status
+
+
+def _attempt(provider, address_data, validator):
+    try:
+        result = validator(address_data)
+    except Exception as err:
+        payload, message, failure_class, status = _failure(provider, error=err)
+        return None, payload, message, failure_class, status
+
+    if isinstance(result, Mapping) and result.get("valid") is True:
+        payload = dict(result)
+        payload["provider"] = provider
+        return payload, None, None, None, None
+
+    payload, message, failure_class, status = _failure(provider, result=result)
+    return None, payload, message, failure_class, status
 
 
 def validate_address(address_data):
     """
-    Validate an address using USPS API.
+    Validate an address using USPS with one-way fallback to Google.
 
     Args:
         address_data (dict): Address data to validate.
@@ -23,17 +59,40 @@ def validate_address(address_data):
     from . import google
     from . import usps
 
-    provider = address_data.get("provider", "usps")
-    if provider == "usps" and not bool(settings.USPS_CLIENT_ID):
-        provider = "google"
+    requested_provider = address_data.get("provider", "usps")
+    usps_ready = bool(settings.USPS_CLIENT_ID and settings.USPS_CLIENT_SECRET)
+    if requested_provider == "google" or not usps_ready:
+        providers = (("google", google.validate_address),)
+    else:
+        providers = (
+            ("usps", usps.validate_address),
+            ("google", google.validate_address),
+        )
 
-    try:
-        if provider == "google":
-            return google.validate_address(address_data)
-        return usps.validate_address(address_data)
-    except Exception as err:
-        from objict import objict
-        return objict(error=str(err), status=False)
+    errors = {}
+    final_provider = None
+    final_payload = {}
+    final_message = None
+    for provider, validator in providers:
+        success, payload, message, failure_class, status = _attempt(
+            provider, address_data, validator)
+        if success is not None:
+            return success
+
+        errors[provider] = message
+        final_provider = provider
+        final_payload = payload
+        final_message = message
+        if provider == "usps":
+            logit.warning(
+                "location address failover provider=usps "
+                f"class={failure_class} status={status}")
+
+    final_payload["status"] = False
+    final_payload["provider"] = final_provider
+    final_payload["error"] = final_message
+    final_payload["errors"] = errors
+    return final_payload
 
 def get_address_suggestions(input_text, session_token=None, country="US", location=None, radius=None):
     """

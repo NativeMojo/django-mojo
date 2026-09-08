@@ -13,5 +13,6 @@ Helpers live in `mojo/helpers/`. Import directly — no registration required.
 - [safe_fetch](safe_fetch.md) — SSRF-safe outbound fetch for caller-supplied URLs
 - [response](response.md) — JSON response helpers
 - [llm](llm.md) — Provider-neutral LLM facade and mandatory safety policy
+- [location](location.md) — USPS-preferred address validation with one-way Google fallback, plus autocomplete and place details
 - [redis](redis.md) — Redis client and caching
 - [other](other.md) — stats, qrcode, filetypes, domain, geoip, sysinfo, urls

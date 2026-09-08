@@ -30,6 +30,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | [fileman/](fileman/README.md) | File uploads, downloads, management |
 | [email/](email/README.md) | Email templates, mailboxes, sent messages |
 | [jobs/](jobs/README.md) | Job status and management |
+| [location/](location/README.md) | Public US address validation with USPS-first, one-way Google fallback |
 | [metrics/](metrics/README.md) | Time-series metrics |
 | [chat/](chat/README.md) | Real-time chat rooms, messages, WebSocket protocol |
 | [realtime/](realtime/README.md) | WebSocket pub/sub protocol |
