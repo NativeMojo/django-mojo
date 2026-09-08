@@ -92,13 +92,18 @@ is retained and the router adds consistent attribution:
 ```json
 {
   "valid": false,
-  "source": "google_address_validation",
+  "original_address": {
+    "address1": "1600 Amphitheatre Parkway",
+    "city": "Mountain View",
+    "state": "CA",
+    "postal_code": "94043"
+  },
   "status": false,
   "provider": "google",
-  "error": "Google could not validate address",
+  "error": "Incomplete or invalid address",
   "errors": {
-    "usps": "USPS could not confirm delivery",
-    "google": "Google could not validate address"
+    "usps": "Address not found in USPS database",
+    "google": "Incomplete or invalid address"
   }
 }
 ```
