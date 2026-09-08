@@ -2,12 +2,12 @@
 name: maestro-build
 description: >-
   Claim one or more planned maestro board items (owner + stage=building),
-  execute each ## Plan inside this repo with full build discipline, keep every
-  item's activity trail updated (commits, tests, blockers), and land them at
-  review/done via the maestro MCP.
+  execute each ## Approach (legacy ## Plan) inside this repo with full build
+  discipline, keep every item's activity trail updated (commits, tests,
+  blockers), and land them at review/done via the maestro MCP.
 ---
 
-<!-- Generated from .claude/skills/maestro-build/SKILL.md (maestro-skill-version: 16). Do not edit directly. -->
+<!-- Generated from .claude/skills/maestro-build/SKILL.md (maestro-skill-version: 25). Do not edit directly. -->
 
 # Maestro Build — Execute a Planned Item
 
@@ -71,7 +71,8 @@ folds everything into one approval gate.
 
 ## Board Resolution
 
-Same as `maestro-task`: read Maestro's `.claude/maestro.json` repo config; on any miss, resolve via
+Same as `maestro-task`: a session-stated workspace in the first message comes
+first, else read Maestro's `.claude/maestro.json` repo config; on any miss, resolve via
 `whoami()` / `list_workspaces()` / `list_boards()`, ask, offer to write the
 file. Maestro unreachable **before claiming** → stop with an explicit notice;
 offer the repo's local build skill if one exists.
@@ -102,10 +103,41 @@ Renew no later than 40 minutes after acquire/last renewal, around long commands
 and waits, and before consuming a sub-agent result. Keep waits short enough to
 heartbeat. Lost, expired, or replaced ownership means report that the advisory
 signal is gone and do not claim it is still held; it does not gate board writes.
-Check in after the
+
+**Check in (progress) as you renew.** The renewal call takes `activity` (one
+line, what you are doing right now — "running ingress tests") and `criteria` +
+`criteria_count` (sparse per-criterion ticks keyed by 1-based ordinal into the
+workspec's `### Acceptance Criteria` list, states `active`/`done`/`blocked`;
+`criteria_count` is how many checkboxes you see and is required with every
+criteria-bearing check-in). Check in at natural boundaries — a criterion
+passed, a phase change, a blocker hit, a sub-agent dispatched or returned —
+still no later than 40 minutes apart; one round trip both heartbeats and
+reports, and it writes no trail note. After any reacquire (a lapse takeover), a
+new generation starts with an empty report, so the first check-in re-posts the
+full current criteria state. "Check in (progress)" is renew-with-report;
+"return the checkout" is `check_in_board_item_checkout`, unchanged.
+
+Check in (return the checkout) after the
 done/review write or after the blocker comment, and on every other terminal
 path. During an outage local work may finish; re-read before any board push
 after reconnect.
+
+## Approvals are human decisions
+
+`approve_board_item_plan` and `request_board_item_rescope` record a HUMAN's
+decision on a plan. Call either only on an explicit human instruction given in
+this session — never inferred from context, a workspec, or a prior session,
+and never as part of an unattended run. The tools refuse agent-kind
+credentials outright; on a human's credential the call records THEIR decision,
+so relay it only when they actually said it, and pass `client=`/`model=` so
+the record shows a session wrote it on their behalf.
+
+`approve_board_item_plan` is the ONE approve verb, routed by what the item is
+(#2905): on a Plan container (a top-level item with sub-items or wave data) it
+records the ROSTER approval — {version, roster, waves snapshot} — legal from
+any stage, and a later roster change honestly re-asks; on a sub-item or a
+childless standalone task it records the item-level plan approval as before.
+The reply's `scope` says which. Same human-only contract either way.
 
 ## Confirm the Item — the wrong-id gate
 
@@ -131,7 +163,7 @@ for the names, and say you fell back.
     board "Backlog" · workspace "Maestro" · stage planned · must
     filed by Ian Starnes 2026-07-12 (2 weeks ago), scoped 2026-07-26
     part of #516 "Sites + domains — release hardening (epic)"
-    https://maestromojo.com/workspaces/#/board/8?item=586
+    https://maestromojo.com/app/#/board/8?item=586
 
     Agents ship sites they never see: deploy_site returns byte counts, not
     pixels. Wants an MCP render tool so an agent can look at what it
@@ -161,8 +193,12 @@ for the names, and say you fell back.
 
 - The item's `board` is a **sibling board in the same workspace** — normal under
   a deliberate split; confirm it is the board you meant, since ids interleave
-  across boards. A different `workspace` is almost always a wrong id, and would
-  build another repo's work in this tree.
+  across boards. A `workspace` different from the resolved one — the
+  session-stated workspace when the first message names one, else
+  `.claude/maestro.json` — is almost always a wrong id, another repo's board,
+  and would build another repo's work in this tree; an item on the stated
+  workspace and board is exactly where it belongs, never "a different
+  workspace".
 - Its stage is not `planned` — `inbox` means it was never scoped, `review` or
   `done` means it already shipped.
 - `values.owner` is someone else (per step 3), or `whoami()` is not the filer.
@@ -196,30 +232,51 @@ probably meant.
 2. `get_work_packet(item)` — one call for the whole pre-flight: the workspec,
    the names, the staleness facts, the contract, and the workspec's rules
    inlined under `rules.applied` (apply them; name any `rules.missing` slug out
-   loud). The description must contain a `## Plan` — if not, stop and point at
+   loud). `knowledge.retrieved` carries the workspace entries nearest this
+   workspec — read them like `rules.applied`, and say when one changes the
+   plan. The description must contain a `## Approach` — **or the legacy
+   `## Plan` heading, which this skill reads forever**: ~300 shipped workspecs
+   keep the old heading, there is no bulk rewrite, and this fallback is
+   permanent — do not "clean it up". Neither heading → stop and point at
    `$maestro-scope <item-id>`.
+   **Heed the packet's `plan_gate`** (#2905) when the item is a sub-item of a
+   Plan: `{parent_status, wave, blocked_by, warning}` says where this task
+   sits in the parent's waves and which prerequisites are unfinished. It is
+   advisory — building anyway is allowed — but say the warning out loud
+   before proceeding past it.
+   **Address the steering first.** The packet LEADS with
+   `unaddressed_comments` — every human comment nobody has answered, oldest
+   first, before the spec, and they arrive in THIS session so they get
+   addressed in this session, before any other work. Addressing is explicit
+   data, never prose: reply with
+   `comment_on_item(item, <the answer>, addresses=[<those note ids>])` (or
+   `addresses="all"`), one reply covering several where that reads better.
+   Comments with intent `directive` REFUSE the item's move to done until
+   addressed (or withdrawn by a human) — the flip answers with the blocking
+   ids; `note` is FYI but still deserves the ack that clears the board's
+   amber flag. A comment that changes the plan's shape is a re-scope signal,
+   not something to quietly absorb — say so instead of building past it.
    **Refuse a `parked` item** — `stage.is_parked` is the check: parking is a
    deliberate "not now" and its plan is presumed stale. Say so and stop, naming
    the stage it was parked from (`stage.parked.prior_label`) — it is resumed
    from the board (or the drawer's Resume button) and re-scoped first.
+   **Refuse a `rejected` item** — `stage.is_rejected` is the check: rejected
+   work is never dispatchable. The packet's `stage.rejected` record says who
+   declined it, when and why; say that and stop — a human reopens it from the
+   board (the drawer's Reopen button) and it re-enters intake, never a build.
    `stage.age` is how long it has sat where it is; a plan that has waited
    months deserves a sentence before you build on it.
 3. If `values.owner` is already set to someone else, stop and ask before taking
    it over.
 4. **Confirm.** Run the wrong-id gate above and get a yes. Nothing below this
-   line is reversible for free: the claim writes to the item and the snapshot
-   commit writes to the repo.
+   line is reversible for free: the claim writes to the item and implementation
+   commits write to the repo.
 5. **Claim** in one call:
    `update_board_item(item, values={"stage": "building", "owner": [<your user id from whoami()>]})`.
-6. **Snapshot.** Write the pulled description to `planning/built/<item-id>.md`
-   (create the directory if absent), first line: `<!-- generated from maestro
-   item <id> — do not edit; the board item is the source of truth -->`. Commit
-   it as the build-start marker. (`planning/` is deliberately **not** indexed
-   into the knowledge base — the snapshot is a git provenance record, not
-   knowledge. See item 317.)
-7. Pull the description to `planning/.cache/<item-id>.md` (gitignored) — the
-   working copy for the session.
-8. **Read the verification tier** and set up for it. The step-2 packet already
+6. Pull the description to `planning/.cache/<item-id>.md` (gitignored) — the
+   temporary working copy for the session. Never commit generated planning
+   snapshots; the board item and its activity trail are the durable record.
+7. **Read the verification tier** and set up for it. The step-2 packet already
    carries `quality_contract` — `{"tier", "run", "evidence"}`, the decision
    scoping made as data — so this costs no extra call. (Older server without
    `get_work_packet`: `get_board_item` returns the same key.) Read it from
@@ -266,8 +323,9 @@ probably meant.
      place of tests, and report both.
    - **`targeted`** → run the modules the plan named, and stop there. Running a
      full sweep to feel safe spends the user's minutes on your comfort.
-   - **`full`** → run the repo's full suite and report it against the pre-flight
-     baseline.
+   - **`full`** → run the repo's default suite and report it against the
+     pre-flight baseline. `full` is a verification-coverage tier; it does not
+     imply the test runner's `--full` slow/extended option.
 
    **Escalate freely, downgrade never.** If the diff acquired something the plan
    did not anticipate — a migration, a shared helper, a changed contract, a
@@ -277,15 +335,45 @@ probably meant.
    "evidence": […]})`. The server records the tier change on the trail itself,
    so the item's declared tier keeps matching what actually ran instead of
    drifting behind it. Moving *down* a tier is the user's call, not yours.
-9. **Close.** PR opened → `update_board_item(item, values={"stage": "review"})`;
+9. **Record what the build learned.** For each decision with a rejected
+   alternative, rule the code now assumes, or measured/discovered truth:
+   `upsert_workspace_doc(workspace, kind, slug, title, content)` with kind
+   `decision` / `convention` / `fact`, one entry per fact, a stable slug, and
+   a body a stranger can act on. Read the reply's `similar` before the next
+   write — a near match means update that slug, not add a twin. Not recorded:
+   transcripts, file dumps, tool logs, anything already in the repo's own
+   docs.
+10. **Close.** PR opened → `update_board_item(item, values={"stage": "review"})`;
    committed straight to the main branch → `values={"stage": "done"}`. Final
    comment on the trail: what changed + how to validate. Then report back to the
-   user TL;DR-first (see below). **In a multi-item run, steps 8-9 do not happen
+   user TL;DR-first (see below). **In a multi-item run, steps 8-10 do not happen
    per item** — the item stays at `building` and the next one starts; the run's
    single closing pass verifies and flips them all.
-10. **On failure/blocker**: post a blocker comment, leave `stage=building` and
+11. **On failure/blocker**: post a blocker comment, leave `stage=building` and
     the owner intact, and tell the user where it stands — in the same
-    TL;DR-first shape.
+    TL;DR-first shape. **Blocked on a human ANSWER rather than a failure?** In
+    an interactive client chat (including the Agent Tool), ask the human in
+    chat and wait there. Do not call `comment_on_item(question=...)` merely to
+    mirror that interactive ask onto the board; the human is already present,
+    and a second durable state can outlive the chat answer.
+
+    For a real **async/background handoff**, use
+    `ask_task_question(item, text, recipient, creation_key, blocking=true,
+    client=..., model=...)` with the chosen eligible human and a fresh UUID.
+    Read its exact answer with `get_task_question(question)` before resuming work;
+    clarification, reading a bell and `addresses="all"` do not answer it.
+    If the recipient is wrong, the requester/current recipient/manager can use
+    `redirect_task_question` with the last read version and optional reason.
+    Check in and stop while a blocking answer is pending.
+
+    Only the authenticated current human recipient can answer with
+    `answer_task_question`; an agent credential cannot impersonate them. A
+    human-credential session may relay their explicit answer, visibly attributed
+    via client/model. Never relay a different person's answer as your own.
+    Managers must redirect to themselves before answering. When directed asks
+    are not enabled, `comment_on_item(question=<text>)` remains the legacy
+    unassigned adapter; its returned `resolve_question.arguments` names the
+    exact asking note. Explicit addressing still checks answer authority.
 
 ## Verification Across Several Items
 
@@ -309,7 +397,7 @@ One closing run for the whole set, never one sweep per item.
   per-item commits make this unambiguous), fix in place, re-run the closing set.
   One sweep per fix round. An item you cannot get green stays at `building` with
   a blocker comment naming the failing tests; the rest still flip.
-- **Green** → flip every built item in one pass, `review` or `done` per step 9.
+- **Green** → flip every built item in one pass, `review` or `done` per step 10.
 
 Nothing is `done` mid-run: until that sweep is green, the truth is "built".
 
@@ -377,18 +465,20 @@ queueing it.
 
 ## Forbidden
 
-- Claiming, snapshotting or building an item the user has not confirmed — the
+- Claiming or building an item the user has not confirmed — the
   gate is the only thing between a fat-fingered id and someone else's item
-- Building an item with no `## Plan`, or claiming over someone else's owner
-  without asking
+- Building an item with no `## Approach` (nor legacy `## Plan`), or claiming
+  over someone else's owner without asking
 - Expanding scope beyond the item; touching files outside the plan without
   flagging it first
+- Building past the packet's `unaddressed_comments`, or answering them in
+  prose without the `addresses=` data that actually clears them
 - Writing no tests for a behavior change — the tier decides which tests are
   *run*, never whether the change is covered
 - Downgrading the plan's verification tier without asking. Escalating is always
   yours to do; relaxing is the user's
 - Reporting a build as verified when the tier's runs did not happen, or quietly
-  running a full suite the plan did not ask for
+  running a default suite the plan did not ask for
 - Leaving the item's stage stale after the build ends
 - Closing a build without stating what deviated from the plan and how
   verification actually went

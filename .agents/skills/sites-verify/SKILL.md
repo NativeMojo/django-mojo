@@ -7,7 +7,7 @@ description: >-
   blank cross-origin tile).
 ---
 
-<!-- Generated from .claude/skills/sites-verify/SKILL.md (maestro-skill-version: 2). Do not edit directly. -->
+<!-- Generated from .claude/skills/sites-verify/SKILL.md (maestro-skill-version: 3). Do not edit directly. -->
 
 # Sites Verify — Look At It Before You Say It Works
 
@@ -161,6 +161,13 @@ could not confirm it" beats silence — and name any skipped check as skipped.
 
 Never write "should look good", "the site is live and looking great", or any
 sentence whose evidence is a deploy response.
+
+A substitute that lied on this site — a tile that is cross-origin by design, a
+page that paints only after a font loads — is a `fact` the next verifier
+needs: `upsert_workspace_doc(workspace, "fact", slug, title, content)`, the
+reply's `similar` read first (a near match means update that slug, not add a
+twin). Not recorded: screenshots, transcripts, the verdict itself (it belongs
+in the chat and on the site's trail), anything already in the repo's own docs.
 
 ## Forbidden
 

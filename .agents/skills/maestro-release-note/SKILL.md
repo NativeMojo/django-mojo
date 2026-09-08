@@ -8,7 +8,7 @@ description: >-
   over MCP. It never asks a person to write the words.
 ---
 
-<!-- Generated from .claude/skills/maestro-release-note/SKILL.md (maestro-skill-version: 2). Do not edit directly. -->
+<!-- Generated from .claude/skills/maestro-release-note/SKILL.md (maestro-skill-version: 5). Do not edit directly. -->
 
 # Release Note — write what shipped, for the people who use it
 
@@ -65,25 +65,30 @@ the file IS the mechanism.
    that span (their trails carry the deviations and decisions that never made
    it into a commit subject). Read the commits and diffs properly:
    **never write a note from commit subjects alone**. (There is no repo
-   changelog; it was retired 2026-07-31.)
+   changelog; it was retired 2026-07-31.) The *why* behind a change often
+   lives only in the workspace's knowledge: `search_knowledge(<the release's
+   themes>, project=<the project>, kind="decision")` before you draft.
 2. **Pick the version — it must match what `publish.sh` will mint.** The
-   script bumps the PATCH on every deploy, so the note for "the next publish"
-   is `current + 0.0.1`; read current from `config/settings/version.py`. For a
-   deliberate minor or major cut, bump the version yourself first with
-   `bin/versioning` and name the note accordingly — `publish.sh` nags on an
-   `x.y.0` with no note.
+   script bumps the part it is TOLD to, defaulting to the patch, so the note
+   for a plain "next publish" is `current + 0.0.1`; read current from
+   `config/settings/version.py`. For a deliberate cut, the publish itself
+   names the part — `./publish.sh --minor` (or `--major`, or
+   `--set X.Y.Z`) — so name the note for the version that flag will produce
+   and let the publish mint it. Do not bump by hand first; `publish.sh` nags
+   on an `x.y.0` with no note.
 3. **Write `<version>.md`** into the notes directory with the `---`-delimited
    header: `version:` (MUST equal the filename stem — the loader skips a
    mismatch), `date:` as YYYY-MM-DD, `title:`. Then the body.
 4. **Voice and shape** — see `## Voice` below.
-5. **Validate**: `bin/run_tests -t test_maestro.27_test_releases`. The suite
+5. **Validate**: `bin/run_tests --nomojo -t test_maestro.27_test_releases`. The suite
    parses every shipped note and fails on a version/filename mismatch or a
    malformed header. The test runner starts and owns its own server on a port
    derived for this checkout — do not start a server first and do not go
    hunting for a port number.
 6. **Commit the note with (or right after) the code it describes** so it is
    reviewed as part of that diff and deploys with it. Then `./publish.sh`
-   ships it; check the bump the script prints equals the note's version.
+   ships it — with the part flag the note was named for (`--minor` for a
+   feature release); check the version the script prints equals the note's.
 
 ## Mode B — any other repo (filed to Maestro over MCP)
 
@@ -106,7 +111,10 @@ release history, drafted by you and filed with `create_release(...)`.
 4. **Read the changes.** `git log <last commit_ref>..HEAD`, then read the
    diffs:
    **never write a note from commit subjects alone** — a subject line says a
-   file changed, not what a user will notice.
+   file changed, not what a user will notice. Read the decisions recorded in
+   the span too — `search_knowledge(<the release's themes>, project=<the
+   project>, kind="decision")` — the reason a change was made rarely reaches
+   a commit subject.
 5. **Draft it.** A **TLDR**: one paragraph on what this release is about. Then
    **Key changes**: a bullet list of the handful of things people want to
    know. See `## Voice`.
@@ -118,9 +126,15 @@ release history, drafted by you and filed with `create_release(...)`.
    `list_releases` call instead of a second round trip. Skip it and you leave
    that cost for the next session.
    The note lands as a DRAFT. Nothing touches the filesystem.
-7. **Publishing is a separate yes.** Show the user the draft. Only on an
-   explicit go-ahead call `publish_release(project, version)` — never as the
-   tail of step 6. `is_public` is a different decision again; leave it alone.
+7. **Publishing is a separate yes — and on a public project it is a PUBLIC
+   yes.** Show the user the draft. Only on an explicit go-ahead call
+   `publish_release(project, version)` — never as the tail of step 6.
+   If the project's visibility is public, publishing puts the note on its
+   public changelog immediately, with no second step. Say that when you ask
+   for the go-ahead, so "publish it" is not a bigger yes than the user
+   thought. The reply's `is_publicly_listed` is the confirmation; leave
+   `is_public` alone — it is a widening override for a PRIVATE project, not
+   the switch.
 
 ## The versioning gate (mode B)
 
@@ -221,6 +235,12 @@ Both modes, one voice.
 
 ## Rules
 
+- A release-level decision worth remembering — a deprecation, a compatibility
+  floor, a behaviour the note promises — is recorded once as knowledge:
+  `upsert_workspace_doc(workspace, kind, slug, title, content)` with kind
+  `decision` / `convention` / `fact`, the reply's `similar` read first (a near
+  match means update that slug, not add a twin). Not recorded: the note
+  itself, commit lists, anything already in the repo's own docs.
 - Say which mode you are in, and why, before reading anything else.
 - One note per released version. Never rewrite a shipped or published note's
   history — a correction goes in the next note.

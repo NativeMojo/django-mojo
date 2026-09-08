@@ -11,7 +11,7 @@ description: >-
   the work.
 ---
 
-<!-- Generated from .claude/skills/maestro-auto/SKILL.md (maestro-skill-version: 15). Do not edit directly. -->
+<!-- Generated from .claude/skills/maestro-auto/SKILL.md (maestro-skill-version: 24). Do not edit directly. -->
 
 # Maestro Auto — Scope + Build, One Gate
 
@@ -56,9 +56,17 @@ those skills also take one id or many (`$maestro-scope 431 432`,
 `$maestro-build 431 432`) when only that half of the journey is wanted.
 `$maestro-auto` is for approve-once, read-the-result, at any N.
 
+**Ids that are the roster of an approved Plan belong to `/maestro-run`** — it
+takes the Plan's own id, runs its waves in the order the board holds, and gates
+on the roster approval a human already recorded there rather than on a yes in
+this session. `$maestro-auto` is for **flat filed items with no Plan**: it
+classifies them itself, derives its own build order, and creates the approval
+gate as it goes.
+
 ## Board Resolution
 
-Same as `maestro-task`: read Maestro's `.claude/maestro.json` repo config; on any miss, resolve via
+Same as `maestro-task`: a session-stated workspace in the first message comes
+first, else read Maestro's `.claude/maestro.json` repo config; on any miss, resolve via
 `whoami()` / `list_workspaces()` / `list_boards()`, ask, offer to write the
 file. Maestro unreachable or unauthenticated → stop with an explicit notice;
 never fall back silently. Call `get_board(board, items=False)` once and keep the
@@ -98,7 +106,19 @@ sub-agent context.
 Renew by 40 minutes, immediately before and after long waits/commands, and
 before accepting a sub-agent result. Keep waits short enough to heartbeat.
 Lost/expired/replaced ownership means report that the advisory signal is gone
-and do not pretend it remains held; it does not gate a claim or push. Check in
+and do not pretend it remains held; it does not gate a claim or push.
+
+**The orchestrator checks in (progress) on behalf of each running build.**
+Sub-agents never hold tokens, so the renewal you already make per lease
+carries the report: `activity` says what that item's build is doing right now
+("sub-agent building", "merging branch", "closing test run"), and on a build
+lease `criteria` + `criteria_count` tick the item's `### Acceptance Criteria`
+ordinals as the sub-agent's results come back. Check in at natural boundaries
+— dispatch, return, merge, blocker — still no later than 40 minutes apart; it
+writes no trail note. After any reacquire the report starts empty, so re-post
+the full criteria state on the first check-in of the new generation.
+
+Check in (return)
 each scope lease after its plan push and
 each build lease after its final stage write or blocker comment, plus every
 failure, cancellation, or dropped-item terminal path. After an outage, reread
@@ -121,8 +141,9 @@ before replaying queued board writes.
    below, the classification here, and the rules each item names. (Older server
    without the tool: `get_board_item(item)` plus one `list_boards(<workspace>)`
    for the names, and say you fell back.) Classify:
-   - `inbox`, no `## Plan` → **scope then build**
-   - `planned`, has `## Plan` → **build only** (skip phases 1-2)
+   - `inbox`, no `## Approach` (nor legacy `## Plan`) → **scope then build**
+   - `planned`, has `## Approach` (or legacy `## Plan`) → **build only**
+     (skip phases 1-2)
    - `stage.is_parked` → **reject**, always. Parking is a deliberate "not now"
      and its plan is presumed stale; it is resumed and re-scoped first.
    - already `building`, or owned by someone else (`people` names them) → ask
@@ -133,15 +154,21 @@ before replaying queued board writes.
    user away to another skill. At the other end, more than about six items in
    one run is an unreviewable diff, not autonomy: propose a first batch of the
    highest-priority items and say what you left for the next run.
-4. Each packet already carries the rules its own workspec names (`rules.applied`,
+4. Every packet LEADS with `unaddressed_comments` — human steering nobody has
+   answered. Address each first, per maestro-build's rule
+   (`comment_on_item(..., addresses=[...])` or `"all"`; a comment that
+   changes an item's shape re-routes it to **scope then build**): the done
+   flip is refused while directives remain, so an unaddressed comment left
+   for the closing pass fails the run at its last step.
+5. Each packet already carries the rules its own workspec names (`rules.applied`,
    with unresolved slugs in `rules.missing` — say those out loud). Call
    `get_workspace_context(workspace)` once only for what the packets do not
    carry: workspace rules no item references, or the `challenge` doc the scoping
    sub-agents need.
-5. **Admit the batch** — run the wrong-id gate below and get a yes, before any
+6. **Admit the batch** — run the wrong-id gate below and get a yes, before any
    agent spawns. Not the phase-4 gate: this asks "are these the right items?",
    that asks "is this the right plan?".
-6. **No baseline yet** — the tier that decides whether the run needs one arrives
+7. **No baseline yet** — the tier that decides whether the run needs one arrives
    with the plans (phase 1), and scoping is read-only. See "Verification".
 
 ## Naming an Item
@@ -203,8 +230,11 @@ classified it into (scope-then-build / build-only); and one line of what it is
 
 - An item's `board` is a **sibling board in the same workspace** — normal under a
   deliberate split; confirm it is the board you meant, since ids interleave
-  across boards. A different `workspace` is almost always a wrong id — another
-  repo's board.
+  across boards. A `workspace` different from the resolved one — the
+  session-stated workspace when the first message names one, else
+  `.claude/maestro.json` — is almost always a wrong id, another repo's board;
+  an item on the stated workspace and board is exactly where it belongs,
+  never "a different workspace".
 - A `planned` item's plan is weeks old (`spec_updated.age`) — possibly stale,
   and the batch will build it without re-scoping. Same for any
   `resumed_from_parked` warning, which says so outright.
@@ -226,7 +256,7 @@ Brief: the `maestro-scope` workflow for exactly one item — read every file the
 workspec references, check existing patterns and helpers in the target app, fetch
 framework docs when framework features are involved — and **return the complete
 updated description as its result**: the human block, the `## Spec`, and the
-`## Plan` it just wrote (objective, ordered steps with file paths, design
+`## Approach` it just wrote (objective, ordered steps with file paths, design
 decisions with rationale, edge cases, testing plan, documentation plan), in
 `maestro-scope`'s plan style — each fact once, conclusions not investigation.
 
@@ -248,9 +278,33 @@ Also require, returned separately:
   behavior changes for existing callers.
 - **Premise check** — anything in the workspec that turned out false, already
   shipped, or impossible as written.
+- **Durable findings** — decisions with a rejected alternative, conventions
+  the code assumes, facts measured or discovered — as `{kind, slug, title,
+  content}` rows. You write them at the phase-4 push (see phase 5 step 4 for
+  the rule); a sub-agent holds no knowledge tool.
 
-Give each agent the workspec, the workspace rule docs, and read access to the
-repo. Forbid edits: phase 1 writes nothing but its own answer.
+Give each agent the workspec, the workspace rule docs, the packet's
+`knowledge.retrieved` entries (the workspace's memory nearest this item —
+applied beside the rules, and the agent says when one changes the approach;
+`knowledge.reason` says why the set is empty), and read access to the repo.
+Forbid edits: phase 1 writes nothing but its own answer.
+
+**Milestone stamp is INHERIT-ONLY in this run.** An unattended run stamps
+what the parent already carries — the parent's milestone column value goes
+into the item's phase-4 push `values` — and NOTHING else: never
+`manage_milestone(create)`, never ask mid-run, never derive one from a due
+date (`maestro-scope`'s reuse-before-create rule is for interactive
+sessions; unattended creation is both a silent write the human never asked
+for and a duplicate-create race between parallel sub-agents scoping
+siblings of one dated Plan). Items with no parent signal stay unstamped;
+the phase-4 gate lists each item's milestone (or "no milestone") so the
+human assigns at approval — that listing IS this run's "ask once".
+
+**Horizon stamp is inherit-or-default-`next`, never a question.** On a
+horizon-purpose board an item keeps the horizon value it has; one with none
+is stamped `next` at the phase-4 push (only when the column defines it).
+Never ask mid-run and never stamp `now` unattended — urgency is the
+human's call, made at the gate or on the board.
 
 ## Phase 2 — Challenge
 
@@ -320,7 +374,9 @@ Then present **one** consolidated brief and stop for approval — the user's sin
 decision point, so complete and short:
 
 - **The batch** — one line per item: markdown link, plan in a sentence, size
-  (commits / tests / docs), verification tier.
+  (commits / tests / docs), verification tier, and its milestone (or "no
+  milestone") — the run is inherit-only, so this line is where the human
+  assigns the unstamped ones.
 - **Build order** — the sequence, and any dependency that forced it.
 - **How the batch gets verified** — the batch tier, what the closing run will be,
   whether a baseline is coming, and any tier phase 3 escalated with why. The user
@@ -368,24 +424,27 @@ Then, for each item — concurrently within a parallel group, otherwise in order
 
 1. **Claim it** yourself: `update_board_item(item, values={"stage":
    "building", "owner": [<the user's id from whoami()>]})`.
-2. **Snapshot** the approved description to `planning/built/<item-id>.md`
-   (create the directory if absent), first line: `<!-- generated from maestro
-   item <id> — do not edit; the board item is the source of truth -->`. Commit
-   it as the build-start marker.
+2. Cache the approved description at `planning/.cache/<item-id>.md` for the
+   session. `planning/` is ignored; never commit generated workspec snapshots.
+   The board item and its activity trail are the durable record.
 3. **Spawn one build sub-agent** (frontier model, high reasoning) with the approved plan, the
-   repo's conventions, and its batch context (build order, what earlier items in
+   repo's conventions, the packet's `knowledge.retrieved` entries (read beside
+   the rules), and its batch context (build order, what earlier items in
    this run landed, any shared helper another item introduced). Brief: the
    `maestro-build` workflow for one item — read before editing, one logical unit
    at a time with tests written alongside the change, commit per the repo's git
    conventions, update docs and changelog. Returns commits (hash + one line), the
-   tests it wrote, deviations from the plan, anything left open. **It does not
-   touch the board and does not run the full suite** (see below). In a parallel
+   tests it wrote, deviations from the plan, anything left open, and its
+   durable findings as `{kind, slug, title, content}` rows. **It does not
+   touch the board and does not run the default suite** (see below). In a parallel
    group, give each agent its own worktree and branch, set up the way the repo's
    rules say — a bare `git worktree add` skips steps (dependency install,
    gitignored config) that make tests work there.
 4. **Post the commit trail yourself**: `comment_on_item(item, ...)` with the
    commits and any deviation from the plan. Leave the item at `building` — built,
-   not verified.
+   not verified. **Then record what the item taught** — the agent's durable
+   findings and the deviations you accepted with a reason that binds the next
+   build: `upsert_workspace_doc(workspace, kind, slug, title, content)` with kind `decision` / `convention` / `fact`, one entry per fact, a stable slug, and a body a stranger can act on. Read the reply's `similar` before the next write — a near match means update that slug, not add a twin. Not recorded: transcripts, file dumps, tool logs, anything already in the repo's own docs.
 5. **Check the tree before moving on**: working tree clean, commits present,
    nothing staged from the next item. A build agent's report is a claim; the
    suite settles it, once, at the end.
@@ -408,8 +467,9 @@ a focused target in its own tree without colliding.
 **The batch's tier is the highest tier any item in it carries.**
 
 - **Any item at `full`** → the repo's green baseline **before phase 5** (not in
-  pre-flight — the tier isn't known until scoping is done), then the full suite
-  once after the last item lands. Red baseline → stop and tell the user; never
+  pre-flight — the tier isn't known until scoping is done), then the default
+  suite once after the last item lands. The tier never implies the runner's
+  `--full` slow/extended option. Red baseline → stop and tell the user; never
   build a batch on red.
 - **Otherwise (`targeted` / `none` only)** → **no baseline at all.** The closing
   run is the union of every item's named modules, once, after the last item
@@ -478,6 +538,14 @@ Never stop to ask a question the repo, its rules, or the workspec answers. And
 never suppress a question because the run was supposed to be autonomous — an
 unasked question becomes a wrong diff.
 
+**An unattended run never approves a plan.** The user's yes at the gate is
+this run's approval and lives on the trail; `approve_board_item_plan` and
+`request_board_item_rescope` record a HUMAN's per-item decision and are called
+only on an explicit human instruction given in this session — never inferred,
+never on the run's own judgment. The tools refuse agent-kind credentials; on
+the user's credential, relay a decision only when they actually said it, with
+`client=`/`model=` stamped so the record shows a session wrote it.
+
 ## Final Report
 
 TL;DR-first, once, for the batch. Every item a markdown link (see "Naming an
@@ -492,6 +560,8 @@ Item").
   and any tier escalation phase 3 or a build forced. Failures, skips and anything
   that could not run go here, never omitted.
 - **Not done** — blocked, halted, or dropped items, with what each needs.
+- **What the workspace learned** — the knowledge entries this run wrote, by
+  slug; "none" is a fine answer when nothing durable surfaced.
 - **Queued board updates** — any push that never landed, as replayable calls.
 
 Roughly 20 lines. Detail lives in the commits and each item's activity trail —
@@ -502,7 +572,8 @@ point at them.
 - Spawning a scoping agent against a roster the user has not confirmed — phase 4
   pushes plans to items before approval
 - Building any item the user did not approve at the gate
-- Building an item with no `## Plan`, a `parked` item, or one owned by someone
+- Building an item with no `## Approach` (nor legacy `## Plan`), a `parked`
+  item, or one owned by someone
   else without asking
 - Concurrent builds in a repo with a shared test port, database, or working tree
 - Letting sub-agents write to the board, or reporting a sub-agent's claimed test
@@ -512,5 +583,7 @@ point at them.
   tier below the one approved at the gate
 - Building a `full`-tier batch without a baseline, or taking a baseline for a
   batch that has no `full` item in it
+- Calling the plan-approval or re-scope decision tools without an explicit
+  human instruction from this session — the unattended run never approves
 - Skipping the challenge phase, the coherence pass, or the gate to "save time"
 - Leaving any item's stage stale when the run ends

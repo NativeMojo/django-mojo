@@ -7,14 +7,15 @@ description: >-
   to track; leaves a born-done history item on the board at close-out.
 ---
 
-<!-- Generated from .claude/skills/maestro-vibe/SKILL.md (maestro-skill-version: 10). Do not edit directly. -->
+<!-- Generated from .claude/skills/maestro-vibe/SKILL.md (maestro-skill-version: 14). Do not edit directly. -->
 
 # Maestro Vibe — One Session, No Board Ceremony
 
 Same build discipline as `$maestro-build` — conventions, tests, commits,
-honest reporting — with no board ceremony: no workspec, no `## Plan` push, no
-stage flips, no `planning/built/` snapshot. The board hears about it once, at
-close-out (step 9).
+honest reporting — with no board ceremony: no workspec, no `## Approach`
+push, no
+stage flips, and no generated planning snapshot. The board hears about it once, at
+close-out (step 10).
 
 For work that is small, single-session and low-risk: a one-file fix, a small
 bug, a typo, a config tweak, a tiny endpoint addition — where a workspec would
@@ -34,7 +35,7 @@ have to invoke this three times.
 - **Verify per change, at its own tier.** Where two changes cover the same
   module, one run of that module after both is enough. Anything needing `full`
   was never vibe-sized.
-- **One history item per separable change** at close-out (step 9); changes that
+- **One history item per separable change** at close-out (step 10); changes that
   are genuinely one sweep get one item naming them all.
 - **Report once**, one short block per change.
 
@@ -77,8 +78,19 @@ escalate.
    tests. Escalate a tier if the diff outgrew it; never quietly relax one.
 7. Update docs/changelog per the repo's conventions if behavior changed.
 8. Commit per the repo's git conventions (no push unless its rules say so).
-9. **File the history item** — one board item on the repo's maestro board
-   (`.claude/maestro.json`), born done:
+   If the ask arrived as a board comment, the closing comment answers it with
+   `comment_on_item(..., addresses=[<that note id>])` — the ack that clears
+   the item's unaddressed flag (maestro-build's comment round-trip rule).
+9. **Record what the change taught.** A decision with a rejected alternative,
+   a rule the code now assumes, or a discovered truth:
+   `upsert_workspace_doc(workspace, kind, slug, title, content)` with kind
+   `decision` / `convention` / `fact`, one entry per fact, a stable slug, a
+   body a stranger can act on. Read the reply's `similar` first — a near
+   match means update that slug, not add a twin. Not recorded: transcripts,
+   file dumps, tool logs, anything already in the repo's own docs.
+10. **File the history item** — one board item on the repo's maestro board
+   (the session-stated board when the first message names one, else
+   `.claude/maestro.json`), born done:
    - Title `Vibe: <what shipped>`, stage = the board's done value, owner = the
      user, plus `project` from that same config when it carries one.
    - `contract={"tier": <step 3's tier>, "run": [<what you actually ran>],
@@ -96,7 +108,7 @@ escalate.
      the history) or the session escalated to `$maestro-task`.
    - Maestro unreachable: say so in the report and move on — this never blocks
      a close-out.
-10. Report back briefly: what changed (commits, one line each), how it was
+11. Report back briefly: what changed (commits, one line each), how it was
     verified — the tier, what ran, and at `none` the plain statement that no
     tests ran and what stood in for them — and anything left open. Keep the
     report as small as the change.
@@ -106,7 +118,7 @@ escalate.
 - **During the build the board is not part of this flow.** No tracking items,
   no stage flips, no progress comments — the conversation is the work record
   until close-out.
-- The **only** item a vibe creates is step 9's. Work that deserves a live board
+- The **only** item a vibe creates is step 10's. Work that deserves a live board
   item deserves `$maestro-task` — hand off.
 - If the change closes an **existing** board item (you notice one, or the user
   names one), do that item's close-out instead: comment the commits, flip its
@@ -129,3 +141,4 @@ escalate.
 - Creating live tracking items, workspecs, or `planning/` files — the born-done
   history item at close-out is the single exception, filed once, at the end,
   only for completed vibes.
+- Writing a transcript or a file dump as a knowledge entry.

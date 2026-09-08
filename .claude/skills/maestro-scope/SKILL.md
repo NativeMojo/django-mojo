@@ -2,17 +2,24 @@
 name: maestro-scope
 description: >-
   Pull one or more maestro board items, scope each inside this repo with full
-  investigation rigor, append a file-level ## Plan to every workspec, and push
-  them back (stage=planned) via the maestro MCP.
+  investigation rigor, append a file-level ## Approach to every workspec, and
+  push them back (stage=planned) via the maestro MCP.
 user-invocable: true
 argument-hint: <item-ids, e.g. "431" or "431 432" (omit to pick from the board)>
-maestro-skill-version: 17
+maestro-skill-version: 26
 ---
 
-# Maestro Scope — Design the Plan on the Item
+# Maestro Scope — Design the Approach on the Item
+
+Vocabulary (#2905): **"Plan" means the parent unit** — a top-level item's
+approved roster of tasks in dependency waves. The task-level design section
+this skill writes is **`## Approach`**. Legacy workspecs keep their `## Plan`
+heading — the build skill reads both, permanently; there is no bulk rewrite of
+historical descriptions.
 
 Scoping runs **inside the target repo** with full code access; only storage
-differs — the plan goes back to the item's workspec, not a local planning file.
+differs — the approach goes back to the item's workspec, not a local planning
+file.
 
 ## One Item or Many
 
@@ -23,7 +30,7 @@ differs — the plan goes back to the item's workspec, not a local planning file
 - **Several** → run the wrong-id gate over the whole roster in one block, then
   **spawn one fresh-context sub-agent per item, all in one message**. Each runs
   workflow steps 3-6 for its item with read-only repo access and returns the
-  complete updated description (human block + `## Spec` + `## Plan`), its
+  complete updated description (human block + `## Spec` + `## Approach`), its
   files-touched list, its verification tier, schema/contract impact, and its
   premise check. Then, in this session:
   - **Cross-check the plans before pushing anything** — two plans changing the
@@ -43,7 +50,8 @@ do them in separate sessions.
 
 ## Board Resolution
 
-Same as `maestro-task`: read Maestro's `.claude/maestro.json` repo config; on any
+Same as `maestro-task`: a session-stated workspace in the first message comes
+first, else read Maestro's `.claude/maestro.json` repo config; on any
 miss, resolve via `whoami()` / `list_workspaces()` / `list_boards()`, ask, offer
 to write the file. Unreachable or unauthenticated → stop with an explicit
 notice; offer the repo's local scoping skill if one exists. Never fall back
@@ -86,6 +94,12 @@ signal is gone: report it and do not pretend the lease is still held. It does
 not authorize or block item writes, and the token is used only for renew and
 check-in lifecycle calls.
 
+**Report the phase as you renew.** Pass `activity` with the renewal — the
+scoping phase in a few words ("exploring", "drafting plan", "challenging") —
+at each phase change, still no later than 40 minutes apart. One round trip
+both heartbeats and reports, and it writes no trail note. Scope check-ins
+rarely carry `criteria` ticks; those are the build's progress vocabulary.
+
 On every terminal path—including success, refusal, blocker, exception, or user
 cancellation—call `check_in_board_item_checkout`. If Maestro was unavailable,
 local analysis may finish; re-read before any later board push.
@@ -115,7 +129,7 @@ names, and say you fell back.
     board "Backlog" · workspace "Maestro" · stage inbox · must
     filed by Ian Starnes on 2026-07-29 (today)
     part of #516 "Sites + domains — release hardening (epic)"
-    https://maestromojo.com/workspaces/#/board/8?item=586
+    https://maestromojo.com/app/#/board/8?item=586
 
     Agents ship sites they never see: deploy_site returns byte counts, not
     pixels, and every cheap substitute (the browser pane, headless Chrome)
@@ -140,19 +154,23 @@ names, and say you fell back.
 
 - The item's `board` is a **sibling board in the same workspace** — normal under
   a deliberate split, but confirm it is the board you meant; ids interleave
-  across boards. A different `workspace` is almost always a wrong id — another
-  repo's board.
-- It already has a `## Plan` — it is scoped, and re-scoping overwrites it.
+  across boards. A `workspace` different from the resolved one — the
+  session-stated workspace when the first message names one, else
+  `.claude/maestro.json` — is almost always a wrong id, another repo's board;
+  an item on the stated workspace and board is exactly where it belongs,
+  never "a different workspace".
+- It already has a `## Approach` (or a legacy `## Plan`) — it is scoped, and
+  re-scoping overwrites it.
 - Its stage is `building`, `review` or `done`, or `values.owner` is someone else
   — live work with a person attached. Name that person: the packet's `people`
   resolves owner ids to names, so "owned by [7]" is never the sentence.
-  (`parked` is refused outright, per step 1.)
+  (`parked` and `rejected` are refused outright, per step 1.)
 - You are not authenticated as the filer — `whoami()` is free, make the call.
   Not an error on a shared board, but say whose work it is: "the wrong person
   scoping it" is half of how the wrong item gets scoped.
 
-None is a hard refusal except `parked` — but the user must see them **before**
-saying yes, not after the workspec has been rewritten.
+None is a hard refusal except `parked` and `rejected` — but the user must see
+them **before** saying yes, not after the workspec has been rewritten.
 
 Then wait for a clear answer; an ambiguous one is not a yes. If it is the wrong
 item, ask for the right id — never go hunting for the item they probably meant.
@@ -172,17 +190,27 @@ item, ask for the right id — never go hunting for the item they probably meant
    is unavailable (older server), fall back to `get_board(board)` and say so.
    **Skip `parked` items**: parking is a deliberate "not now", so a parked item
    is never a candidate unless the user names it outright.
+   **Refuse `rejected` items outright**: a rejected stage is a recorded "we
+   decided not to do this" (the item's `rejected` record says why). It is not
+   scoped, not resumed here — a human reopens it from the board first; say so
+   and stop.
 2. **Pull, then confirm.** `get_work_packet(item)` → run the wrong-id gate and
    get a yes **before** anything else in this step. Only then write the packet's
    `description` verbatim to `planning/.cache/<item-id>.md` (create
    `planning/.cache/` if absent; make sure it is gitignored — offer to add the
    entry). That file is the session's working copy: edit it, not the item. Read
-   the activity trail too — requester comments are scope input.
+   the activity trail too — requester comments are scope input, and the
+   packet LEADS with `unaddressed_comments` (every human comment nobody has
+   answered) precisely so scoping starts from them. They get addressed in
+   this session: the step-8 plan-summary comment carries `addresses="all"`,
+   recording that the steering shaped the plan.
 3. **Context.** The packet already carries the rules the workspec's `Apply
    rules:` line names, inlined under `rules.applied` — apply them; that is the
    full text, not a summary. **Say any `rules.missing` slug out loud**: the
    workspec told you to apply a rule that resolves to nothing, and that is the
-   user's to fix, not yours to skip silently. Call
+   user's to fix, not yours to skip silently. `knowledge.retrieved` is the
+   workspace's memory nearest this item — apply it beside `rules.applied`;
+   `knowledge.reason` says why it is empty. Call
    `get_workspace_context(workspace)` only for what the packet does not carry —
    a workspec naming no rules at all, or the workspace's `challenge` doc for
    step 6.
@@ -190,7 +218,7 @@ item, ask for the right id — never go hunting for the item they probably meant
    patterns and helpers in the target app; fetch framework docs when framework
    features are involved. Depth must match a local scoping session — the board
    changes storage, not rigor.
-5. **Design.** Append a `## Plan` section to the scratch file:
+5. **Design.** Append a `## Approach` section to the scratch file:
    - Objective (exact outcome)
    - Ordered implementation steps with file paths
    - Design decisions (why this approach over alternatives)
@@ -227,10 +255,10 @@ item, ask for the right id — never go hunting for the item they probably meant
      premise, a different defect than the one filed, scope that moved. A block
      still describing a problem that turned out not to exist is the failure this
      shape exists to prevent.
-6. **Challenge — an independent red-team of the draft plan.** The author does
-   not grade their own homework. Spawn ONE fresh-context agent (e.g.
+6. **Challenge — an independent red-team of the draft approach.** The author
+   does not grade their own homework. Spawn ONE fresh-context agent (e.g.
    general-purpose, read access to the repo) with the workspec, the draft
-   `## Plan`, and the workspace `challenge` skill doc (slug `challenge`, from
+   `## Approach`, and the workspace `challenge` skill doc (slug `challenge`, from
    step 3; if the workspace lacks it, brief the agent with its core rules: name
    untested assumptions, argue the strongest opposing case, never invent a flaw
    to perform thoroughness). Its brief: **refute the plan** — the untested
@@ -283,16 +311,89 @@ item, ask for the right id — never go hunting for the item they probably meant
      description keeps a ≤3-line summary of the corrected claim so a reader
      knows the record changed; the plan is the authority.
 
-   Then `update_board_item(item, description=<full scratch file contents>,
-   values={"stage": "planned"}, contract={"tier": …, "run": […],
+   Then resolve the workflow column's `planned` role and the purpose-marked
+   Risk column from the fresh board schema. Assess Risk from migrations,
+   contract/security changes, blast radius, unknowns, rollback and verification
+   difficulty. On re-scope, record whether evidence preserves or changes the
+   prior Risk. Never guess a slug or value; report a missing/incompatible
+   semantic column. Push `update_board_item(item, description=<full scratch file contents>,
+   values={<resolved planned role>, <resolved risk>}, contract={"tier": …, "run": […],
    "evidence": […]})` — description replaces whole; `contract` carries the same
    verification decision as data (see below) — and
-   `comment_on_item(item, <3-5 line plan summary>)`.
+   `comment_on_item(item, <3-5 line plan summary>, addresses="all")` — the
+   summary is the reply that ADDRESSES the trail's unaddressed comments
+   (step 2 read them as scope input; this records them answered).
+   Record scoping's durable findings as knowledge too —
+   `upsert_workspace_doc(workspace, kind, slug, title, content)` with kind
+   `decision` / `convention` / `fact`, slug-addressed, the reply's `similar`
+   checked before each write (a near match means update that slug, not add a
+   twin); a premise that turned out false is a `fact`. Not recorded:
+   transcripts, file dumps, anything already in the repo's own docs.
+   **The push's `values` also carry the milestone stamp** — see "Milestone
+   stamp" below — **and, on a horizon-purpose board, the horizon stamp**
+   (see "Horizon stamp"); resolve both before this call so stamps and stage
+   land in one write.
+   **Scoping a PARENT (a Plan) whose sub-items have a build order?** Push the
+   roster as data on the same call: `plan={"waves": [[<wave-1 ids>], …],
+   "depends": {…}}` (#2905) — waves of active child ids, depends edges
+   pointing strictly earlier. That is what the Plan panel renders and what a
+   child's work packet warns from; approval stays a separate human decision
+   (`approve_board_item_plan` or the portal), never this push.
 9. Hand off: "run `/maestro-build <item-id>` to build it" — name the item title
    alongside the id; that line is often read back in a later session. Several
    items scoped in this session hand off as one line carrying every id
    (`/maestro-build 431 432 438`, or `/maestro-auto` for the unsupervised
    route), in the build order the cross-check produced.
+
+## Milestone stamp — trajectory upkeep at the push
+
+Milestones only work if the journey writes them: nothing else populates the
+trajectory rail, and anything agents don't maintain, dies. When the item's
+board carries a milestone column, settle the stamp at the step-8 push, in
+this order — first match wins:
+
+- **The item already has one** → keep it. Scoping never re-buckets work.
+- **The parent has one** → stamp the same milestone id in the push's
+  `values`. The parent Plan's own milestone column value IS the
+  Plan↔milestone link — no other registry exists.
+- **The parent has a `due` date but no milestone** → the Plan's date wants to
+  be a milestone. **Reuse before create**: `list_milestones(workspace)` and
+  take an existing row matching the parent's title (or whose `ends` equals
+  the due date) if one exists; only then
+  `manage_milestone(workspace, "create", name=<parent title>, ends=<parent
+  due>)`. Stamp BOTH the parent and the item with it. If the Plan's due date
+  and its existing milestone's `ends` disagree, re-date the milestone
+  (`manage_milestone(..., "date", ends=<due>)`) — the Plan is the authority.
+- **No parent signal** → `list_milestones(workspace)` and ask ONCE, inside
+  the step-7 presentation ("which milestone does this land in — or none?"),
+  quoting the reply's `no_milestone` count so the human sees the unbucketed
+  pile they are adding to. "None" is an acceptable answer; never ask twice.
+- **No milestone column on the board, or `manage_milestone` denied** (it
+  needs `manage_boards`) → say so in the step-7/9 report and push without.
+  **The stamp never blocks a push.**
+
+Two interactive scope sessions can still double-create from one dated Plan
+(`create_milestone` has no name idempotency) — accepted: a duplicate is
+human-visible and fixable by archive. Under `/maestro-auto` the rule is
+inherit-only; that skill says so itself.
+
+## Horizon stamp — same upkeep, dispatch vocabulary
+
+When the item's board carries a category column marked `purpose: "horizon"`
+(the schema from the step-2 packet / `get_board` says so), settle the
+horizon value at the step-8 push, beside the milestone stamp:
+
+- **The item already has one** → keep it. Scoping never re-buckets work —
+  the same rule as milestones.
+- **No value yet** → stamp `next` in the push's `values`. A planned item
+  sits in the default orbit unless the plan itself surfaced real urgency;
+  step 7 asks about the horizon **only** in that case ("this looks like it
+  wants `now` — agree?"), never as a routine question.
+- Write only values the column defines — a column without `next` gets no
+  stamp. Legacy moscow boards get no horizon stamp at all; their moscow
+  value is filing's business, untouched here.
+
+**The stamp never blocks a push.**
 
 ## Verification Tier — how much testing this change actually needs
 
@@ -322,7 +423,8 @@ Append a `### Verification` subsection naming exactly one tier:
   schema changes, a shared helper or contract with callers across modules, a
   dependency or framework bump, settings and auth surfaces many modules read, or
   a bug whose cause is still unknown. The build takes a green baseline before
-  its first edit and runs the full suite after — you take neither.
+  its first edit and runs the default suite after — you take neither. A `full`
+  verification tier does not imply the runner's `--full` slow/extended option.
 
 Format:
 
