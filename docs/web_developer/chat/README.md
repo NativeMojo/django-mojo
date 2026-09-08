@@ -29,7 +29,7 @@ All require JWT authentication via `Authorization: Bearer <token>`.
 | POST | `/api/chat/room/member/ban` | Ban member (mod) `{room_id, user_id}` |
 | POST | `/api/chat/room/rules` | Update rules (admin) `{room_id, ...rules}` |
 | GET | `/api/chat/room/members?room_id=X` | List members |
-| GET | `/api/chat/room/online?room_id=X` | Online members |
+| GET | `/api/chat/room/online?room_id=X` | Online members (members, or group chat/manage_chat) |
 
 ### Messages
 

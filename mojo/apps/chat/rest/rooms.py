@@ -319,7 +319,15 @@ def on_chat_room_members(request):
 @md.requires_auth()
 @md.requires_params('room_id')
 def on_chat_room_online(request):
-    """Get online members of a room."""
+    """Get online members of a room.
+
+    Gated like message history (rest/messages.py), not like the member list:
+    an active/muted membership, else the group grant that already reads the
+    room. Presence is weaker information than history, so whoever may read the
+    one may read the other — and a banned row counts for neither. Without this
+    gate any signed-in user could list who is online in a groupless DM by
+    trying room ids (maestro #3859).
+    """
     from mojo.apps.realtime import is_online
 
     room = ChatRoom.objects.filter(pk=request.DATA.room_id).first()
@@ -327,6 +335,15 @@ def on_chat_room_online(request):
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
 
     _deny_cross_tenant_room(request, room)
+
+    membership = ChatMembership.objects.filter(
+        room=room, user=request.user, status__in=["active", "muted"],
+    ).first()
+    if not membership:
+        if not (room.group and room.group.user_has_permission(
+                request.user, ["chat", "manage_chat"],
+                not is_override_user_session(request))):
+            raise merrors.PermissionDeniedException()
 
     members = ChatMembership.objects.filter(
         room=room, status__in=["active", "muted"],

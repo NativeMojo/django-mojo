@@ -82,7 +82,10 @@ Excludes banned members.
 
 ### `GET /api/chat/room/online?room_id=5` — Online members
 
-Returns list of currently online members with their role.
+Returns list of currently online members with their role. Requires an
+active/muted membership, or `chat`/`manage_chat` on the room's group; anyone
+else is a 403 — the same gate as message history (a banned member is denied,
+and a groupless room admits members only).
 
 ## Messages
 

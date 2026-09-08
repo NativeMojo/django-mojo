@@ -176,6 +176,103 @@ def test_dm_room_reuse(opts):
     assert_eq(resp.json.data.id, opts.dm_room_id, "expected same DM room id")
 
 
+# -- room/online gate (maestro #3859) ------------------------------------------
+# The online-members read used to run only the tenant confinement, so any
+# signed-in user could list who is online in a groupless DM by room id. It
+# now carries the HISTORY gate (rest/messages.py): an active/muted membership,
+# else the group's chat/manage_chat grant. These tests build their OWN rooms
+# by ORM: the file's DM (opts.dm_room_id) comes from an untagged test that the
+# framework preset skips, and a bug-tier test must not depend on it.
+
+def _online(client, room_id):
+    return client.get('/api/chat/room/online', params={'room_id': room_id})
+
+
+def _online_dm(opts):
+    """A groupless DM between user1 and user2 — delete-before-create."""
+    from mojo.apps.chat.models import ChatRoom, ChatMembership
+    ChatRoom.objects.filter(name="test-chat-online-dm").delete()
+    room = ChatRoom.objects.create(name="test-chat-online-dm", kind="direct", group=None)
+    ChatMembership.objects.create(room=room, user=opts.user1, role="member")
+    ChatMembership.objects.create(room=room, user=opts.user2, role="member")
+    return room
+
+
+@th.tier("bug")
+@th.django_unit_test()
+def test_online_denies_non_member(opts):
+    """Regression (#3859): a signed-in user with no membership — even one
+    holding the PLATFORM manage_chat grant — gets 403 on a groupless room."""
+    room = _online_dm(opts)
+    try:
+        opts.client.login(TEST_EMAIL_3, TEST_PASSWORD)
+        resp = _online(opts.client, room.pk)
+        assert_eq(resp.status_code, 403,
+                  f"a non-member must be denied the online list, got {resp.status_code}: {resp.json}")
+    finally:
+        room.delete()
+
+
+@th.tier("bug")
+@th.django_unit_test()
+def test_online_lists_for_member(opts):
+    """A member reads the presence list (empty here — nobody holds a socket)."""
+    room = _online_dm(opts)
+    try:
+        opts.client.login(TEST_EMAIL_1, TEST_PASSWORD)
+        resp = _online(opts.client, room.pk)
+        assert_eq(resp.status_code, 200, f"a member must read online, got {resp.status_code}: {resp.json}")
+        assert_true(isinstance(resp.json.data, list), f"online answers a list, got {resp.json.data!r}")
+    finally:
+        room.delete()
+
+
+@th.tier("bug")
+@th.django_unit_test()
+def test_online_denies_banned(opts):
+    """A banned membership row is a non-member — the history gate's rule."""
+    from mojo.apps.chat.models import ChatMembership
+    room = _online_dm(opts)
+    try:
+        ChatMembership.objects.create(room=room, user=opts.admin_user, role="member", status="banned")
+        opts.client.login(TEST_EMAIL_3, TEST_PASSWORD)
+        resp = _online(opts.client, room.pk)
+        assert_eq(resp.status_code, 403,
+                  f"a banned member must be denied the online list, got {resp.status_code}")
+    finally:
+        room.delete()
+
+
+@th.tier("bug")
+@th.django_unit_test()
+def test_online_group_room_gate(opts):
+    """Group-linked room, no membership rows: the group's `chat` holder reads
+    (200), a stranger is denied (403), and a PLATFORM manage_chat holder reads
+    (200) — Group.user_has_permission consults the platform dict first, exactly
+    as the history gate does."""
+    from mojo.apps.account.models import Group
+    from mojo.apps.chat.models import ChatRoom
+    ChatRoom.objects.filter(name="test-chat-online-scoped").delete()
+    Group.objects.filter(name="test-chat-online-group").delete()
+    group = Group.objects.create(name="test-chat-online-group")
+    room = ChatRoom.objects.create(name="test-chat-online-scoped", kind="group", group=group)
+    try:
+        group.add_member(opts.user2).add_permission("chat")
+        opts.client.login(TEST_EMAIL_2, TEST_PASSWORD)
+        resp = _online(opts.client, room.pk)
+        assert_eq(resp.status_code, 200, f"the group's chat holder reads online, got {resp.status_code}: {resp.json}")
+        opts.client.login(TEST_EMAIL_1, TEST_PASSWORD)
+        resp = _online(opts.client, room.pk)
+        assert_eq(resp.status_code, 403, f"a stranger to the group must be denied, got {resp.status_code}")
+        opts.client.login(TEST_EMAIL_3, TEST_PASSWORD)
+        resp = _online(opts.client, room.pk)
+        assert_eq(resp.status_code, 200,
+                  f"a platform manage_chat holder reads a group-linked room (history parity), got {resp.status_code}")
+    finally:
+        room.delete()
+        group.delete()
+
+
 def _shared_direct_room_ids(user_a, user_b):
     """Every direct room `user_a` and `user_b` are both members of."""
     from mojo.apps.chat.models import ChatMembership
