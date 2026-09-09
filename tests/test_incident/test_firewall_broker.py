@@ -307,6 +307,8 @@ def test_firewall_invocation(opts):
     with execution("job-1", "mojo.apps.incident.asyncjobs.broadcast_block_ip", 1,
                    "default", "runner-1"):
         with mock.patch.object(firewall, "_check_user", return_value=True), \
+                mock.patch("mojo.apps.incident.services.firewall_readiness.probe",
+                        return_value={"ready": True, "code": "ready"}), \
                 mock.patch.object(firewall.subprocess, "run", return_value=completed) as run:
             result = firewall.is_blocked("192.0.2.8")
     th.assert_true(not result, "semantic rules read should return broker presence")
@@ -349,6 +351,8 @@ def test_firewall_transport_failures_are_typed(opts):
             "default", "runner-1"):
         for outcome, expected in scenarios:
             with mock.patch.object(firewall, "_check_user", return_value=True), \
+                    mock.patch("mojo.apps.incident.services.firewall_readiness.probe",
+                            return_value={"ready": True, "code": "ready"}), \
                     mock.patch.object(firewall.logit, "error") as logged:
                 if isinstance(outcome, BaseException):
                     run = mock.patch.object(
@@ -382,6 +386,8 @@ def test_permanent_client_request_has_no_target_field(opts):
             "job-1", "mojo.apps.incident.asyncjobs.sync_firewall", 1,
             "default", "runner-1"), \
             mock.patch.object(firewall, "_check_user", return_value=True), \
+            mock.patch("mojo.apps.incident.services.firewall_readiness.probe",
+                       return_value={"ready": True, "code": "ready"}), \
             mock.patch.object(
                 firewall.subprocess, "run", return_value=completed) as run:
         firewall.normalize_permanent_ipset([])

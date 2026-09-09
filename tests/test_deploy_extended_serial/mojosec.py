@@ -286,7 +286,10 @@ def test_off_restores_audit_and_removes_feature_assets(opts):
 
     flush.assert_called_once_with()
     restore.assert_called_once_with()
-    for path in (BROKER_PATH, SUDOERS_PATH, deploy.AUDIT_HEALTH_SERVICE_PATH,
+    for path in (BROKER_PATH, SUDOERS_PATH):
+        th.assert_true(path not in removed,
+                       f"MojoSec off must preserve independently enrolled firewall asset {path}")
+    for path in (deploy.AUDIT_HEALTH_SERVICE_PATH,
                  deploy.AUDIT_HEALTH_TIMER_PATH, deploy.AUDIT_STABLE_HELPER_PATH,
                  audit.HEALTH_PATH):
         th.assert_in(path, removed,
