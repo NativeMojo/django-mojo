@@ -486,6 +486,12 @@ def _retry_broker_failure(job, result):
     """Enter durable backoff immediately for whole-broker failures."""
     error = result.get("error") if isinstance(result, dict) else None
     code = error.get("code") if isinstance(error, dict) else None
+    if code is not None and (
+            not isinstance(code, str) or not 1 <= len(code) <= 64 or
+            not "a" <= code[0] <= "z" or
+            any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_"
+                for character in code)):
+        code = "broker_invalid_response"
     if isinstance(code, str) and (code == "host_busy" or code.startswith("broker_")):
         _retry_firewall_sync(job, code[:64])
 

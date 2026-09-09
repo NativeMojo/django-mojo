@@ -148,13 +148,16 @@ def _broker_request(operation, timeout=20, **values):
         return _broker_error("broker_invalid_response")
     if result.returncode or not value["ok"]:
         error = value.get("error") if isinstance(value.get("error"), dict) else {}
-        code = error.get("code")
-        if not isinstance(code, str) or not _BROKER_CODE.fullmatch(code):
-            code = "broker_invalid_response" if result.returncode else "semantic_mismatch"
-        if result.returncode and value["ok"]:
+        raw_code = error.get("code")
+        if isinstance(raw_code, str) and _BROKER_CODE.fullmatch(raw_code):
+            code = raw_code
+        elif not result.returncode and raw_code is None:
+            code = "semantic_mismatch"
+        else:
             code = "broker_invalid_response"
             value = _broker_error(code)
-        elif result.returncode and code == "broker_invalid_response":
+        if result.returncode and value["ok"]:
+            code = "broker_invalid_response"
             value = _broker_error(code)
         _log_broker_failure(
             operation, code, result.returncode, response_length)

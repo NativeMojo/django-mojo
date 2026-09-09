@@ -187,6 +187,28 @@ def test_host_lock_busy_is_typed(opts):
     close.assert_called_once_with(7)
 
 
+@th.unit_test("global broker preconditions always use broker-wide codes")
+def test_global_broker_preconditions_are_retryable(opts):
+    import stat
+    from mojo.deploy import firewall_broker as broker
+
+    with mock.patch.object(broker.os, "geteuid", return_value=1000), \
+            th.assert_raises(broker.BrokerError) as caller:
+        broker._verify_caller()
+    th.assert_eq(caller.exception.code, "broker_caller_invalid",
+                 "caller verification could repeat once per desired object")
+
+    unsafe = mock.Mock(st_uid=1, st_mode=stat.S_IFREG | 0o600)
+    with mock.patch.object(broker.os, "open", return_value=7), \
+            mock.patch.object(broker.os, "fstat", return_value=unsafe), \
+            mock.patch.object(broker.os, "close") as close, \
+            th.assert_raises(broker.BrokerError) as locked:
+        broker._acquire_host_lock()
+    th.assert_eq(locked.exception.code, "broker_host_lock_unsafe",
+                 "unsafe host-lock metadata was treated as object-local")
+    close.assert_called_once_with(7)
+
+
 @th.unit_test("broker function-operation matrix is closed")
 def test_function_matrix(opts):
     from mojo.deploy import firewall_broker as broker
@@ -309,6 +331,10 @@ def test_firewall_transport_failures_are_typed(opts):
         returncode=1,
         stdout='{"ok":false,"error":{"code":"broker_timeout\\nsecret-log-line"}}',
         stderr="")
+    poisoned_zero = mock.Mock(
+        returncode=0,
+        stdout='{"ok":false,"error":{"code":"broker_bad\\nsecret-job-line"}}',
+        stderr="")
     scenarios = (
         (subprocess.TimeoutExpired([firewall.BROKER], 20), "broker_timeout"),
         (OSError("secret-startup-path"), "broker_start_failed"),
@@ -316,6 +342,7 @@ def test_firewall_transport_failures_are_typed(opts):
         (invalid, "broker_invalid_response"),
         (refused, "broker_resource_limit_unavailable"),
         (poisoned, "broker_invalid_response"),
+        (poisoned_zero, "broker_invalid_response"),
     )
     with execution(
             "job-1", "mojo.apps.incident.asyncjobs.sync_firewall", 1,
@@ -339,7 +366,7 @@ def test_firewall_transport_failures_are_typed(opts):
             th.assert_true(
                 secret not in rendered and "secret-startup-path" not in rendered and
                 "secret-stderr" not in rendered and "not-json" not in rendered and
-                "secret-log-line" not in rendered,
+                "secret-log-line" not in rendered and "secret-job-line" not in rendered,
                 "broker diagnostics leaked request, exception, stderr, or response content")
 
 

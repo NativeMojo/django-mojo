@@ -895,9 +895,9 @@ each affected database with an exact sensor and UTC half-open interval:
 
 ```bash
 uv run python manage.py prune_mojosec_broker_flood \
-  --sensor prod-web-i-0e8f54390777cc0ac \
-  --since 2026-09-05T23:46:34Z \
-  --before 2026-09-09T19:00:00Z
+  --sensor example-web-i-00000000000000000 \
+  --since 2000-01-01T00:00:00Z \
+  --before 2000-01-01T01:00:00Z
 ```
 
 The JSON preview reports `matched`, `safe`, `unsafe`, and the ID/time range.
@@ -909,9 +909,9 @@ obtain write approval for that exact database, sensor, interval, and ceiling:
 
 ```bash
 uv run python manage.py prune_mojosec_broker_flood \
-  --sensor prod-web-i-0e8f54390777cc0ac \
-  --since 2026-09-05T23:46:34Z \
-  --before 2026-09-09T19:00:00Z \
+  --sensor example-web-i-00000000000000000 \
+  --since 2000-01-01T00:00:00Z \
+  --before 2000-01-01T01:00:00Z \
   --apply --max-events 300000
 ```
 

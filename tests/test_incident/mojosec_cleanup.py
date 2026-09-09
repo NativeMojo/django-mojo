@@ -141,6 +141,28 @@ def test_broker_flood_cleanup_refuses_unsafe_or_unbounded_apply(opts):
             since="2026-09-09T00:00:00", before=opts.cleanup_before)
 
 
+@th.django_unit_test("cleanup revalidates locked Event and receipt safety")
+def test_broker_flood_cleanup_revalidates_each_batch(opts):
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.models import Event, MojoSecReceipt
+    from mojo.apps.incident.management.commands import prune_mojosec_broker_flood
+
+    key = ApiKey.objects.get(pk=opts.cleanup_key_id)
+    sensor = "mojosec-cleanup-race"
+    event = _event(sensor)
+    receipt = _receipt(key, event)
+    since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
+    before = datetime.datetime.now(datetime.timezone.utc)
+    MojoSecReceipt.objects.filter(pk=receipt.pk).update(handler_state="pending")
+    with th.assert_raises(CommandError):
+        prune_mojosec_broker_flood._delete_safe_batch(
+            sensor, since, before, [event.pk])
+    th.assert_true(Event.objects.filter(pk=event.pk).exists(),
+                   "a receipt that became nonterminal lost its Event evidence")
+    MojoSecReceipt.objects.filter(pk=receipt.pk).delete()
+    Event.objects.filter(pk=event.pk).delete()
+
+
 @th.django_unit_test("bounded apply deletes Events but retains receipts and unrelated sudo")
 def test_broker_flood_cleanup_preserves_audit_receipts(opts):
     from mojo.apps.incident.models import Event, MojoSecReceipt

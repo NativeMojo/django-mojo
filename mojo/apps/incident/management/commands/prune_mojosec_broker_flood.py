@@ -66,6 +66,28 @@ def _safe_events(sensor, since, before):
     )
 
 
+def _delete_safe_batch(sensor, since, before, ids):
+    """Lock and revalidate both sides of the audit relation before delete."""
+    from mojo.apps.incident.models import Event, MojoSecReceipt
+
+    expected = sorted(ids)
+    with transaction.atomic():
+        locked = sorted(Event.objects.select_for_update().filter(
+            pk__in=expected).values_list("pk", flat=True))
+        list(MojoSecReceipt.objects.select_for_update().filter(
+            event_id__in=expected).order_by("pk").values_list("pk", flat=True))
+        revalidated = sorted(_safe_events(sensor, since, before).filter(
+            pk__in=expected).values_list("pk", flat=True))
+        if locked != expected or revalidated != expected:
+            raise CommandError(
+                "refusing batch: Event/receipt safety changed after selection")
+        unused_total, by_model = Event.objects.filter(pk__in=expected).delete()
+        removed = by_model.get(Event._meta.label, 0)
+        if removed != len(expected):
+            raise CommandError("Event deletion count changed during apply")
+    return removed
+
+
 class Command(BaseCommand):
     help = "Dry-run or prune the exact missing-proof firewall-broker MojoSec flood"
 
@@ -77,8 +99,6 @@ class Command(BaseCommand):
         parser.add_argument("--max-events", type=int, default=None)
 
     def handle(self, *args, **options):
-        from mojo.apps.incident.models import Event
-
         sensor = options["sensor"]
         if not sensor or len(sensor) > 128:
             raise CommandError("--sensor must be 1-128 characters")
@@ -140,12 +160,7 @@ class Command(BaseCommand):
                 pk__lte=upper_pk).order_by("pk").values_list("pk", flat=True)[:BATCH_SIZE])
             if not ids:
                 break
-            with transaction.atomic():
-                unused_total, by_model = Event.objects.filter(pk__in=ids).delete()
-            removed = by_model.get(Event._meta.label, 0)
-            if removed != len(ids):
-                raise CommandError("Event deletion count changed during apply")
-            deleted += removed
+            deleted += _delete_safe_batch(sensor, since, before, ids)
         result["deleted"] = deleted
         self.stdout.write(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return None

@@ -117,7 +117,9 @@ class BrokerChildError(BrokerError):
     """A launched child failed before normal result handling."""
 
     def __init__(self, message, child, timeout=False):
-        super().__init__(message)
+        super().__init__(
+            message,
+            code="broker_target_timeout" if timeout else "broker_target_failure")
         self.child = child
         self.timeout = timeout
 
@@ -383,7 +385,9 @@ def _start_ticks(pid):
 def _receipt(kind, operation_id, context, built, children=None, **values):
     broker_start_ticks = _start_ticks(os.getpid())
     if not broker_start_ticks:
-        raise BrokerError("cannot prove broker PID generation")
+        raise BrokerError(
+            "cannot prove broker PID generation",
+            code="broker_identity_unavailable")
     value = {
         "schema": "mojosec.firewall-receipt", "version": 1, "kind": kind,
         "operation_id": operation_id, "execution_id": context["execution_id"],
@@ -412,7 +416,9 @@ def _run_child(argv, stdin_text="", timeout=SCALAR_TIMEOUT_SECONDS,
     if not ticks:
         process.kill()
         process.wait()
-        raise BrokerError("cannot prove child PID generation")
+        raise BrokerError(
+            "cannot prove child PID generation",
+            code="broker_identity_unavailable")
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ, "stdout")
     selector.register(process.stderr, selectors.EVENT_READ, "stderr")
@@ -844,12 +850,14 @@ def execute(request):
             target_pid=err.child["pid"], target_start_ticks=err.child["start_ticks"],
             returncode=err.child["returncode"], ok=False,
             error="timeout" if err.timeout else "target_failure")
-        raise BrokerError("target timed out" if err.timeout else
-                          "target execution failed") from err
+        raise BrokerError(
+            "target timed out" if err.timeout else "target execution failed",
+            code="broker_target_timeout" if err.timeout
+            else "broker_target_failure") from err
     except subprocess.TimeoutExpired as err:
         _receipt("result", operation_id, context, built, children=children,
                  target_pid=0, target_start_ticks=0, returncode=-1, ok=False, error="timeout")
-        raise BrokerError("target timed out") from err
+        raise BrokerError("target timed out", code="broker_target_timeout") from err
     except BrokerError as err:
         _receipt("result", operation_id, context, built, children=children,
                  target_pid=0, target_start_ticks=0, returncode=-1, ok=False,
@@ -859,25 +867,31 @@ def execute(request):
         _receipt("result", operation_id, context, built, children=children,
                  target_pid=0, target_start_ticks=0, returncode=-1, ok=False,
                  error="target_failure")
-        raise BrokerError("target execution failed") from err
+        raise BrokerError(
+            "target execution failed", code="broker_target_failure") from err
 
 
 def _verify_caller():
     if os.geteuid() != 0:
-        raise BrokerError("broker must run as root")
+        raise BrokerError("broker must run as root", code="broker_caller_invalid")
     raw_uid = os.environ.get("SUDO_UID", "")
     if not raw_uid.isdigit() or int(raw_uid) <= 0:
-        raise BrokerError("SUDO_UID is missing or invalid")
+        raise BrokerError(
+            "SUDO_UID is missing or invalid", code="broker_caller_invalid")
     try:
         expected = pwd.getpwnam("ec2-user").pw_uid
     except KeyError as err:
-        raise BrokerError("application account is missing") from err
+        raise BrokerError(
+            "application account is missing", code="broker_caller_invalid") from err
     if int(raw_uid) != expected:
-        raise BrokerError("caller is not the application account")
+        raise BrokerError(
+            "caller is not the application account", code="broker_caller_invalid")
     info = os.stat(BROKER_PATH, follow_symlinks=False)
     if (info.st_uid != 0 or info.st_gid != 0 or info.st_mode & 0o022 or
             not stat.S_ISREG(info.st_mode)):
-        raise BrokerError("installed broker metadata is unsafe")
+        raise BrokerError(
+            "installed broker metadata is unsafe",
+            code="broker_installation_unsafe")
 
 
 def _virtual_address_space_bytes(path="/proc/self/statm"):
@@ -960,7 +974,8 @@ def _acquire_host_lock():
     if (info.st_uid != 0 or not stat.S_ISREG(info.st_mode) or
             info.st_mode & 0o077):
         os.close(descriptor)
-        raise BrokerError("host lock metadata is unsafe", code="host_lock_unsafe")
+        raise BrokerError(
+            "host lock metadata is unsafe", code="broker_host_lock_unsafe")
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as err:
