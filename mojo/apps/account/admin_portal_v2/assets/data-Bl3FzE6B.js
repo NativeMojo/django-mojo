@@ -1,0 +1,1 @@
+function t(e){const r=String(e??"").trim().toLowerCase();return r==="route53"?"Route 53":r==="godaddy"?"GoDaddy":r?r.charAt(0).toUpperCase()+r.slice(1):"—"}function i(e){return e.providers.filter(r=>r.requires_credential)}export{i as l,t as p};

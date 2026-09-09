@@ -12,6 +12,8 @@ is declared and missing — fails the process rather than 404ing in a browser.
 import json
 from pathlib import Path, PurePosixPath
 
+from . import admin_artifact
+
 
 ROOT = Path(__file__).resolve().parents[1] / "admin_portal"
 FEATURES = (
@@ -19,9 +21,6 @@ FEATURES = (
     "settings", "sms", "email")
 
 ROOT_V2 = Path(__file__).resolve().parents[1] / "admin_portal_v2"
-V2_FEATURES = (
-    "home", "apps", "infrastructure", "domains", "access", "security",
-    "settings")
 V2_PREFIX = "v2/"
 
 
@@ -87,7 +86,8 @@ def load_manifest(root=ROOT, features=FEATURES):
 
 
 PRIVATE_ASSETS = load_manifest()
-PRIVATE_ASSETS_V2 = load_manifest(ROOT_V2, V2_FEATURES)
+V2_ARTIFACT = admin_artifact.validate(ROOT_V2, admin_artifact.PINNED_MANIFEST_SHA256)
+PRIVATE_ASSETS_V2 = V2_ARTIFACT["allowlist"]
 
 
 def asset_path(asset):
