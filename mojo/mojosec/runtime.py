@@ -7,15 +7,16 @@ import time
 from .collectors import (
     FimCollector, JournalCollector, NginxCollector, SystemPythonCollector,
 )
-from .output import emit, emit_error, write_status
+from .output import emit, emit_error, write_status, runtime_identity, publish_identity
 from .profiles import profile_identity, resolve_profile
 from .sender import Sender
 from .store import Store
 
 
 class Runtime:
-    def __init__(self, config, store=None, sender=None):
+    def __init__(self, config, store=None, sender=None, identity=None):
         self.config = config
+        self.identity = dict(identity if identity is not None else runtime_identity())
         self.store = store or Store(
             config["state_dir"], config["sensor_id"],
             config["aggregation"], config["delivery"],
@@ -264,6 +265,8 @@ class Runtime:
         except Exception as err:
             status["expected_changes"] = {"ok": False, "error": str(err)[:256]}
         status.update(self.store.stats())
+        status.update(self.identity)
+        status["running"] = self.running
         write_status(self.config["status_path"], status)
 
     def run_once(self):
@@ -298,9 +301,11 @@ class Runtime:
         self.running = False
         self.stop_event.set()
 
-    def run(self):
-        signal.signal(signal.SIGTERM, self.stop)
-        signal.signal(signal.SIGINT, self.stop)
+    def run(self, signal_installer=None):
+        install_signal = signal_installer or signal.signal
+        install_signal(signal.SIGTERM, self.stop)
+        install_signal(signal.SIGINT, self.stop)
+        publish_identity(self.config, self.identity, running=True)
         emit("info", "MojoSec sensor started", sensor_id=self.config["sensor_id"])
         while self.running:
             started = time.monotonic()

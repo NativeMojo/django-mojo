@@ -8,7 +8,7 @@ from .config import (
     CANONICAL_CONFIG_PATH, ConfigError, load_config, load_effective_config,
 )
 from .collectors.rpm import SystemPythonError, probe_system_python_capability
-from .output import read_status
+from .output import read_status, runtime_identity, publish_identity
 
 
 def build_parser():
@@ -38,7 +38,7 @@ def _print_json(value, output):
 
 
 def main(argv=None, *, stdout=None, stderr=None, config_loader=None,
-         system_python_probe=None):
+         system_python_probe=None, runtime_factory=None):
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
     args = build_parser().parse_args(argv)
@@ -62,8 +62,13 @@ def main(argv=None, *, stdout=None, stderr=None, config_loader=None,
             _print_json(read_status(config["status_path"]), stdout)
             return 0
 
-        from .runtime import Runtime
-        runtime = Runtime(config)
+        identity = runtime_identity()
+        if args.command == "run":
+            publish_identity(config, identity)
+        if runtime_factory is None:
+            from .runtime import Runtime
+            runtime_factory = Runtime
+        runtime = runtime_factory(config, identity=identity)
         if args.command in ("baseline-preview", "baseline-initialize"):
             scans = runtime.preview_integrity()
             identity = runtime.profile_identity
