@@ -263,6 +263,83 @@ def test_busy_host_lock_is_not_success(opts):
     ips.assert_not_called()
 
 
+@th.django_unit_test("permanent broker failure starts backoff before later work")
+def test_permanent_broker_failure_stops_immediately(opts):
+    from mojo.apps.incident.asyncjobs import FirewallSyncRetry
+    from mojo.apps.incident.services import firewall_truth
+
+    redis = _Redis()
+    failed = {"ok": False, "error": {"code": "broker_timeout"}}
+    with mock.patch("mojo.apps.jobs.adapters.get_adapter", return_value=redis), \
+            mock.patch("mojo.apps.jobs.publish") as publish, \
+            mock.patch("mojo.apps.incident.firewall.normalize_permanent_ipset",
+                       return_value=failed), \
+            mock.patch("mojo.apps.incident.firewall.normalize_ipset") as sets, \
+            mock.patch("mojo.apps.incident.firewall.normalize_ip") as ips, \
+            mock.patch.object(
+                firewall_truth, "permanent_snapshot",
+                wraps=firewall_truth.permanent_snapshot) as snapshots, \
+            th.assert_raises(FirewallSyncRetry) as raised:
+        _run_sync(_job())
+    assert raised.exception.code == "broker_timeout"
+    assert snapshots.call_count == 1, "broker failure triggered a post-call snapshot"
+    sets.assert_not_called()
+    ips.assert_not_called()
+    publish.assert_not_called()
+
+
+@th.django_unit_test("set broker failure starts backoff before later work")
+def test_set_broker_failure_stops_immediately(opts):
+    from mojo.apps.incident.asyncjobs import FirewallSyncRetry
+    from mojo.apps.incident.services import firewall_truth
+
+    redis = _Redis()
+    failed = {"ok": False, "error": {"code": "broker_start_failed"}}
+    with mock.patch("mojo.apps.jobs.adapters.get_adapter", return_value=redis), \
+            mock.patch("mojo.apps.jobs.publish") as publish, \
+            mock.patch("mojo.apps.incident.firewall.normalize_permanent_ipset",
+                       side_effect=_permanent_result), \
+            mock.patch("mojo.apps.incident.firewall.normalize_ipset",
+                       return_value=failed) as sets, \
+            mock.patch("mojo.apps.incident.firewall.normalize_ip") as ips, \
+            mock.patch.object(
+                firewall_truth, "ipset_snapshot",
+                wraps=firewall_truth.ipset_snapshot) as snapshots, \
+            th.assert_raises(FirewallSyncRetry) as raised:
+        _run_sync(_job())
+    assert raised.exception.code == "broker_start_failed"
+    assert sets.call_count == 1, "set broker failure did not stop sibling calls"
+    snapshots.assert_not_called()
+    ips.assert_not_called()
+    publish.assert_not_called()
+
+
+@th.django_unit_test("IP broker failure starts backoff before later work")
+def test_ip_broker_failure_stops_immediately(opts):
+    from mojo.apps.incident.asyncjobs import FirewallSyncRetry
+    from mojo.apps.incident.services import firewall_truth
+
+    redis = _Redis()
+    failed = {"ok": False, "error": {"code": "broker_invalid_response"}}
+    with mock.patch("mojo.apps.jobs.adapters.get_adapter", return_value=redis), \
+            mock.patch("mojo.apps.jobs.publish") as publish, \
+            mock.patch("mojo.apps.incident.firewall.normalize_permanent_ipset",
+                       side_effect=_permanent_result), \
+            mock.patch("mojo.apps.incident.firewall.normalize_ipset",
+                       side_effect=_set_result), \
+            mock.patch("mojo.apps.incident.firewall.normalize_ip",
+                       return_value=failed) as ips, \
+            mock.patch.object(
+                firewall_truth, "geolocated_snapshot",
+                wraps=firewall_truth.geolocated_snapshot) as snapshots, \
+            th.assert_raises(FirewallSyncRetry) as raised:
+        _run_sync(_job())
+    assert raised.exception.code == "broker_invalid_response"
+    assert ips.call_count == 1, "IP broker failure did not stop sibling calls"
+    snapshots.assert_not_called()
+    publish.assert_not_called()
+
+
 @th.django_unit_test("stale generation cannot clear a newer pending decision")
 def test_object_generation_fences_finalize(opts):
     from mojo.apps.account.models import GeoLocatedIP

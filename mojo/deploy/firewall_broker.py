@@ -46,7 +46,12 @@ MAX_OUTPUT_BYTES = 64 * 1024
 MAX_RULES_OUTPUT_BYTES = 8 * 1024 * 1024
 SCALAR_TIMEOUT_SECONDS = 15
 BULK_TIMEOUT_SECONDS = 120
-ADDRESS_SPACE_BYTES = 256 * 1024 * 1024
+ADDRESS_SPACE_GROWTH_BYTES = 256 * 1024 * 1024
+MAX_ADDRESS_SPACE_BYTES = 768 * 1024 * 1024
+MAX_STATM_BYTES = 128
+_RESOURCE_EXHAUSTED_RESPONSE = (
+    b'{"error":{"code":"broker_resource_exhausted",'
+    b'"message":"broker memory exhausted"},"ok":false}\n')
 MAX_SET_NAME = 31
 MAX_CONFIG_BYTES = 4096
 _SET_NAME = re.compile(r"^[A-Za-z0-9_-]{1,31}$")
@@ -872,6 +877,70 @@ def _verify_caller():
         raise BrokerError("installed broker metadata is unsafe")
 
 
+def _virtual_address_space_bytes(path="/proc/self/statm"):
+    """Read this process's post-import virtual address-space footprint."""
+    descriptor = None
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        payload = os.read(descriptor, MAX_STATM_BYTES + 1)
+        if not payload or len(payload) > MAX_STATM_BYTES:
+            raise ValueError("statm size is invalid")
+        pages = int(payload.split(None, 1)[0])
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        if pages <= 0 or page_size <= 0:
+            raise ValueError("statm values are invalid")
+        return pages * page_size
+    except (OSError, ValueError, IndexError, OverflowError) as err:
+        raise BrokerError(
+            "cannot establish broker memory baseline",
+            code="broker_resource_limit_unavailable") from err
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _install_address_space_limit(
+        baseline_bytes=None, *, get_limit=resource.getrlimit,
+        set_limit=resource.setrlimit):
+    """Install reviewed post-import growth headroom under a hard ceiling."""
+    if baseline_bytes is None:
+        baseline_bytes = _virtual_address_space_bytes()
+    if (isinstance(baseline_bytes, bool) or
+            not isinstance(baseline_bytes, int) or baseline_bytes <= 0):
+        raise BrokerError(
+            "broker memory baseline is invalid",
+            code="broker_resource_limit_unavailable")
+    target = baseline_bytes + ADDRESS_SPACE_GROWTH_BYTES
+    if target > MAX_ADDRESS_SPACE_BYTES:
+        raise BrokerError(
+            "broker memory headroom exceeds the absolute ceiling",
+            code="broker_resource_limit_unavailable")
+    try:
+        unused_soft, hard = get_limit(resource.RLIMIT_AS)
+        if hard != resource.RLIM_INFINITY and hard < target:
+            raise BrokerError(
+                "existing address-space limit cannot provide safe headroom",
+                code="broker_resource_limit_unavailable")
+        set_limit(resource.RLIMIT_AS, (target, target))
+    except BrokerError:
+        raise
+    except (OSError, ValueError, OverflowError) as err:
+        raise BrokerError(
+            "cannot install broker address-space limit",
+            code="broker_resource_limit_unavailable") from err
+    return target
+
+
+def _write_resource_exhausted():
+    """Use one prebuilt response so heap exhaustion cannot empty stdout."""
+    try:
+        os.write(1, _RESOURCE_EXHAUSTED_RESPONSE)
+    except OSError:
+        pass
+
+
 def render_sudoers(user="ec2-user"):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", user):
         raise BrokerError("sudoers user is invalid")
@@ -907,7 +976,7 @@ def main(argv=None):
     descriptor = None
     try:
         _verify_caller()
-        resource.setrlimit(resource.RLIMIT_AS, (ADDRESS_SPACE_BYTES, ADDRESS_SPACE_BYTES))
+        _install_address_space_limit()
         payload = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
         request = parse_request(payload)
         descriptor = _acquire_host_lock()
@@ -920,6 +989,9 @@ def main(argv=None):
             "ok": False,
             "error": {"code": code, "message": message},
         }, sort_keys=True, separators=(",", ":")))
+        return 1
+    except MemoryError:
+        _write_resource_exhausted()
         return 1
     finally:
         if descriptor is not None:

@@ -28,6 +28,16 @@ IPSET = "/sbin/ipset"
 BROKER = "/usr/local/sbin/mojo-firewall-broker"
 
 
+def _broker_error(code):
+    return {"ok": False, "error": {"code": code}}
+
+
+def _log_broker_failure(operation, code, returncode=None, response_length=0):
+    logit.error(
+        "firewall broker failed %s code=%s returncode=%s response_length=%s",
+        operation, str(code)[:64], returncode, response_length)
+
+
 def _validate_ip(ip):
     """Return the canonical IPv4 network or fail closed."""
     try:
@@ -94,19 +104,19 @@ def _run_stdin(args, stdin_data, timeout=30):
 def _broker_request(operation, timeout=20, **values):
     """Call the exact empty-argv broker with immutable engine identity."""
     if not _check_user():
-        return None
+        return _broker_error("broker_wrong_user")
     from mojo.apps.jobs.execution_context import current
     context = current()
     if context is None:
         logit.error("firewall operation rejected outside JobEngine execution context")
-        return None
+        return _broker_error("broker_context_unavailable")
     if (operation.startswith("set.") or operation.startswith("permanent.") or
             operation == "geolocated.normalize"):
         try:
             values["expected_permanent_set"] = permanent_set_name()
         except FirewallTruthError as err:
             logit.error("firewall reservation refused: %s", err.code)
-            return None
+            return _broker_error(err.code)
     payload = json.dumps(
         {"operation": operation, "context": context, **values},
         sort_keys=True, separators=(",", ":"))
@@ -115,24 +125,33 @@ def _broker_request(operation, timeout=20, **values):
             [SUDO, "-n", "--", BROKER], input=payload,
             capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        logit.error(f"firewall broker timed out during {operation}")
-        return None
-    except OSError as err:
-        logit.error(f"firewall broker could not start during {operation}: {err}")
-        return None
+        _log_broker_failure(operation, "broker_timeout")
+        return _broker_error("broker_timeout")
+    except OSError:
+        _log_broker_failure(operation, "broker_start_failed")
+        return _broker_error("broker_start_failed")
+    stdout = result.stdout if isinstance(result.stdout, str) else ""
+    response_length = len(stdout)
     try:
-        value = json.loads(result.stdout)
+        value = json.loads(stdout)
     except (TypeError, json.JSONDecodeError):
-        logit.error(f"firewall broker returned malformed output for {operation}")
-        return None
+        _log_broker_failure(
+            operation, "broker_malformed_response", result.returncode,
+            response_length)
+        return _broker_error("broker_malformed_response")
     if not isinstance(value, dict) or not isinstance(value.get("ok"), bool):
-        logit.error(f"firewall broker returned an invalid result for {operation}")
-        return None
-    if result.returncode:
+        _log_broker_failure(
+            operation, "broker_invalid_response", result.returncode,
+            response_length)
+        return _broker_error("broker_invalid_response")
+    if result.returncode or not value["ok"]:
         error = value.get("error") if isinstance(value.get("error"), dict) else {}
-        logit.error(
-            "firewall broker refused %s: %s",
-            operation, str(error.get("code") or "broker_failure")[:64])
+        code = str(error.get("code") or "broker_invalid_response")[:64]
+        if result.returncode and value["ok"]:
+            code = "broker_invalid_response"
+            value = _broker_error(code)
+        _log_broker_failure(
+            operation, code, result.returncode, response_length)
     return value
 
 

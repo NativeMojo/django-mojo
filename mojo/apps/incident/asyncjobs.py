@@ -482,6 +482,14 @@ def _retry_firewall_sync(job, code):
     raise FirewallSyncRetry(code)
 
 
+def _retry_broker_failure(job, result):
+    """Enter durable backoff immediately for whole-broker failures."""
+    error = result.get("error") if isinstance(result, dict) else None
+    code = error.get("code") if isinstance(error, dict) else None
+    if isinstance(code, str) and (code == "host_busy" or code.startswith("broker_")):
+        _retry_firewall_sync(job, code[:64])
+
+
 def _firewall_host():
     """Per-HOST identity for the reconcile keys.
 
@@ -619,6 +627,7 @@ def sync_firewall(job):
             "digest": firewall_truth.network_digest(permanent["cidrs"]),
         }
         result = firewall.normalize_permanent_ipset(permanent["cidrs"])
+        _retry_broker_failure(job, result)
         semantic = _semantic("set", set_desired, result)
         current_permanent = firewall_truth.permanent_snapshot()
         lease = None
@@ -651,6 +660,7 @@ def sync_firewall(job):
             desired = snapshot["desired"]
             result = firewall.normalize_ipset(
                 desired["name"], snapshot["cidrs"], desired["present"])
+            _retry_broker_failure(job, result)
             current_snapshot = firewall_truth.ipset_snapshot(desired["name"])
             lease = None
             try:
@@ -683,6 +693,7 @@ def sync_firewall(job):
             ip_desired = desired["ip"]
             result = firewall.normalize_ip(
                 ip_desired["ip"], ip_desired["present"])
+            _retry_broker_failure(job, result)
             current_snapshot = firewall_truth.geolocated_snapshot(
                 ip_desired["ip"], permanent=permanent)
             lease = None

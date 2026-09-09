@@ -1,4 +1,5 @@
 import io
+import subprocess
 import sys
 from unittest import mock
 
@@ -292,6 +293,50 @@ def test_firewall_invocation(opts):
                  "application sudo must execute only the empty-argv broker command")
 
 
+@th.unit_test("firewall client returns typed bounded transport failures")
+def test_firewall_transport_failures_are_typed(opts):
+    from mojo.apps.incident import firewall
+    from mojo.apps.jobs.execution_context import execution
+
+    secret = "198.51.100.201/32"
+    malformed = mock.Mock(returncode=1, stdout="not-json", stderr="secret-stderr")
+    invalid = mock.Mock(returncode=0, stdout='{"result":"unknown"}', stderr="")
+    refused = mock.Mock(
+        returncode=1,
+        stdout='{"ok":false,"error":{"code":"broker_resource_limit_unavailable"}}',
+        stderr="")
+    scenarios = (
+        (subprocess.TimeoutExpired([firewall.BROKER], 20), "broker_timeout"),
+        (OSError("secret-startup-path"), "broker_start_failed"),
+        (malformed, "broker_malformed_response"),
+        (invalid, "broker_invalid_response"),
+        (refused, "broker_resource_limit_unavailable"),
+    )
+    with execution(
+            "job-1", "mojo.apps.incident.asyncjobs.sync_firewall", 1,
+            "default", "runner-1"):
+        for outcome, expected in scenarios:
+            with mock.patch.object(firewall, "_check_user", return_value=True), \
+                    mock.patch.object(firewall.logit, "error") as logged:
+                if isinstance(outcome, BaseException):
+                    run = mock.patch.object(
+                        firewall.subprocess, "run", side_effect=outcome)
+                else:
+                    run = mock.patch.object(
+                        firewall.subprocess, "run", return_value=outcome)
+                with run:
+                    result = firewall._broker_request(
+                        "ip.normalize", source=secret, present=True)
+            th.assert_eq(
+                result["error"]["code"], expected,
+                "a broker transport failure lost its stable machine code")
+            rendered = repr(logged.call_args_list)
+            th.assert_true(
+                secret not in rendered and "secret-startup-path" not in rendered and
+                "secret-stderr" not in rendered and "not-json" not in rendered,
+                "broker diagnostics leaked request, exception, stderr, or response content")
+
+
 @th.unit_test("aggregate client declares config but cannot choose root target")
 def test_permanent_client_request_has_no_target_field(opts):
     import json
@@ -324,9 +369,10 @@ def test_broker_limits_and_sudoers(opts):
         (broker.MAX_REQUEST_BYTES, broker.MAX_CIDRS, broker.MAX_RESTORE_BYTES,
          broker.MAX_OUTPUT_BYTES, broker.MAX_RULES_OUTPUT_BYTES,
          broker.SCALAR_TIMEOUT_SECONDS, broker.BULK_TIMEOUT_SECONDS,
-         broker.ADDRESS_SPACE_BYTES),
+         broker.ADDRESS_SPACE_GROWTH_BYTES, broker.MAX_ADDRESS_SPACE_BYTES),
         (16 * 1024 * 1024, 250000, 24 * 1024 * 1024, 64 * 1024,
-         8 * 1024 * 1024, 15, 120, 256 * 1024 * 1024),
+         8 * 1024 * 1024, 15, 120, 256 * 1024 * 1024,
+         768 * 1024 * 1024),
         "the reviewed production resource envelope must not drift")
     th.assert_eq(
         broker.render_sudoers(),
