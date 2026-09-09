@@ -215,6 +215,52 @@ an external immutable environment strategy.
 
 ## Compatibility with the predecessor launcher
 
+### Refreshing the running MojoSec version
+
+After candidate installation and before API, code, or custom activation, the
+updater refreshes an already-active `mojosec.service` when its loaded framework
+version or current process generation cannot be proved. A healthy same-version
+sensor stays running. The helper uses `systemctl try-restart --no-block`; it
+never enrolls, enables, or starts an inactive sensor. A disabled-but-active
+sensor can restart and remains disabled. MojoSec does not enter the application's
+`touched_units` rollback list.
+
+The helper has one 60-second monotonic restart/proof budget, with individual
+queries capped at five seconds and time reserved for cancellation. It records
+intent before submission, captures systemd jobs, and reconciles/cancels outstanding
+jobs before another direction can run. Duplicate updater and post-deploy hooks
+share the deployment/direction/target-version attempt, including failures;
+they cannot submit a second restart. Later recovery can make a bounded read-only
+generation check without renewing the restart budget.
+
+Root-only `/etc/mojosec/runtime-refresh.json` records current outcome, unresolved
+jobs, recent attempts, and the last eight failures. Writes fsync both the staged
+file and its parent directory. The helper, saved previous activation body, and
+rollback wrapper receive the same ordered durability inside the transaction.
+Preparation failures also attempt durable evidence and print a diagnostic.
+All observer failures are absorbed: application activation, rollback policy,
+exit status, and deployment identity retain their existing authority.
+
+Rollback invokes the retained stdlib-only helper after reinstalling the old
+package and before previous activation. Publication recovery checks the retained
+candidate. A rollback to a sensor without the new status fields records its
+restart outcome and **loaded-version proof unavailable**, never inferred success.
+
+The first N−1 upgrade adopts this at the start of the candidate's packaged
+`post_deploy.sh --activate`. It retains the original previous activation bytes
+before installing a wrapper, so downgrade still reaches refresh. There is an
+unavoidable earlier interval: if the preceding updater is interrupted before
+candidate activation begins, no code in this release has run and no rollback
+hook can be added retroactively. `check_node --section mojosec` makes resulting
+installed/loaded drift loud; recover with a rolling sensor restart or the next
+successful deployment. Intentional full-script overrides remain project-owned.
+
+Daily restarts do not prove version alignment and can conceal deployment drift.
+Release verification must use the normal canary/fleet order: verify the canary's
+active, fresh loaded version and kernel generation, then the next node, and check
+for new exact broker missing-proof occurrences. Local tests do not complete that
+production rollout evidence.
+
 The first deploy that adopts these files can still be started by the previous
 django-mojo job engine. New deploy parents set `MOJO_DEPLOY_PARENT_STATUS=1`
 and record success after the script returns. A predecessor does not set it, so

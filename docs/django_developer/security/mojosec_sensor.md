@@ -737,7 +737,8 @@ off, then run:
 
 `/run/mojosec/status.json` is atomically written as root:root mode `0640`. Its
 exhaustive top-level field set is `schema`, `version`, `sensor_id`, `state`,
-`updated_at`, `config`, `collectors`, `delivery`, optional `integrity`,
+`updated_at`, `running`, `framework_version`, `pid`, `boot_id`,
+`process_start_ticks`, `process_started_at`, `config`, `collectors`, `delivery`, optional `integrity`,
 `expected_changes`, `spooled_events`, `pending_aggregates`, `dropped_capacity`,
 `dropped_aggregate_capacity`, `aggregate_evicted_for_priority`,
 `delivery_accepted`, `delivery_duplicate`, `delivery_rejected`,
@@ -748,6 +749,41 @@ exhaustive top-level field set is `schema`, `version`, `sensor_id`, `state`,
 It contains no API key, endpoint, raw log record, command output, database
 row, FIM digest, or file content. `check_node` reads that projection with sudo;
 ordinary app users do not receive collector/backlog timing.
+
+The framework version is captured from loaded code once per process; installed
+package metadata is not evidence of loaded code. Boot id and Linux start ticks
+distinguish PID reuse. `process_started_at` is derived from the kernel process
+start and serialized in UTC. A minimal schema-v1 `state=starting` identity is
+published before Store construction, journal locking, scans, or delivery;
+`state=running` follows signal-handler installation. Normal health publication
+enriches that same immutable identity. Missing kernel evidence cannot prove a
+generation, and starting identity does not claim collector readiness.
+
+Framework deployment refreshes an active stale/unproved sensor before candidate
+activation, and after package rollback before previous activation. It never
+enables or starts an inactive service. The retained stdlib helper shares one
+60-second attempt across duplicate hooks, including failed attempts, and
+reconciles outstanding systemd jobs before another restart can be submitted.
+Failures and pending jobs remain in root-only
+`/etc/mojosec/runtime-refresh.json`; later success keeps bounded recent failures.
+Both file and parent-directory fsync make refresh and retained-wrapper state
+crash-durable. Every observer failure is visible but cannot veto application
+deployment. Legacy rollback records loaded-version proof unavailable explicitly.
+
+For the first upgrade, the preceding updater reaches this logic only when the
+candidate activation body starts. Interruption before that point cannot be
+covered retroactively. The activation bridge preserves and wraps the previous
+body for later rollback. Use `check_node --section mojosec` to compare installed
+and loaded versions, current kernel generation/process age, and refresh evidence.
+It hashes original `auditctl -l` bytes and accepts case-insensitive systemd
+capability tokens without ignoring extra capabilities or real Audit drift.
+Repair pre-adoption drift with a rolling restart or the next successful deploy.
+Daily restarts are not a security control or a substitute for generation proof.
+
+After release, follow normal canary/fleet ordering and require both MojoVerify
+nodes to report the released version from active, fresh generations with no new
+false broker missing-proof occurrences. Do not restart both as an out-of-band
+batch; local code verification does not satisfy this rollout criterion.
 
 ## Durability and batching
 

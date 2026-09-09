@@ -30,7 +30,7 @@ class FakeRunner:
         self.rules = list(rules or [])
         self.commands = []
 
-    def __call__(self, cmd, timeout=30):
+    def __call__(self, cmd, timeout=30, raw_stdout=False):
         self.commands.append(cmd)
         for needle, response in self.rules:
             if needle in cmd:
@@ -406,6 +406,66 @@ def test_mojosec_edge_log_must_be_exactly_beneath_enrolled_root(opts):
                    "/var/log/nginx/nested/mojosec.json.log"):
         th.assert_true(not cn._protected_mojosec_log_path(unsafe),
                        f"an app-owned or non-exact evidence path was accepted: {unsafe}")
+
+
+@th.django_unit_test()
+def test_runner_raw_stdout_preserves_exact_audit_bytes_and_default_stripping(opts):
+    from mojo.deploy.check_node import build_runner
+
+    run = build_runner(None)
+    raw = run("printf '  audit rule\\r\\n'", raw_stdout=True)
+    normal = run("printf '  audit rule\\r\\n'")
+    assert raw[1] == b"  audit rule\r\n", "raw mode must preserve spaces and original CR/LF bytes"
+    assert normal[1] == "audit rule", "existing runner callers must retain stripped text"
+
+
+@th.django_unit_test()
+def test_mojosec_audit_hashes_raw_trailing_newline_and_normalizes_capabilities(opts):
+    import hashlib
+    from mojo.deploy import check_node as cn
+
+    raw = b"-a always,exit -k mojosec-root-exec\n-a always,exit -k mojosec-app-exec\n-a always,exit -k mojosec-sudo\n"
+    expected = json.dumps({"generation": "policy", "rules": hashlib.sha256(raw).hexdigest()})
+    common = [
+        ("/sbin/auditctl -s", (0, "enabled 1\nfailure 1\nrate_limit 0\nbacklog_limit 8192\nlost 0", "")),
+        ("/sbin/auditctl -l", (0, raw, "")),
+        ("audit_generation", (0, expected, "")),
+        ("sha256sum /etc/audit/rules.d/70-mojosec.rules", (0, "policy path", "")),
+        ("is-active mojosec-audit-health.timer", (0, "active", "")),
+    ]
+    for capability, grade in (("cap_audit_control\ncap_audit_control", cn.PASS),
+                              ("CAP_AUDIT_CONTROL", cn.PASS),
+                              ("cap_audit_control cap_sys_admin", cn.FAIL),
+                              ("cap_audit_control_fake", cn.FAIL)):
+        runner = FakeRunner(common + [("-p CapabilityBoundingSet -p AmbientCapabilities", (0, capability, ""))])
+        report = cn.Report()
+        cn.check_mojosec(report, runner, "observe", "")
+        assert _find(report, "mojosec", "active Audit provenance")["status"] == cn.PASS, "raw audit rules with trailing newline must match the authoritative digest"
+        assert _find(report, "mojosec", "Audit health publisher")["status"] == grade, "only exact case-insensitive capability tokens may pass"
+    report = cn.Report()
+    runner = FakeRunner([("/sbin/auditctl -l", (0, raw.rstrip(), ""))] + common)
+    cn.check_mojosec(report, runner, "observe", "")
+    assert _find(report, "mojosec", "active Audit provenance")["status"] == cn.FAIL, "genuine byte drift must remain a failure"
+
+
+@th.django_unit_test()
+def test_runtime_diagnostics_report_version_generation_age_and_pending_evidence(opts):
+    from mojo.deploy import check_node as cn
+
+    value = {"installed": "2", "runtime": {"framework_version": "2", "proved": True,
+             "identity": {"pid": 42, "boot_id": "boot", "process_start_ticks": 100,
+                          "process_started_at": "2026-01-01T00:00:00+00:00"}},
+             "refresh": {"outcome": "refreshed", "pending": False}}
+    report = cn.Report()
+    cn.check_mojosec_runtime(report, FakeRunner([("diagnostic_snapshot", (0, json.dumps(value), ""))]), "")
+    assert _find(report, "mojosec", "loaded framework generation")["status"] == cn.PASS, "matching loaded and installed live generation must pass"
+    assert "ticks=100" in _find(report, "mojosec", "sensor process age")["detail"], "operator diagnostics must include kernel generation and age"
+    value["runtime"].update(framework_version="1", proved=False)
+    value["refresh"] = {"outcome": "degraded", "pending": True, "reason": "late systemd job"}
+    report = cn.Report()
+    cn.check_mojosec_runtime(report, FakeRunner([("diagnostic_snapshot", (0, json.dumps(value), ""))]), "")
+    assert _find(report, "mojosec", "loaded framework generation drift")["status"] == cn.FAIL, "installed-versus-loaded drift must be loud"
+    assert _find(report, "mojosec", "runtime refresh degraded")["status"] == cn.FAIL, "pending refresh jobs must remain visible"
 
 
 @th.django_unit_test()

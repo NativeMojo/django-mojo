@@ -50,8 +50,9 @@ A finding is one of:
     FAIL   convergence, correctness, or security drift that should be fixed
     INFO   context, no judgement
 
-Exit code is 1 if anything FAILed, else 0 (2 for usage errors) — so this can
-gate a deploy. Over ssh each probe is its own connection; enable ssh
+Exit code is 1 if anything FAILed, else 0 (2 for usage errors). This is an
+operator diagnostic; MojoSec findings never gate application deployment.
+Over ssh each probe is its own connection; enable ssh
 multiplexing (ControlMaster) in ~/.ssh/config if the round-trips add up.
 """
 
@@ -158,19 +159,21 @@ def build_runner(ssh_host):
     locally via /bin/sh or remotely via `ssh <host> <cmd>` (BatchMode, so a
     node needing a password fails fast instead of hanging the audit)."""
 
-    def run(cmd, timeout=30):
+    def run(cmd, timeout=30, raw_stdout=False):
         if ssh_host:
             argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
                     ssh_host, cmd]
         else:
             argv = ["/bin/sh", "-c", cmd]
         try:
-            done = subprocess.run(argv, capture_output=True, text=True,
+            done = subprocess.run(argv, capture_output=True, text=not raw_stdout,
                                   timeout=timeout)
         except subprocess.TimeoutExpired:
             return 124, "", f"timed out after {timeout}s"
         except OSError as err:
             return 127, "", str(err)
+        if raw_stdout:
+            return done.returncode, done.stdout, done.stderr.decode(errors="replace").strip()
         return done.returncode, done.stdout.strip(), done.stderr.strip()
 
     return run
@@ -977,9 +980,49 @@ def _valid_provenance_status(process):
         process["engine_anchors"] >= 1)
 
 
+def check_mojosec_runtime(report, run, sudo):
+    projection = (
+        "import json;from mojo.deploy.mojosec_refresh import diagnostic_snapshot;"
+        "print(json.dumps(diagnostic_snapshot(),separators=(',',':')))"
+    )
+    rc, out, _ = run(_mojosec_python(sudo, "-c " + q(projection)), timeout=15)
+    try:
+        value = json.loads(out) if rc == 0 and len(out) <= 16384 else {}
+        runtime = value.get("runtime", {})
+        installed = str(value.get("installed", ""))[:64]
+        loaded = str(runtime.get("framework_version", ""))[:64]
+        identity = runtime.get("identity", {})
+        if installed and loaded == installed and runtime.get("proved") is True:
+            report.passed("mojosec", "loaded framework generation", f"installed and loaded {installed}")
+        else:
+            report.fail("mojosec", "loaded framework generation drift",
+                        f"installed={installed or '?'} loaded={loaded or '?'}; current generation proof unavailable",
+                        "complete a framework deployment or restart the sensor one node at a time")
+        if identity:
+            started = datetime.datetime.fromisoformat(identity["process_started_at"])
+            age = (datetime.datetime.now(datetime.timezone.utc) - started).total_seconds()
+            report.info("mojosec", "sensor process age",
+                        f"pid={identity['pid']} boot={str(identity['boot_id'])[:36]} "
+                        f"ticks={identity['process_start_ticks']} age={int(age)}s")
+        refresh = value.get("refresh")
+        if isinstance(refresh, dict) and (refresh.get("pending") or refresh.get("outcome") == "degraded"):
+            report.fail("mojosec", "runtime refresh degraded",
+                        str(refresh.get("reason", "pending systemd job"))[:160])
+        elif refresh:
+            report.info("mojosec", "runtime refresh", str(refresh.get("outcome", "unknown"))[:64])
+        else:
+            report.info("mojosec", "runtime refresh evidence absent", "deployment refresh not yet recorded")
+        if value.get("observer_error"):
+            report.warn("mojosec", "retained observer error", str(value["observer_error"])[:160])
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+        report.fail("mojosec", "runtime identity unavailable", "bounded runtime projection failed")
+
+
 def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
     active = run("systemctl is-active mojosec.service 2>&1")[1]
     enabled = run("systemctl is-enabled mojosec.service 2>&1")[1]
+    if active == "active":
+        check_mojosec_runtime(report, run, sudo)
     if mode == "auto":
         mode = "observe" if enabled == "enabled" else "off"
         report.info("mojosec", f"auto-derived mode: {mode}",
@@ -1075,7 +1118,10 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                 report.passed("mojosec", "publish broker absent",
                               "no content roots are enrolled and no grant exists")
         rc, audit_status, _ = run(f"{sudo}/sbin/auditctl -s")
-        rc_rules, audit_rules, _ = run(f"{sudo}/sbin/auditctl -l")
+        rc_rules, audit_bytes, _ = run(f"{sudo}/sbin/auditctl -l", raw_stdout=True)
+        if isinstance(audit_bytes, str):
+            audit_bytes = audit_bytes.encode()
+        audit_rules = audit_bytes.decode(errors="replace")
         projection = (
             "import json;"
             f"p=json.load(open('{MOJOSEC_DEPLOY_STATE_PATH}'));"
@@ -1092,7 +1138,7 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
         policy_parts = policy_digest.split(None, 1) if rc_policy == 0 else []
         policy_digest = policy_parts[0] if policy_parts else ""
         generated_exact = run(f"{sudo}/sbin/augenrules --check")[0] == 0
-        active_digest = hashlib.sha256(audit_rules.encode()).hexdigest()
+        active_digest = hashlib.sha256(audit_bytes).hexdigest()
         required_status = ("enabled 1", "failure 1", "rate_limit 0", "backlog_limit 8192")
         if (rc == 0 and rc_rules == 0 and
                 all(value in audit_status for value in required_status) and
@@ -1120,7 +1166,7 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
         capabilities = run(
             "systemctl show mojosec-audit-health.service "
             "-p CapabilityBoundingSet -p AmbientCapabilities --value 2>&1")[1]
-        if timer == "active" and capabilities.count("CAP_AUDIT_CONTROL") >= 1:
+        if timer == "active" and set(capabilities.lower().split()) == {"cap_audit_control"}:
             report.passed("mojosec", "Audit health publisher",
                           "timer active with constrained Audit control capability")
         else:
@@ -1194,7 +1240,8 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
             "'spooled_events','delivery_accepted','collectors','delivery','config',"
             "'integrity','local_only_observed','local_only_diagnostic_delivered',"
             "'local_only_suppressed','local_only_last_seen','local_only_diagnostic',"
-            "'provenance');"
+            "'provenance','framework_version','pid','boot_id','process_start_ticks',"
+            "'process_started_at');"
             "print(json.dumps({k:p.get(k) for k in keys},separators=(',',':')))"
         )
         command = f"{sudo}python3 -c {q(projection)}"

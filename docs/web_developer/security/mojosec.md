@@ -10,6 +10,31 @@
 EC2 host sensors. It is not a browser/admin ingestion endpoint and does not use
 the normal REST response envelope.
 
+## Operator runtime evidence
+
+On-node schema-v1 status adds the loaded `framework_version`, `pid`, `boot_id`,
+Linux `process_start_ticks`, UTC `process_started_at`, and `running`. A minimal
+starting identity is available before Store/journal health work; running identity
+does not itself prove collection or delivery. The ingestion wire contract is
+unchanged, and these local fields are not a new browser API.
+
+Normal deployment refreshes an active stale sensor before application activation;
+rollback repeats the bounded operation after package restore. Inactive services
+stay inactive and enable state is preserved. Duplicate hooks share one durable
+attempt, with a 60-second budget and systemd job reconciliation/cancellation.
+Root-only `/etc/mojosec/runtime-refresh.json` retains pending/degraded results and
+recent failures. Observer errors never decide application deployment success.
+Legacy rollback reports unavailable loaded-version proof explicitly.
+
+The first upgrade adopts refresh when the candidate activation body starts and
+retains a wrapper for previous activation. An interruption before that boundary
+cannot be repaired by code that has not run. Operators use `check_node` to detect
+installed/loaded drift and recover one node at a time, or complete the next
+deployment. Daily restarts can hide drift and do not prove version alignment.
+After release, canary/fleet verification must establish the released version,
+fresh process generation, and absence of new false broker missing-proof events
+on both MojoVerify nodes; local tests are not that production evidence.
+
 ## Authentication
 
 Each installation uses its own API key:
