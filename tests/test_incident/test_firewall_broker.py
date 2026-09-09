@@ -305,12 +305,17 @@ def test_firewall_transport_failures_are_typed(opts):
         returncode=1,
         stdout='{"ok":false,"error":{"code":"broker_resource_limit_unavailable"}}',
         stderr="")
+    poisoned = mock.Mock(
+        returncode=1,
+        stdout='{"ok":false,"error":{"code":"broker_timeout\\nsecret-log-line"}}',
+        stderr="")
     scenarios = (
         (subprocess.TimeoutExpired([firewall.BROKER], 20), "broker_timeout"),
         (OSError("secret-startup-path"), "broker_start_failed"),
         (malformed, "broker_malformed_response"),
         (invalid, "broker_invalid_response"),
         (refused, "broker_resource_limit_unavailable"),
+        (poisoned, "broker_invalid_response"),
     )
     with execution(
             "job-1", "mojo.apps.incident.asyncjobs.sync_firewall", 1,
@@ -333,7 +338,8 @@ def test_firewall_transport_failures_are_typed(opts):
             rendered = repr(logged.call_args_list)
             th.assert_true(
                 secret not in rendered and "secret-startup-path" not in rendered and
-                "secret-stderr" not in rendered and "not-json" not in rendered,
+                "secret-stderr" not in rendered and "not-json" not in rendered and
+                "secret-log-line" not in rendered,
                 "broker diagnostics leaked request, exception, stderr, or response content")
 
 

@@ -9,6 +9,7 @@ Called only from async jobs — never from the web process.
 """
 import getpass
 import json
+import re
 import subprocess
 from mojo.helpers import logit
 from mojo.apps.incident.services.firewall_truth import (
@@ -26,6 +27,7 @@ IPTABLES = "/sbin/iptables"
 IPTABLES_SAVE = "/sbin/iptables-save"
 IPSET = "/sbin/ipset"
 BROKER = "/usr/local/sbin/mojo-firewall-broker"
+_BROKER_CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 def _broker_error(code):
@@ -146,9 +148,13 @@ def _broker_request(operation, timeout=20, **values):
         return _broker_error("broker_invalid_response")
     if result.returncode or not value["ok"]:
         error = value.get("error") if isinstance(value.get("error"), dict) else {}
-        code = str(error.get("code") or "broker_invalid_response")[:64]
+        code = error.get("code")
+        if not isinstance(code, str) or not _BROKER_CODE.fullmatch(code):
+            code = "broker_invalid_response" if result.returncode else "semantic_mismatch"
         if result.returncode and value["ok"]:
             code = "broker_invalid_response"
+            value = _broker_error(code)
+        elif result.returncode and code == "broker_invalid_response":
             value = _broker_error(code)
         _log_broker_failure(
             operation, code, result.returncode, response_length)
