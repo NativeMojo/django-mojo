@@ -52,6 +52,9 @@ MAX_STATM_BYTES = 128
 _RESOURCE_EXHAUSTED_RESPONSE = (
     b'{"error":{"code":"broker_resource_exhausted",'
     b'"message":"broker memory exhausted"},"ok":false}\n')
+_RESOURCE_LIMIT_UNAVAILABLE_RESPONSE = (
+    b'{"error":{"code":"broker_resource_limit_unavailable",'
+    b'"message":"broker resource limit unavailable"},"ok":false}\n')
 MAX_SET_NAME = 31
 MAX_CONFIG_BYTES = 4096
 _SET_NAME = re.compile(r"^[A-Za-z0-9_-]{1,31}$")
@@ -926,17 +929,17 @@ def _install_address_space_limit(
         set_limit(resource.RLIMIT_AS, (target, target))
     except BrokerError:
         raise
-    except (OSError, ValueError, OverflowError) as err:
+    except (OSError, TypeError, ValueError, OverflowError) as err:
         raise BrokerError(
             "cannot install broker address-space limit",
             code="broker_resource_limit_unavailable") from err
     return target
 
 
-def _write_resource_exhausted():
-    """Use one prebuilt response so heap exhaustion cannot empty stdout."""
+def _write_prebuilt_response(response):
+    """Use prebuilt response bytes when normal JSON may lack heap headroom."""
     try:
-        os.write(1, _RESOURCE_EXHAUSTED_RESPONSE)
+        os.write(1, response)
     except OSError:
         pass
 
@@ -982,16 +985,23 @@ def main(argv=None):
         descriptor = _acquire_host_lock()
         print(json.dumps(execute(request), sort_keys=True, separators=(",", ":")))
         return 0
-    except (BrokerError, OSError, ValueError) as err:
-        code = err.code if isinstance(err, BrokerError) else "broker_failure"
-        message = str(err)[:256] if isinstance(err, BrokerError) else "broker failed"
+    except BrokerError as err:
+        if err.code == "broker_resource_limit_unavailable":
+            _write_prebuilt_response(_RESOURCE_LIMIT_UNAVAILABLE_RESPONSE)
+            return 1
         print(json.dumps({
             "ok": False,
-            "error": {"code": code, "message": message},
+            "error": {"code": err.code, "message": str(err)[:256]},
+        }, sort_keys=True, separators=(",", ":")))
+        return 1
+    except (OSError, ValueError):
+        print(json.dumps({
+            "ok": False,
+            "error": {"code": "broker_failure", "message": "broker failed"},
         }, sort_keys=True, separators=(",", ":")))
         return 1
     except MemoryError:
-        _write_resource_exhausted()
+        _write_prebuilt_response(_RESOURCE_EXHAUSTED_RESPONSE)
         return 1
     finally:
         if descriptor is not None:

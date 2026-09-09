@@ -41,6 +41,17 @@ def test_adaptive_address_space_limit(opts):
         installed, [(resource.RLIMIT_AS, (target, target))],
         "the broker did not install one finite soft and hard address-space cap")
 
+    with th.assert_raises(broker.BrokerError) as raised:
+        broker._install_address_space_limit(
+            baseline_bytes=baseline,
+            get_limit=lambda unused_kind: (
+                384 * 1024 * 1024, 384 * 1024 * 1024),
+            set_limit=set_limit,
+        )
+    th.assert_eq(
+        raised.exception.code, "broker_resource_limit_unavailable",
+        "a lower existing hard cap did not fail before request execution")
+
 
 @th.unit_test("broker returns valid prebuilt JSON when stdin allocation fails")
 def test_memory_error_response(opts):
@@ -66,3 +77,30 @@ def test_memory_error_response(opts):
     th.assert_eq(
         response["error"]["code"], "broker_resource_exhausted",
         "the resource error must remain stable and machine-readable")
+
+
+@th.unit_test("broker returns prebuilt JSON when safe headroom is unavailable")
+def test_resource_limit_unavailable_response(opts):
+    from mojo.deploy import firewall_broker as broker
+
+    written = []
+
+    def write(unused_descriptor, payload):
+        written.append(payload)
+        return len(payload)
+
+    refused = broker.BrokerError(
+        "unsafe headroom", code="broker_resource_limit_unavailable")
+    with mock.patch.object(broker, "_verify_caller"), \
+            mock.patch.object(
+                broker, "_install_address_space_limit", side_effect=refused), \
+            mock.patch.object(broker.os, "write", side_effect=write), \
+            mock.patch.object(broker, "_acquire_host_lock") as lock:
+        status = broker.main([])
+
+    th.assert_eq(status, 1, "unsafe resource headroom did not fail closed")
+    lock.assert_not_called()
+    response = json.loads(b"".join(written).decode("ascii"))
+    th.assert_eq(
+        response["error"]["code"], "broker_resource_limit_unavailable",
+        "resource-limit refusal did not use a stable prebuilt response")
