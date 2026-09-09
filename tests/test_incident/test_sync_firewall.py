@@ -57,7 +57,8 @@ class _Redis:
 
 def _job(target=None):
     from objict import objict
-    value = objict(logs=[], payload={"target": target or LOCAL_TARGET})
+    value = objict(logs=[], payload={"target": target or LOCAL_TARGET},
+                   attempt=1, max_retries=8)
     value.add_log = value.logs.append
     return value
 
@@ -100,10 +101,16 @@ def _observation(kind, identity, fence, fingerprint, host, desired,
 
 
 def _run_sync(job):
-    from mojo.apps.incident.asyncjobs import sync_firewall
+    from mojo.apps.incident.asyncjobs import _firewall_host, sync_firewall
+    # These tests exercise post-admission kernel/fence behavior on an enrolled
+    # host. Readiness rejection itself is covered by firewall_readiness tests.
     with mock.patch(
+            "mojo.apps.incident.services.firewall_readiness.probe",
+            return_value={"ready": True, "code": "ready"}), mock.patch(
+            "mojo.apps.incident.services.firewall_truth.expected_hosts",
+            return_value=[_firewall_host()]), mock.patch(
             "mojo.apps.incident.services.firewall_truth.current_host_runner_target",
-            return_value=LOCAL_TARGET):
+            return_value=job.payload["target"]):
         return sync_firewall(job)
 
 
@@ -281,7 +288,7 @@ def test_permanent_broker_failure_stops_immediately(opts):
                 wraps=firewall_truth.permanent_snapshot) as snapshots, \
             th.assert_raises(FirewallSyncRetry) as raised:
         _run_sync(_job())
-    assert raised.exception.code == "broker_timeout"
+    assert raised.exception.code == "broker_timeout", "broker timeout lost its retry code"
     assert snapshots.call_count == 1, "broker failure triggered a post-call snapshot"
     sets.assert_not_called()
     ips.assert_not_called()
@@ -307,7 +314,7 @@ def test_set_broker_failure_stops_immediately(opts):
                 wraps=firewall_truth.ipset_snapshot) as snapshots, \
             th.assert_raises(FirewallSyncRetry) as raised:
         _run_sync(_job())
-    assert raised.exception.code == "broker_start_failed"
+    assert raised.exception.code == "broker_start_failed", "broker startup failure lost its code"
     assert sets.call_count == 1, "set broker failure did not stop sibling calls"
     snapshots.assert_not_called()
     ips.assert_not_called()
@@ -334,7 +341,7 @@ def test_ip_broker_failure_stops_immediately(opts):
                 wraps=firewall_truth.geolocated_snapshot) as snapshots, \
             th.assert_raises(FirewallSyncRetry) as raised:
         _run_sync(_job())
-    assert raised.exception.code == "broker_invalid_response"
+    assert raised.exception.code == "broker_invalid_response", "invalid broker response lost its code"
     assert ips.call_count == 1, "IP broker failure did not stop sibling calls"
     snapshots.assert_not_called()
     publish.assert_not_called()
@@ -552,7 +559,7 @@ def test_checked_finalization_rejects_changed_incarnation(opts):
             firewall_truth, "exact_compatible_roster",
             return_value=[{"host": "node-a", "started": "after-restart"}]), \
             th.assert_raises(firewall_truth.FirewallTruthError) as raised:
-        firewall_truth._checked_current_roster(checked, "default")
+        firewall_truth._checked_current_roster(checked, "firewall")
     assert raised.exception.code == "runner_roster_changed", \
         "a checked reply remained authoritative after its runner restarted"
 
@@ -620,7 +627,7 @@ def test_sync_broker_io_does_not_starve_other_hosts(opts):
                 firewall_truth, "current_host_runner_target",
                 return_value={"host": "node-a", "runner_id": "runner-a",
                               "started": "node-a-start"}):
-        result = sync_firewall(_job({
+        result = _run_sync(_job({
             "host": "node-a", "runner_id": "runner-a",
             "started": "node-a-start"}))
     assert result is True and observed_unlocked and all(observed_unlocked), \
@@ -676,8 +683,8 @@ def test_sync_lease_contention_raises_for_job_retry(opts):
                               side_effect=busy), \
             mock.patch("mojo.apps.incident.firewall.normalize_ipset") as broker, \
             th.assert_raises(FirewallSyncRetry) as raised:
-        sync_firewall(_job())
-    assert raised.exception.code == "desired_state_busy"
+        _run_sync(_job())
+    assert raised.exception.code == "desired_state_busy", "lease contention lost its retry code"
     broker.assert_not_called()
 
 
@@ -705,8 +712,8 @@ def test_desired_plan_bound_raises_for_retry(opts):
                 return_value=LOCAL_TARGET), \
             mock.patch("mojo.apps.incident.firewall.normalize_ipset") as broker, \
             th.assert_raises(asyncjobs.FirewallSyncRetry) as raised:
-        asyncjobs.sync_firewall(_job())
-    assert raised.exception.code == "desired_object_bound_exceeded"
+        _run_sync(_job())
+    assert raised.exception.code == "desired_object_bound_exceeded", "oversize plan lost its safety code"
     broker.assert_not_called()
 
 
@@ -733,8 +740,8 @@ def test_two_hosts_publish_without_global_lease_starvation(opts):
             mock.patch.object(
                 firewall_truth, "current_host_runner_target",
                 side_effect=targets):
-        assert sync_firewall(_job(targets[0])) is True
-        assert sync_firewall(_job(targets[1])) is True
+        assert _run_sync(_job(targets[0])) is True, "node-a did not publish its observation"
+        assert _run_sync(_job(targets[1])) is True, "node-b did not publish its observation"
     permanent = firewall_truth.permanent_snapshot()
     target = ("permanent", permanent["name"])
     fence = firewall_truth.read_fences(redis, [target])[target]
@@ -822,20 +829,22 @@ def test_cron_schedule_and_host_fanout(opts):
     assert specs["sync_firewall"]["minutes"] == "0"
     rows = [
         {"runner_id": "z-runner", "hostname": "node-a",
-         "started": "2026-09-04T12:00:00+00:00", "channels": ["default"],
-         "capabilities": {"execute_checked": 2}},
+         "started": "2026-09-04T12:00:00+00:00", "channels": ["firewall", "z-runner"],
+         "capabilities": {"execute_checked": 2, "firewall_reconcile": 1}},
         {"runner_id": "a-runner", "hostname": "node-a",
-         "started": "2026-09-04T12:01:00+00:00", "channels": ["default"],
-         "capabilities": {"execute_checked": 2}},
+         "started": "2026-09-04T12:01:00+00:00", "channels": ["firewall", "a-runner"],
+         "capabilities": {"execute_checked": 2, "firewall_reconcile": 1}},
         {"runner_id": "b-runner", "hostname": "node-b",
-         "started": "2026-09-04T12:02:00+00:00", "channels": ["default"],
-         "capabilities": {"execute_checked": 2}},
+         "started": "2026-09-04T12:02:00+00:00", "channels": ["firewall", "b-runner"],
+         "capabilities": {"execute_checked": 2, "firewall_reconcile": 1}},
     ]
     manager = mock.Mock()
     manager.get_runners_bounded.return_value = rows
     manager._checked_host_roster = JobManager._checked_host_roster
     with mock.patch("mojo.apps.jobs.manager.get_manager",
                     return_value=manager), \
+            mock.patch("mojo.apps.incident.services.firewall_truth.expected_hosts",
+                       return_value=["node-a", "node-b"]), \
             th.capture_publishes(
             lambda call: call.get("func") == cronjobs.FIREWALL_SYNC_JOB) as calls:
         cronjobs.sync_firewall()

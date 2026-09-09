@@ -18,7 +18,7 @@ SYNC_JOB = "mojo.apps.incident.asyncjobs.sync_firewall"
 
 def _engine(runner_id="test-node-engine", channels=None):
     if channels is None:
-        channels = ["default", runner_id]
+        channels = ["default", "firewall", runner_id]
     engine = mock.Mock(runner_id=runner_id, channels=channels)
     engine.start_time.isoformat.return_value = "2026-09-04T12:00:00+00:00"
     return engine
@@ -42,6 +42,10 @@ def test_startup_hook_publishes_box_direct_force_sync(opts):
     _, force_key, _ = asyncjobs._sync_firewall_keys()
 
     with mock.patch("mojo.apps.jobs.adapters.get_adapter", return_value=redis_client), \
+         mock.patch("mojo.apps.incident.services.firewall_readiness.probe",
+                    return_value={"ready": True, "code": "ready"}), \
+         mock.patch("mojo.apps.incident.services.firewall_truth.expected_hosts",
+                    return_value=[asyncjobs._firewall_host()]), \
          th.capture_publishes(lambda c: c.get("func") == SYNC_JOB) as calls:
         result = asyncjobs.on_engine_start(_engine())
 
@@ -72,7 +76,7 @@ def test_startup_hook_skips_without_box_direct_channel(opts):
     with mock.patch("mojo.apps.jobs.adapters.get_adapter", return_value=redis_client), \
          th.capture_publishes(lambda c: c.get("func") == SYNC_JOB) as calls:
         result = asyncjobs.on_engine_start(
-            _engine(channels=["default"]))
+            _engine(channels=["default", "firewall"]))
 
     assert calls == [], f"nothing should be published into an unconsumed channel: {calls}"
     assert redis_client.store == {}, \

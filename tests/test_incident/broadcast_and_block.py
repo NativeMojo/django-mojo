@@ -140,6 +140,8 @@ def test_checked_ip_reconcile_receipt(opts):
     redis, fingerprint = _checked_state("ip", "192.0.2.8", desired)
     with mock.patch("mojo.apps.incident.asyncjobs._raw_redis",
                     return_value=redis), \
+            mock.patch("mojo.apps.incident.services.firewall_readiness.probe",
+                       return_value={"ready": True, "code": "ready"}), \
             mock.patch(
                 "mojo.apps.incident.services.firewall_truth._redis_client",
                 return_value=redis), \
@@ -197,6 +199,8 @@ def test_checked_geolocated_reconcile_is_compound(opts):
     }
     with mock.patch(
             "mojo.apps.incident.asyncjobs._raw_redis", return_value=redis), \
+            mock.patch("mojo.apps.incident.services.firewall_readiness.probe",
+                       return_value={"ready": True, "code": "ready"}), \
             mock.patch(
                 "mojo.apps.incident.services.firewall_truth._redis_client",
                 return_value=redis), \
@@ -235,11 +239,20 @@ def test_firewall_truth_requires_exact_nonempty_evidence(opts):
             "mojo.apps.incident.services.firewall_truth._redis_client",
             return_value=redis), \
             mock.patch(
-            "mojo.apps.jobs.broadcast_execute_checked",
+            "mojo.apps.incident.services.firewall_truth._dispatch_firewall",
             return_value=malformed):
         result = firewall_truth.reconcile_ip("192.0.2.8", True)
     assert result["status"] == "partial" and result["ok"] is False, result
     assert result["error"]["code"] == "checked_evidence_invalid", result
+
+    from mojo.helpers.settings import settings
+    with mock.patch.object(firewall_truth, "_redis_client", return_value=redis), \
+            mock.patch.object(settings, "get_static", return_value=None), \
+            mock.patch("mojo.apps.jobs.manager.get_manager") as manager:
+        missing = firewall_truth.reconcile_ip("192.0.2.8", True)
+    assert missing["status"] == "unknown" and missing["ok"] is False, missing
+    assert missing["error"]["code"] == "expected_hosts_missing", missing
+    manager.return_value.broadcast_execute_checked.assert_not_called()
 
 
 @th.django_unit_test("delayed checked command refuses a stale fence before mutation")
@@ -255,6 +268,8 @@ def test_delayed_checked_command_is_fenced(opts):
         "set", "stale_checked", desired, fence=2)
     with mock.patch("mojo.apps.incident.asyncjobs._raw_redis",
                     return_value=redis), \
+            mock.patch("mojo.apps.incident.services.firewall_readiness.probe",
+                       return_value={"ready": True, "code": "ready"}), \
             mock.patch("mojo.apps.incident.firewall.normalize_ipset") as mutate, \
             mock.patch(
                 "mojo.apps.incident.services.firewall_truth.mark_superseded_pending") \
@@ -263,7 +278,8 @@ def test_delayed_checked_command_is_fenced(opts):
             "name": "stale_checked", "cidrs": ["192.0.2.0/24"],
             "present": True, "fence": 1, "fingerprint": "e" * 64,
         })
-    assert result["ok"] is False and result["error"] == "generation_superseded"
+    assert result["ok"] is False and result["error"] == "generation_superseded", \
+        f"stale checked command did not fail at the generation fence: {result!r}"
     mutate.assert_not_called()
     pending.assert_called_once_with("set", "stale_checked")
 
@@ -286,6 +302,8 @@ def test_checked_broker_io_is_between_short_lease_phases(opts):
 
     with mock.patch("mojo.apps.incident.asyncjobs._raw_redis",
                     return_value=redis), \
+            mock.patch("mojo.apps.incident.services.firewall_readiness.probe",
+                       return_value={"ready": True, "code": "ready"}), \
             mock.patch(
                 "mojo.apps.incident.services.firewall_truth._redis_client",
                 return_value=redis), \
