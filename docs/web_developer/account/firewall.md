@@ -11,6 +11,16 @@ host prevents verified fleet truth. Healthy expected hosts may still repair;
 keep partial/unknown responses pending. Checked evidence distinguishes
 `fleet_expected_hosts`, `selected_hosts`, and `unavailable_hosts`.
 
+An expected host needs an enrolled broker and a live runner consuming `firewall`
+plus its own direct channel, running as ec2-user, and advertising both checked
+execution v2 and fresh `firewall_reconcile: 1` readiness. This includes Sites
+hosts. A generic checked-capable runner alone is insufficient. Enrollment is an
+operator deployment action; it has no new REST endpoint. The
+[backend lifecycle guide](../../django_developer/deploy/firewall.md) covers
+enroll/check/converge/off and retained rollback convergence. These lifecycle
+commands do not change SSH rules or flush kernel state. MojoSec may remain off;
+firewall `off` revokes broker authority but preserves existing kernel rules.
+
 **Permissions required:** `view_security` (read), `manage_security` (block/unblock/whitelist actions)
 
 ## Overview
@@ -97,7 +107,7 @@ legacy response, not evidence of enforcement. Migration
 firewall-touched or whitelisted row pending because the old broadcasts supplied
 no compatible-host observation. One host's periodic repair cannot clear shared
 truth: an exact-current-roster aggregator requires matching fenced observations
-from every compatible host.
+from every configured expected host, with current compatible readiness.
 
 ### Block an IP
 
@@ -239,7 +249,8 @@ stale-auth sessions are refused.
 
 Migration `0054_geolocatedip_firewall_reconciliation` resets legacy IPSet
 dispatch fields to unverified state. Wait until at least one v2 checked-capable
-job engine is live on every intended host, then call `ipset.sync` to establish
+job engine with fresh `firewall_reconcile: 1` readiness is live on every
+configured expected host, then call `ipset.sync` to establish
 new fleet proof. An invalid or IPv6 Geo row or legacy IPSet with an
 invalid/reserved name, a name over 27 characters, or a present set with malformed or IPv6 CIDRs or
 more than 250,000 networks is quarantined individually while valid

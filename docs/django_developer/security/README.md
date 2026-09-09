@@ -763,22 +763,25 @@ absence tombstone so kernel drift is removed; it never loads the cached CIDRs.
 
 `sync_firewall` reconciles **the kernel of the node it runs on** against DB truth. Every node needs its own run: iptables/ipset state is lost on restart, and no other node can repair it.
 
-It is reached two ways:
+It is reached through these readiness-gated paths:
 
-- **Hourly, once per hostname.** The cron reads the compatible `default`
-  roster and directly queues its deterministic selected runner for each host.
+- **Hourly, once per available expected hostname.** The cron joins
+  `FIREWALL_EXPECTED_HOSTS` to ready `firewall_reconcile: 1` runners consuming
+  `firewall` and directly queues its deterministic selected runner for each host.
   This is the same selection checked execution uses, so a second runner sharing
   that kernel cannot win the host lock and publish the wrong incarnation.
-- **At engine start, box-direct.** `asyncjobs.on_engine_start` (registered by the incident `AppConfig`) sets a force flag and publishes a forced reconcile to its own runner's channel. This is boot recovery, and it is what makes a rebooted node recover in seconds rather than up to an hour.
+- **At engine start or readiness recovery, box-direct.** `asyncjobs.on_engine_start` (registered by the incident `AppConfig`) sets a force flag and publishes a forced reconcile to its own runner's channel after broker readiness and expected membership pass. Durable markers make each startup/recovery transition idempotent for that runner incarnation.
 
 The hook publishes rather than reconciling inline because every firewall write goes through the root-owned broker, which refuses outside a JobEngine execution context — and a startup hook has none.
 
 **Propagation boundary — state it plainly:** a node reconciles hourly only if it
-runs a compatible jobs runner consuming `default`, and recovers at boot only if
-that engine consumes its own box-direct channel. With
-`JOBS_HOSTNAME_CHANNEL = False` direct addressing is unavailable, so both paths
-fail closed with a warning; a single arbitrary runner is not treated as fleet
-repair.
+runs an enrolled, ready jobs runner consuming `firewall` and its own box-direct
+channel, and belongs to `FIREWALL_EXPECTED_HOSTS`. With
+`JOBS_HOSTNAME_CHANNEL = False` direct addressing is unavailable and the runner
+does not advertise firewall capability. This also applies to dedicated Sites
+runners; see [enrollment and runner configuration](../deploy/firewall.md).
+Healthy expected hosts can repair while another expected host is unavailable,
+but that subset cannot finalize fleet truth.
 
 **Exact reconciliation:** every run bounds the complete desired-row roster and
 builds canonical plans before its first firewall write. Unsupported rows are
@@ -800,8 +803,9 @@ The bounded DB row scan, per-object canonicalization, checked transport, and
 root-broker I/O all occur outside that lease. Full reconciliation retains the
 per-host lock around local kernel operations, then briefly reacquires the global
 lease to reject stale truth before publishing. Contention, lease expiry,
-oversized plans, and unverified observations raise into JobEngine's durable
-exponential retry with jitter; none is a successful completion. Every release
+and unverified observations raise into JobEngine's durable exponential retry
+with jitter; oversized plans fail terminally until repaired. None is a
+successful completion. Every release
 is compare-and-delete. Fleet aggregation likewise brackets its per-row CAS
 writes with short batched generation checks; superseded publication
 pessimistically re-marks the plan pending before retry.
@@ -836,15 +840,20 @@ Broker transport failures are host-wide, not object-local. Stable client codes
 `broker_invalid_response` (plus broker-returned `broker_*` and `host_busy`)
 raise `FirewallSyncRetry` immediately after the permanent, IPSet, or IP call
 that returned them. No later snapshot, object, observation, or aggregate publish
-runs in that attempt, so JobEngine backoff starts after one failed privileged
-call. A semantic mismatch without one of those codes remains object-local and
-valid siblings continue.
+runs in that attempt. Transient timeouts, start failures, and host contention
+use durable backoff; wrong-user, missing/malformed broker, unsafe installation,
+permanent-name mismatch, and invalid expected-fleet configuration are terminal
+structural failures (`retryable=False`). A later readiness recovery queues a
+fresh repair. A semantic mismatch without one of those codes remains
+object-local and valid siblings continue.
 
 The hourly/startup job proves only the kernel on the host where it runs. It
 writes a TTL-bounded observation and advances only that host's marker; it never
 clears shared object truth by itself. The aggregator re-reads the exact current
-compatible-host roster and clears a GeoLocatedIP/IPSet pending error only when
-every host observation matches the same fingerprint and fence. A synchronous
+configured expected roster and clears a GeoLocatedIP/IPSet pending error only
+when every expected host is available and its observation matches the same
+fingerprint and fence. Aggregate jobs coalesce by desired generation on the
+`firewall` channel. A synchronous
 checked action result (`status="verified"`, `ok=true`, and, for a
 GeoLocatedIP, `owned=true`) applies the same exact-host proof directly.
 
@@ -859,25 +868,29 @@ exist before that cross-app reset; it does not claim
 that old best-effort broadcasts were observed. Unsupported legacy rows receive
 a bounded quarantine error rather than blocking valid IPv4 repair.
 
-Roll the v2 job engine to at least one runner on every intended hostname before
-using checked actions. An old-only host makes the compatible roster fail
-closed with `unknown` before confirmed dispatch. After the fleet is compatible,
+Declare the complete `FIREWALL_EXPECTED_HOSTS` fleet and enroll every host, then
+roll a v2 job engine with current `firewall_reconcile: 1` readiness to at least
+one runner on every expected hostname. An old-only or unready expected host
+remains unavailable; healthy peers can receive checked repair, but their result
+cannot verify the complete fleet. After the fleet is ready,
 run reconciliation on every host and use `ipset.sync` (or the GeoLocatedIP
 checked action) when an operator needs a retained exact fleet result.
 
 Preflight legacy desired data before this upgrade. Firewall state accepts only
 canonical IPv4. Migration/reconciliation quarantines an invalid or IPv6 Geo
 row or an IPSet with an invalid/reserved name, any name without atomic-swap
-suffix room, malformed or IPv6 CIDRs, or more than 250,000 networks while valid rows
-continue.
+suffix room, or an enabled set with malformed or IPv6 CIDRs or more than 250,000
+networks while valid rows continue. Disabled historical sets validate only the
+safe name and produce absence tombstones without loading old member data.
 Migration also forces a quarantined legacy IPSet disabled. Quarantined objects
 remain pending/error and cannot verify until repaired;
 valid siblings still receive host observations and can become verified. The
 configured `FIREWALL_BLOCKED_IPSET_NAME` is dynamically reserved too; an IPSet
 with that name is quarantined so it cannot overwrite the permanent aggregate.
 The privileged broker derives that identity from root-owned
-`/etc/mojo-firewall-broker.json`; when the file is absent it securely defaults
-to `mojo_blocked`. The application setting is only an equality assertion, so a
+`/etc/mojo-firewall-broker.json`; missing enrollment or broker configuration
+makes it unavailable. Enrollment defaults the permanent name to `mojo_blocked`.
+The application setting is only an equality assertion, so a
 mismatch refuses before mutation and cannot redefine the broker namespace.
 Operator IPSet operations also reject the entire framework-reserved `mojo_*`
 namespace independently in the broker, including absence/removal operations.

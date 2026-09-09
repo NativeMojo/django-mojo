@@ -45,8 +45,10 @@ fleet. Changing membership is an explicit deployment configuration change.
 
 The normal API runner consumes `firewall` through `DEFAULT_CHANNELS`. Projects
 that replace `JOBS_CHANNELS` must add `firewall` and retain
-`JOBS_HOSTNAME_CHANNEL=True`. A dedicated Sites deployment engine can add
-`firewall` to its own channel list and must run as ec2-user. Enrolled API
+`JOBS_HOSTNAME_CHANNEL=True`. A participating Sites host also needs a live
+JobEngine: its dedicated deployment engine must consume `firewall` and its own
+box-direct channel, load the incident capability provider, and run as ec2-user.
+Enrollment alone does not start that runner. Enrolled API
 candidates validate these channel and membership contracts before activation.
 
 ## Readiness and reconciliation
