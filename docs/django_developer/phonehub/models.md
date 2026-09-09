@@ -20,7 +20,7 @@ from mojo.apps.phonehub.models import PhoneNumber
 | `line_type` | CharField(20) | `"mobile"`, `"landline"`, or `"voip"` |
 | `is_mobile` | BooleanField | True if mobile line |
 | `is_voip` | BooleanField | True if VoIP line |
-| `is_valid` | BooleanField | True if number passed validation |
+| `is_valid` | BooleanField | Carrier verdict from the last **successful** lookup. Never written by the error path — meaningless while `lookup_unavailable` is true |
 | `registered_owner` | CharField(200) | CNAM registered name, if available |
 | `owner_type` | CharField(50) | `"CONSUMER"` or `"BUSINESS"` |
 | `address_line1` | CharField(200) | Address from lookup data |
@@ -29,10 +29,10 @@ from mojo.apps.phonehub.models import PhoneNumber
 | `address_zip` | CharField(20) | ZIP from lookup data |
 | `address_country` | CharField(5) | Country from lookup data |
 | `lookup_provider` | CharField(20) | `"twilio"` or `"aws"` |
-| `lookup_data` | JSONField | Raw provider response |
+| `lookup_data` | JSONField | Error marker only (`error`, `error_at`, `error_count`); cleared on every success. Never serialized (`NO_SHOW_FIELDS`) |
 | `lookup_expires_at` | DateTimeField | When to re-fetch from provider |
 | `lookup_count` | IntegerField | Number of times looked up |
-| `last_lookup_at` | DateTimeField | Last lookup timestamp |
+| `last_lookup_at` | DateTimeField | Last **successful** lookup timestamp; an error never sets it |
 | `created` | DateTimeField | Auto-set on create |
 | `modified` | DateTimeField | Auto-set on update |
 
@@ -50,7 +50,7 @@ SEARCH_FIELDS = ["phone_number", "carrier", "registered_owner"]
 | Graph | Fields |
 |---|---|
 | `basic` | `id`, `phone_number`, `carrier`, `line_type`, `is_valid` |
-| `default` | All fields except `lookup_data` |
+| `default` | All fields except `lookup_data` (excluded via `NO_SHOW_FIELDS`), plus the `lookup_unavailable` property |
 
 ### Key Methods
 
@@ -65,13 +65,21 @@ PhoneNumber.normalize("bad")              # None
 
 #### `PhoneNumber.lookup(phone_number)` (classmethod)
 Get or create a cached `PhoneNumber`. Auto-refreshes if the cache has expired.
+Returns `None` when `normalize()` cannot parse the number — there is no cache
+key for it, so no row is created.
 
 ```python
 phone = PhoneNumber.lookup("+14155551234")
+PhoneNumber.lookup("bad")   # None
 ```
 
-#### `phone.refresh()`
-Force re-fetch from the provider and update all fields.
+#### `phone.refresh(*, lookup_fn=None)`
+Force re-fetch from the provider. On success every carrier field is updated and
+the row is cached for `LOOKUP_TTL_DAYS`. On a provider error nothing but the
+error marker is written — see "Lookup errors and `is_valid`" below.
+
+`lookup_fn` is a keyword-only **test seam** for the provider call. Production
+never passes it; when it is `None` the Twilio lookup service is used.
 
 #### Properties
 
@@ -79,8 +87,37 @@ Force re-fetch from the provider and update all fields.
 |---|---|
 | `needs_lookup` | True if `lookup_expires_at` has passed |
 | `is_expired` | Alias for `needs_lookup` |
+| `lookup_error` | Provider error text from the last failed lookup, or `None` |
+| `lookup_unavailable` | True when the provider failed **and** there is no successful lookup younger than `LOOKUP_TTL_DAYS` — i.e. no verdict is available |
 | `area_code` | Extracted 3-digit area code |
 | `area_code_info` | objict with area code type, location, description |
+
+### Lookup errors and `is_valid`
+
+One row, two TTLs (module constants in `mojo/apps/phonehub/models/phone.py`):
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `LOOKUP_TTL_DAYS` | 90 | How long a **successful** carrier verdict is cached |
+| `LOOKUP_ERROR_TTL_MINUTES` | 15 | First negative-cache window after a provider error |
+| `LOOKUP_ERROR_TTL_MAX_MINUTES` | 1440 | Ceiling for the exponential backoff |
+
+A failed lookup is **negative-cached**, not raised and not discarded: the error
+is recorded in `lookup_data` (text ANSI-stripped and truncated to 200 chars,
+plus `error_at` and `error_count`) and `lookup_expires_at` is stamped
+**unconditionally** on every error at `min(15 * 2**(error_count-1), 1440)`
+minutes. Nothing else moves — not `is_valid`, not `carrier`/`line_type`/
+`is_mobile`/`is_voip`/`registered_owner`, not `last_lookup_at`, not
+`lookup_count`. A success clears the marker.
+
+That asymmetry is deliberate. `is_valid` is the carrier verdict from the last
+**successful** lookup, so an outage must never overwrite it — writing `False`
+would mint a false negative from someone else's downtime. Read
+`lookup_unavailable` first and treat it as "no verdict"; only then is `is_valid`
+meaningful. A previously-good row that errors inside its TTL keeps serving its
+cached verdict (`lookup_unavailable` is False); a verdict older than
+`LOOKUP_TTL_DAYS` that cannot be refreshed does not (`True`), which is what
+stops a disconnected or reassigned number from serving a dated "valid" forever.
 
 ---
 

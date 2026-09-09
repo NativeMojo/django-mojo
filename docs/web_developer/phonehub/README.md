@@ -55,7 +55,7 @@ Converts any phone number format to E.164. No carrier lookup — pure normalizat
 
 ## Look Up Phone Info
 
-Returns carrier, line type, and owner data for a phone number. Results are cached on the server — re-fetched automatically when the cache expires (default 90 days).
+Returns carrier, line type, and owner data for a phone number. Results are cached on the server — re-fetched automatically when the cache expires (default 90 days). A failed provider lookup is cached too, for a much shorter window; see "When the carrier lookup fails" below.
 
 **POST** `/api/phonehub/number/lookup`
 
@@ -95,9 +95,33 @@ Pass `force_refresh: true` to bypass the cache and fetch fresh data from the car
 | `line_type` | `mobile`, `landline`, `voip` | Type of phone line |
 | `is_mobile` | bool | True for mobile numbers |
 | `is_voip` | bool | True for VoIP numbers |
-| `is_valid` | bool | Whether the number passed validation |
+| `is_valid` | bool | Carrier verdict from the last **successful** lookup — see the warning below |
+| `lookup_unavailable` | bool | True when no verdict is available (see below) |
 | `registered_owner` | string or null | CNAM registered name, if available |
 | `owner_type` | `CONSUMER`, `BUSINESS`, or null | Registered owner type |
+
+### When the carrier lookup fails
+
+A provider error is **not** an error response. The endpoint returns 200 with the
+row, `lookup_unavailable: true`, and carrier fields that are either stale or
+absent. The failure is cached briefly (15 minutes, backing off to 24 hours) so
+retries inside that window cost nothing and return the same body.
+
+**Do not read `is_valid` while `lookup_unavailable` is true.** `is_valid` is the
+verdict from the last *successful* lookup and is never written by the error
+path, so during an outage it still carries its old value (or the `true`
+default on a number that has never been looked up successfully). Treat
+`lookup_unavailable: true` as "no verdict" — not as valid, and not as invalid.
+
+`lookup_data` is never returned; it holds raw provider error text.
+
+**Unnormalizable number** (with or without `force_refresh`):
+```json
+{
+  "status": false,
+  "error": "Phone lookup failed"
+}
+```
 
 ---
 
