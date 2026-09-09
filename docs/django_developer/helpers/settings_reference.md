@@ -788,6 +788,14 @@ restart. See
 - `INCIDENT_EVENT_PRUNE_DAYS`
 - `INCIDENT_LEVEL_THRESHOLD`
 - `INCIDENT_METRICS_MIN_GRANULARITY`
+- `MOJOSEC_CATEGORY_VOLUME_ALERT_THRESHOLD` — **file-only**
+  (`settings.get_static`). Integer, default `10000`; `<=0` disables. Each
+  digest-matched durable MojoSec receipt contributes its wire occurrence count
+  once to the server-derived category's fixed UTC-hour Redis bucket. The
+  receipt marker and counter share a Redis Cluster hash slot and expire after
+  two hours. The first count above the threshold files one
+  `system:health:mojosec_volume` Event for that category/hour. Redis or reporter
+  failure is best-effort undercount and never changes the sensor acknowledgement.
 
 ### INFO
 

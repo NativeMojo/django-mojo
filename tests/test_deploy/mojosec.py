@@ -16,6 +16,22 @@ from testit import helpers as th
 
 
 @th.django_unit_test()
+def test_firewall_broker_wrapper_keeps_the_adaptive_resource_contract(opts):
+    from mojo.deploy import firewall_broker
+    from mojo.deploy import mojosec as deploy
+
+    th.assert_eq(
+        deploy.BROKER_WRAPPER_TEXT,
+        "#!/bin/sh\nexec /usr/bin/python3 -E -P -m mojo.deploy.firewall_broker\n",
+        "deployment must execute the reviewed module with no caller arguments")
+    th.assert_eq(
+        (firewall_broker.ADDRESS_SPACE_GROWTH_BYTES,
+         firewall_broker.MAX_ADDRESS_SPACE_BYTES),
+        (256 * 1024 * 1024, 768 * 1024 * 1024),
+        "the deployed broker lost adaptive headroom or its absolute ceiling")
+
+
+@th.django_unit_test()
 def test_nginx_security_log_is_rich_bounded_json(opts):
     from mojo.deploy.mojosec_nginx import render_http_log
     from mojo.apps.edge.services import render as edge_render

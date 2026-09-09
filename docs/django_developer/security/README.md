@@ -826,6 +826,15 @@ marker, and does not clear the force token. Quarantined rows remain individually
 pending but do not suppress observations, aggregation, or verification for
 valid siblings.
 
+Broker transport failures are host-wide, not object-local. Stable client codes
+`broker_timeout`, `broker_start_failed`, `broker_malformed_response`, and
+`broker_invalid_response` (plus broker-returned `broker_*` and `host_busy`)
+raise `FirewallSyncRetry` immediately after the permanent, IPSet, or IP call
+that returned them. No later snapshot, object, observation, or aggregate publish
+runs in that attempt, so JobEngine backoff starts after one failed privileged
+call. A semantic mismatch without one of those codes remains object-local and
+valid siblings continue.
+
 The hourly/startup job proves only the kernel on the host where it runs. It
 writes a TTL-bounded observation and advances only that host's marker; it never
 clears shared object truth by itself. The aggregator re-reads the exact current
@@ -876,6 +885,42 @@ lifecycle.
 - Job workers run as `ec2-user`; sudo permits only the root-owned broker with an empty argument vector
 - IPv4 only; IPv6 is refused with `unsupported_family` before desired-state writes
 - The broker accepts a closed semantic JSON grammar, constructs argv/stdin itself, and bounds inputs, outputs, and child timeouts
+
+### MojoSec broker-flood cleanup
+
+Missing broker proof remains centrally visible by design; never suppress raw
+`auth.sudo_command` at the sensor. After a fixed release has been deployed and
+the matching count has stopped growing, preview the September-style flood on
+each affected database with an exact sensor and UTC half-open interval:
+
+```bash
+uv run python manage.py prune_mojosec_broker_flood \
+  --sensor prod-web-i-0e8f54390777cc0ac \
+  --since 2026-09-05T23:46:34Z \
+  --before 2026-09-09T19:00:00Z
+```
+
+The JSON preview reports `matched`, `safe`, `unsafe`, and the ID/time range.
+`safe` requires the exact MojoSec scope/category/sensor, broker command path,
+missing-proof status, no Event-linked Incident, and only published terminal
+receipts with no receipt-linked Incident. Any exact match outside those gates is
+reported as `unsafe` and makes apply refuse. Review and record the preview, then
+obtain write approval for that exact database, sensor, interval, and ceiling:
+
+```bash
+uv run python manage.py prune_mojosec_broker_flood \
+  --sensor prod-web-i-0e8f54390777cc0ac \
+  --since 2026-09-05T23:46:34Z \
+  --before 2026-09-09T19:00:00Z \
+  --apply --max-events 300000
+```
+
+Apply deletes only the selected Event rows in batches of at most 5,000.
+`MojoSecReceipt` replay/idempotency rows remain and their Event FK becomes null;
+incidents are never deleted. Repeat the preview after apply. Record that the
+exact matching count no longer grows, broker transport errors stopped,
+`sync_firewall` completes/backs off normally, and unrelated sudo evidence such
+as deploy `/usr/bin/bash` commands remains.
 
 ## 8. Bouncer Integration
 
@@ -1074,6 +1119,7 @@ Single-server job functions follow the engine's calling convention: `func(job)` 
 | `MOJOSEC_RECEIPT_RETENTION_DAYS` | `45` | Published receiver-idempotency retention; minimum 7 days |
 | `MOJOSEC_HANDLER_MAX_ATTEMPTS` | `100` | Handler dispatch attempts before a receipt is dead-lettered (~8h of continuous failure) |
 | `MOJOSEC_HANDLER_QUEUED_STALE_SECONDS` | `1800` | Age after which a queued receipt's vanished dispatch job is recovered inline by the replay cron |
+| `MOJOSEC_CATEGORY_VOLUME_ALERT_THRESHOLD` | `10000` | File-only persisted MojoSec occurrence threshold per server-owned category/fixed UTC hour; `<=0` disables advisory counting/alerts |
 
 ### Health Monitoring Settings
 

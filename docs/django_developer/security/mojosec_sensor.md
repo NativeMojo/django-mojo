@@ -1189,9 +1189,16 @@ It sends one strict semantic JSON request to exactly
 empty-argument command only. The broker generates the operation ID, validates
 the SUDO caller and the same-runner JobEngine context, constructs all argv and
 restore input, and emits root-owned begin/result receipts. Requests are at most
-16 MiB/250,000 canonical networks; restore is at most 24 MiB; address space is
-256 MiB; scalar work has 15 seconds and bulk work 120 seconds. Output overflow
-is failure (64 KiB, or an 8 MiB hard ceiling for semantic rules reads).
+16 MiB/250,000 canonical networks; restore is at most 24 MiB. After imports the
+broker reads its current virtual address space from `/proc/self/statm` and adds
+256 MiB of growth headroom, with a 768 MiB absolute ceiling. A lower existing
+hard limit, an invalid baseline, or a failed `setrlimit` returns
+`broker_resource_limit_unavailable` before stdin or any firewall child is
+executed. A later `MemoryError` uses a prebuilt ASCII
+`broker_resource_exhausted` response through `os.write`, so callers never
+receive an empty response solely because normal JSON serialization needed more
+heap. Scalar work has 15 seconds and bulk work 120 seconds. Output overflow is
+failure (64 KiB, or an 8 MiB hard ceiling for semantic rules reads).
 
 `jobman_firewall_operation_v1` is local-only only after healthy post-cutover
 cron/jobman → sudo → broker → target lineage and exact receipt/PID-generation
@@ -1201,6 +1208,17 @@ incomplete proof retain the original rich sudo Event. Legacy direct grants
 remain for one rollback generation but never qualify for suppression.
 The JobEngine context prevents accidental cross-job attribution through the
 normal API; it does not resist hostile Python already running in that process.
+
+Do not rate-limit or aggregate raw `auth.sudo_command` observations at the
+sensor. Missing, conflicting, or incomplete root proof is the security evidence
+that distinguishes an unexplained privileged command from an approved broker
+operation. The receiver instead counts each digest-matched durable receipt's
+wire occurrence count once in a fixed UTC-hour Redis bucket. Receipt markers and
+category counters share one cluster slot and expire after two hours. Crossing
+`MOJOSEC_CATEGORY_VOLUME_ALERT_THRESHOLD` (file-only, default 10,000; `<=0`
+disables) reports one `system:health:mojosec_volume` Event per category/hour.
+This monitor is deliberately best-effort: a Redis outage may undercount, but it
+never changes the sensor acknowledgement or weakens the underlying evidence.
 
 Sensor `recommendation` values (`none`, `review`, `block_ip`) are advice, not an
 instruction. A compromised root node can forge its own observations, so the
