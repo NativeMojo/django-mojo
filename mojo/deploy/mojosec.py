@@ -138,9 +138,8 @@ LOGROTATE_TEXT = """/var/log/nginx/mojosec.json.log {
 }
 """
 
-BROKER_WRAPPER_TEXT = """#!/bin/sh
-exec /usr/bin/python3 -E -P -m mojo.deploy.firewall_broker
-"""
+# Compatibility export only; firewall enrollment owns these assets.
+from mojo.deploy.firewall_deploy import BROKER_WRAPPER_TEXT
 
 PUBLISH_BROKER_WRAPPER_TEXT = """#!/bin/sh
 exec /usr/bin/python3 -E -P -m mojo.deploy.publish_broker
@@ -1040,9 +1039,6 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         broker_changed = False
         if mode == "observe":
             from mojo.deploy import audit as audit_deploy
-            from mojo.deploy.firewall_broker import (
-                BROKER_PATH, SUDOERS_PATH, render_sudoers,
-            )
             from mojo.deploy.publish_broker import (
                 BROKER_PATH as PUBLISH_BROKER_PATH,
                 SUDOERS_PATH as PUBLISH_SUDOERS_PATH,
@@ -1057,7 +1053,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                 raise DeployError("ec2-user identity differs from protected MojoSec config")
             app_uid = app_account.pw_uid
             audit_state_snapshot = _owned_snapshot(audit_deploy.STATE_PATH)
-            for path in (BROKER_PATH, SUDOERS_PATH, PUBLISH_BROKER_PATH,
+            for path in (PUBLISH_BROKER_PATH,
                          PUBLISH_SUDOERS_PATH, AUDIT_HEALTH_SERVICE_PATH,
                          AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH):
                 broker_snapshots[path] = _owned_snapshot(path)
@@ -1066,17 +1062,6 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                 audit_converged = True
             except audit_deploy.AuditError as err:
                 raise DeployError(f"Linux Audit convergence failed: {err}") from err
-            for parent in (os.path.dirname(BROKER_PATH), os.path.dirname(SUDOERS_PATH)):
-                _require_root_install_dir(parent)
-            broker_changed |= _write_if_changed(BROKER_PATH, BROKER_WRAPPER_TEXT, 0o755)
-            broker_changed |= _write_if_changed(SUDOERS_PATH, render_sudoers(), 0o440)
-            # Keep legacy direct grants for exactly the rollback generation;
-            # #1964 owns their later removal.
-            process = subprocess.run(
-                ["/usr/sbin/visudo", "-c", "-f", SUDOERS_PATH],
-                capture_output=True, text=True, timeout=10)
-            if process.returncode:
-                raise DeployError(process.stderr.strip() or "broker sudoers validation failed")
             # The publish broker exists only where content is served. An
             # unenrolled node must not carry a sudo grant it cannot use.
             content_roots = prepared[2].get("fim_content_roots", [])
@@ -1125,13 +1110,12 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                     _systemctl_is("is-active", SERVICE)):
                 raise DeployError("MojoSec off convergence left service enabled or active")
             from mojo.deploy import audit as audit_deploy
-            from mojo.deploy.firewall_broker import BROKER_PATH, SUDOERS_PATH
             from mojo.deploy.publish_broker import (
                 BROKER_PATH as PUBLISH_BROKER_PATH,
                 SUDOERS_PATH as PUBLISH_SUDOERS_PATH,
             )
             feature_paths = (
-                BROKER_PATH, SUDOERS_PATH, PUBLISH_BROKER_PATH,
+                PUBLISH_BROKER_PATH,
                 PUBLISH_SUDOERS_PATH, AUDIT_HEALTH_SERVICE_PATH,
                 AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH,
                 audit_deploy.HEALTH_PATH,
@@ -1188,7 +1172,6 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             state["nginx_plane"] = nginx_plane
             state["audit_generation"] = audit_state["generation"]
             state["audit_rules_sha256"] = audit_state["rules_sha256"]
-            state["firewall_broker"] = True
             state["content_roots"] = list(prepared[2].get("fim_content_roots", []))
             state["publish_broker"] = bool(state["content_roots"])
             if content_digest:
@@ -1348,7 +1331,6 @@ def _journalable_converge_paths():
     writes instead of flagging them as unexplained protected changes.
     """
     from mojo.deploy import audit as audit_deploy
-    from mojo.deploy.firewall_broker import BROKER_PATH, SUDOERS_PATH
     from mojo.deploy.publish_broker import (
         BROKER_PATH as PUBLISH_BROKER_PATH,
         SUDOERS_PATH as PUBLISH_SUDOERS_PATH,
@@ -1359,7 +1341,6 @@ def _journalable_converge_paths():
         DJANGO_INCLUDE_PATH, LOGROTATE_PATH, AUDIT_HEALTH_SERVICE_PATH,
         AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH,
         audit_deploy.MANAGED_PATH, audit_deploy.GENERATED_PATH,
-        BROKER_PATH, SUDOERS_PATH,
         PUBLISH_BROKER_PATH, PUBLISH_SUDOERS_PATH,
         "/etc/systemd/system/mojosec-agent.service",
     ]

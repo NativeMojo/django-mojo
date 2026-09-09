@@ -77,7 +77,7 @@ INFO = "INFO"
 # schedules and serves it, then the trailing edges (certs, config, shims,
 # leftovers).
 SECTIONS = (
-    "repo", "framework", "deployment", "roles", "cron", "systemd", "mojosec", "nginx",
+    "repo", "framework", "deployment", "roles", "cron", "systemd", "firewall", "mojosec", "nginx",
     "certs", "config_plane", "shims", "legacy", "var_ownership", "jobs",
 )
 
@@ -1018,6 +1018,37 @@ def check_mojosec_runtime(report, run, sudo):
         report.fail("mojosec", "runtime identity unavailable", "bounded runtime projection failed")
 
 
+def check_firewall(report, run, sudo):
+    """Independent enrollment and live least-privilege broker proof."""
+    rc, out, err = run(f"{sudo}/usr/bin/python3 -E -P -m mojo.deploy.firewall_deploy check", timeout=10)
+    try:
+        state = json.loads(out)
+    except (ValueError, TypeError):
+        state = {}
+    if state.get("status") == "unenrolled" and rc == 0:
+        report.info("firewall", "host not enrolled", "firewall enrollment is independent of MojoSec")
+        return
+    if rc or state.get("status") != "ready":
+        report.fail("firewall", "firewall authority unavailable", "enrollment or managed assets are missing or unsafe",
+                    "run the root firewall_deploy enroll or converge command")
+        return
+    command = ("printf '%s' '{\"operation\":\"broker.status\"}' | "
+               f"{sudo}-u ec2-user /usr/bin/sudo -n -- /usr/local/sbin/mojo-firewall-broker")
+    if not sudo:
+        command = "printf '%s' '{\"operation\":\"broker.status\"}' | /usr/bin/sudo -n -- /usr/local/sbin/mojo-firewall-broker"
+    rc, out, err = run(command, timeout=5)
+    try:
+        status = json.loads(out) if len(out) <= 4096 else {}
+    except (ValueError, TypeError):
+        status = {}
+    if rc == 0 and status == {"ok": True, "schema": "mojo.firewall.broker", "version": 1,
+                             "permanent_set_name": state.get("permanent_set_name")}:
+        report.passed("firewall", "enrolled broker ready", "exact empty-argv status succeeded as ec2-user")
+    else:
+        report.fail("firewall", "broker readiness failed", "the application account could not prove its broker authority",
+                    "repair enrollment and restart the firewall runner")
+
+
 def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
     active = run("systemctl is-active mojosec.service 2>&1")[1]
     enabled = run("systemctl is-enabled mojosec.service 2>&1")[1]
@@ -1073,8 +1104,6 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
         ("Audit health unit", "/etc/systemd/system/mojosec-audit-health.service", "644"),
         ("Audit health timer", "/etc/systemd/system/mojosec-audit-health.timer", "644"),
         ("Audit stable helper", "/usr/local/lib/mojosec/mojosec_audit.py", "755"),
-        ("firewall broker", "/usr/local/sbin/mojo-firewall-broker", "755"),
-        ("firewall broker sudoers", "/etc/sudoers.d/70-mojo-firewall-broker", "440"),
     )
     publish_assets = (
         ("publish broker", "/usr/local/sbin/mojo-publish-broker", "755"),
@@ -2137,11 +2166,12 @@ def check_jobs(report, run, proj, node_type="api"):
 # perfectly and takes no deploys. That is what this check exists to catch.
 FRAMEWORK_CHANNELS = (
     "default", "priority", "cleanup", "incident_handlers", "renditions",
-    "certs", "webhooks", "webhook_fanout",
+    "certs", "webhooks", "webhook_fanout", "firewall",
 )
 
 # What breaks, per channel, in the words of the person who will read this.
 CHANNEL_COST = {
+    "firewall": "firewall reconciliation and aggregate truth never run",
     "edge": "push-to-deploy and nginx generation convergence never run",
     "platform-deploy": "specialized webhook deployments never reach this node",
     "certs": "dnsman certificate sync never runs",
@@ -2288,6 +2318,8 @@ def main(argv):
     if "mojosec" in wanted:
         check_mojosec(report, run, args.mojosec_mode, sudo,
                       args.mojosec_sensor_id)
+    if "firewall" in wanted:
+        check_firewall(report, run, sudo)
     if "nginx" in wanted and node_type == "api":
         check_nginx(report, run, repo, sudo, args.probe_url, retired_confd,
                     args.web_user, roles["foreign"]["conf.d"])

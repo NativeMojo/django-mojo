@@ -146,6 +146,12 @@ def parse_request(payload):
     if not isinstance(value, dict):
         raise BrokerError("request must be an object")
     operation = value.get("operation")
+    if operation == "broker.status":
+        if set(value) != {"operation"}:
+            raise BrokerError("broker status accepts only operation")
+        return value
+    if not isinstance(operation, str):
+        raise BrokerError("operation must be a string")
     allowed = _OP_FIELDS.get(operation)
     if allowed is None or set(value) != _COMMON_FIELDS | allowed:
         raise BrokerError("request has unknown, missing, or forbidden fields")
@@ -338,7 +344,7 @@ def build_operation(request, function=None):
                         operation == "set.normalize" and present)))
         cidrs = request.get("cidrs", [])
         try:
-            cidrs = canonical_ipv4_networks(cidrs, limit=MAX_CIDRS)
+            cidrs = canonical_ipv4_networks(cidrs, limit=MAX_CIDRS) if present else []
         except FirewallTruthError as err:
             raise BrokerError(str(err), code=err.code) from err
         built.update(
@@ -892,6 +898,22 @@ def _verify_caller():
         raise BrokerError(
             "installed broker metadata is unsafe",
             code="broker_installation_unsafe")
+    broker_status()
+
+
+def broker_status(lifecycle=None):
+    """Read protected enrollment/assets only; never touch locks or kernel state."""
+    from mojo.deploy.firewall_deploy import Lifecycle
+    try:
+        state = (lifecycle or Lifecycle()).check()
+    except (OSError, ValueError) as err:
+        raise BrokerError("firewall installation is invalid",
+                          code="broker_installation_unsafe") from err
+    if state.get("status") != "ready":
+        raise BrokerError("firewall broker is not enrolled and ready",
+                          code="broker_not_ready")
+    return {"ok": True, "schema": "mojo.firewall.broker", "version": 1,
+            "permanent_set_name": state["permanent_set_name"]}
 
 
 def _virtual_address_space_bytes(path="/proc/self/statm"):
@@ -997,6 +1019,9 @@ def main(argv=None):
         _install_address_space_limit()
         payload = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
         request = parse_request(payload)
+        if request["operation"] == "broker.status":
+            print(json.dumps(broker_status(), sort_keys=True, separators=(",", ":")))
+            return 0
         descriptor = _acquire_host_lock()
         print(json.dumps(execute(request), sort_keys=True, separators=(",", ":")))
         return 0

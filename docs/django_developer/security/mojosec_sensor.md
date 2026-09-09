@@ -1188,10 +1188,15 @@ handoff; failure restores the prior service/assets only after safe rollback.
 The capability probe also selects the command-line contract: a pre-feature
 module receives only its historical `--mode` and `--criticality` flags, never
 new provenance-generation arguments such as `--project-path`.
-Health units/timer, broker sudoers/wrapper, stable helper and sidecar are
+Health units/timer, publish-broker sudoers/wrapper, stable helper and sidecar are
 retired by one shared finalizer only after the old-module converge or the
 module-absent fallback cleanup has fully succeeded. Every earlier failure keeps
 those recovery assets intact.
+
+The firewall broker is owned by [firewall enrollment](../deploy/firewall.md),
+independently of this sensor. MojoSec convergence no longer installs or removes
+its wrapper or sudoers. Candidate and retained rollback activation reconverge
+enrolled firewall authority after legacy mode-off cleanup. MojoSec can stay off.
 
 Audit-health v1 is closed after publication. Its exact fields are `schema`,
 `version`, `boot_id`, `generation`, `rules_sha256`, `sequence`, `enabled`,
@@ -1220,6 +1225,9 @@ central Event receives at most eight compact ancestors; the complete graph and
 raw Audit records remain on the sensor.
 
 Application firewall work no longer invokes raw iptables/ipset sudo commands.
+The exact read-only `broker.status` request needs no JobEngine context and
+creates no mutation receipt or mutation lock; it only proves enrollment and
+protected authority assets for runner readiness.
 It sends one strict semantic JSON request to exactly
 `sudo -n -- /usr/local/sbin/mojo-firewall-broker`; sudoers authorizes that
 empty-argument command only. The broker generates the operation ID, validates

@@ -148,6 +148,8 @@ class JobEngine:
 
         # Control channel listener
         self.control_thread = None
+        from .capabilities import CapabilityCache
+        self.capability_cache = CapabilityCache(self)
 
         # Stats
         self.jobs_processed = 0
@@ -218,6 +220,7 @@ class JobEngine:
             return
 
         self.initialize()
+        self.capability_cache.start()
         self._run_startup_hooks()
 
         # Main processing loop
@@ -444,7 +447,8 @@ class JobEngine:
             'jobs_failed': self.jobs_failed,
             'started': self.start_time.isoformat(),
             'last_heartbeat': dates.utcnow().isoformat(),
-            'capabilities': {'execute_checked': CHECKED_EXECUTE_PROTOCOL},
+            'capabilities': {'execute_checked': CHECKED_EXECUTE_PROTOCOL,
+                             **self.capability_cache.snapshot()},
         }), ex=self.heartbeat_interval * 3)  # TTL = 3x interval
 
     def _start_control_listener(self):
@@ -913,7 +917,7 @@ class JobEngine:
             job.stack_trace = traceback.format_exc()
 
             # Check retry eligibility
-            if job.attempt < job.max_retries:
+            if getattr(error, "retryable", True) and job.attempt < job.max_retries:
                 # Calculate backoff with jitter
                 backoff = min(
                     job.backoff_base ** job.attempt,
