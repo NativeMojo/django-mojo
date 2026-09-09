@@ -79,7 +79,10 @@ def verify(dist, expected, build_smoke=False):
     if len(wheels) != 1 or len(sources) != 1:
         raise artifact.ArtifactError("dist must contain exactly one django-mojo wheel and sdist")
     with tempfile.TemporaryDirectory(prefix="mojo-admin-package-") as directory:
-        root = Path(directory)
+        # macOS may return /var, an alias of /private/var. Only this freshly
+        # created, verifier-owned root is canonicalized; artifact/source paths
+        # continue through the validator's strict symlink-ancestry checks.
+        root = Path(directory).resolve()
         for name, path in (("wheel", wheels[0]), ("sdist", sources[0])):
             result, package_root = inspect_archive(path, expected, root / name)
             if result["inventory"] != tree["inventory"]:

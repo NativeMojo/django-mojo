@@ -45,7 +45,7 @@ def fixture(root):
 def test_artifact_validation(opts):
     module = load("mojo/apps/account/services/admin_artifact.py")
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory) / "artifact"
+        root = Path(directory).resolve() / "artifact"
         original = fixture(root)
         result = module.validate(root)
         assert result["allowlist"] == frozenset({"index.html"}), "metadata must not be runtime-deliverable"
@@ -82,7 +82,7 @@ def test_artifact_validation(opts):
 def test_vendor_transaction(opts):
     module = load("scripts/vendor_admin_portal.py")
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         source, destination = root / "source", root / "installed"
         fixture(source)
         digest = module.artifact.validate(source)["manifest_sha256"]
@@ -125,7 +125,7 @@ def test_vendor_lock(opts):
     import fcntl
     module = load("scripts/vendor_admin_portal.py")
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         source = root / "source"
         fixture(source)
         digest = module.artifact.validate(source)["manifest_sha256"]
@@ -140,7 +140,7 @@ def test_archive_boundaries(opts):
     import zipfile
     module = load("scripts/verify_admin_portal_package.py")
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         source = root / "source"
         fixture(source)
         digest = module.artifact.validate(source)["manifest_sha256"]
@@ -167,6 +167,44 @@ def test_archive_boundaries(opts):
                 output.writestr("duplicate", "two")
         with th.assert_raises(module.artifact.ArtifactError):
             module.inspect_archive(root / "duplicate.whl", digest, root / "duplicates")
+
+
+@th.unit_test("package verifier resolves only its own temporary-directory alias")
+def test_verifier_owned_temporary_alias(opts):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    import tarfile
+    import zipfile
+    module = load("scripts/verify_admin_portal_package.py")
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        repo = root / "repo"
+        source = repo / module.PREFIX
+        fixture(source)
+        digest = module.artifact.validate(source)["manifest_sha256"]
+        dist = root / "dist"
+        dist.mkdir()
+        with zipfile.ZipFile(dist / "django_mojo-fixture.whl", "w") as output:
+            for path in source.rglob("*"):
+                if path.is_file():
+                    output.write(path, path.relative_to(repo).as_posix())
+        with tarfile.open(dist / "django_mojo-fixture.tar.gz", "w:gz") as output:
+            output.add(source, arcname="django_mojo-fixture/" + module.PREFIX)
+        owned = root / "owned-temporary-directory"
+        owned.mkdir()
+        alias = root / "temporary-alias"
+        alias.symlink_to(owned, target_is_directory=True)
+        # Both bindings belong only to this directly loaded verifier instance.
+        module.REPO = repo
+        module.tempfile = SimpleNamespace(TemporaryDirectory=lambda **kwargs: nullcontext(str(alias)))
+        result = module.verify(dist, digest)
+        assert result["manifest_sha256"] == digest, "owned temporary alias prevented archive proof"
+        with th.assert_raises(module.artifact.ArtifactError):
+            module.artifact.validate(alias / "wheel" / module.PREFIX, digest)
+        user_alias = root / "user-artifact-alias"
+        user_alias.symlink_to(source, target_is_directory=True)
+        with th.assert_raises(module.artifact.ArtifactError):
+            module.artifact.validate(user_alias, digest)
 
 
 @th.django_unit_test("source session expiry is bounded by both JWT and deployment TTL")
