@@ -136,6 +136,17 @@ def on_admin_v2_root(request):
     return _private_file("v2/index.html")
 
 
+# Django resolves paths before the dispatcher checks methods. Keep literal
+# revocation ahead of the asset catch-all, just like the v2 document routes.
+@md.DELETE(_ADMIN_SESSION)
+@md.public_endpoint("Revokes only the caller's path-scoped Admin source session")
+def on_admin_session_revoke(request):
+    admin_portal_service.revoke(request)
+    response = JsonResponse({"status": True})
+    admin_portal_service.delete_cookie(response)
+    return _headers(response)
+
+
 @md.GET(_ADMIN_ASSET)
 @md.public_endpoint("Admin assets return 404 without a valid source session")
 def on_admin_asset(request, asset=None):
@@ -158,15 +169,6 @@ def on_admin_session(request):
     }})
     admin_portal_service.set_cookie(response, grant["session_id"],
                                     expires_at=grant["source_session_expires_at"])
-    return _headers(response)
-
-
-@md.DELETE(_ADMIN_SESSION)
-@md.public_endpoint("Revokes only the caller's path-scoped Admin source session")
-def on_admin_session_revoke(request):
-    admin_portal_service.revoke(request)
-    response = JsonResponse({"status": True})
-    admin_portal_service.delete_cookie(response)
     return _headers(response)
 
 

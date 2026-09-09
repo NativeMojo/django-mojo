@@ -76,6 +76,9 @@ class CDP:
         result = self.call("Runtime.evaluate", {
             "expression": expression, "returnByValue": True,
             "awaitPromise": True, "userGesture": True,
+            # CDP defaults to bypassing unsafe-eval CSP checks. Acceptance
+            # probes must exercise the page's policy, not debugger privileges.
+            "allowUnsafeEvalBlockedByCSP": False,
         })
         assert "exceptionDetails" not in result, result.get("exceptionDetails")
         return result.get("result", {}).get("value")
@@ -154,6 +157,7 @@ async def rider(scope, receive, send):
         async def delayed(message):
             if message['type'] == 'http.response.start':
                 await asyncio.sleep(delay.get(method, 0))
+                events.append({'method':method,'phase':'response','status':message['status'],'at':time.monotonic()})
             await send(message)
             if message['type'] == 'http.response.body' and not message.get('more_body'):
                 events.append({'method':method,'phase':'end','at':time.monotonic()})
@@ -291,8 +295,8 @@ def test_admin_security_real_chrome(opts):
                       let foreignDenied=false;try{await fetch('https://example.invalid/forbidden')}catch(_){foreignDenied=true}
                       return {inline:!!window.__inlineRan,evalDenied,foreignDenied};
                     })()""")
-                    assert csp == {"inline": False, "evalDenied": True, "foreignDenied": True}, "CSP script/connect denials weakened"
                     (evidence / f"{mount}-csp.json").write_text(json.dumps(csp))
+                    assert csp == {"inline": False, "evalDenied": True, "foreignDenied": True}, f"CSP script/connect denials weakened: {csp}"
                     # Controlled provider/media/frame/realtime fixtures exercise
                     # the actual browser mechanisms without external writes.
                     # Run current policy first; a failed required mechanism is
@@ -313,6 +317,7 @@ def test_admin_security_real_chrome(opts):
                       return {dataImage,blobImage,blobMedia,realtime,sandboxedFrame,provider};
                     })()""")
                     (evidence / f"{mount}-csp-surfaces.json").write_text(json.dumps(surfaces))
+                    (evidence / f"{mount}-csp-violations.json").write_text(json.dumps(cdp.evaluate("window.__csp")))
                     assert surfaces["provider"] == {"received": 7, "authorization": False}, "provider fixture received API credentials"
                     assert all(surfaces[key] for key in ("dataImage", "blobImage", "blobMedia", "realtime", "sandboxedFrame")), f"current packaged CSP blocks a required mechanism: {surfaces}"
 
@@ -331,9 +336,10 @@ def test_admin_security_real_chrome(opts):
                         if history and history[-1]["phase"] == "start":
                             break
                         time.sleep(.025)
-                    second.evaluate(f"window.__logoutDone=false;MojoAdminSourceSession.revoke({json.dumps(root_path)},()=>MojoAuth.logout()).then(()=>__logoutDone=true);true")
+                    second.evaluate(f"window.__logoutDone=false;window.__logoutError='';MojoAdminSourceSession.revoke({json.dumps(root_path)},()=>MojoAuth.logout()).catch(e=>__logoutError=e.message).finally(()=>__logoutDone=true);true")
                     second.wait("JSON.parse(localStorage.getItem('mojo:admin-source-generation:v1')).state==='revoked'", "logout tombstone")
                     second.wait("window.__logoutDone", "two-tab revocation")
+                    assert not second.evaluate("window.__logoutError"), f"two-tab revocation failed: {second.evaluate('window.__logoutError')}"
                     cdp.wait("window.__issueDone", "superseded issuance")
                     assert cdp.evaluate("!!window.__issueError"), "pending issuer declared ready after logout"
                     history = _json(origin + "/__rider/state", time.monotonic() + 2)
@@ -369,9 +375,16 @@ def test_admin_security_real_chrome(opts):
                     (evidence / f"{mount}-races.json").write_text(json.dumps(history))
                     (evidence / f"{mount}-console.json").write_text(json.dumps(cdp.failures))
                 finally:
-                    for page in pages:
-                        page.close()
-                    _stop(chrome)
-                    _stop(server)
+                    try:
+                        if server and server.poll() is None:
+                            (evidence / f"{mount}-races.json").write_text(json.dumps(
+                                _json(origin + "/__rider/state", time.monotonic() + 2)))
+                        for index, page in enumerate(pages):
+                            (evidence / f"{mount}-page-{index}-console.json").write_text(json.dumps(page.failures))
+                    finally:
+                        for page in pages:
+                            page.close()
+                        _stop(chrome)
+                        _stop(server)
     finally:
         User.objects.filter(pk=user.pk).delete()

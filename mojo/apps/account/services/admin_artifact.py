@@ -14,7 +14,7 @@ from types import MappingProxyType
 
 MANIFEST = "admin-artifact.json"
 PINNED_MANIFEST_SHA256 = "934e89e2ce913583463469d7eda4c4ef3c5015ce9f3d51fb9894a75ce61b2031"
-DOCUMENT_CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; "
+DOCUMENT_CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; "
                 "script-src 'self'; connect-src 'self'; base-uri 'none'; "
                 "form-action 'self'; frame-ancestors 'none'")
 _FIELDS = frozenset(("schema_version", "artifact", "version", "source_revision",

@@ -33,10 +33,13 @@ fresh login can activate a new generation. Missing browser coordination fails
 visibly. The gate and legacy adapter are public protocol code served no-store;
 private source and provenance remain behind their separate delivery boundary.
 
-The packaged CSP starts from the existing restrictive Admin policy. Provider,
-blob/media/frame and realtime compatibility must be established by the protected
-browser matrix before adding narrowly scoped sources. Never forward API bearer
-credentials to capability/provider destinations.
+The packaged CSP retains the restrictive Admin policy, with `blob:` allowed
+only for image and media previews as demonstrated by the protected Chrome rider.
+Inline scripts, eval and foreign connections remain denied. Same-origin realtime,
+sandboxed email-frame and credential-free upload fixtures pass without further
+policy extensions; external provider origins still require deployment-specific
+allowlists and browser verification. Never forward API bearer credentials to
+capability/provider destinations.
 
 The built-in portal defaults to `/admin/` and uses the hosted Bouncer auth
 pages. It provides System Setup/readiness, a system overview, User and Group

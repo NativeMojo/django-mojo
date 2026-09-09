@@ -108,12 +108,16 @@ uncoordinated fallback.
 of production authorization. Protected-browser acceptance uses a separate real
 Django process and the committed artifact.
 
-The initial packaged CSP is the existing Admin policy: same-origin scripts,
-styles, connections and resources, data images, no base URI and no framing.
-There is no inline-script/eval permission or global policy relaxation.
-Any required blob/media/frame/provider/realtime addition must be justified by
-the closing browser matrix and restricted to the relevant directive; external
-origins require exact deployment allowlists. Browser evidence is written under
+The packaged CSP retains same-origin scripts, styles, connections and resources,
+data images, no base URI and no framing. The protected Chrome rider demonstrated
+that blob image and audio previews require `blob:` in `img-src` and
+`media-src`; only those two directives are extended, for v2 only.
+Inline scripts, eval and foreign connections remain denied. Same-origin
+WebSocket, sandboxed email-frame and credential-free upload fixtures need no
+policy extension; these controlled fixtures do not prove external provider
+compatibility. External origins still require exact deployment allowlists.
+The rider explicitly disables CDP's unsafe-eval bypass and writes probe results
+before asserting. Browser evidence is written under
 `testproject/var/admin-browser-4060/` (identity, screenshots, CSP and race
 records). Do not describe unexecuted fixtures as measured compatibility.
 
