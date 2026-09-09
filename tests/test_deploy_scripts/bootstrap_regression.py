@@ -48,7 +48,7 @@ def test_project_scripts_export_without_django_bootstrap(opts):
             with open(path) as handle:
                 source = handle.read().lower()
             for forbidden in (
-                    "trusted_change", "mojosec", "vhost_install",
+                    "trusted_change", "mojosec converge", "vhost_install",
                     "sanity_check"):
                 th.assert_true(forbidden not in source,
                                "%s still contains %s" % (name, forbidden))

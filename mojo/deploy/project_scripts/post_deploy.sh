@@ -4,6 +4,56 @@
 
 set -Eeuo pipefail
 
+# This fallback does not import the package that may just have failed to copy.
+mojosec_refresh_error() {
+    echo "mojosec refresh degraded: helper preparation or invocation failed" >&2
+    if (cd / && /usr/bin/python3 -E -s - "$1") <<'PY'
+import fcntl, json, os, stat, sys, tempfile
+for path in ("/etc/mojosec/runtime-refresh.json", os.path.join(sys.argv[1], "mojosec_refresh_error.json")):
+    lock = None
+    try:
+        parent = os.path.dirname(path)
+        os.makedirs(parent, mode=0o700, exist_ok=True)
+        info = os.lstat(parent)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError("unsafe evidence directory")
+        lock = os.open(path + ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        info = os.fstat(lock)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077 or info.st_nlink != 1:
+            raise ValueError("unsafe evidence lock")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        value = {"schema": 1, "attempts": {}, "failures": []}
+        if os.path.lexists(path):
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as handle:
+                info = os.fstat(handle.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077 or info.st_nlink != 1:
+                    raise ValueError("unsafe evidence file")
+                raw = handle.read(262145)
+                if len(raw) > 262144: raise ValueError("oversized evidence")
+                value = json.loads(raw)
+        failure = {"outcome": "degraded", "reason": "helper preparation or invocation failed"}
+        value["latest"] = failure
+        value["failures"] = (value.get("failures", []) + [failure])[-8:]
+        fd, temporary = tempfile.mkstemp(prefix=".refresh-error-", dir=parent)
+        with os.fdopen(fd, "w") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            json.dump(value, handle)
+            handle.flush(); os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+    except Exception:
+        print("mojosec refresh: fallback evidence write failed", file=sys.stderr)
+    finally:
+        if lock is not None: os.close(lock)
+PY
+    then :; else echo "mojosec refresh: fallback observer failed" >&2; fi
+    return 0
+}
+
+
 PROJ_PATH="${PROJ_PATH:-/opt/api}"
 PROBE_URL="${PROBE_URL:-https://127.0.0.1/api/version}"
 PROBE_SECONDS="${PROBE_SECONDS:-30}"
@@ -314,6 +364,34 @@ activate_previous() {
 }
 
 cd "$PROJ_PATH"
+# Earliest N-1 adoption boundary: retain rollback support before any candidate
+# API/code/custom activation. The previous updater cannot execute this code
+# before it reaches this activation body.
+if [ "$ACTION" = "activate" ]; then
+    refresh_source="${BASH_SOURCE[0]%/*}/../mojosec_refresh.py"
+    if [ -f "$refresh_source" ] && \
+            /usr/bin/python3 -E -s "$refresh_source" --state "$STATE" --prepare; then
+        :
+    else
+        echo "mojosec refresh degraded: activation bridge retention failed" >&2
+        mojosec_refresh_error "$STATE"
+    fi
+    if [ -f "$STATE/mojosec_refresh.py" ] && \
+            /usr/bin/python3 -E -s "$STATE/mojosec_refresh.py" --state "$STATE" --direction candidate; then
+        :
+    else
+        echo "mojosec refresh degraded: activation bridge failed" >&2
+        mojosec_refresh_error "$STATE"
+    fi
+elif [ "$ACTION" = "activate-previous" ]; then
+    if [ -f "$STATE/mojosec_refresh.py" ] && \
+            /usr/bin/python3 -E -s "$STATE/mojosec_refresh.py" --state "$STATE" --direction rollback; then
+        :
+    else
+        echo "mojosec refresh degraded: previous activation refresh failed" >&2
+        mojosec_refresh_error "$STATE"
+    fi
+fi
 case "$ACTION" in
     activate)
         if [ "$NODE_TYPE" = "api" ]; then

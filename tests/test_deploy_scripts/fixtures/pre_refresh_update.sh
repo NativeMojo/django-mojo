@@ -4,56 +4,6 @@
 
 set -Eeuo pipefail
 
-# This fallback does not import the package that may just have failed to copy.
-mojosec_refresh_error() {
-    echo "mojosec refresh degraded: helper preparation or invocation failed" >&2
-    if (cd / && /usr/bin/python3 -E -s - "$1") <<'PY'
-import fcntl, json, os, stat, sys, tempfile
-for path in ("/etc/mojosec/runtime-refresh.json", os.path.join(sys.argv[1], "mojosec_refresh_error.json")):
-    lock = None
-    try:
-        parent = os.path.dirname(path)
-        os.makedirs(parent, mode=0o700, exist_ok=True)
-        info = os.lstat(parent)
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
-            raise ValueError("unsafe evidence directory")
-        lock = os.open(path + ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-        info = os.fstat(lock)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077 or info.st_nlink != 1:
-            raise ValueError("unsafe evidence lock")
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        value = {"schema": 1, "attempts": {}, "failures": []}
-        if os.path.lexists(path):
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with os.fdopen(fd, "rb") as handle:
-                info = os.fstat(handle.fileno())
-                if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077 or info.st_nlink != 1:
-                    raise ValueError("unsafe evidence file")
-                raw = handle.read(262145)
-                if len(raw) > 262144: raise ValueError("oversized evidence")
-                value = json.loads(raw)
-        failure = {"outcome": "degraded", "reason": "helper preparation or invocation failed"}
-        value["latest"] = failure
-        value["failures"] = (value.get("failures", []) + [failure])[-8:]
-        fd, temporary = tempfile.mkstemp(prefix=".refresh-error-", dir=parent)
-        with os.fdopen(fd, "w") as handle:
-            os.fchmod(handle.fileno(), 0o600)
-            json.dump(value, handle)
-            handle.flush(); os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try: os.fsync(fd)
-        finally: os.close(fd)
-    except Exception:
-        print("mojosec refresh: fallback evidence write failed", file=sys.stderr)
-    finally:
-        if lock is not None: os.close(lock)
-PY
-    then :; else echo "mojosec refresh: fallback observer failed" >&2; fi
-    return 0
-}
-
-
 PROJ_PATH="${PROJ_PATH:-/opt/api}"
 RUNTIME_SECONDS="${MOJO_DEPLOY_RUNTIME_SECONDS:-1800}"
 ROLLBACK_SECONDS="${MOJO_DEPLOY_ROLLBACK_SECONDS:-900}"
@@ -114,30 +64,6 @@ valid_deployment() {
 installed_framework() {
     python3 -m pip show django-mojo 2>/dev/null |
         sed -n 's/^Version:[[:space:]]*//p' | head -1
-}
-
-# Security observation has no authority over the application transaction.
-# Every command is explicitly guarded so ERR can never initiate rollback.
-prepare_mojosec_refresh() {
-    local post="$1" state="$2" helper
-    helper="${post%/*}/../mojosec_refresh.py"
-    if [ -f "$helper" ] && /usr/bin/python3 -E -s "$helper" --state "$state" --prepare; then
-        return 0
-    fi
-    echo "mojosec refresh degraded: helper retention failed" >&2
-    mojosec_refresh_error "$state"
-    return 0
-}
-
-refresh_mojosec() {
-    local direction="$1"
-    if [ -f "$ACTIVE/mojosec_refresh.py" ] && \
-            /usr/bin/python3 -E -s "$ACTIVE/mojosec_refresh.py" --state "$ACTIVE" --direction "$direction"; then
-        return 0
-    fi
-    echo "mojosec refresh degraded: retained helper unavailable or failed" >&2
-    mojosec_refresh_error "$ACTIVE"
-    return 0
 }
 
 run_as_app() {
@@ -294,7 +220,6 @@ rollback_transaction() {
     # rolling back a healthy candidate here would make identity and code lie.
     if [ -f "$ACTIVE/activation_succeeded" ]; then
         log "Finishing successful deployment publication"
-        refresh_mojosec candidate
         publish_success || return 1
         rm -rf -- "$ACTIVE"
         return 0
@@ -320,8 +245,6 @@ rollback_transaction() {
         python3 -m pip install -r "$ACTIVE/previous_requirements.txt" || return 1
     fi
     python3 -m pip install "django-mojo==$previous_framework" || return 1
-
-    refresh_mojosec rollback
 
     if [ -x "$ACTIVE/previous_post.sh" ]; then
         MOJO_DEPLOY_ROLLBACK=1 bash "$ACTIVE/previous_post.sh" \
@@ -486,7 +409,6 @@ previous_post="$(python3 -m mojo.deploy locate post_deploy.sh)" ||
     die "cannot locate previous post-deploy body"
 cp -f -- "$previous_post" "$PREPARING/previous_post.sh"
 chmod 0700 "$PREPARING/previous_post.sh"
-prepare_mojosec_refresh "$previous_post" "$PREPARING"
 if [ "$PREVIOUS_NODE_TYPE" != "api" ] && [ "$PREVIOUS_NODE_TYPE" != "code" ]; then
     [ -f "aws/deploy/$PREVIOUS_NODE_TYPE.sh" ] || die "previous custom profile is missing"
     cp -f -- "aws/deploy/$PREVIOUS_NODE_TYPE.sh" "$PREPARING/previous_profile.sh"
@@ -531,8 +453,6 @@ printf '%s\n' "$installed_candidate_framework" > "$ACTIVE/candidate_framework"
 set_phase candidate_activation
 candidate_post="$(python3 -m mojo.deploy locate post_deploy.sh)" ||
     die "cannot locate candidate post-deploy body"
-prepare_mojosec_refresh "$candidate_post" "$ACTIVE"
-refresh_mojosec candidate
 cp -f -- "$candidate_post" "$ACTIVE/candidate_post.sh"
 chmod 0700 "$ACTIVE/candidate_post.sh"
 
