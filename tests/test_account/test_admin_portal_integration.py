@@ -341,24 +341,13 @@ def test_merged_browser_secret_and_route_contract(opts):
         ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/feature.js").read_text()
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
     classifier = (ROOT / "mojo/helpers/request.py").read_text()
-    v2_root = ROOT / "mojo/apps/account/admin_portal_v2/assets"
-    v2_registry = (v2_root / "features/registry.js").read_text()
-    v2_security = "\n".join(
-        path.read_text() for path in (v2_root / "features/security").glob("*.js"))
+    from mojo.apps.account.services import admin_artifact
+    packaged = admin_artifact.validate(ROOT / "mojo/apps/account/admin_portal_v2",
+                                      admin_artifact.PINNED_MANIFEST_SHA256)
+    th.assert_eq(packaged["metadata"]["api_mode"], "same-origin", "Portal API contract drifted")
     th.assert_true(
         "[dashboard, webapps, advanced, people, activity, platform, settings, sms, email]" in registry,
         "feature order does not match the approved product navigation")
-    descriptor_block = v2_registry.split(
-        "const DESCRIPTORS = Object.freeze([", 1)[1].split("]);", 1)[0]
-    th.assert_eq(
-        [name.strip() for name in descriptor_block.split(",") if name.strip()],
-        ["home", "apps", "infrastructure", "domains", "access", "security", "settings"],
-        "Admin v2 does not package the exact seven-feature order")
-    th.assert_true(
-        "/api/incident/admin/security" in v2_security
-        and "/api/incident/event" not in v2_security
-        and "/api/incident/incident" not in v2_security,
-        "Admin v2 Security escaped its bounded authority")
     # The sidebar is no longer one entry per feature: a feature contributes as
     # many entries as its own capabilities allow. The Platform page itself is
     # dissolved, so what it contributes is Metrics, Maintenance, and the

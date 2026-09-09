@@ -25,6 +25,32 @@ def _server():
     return server
 
 
+@th.django_unit_test("preview serves the exact packaged allowlist and matching expiry contract")
+def test_packaged_preview_contract(opts):
+    from urllib.parse import urlparse
+    server = _server()
+    class Handler(server.PreviewHandler):
+        upstream = None
+    handler = object.__new__(Handler)
+    replies = []
+    handler._send = lambda body, content_type="application/json", status=200, headers=None: replies.append((body, status, headers))
+    handler._serve_admin(urlparse("/admin/v2/"))
+    body, status, headers = replies.pop()
+    assert status == 200 and body == (server.ROOT_V2 / "index.html").read_bytes(), "preview changed compiled entry bytes"
+    assert headers["Content-Security-Policy"] == server._artifact.DOCUMENT_CSP, "preview CSP differs from packaged policy"
+    handler._serve_admin(urlparse("/admin/v2/admin-artifact.json"))
+    assert replies.pop()[1] == 404, "preview exposed artifact provenance"
+    handler._serve_admin(urlparse("/v2/"))
+    assert replies.pop()[2]["Location"] == "/admin/v2/", "preview alias lost canonical mount"
+    handler.path = "/api/account/admin/session"
+    handler._read_body = lambda: {}
+    handler._record_event = lambda *args: None
+    handler.do_POST()
+    grant = replies.pop()[0]
+    assert grant["path"] == "/admin/" and grant["source_session_expires_in"] == 300, "fixture grant shape changed"
+    assert type(grant["source_session_expires_at"]) is int, "fixture expiry is not an integer epoch"
+
+
 @th.django_unit_test("live preview accepts only one public HTTPS hostname origin")
 def test_live_upstream_origin_contract(opts):
     server = _server()

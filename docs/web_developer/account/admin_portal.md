@@ -5,6 +5,39 @@ developers building a custom internal console.
 
 ## Built-in portal
 
+Legacy Admin remains the default configured route. Its **Open Portal** link
+opens the packaged portal-mojo application in the same tab at the configured
+Admin root plus `v2/` (normally `/admin/v2/`). Portal uses same-origin
+`/api/...` requests; neither the mount nor legacy Admin config supplies an API
+origin. Django ships the exact compiled artifact and needs no frontend build.
+For the pinned manifest hash, ownership, offline recovery and archive proof,
+see [the backend packaging guide](../../django_developer/account/admin.md).
+
+The source-session response adds two integer fields while preserving `path`:
+
+```json
+{"status":true,"data":{"path":"/admin/","source_session_expires_in":300,"source_session_expires_at":2000000300}}
+```
+
+One deadline, bounded by configured source TTL and access-token expiry, drives
+both fields, cache expiry and cookie lifetime. No source-session identifier is
+returned. Portal renews before expiry, also rechecking on focus/resume; a
+source-cookie grant never substitutes for REST permissions.
+
+All issuers and logout share the exclusive `mojo:admin-source-session:v1` Web
+Lock and BroadcastChannel. The nonsecret `mojo:admin-source-generation:v1`
+record in localStorage is authoritative; each tab binds its accepted generation
+in sessionStorage. Logout tombstones/broadcasts before clearing credentials and
+waiting for the lock, then completes `DELETE /<admin>/_session`. Only an explicit
+fresh login can activate a new generation. Missing browser coordination fails
+visibly. The gate and legacy adapter are public protocol code served no-store;
+private source and provenance remain behind their separate delivery boundary.
+
+The packaged CSP starts from the existing restrictive Admin policy. Provider,
+blob/media/frame and realtime compatibility must be established by the protected
+browser matrix before adding narrowly scoped sources. Never forward API bearer
+credentials to capability/provider destinations.
+
 The built-in portal defaults to `/admin/` and uses the hosted Bouncer auth
 pages. It provides System Setup/readiness, a system overview, User and Group
 management, permanent Domains/Credentials/DNS/Certificates/Upstreams/Vhosts/

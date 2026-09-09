@@ -44,19 +44,30 @@ def _delete(session_id):
 
 def issue(request):
     """Issue a source session derived from a validated interactive JWT."""
+    grant = issue_with_metadata(request)
+    return grant["session_id"] if grant else None
+
+
+def issue_with_metadata(request, *, cache_backend=cache, clock=time.time):
+    """One integer deadline bounds the cache, cookie and public metadata."""
     if getattr(request, "bearer", None) != "bearer":
         return None
     raw_token = getattr(getattr(request, "auth_token", None), "token", None)
     if not raw_token:
         return None
-    payload = JWToken().decode(raw_token, validate=False)
+    try:
+        payload = JWToken().decode(raw_token, validate=False)
+    except Exception:
+        return None
     if payload.get("token_type") != "access":
         return None
     try:
         expires_at = int(payload.get("exp"))
     except (TypeError, ValueError):
         return None
-    ttl = min(SESSION_TTL, expires_at - int(time.time()))
+    issued_at = int(clock())
+    deadline = min(issued_at + SESSION_TTL, expires_at)
+    ttl = deadline - issued_at
     if ttl <= 0:
         return None
 
@@ -65,12 +76,14 @@ def issue(request):
         "user_id": request.user.pk,
         "auth_key": _auth_key_fingerprint(request.user),
         "token_exp": expires_at,
+        "source_session_expires_at": deadline,
     }
     try:
-        cache.set(_cache_key(session_id), value, timeout=ttl)
+        cache_backend.set(_cache_key(session_id), value, timeout=ttl)
     except Exception:
         return None
-    return session_id
+    return {"session_id": session_id, "source_session_expires_in": ttl,
+            "source_session_expires_at": deadline}
 
 
 def validate(request):
@@ -82,7 +95,11 @@ def validate(request):
         value = cache.get(_cache_key(session_id))
     except Exception:
         return None
-    if not isinstance(value, dict) or int(value.get("token_exp", 0)) <= int(time.time()):
+    now = int(time.time())
+    if (not isinstance(value, dict)
+            or type(value.get("token_exp")) is not int
+            or type(value.get("source_session_expires_at")) is not int
+            or min(value["token_exp"], value["source_session_expires_at"]) <= now):
         _delete(session_id)
         return None
     user = User.objects.filter(pk=value.get("user_id"), is_active=True).first()
@@ -97,11 +114,18 @@ def revoke(request):
     _delete(request.COOKIES.get(COOKIE_NAME, ""))
 
 
-def set_cookie(response, session_id):
+def set_cookie(response, session_id, *, expires_at=None):
+    if expires_at is None:
+        try:
+            value = cache.get(_cache_key(session_id)) or {}
+            expires_at = value.get("source_session_expires_at", 0)
+        except Exception:
+            expires_at = 0
+    ttl = max(0, int(expires_at) - int(time.time()))
     response.set_cookie(
         COOKIE_NAME,
         session_id,
-        max_age=SESSION_TTL,
+        max_age=ttl,
         path=f"/{ADMIN_PATH}",
         secure=bool(settings.get_static("MOJO_ADMIN_COOKIE_SECURE", not settings.DEBUG)),
         httponly=True,

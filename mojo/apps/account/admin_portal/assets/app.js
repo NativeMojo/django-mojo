@@ -1,7 +1,8 @@
-import {api, h, icon} from './core.js';
+import {api, h, icon, renewSourceSession, revokeSourceSession} from './core.js';
 import {clearBusy, closeAllOverlays, openModal} from './components/overlays.js';
 import {decodeRouteState, routeHref} from './components/routes.js';
 import {loadingState} from './components/views.js';
+import {runAction} from './components/actions.js';
 import {featureForRoute, installFeatureStyles, navigationFor} from './features/registry.js';
 
 const app = document.getElementById('app');
@@ -22,8 +23,11 @@ function navigate(route, {replace = false, state = {}} = {}) {
 }
 
 async function logout(path) {
-  await fetch(`${path}_session`, {method: 'DELETE'}).catch(() => {});
-  window.MojoAuth?.logout?.(); location.assign(path);
+  try { await revokeSourceSession(path); location.assign(path); }
+  catch (error) {
+    showFatal(error);
+    app.querySelector('.fatal')?.append(h('button', {class: 'button', onclick: () => logout(path)}, 'Retry sign out'));
+  }
 }
 
 function setTheme(value) { localStorage.setItem('mojo-admin-theme', value); document.documentElement.dataset.theme = value; }
@@ -38,7 +42,13 @@ function refreshNavigation(route) {
   for (const item of navigationFor(context)) {
     if (item.section !== section) { section = item.section; children.push(h('div', {class: `nav-label ${children.length ? 'nav-space' : ''}`, text: section})); }
     const active = (item.matches || [item.route]).includes(route);
-    children.push(h('a', {href: `#/${item.route}`, class: active ? 'active' : ''}, icon(item.icon), h('span', {text: item.label}),
+    children.push(h('a', {href: item.href || `#/${item.route}`, class: active ? 'active' : '',
+      onclick: item.href ? (event) => {
+        event.preventDefault();
+        runAction(event.currentTarget, async () => {
+          await renewSourceSession(); location.assign(item.href);
+        }, {pendingLabel: 'Opening Portal…', onError: showFatal});
+      } : null}, icon(item.icon), h('span', {text: item.label}),
       item.badge ? h('span', {class: 'nav-badge', 'aria-label': 'Needs attention'}) : null));
   }
   navigation.replaceChildren(...children);
@@ -106,6 +116,8 @@ async function start() {
   setTheme(localStorage.getItem('mojo-admin-theme') || 'system');
   if (!window.MojoAuth) throw new Error('Authentication client unavailable');
   window.MojoAuth.init({baseURL: location.origin});
+  await import('/api/account/static/admin-source-session.js');
+  window.MojoAdminSourceSession.start();
   context = await api('/api/account/admin/bootstrap');
   installFeatureStyles(context); mountShell(); await render();
   if (context.features?.assistant?.enabled === true) {
@@ -126,7 +138,9 @@ function showFatal(error) {
 function showSessionExpired(event) {
   controller?.abort(); dispose?.(); dispose = null; disposeAssistant?.(); disposeAssistant = null;
   reauthClose?.(); reauthClose = null; closeAllOverlays(); context = null;
-  window.MojoAuth?.logout?.();
+  // A newer explicit login belongs to another tab. A stale tab must hide its
+  // UI without deleting the new generation's shared credentials.
+  if (event.type !== 'mojo-admin:source-revoked') window.MojoAuth?.logout?.();
   const supplied = event.detail?.returnPath;
   const returnPath = typeof supplied === 'string' && supplied.startsWith('/')
     && supplied.length <= 1000 ? supplied : `${location.pathname}${location.search}${location.hash}`;
@@ -193,4 +207,5 @@ function showFreshAuth(event) {
 window.addEventListener('hashchange', () => render().catch(showFatal));
 window.addEventListener('mojo-admin:fresh-auth', showFreshAuth);
 window.addEventListener('mojo-admin:session-expired', showSessionExpired);
+window.addEventListener('mojo-admin:source-revoked', showSessionExpired);
 start().catch(showFatal);

@@ -450,15 +450,6 @@ def test_large_legacy_ruleset_transport(opts):
     assert len(_chunk_value(detail, "rules")) == 40, (
         "legacy RuleSet detail lost conditions above the governed mutation cap")
 
-    api_source = open(
-        "mojo/apps/account/admin_portal_v2/assets/features/security/api.js",
-        encoding="utf-8").read()
-    assert "validChunk(row.name)" in api_source, (
-        "Admin UI rejects chunked legacy names before expansion")
-    assert "validChunk(row.rules)" in api_source, (
-        "Admin UI rejects chunked legacy conditions before expansion")
-
-
 @th.django_unit_test("Event discovery bounds titles while detail remains complete")
 def test_event_title_bounds(opts):
     from mojo.apps.incident.models import Event
