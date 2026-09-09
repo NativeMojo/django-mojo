@@ -13,9 +13,15 @@ consumer reads; `is_valid` keeps meaning "the carrier verdict from the last
 
 No mock, no patch: the provider call is driven through `refresh()`'s
 keyword-only `lookup_fn` seam, so this file is offline and does not touch the
-package's cold-site budget. Untagged on purpose — it must run in the `core`
-preset, the only non-advisory gate.
+package's cold-site budget.
+
+Tagged `core` on purpose — it must run in the bare `core` preset, the only
+non-advisory gate. This package declares `default_core: True`, which
+`runner._resolve_tags` maps to the **framework** bucket, so an untagged file
+here would run only in the advisory `--tier framework` preset. The file is
+offline, parallel-safe and ~0.3s, so it belongs in the baseline.
 """
+TESTIT_TIER = "core"
 from objict import objict
 from testit import helpers as th
 

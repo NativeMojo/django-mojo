@@ -76,7 +76,9 @@ def on_phone_lookup(request):
 
     # Lookup phone
     phone = PhoneNumber.lookup(phone_number)
-    if force_refresh:
+    # lookup() returns None for an unnormalizable number — there is nothing to
+    # refresh, and the falsy guard below owns the response.
+    if phone and force_refresh:
         phone.refresh()
 
     if phone:
