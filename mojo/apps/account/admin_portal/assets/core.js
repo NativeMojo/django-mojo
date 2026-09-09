@@ -114,16 +114,17 @@ function requestFreshAuth(error) {
   return freshAuthAttempt;
 }
 
-async function renewSourceSession() {
-  const header = authHeader();
-  if (!header?.startsWith('Bearer ')) return false;
-  const response = await fetch('/api/account/admin/session', {
-    method: 'POST', headers: {Authorization: header, 'Content-Type': 'application/json'}, body: '{}',
+export async function renewSourceSession() {
+  await import('/api/account/static/admin-source-session.js');
+  return window.MojoAdminSourceSession.issue(window.MojoAuth);
+}
+
+export async function revokeSourceSession(path) {
+  await import('/api/account/static/admin-source-session.js');
+  return window.MojoAdminSourceSession.revoke(path, () => {
+    window.MojoAuth.logout();
+    for (const key of ['access_token', 'refresh_token', 'token_type', 'token_expires_at']) sessionStorage.removeItem(key);
   });
-  let payload = {};
-  try { payload = await response.json(); } catch (_) { payload = {}; }
-  return response.ok && payload.status !== false
-    && effectiveResponseStatus(payload, response) < 400;
 }
 
 async function requestPayload(path, options = {}, retry = true, freshRetry = true) {

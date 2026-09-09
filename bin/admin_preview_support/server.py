@@ -4,6 +4,7 @@ import argparse
 import email.utils
 import http.client
 import ipaddress
+import importlib.util
 import json
 import mimetypes
 import secrets
@@ -23,6 +24,11 @@ from .features import dashboard
 
 ROOT = Path(__file__).resolve().parents[2] / "mojo/apps/account/admin_portal"
 ROOT_V2 = Path(__file__).resolve().parents[2] / "mojo/apps/account/admin_portal_v2"
+_artifact_spec = importlib.util.spec_from_file_location(
+    "preview_admin_artifact", ROOT_V2.parent / "services/admin_artifact.py")
+_artifact = importlib.util.module_from_spec(_artifact_spec)
+_artifact_spec.loader.exec_module(_artifact)
+V2_ARTIFACT = _artifact.validate(ROOT_V2, _artifact.PINNED_MANIFEST_SHA256)
 HOST = "127.0.0.1"
 PREVIEW_COOKIE = "mojo_admin_preview"
 MAX_REQUEST_BODY = 2 * 1024 * 1024
@@ -573,12 +579,21 @@ class PreviewHandler(BaseHTTPRequestHandler):
         return (ROOT / relative).resolve(), ROOT
 
     def _serve_admin(self, parsed):
+        if parsed.path == "/v2" or parsed.path.startswith("/v2/"):
+            return self._send("", "text/plain", 302, {"Location": "/admin" + parsed.path + ("?" + parsed.query if parsed.query else "")})
         target, root = self._admin_target(parsed.path)
+        if root == ROOT_V2:
+            try:
+                relative = target.relative_to(root).as_posix()
+            except ValueError:
+                return self._send("Not found", "text/plain", 404)
+            if relative not in V2_ARTIFACT["allowlist"]:
+                return self._send("Not found", "text/plain", 404)
         if target != root / "index.html" and root.resolve() not in target.parents:
             return self._send("Not found", "text/plain", 404)
         if not target.is_file():
             return self._send("Not found", "text/plain", 404)
-        headers = None
+        headers = {"Content-Security-Policy": _artifact.DOCUMENT_CSP} if root == ROOT_V2 and target.suffix == ".html" else {}
         if type(self).upstream:
             token = self._request_preview_token()
             now = time.time()
@@ -594,9 +609,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
                 while len(expired) > PREVIEW_SESSION_CAP:
                     old_token, _ = expired.pop(0)
                     type(self).preview_sessions.pop(old_token, None)
-            headers = {"Set-Cookie": (
+            headers.update({"Set-Cookie": (
                 f"{PREVIEW_COOKIE}={token}; Path=/; "
-                "HttpOnly; SameSite=Strict")}
+                "HttpOnly; SameSite=Strict")})
         return self._send(target.read_bytes(), mimetypes.guess_type(
             target.name)[0] or "application/octet-stream", headers=headers)
 
@@ -632,8 +647,16 @@ class PreviewHandler(BaseHTTPRequestHandler):
 
     def _api(self, parsed):
         path = parsed.path
+        if path == "/api/account/static/admin-source-session.js":
+            return self._send((ROOT.parent / "static/account/admin-source-session.js").read_bytes(), "application/javascript; charset=utf-8")
         if path == "/api/account/static/mojo-auth.js":
-            return self._send("window.MojoAuth={init:function(){},getAuthHeader:function(){return 'Bearer preview';},getRefreshToken:function(){return null;},logout:function(){}};", "application/javascript; charset=utf-8")
+            return self._send("""window.MojoAuth={
+init:function(){if(!localStorage.getItem('access_token'))localStorage.setItem('access_token',btoa('{"alg":"none"}')+'.'+btoa(JSON.stringify({uid:1,email:'ian@example.com',exp:Math.floor(Date.now()/1000)+3600,token_type:'access'}))+'.preview')},
+getToken:function(){return localStorage.getItem('access_token')},getTokenType:function(){return 'bearer'},
+getAuthHeader:function(){return 'Bearer '+this.getToken()},getRefreshToken:function(){return null},
+logout:function(){localStorage.removeItem('access_token')}};""", "application/javascript; charset=utf-8")
+        if path == "/api/user/me":
+            return self._send(self.users[0])
         if path == "/api/account/admin/bootstrap":
             memberships = [] if self.onboarding_state == "new_group" else None
             return self._send(bootstrap(
@@ -784,6 +807,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         payload = self._read_body()
         self._record_event(path, payload)
+        if path == "/api/account/admin/session":
+            return self._send({"path": "/admin/", "source_session_expires_in": 300,
+                               "source_session_expires_at": int(time.time()) + 300})
         for provider in (webapps, platform, advanced, security, settings, sms, email, maintenance, capacity, assistant):
             response = provider.post(self, path, payload)
             if response is not None:

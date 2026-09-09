@@ -66,6 +66,7 @@
 
     {{ login_methods|json_script:"mat-login-methods" }}
     <script nonce="{{ csp_nonce }}" src="{{ api_base }}/api/account/static/mojo-auth.js"></script>
+    {% if admin_source_session %}<script nonce="{{ csp_nonce }}" src="/api/account/static/admin-source-session.js"></script>{% endif %}
     <script nonce="{{ csp_nonce }}">
     (function () {
         {% comment %}
@@ -102,6 +103,22 @@
         } catch (e) { LOGIN_METHODS = []; }
         var PASSKEY_PROMPT = "{{ passkey_prompt|default:'off'|escapejs }}";
         var SKIP_SESSION_CHECK = {{ skip_session_check|yesno:"true,false" }};
+        {% if admin_source_session %}
+        // A stale token/refresh is never proof of a new explicit login.
+        SKIP_SESSION_CHECK = true;
+        ['login', 'register', 'verifyPhoneRegister', 'resetWithCode', 'resetWithToken',
+         'completeForcedPassword', 'loginWithMagicToken', 'loginWithPasskeyDiscoverable',
+         'loginWithPasskey', 'verifySmsLogin', 'completeOAuthLogin'].forEach(function(name) {
+            var original = MojoAuth[name];
+            if (typeof original !== 'function') return;
+            MojoAuth[name] = function() {
+                var args = arguments;
+                return MojoAdminSourceSession.explicitLogin(function() {
+                    return original.apply(MojoAuth, args);
+                });
+            };
+        });
+        {% endif %}
         function hasMethod(m) { return LOGIN_METHODS.indexOf(m) !== -1; }
         var ENABLE_GOOGLE = hasMethod("google");
         var ENABLE_APPLE = hasMethod("apple");

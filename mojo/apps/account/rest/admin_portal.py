@@ -10,6 +10,7 @@ from django.http import HttpResponse, HttpResponseRedirect
 import mojo
 from mojo import decorators as md
 from mojo.apps.account.services import admin_assets, admin_features
+from mojo.apps.account.services.admin_artifact import DOCUMENT_CSP
 from mojo.apps.account.services import assistant_setup
 from mojo.apps.account.services import admin_portal as admin_portal_service
 from mojo.apps.account.services import system_settings, webapp_authority
@@ -48,14 +49,20 @@ def _gate(target=None):
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Admin access</title><style nonce="{nonce}">html{{color-scheme:light dark}}body{{margin:0;font:14px system-ui;background:#f5f7fa;color:#172033}}main{{max-width:360px;margin:18vh auto;padding:28px;background:Canvas;border:1px solid #d9dee8;border-radius:14px}}h1{{font-size:20px;margin:0 0 8px}}p{{line-height:1.5;color:#667085}}button{{font:inherit;padding:9px 14px;border:0;border-radius:8px;background:#4665e8;color:white;cursor:pointer}}</style></head>
 <body><main><h1>Admin access</h1><p id="message">Checking your secure session…</p><button id="signin" hidden>Continue to sign in</button></main>
-<script src="/api/account/static/mojo-auth.js"></script><script nonce="{nonce}">
+<script src="/api/account/static/mojo-auth.js"></script><script src="/api/account/static/admin-source-session.js"></script><script nonce="{nonce}">
 (function(){{var msg=document.getElementById('message'),btn=document.getElementById('signin');var auth={auth_path!r};
 function signIn(){{location.assign(auth)}}btn.onclick=signIn;
-if(!window.MojoAuth){{msg.textContent='Authentication is unavailable.';return}}
+if(!window.MojoAuth||!window.MojoAdminSourceSession){{msg.textContent='Authentication is unavailable.';return}}
 MojoAuth.init({{baseURL:location.origin}});
-var token=MojoAuth.getToken();if(!token||MojoAuth.getTokenType()!=='bearer'){{signIn();return}}
-fetch('/api/account/admin/session',{{method:'POST',headers:{{Authorization:'Bearer '+token,'Content-Type':'application/json'}},body:'{{}}'}})
-.then(function(r){{if(r.ok){{location.reload();return}}if(r.status===401&&MojoAuth.getRefreshToken()){{return MojoAuth.refreshToken().then(function(){{location.reload()}})}}throw new Error(r.status===403?'Your account does not have Admin access.':'Your session could not be verified.')}})
+var params=new URLSearchParams(location.search),code=params.get('auth_code');
+if(code){{params.delete('auth_code');history.replaceState({{}},'',location.pathname+(params.toString()?'?'+params:'')+location.hash)}}
+Promise.resolve().then(function(){{
+ if(code)return MojoAdminSourceSession.explicitLogin(function(){{return MojoAuth.exchangeAuthCode(code)}});
+ MojoAdminSourceSession.start();
+}}).then(function(){{
+ if(!MojoAuth.getToken()&&!MojoAuth.getRefreshToken()){{btn.hidden=false;msg.textContent='Sign in to open Admin.';return null}}
+ return MojoAdminSourceSession.issue(MojoAuth);
+}}).then(function(grant){{if(grant)location.reload()}})
 .catch(function(e){{msg.textContent=e.message;btn.hidden=false;btn.textContent='Sign in again'}})
 }})();</script></body></html>"""
     response = HttpResponse(body, content_type="text/html; charset=utf-8")
@@ -65,6 +72,13 @@ fetch('/api/account/admin/session',{{method:'POST',headers:{{Authorization:'Bear
              "'nonce-%s'; connect-src 'self'; base-uri 'none'; "
              "form-action 'none'; frame-ancestors 'none'") % (nonce, nonce),
     )
+
+
+@md.GET("account/static/admin-source-session.js")
+@md.public_endpoint("Public source-cookie coordination protocol; no private UI")
+def on_admin_source_coordination(request):
+    path = admin_assets.ROOT.parent / "static/account/admin-source-session.js"
+    return _headers(HttpResponse(path.read_bytes(), content_type="application/javascript; charset=utf-8"))
 
 
 def _private_file(asset):
@@ -81,9 +95,12 @@ def _private_file(asset):
     response = HttpResponse(content, content_type=content_type)
     csp = None
     if path.suffix == ".html":
-        csp = ("default-src 'self'; img-src 'self' data:; style-src 'self'; "
-               "script-src 'self'; connect-src 'self'; base-uri 'none'; "
-               "form-action 'self'; frame-ancestors 'none'")
+        if asset.startswith(admin_assets.V2_PREFIX):
+            csp = DOCUMENT_CSP
+        else:
+            csp = ("default-src 'self'; img-src 'self' data:; style-src 'self'; "
+                   "script-src 'self'; connect-src 'self'; base-uri 'none'; "
+                   "form-action 'self'; frame-ancestors 'none'")
     return _headers(response, csp=csp)
 
 
@@ -131,11 +148,16 @@ def on_admin_asset(request, asset=None):
 @md.denies_key_backed_session()
 @md.requires_global_perms("view_admin", "manage_users", "manage_settings", "admin")
 def on_admin_session(request):
-    session_id = admin_portal_service.issue(request)
-    if session_id is None:
+    grant = admin_portal_service.issue_with_metadata(request)
+    if grant is None:
         return JsonResponse({"status": False, "error": "interactive JWT required"}, status=401)
-    response = JsonResponse({"status": True, "data": {"path": _ADMIN_ROOT_SLASH}})
-    admin_portal_service.set_cookie(response, session_id)
+    response = JsonResponse({"status": True, "data": {
+        "path": _ADMIN_ROOT_SLASH,
+        "source_session_expires_in": grant["source_session_expires_in"],
+        "source_session_expires_at": grant["source_session_expires_at"],
+    }})
+    admin_portal_service.set_cookie(response, grant["session_id"],
+                                    expires_at=grant["source_session_expires_at"])
     return _headers(response)
 
 

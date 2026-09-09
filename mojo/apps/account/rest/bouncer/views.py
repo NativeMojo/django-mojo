@@ -428,6 +428,21 @@ def _auth_context(request, group=None, include_registration_extras=False):
     # straight back into another 440 response.
     context['skip_session_check'] = str(
         request_data.get('force_reauth', '')).lower() in ('1', 'true', 'yes')
+    # Only same-origin hosted sign-in returning to this installation's Admin
+    # participates in the source-cookie generation protocol.
+    from urllib.parse import urlsplit
+    from mojo.apps.account.services.admin_portal import ADMIN_PATH
+    destination = (request_data.get('redirect') or request_data.get('next')
+                   or request_data.get('returnTo') or context.get('success_redirect') or '')
+    try:
+        target = urlsplit(request.build_absolute_uri(destination))
+        origin = urlsplit(request.build_absolute_uri('/'))
+        root = f'/{ADMIN_PATH}/'
+        context['admin_source_session'] = (
+            (target.scheme, target.netloc) == (origin.scheme, origin.netloc)
+            and (target.path == root.rstrip('/') or target.path.startswith(root)))
+    except (TypeError, ValueError):
+        context['admin_source_session'] = False
     return context
 
 

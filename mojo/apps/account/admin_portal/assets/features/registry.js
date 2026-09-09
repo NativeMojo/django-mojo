@@ -31,9 +31,13 @@ export function featureForRoute(route, ctx) {
 // `order` to sit later in the sidebar than the feature it belongs to. Array
 // sort is stable, so everything unordered stays exactly where it was.
 export function navigationFor(ctx) {
-  return DESCRIPTORS.filter((feature) => feature.enabled(ctx))
+  const entries = DESCRIPTORS.filter((feature) => feature.enabled(ctx))
     .flatMap((feature) => feature.navigation(ctx))
     .sort((left, right) => (left.order || 0) - (right.order || 0));
+  if (/^\/(?:[A-Za-z0-9_-]+\/)+$/.test(ctx.admin_path || '')) {
+    entries.push({label: 'Open Portal', href: `${ctx.admin_path}v2/`, icon: 'globe', section: 'Portal'});
+  }
+  return entries;
 }
 
 export function installFeatureStyles(ctx) {

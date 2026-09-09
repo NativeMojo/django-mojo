@@ -79,6 +79,17 @@ def test_authenticated_admin_delivery(opts):
     assert opts.client.login(ADMIN_EMAIL, ADMIN_PASSWORD), "Admin login failed"
     issued = opts.client.post("/api/account/admin/session", json={})
     assert issued.status_code == 200, issued.response
+    grant = issued.json["data"]
+    assert set(grant) == {"path", "source_session_expires_in", "source_session_expires_at"}, "source identifier or metadata leaked"
+    assert type(grant["source_session_expires_in"]) is int and grant["source_session_expires_in"] > 0, "missing positive grant lifetime"
+    assert type(grant["source_session_expires_at"]) is int, "expiry epoch is not an integer"
+    from mojo.apps.account.services import admin_assets
+    v2 = opts.client.get("/admin/v2/")
+    assert v2.status_code == 200 and v2.text == (admin_assets.ROOT_V2 / "index.html").read_text(), "compiled entry bytes changed in delivery"
+    assert "script-src 'self'" in opts.client.last_response.headers.get("content-security-policy", ""), "private document lost strict scripts"
+    lazy = next(path for path in admin_assets.PRIVATE_ASSETS_V2 if path.endswith(".js"))
+    assert opts.client.get("/admin/v2/" + lazy).status_code == 200, "protected lazy chunk missing"
+    assert opts.client.get("/admin/v2/admin-artifact.json").status_code == 404, "provenance is HTTP-deliverable"
     cookie = next((item for item in opts.client.session.cookies
                    if item.name == "mojo_admin"), None)
     assert cookie is not None and cookie.path == "/admin", cookie
@@ -221,12 +232,13 @@ def test_private_asset_manifest_is_exact(opts):
     # The v2 portal is a SECOND exact manifest reached through the same asset
     # route under a "v2/" prefix. It is proven at import time like v1's, and
     # the prefix must not become a way around either manifest.
-    assert admin_assets.load_manifest(
-        admin_assets.ROOT_V2,
-        admin_assets.V2_FEATURES) == admin_assets.PRIVATE_ASSETS_V2
-    assert "assets/features/home/feature.js" in admin_assets.PRIVATE_ASSETS_V2
-    assert "assets/features/security/page.js" in admin_assets.PRIVATE_ASSETS_V2
-    assert admin_assets.asset_path("v2/assets/features/home/feature.js").is_file()
+    from mojo.apps.account.services import admin_artifact
+    validated = admin_artifact.validate(admin_assets.ROOT_V2, admin_artifact.PINNED_MANIFEST_SHA256)
+    assert validated["allowlist"] == admin_assets.PRIVATE_ASSETS_V2, "runtime inventory drifted"
+    for name in validated["allowlist"]:
+        assert admin_assets.asset_path("v2/" + name).is_file(), name
+    assert admin_assets.asset_path("v2/admin-artifact.json") is None, "provenance must stay private"
+    assert admin_assets.asset_path("v2/.vite/manifest.json") is None, "build metadata must stay private"
     for value in ("v2/manifest.json", "v2/assets/pages.js", "v2/../memory.md",
                   "v2/assets/features/home/../apps/page.js",
                   # A v1-only asset is not reachable through the v2 prefix, and

@@ -31,6 +31,9 @@ dump.rdb
 
 # Build
 dist/
+/.admin-portal-v2.lock
+/.admin-portal-v2.backup/
+/.admin-portal-v2.stage-*/
 
 # macOS
 .DS_Store

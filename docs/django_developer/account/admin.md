@@ -1,90 +1,132 @@
-# Packaged Admin v2
+# Packaged Portal and legacy Admin
 
-The packaged Admin v2 has exactly seven feature destinations: Home, Apps,
-Infrastructure, Domains, Access, Security, and Settings. Admin v1 remains
-packaged with its original four-lane Activity surface. In v2, incidents and
-events live only at `#/security-operations`; Activity retains tickets and logs.
-Authorized old
-`#/activity?tab=incidents` and `tab=events` links are canonicalized to Security.
-If Security is unavailable or unreadable, those links fail closed to Home.
+The default configured Admin route (normally `/admin/`) remains legacy Admin.
+Its **Open Portal** sidebar destination opens `/admin/v2/` in the same tab.
+With `MOJO_ADMIN_PATH = "operations"`, these become `/operations/` and
+`/operations/v2/`. The backend validates this configuration as one
+letter/digit/underscore/hyphen segment. No credentials are included in the link.
 
-## Security feature admission
+Portal's UI source and build belong to **portal-mojo**. Django vendors the
+complete canonical `dist/admin` artifact, not the ordinary Portal build.
+The installed Python package requires no Node, npm or frontend build.
+Compiled assets use a relative base; Portal API requests always use same-origin
+`/api/...`, independent of the Admin mount and legacy bootstrap.
 
-The ordinary Admin source-session gate still requires global Admin access and
-denies key-backed sessions. After that gate, the `security` bootstrap provider
-is enabled only when `mojo.apps.incident` is installed and the caller has a
-global `view_security`, `manage_security`, or `security` grant. A literal
-`admin` grant admits the portal but is not a fine-grained Security wildcard. Its
-capabilities are independent:
+## Pinned identity and offline replacement
+
+The current artifact is portal-mojo **0.2.2**, source revision
+`b61a053842400a07f2bc625af0d37db0bae8e001`, built clean with Node
+**24.21.0** / npm **11.19.0** and lockfile SHA-256
+`573f34453fb06def1bbbad428afba04af286afa738aa92fe58a4862dda341ac4`.
+Its 116-file inventory includes the Vite manifest and lazy chunks.
+The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
+
+`934e89e2ce913583463469d7eda4c4ef3c5015ce9f3d51fb9894a75ce61b2031`
+
+The paired work items record the producer's retrieval path, verification and
+revision. This pin was retrieved from
+`/Users/ians/Projects/mojo/nativemojo/portal-mojo/dist/admin`.
+
+Stop processes serving/importing the checkout before replacing the artifact:
+
+```bash
+uv run python scripts/vendor_admin_portal.py \
+  --source /absolute/path/to/verified/dist/admin \
+  --expected-manifest-sha256 934e89e2ce913583463469d7eda4c4ef3c5015ce9f3d51fb9894a75ce61b2031
+uv run python scripts/vendor_admin_portal.py --check
+```
+
+The tool is offline, rejects overlapping paths and symlinked ancestry, takes an
+exclusive lock, verifies the source, stages only declared files plus metadata,
+reverifies, and replaces only `mojo/apps/account/admin_portal_v2/`.
+Identical bytes are a no-op. A failed promotion restores the previous tree.
+A crash between the two renames can briefly leave no live tree: this is
+recoverable offline replacement, not uninterrupted live deployment.
+
+The deterministic checkout-root `.admin-portal-v2.backup/` is retained if
+restoration fails. Re-run the vendor command to recover and install the pinned
+source. If both the destination and backup exist but the destination fails
+validation, stop and preserve both for diagnosis; restore that exact backup
+with processes stopped before retrying. Lock, stage and backup paths are
+gitignored and forbidden in archives. Interrupted orphan stages contain no
+authoritative copy and may be removed after confirming no vendor process runs.
+
+`services/admin_artifact.py` uses only the Python standard library. Repair
+and package commands load it directly, so they work even when an invalid v2
+tree prevents Django startup. The runtime loader proves the pinned bytes at
+startup and delivers only its validated allowlist. Provenance and
+`.vite/manifest.json` ship in the package but return HTTP 404.
+
+## Private source sessions
+
+Interactive global Admin admission remains required. API keys, group tokens,
+ordinary authenticated users and anonymous clients cannot mint a source
+session. A valid source cookie admits static source only; every REST endpoint
+retains its own user/group/security permission checks. Legacy Security
+bootstrap capabilities do not turn `admin` into a Security wildcard.
+
+`POST /api/account/admin/session` returns:
 
 ```json
-{"id":"security","enabled":true,"capabilities":{"view":true,"manage":false}}
+{"status":true,"data":{"path":"/admin/","source_session_expires_in":300,"source_session_expires_at":2000000300}}
 ```
 
-The browser workspace still uses this interactive portal admission. The REST
-authority is broader: validated per-user API keys retain the user's global or
-default-group security permissions, and group API keys/tokens may read only
-evidence owned by their exact authenticated group. Client-supplied group parameters never
-select or widen that scope. Mutations require global `manage_security` or
-`security`; their freshness window comes from deployment configuration, and
-machine credentials do not face an impossible interactive reauthentication.
+The two integer fields derive from one issuance deadline, bounded by
+`MOJO_ADMIN_SESSION_TTL` and access JWT expiry. The cache stores and explicitly
+checks that deadline; cache timeout and cookie Max-Age cannot exceed it.
+`issue(request)` retains its session-id-or-None Python return contract;
+`issue_with_metadata(request)` is the internal richer API. The source-session
+identifier never appears in the REST response.
 
-## Browser boundary
+The HttpOnly, SameSite=Strict cookie remains scoped to the configured Admin
+root. Source delivery is no-store; anonymous documents contain only the public
+auth gate, and anonymous private assets return 404. Cache failure, expired
+grants, inactive users and changed authentication keys fail closed.
 
-Security consumes only `/api/incident/admin/security` schema version 3 and its
-governed action endpoint. It renders server-curated fields, action schemas,
-cutoff/window metadata, captured checked-host summaries, and complete
-permissioned detail. Large detail fields use signed scope/object/revision-bound
-cursors; the client follows each field's `chunk_cursor` to completion. A
-discovery-list `next_cursor` is continued separately with
-`sections=<the same section>&page_cursor=<next_cursor>`. Only authentication
-secrets are scrubbed. Addresses, CIDRs, commands, paths, handler text, provider
-errors, and other retained operational evidence remain visible to an
-authorized operator.
+Portal, legacy Admin and the gate all hold the origin Web Lock
+`mojo:admin-source-session:v1` across every issue/revoke response, including
+body completion. The BroadcastChannel uses that same name. The authoritative
+localStorage key `mojo:admin-source-generation:v1` stores only
+`{version:1,generation:<UUID>,state:"active"|"revoked"}`; sessionStorage binds
+each tab to its accepted generation. Messages contain only
+`{type:"generation",version,generation,state}` and prompt a reread.
 
-Schema version alone is not trusted. The v2 client validates each requested
-section's envelope, window, bounded row shape, policy/action schemas, and
-firewall host lists before rendering it. A missing, malformed, contradictory,
-or oversized value fails the requested view with a contract error; it is never
-coerced into an empty table and never enables a governed action.
+Logout writes/broadcasts a fresh tombstone and clears credentials before waiting
+for the lock, then awaits `DELETE /<admin>/_session`. It never overwrites a
+newer explicit-login generation. Refresh and resumed tabs cannot reactivate a
+tombstone. Hosted auth activates a generation only after explicit credential
+completion, and only for a validated same-origin Admin return destination.
+The coordination-only public adapter is served no-store. Missing Web Locks,
+BroadcastChannel, UUIDs or usable storage yields visible recovery without an
+uncoordinated fallback.
 
-The shared v1 and v2 clients renew a 401 once only for GET/HEAD. A mutation is
-never replayed after an ambiguous 401. HTTP 440 may retry once after the
-pre-action recent-auth ceremony. A terminal 401 tears down authenticated
-chrome and preserves the exact path, query, and hash in the sign-in return.
-Errors retain typed status/code but render only bounded scalar messages. When
-legacy `MOJO_APP_STATUS_200_ON_ERROR` folds a failure onto HTTP 200, the error
-envelope's validated `error_status` remains authoritative, so folded 401, 409,
-and 440 responses follow the same state machine as native HTTP statuses.
+## Preview, CSP and release proof
 
-## Preview and browser proof
+`bin/admin_preview` preserves legacy fixtures and the live proxy. Start at
+`/admin/` and use Open Portal; `/v2/` redirects to the canonical
+`/admin/v2/` fixture mount. Preview is a deterministic fixture, not evidence
+of production authorization. Protected-browser acceptance uses a separate real
+Django process and the committed artifact.
 
-`bin/admin_preview --security-state STATE` supports `full`, `empty`,
-`unavailable`, `view-only`, `no-access`, `partial`, `failed`, `stale`,
-`expired-session`, `440`, `conflict`, `recovery`, and `malformed`.
-
-The opt-in real-browser rider requires an explicit executable:
+The initial packaged CSP is the existing Admin policy: same-origin scripts,
+styles, connections and resources, data images, no base URI and no framing.
+There is no inline-script/eval permission or global policy relaxation.
+Any required blob/media/frame/provider/realtime addition must be justified by
+the closing browser matrix and restricted to the relevant directive; external
+origins require exact deployment allowlists. Browser evidence is written under
+`testproject/var/admin-browser-4060/` (identity, screenshots, CSP and race
+records). Do not describe unexecuted fixtures as measured compatibility.
 
 ```bash
-MOJO_ADMIN_CHROME=/exact/path/to/chrome \
-  bin/run_tests --agent --extra slow \
-  -t test_account.test_admin_security_browser
+uv build
+uv run python scripts/verify_admin_portal_package.py --dist dist --build-smoke
+MOJO_ADMIN_CHROME=/absolute/path/to/chrome \
+  bin/run_tests --agent --extra slow -t test_account
 ```
 
-It creates isolated preview/CDP ports and a temporary browser profile, applies
-hard deadlines, terminates both processes, and treats console/runtime errors
-as failures. It never reaches a live firewall or public target.
-
-For non-destructive acceptance against a real installation, bridge the local
-packaged source to that installation and open Admin v2:
-
-```bash
-bin/admin_preview --port 8766 --upstream https://api.example.com
-# open http://localhost:8766/admin/v2/#/security-operations
-```
-
-Prefer an operator with global `view_admin` and `view_security` but no
-`manage_security`. Verify admission, all six tabs, schema-v3 status/cutoff
-rendering, complete evidence with secret-only scrubbing, legacy Activity links, and session recovery using reads
-only. Do not submit any RuleSet, recommendation, or IPSet confirmation: those
-requests target the real installation and may change policy or fleet state.
+Package verification rejects duplicate, traversing and nonregular archive
+members, validates exact bytes in both wheel and sdist, builds a wheel from the
+sdist, installs it into a clean environment and performs a dependency-free
+installed-asset smoke check. `publish.py` validates the committed tree before
+building and requires archive/build-smoke proof before any push. Its dry-run
+continues to print the intended commands without building or publishing.

@@ -60,19 +60,6 @@ def test_deploys_tab_renders_its_own_states_contract(opts):
         assert copy in page, f"the Deploys tab lost its {copy!r} empty state"
 
 
-@th.django_unit_test("Admin v2 Security actions answer once and reconcile conflicts")
-def test_security_actions_are_single_attempt_contract(opts):
-    root = ROOT / "mojo/apps/account/admin_portal_v2/assets/features/security"
-    api = (root / "api.js").read_text()
-    actions = (root / "rules.js").read_text() + (root / "firewall.js").read_text()
-    assert "apiOnce('/api/incident/admin/security/action'" in api
-    assert "if (error?.status === 409)" in api and "await reread?.()" in api
-    assert "if (error?.code === 'stale_revision') close()" in actions, \
-        "a conflict leaves a stale typed confirmation or draft actionable"
-    assert "runAction(" in actions and "pendingLabel" in actions, \
-        "a governed action does not answer the click that started it"
-
-
 def swept():
     """Every JavaScript module in the packaged portal.
 

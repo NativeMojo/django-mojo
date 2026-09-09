@@ -33,64 +33,18 @@ def test_security_feature_provider(opts):
     }, "manage may never imply view inside a malformed bootstrap capability set"
 
 
-@th.django_unit_test("Admin v2 packages exactly seven destinations with complete Security detail")
+@th.django_unit_test("Portal package preserves pinned identity and private metadata")
 def test_security_packaging_and_routes(opts):
-    registry = (V2 / "features/registry.js").read_text()
-    routes = (V2 / "components/routes.js").read_text()
-    app = (V2 / "app.js").read_text()
-    page = (SECURITY / "page.js").read_text()
-    manifest = (SECURITY / "manifest.json").read_text()
-    descriptor_block = registry.split(
-        "const DESCRIPTORS = Object.freeze([", 1)[1].split("]);", 1)[0]
-    assert [name.strip() for name in descriptor_block.split(",") if name.strip()] == [
-        "home", "apps", "infrastructure", "domains", "access", "security", "settings",
-    ], "Admin v2 does not package the exact seven-feature order"
-    assert "route: 'security-operations'" in (SECURITY / "manifest.js").read_text()
-    for label in ("Overview", "Cases", "Incidents & events", "Rules",
-                  "Firewall & IPSets", "Recommendations"):
-        assert label in page
-    for asset in ("manifest.js", "api.js", "page.js", "mojosec.js",
-                  "activity.js", "rules.js", "firewall.js", "styles.css"):
-        assert f'"{asset}"' in manifest
-    assert "return routeHref('security-operations', state)" in routes
-    assert "['incidents', 'events'].includes(requested.state.tab)" in app
-    assert "capabilities?.view !== true" in app, "legacy Security hashes must fail closed"
-
-
-@th.django_unit_test("v2 Security uses only the typed authority and governed schemas")
-def test_security_browser_authority(opts):
-    sources = "\n".join(path.read_text() for path in SECURITY.glob("*.js"))
-    api = (SECURITY / "api.js").read_text()
-    rules = (SECURITY / "rules.js").read_text()
-    assert "/api/incident/admin/security" in api
-    assert "/api/incident/incident" not in sources
-    assert "/api/incident/event" not in sources
-    assert "SECURITY_SCHEMA_VERSION = 3" in api
-    assert "actionSchemas(report)" in rules and "policySchema(report)" in rules
-    assert "confirm_catch_all = catchAllInput.value" in rules
-    assert "await reread?.()" in api and "SecurityConflictError" in api
-    assert "apiOnce" in api, "governed mutations may not receive transport replay"
-    assert "validateSectionData" in api and "validateSchemas" in api
-    assert "validators[name](data, name)" in api
-    assert "if (!Array.isArray(envelope?.data))" in api, (
-        "a malformed available list must not become an authoritative empty table")
-    assert "readSecurityDetail" in sources and "completeChunk" in api, (
-        "authorized operators must be able to retrieve complete retained evidence")
-    assert "readNextSecurityPage" in api and "page_cursor" in api, (
-        "truncated discovery lists must have opaque server-side traversal")
-    assert "Load more" in sources, (
-        "the browser must expose the server's next-page retrieval path")
-    for required in ("source_ip", "details", "metadata",
-                     "source_url", "sync_error", "checked_proof",
-                     "transitions", "attempts"):
-        assert required in sources, f"browser Security omits operational evidence: {required}"
-    assert "source_key: row.source_key" in sources, (
-        "the browser should make the server's explicit secret placeholder visible")
+    from mojo.apps.account.services import admin_artifact, admin_assets
+    result = admin_artifact.validate(admin_assets.ROOT_V2, admin_artifact.PINNED_MANIFEST_SHA256)
+    assert result["metadata"]["source_session_contract"] == 1, "source protocol changed"
+    assert admin_assets.asset_path("v2/admin-artifact.json") is None, "provenance became HTTP-deliverable"
+    assert len(result["allowlist"]) > 1, "lazy runtime inventory is missing"
 
 
 @th.django_unit_test("both Admin clients preserve return hashes and never replay mutations on 401")
 def test_admin_auth_recovery_contract(opts):
-    for root in (ROOT / "mojo/apps/account/admin_portal/assets", V2):
+    for root in (ROOT / "mojo/apps/account/admin_portal/assets",):
         core = (root / "core.js").read_text()
         app = (root / "app.js").read_text()
         assert "const replaySafe = method === 'GET' || method === 'HEAD'" in core
@@ -133,8 +87,7 @@ def test_security_browser_harness_contract(opts):
     assert "--remote-debugging-port" in harness and "--user-data-dir" in harness
     assert "TemporaryDirectory" in harness and "DEADLINE_SECONDS" in harness
     assert "Runtime.exceptionThrown" in harness and "Log.entryAdded" in harness
-    for proof in ("case paging", "case filtering", "complete case detail",
-                  "narrow viewport", "dark theme", "keyboard focus",
-                  "malformed contract"):
+    for proof in ("artifact identity", "protected lazy", "post-logout denial",
+                  "narrow viewport", "dark theme", "two-tab", "renewal"):
         assert proof in harness
     assert "process.terminate()" in harness and "process.kill()" in harness

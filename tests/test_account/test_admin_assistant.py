@@ -154,7 +154,7 @@ def test_admin_assistant_rest_decorators(opts):
     assert "request.POST" not in source and "request.GET" not in source, \
         "the Assistant setup endpoints read input from something other than request.DATA"
 
-    for bundle in ("admin_portal", "admin_portal_v2"):
+    for bundle in ("admin_portal",):
         setup_source = (ROOT / f"mojo/apps/account/{bundle}/assets/assistant/setup.js").read_text()
         assert "checked: state.emergency_stop_database" in setup_source, \
             f"{bundle} binds its editable checkbox to effective/static stop state"
@@ -302,8 +302,6 @@ def test_assistant_keys_are_catalog_protected(opts):
 @th.django_unit_test("both Admin bundles expose the exact fresh-owner LLM actions")
 def test_llm_safety_actions_match_in_both_admin_bundles(opts):
     first = (ROOT / "mojo/apps/account/admin_portal/assets/assistant/setup.js").read_text()
-    second = (ROOT / "mojo/apps/account/admin_portal_v2/assets/assistant/setup.js").read_text()
-    assert first == second, "the two Admin Assistant setup bundles drifted"
     for action in ("activate_policy", "reset_breaker", "historical_triage"):
         literal = f"action: '{action}'"
         assert first.count(literal) == 1, \

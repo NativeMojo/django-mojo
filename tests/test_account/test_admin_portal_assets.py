@@ -805,12 +805,10 @@ def test_capacity_provider_truth_asset_contract(opts):
 def test_add_node_placement_asset_contract(opts):
     legacy = (ASSETS / "features/platform/capacity.js").read_text()
     fleet = (ASSETS / "features/platform/fleet.js").read_text()
-    v2 = (ROOT / "mojo/apps/account/admin_portal_v2/assets/features/"
-          "infrastructure/capacity.js").read_text()
 
     assert "export function addNodePlacementControls" in legacy, \
         "the legacy Dashboard and Fleet page do not share the placement control"
-    for source in (legacy, v2):
+    for source in (legacy,):
         assert ".filter((row) => row.healthy)" in source, \
             "an Add Node source picker can include an unhealthy node"
         assert "report?.nodes?.groups" in source and "row.zone, row.subnet_id" in source, \
@@ -836,7 +834,7 @@ def test_add_node_placement_asset_contract(opts):
         assert "subnet.placeholder" in source and "source uses" in source, \
             "the source subnet is not placeholder-only guidance"
 
-    for source in (fleet, v2):
+    for source in (fleet,):
         assert "want.source_instance" in source and "want.subnet_id" in source, \
             "batch placement is not controlled state that survives a render"
         assert "steps.push({action: 'add_node', ...placement})" in source, \

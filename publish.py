@@ -387,8 +387,12 @@ def current_branch():
 
 
 def build(dry_run=False):
+    run([sys.executable, "scripts/vendor_admin_portal.py", "--check"],
+        dry_run=dry_run, capture=False)
     run(["rm", "-rf", "dist"], dry_run=dry_run, capture=False)
     run(["uv", "build"], dry_run=dry_run, capture=False)
+    run([sys.executable, "scripts/verify_admin_portal_package.py", "--dist", "dist",
+         "--build-smoke"], dry_run=dry_run, capture=False)
 
 
 def push_source(branch, dry_run=False):
