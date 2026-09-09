@@ -46,8 +46,7 @@ def test_retention_crash_cutpoints_preserve_original_and_forward_arguments(opts)
             assert Path(root, "args").read_text().splitlines() == ["--activate-previous", "space argument"], "wrapper must forward arguments unchanged"
 
 
-@th.django_unit_test()
-def test_predecessor_and_modern_updaters_refresh_candidate_and_rollback_without_veto(opts):
+def _exercise_refresh_updaters(opts, closed_stderr=False):
     from mojo.deploy import mojosec_refresh
 
     assert os.getuid() != 0, "the real updater fixture requires an unprivileged runner so all state remains test-local"
@@ -89,6 +88,8 @@ else:
             with open(os.environ["EVENT_LOG"], "a") as f: f.write(direction + "-refresh\\n")
             raise RuntimeError("observer failure must not veto activation")
     m.Refresh(str(Path(os.environ["EVENT_LOG"]).parent / "evidence.json"), host=Host(), owner_uid=os.getuid()).run("deployment", direction)
+if os.environ.get("OBSERVER_FAIL_EXIT"):
+    sys.exit(7)
 '''.replace("REAL_HELPER", repr(str(Path(mojosec_refresh.__file__).resolve())))
             executable(package / "mojosec_refresh.py", helper_source)
             executable(stubs / "python3", '''#!/bin/bash
@@ -109,8 +110,12 @@ esac
                        MOJO_DEPLOY_STATE_ROOT=str(state), MOJO_DEPLOY_NO_SYSTEMD="1",
                        VERSION_FILE=str(version), EVENT_LOG=str(log), OLD_POST=str(old_post),
                        CANDIDATE_POST=str(candidate_post))
-            done = subprocess.run(["bash", str(updater), "--sha", "2" * 40, "--framework", "2",
-                                   "--deployment", "11111111-1111-4111-8111-111111111111", "--node-type", "worker"],
+            argv = ["bash", str(updater), "--sha", "2" * 40, "--framework", "2",
+                    "--deployment", "11111111-1111-4111-8111-111111111111", "--node-type", "worker"]
+            if closed_stderr:
+                env["OBSERVER_FAIL_EXIT"] = "1"
+                argv = ["bash", "-c", 'exec 2>&-; exec "$@"', "closed-stderr", *argv]
+            done = subprocess.run(argv,
                                   env=env, capture_output=True, text=True, timeout=20)
             events = log.read_text().splitlines() if log.exists() else []
             assert done.returncode != 0, "application probe failure must retain its original failed deployment outcome"
@@ -119,6 +124,42 @@ esac
             assert events.count("rollback-refresh") == 1, f"{updater.name}: rollback hooks must share one durable attempt"
             assert events.index("rollback-refresh") < events.index("previous-activation"), "rollback refresh must run after downgrade before saved activation"
             assert version.read_text().strip() == "1", "application rollback must still restore the prior framework"
+
+
+@th.django_unit_test()
+def test_predecessor_and_modern_updaters_refresh_candidate_and_rollback_without_veto(opts):
+    _exercise_refresh_updaters(opts)
+
+
+@th.django_unit_test()
+def test_closed_stderr_observer_failures_preserve_activation_and_rollback(opts):
+    from mojo.deploy import mojosec_refresh
+
+    # Both real updaters must reach candidate preflight, then complete rollback
+    # for the genuine application probe failure even if every observer hook
+    # exits nonzero and every shell diagnostic writes to a closed descriptor.
+    _exercise_refresh_updaters(opts, closed_stderr=True)
+    repo = Path(mojosec_refresh.__file__).resolve().parents[2]
+    post_source = (repo / "mojo/deploy/project_scripts/post_deploy.sh").read_text()
+    with tempfile.TemporaryDirectory() as root:
+        root = Path(root)
+        scripts, state, project = root / "project_scripts", root / "state", root / "project"
+        for directory in (scripts, state, project):
+            directory.mkdir()
+        post = scripts / "post_deploy.sh"
+        executable(post, post_source)
+        for helper in (root / "mojosec_refresh.py", state / "mojosec_refresh.py"):
+            executable(helper, "raise SystemExit(7)\n")
+        env = os.environ.copy()
+        env["PROJ_PATH"] = str(project)
+        for action, expected in (("--activate", "Code-only deployment complete"),
+                                 ("--activate-previous", "Previous code-only node restored")):
+            done = subprocess.run(
+                ["bash", "-c", 'exec 2>&-; exec bash "$@"', "closed-stderr",
+                 str(post), action, "--node-type", "code", "--state", str(state)],
+                env=env, capture_output=True, text=True, timeout=10)
+            assert done.returncode == 0, f"{action} must retain successful application activation despite observer/stderr failure"
+            assert expected in done.stdout, f"{action} must reach the actual application activation branch"
 
 
 @th.django_unit_test()

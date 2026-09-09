@@ -6,7 +6,7 @@ set -Eeuo pipefail
 
 # This fallback does not import the package that may just have failed to copy.
 mojosec_refresh_error() {
-    echo "mojosec refresh degraded: helper preparation or invocation failed" >&2
+    echo "mojosec refresh degraded: helper preparation or invocation failed" >&2 || :
     if (cd / && /usr/bin/python3 -E -s - "$1") <<'PY'
 import fcntl, json, os, stat, sys, tempfile
 for path in ("/etc/mojosec/runtime-refresh.json", os.path.join(sys.argv[1], "mojosec_refresh_error.json")):
@@ -45,11 +45,14 @@ for path in ("/etc/mojosec/runtime-refresh.json", os.path.join(sys.argv[1], "moj
         try: os.fsync(fd)
         finally: os.close(fd)
     except Exception:
-        print("mojosec refresh: fallback evidence write failed", file=sys.stderr)
+        try:
+            print("mojosec refresh: fallback evidence write failed", file=sys.stderr)
+        except (OSError, ValueError):
+            pass
     finally:
         if lock is not None: os.close(lock)
 PY
-    then :; else echo "mojosec refresh: fallback observer failed" >&2; fi
+    then :; else echo "mojosec refresh: fallback observer failed" >&2 || :; fi
     return 0
 }
 
@@ -373,25 +376,25 @@ if [ "$ACTION" = "activate" ]; then
             /usr/bin/python3 -E -s "$refresh_source" --state "$STATE" --prepare; then
         :
     else
-        echo "mojosec refresh degraded: activation bridge retention failed" >&2
-        mojosec_refresh_error "$STATE"
+        echo "mojosec refresh degraded: activation bridge retention failed" >&2 || :
+        mojosec_refresh_error "$STATE" || :
     fi
     if [ -f "$STATE/mojosec_refresh.py" ] && \
             /usr/bin/python3 -E -s "$STATE/mojosec_refresh.py" --state "$STATE" --direction candidate; then
         :
     else
-        echo "mojosec refresh degraded: activation bridge failed" >&2
-        mojosec_refresh_error "$STATE"
+        echo "mojosec refresh degraded: activation bridge failed" >&2 || :
+        mojosec_refresh_error "$STATE" || :
     fi
 elif [ "$ACTION" = "activate-previous" ]; then
     if [ -f "$STATE/mojosec_refresh.py" ] && \
             /usr/bin/python3 -E -s "$STATE/mojosec_refresh.py" --state "$STATE" --direction rollback; then
         :
     else
-        echo "mojosec refresh degraded: previous activation refresh failed" >&2
-        mojosec_refresh_error "$STATE"
+        echo "mojosec refresh degraded: previous activation refresh failed" >&2 || :
+        mojosec_refresh_error "$STATE" || :
     fi
-fi
+fi || :
 case "$ACTION" in
     activate)
         if [ "$NODE_TYPE" = "api" ]; then

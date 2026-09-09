@@ -25,6 +25,14 @@ IDENTITY_FIELDS = ("framework_version", "pid", "boot_id", "process_start_ticks",
                    "process_started_at")
 
 
+def diagnostic(message):
+    """A failed diagnostic sink must not prevent durable observer evidence."""
+    try:
+        print(message, file=sys.stderr)
+    except (OSError, ValueError):
+        pass
+
+
 def read_bytes(path, limit=MAX_BYTES, owner_uid=0, private=False):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
@@ -222,7 +230,7 @@ class Refresh:
         self.state["latest"] = dict(self.attempt)
         if outcome == "degraded":
             self.state["failures"] = (self.state.get("failures", []) + [dict(self.attempt)])[-8:]
-            print("mojosec refresh degraded: " + reason[:160], file=sys.stderr)
+            diagnostic("mojosec refresh degraded: " + reason[:160])
         self.save()
         return dict(self.attempt)
 
@@ -327,7 +335,7 @@ class Refresh:
                     if existing.get("outcome") == "pending":
                         return self.finish("refreshed", "interrupted attempt reconciled")
                 elif existing.get("outcome") == "degraded":
-                    print("mojosec refresh degraded: " + existing.get("reason", "previous attempt failed"), file=sys.stderr)
+                    diagnostic("mojosec refresh degraded: " + existing.get("reason", "previous attempt failed"))
                 return dict(existing)
             before = self.call(self.host.observe)
             self.attempt["before"] = before.get("generation")
@@ -362,7 +370,7 @@ class Refresh:
             return self.finish("degraded", "refresh deadline exhausted; loaded-version proof unavailable")
         except Exception as error:
             reason = type(error).__name__ + ": " + str(error)[:120]
-            print("mojosec refresh degraded: " + reason, file=sys.stderr)
+            diagnostic("mojosec refresh degraded: " + reason)
             if not locked or not evidence_loaded:
                 # A competing writer may own an unresolved restart. Never
                 # replace its evidence without the lock, even on an error path.
@@ -371,7 +379,7 @@ class Refresh:
                         "outcome": "degraded", "reason": reason}).encode(),
                         owner_uid=self.owner_uid)
                 except Exception:
-                    print("mojosec refresh: error evidence write failed", file=sys.stderr)
+                    diagnostic("mojosec refresh: error evidence write failed")
                 return {"outcome": "degraded", "reason": reason, "evidence_failed": True}
             if self.attempt is None:
                 self.attempt = {"deployment": str(deployment)[:160], "direction": str(direction)[:16],
@@ -379,7 +387,7 @@ class Refresh:
             try:
                 return self.finish("degraded", reason)
             except Exception:
-                print("mojosec refresh: evidence write failed", file=sys.stderr)
+                diagnostic("mojosec refresh: evidence write failed")
                 return {"outcome": "degraded", "reason": reason, "evidence_failed": True}
         finally:
             if lock is not None:
@@ -440,7 +448,7 @@ def record_error(state, reason, owner_uid=0):
             value["failures"] = (value.get("failures", []) + [failure])[-8:]
             durable_write(path, json.dumps(value).encode(), owner_uid=owner_uid)
         except Exception:
-            print("mojosec refresh: preparation evidence write failed", file=sys.stderr)
+            diagnostic("mojosec refresh: preparation evidence write failed")
         finally:
             if lock is not None:
                 os.close(lock)
@@ -471,8 +479,8 @@ def retain(state, source=None, owner_uid=0, writer=None):
 # mojosec-refresh-wrapper-v1
 state="$(cd "$(dirname "$0")" && pwd)"
 if ! /usr/bin/python3 -E -s "$state/mojosec_refresh.py" --state "$state" --direction rollback; then
-    echo "mojosec refresh degraded: retained rollback helper failed" >&2
-fi
+    echo "mojosec refresh degraded: retained rollback helper failed" >&2 || :
+fi || :
 exec bash "$state/previous_post.original.sh" "$@"
 '''
     writer(previous, wrapper, mode=0o700, owner_uid=owner_uid)
@@ -498,7 +506,7 @@ def main(argv=None):
             target = ""
         Refresh().run(deployment, args.direction, target)
     except Exception as error:
-        print("mojosec refresh preparation degraded: " + str(error)[:160], file=sys.stderr)
+        diagnostic("mojosec refresh preparation degraded: " + str(error)[:160])
         record_error(args.state, str(error))
         return 1
     return 0
