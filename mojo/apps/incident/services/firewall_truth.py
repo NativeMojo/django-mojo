@@ -457,7 +457,14 @@ def repair_runner_roster():
             for row in firewall_roster()["selected"]]
 
 
+def require_firewall_channel(channel):
+    if channel != "firewall":
+        raise FirewallTruthError(
+            "invalid_firewall_channel", "firewall operations require the firewall channel")
+
+
 def exact_compatible_runner_roster(channel="firewall"):
+    require_firewall_channel(channel)
     fleet = firewall_roster()
     if fleet["unavailable_hosts"]:
         raise FirewallTruthError(
@@ -479,6 +486,7 @@ def exact_compatible_hosts(channel="firewall"):
 def aggregate_observations(kind, identity, fence, fingerprint, desired,
                            channel="firewall", roster=None):
     try:
+        require_firewall_channel(channel)
         verify_current_roster = roster is None
         roster = ([dict(row) for row in roster] if roster is not None
                   else exact_compatible_roster(channel))
@@ -547,6 +555,7 @@ def _unique_object(pairs):
 def current_ipset_enforcement(row, channel="firewall", roster=None):
     """Return fleet aggregate truth for the row's exact current generation."""
     try:
+        require_firewall_channel(channel)
         snapshot = ipset_snapshot(row.name)
         redis = _redis_client()
         fence = read_fences(redis, [("set", row.name)])[("set", row.name)]
@@ -708,6 +717,7 @@ def _dispatch_firewall(func, payload, timeout, correlation_id, *,
 def reconcile_ip(ip, present, channel="firewall", timeout=10.0,
                  correlation_id=None):
     try:
+        require_firewall_channel(channel)
         canonical = canonical_ipv4_address(ip)
     except FirewallTruthError as err:
         return _failure(err.code, err)
@@ -764,6 +774,7 @@ def reconcile_ip(ip, present, channel="firewall", timeout=10.0,
 def reconcile_set(name, cidrs, present=True, channel="firewall", timeout=135.0,
                   correlation_id=None):
     try:
+        require_firewall_channel(channel)
         name = canonical_set_name(name)
         name, canonical = canonical_operator_ipset(name, cidrs, present)
         if not isinstance(present, bool):
@@ -853,6 +864,7 @@ def reconcile_geolocated_ip(ip, permanent_ips, temporary_present,
                             correlation_id=None):
     """Reconcile one row and the permanent aggregate in one host snapshot."""
     try:
+        require_firewall_channel(channel)
         canonical = canonical_ipv4_address(ip)
         permanent = canonical_ipv4_networks(permanent_ips)
         set_name = permanent_set_name()

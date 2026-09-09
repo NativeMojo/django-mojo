@@ -802,12 +802,19 @@ def queue_aggregate_firewall_truth(generation, redis):
 
 
 def aggregate_firewall_truth(job):
+    release_marker = True
     try:
         return _aggregate_firewall_truth(job)
+    except Exception as error:
+        # Match the engine's retry decision. Keep one generation's existing
+        # chain authoritative until it succeeds or reaches a terminal attempt.
+        release_marker = not (getattr(error, "retryable", True) and
+                              job.attempt < job.max_retries)
+        raise
     finally:
         token = job.payload.get("aggregate_token")
         generation = job.payload.get("generation")
-        if isinstance(token, str) and type(generation) is int:
+        if release_marker and isinstance(token, str) and type(generation) is int:
             _raw_redis().eval(_DELETE_VALUE_LUA, 1,
                 f"mojo:firewall:aggregate-queued:{generation}", token)
 
@@ -819,10 +826,11 @@ def _aggregate_firewall_truth(job):
     from mojo.apps.incident.models import IPSet
     from mojo.apps.incident.services import firewall_truth
     from mojo.helpers import dates
-    from mojo.apps.incident.services.firewall_readiness import require_ready
 
     try:
-        require_ready()
+        # This job only reads fleet evidence and writes database truth. Any
+        # consumer can finalize it; kernel authority belongs to the observed
+        # host runners, whose readiness is required by this exact roster.
         roster = firewall_truth.exact_compatible_roster()
     except firewall_truth.FirewallTruthError as err:
         _retry_firewall_sync(job, err.code)
@@ -991,9 +999,9 @@ def _aggregate_firewall_truth(job):
                 firewall_generation=row.firewall_generation).update(**values):
             stale_code = stale_code or "geo_generation_changed"
 
-    current_roster = firewall_truth.exact_compatible_roster()
     lease = None
     try:
+        current_roster = firewall_truth.exact_compatible_roster()
         lease = firewall_truth.acquire_desired_state()
         if current_roster != roster:
             stale_code = stale_code or "runner_roster_changed"

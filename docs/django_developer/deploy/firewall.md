@@ -72,10 +72,21 @@ list and preserves expected, selected, and unavailable hosts separately. A
 healthy subset can repair itself while an unavailable expected host prevents
 aggregate truth from finalizing. Startup/recovered-readiness work is idempotent
 per runner incarnation; hourly repair selects one capable runner per host.
-Aggregate jobs coalesce by desired generation. Structural failures such as a
+Aggregate jobs coalesce by desired generation; their marker stays held through
+retryable attempts and is released on success, terminal failure, or exhausted
+retries (its expiry bounds recovery after a lost worker). Aggregation reads
+fleet evidence and updates database truth, so any firewall-channel consumer
+can run it without local broker authority. It still requires the complete
+ready expected roster, and capability loss during publication invalidates the
+published success before retrying. Local kernel mutations retain their broker
+readiness checks. Structural failures such as a
 wrong account or malformed/missing broker fail terminally; transient timeouts
 and host contention use durable retry. A later readiness recovery queues a
 fresh repair.
+
+Public firewall truth APIs accept only `channel="firewall"`; passing another
+channel, including the former `"default"`, explicitly fails with
+`invalid_firewall_channel` before dispatch. Omit the argument for the default.
 
 Disabled historical IPSet rows produce an absence tombstone after validating
 their safe name; their old IPv6 or malformed member lists are not loaded.
