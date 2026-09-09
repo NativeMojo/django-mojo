@@ -41,6 +41,7 @@ DEFAULT_CHANNELS = [
     # THERE too — this list is the CONSUME default, and enforcement reads the
     # other one.
     'edge',
+    'firewall',
 ]
 
 # Module-level settings for readability. JOB_CHANNELS is the box's CONSUME

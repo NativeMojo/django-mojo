@@ -1,5 +1,10 @@
 # MojoSec Sensor Ingestion
 
+Firewall enrollment and reconciliation are independent of MojoSec. An off or
+absent sensor does not disable an enrolled firewall broker. Firewall UI truth
+requires observations from the complete configured expected fleet; consult the
+[firewall API contract](../account/firewall.md) for partial/unavailable states.
+
 > The sensor receiver below is machine-facing. Operator clients, including
 > validated per-user automation, use `GET /api/incident/admin/security` and
 > `POST /api/incident/admin/security/action`. Those Admin Security REST routes

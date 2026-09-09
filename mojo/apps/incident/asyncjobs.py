@@ -49,6 +49,8 @@ def _valid_checked_generation(data, redis_client, targets):
 def _checked_desired_phase(data, redis_client, targets, validate=None):
     """Briefly fence desired truth; never retain the lease across broker I/O."""
     from mojo.apps.incident.services import firewall_truth
+    from mojo.apps.incident.services.firewall_readiness import require_ready
+    require_ready()
 
     lease = None
     try:
@@ -163,7 +165,8 @@ def broadcast_reconcile_firewall_set(data):
         if name == firewall_truth.permanent_set_name():
             raise firewall_truth.FirewallTruthError(
                 "reserved_set_name", "configured permanent set name is reserved")
-        cidrs = firewall_truth.canonical_ipv4_networks(data["cidrs"])
+        name, cidrs = firewall_truth.canonical_operator_ipset(
+            name, data["cidrs"], data["present"])
     except firewall_truth.FirewallTruthError as err:
         return _semantic("set", {}, {"ok": False,
                                      "error": {"code": err.code}})
@@ -472,6 +475,15 @@ class FirewallSyncRetry(RuntimeError):
     def __init__(self, code):
         super().__init__(f"retryable firewall reconciliation: {code}")
         self.code = code
+        self.retryable = code not in {
+            "broker_wrong_user", "broker_unavailable", "broker_not_ready",
+            "broker_malformed_response", "broker_invalid_response",
+            "broker_response_overflow", "broker_installation_unsafe",
+            "broker_config_invalid", "broker_config_unsafe", "broker_caller_invalid",
+            "permanent_set_config_mismatch", "expected_hosts_missing",
+            "expected_hosts_invalid", "desired_object_bound_exceeded",
+            "host_not_expected", "runner_incarnation_changed",
+        }
 
 
 def _retry_firewall_sync(job, code):
@@ -492,7 +504,9 @@ def _retry_broker_failure(job, result):
             any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_"
                 for character in code)):
         code = "broker_invalid_response"
-    if isinstance(code, str) and (code == "host_busy" or code.startswith("broker_")):
+    if isinstance(code, str) and (
+            code == "host_busy" or code.startswith("broker_") or
+            not FirewallSyncRetry(code).retryable):
         _retry_firewall_sync(job, code[:64])
 
 
@@ -528,6 +542,14 @@ def sync_firewall(job):
     from mojo.apps.incident.models import IPSet
     from mojo.apps.incident.services import firewall_truth
     from mojo.helpers import dates
+    from mojo.apps.incident.services.firewall_readiness import require_ready
+
+    try:
+        require_ready()
+        if _firewall_host() not in firewall_truth.expected_hosts():
+            raise firewall_truth.FirewallTruthError("host_not_expected", "local host is not in the declared firewall fleet")
+    except firewall_truth.FirewallTruthError as err:
+        _retry_firewall_sync(job, err.code)
 
     redis_client = _raw_redis()
     last_sync_key, force_key, lock_key = _sync_firewall_keys()
@@ -735,11 +757,7 @@ def sync_firewall(job):
             if firewall_truth.read_desired_generation(
                     lease.redis) != plan_generation:
                 _retry_firewall_sync(job, "desired_generation_changed")
-            jobs.publish(
-                func="mojo.apps.incident.asyncjobs.aggregate_firewall_truth",
-                payload={}, channel="default", max_retries=8,
-                backoff_base=2.0, backoff_max=300,
-                expires_in=SYNC_FIREWALL_MARKER_TTL)
+            queue_aggregate_firewall_truth(plan_generation, lease.redis)
         except firewall_truth.FirewallTruthError as err:
             _retry_firewall_sync(job, err.code)
         finally:
@@ -765,13 +783,49 @@ def sync_firewall(job):
             logit.exception("sync_firewall: failed to release owned host lock")
 
 
+def queue_aggregate_firewall_truth(generation, redis):
+    import uuid
+    from mojo.apps import jobs
+    key = f"mojo:firewall:aggregate-queued:{generation}"
+    token = uuid.uuid4().hex
+    if not redis.set(key, token, nx=True, ex=SYNC_FIREWALL_MARKER_TTL):
+        return
+    try:
+        return jobs.publish(
+            func="mojo.apps.incident.asyncjobs.aggregate_firewall_truth",
+            payload={"generation": generation, "aggregate_token": token},
+            channel="firewall", max_retries=8, backoff_base=2.0, backoff_max=300,
+            expires_in=SYNC_FIREWALL_MARKER_TTL)
+    except Exception:
+        redis.eval(_DELETE_VALUE_LUA, 1, key, token)
+        raise
+
+
 def aggregate_firewall_truth(job):
+    try:
+        return _aggregate_firewall_truth(job)
+    finally:
+        token = job.payload.get("aggregate_token")
+        generation = job.payload.get("generation")
+        if isinstance(token, str) and type(generation) is int:
+            _raw_redis().eval(_DELETE_VALUE_LUA, 1,
+                f"mojo:firewall:aggregate-queued:{generation}", token)
+
+
+def _aggregate_firewall_truth(job):
     """Finalize shared truth only from one exact current compatible roster."""
     from django.db.models import Q
     from mojo.apps.account.models import GeoLocatedIP
     from mojo.apps.incident.models import IPSet
     from mojo.apps.incident.services import firewall_truth
     from mojo.helpers import dates
+    from mojo.apps.incident.services.firewall_readiness import require_ready
+
+    try:
+        require_ready()
+        roster = firewall_truth.exact_compatible_roster()
+    except firewall_truth.FirewallTruthError as err:
+        _retry_firewall_sync(job, err.code)
 
     lease = None
     try:
@@ -784,7 +838,6 @@ def aggregate_firewall_truth(job):
     finally:
         firewall_truth.release_desired_state(lease)
 
-    roster = firewall_truth.exact_compatible_roster()
     permanent = firewall_truth.permanent_snapshot()
     aggregate_target = ("permanent", permanent["name"])
     permanent_desired = {
@@ -973,7 +1026,7 @@ def aggregate_firewall_truth(job):
     return True
 
 
-def on_engine_start(engine):
+def on_engine_start(engine, recovery=0):
     """Reconcile THIS node's firewall because its engine started (item #2716).
 
     Publishes rather than reconciling inline: every firewall write goes through
@@ -989,6 +1042,13 @@ def on_engine_start(engine):
     """
     from mojo.apps import jobs
     from mojo.apps.jobs.adapters import get_adapter
+    from mojo.apps.incident.services import firewall_readiness, firewall_truth
+
+    readiness = firewall_readiness.provider(engine)
+    if not readiness["ready"]:
+        return "skipped:" + readiness["code"]
+    if _firewall_host() not in firewall_truth.expected_hosts():
+        return "skipped:host not expected"
 
     if engine.runner_id not in (engine.channels or []):
         logit.warning(
@@ -997,19 +1057,30 @@ def on_engine_start(engine):
             "(JOBS_HOSTNAME_CHANNEL is False)")
         return "skipped:no box-direct channel"
 
+    started = engine.start_time.isoformat()
+    recovery_key = f"mojo:firewall:recovery:{engine.runner_id}:{started}:{recovery}"
+    adapter = get_adapter()
+    if not adapter.set(recovery_key, "queued", nx=True, ex=SYNC_FIREWALL_MARKER_TTL):
+        return "already queued:sync_firewall"
     _, force_key, _ = _sync_firewall_keys()
+    import hashlib
     import uuid
     get_adapter().set(force_key, uuid.uuid4().hex,
                       ex=SYNC_FIREWALL_MARKER_TTL)
-    jobs.publish(
-        func="mojo.apps.incident.asyncjobs.sync_firewall",
-        payload={"target": {
-            "host": _firewall_host(), "runner_id": engine.runner_id,
-            "started": engine.start_time.isoformat(),
-        }},
-        channel=engine.runner_id, max_retries=8,
-        backoff_base=2.0, backoff_max=300,
-        expires_in=SYNC_FIREWALL_MARKER_TTL)
+    try:
+        jobs.publish(
+            func="mojo.apps.incident.asyncjobs.sync_firewall",
+            payload={"target": {
+                "host": _firewall_host(), "runner_id": engine.runner_id,
+                "started": started,
+            }},
+            idempotency_key=hashlib.sha256(recovery_key.encode()).hexdigest(),
+            channel=engine.runner_id, max_retries=8,
+            backoff_base=2.0, backoff_max=300,
+            expires_in=SYNC_FIREWALL_MARKER_TTL)
+    except Exception:
+        adapter.delete(recovery_key)
+        raise
     return f"queued:sync_firewall force={engine.runner_id}"
 
 

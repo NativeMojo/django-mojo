@@ -2,6 +2,17 @@
 
 Async job processing with Redis transport and PostgreSQL persistence. Publish a job from any Django code, and a background runner executes it.
 
+`DEFAULT_CHANNELS` includes `firewall`. An enrolled firewall runner needs that
+channel and its box-direct channel. App capability providers register through
+`mojo.apps.jobs.capabilities.register(name, probe, on_ready)`; each engine
+probes in a background thread and heartbeats read only a cache whose proofs
+expire after 60 seconds. The incident provider advertises `firewall_reconcile: 1`
+only after the effective application UID and root broker pass readiness.
+`execute_checked` remains the generic protocol capability. Ordinary jobs can
+raise an exception with `retryable=False` for a terminal structural failure;
+other exceptions retain existing retry behavior. See
+[firewall enrollment](../deploy/firewall.md).
+
 ## Quick Start
 
 ```python

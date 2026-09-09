@@ -290,6 +290,9 @@ activate_api() {
     set_phase django_check
     log "Checking candidate Django"
     python3 bin/manage.py check
+    if [ -f /etc/mojo-firewall.json ] && /usr/bin/python3 -E -P -c 'import sys; from mojo.deploy.firewall_deploy import Lifecycle; sys.exit(not Lifecycle().enrolled())'; then
+        python3 bin/manage.py shell -c 'from mojo.apps.jobs.capabilities import validate_firewall_runner; from mojo.apps.incident.services.firewall_truth import expected_hosts; validate_firewall_runner(); expected_hosts()'
+    fi
     if [ "$MIGRATE" = "1" ]; then
         set_phase migration
         log "Running migrations"
@@ -416,3 +419,11 @@ case "$ACTION" in
     rollback-candidate) rollback_candidate ;;
     activate-previous) activate_previous ;;
 esac
+
+# Candidate and previous activation may run legacy MojoSec-off cleanup.
+# Enrollment survives that cleanup; restore its authority after activation.
+if [ -f "$STATE/firewall_deploy.py" ]; then
+    /usr/bin/python3 -E -s "$STATE/firewall_deploy.py" converge
+elif [ -f /etc/mojo-firewall.json ]; then
+    /usr/bin/python3 -E -P -m mojo.deploy.firewall_deploy converge
+fi

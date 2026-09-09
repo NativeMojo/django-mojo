@@ -82,10 +82,8 @@ def canonical_operator_ipset(name, values, present):
             "reserved_set_name", "framework firewall set names are reserved")
     if not isinstance(present, bool):
         raise FirewallTruthError("invalid_request", "present must be a boolean")
-    # Validate stored data even for an absence tombstone. A disabled legacy row
-    # with unsafe data stays quarantined instead of reaching the broker as a
-    # seemingly successful removal.
-    cidrs = canonical_ipv4_networks(values)
+    # Absence names the safe set only; historical members are irrelevant.
+    cidrs = canonical_ipv4_networks(values) if present else []
     if len(name) + 4 > 31:
         raise FirewallTruthError(
             "invalid_set_name", "set name is too long for replacement")
@@ -413,38 +411,73 @@ def record_host_observation(kind, identity, fence, fingerprint, desired,
     return value
 
 
-def exact_compatible_runner_roster(channel="default"):
+_EXPECTED_FROM_FILE = object()
+
+
+def expected_hosts(value=_EXPECTED_FROM_FILE):
+    """Fleet membership is exclusively an explicit, strict settings-file list."""
+    if value is _EXPECTED_FROM_FILE:
+        from mojo.helpers.settings import settings
+        value = settings.get_static("FIREWALL_EXPECTED_HOSTS", None)
+    if not isinstance(value, (list, tuple)) or not 1 <= len(value) <= 128:
+        raise FirewallTruthError("expected_hosts_missing", "FIREWALL_EXPECTED_HOSTS must name the complete fleet")
+    if (any(not isinstance(host, str) or not re.fullmatch(r"[a-z0-9][a-z0-9.\-]{0,253}", host)
+            for host in value) or len(set(value)) != len(value)):
+        raise FirewallTruthError("expected_hosts_invalid", "FIREWALL_EXPECTED_HOSTS is invalid")
+    return sorted(value)
+
+
+def firewall_roster(*, rows=None, expected=_EXPECTED_FROM_FILE, manager=None):
+    """Keep expected, currently capable, and unavailable hosts distinct."""
     from mojo.apps.jobs.manager import get_manager
+    expected = expected_hosts(expected)
     try:
-        manager = get_manager()
-        rows = manager.get_runners_bounded(channel, limit=128, timeout=2.0)
-        selected, expected, incompatible = manager._checked_host_roster(
-            rows, channel)
+        manager = manager or get_manager()
+        rows = (manager.get_runners_bounded("firewall", limit=128, timeout=2.0)
+                if rows is None else rows)
+        eligible = [row for row in rows if isinstance(row, dict)
+                    and row.get("hostname") in expected
+                    and isinstance(row.get("capabilities"), dict)
+                    and type(row["capabilities"].get("firewall_reconcile")) is int
+                    and row["capabilities"]["firewall_reconcile"] == 1
+                    and isinstance(row.get("channels"), list)
+                    and row.get("runner_id") in row["channels"]]
+        selected, unused_expected, incompatible = manager._checked_host_roster(eligible, "firewall")
     except Exception as err:
         raise FirewallTruthError(
             "runner_roster_unavailable", "runner roster is unavailable") from err
-    if not expected:
-        raise FirewallTruthError("runner_roster_empty", "runner roster is empty")
-    if incompatible or set(selected) != set(expected):
+    return {"expected_hosts": expected,
+            "selected": [selected[host] for host in sorted(selected)],
+            "selected_hosts": sorted(selected),
+            "unavailable_hosts": sorted(set(expected) - set(selected))}
+
+
+def repair_runner_roster():
+    return [{"host": row["hostname"], "runner_id": row["runner_id"], "started": row["started"]}
+            for row in firewall_roster()["selected"]]
+
+
+def exact_compatible_runner_roster(channel="firewall"):
+    fleet = firewall_roster()
+    if fleet["unavailable_hosts"]:
         raise FirewallTruthError(
-            "runner_roster_incompatible", "runner roster is not fully compatible")
-    return [{"host": host, "runner_id": selected[host]["runner_id"],
-             "started": selected[host]["started"]}
-            for host in expected]
+            "expected_hosts_unavailable", "one or more expected firewall hosts are unavailable")
+    return [{"host": row["hostname"], "runner_id": row["runner_id"], "started": row["started"]}
+            for row in fleet["selected"]]
 
 
-def exact_compatible_roster(channel="default"):
+def exact_compatible_roster(channel="firewall"):
     return [{"host": row["host"], "started": row["started"]}
             for row in exact_compatible_runner_roster(channel)]
 
 
-def exact_compatible_hosts(channel="default"):
+def exact_compatible_hosts(channel="firewall"):
     """Compatibility projection for callers that only display host names."""
     return [row["host"] for row in exact_compatible_roster(channel)]
 
 
 def aggregate_observations(kind, identity, fence, fingerprint, desired,
-                           channel="default", roster=None):
+                           channel="firewall", roster=None):
     try:
         verify_current_roster = roster is None
         roster = ([dict(row) for row in roster] if roster is not None
@@ -511,7 +544,7 @@ def _unique_object(pairs):
     return value
 
 
-def current_ipset_enforcement(row, channel="default", roster=None):
+def current_ipset_enforcement(row, channel="firewall", roster=None):
     """Return fleet aggregate truth for the row's exact current generation."""
     try:
         snapshot = ipset_snapshot(row.name)
@@ -656,7 +689,23 @@ return 0
 """, 1, key, token)
 
 
-def reconcile_ip(ip, present, channel="default", timeout=10.0,
+def _dispatch_firewall(func, payload, timeout, correlation_id, *,
+                       manager=None, expected=_EXPECTED_FROM_FILE):
+    from mojo.apps.jobs.manager import get_manager
+    manager = manager or get_manager()
+    fleet = firewall_roster(manager=manager, expected=expected)
+    checked = manager.broadcast_execute_checked(
+        func, payload, timeout=timeout, channel="firewall",
+        roster=fleet["selected"], correlation_id=correlation_id)
+    checked["fleet_expected_hosts"] = fleet["expected_hosts"]
+    checked["selected_hosts"] = fleet["selected_hosts"]
+    checked["unavailable_hosts"] = fleet["unavailable_hosts"]
+    if fleet["unavailable_hosts"] and checked.get("status") == "verified":
+        checked["status"] = "partial"
+    return checked
+
+
+def reconcile_ip(ip, present, channel="firewall", timeout=10.0,
                  correlation_id=None):
     try:
         canonical = canonical_ipv4_address(ip)
@@ -679,10 +728,10 @@ def reconcile_ip(ip, present, channel="default", timeout=10.0,
         release_desired_state(lease)
         lease = None
     try:
-        checked = jobs.broadcast_execute_checked(
+        checked = _dispatch_firewall(
             "mojo.apps.incident.asyncjobs.broadcast_reconcile_firewall_ip",
             {**desired, "fence": fence, "fingerprint": fingerprint},
-            timeout=timeout, channel=channel, correlation_id=correlation_id)
+            timeout=timeout, correlation_id=correlation_id)
         lease = acquire_desired_state()
         if (read_fences(lease.redis, [("ip", canonical)])[
                 ("ip", canonical)] != fence or
@@ -712,11 +761,11 @@ def reconcile_ip(ip, present, channel="default", timeout=10.0,
         lease = None
 
 
-def reconcile_set(name, cidrs, present=True, channel="default", timeout=135.0,
+def reconcile_set(name, cidrs, present=True, channel="firewall", timeout=135.0,
                   correlation_id=None):
     try:
         name = canonical_set_name(name)
-        canonical = canonical_ipv4_networks(cidrs)
+        name, canonical = canonical_operator_ipset(name, cidrs, present)
         if not isinstance(present, bool):
             raise FirewallTruthError("invalid_request", "present must be a boolean")
         if name == permanent_set_name():
@@ -757,11 +806,11 @@ def reconcile_set(name, cidrs, present=True, channel="default", timeout=135.0,
         lease = None
     try:
         from mojo.apps import jobs
-        checked = jobs.broadcast_execute_checked(
+        checked = _dispatch_firewall(
             "mojo.apps.incident.asyncjobs.broadcast_reconcile_firewall_set",
             {"name": name, "cidrs": canonical, "present": present,
              "fence": fence, "fingerprint": snapshot["fingerprint"]},
-            timeout=timeout, channel=channel, correlation_id=correlation_id)
+            timeout=timeout, correlation_id=correlation_id)
         lease = acquire_desired_state()
         current = ipset_snapshot(name)
         current_fence = read_fences(
@@ -800,7 +849,7 @@ def reconcile_set(name, cidrs, present=True, channel="default", timeout=135.0,
 
 
 def reconcile_geolocated_ip(ip, permanent_ips, temporary_present,
-                            channel="default", timeout=135.0,
+                            channel="firewall", timeout=135.0,
                             correlation_id=None):
     """Reconcile one row and the permanent aggregate in one host snapshot."""
     try:
@@ -848,7 +897,7 @@ def reconcile_geolocated_ip(ip, permanent_ips, temporary_present,
         lease = None
     try:
         from mojo.apps import jobs
-        checked = jobs.broadcast_execute_checked(
+        checked = _dispatch_firewall(
             "mojo.apps.incident.asyncjobs.broadcast_reconcile_geolocated_ip",
             {"ip": canonical, "permanent_set_name": set_name,
              "permanent_ips": permanent,
@@ -857,7 +906,7 @@ def reconcile_geolocated_ip(ip, permanent_ips, temporary_present,
              "aggregate_fence": aggregate_fence,
              "fingerprint": snapshot["fingerprint"],
              "aggregate_fingerprint": snapshot["permanent"]["fingerprint"]},
-            timeout=timeout, channel=channel, correlation_id=correlation_id)
+            timeout=timeout, correlation_id=correlation_id)
         lease = acquire_desired_state()
         current = geolocated_snapshot(canonical)
         current_fences = read_fences(lease.redis, targets)

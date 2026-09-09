@@ -6,7 +6,7 @@ from mojo.helpers import logit
 HEALTH_MONITORING_ENABLED = settings.get_static("HEALTH_MONITORING_ENABLED", False)
 
 FIREWALL_SYNC_JOB = "mojo.apps.incident.asyncjobs.sync_firewall"
-FIREWALL_SYNC_CHANNEL = "default"
+FIREWALL_SYNC_CHANNEL = "firewall"
 FIREWALL_SYNC_EXPIRES = 7200
 
 
@@ -116,8 +116,7 @@ def sync_firewall(force=False, verbose=False, now=None):
             return "failed"
         from mojo.apps.incident.services import firewall_truth
         queued = []
-        for target in firewall_truth.exact_compatible_runner_roster(
-                FIREWALL_SYNC_CHANNEL):
+        for target in firewall_truth.repair_runner_roster():
             queued.append(jobs.publish(
                 func=FIREWALL_SYNC_JOB, channel=target["runner_id"],
                 payload={"target": target}, max_retries=8,

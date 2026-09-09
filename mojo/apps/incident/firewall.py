@@ -7,7 +7,8 @@ Used by the broadcast job system to enforce fleet-wide IP blocks.
 Must run as ec2-user (which may sudo only the empty-argv broker).
 Called only from async jobs — never from the web process.
 """
-import getpass
+import os
+import pwd
 import json
 import re
 import subprocess
@@ -60,9 +61,12 @@ def _validate_ipset_name(name):
 
 def _check_user():
     """Verify we are running as ec2-user. Returns True or logs error."""
-    user = getpass.getuser()
-    if user != ALLOWED_USER:
-        logit.error(f"firewall.py must run as {ALLOWED_USER}, not {user}")
+    try:
+        valid = os.geteuid() == pwd.getpwnam(ALLOWED_USER).pw_uid and os.geteuid() > 0
+    except KeyError:
+        valid = False
+    if not valid:
+        logit.error("firewall.py requires the application effective UID")
         return False
     return True
 
@@ -112,6 +116,11 @@ def _broker_request(operation, timeout=20, **values):
     if context is None:
         logit.error("firewall operation rejected outside JobEngine execution context")
         return _broker_error("broker_context_unavailable")
+    from mojo.apps.incident.services.firewall_readiness import probe
+    readiness = probe()
+    if not readiness["ready"]:
+        _log_broker_failure(operation, readiness["code"])
+        return _broker_error(readiness["code"])
     if (operation.startswith("set.") or operation.startswith("permanent.") or
             operation == "geolocated.normalize"):
         try:
@@ -194,7 +203,7 @@ def normalize_ipset(name, cidrs, present=True):
     if not name:
         return {"ok": False, "error": {"code": "invalid_set_name"}}
     try:
-        canonical = canonical_ipv4_networks(cidrs)
+        canonical = canonical_ipv4_networks(cidrs) if present else []
     except FirewallTruthError as err:
         return {"ok": False, "error": {"code": err.code}}
     return _broker_request(

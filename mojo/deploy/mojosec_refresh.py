@@ -461,6 +461,13 @@ def retain(state, source=None, owner_uid=0, writer=None):
     helper = os.path.join(state, "mojosec_refresh.py")
     if os.path.abspath(source) != os.path.abspath(helper):
         writer(helper, read_bytes(source, owner_uid=owner_uid), owner_uid=owner_uid)
+    # Retain the settings-free firewall lifecycle independently of whichever
+    # framework version rollback later installs. An old MojoSec-off body may
+    # remove its former broker assets; reconverge AFTER that body returns.
+    firewall_source = os.path.join(os.path.dirname(source), "firewall_deploy.py")
+    firewall_helper = os.path.join(state, "firewall_deploy.py")
+    if os.path.exists(firewall_source) and os.path.abspath(firewall_source) != os.path.abspath(firewall_helper):
+        writer(firewall_helper, read_bytes(firewall_source, owner_uid=owner_uid), owner_uid=owner_uid)
     previous = os.path.join(state, "previous_post.sh")
     original = os.path.join(state, "previous_post.original.sh")
     marker = b"# mojosec-refresh-wrapper-v1\n"
@@ -481,7 +488,12 @@ state="$(cd "$(dirname "$0")" && pwd)"
 if ! /usr/bin/python3 -E -s "$state/mojosec_refresh.py" --state "$state" --direction rollback; then
     echo "mojosec refresh degraded: retained rollback helper failed" >&2 || :
 fi || :
-exec bash "$state/previous_post.original.sh" "$@"
+bash "$state/previous_post.original.sh" "$@"
+previous_status=$?
+if [ -f "$state/firewall_deploy.py" ]; then
+    /usr/bin/python3 -E -s "$state/firewall_deploy.py" converge || exit 1
+fi
+exit "$previous_status"
 '''
     writer(previous, wrapper, mode=0o700, owner_uid=owner_uid)
 

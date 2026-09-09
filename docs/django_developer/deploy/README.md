@@ -1,5 +1,9 @@
 # Project deployment scripts
 
+[Firewall enrollment](firewall.md) is independent of MojoSec: the root CLI
+enrolls, converges, disables, and checks broker authority, while deployment
+retains rollback reconvergence and the expected fleet stays file-configured.
+
 django-mojo owns the deployment transaction. The normal entry point is the
 packaged `update.sh`, resolved without importing project Django:
 

@@ -1,5 +1,10 @@
 # Security System — Architecture & Configuration Guide
 
+Firewall reconciliation uses [independent host enrollment](../deploy/firewall.md)
+and the file-only `FIREWALL_EXPECTED_HOSTS` list. It works while MojoSec is off.
+Only ready firewall-capable expected hosts participate; healthy subsets repair,
+but every expected host must prove the generation before fleet truth finalizes.
+
 The security system is a multi-layered defense pipeline that detects, correlates, triages, and enforces security policy across the platform. This document covers the full system end-to-end.
 
 External LLM features use the mandatory provider-neutral
