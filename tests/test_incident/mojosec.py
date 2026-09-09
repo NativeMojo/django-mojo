@@ -12,6 +12,23 @@ from testit import helpers as th
 SENSOR_ID = "mojosec-receiver-test"
 
 
+class _VolumeRedis:
+    def __init__(self):
+        self.store = {}
+        self.calls = []
+
+    def eval(self, script, key_count, *args):
+        keys = args[:key_count]
+        argv = args[key_count:]
+        self.calls.append((script, keys, argv))
+        counter_key, marker_key = keys
+        if marker_key in self.store:
+            return [0, self.store.get(counter_key, 0)]
+        self.store[marker_key] = 1
+        self.store[counter_key] = self.store.get(counter_key, 0) + int(argv[0])
+        return [1, self.store[counter_key]]
+
+
 def _golden_batch():
     path = os.path.join(
         os.path.dirname(os.path.dirname(__file__)),
@@ -316,6 +333,97 @@ def test_mojosec_replay_is_idempotent_and_digest_conflicts_reject(opts):
     conflict = mojosec.ingest_batch(key, changed)
     th.assert_eq(conflict["results"][0]["status"], "rejected",
                  "one event id must never be accepted with a different canonical digest")
+
+
+@th.django_unit_test("category volume counts receipts once and reports one crossing")
+def test_mojosec_category_volume_is_receipt_idempotent(opts):
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.models import MojoSecReceipt
+    from mojo.apps.incident.services import mojosec, mojosec_volume
+
+    key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
+    redis = _VolumeRedis()
+    reports = []
+
+    def reporter(*args, **kwargs):
+        reports.append((args, kwargs))
+        return True
+
+    def observer(receipt, category, count):
+        return mojosec_volume.observe(
+            receipt, category, count, connection=redis, reporter=reporter,
+            threshold=10000)
+
+    first = _golden_batch()
+    first["events"] = [copy.deepcopy(first["events"][0])]
+    first["events"][0].update({"id": "b1" * 32, "count": 6001})
+    accepted = mojosec.ingest_batch(key, first, volume_observer=observer)
+    replayed = mojosec.ingest_batch(key, first, volume_observer=observer)
+    th.assert_eq(
+        (accepted["results"][0]["status"], replayed["results"][0]["status"]),
+        ("accepted", "duplicate"),
+        "DB-commit redelivery did not preserve normal acknowledgement semantics")
+
+    second = copy.deepcopy(first)
+    second["events"][0].update({"id": "b2" * 32, "count": 4000})
+    mojosec.ingest_batch(key, second, volume_observer=observer)
+    mojosec.ingest_batch(key, second, volume_observer=observer)
+
+    first_receipt = MojoSecReceipt.objects.get(api_key=key, wire_event_id="b1" * 32)
+    counter_key, marker_key, bucket = mojosec_volume.volume_keys(
+        first_receipt, "mojosec.auth.ssh_login")
+    th.assert_eq(redis.store[counter_key], 10001,
+                 "wire occurrence counts were not accumulated exactly once per receipt")
+    th.assert_true(marker_key in redis.store,
+                   "the durable receipt identity was not represented in Redis")
+    th.assert_eq(len(reports), 1,
+                 "one fixed category/hour threshold crossing filed multiple alerts")
+    th.assert_eq(reports[0][1]["mojosec_category"], "mojosec.auth.ssh_login",
+                 "the alert category came from untrusted wire data")
+    th.assert_eq(reports[0][1]["utc_hour"], bucket,
+                 "the alert did not use the receipt creation hour")
+    for unused_script, keys, unused_argv in redis.calls:
+        slots = [value[value.index("{") + 1:value.index("}")] for value in keys]
+        th.assert_eq(slots[0], slots[1],
+                     "the atomic receipt marker and counter span Redis cluster slots")
+
+
+@th.django_unit_test("all digest-matched receipts reach best-effort volume observation")
+def test_mojosec_volume_observes_local_only_replay_without_owning_ack(opts):
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.services import mojosec
+
+    key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
+    batch = _golden_batch()
+    batch["events"] = [_local_only_event("b3" * 32)]
+    observed = []
+
+    def observer(receipt, category, count):
+        observed.append((receipt.pk, category, count))
+
+    first = mojosec.ingest_batch(key, batch, volume_observer=observer)
+    second = mojosec.ingest_batch(key, batch, volume_observer=observer)
+    th.assert_eq(
+        [first["results"][0]["status"], second["results"][0]["status"]],
+        ["accepted", "duplicate"],
+        "local-only terminalization or replay lost its acknowledgement")
+    th.assert_eq(len(observed), 2,
+                 "a digest-matched local-only replay skipped the idempotent observer")
+    th.assert_eq(observed[0], observed[1],
+                 "local-only replay changed receipt identity or server category")
+    th.assert_eq(observed[0][1], "mojosec.auth.session_open",
+                 "the observer did not receive the server-owned category")
+
+    failing = copy.deepcopy(batch)
+    failing["events"][0]["id"] = "b4" * 32
+
+    def fail_observer(*unused_args):
+        raise RuntimeError("monitor unavailable")
+
+    result = mojosec.ingest_batch(
+        key, failing, volume_observer=fail_observer)
+    th.assert_eq(result["results"][0]["status"], "accepted",
+                 "advisory monitoring failure changed the sensor acknowledgement")
 
 
 @th.django_unit_test()

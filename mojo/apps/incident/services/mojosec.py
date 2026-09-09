@@ -15,6 +15,7 @@ from mojo.mojosec import protocol
 from mojo.mojosec.disposition import is_local_only
 from . import mojosec_evidence
 from . import mojosec_correlation
+from . import mojosec_volume
 
 
 logger = logit.get_logger(__name__, "incident.log")
@@ -149,6 +150,11 @@ def _payload_digest(event):
     return hashlib.sha256(protocol.canonical_json(event).encode("utf-8")).hexdigest()
 
 
+def _category_for_kind(kind):
+    policy = KIND_POLICY.get(kind, UNKNOWN_KIND_POLICY)
+    return policy.get("category", f"mojosec.{kind}")
+
+
 def _expected_change_projection(kind, attributes, last_seen=None):
     """Project only the exact safe annotation; never raw FIM attributes.
 
@@ -213,7 +219,7 @@ def _event_projection(batch, sensor_event):
     kind = sensor_event["kind"]
     attributes = sensor_event["attributes"]
     policy = KIND_POLICY.get(kind, UNKNOWN_KIND_POLICY)
-    category = policy.get("category", f"mojosec.{kind}")
+    category = _category_for_kind(kind)
     projection = mojosec_evidence.project(
         kind, attributes, sensor_event["count"], sensor_event["last_seen"])
     source_ip = projection["source_ip"]
@@ -735,7 +741,7 @@ def dispatch_mojosec_receipt(job):
     return _dispatch_receipt_handlers(job.payload["receipt_id"])
 
 
-def ingest_batch(api_key, batch):
+def ingest_batch(api_key, batch, *, volume_observer=None):
     if protocol.has_unstorable_text(batch["policy_revision"]):
         # Every event in the batch would fail on this one field; one line,
         # zero database work, and the sensor frees its spool slots.
@@ -752,6 +758,9 @@ def ingest_batch(api_key, batch):
             ],
         }
     results = []
+    observations = []
+    if volume_observer is None:
+        volume_observer = mojosec_volume.observe
     for sensor_event in batch["events"]:
         try:
             if protocol.has_unstorable_text(sensor_event):
@@ -773,6 +782,9 @@ def ingest_batch(api_key, batch):
                         "reason": "event id was already used for different evidence",
                     })
                 else:
+                    observations.append((
+                        receipt, _category_for_kind(sensor_event["kind"]),
+                        sensor_event["count"]))
                     results.append({
                         "id": sensor_event["id"],
                         "status": "accepted" if accepted else "duplicate",
@@ -795,6 +807,9 @@ def ingest_batch(api_key, batch):
                     "reason": "event id was already used for different evidence",
                 })
                 continue
+            observations.append((
+                receipt, _category_for_kind(sensor_event["kind"]),
+                sensor_event["count"]))
             if receipt.case_routed:
                 # Sticky: once routed, contribution owns the receipt on every
                 # later delivery — regardless of what the binding says now.
@@ -846,6 +861,15 @@ def ingest_batch(api_key, batch):
                 "id": sensor_event["id"], "status": "retry",
                 "reason": "receiver failed to persist event",
             })
+    observer_failed = False
+    for receipt, category, count in observations:
+        try:
+            volume_observer(receipt, category, count)
+        except Exception:
+            if not observer_failed:
+                logger.exception(
+                    "MojoSec category volume observer failed; acknowledgements unchanged")
+                observer_failed = True
     return {
         "schema": protocol.ACK_SCHEMA,
         "version": protocol.PROTOCOL_VERSION,
