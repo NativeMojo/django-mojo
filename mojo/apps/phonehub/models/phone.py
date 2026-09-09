@@ -110,14 +110,22 @@ class PhoneNumber(models.Model, MojoModel):
         self._area_code_info = get_area_code_info(self.phone_number)
         return self._area_code_info
 
-    def refresh(self):
-        from mojo.apps.phonehub.services.twilio import lookup
+    def refresh(self, *, lookup_fn=None):
+        """
+        Re-run the provider lookup for this number.
+
+        `lookup_fn` is a test seam for the provider call. Production never
+        passes it; when it is None the Twilio lookup service is used.
+        """
+        if lookup_fn is None:
+            from mojo.apps.phonehub.services.twilio import lookup
+            lookup_fn = lookup
         if not self.region and self.area_code_info and self.area_code_info.location:
             self.region = self.area_code_info.location.get("region", "")
             self.state = self.area_code_info.location.get("state", "")
             self.country_code = self.area_code_info.location.get("country", "")
 
-        resp = lookup(self.phone_number)
+        resp = lookup_fn(self.phone_number)
         if resp.error:
             self.save()
             return False
