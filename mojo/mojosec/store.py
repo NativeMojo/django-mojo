@@ -36,9 +36,10 @@ AUDIT_FRAGMENT_MAX_BYTES = 8 * 1024 * 1024
 HEALTH_EPOCH_CAP = 128
 PENDING_OPERATION_CAP = 4096
 FIREWALL_RECEIPT_CAP = 32768
-FIREWALL_PROOF_RECEIPT_CAP = PENDING_OPERATION_CAP * 2
-FIREWALL_PROOF_PROCESS_NODE_CAP = PENDING_OPERATION_CAP * 8
 FIREWALL_PROOF_BATCH = 512
+FIREWALL_PROOF_RECEIPT_CAP = FIREWALL_PROOF_BATCH * 4
+FIREWALL_PROOF_PROCESS_NODE_CAP = FIREWALL_PROOF_BATCH * 8
+FIREWALL_PROOF_SQL_CHUNK = 400
 FIREWALL_RECEIPT_TTL_SECONDS = 7 * 24 * 60 * 60
 PROVENANCE_MAX_BYTES = 256 * 1024 * 1024
 STATE_MAX_BYTES = PROVENANCE_MAX_BYTES
@@ -1213,55 +1214,25 @@ class Store:
                 self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
                                 (row["observation_id"],))
             return
-        receipts = self.db.execute(
-            "SELECT operation_id,kind,payload FROM firewall_receipts "
-            "WHERE observed_at >= ? ORDER BY observed_at DESC LIMIT ?",
-            (now - 30, FIREWALL_PROOF_RECEIPT_CAP)).fetchall()
-        pairs = {}
-        for receipt in receipts:
-            pairs.setdefault(receipt["operation_id"], {})[receipt["kind"]] = json.loads(
-                receipt["payload"])
-        pairs_by_broker = {}
-        for operation_id, pair in pairs.items():
-            begin = pair.get("begin")
-            if begin is None:
-                continue
-            key = (begin.get("boot_id"), begin.get("audit_session"),
-                   begin.get("broker_pid"))
-            pairs_by_broker.setdefault(key, []).append((operation_id, pair))
-        node_rows = self.db.execute(
-            "SELECT payload,pinned,generation FROM process_nodes "
-            "WHERE pinned=1 OR updated_at>=? "
-            "ORDER BY pinned DESC,updated_at DESC,rowid DESC LIMIT ?",
-            (now - 30, FIREWALL_PROOF_PROCESS_NODE_CAP)).fetchall()
-        nodes_by_session = {}
-        for row in node_rows:
-            node = dict(json.loads(row["payload"]), pinned=bool(row["pinned"]),
-                        _generation=row["generation"])
-            key = (node.get("boot_id"), node.get("audit_session"))
-            session = nodes_by_session.setdefault(
-                key, {"by_pid": {}, "by_parent": {}})
-            session["by_pid"].setdefault(node.get("pid"), []).append(node)
-            session["by_parent"].setdefault(node.get("ppid"), []).append(node)
+        health_by_boot = {}
         origins = {}
+        proof_candidates = []
         for row in candidates:
             observation = json.loads(row["payload"])
             attributes = observation["attributes"]
-            health = self.db.execute(
-                "SELECT payload,healthy FROM audit_health_epochs WHERE boot_id=? "
-                "ORDER BY observed_at DESC,rowid DESC LIMIT 1",
-                (attributes["boot_id"],)).fetchone()
+            boot_id = attributes["boot_id"]
+            if boot_id not in health_by_boot:
+                health_by_boot[boot_id] = self.db.execute(
+                    "SELECT payload,healthy FROM audit_health_epochs WHERE boot_id=? "
+                    "ORDER BY observed_at DESC,rowid DESC LIMIT 1", (boot_id,)).fetchone()
+            health = health_by_boot[boot_id]
             if health is None or not health["healthy"]:
                 self._ingest_one(observation, now)
                 self._increment_saturating("provenance_health_fail_open")
                 self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
                                 (row["observation_id"],))
                 continue
-            session_key = (attributes["boot_id"], attributes["audit_session"])
-            session_nodes = nodes_by_session.get(
-                session_key, {"by_pid": {}, "by_parent": {}})
-            by_pid = session_nodes["by_pid"]
-            by_parent = session_nodes["by_parent"]
+            session_key = (boot_id, attributes["audit_session"])
             if session_key not in origins:
                 origins[session_key] = self.db.execute(
                     "SELECT origin_kind,anchor_pid,anchor_generation,ambiguous "
@@ -1273,8 +1244,114 @@ class Store:
                 self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
                                 (row["observation_id"],))
                 continue
-            if origin is None or origin["origin_kind"] != "cron_jobman":
+            if origin is not None and origin["origin_kind"] == "cron_jobman":
+                proof_candidates.append((row, observation, attributes, session_key, origin))
+        if not proof_candidates:
+            return
+
+        producers = {}
+        for unused_row, unused_observation, attributes, session_key, unused_origin in (
+                proof_candidates):
+            producers.setdefault(session_key, set()).add(attributes["producer_pid"])
+        broker_pids = {}
+        for session_key, pids in producers.items():
+            values = sorted(pids)
+            found = broker_pids.setdefault(session_key, set())
+            for offset in range(0, len(values), FIREWALL_PROOF_SQL_CHUNK):
+                chunk = values[offset:offset + FIREWALL_PROOF_SQL_CHUNK]
+                placeholders = ",".join("?" for unused in chunk)
+                rows = self.db.execute(
+                    "SELECT DISTINCT pid FROM process_nodes WHERE boot_id=? "
+                    "AND audit_session=? AND updated_at>=? AND "
+                    f"json_extract(payload,'$.ppid') IN ({placeholders})",
+                    (session_key[0], session_key[1], now - 30, *chunk)).fetchall()
+                found.update(item["pid"] for item in rows)
+
+        pairs = {}
+        receipt_count = 0
+        for session_key, pids in broker_pids.items():
+            values = sorted(pids)
+            for offset in range(0, len(values), FIREWALL_PROOF_SQL_CHUNK):
+                remaining = FIREWALL_PROOF_RECEIPT_CAP - receipt_count
+                if remaining <= 0:
+                    break
+                chunk = values[offset:offset + FIREWALL_PROOF_SQL_CHUNK]
+                placeholders = ",".join("?" for unused in chunk)
+                receipts = self.db.execute(
+                    "SELECT operation_id,kind,payload FROM firewall_receipts "
+                    "WHERE observed_at>=? AND json_extract(payload,'$.boot_id')=? "
+                    "AND json_extract(payload,'$.audit_session')=? AND "
+                    f"json_extract(payload,'$.broker_pid') IN ({placeholders}) "
+                    "ORDER BY observed_at DESC,rowid DESC LIMIT ?",
+                    (now - 30, session_key[0], session_key[1], *chunk,
+                     remaining)).fetchall()
+                receipt_count += len(receipts)
+                for receipt in receipts:
+                    pairs.setdefault(receipt["operation_id"], {})[
+                        receipt["kind"]] = json.loads(receipt["payload"])
+        pairs_by_broker = {}
+        for operation_id, pair in pairs.items():
+            begin = pair.get("begin")
+            if begin is None:
                 continue
+            key = (begin.get("boot_id"), begin.get("audit_session"),
+                   begin.get("broker_pid"))
+            pairs_by_broker.setdefault(key, []).append((operation_id, pair))
+
+        proof_pids = {}
+        proof_pid_count = 0
+
+        def add_proof_pids(boot_id, values):
+            nonlocal proof_pid_count
+            bucket = proof_pids.setdefault(boot_id, set())
+            added = set(values) - bucket
+            if proof_pid_count + len(added) > FIREWALL_PROOF_PROCESS_NODE_CAP:
+                return False
+            bucket.update(added)
+            proof_pid_count += len(added)
+            return True
+
+        for session_key, pids in producers.items():
+            add_proof_pids(session_key[0], pids)
+            add_proof_pids(session_key[0], broker_pids.get(session_key, ()))
+            origin = origins.get(session_key)
+            if origin is not None and origin["anchor_pid"]:
+                add_proof_pids(session_key[0], (origin["anchor_pid"],))
+        for pair in pairs.values():
+            begin = pair.get("begin")
+            result = pair.get("result")
+            if begin is None or result is None:
+                continue
+            add_proof_pids(begin.get("boot_id"), (
+                child.get("pid") for child in result.get("children", ())
+                if isinstance(child.get("pid"), int)))
+
+        nodes_by_session = {}
+        for boot_id, pids in proof_pids.items():
+            values = sorted(pids)
+            for offset in range(0, len(values), FIREWALL_PROOF_SQL_CHUNK):
+                chunk = values[offset:offset + FIREWALL_PROOF_SQL_CHUNK]
+                placeholders = ",".join("?" for unused in chunk)
+                node_rows = self.db.execute(
+                    "SELECT payload,pinned,generation FROM process_nodes "
+                    f"WHERE boot_id=? AND pid IN ({placeholders}) "
+                    "AND (pinned=1 OR updated_at>=?)",
+                    (boot_id, *chunk, now - 30)).fetchall()
+                for node_row in node_rows:
+                    node = dict(json.loads(node_row["payload"]),
+                                pinned=bool(node_row["pinned"]),
+                                _generation=node_row["generation"])
+                    key = (node.get("boot_id"), node.get("audit_session"))
+                    session = nodes_by_session.setdefault(
+                        key, {"by_pid": {}, "by_parent": {}})
+                    session["by_pid"].setdefault(node.get("pid"), []).append(node)
+                    session["by_parent"].setdefault(node.get("ppid"), []).append(node)
+
+        for row, observation, attributes, session_key, origin in proof_candidates:
+            session_nodes = nodes_by_session.get(
+                session_key, {"by_pid": {}, "by_parent": {}})
+            by_pid = session_nodes["by_pid"]
+            by_parent = session_nodes["by_parent"]
             conflicted = False
             candidate_pairs = []
             for child in by_parent.get(attributes["producer_pid"], ()):
