@@ -40,6 +40,7 @@ FIREWALL_PROOF_BATCH = 512
 FIREWALL_PROOF_RECEIPT_CAP = FIREWALL_PROOF_BATCH * 4
 FIREWALL_PROOF_PROCESS_NODE_CAP = FIREWALL_PROOF_BATCH * 8
 FIREWALL_PROOF_SQL_CHUNK = 400
+FIREWALL_PROCESS_FALLBACK_NS = 2_000_000_000
 FIREWALL_RECEIPT_TTL_SECONDS = 7 * 24 * 60 * 60
 PROVENANCE_MAX_BYTES = 256 * 1024 * 1024
 STATE_MAX_BYTES = PROVENANCE_MAX_BYTES
@@ -665,6 +666,10 @@ class Store:
         self._refresh_process_pins(now)
         for item in process_nodes or ():
             item = dict(item)
+            # A failed execve does not replace the process image, so it is not
+            # a competing PID generation in the provenance graph.
+            if item.get("success") is False and item.get("pid"):
+                continue
             generation = f"audit-{item.get('audit_id', '')}"[:128]
             # Preserve an existing canonical row (including pre-upgrade rows)
             # when enrichment appears/disappears or the PID gets reused later.
@@ -871,6 +876,8 @@ class Store:
                             (canonical_json(node), row["rowid"]))
 
     def _invalidate_competing_process_nodes(self, item):
+        if item.get("success") is False:
+            return
         rows = self.db.execute(
             "SELECT rowid,payload FROM process_nodes WHERE boot_id=? AND pid=?",
             (item["boot_id"], item["pid"])).fetchall()
@@ -878,6 +885,7 @@ class Store:
         for row in rows:
             peer = json.loads(row["payload"])
             if (peer.get("audit_id") == item.get("audit_id") or
+                    peer.get("success") is False or
                     not self._competing_process_generation(item, peer)):
                 continue
             peers.append((row["rowid"], peer))
@@ -1183,6 +1191,8 @@ class Store:
         for node in nodes:
             if node.get("pid") != pid:
                 continue
+            if node.get("success") is False:
+                continue
             node_ticks = node.get("start_ticks")
             if node_ticks is not None and node_ticks != start_ticks:
                 continue
@@ -1191,7 +1201,8 @@ class Store:
             monotonic = node.get("monotonic")
             if node_ticks is None and not (
                     isinstance(monotonic, int) and
-                    earliest - 1_000_000_000 <= monotonic * 1000 <= latest + 1_000_000_000):
+                    earliest - FIREWALL_PROCESS_FALLBACK_NS <= monotonic * 1000 <=
+                    latest + FIREWALL_PROCESS_FALLBACK_NS):
                 continue
             found.append(node)
         # More than one Audit exec generation for a PID in the proof window is
@@ -1201,7 +1212,8 @@ class Store:
 
     @staticmethod
     def _parent_node(nodes, child):
-        candidates = [node for node in nodes if node.get("pid") == child.get("ppid")]
+        candidates = [node for node in nodes if node.get("pid") == child.get("ppid") and
+                      node.get("success") is not False]
         found = [node for node in candidates if Store._eligible_process_node(node)]
         if any(not Store._eligible_process_node(peer) and
                Store._competing_process_generation(node, peer)

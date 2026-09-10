@@ -711,13 +711,17 @@ def test_pending_firewall_resolution(opts):
             node["argv"] = [node["exe"]]
         node["argv_sha256"] = hashlib.sha256(
             b"\0".join(part.encode() for part in node["argv"])).hexdigest()
+    failed_exec = dict(
+        nodes[5], audit_id="7", start_ticks=None, argv=[],
+        argv_sha256=hashlib.sha256(b"").hexdigest(), success=False,
+        monotonic=1_050_000)
     with tempfile.TemporaryDirectory() as root:
         os.chmod(root, 0o700)
         store = Store(root, "sensor", aggregation, delivery,
                       local_only_diagnostic_path=os.path.join(root, "missing"))
         with mock.patch("mojo.mojosec.lineage.enrich_process",
                         return_value=_engine_live(nodes[3])):
-            store.ingest([], audit_health=health, process_nodes=nodes,
+            store.ingest([], audit_health=health, process_nodes=nodes + [failed_exec],
                          crond_launches=launches)
         store.close()
         reopened = Store(root, "sensor", aggregation, delivery,
@@ -752,17 +756,21 @@ def test_pending_firewall_resolution(opts):
         semantic="read broker enrollment status",
         argv_digest=hashlib.sha256(
             b"/usr/local/sbin/mojo-firewall-broker").hexdigest(),
-        target_exe="/usr/local/sbin/mojo-firewall-broker", children=[])
+        target_exe="/usr/local/sbin/mojo-firewall-broker",
+        monotonic_ns=2_500_000_000, children=[])
     status_result = dict(
         status_begin, kind="result", target_pid=22, target_start_ticks=220,
-        monotonic_ns=1_100_000_000, returncode=0, ok=True, children=[])
+        monotonic_ns=2_600_000_000, returncode=0, ok=True, children=[])
+    status_nodes = [dict(node) for node in nodes]
+    status_nodes[4].pop("start_ticks")
+    status_nodes[4]["monotonic"] = 1_000_000
     with tempfile.TemporaryDirectory() as root:
         store = Store(root, "sensor", aggregation, delivery,
                       local_only_diagnostic_path=os.path.join(root, "missing"))
         with mock.patch("mojo.mojosec.lineage.enrich_process",
                         return_value=_engine_live(nodes[3])):
             store.ingest([dict(candidate, fingerprint="6" * 64)],
-                         audit_health=health, process_nodes=nodes,
+                         audit_health=health, process_nodes=status_nodes,
                          firewall_receipts=[status_begin, status_result],
                          crond_launches=launches)
         th.assert_eq(store.stats()["local_only_suppressed"], 1,

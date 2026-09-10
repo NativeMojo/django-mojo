@@ -1314,7 +1314,11 @@ AL2023 resolves `/sbin/iptables` and `/sbin/iptables-save` to
 `/usr/sbin/xtables-nft-multi`, and `/sbin/ipset` to `/usr/sbin/ipset`, before
 Audit records the child executable. The resolver recognizes only these fixed
 logical-to-kernel executable pairs and separately requires the exact logical
-path in argv plus the receipt's full argv digest.
+path in argv plus the receipt's full argv digest. When a short-lived process
+exits before `/proc` enrichment can provide start ticks, its exact Audit PID
+record must fall within two seconds of the receipt pair. An explicitly failed
+`execve` is not a new process image and is excluded from the lineage graph;
+missing, incomplete, or ambiguous Audit identity still fails open.
 
 Application firewall work no longer invokes raw iptables/ipset sudo commands.
 The exact read-only `broker.status` request carries no caller-supplied JobEngine
