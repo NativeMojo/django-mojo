@@ -161,8 +161,8 @@ def test_render_collision_policy(opts):
         installed = _read(os.path.join(dest, "cron.d", "3_mojo_jobs"))
         th.assert_true("/custom/fork.sh" not in installed,
                        "the undeclared project copy must be inert")
-        th.assert_in("jobman start", installed,
-                     "the framework template must win the collision")
+        th.assert_in("-m mojo.deploy.jobman --root", installed,
+                     "the framework's direct Jobman template must win the collision")
         th.assert_in("extra.sh",
                      _read(os.path.join(dest, "cron.d", "9_extra")),
                      "a non-colliding project extra must copy through")
