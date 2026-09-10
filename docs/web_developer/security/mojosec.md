@@ -357,10 +357,15 @@ never receives `CAP_SYS_PTRACE`. A separate resolver runs as `ec2-user` with no
 capabilities or IP network. Its root-owned mode-`0600` Unix socket accepts one
 bounded PID/start-ticks request. A successful response echoes those identifiers
 and adds only the double-checked executable path; failure remains ordinary
-central evidence. The helper starts only with kernel same-UID ptrace protection,
-and sensor restarts also refresh an already-running helper after framework
-deployments. This supports the exact live JobEngine check without relaxing
-any Audit, receipt, cron-origin, or command-line requirement.
+central evidence. Startup requires `kernel.yama.ptrace_scope >= 1`, which
+protects the resolver from another same-UID process before Python begins. Its
+service declares `PartOf=mojosec.service`, so sensor restarts refresh an
+already-running resolver after framework deployments; a changed socket unit is
+also restarted. Node audit verifies the effective listener, service trigger,
+root ownership, mode, absence of drop-ins, Yama posture, and helper sandbox.
+Mode-off convergence stops the resolver, disables the socket, and removes both
+unit files and the runtime socket. This supports the exact live JobEngine check
+without relaxing any Audit, receipt, cron-origin, or command-line requirement.
 
 Raw sudo observations are never sampled, rate-limited, or aggregated to reduce
 noise. An unexplained privileged action remains ordinary central evidence;

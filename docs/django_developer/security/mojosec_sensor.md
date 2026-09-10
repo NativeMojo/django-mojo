@@ -1182,12 +1182,14 @@ restrictions. Its service starts only when `kernel.yama.ptrace_scope` is at
 least `1`, so another `ec2-user` process cannot attach during Python startup.
 Failure or disagreement returns no identity and keeps the event
 centrally visible. Observe convergence installs both process-identity units and
-enables `mojosec-proc-identity.socket`; a changed socket is restarted, and the
-resolver is part of the sensor restart lifecycle so later framework deployments
-load both generations together. Mode-off stops the resolver, disables
-the socket, and removes both unit files. `check_node --section mojosec` fails on
-unit bytes, effective listener/drop-in settings, socket state or permissions,
-Yama protection, effective helper-sandbox drift, and residue in off mode.
+enables `mojosec-proc-identity.socket`; a changed socket is restarted. The
+resolver declares `PartOf=mojosec.service`, so a sensor restart also refreshes
+an already-running resolver and later framework deployments load both
+generations together. Mode-off stops the resolver, disables the socket, and
+removes both unit files and the runtime socket. `check_node --section mojosec`
+fails on unit bytes, effective listener/drop-in settings, socket state or
+permissions, Yama protection, effective helper-sandbox drift, and residue in
+off mode.
 Audit remains durable truth: a short-lived process or ancestor
 that has already left `/proc` does not poison a complete Audit edge. A live
 `/proc` identity that conflicts with Audit, PID reuse, cycles, ordering
