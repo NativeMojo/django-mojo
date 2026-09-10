@@ -352,12 +352,13 @@ sticky, and a live engine anchor must continue to match its boot, PID generation
 executable and complete command line. Malformed journal records also veto
 suppression, even with healthy Audit sidecars.
 
-The sensor's systemd sandbox includes only the filesystem read capability and
-`CAP_SYS_PTRACE`, which Linux requires to resolve another user's live
-`/proc/<pid>/exe`. That second capability supports the exact JobEngine
-executable check; it does not relax any Audit, receipt, cron-origin, or command
-line requirement, and the service retains `NoNewPrivileges` plus its existing
-filesystem, namespace, kernel, and network restrictions.
+The network-capable root sensor keeps only its filesystem read capability and
+never receives `CAP_SYS_PTRACE`. A separate resolver runs as the application
+user with no capabilities or IP network. Its root-only Unix socket accepts one
+bounded PID/generation request and returns only a double-checked executable
+path; failure remains ordinary central evidence. This supports the exact live
+JobEngine check without relaxing any Audit, receipt, cron-origin, or command
+line requirement.
 
 Raw sudo observations are never sampled, rate-limited, or aggregated to reduce
 noise. An unexplained privileged action remains ordinary central evidence;

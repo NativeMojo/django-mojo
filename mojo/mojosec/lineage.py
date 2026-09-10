@@ -325,7 +325,7 @@ def _read_proc_file(root, pid, name, maximum):
         os.close(descriptor)
 
 
-def enrich_process(pid, proc_root="/proc"):
+def enrich_process(pid, proc_root="/proc", exe_resolver=None):
     """Read a compact identity from one live process; absence is expected."""
     try:
         with open(os.path.join(proc_root, "sys/kernel/random/boot_id"), encoding="ascii") as handle:
@@ -343,7 +343,22 @@ def enrich_process(pid, proc_root="/proc"):
             ).decode(errors="replace").strip()
         except OSError:
             selinux = ""
-        exe = os.readlink(os.path.join(proc_root, str(pid), "exe"))[:512]
+        if exe_resolver is not None:
+            exe = exe_resolver(pid, start_ticks)
+        else:
+            try:
+                exe = os.readlink(os.path.join(proc_root, str(pid), "exe"))
+            except PermissionError:
+                if proc_root != "/proc":
+                    raise
+                from .proc_identity import resolve_executable
+                try:
+                    exe = resolve_executable(pid, start_ticks)
+                except (OSError, RuntimeError, UnicodeError, ValueError) as err:
+                    raise OSError("process executable identity is unavailable") from err
+        if (not isinstance(exe, str) or not exe.startswith("/") or "\0" in exe or
+                len(exe.encode("utf-8", errors="strict")) > 512):
+            return None
         namespaces = {}
         for name in ("mnt", "pid", "user", "net"):
             try:

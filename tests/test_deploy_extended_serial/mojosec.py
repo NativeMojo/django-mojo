@@ -192,11 +192,15 @@ def test_converge_lifecycle_is_an_exact_allowlist(opts):
     th.assert_eq(result["mode"], "observe", "observe convergence must report its mode")
     th.assert_true(all(
         not call or call[-1] in (
-            "daemon-reload", "nginx", deploy.SERVICE, "mojosec-audit-health.timer")
+            "daemon-reload", "nginx", deploy.SERVICE,
+            deploy.PROC_IDENTITY_SERVICE, deploy.PROC_IDENTITY_SOCKET,
+            "mojosec-audit-health.timer")
         for call in calls),
         f"lifecycle may address only nginx and the exact MojoSec unit: {calls}")
     th.assert_in(("enable", "--now", deploy.SERVICE), calls,
                  "observe must enable and start the exact service")
+    th.assert_in(("enable", "--now", deploy.PROC_IDENTITY_SOCKET), calls,
+                 "observe must enable the root-only identity socket")
     th.assert_true(not any("*.service" in part for call in calls for part in call),
                    "deployment must never enable a service glob")
 
@@ -214,6 +218,8 @@ def test_off_and_best_effort_preserve_evidence(opts):
             states["active"] = False
         elif args == ("disable", deploy.SERVICE):
             states["enabled"] = False
+        elif args == ("disable", "--now", deploy.PROC_IDENTITY_SOCKET):
+            states.update(enabled=False, active=False)
 
     with mock.patch.object(deploy, "_ensure_dir"), \
             mock.patch.object(deploy, "_require_root_install_dir"), \
@@ -261,6 +267,8 @@ def test_off_restores_audit_and_removes_feature_assets(opts):
             states["active"] = False
         elif args == ("disable", deploy.SERVICE):
             states["enabled"] = False
+        elif args == ("disable", "--now", deploy.PROC_IDENTITY_SOCKET):
+            states.update(enabled=False, active=False)
 
     with mock.patch.object(deploy.os, "geteuid", return_value=0), \
             mock.patch.object(deploy, "_ensure_dir"), \
@@ -296,6 +304,12 @@ def test_off_restores_audit_and_removes_feature_assets(opts):
                      f"off must remove package-owned provenance asset {path}")
     th.assert_in(("disable", "--now", "mojosec-audit-health.timer"), calls,
                  "off must disable the privileged Audit health publisher")
+    for path in (deploy.PROC_IDENTITY_SERVICE_PATH,
+                 deploy.PROC_IDENTITY_SOCKET_PATH):
+        th.assert_in(path, removed,
+                     f"off must remove the process resolver asset {path}")
+    th.assert_in(("disable", "--now", deploy.PROC_IDENTITY_SOCKET), calls,
+                 "off must disable the process identity socket")
 
 
 @th.django_unit_test()

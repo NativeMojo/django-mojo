@@ -795,6 +795,100 @@ def _audit_mojosec_unit(report, run, sudo, mode="observe"):
         report.fail("mojosec", "service unit byte drift",
                     "installed root unit differs from the package contract")
 
+    if mode == "observe":
+        companion_units = (
+            ("PROC_IDENTITY_SERVICE_TEXT",
+             "/etc/systemd/system/mojosec-proc-identity.service"),
+            ("PROC_IDENTITY_SOCKET_TEXT",
+             "/etc/systemd/system/mojosec-proc-identity.socket"),
+        )
+        for constant, path in companion_units:
+            metadata = _secure_metadata(run, path, "644", sudo=sudo)
+            projection = (
+                "import os,stat;from mojo.deploy import mojosec as m;"
+                f"p={path!r};want=getattr(m,{constant!r}).encode();"
+                "fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW);s=os.fstat(fd);"
+                "got=os.read(fd,len(want)+1);os.close(fd);"
+                "raise SystemExit(0 if stat.S_ISREG(s.st_mode) and s.st_uid==0 and "
+                "s.st_gid==0 and s.st_size==len(want) and got==want else 1)"
+            )
+            if (metadata is not None and metadata[1] and run(_mojosec_python(
+                    sudo, f"-c {q(projection)}", safe_path=True))[0] == 0):
+                report.passed("mojosec", "process identity helper unit",
+                              f"{os.path.basename(path)} is exact root-owned 0644")
+            else:
+                report.fail("mojosec", "process identity helper unit drift",
+                            f"{path} is absent, unsafe, or differs from the package")
+        socket_enabled = run(
+            "systemctl is-enabled --quiet mojosec-proc-identity.socket")[0] == 0
+        socket_active = run(
+            "systemctl is-active --quiet mojosec-proc-identity.socket")[0] == 0
+        if socket_enabled and socket_active:
+            report.passed("mojosec", "process identity helper socket",
+                          "root-only resolver socket is enabled and active")
+        else:
+            report.fail("mojosec", "process identity helper socket unavailable",
+                        "mojosec-proc-identity.socket must be enabled and active")
+
+        socket_path = "/run/mojosec-proc-identity.sock"
+        socket_metadata = run(
+            f"{sudo}test ! -L {q(socket_path)} && {sudo}test -S {q(socket_path)} && "
+            f"{sudo}stat -c '%U %G %a' {q(socket_path)} 2>/dev/null")
+        if socket_metadata[0] == 0 and socket_metadata[1].split() == [
+                "root", "root", "600"]:
+            report.passed("mojosec", "process identity socket permissions",
+                          "live resolver socket is root-owned 0600")
+        else:
+            report.fail("mojosec", "process identity socket permissions unsafe",
+                        "live resolver socket must be a root-owned 0600 Unix socket")
+
+        helper_properties = (
+            "User", "Group", "UMask", "WorkingDirectory", "FragmentPath",
+            "DropInPaths", "NoNewPrivileges", "PrivateTmp", "PrivateDevices",
+            "PrivateNetwork", "ProtectHome", "ProtectSystem",
+            "ProtectKernelTunables", "ProtectKernelModules", "ProtectKernelLogs",
+            "ProtectControlGroups", "ProtectClock", "ProtectHostname", "ProcSubset",
+            "RestrictSUIDSGID", "LockPersonality", "RestrictRealtime",
+            "RestrictNamespaces", "RestrictAddressFamilies", "CapabilityBoundingSet",
+            "AmbientCapabilities",
+        )
+        helper_command = "systemctl show mojosec-proc-identity.service " + " ".join(
+            f"--property={name}" for name in helper_properties)
+        helper_rc, helper_out, _ = run(helper_command)
+        helper_found = {}
+        if helper_rc == 0 and len(helper_out) <= 16384:
+            for line in helper_out.splitlines():
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    helper_found[key] = value.strip()
+        helper_scalar = {
+            "User": "ec2-user", "Group": "ec2-user", "UMask": "0077",
+            "WorkingDirectory": "/",
+            "FragmentPath": "/etc/systemd/system/mojosec-proc-identity.service",
+            "DropInPaths": "", "NoNewPrivileges": "yes", "PrivateTmp": "yes",
+            "PrivateDevices": "yes", "PrivateNetwork": "yes", "ProtectHome": "yes",
+            "ProtectSystem": "strict", "ProtectKernelTunables": "yes",
+            "ProtectKernelModules": "yes", "ProtectKernelLogs": "yes",
+            "ProtectControlGroups": "yes", "ProtectClock": "yes",
+            "ProtectHostname": "yes", "ProcSubset": "pid", "RestrictSUIDSGID": "yes",
+            "LockPersonality": "yes", "RestrictRealtime": "yes",
+            "RestrictNamespaces": "yes", "CapabilityBoundingSet": "",
+            "AmbientCapabilities": "",
+        }
+        helper_drift = [
+            f"{key}={helper_found.get(key, '<missing>')}"
+            for key, value in helper_scalar.items() if helper_found.get(key) != value
+        ]
+        if set(helper_found.get("RestrictAddressFamilies", "").split()) != {"AF_UNIX"}:
+            helper_drift.append("RestrictAddressFamilies=" + helper_found.get(
+                "RestrictAddressFamilies", "<missing>"))
+        if helper_drift:
+            report.fail("mojosec", "process identity helper sandbox drift",
+                        ", ".join(helper_drift[:12]))
+        else:
+            report.passed("mojosec", "process identity helper sandbox",
+                          "app user; no capabilities, IP network, or systemd drop-ins")
+
     properties = (
         "User", "Group", "UMask", "WorkingDirectory", "Environment",
         "FragmentPath", "DropInPaths",
@@ -836,7 +930,7 @@ def _audit_mojosec_unit(report, run, sudo, mode="observe"):
         drift.append("RestrictAddressFamilies=" + found.get(
             "RestrictAddressFamilies", "<missing>"))
     if set(found.get("CapabilityBoundingSet", "").lower().split()) != {
-            "cap_dac_read_search", "cap_sys_ptrace"}:
+            "cap_dac_read_search"}:
         drift.append("CapabilityBoundingSet=" + found.get(
             "CapabilityBoundingSet", "<missing>"))
     if set(found.get("ReadWritePaths", "").split()) != {

@@ -67,9 +67,27 @@ def _mojosec_systemd_show(dropins=""):
         "RestrictSUIDSGID": "yes", "LockPersonality": "yes",
         "RestrictRealtime": "yes", "RestrictNamespaces": "yes",
         "RestrictAddressFamilies": "AF_UNIX AF_INET AF_INET6",
-        "CapabilityBoundingSet": "cap_dac_read_search cap_sys_ptrace",
+        "CapabilityBoundingSet": "cap_dac_read_search",
         "AmbientCapabilities": "",
         "ReadWritePaths": "/var/lib/mojosec /run/mojosec",
+    }
+    return "\n".join(f"{key}={value}" for key, value in values.items())
+
+
+def _proc_identity_systemd_show(dropins=""):
+    values = {
+        "User": "ec2-user", "Group": "ec2-user", "UMask": "0077",
+        "WorkingDirectory": "/",
+        "FragmentPath": "/etc/systemd/system/mojosec-proc-identity.service",
+        "DropInPaths": dropins, "NoNewPrivileges": "yes", "PrivateTmp": "yes",
+        "PrivateDevices": "yes", "PrivateNetwork": "yes", "ProtectHome": "yes",
+        "ProtectSystem": "strict", "ProtectKernelTunables": "yes",
+        "ProtectKernelModules": "yes", "ProtectKernelLogs": "yes",
+        "ProtectControlGroups": "yes", "ProtectClock": "yes",
+        "ProtectHostname": "yes", "ProcSubset": "pid", "RestrictSUIDSGID": "yes",
+        "LockPersonality": "yes", "RestrictRealtime": "yes",
+        "RestrictNamespaces": "yes", "RestrictAddressFamilies": "AF_UNIX",
+        "CapabilityBoundingSet": "", "AmbientCapabilities": "",
     }
     return "\n".join(f"{key}={value}" for key, value in values.items())
 
@@ -203,10 +221,14 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
         ("/etc/mojosec/credential", (0, metadata, "")),
         ("/var/lib/mojosec", (0, "root root 700", "")),
         ("/etc/systemd/system/mojosec.service", (0, "root root 644", "")),
+        ("/etc/systemd/system/mojosec-proc-identity", (0, "root root 644", "")),
         ("/etc/mojosec/expected_changes.json", (1, "", "")),
         ("is-active mojosec", (0, "active", "")),
         ("is-enabled mojosec", (0, "enabled", "")),
         ("systemctl show mojosec.service", (0, _mojosec_systemd_show(), "")),
+        ("systemctl show mojosec-proc-identity.service",
+         (0, _proc_identity_systemd_show(), "")),
+        ("/run/mojosec-proc-identity.sock", (0, "root root 600", "")),
         ("python3 -c", (0, status, "")),
         ("/run/mojosec/status.json", (0, "root root 640", "")),
         ("nginx -T", (0, "log_format mojosec_v1 escape=json\n"
@@ -227,6 +249,12 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
                  f"active+enabled observe service must pass: {statuses}")
     th.assert_eq(statuses.get("public status"), cn.PASS,
                  f"bounded public status must be inspectable: {statuses}")
+    th.assert_eq(statuses.get("process identity helper socket"), cn.PASS,
+                 f"the root-only helper socket must be enabled and active: {statuses}")
+    th.assert_eq(statuses.get("process identity socket permissions"), cn.PASS,
+                 f"the live helper socket must remain root-owned 0600: {statuses}")
+    th.assert_eq(statuses.get("process identity helper sandbox"), cn.PASS,
+                 f"the helper must run unprivileged without capabilities or IP: {statuses}")
     th.assert_eq(statuses.get("security log archives"), cn.PASS,
                  f"root-only rotated evidence must pass: {statuses}")
     th.assert_true(any("mojosec.json.log.*" in command for command in run.commands),
@@ -371,17 +399,6 @@ def test_mojosec_unit_audit_rejects_byte_drift_and_dropins(opts):
     th.assert_eq(statuses.get("effective systemd sandbox drift"), cn.FAIL,
                  f"any drop-in must fail the effective sandbox audit: {statuses}")
 
-    old_capabilities = _mojosec_systemd_show().replace(
-        "cap_dac_read_search cap_sys_ptrace", "cap_dac_read_search")
-    report = cn.Report()
-    cn._audit_mojosec_unit(report, FakeRunner([
-        ("UNIT_TEXT", (0, "", "")),
-        ("systemctl show mojosec.service", (0, old_capabilities, "")),
-        ("systemd-analyze security", (0, "ok", "")),
-    ]), "sudo -n ")
-    statuses = _statuses(report, "mojosec")
-    th.assert_eq(statuses.get("effective systemd sandbox drift"), cn.FAIL,
-                 f"the sensor must retain cross-UID live executable access: {statuses}")
 
 
 @th.django_unit_test()

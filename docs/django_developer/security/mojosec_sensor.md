@@ -1169,12 +1169,16 @@ they cannot be repaired by replaying an earlier valid fragment.
 
 `/proc` is immediate optional enrichment for
 PID generation, parents, cgroup/unit, namespace, executable, command line, and
-SELinux context. The root service is bounded to `CAP_DAC_READ_SEARCH` and
-`CAP_SYS_PTRACE`: the latter is required only because Linux otherwise refuses
-the cross-UID `/proc/<pid>/exe` identity check for the application user's
-JobEngine. It has no ambient capabilities, retains `NoNewPrivileges`, and keeps
-the remaining systemd filesystem, namespace, kernel, and address-family
-restrictions. Audit remains durable truth: a short-lived process or ancestor
+SELinux context. The network-capable root sensor remains bounded to
+`CAP_DAC_READ_SEARCH` with no ambient capabilities; it never receives
+`CAP_SYS_PTRACE`. Linux otherwise refuses its cross-UID `/proc/<pid>/exe`
+identity check, so that one lookup goes through a root-only mode-`0600` Unix
+socket to a separate resolver running as `ec2-user`. The resolver accepts only
+a bounded numeric PID plus the already-read start ticks, double-reads that
+generation, returns only the executable path, disables core dumps, has no
+capabilities or IP network, and keeps the systemd filesystem, namespace, kernel,
+and device restrictions. Failure or disagreement returns no identity and keeps
+the event centrally visible. Audit remains durable truth: a short-lived process or ancestor
 that has already left `/proc` does not poison a complete Audit edge. A live
 `/proc` identity that conflicts with Audit, PID reuse, cycles, ordering
 conflicts, gaps, loss, or stale health makes suppression ineligible. Only the
@@ -1202,8 +1206,8 @@ sticky and makes the session permanently ineligible for suppression.
 
 The root-owned Audit health oneshot has only `CAP_AUDIT_CONTROL` and publishes
 a root-only sidecar every five seconds. The main sensor's separate capability
-set is limited to the read/search and live process-identity capabilities above.
-It validates boot, managed generation, rules digest, sequence,
+set remains limited to read/search; the unprivileged resolver has none. It
+validates boot, managed generation, rules digest, sequence,
 freshness, loss, backlog, failure mode, and rate limit. Deployment accepts only
 the exact AL2023 `task,never` seed or a complete prior Mojo generation after
 hashing every rules source, the generated rules and the active rules. It keeps

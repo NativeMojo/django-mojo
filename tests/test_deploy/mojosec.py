@@ -176,7 +176,7 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
             "NoNewPrivileges=true", "ProtectKernelModules=true",
             "ProtectSystem=strict", "ProtectHome=tmpfs", "BindReadOnlyPaths=",
             "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
-            "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE",
+            "CapabilityBoundingSet=CAP_DAC_READ_SEARCH",
             "ConditionPathExists=/etc/mojosec/config.json"):
         th.assert_in(expected, unit, f"service is missing deployment contract: {expected}")
     for forbidden in ("fail2ban", "iptables", "nft", "firewall", "/opt/api/var"):
@@ -186,6 +186,17 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
                    "every exact root/ec2-user persistence path must be a non-optional bind")
     th.assert_true(" -I " not in unit and " -s " not in unit,
                    "AL2023 root-pip packages disappear under -I/-s")
+    th.assert_true("CAP_SYS_PTRACE" not in unit,
+                   "the network-capable root sensor must never gain process tracing")
+    helper = deploy.PROC_IDENTITY_SERVICE_TEXT
+    for expected in (
+            "User=ec2-user", "PrivateNetwork=true", "ProcSubset=pid",
+            "RestrictAddressFamilies=AF_UNIX", "CapabilityBoundingSet=\n",
+            "ExecStart=/usr/bin/python3 -E -P -m mojo.mojosec.proc_identity"):
+        th.assert_in(expected, helper,
+                     f"the process resolver lost its unprivileged sandbox: {expected}")
+    th.assert_in("SocketMode=0600", deploy.PROC_IDENTITY_SOCKET_TEXT,
+                 "only the root sensor may query the process identity helper")
     rotation = deploy.LOGROTATE_TEXT
     for expected in ("daily", "maxsize 50M", "rotate 14", "copytruncate",
                      "su root root", "create 0600 root root"):
