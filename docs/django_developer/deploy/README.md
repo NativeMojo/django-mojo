@@ -460,20 +460,26 @@ deployment itself does not call this tool.
 engine and scheduler. Cron is the normal start authority, not merely a
 backstop. Before an API deployment can commit, `jobman repair` runs as root,
 hands only Jobman's own files to the exact installed cron account, and clears
-the old readiness marker. The transaction then waits up to 75 seconds for the
-installed cron entry to invoke `jobman start`: that invocation checks the
-runner, directories, and existing Jobman files, then writes a fresh single-link
-marker even when both components are already running. This proves the actual
-cron entry works; checking only that the daemon is active would miss syntax,
-PAM, SELinux, redirection, and permission failures.
+the old readiness marker. The transaction then waits for the installed cron
+entry to invoke `jobman start`; `JOBMAN_CRON_READY_SECONDS` is the non-negative
+integer wait bound and defaults to 75 seconds, enough to cover the installed
+one-minute schedule. That invocation checks the runner, directories, and
+existing Jobman files, then writes a fresh single-link marker even when both
+components are already running. This proves the actual cron entry works;
+checking only that the daemon is active would miss syntax, PAM, SELinux,
+redirection, and permission failures. `jobman ready` accepts the marker only
+when it is a regular, single-link file owned by the exact cron account, is not
+group- or world-writable, and is at most 120 seconds old.
 
 A successful API deployment schedules a bounded root stop of both components
 only after the invoking job has returned and recorded its result. The detached
 handoff rechecks the fresh cron marker, reports its outcome under the
-`mojo-deploy-recycle` journal tag, and returns failure if any process survives.
-The next every-minute cron tick starts the replacements. That fresh cron
-session is part of the MojoSec proof for firewall work, so the deploy process
-must not start the replacements directly.
+`mojo-deploy-recycle` journal tag, and exits nonzero rather than logging success
+if any process survives. Because this handoff runs after the node result is
+recorded, its failure is an operational alarm; it does not roll back the
+activated release. The next every-minute cron tick starts the replacements.
+That fresh cron session is part of the MojoSec proof for firewall work, so the
+deploy process must not start the replacements directly.
 
 `start` runs `bin/jobs.py` through jobman's absolute current Python executable,
 not through the project's `/usr/bin/env` shebang. Besides pinning the child to
@@ -496,10 +502,13 @@ report a false success.
 On a node whose job processes or Jobman files ended up root-owned, a normal API
 deployment now repairs the files, proves a cron tick, and uses its bounded root
 stop to retire the processes automatically. For operator recovery, run
-`sudo python3 -m mojo.deploy.jobman repair --root /opt/api`, leave process
-creation to the installed cron, and confirm
-`journalctl -t mojo-deploy-recycle`; do not leave a manually started replacement
-running, because it lacks the cron audit origin required for MojoSec brokering.
+`sudo python3 -m mojo.deploy.jobman repair --root /opt/api`, wait for the
+installed cron tick, and require
+`sudo python3 -m mojo.deploy.jobman ready --root /opt/api` to pass before
+running `sudo python3 -m mojo.deploy.jobman stop --root /opt/api`. The following
+cron tick starts the MojoSec-proven replacements. Use
+`journalctl -t mojo-deploy-recycle` to inspect automated deploy handoffs; manual
+recovery commands report directly and do not write that tag.
 
 ### `node_setup`
 
