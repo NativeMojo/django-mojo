@@ -395,6 +395,31 @@ def _start_ticks(pid):
             os.close(descriptor)
 
 
+def _audit_session(pid):
+    descriptor = None
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(f"/proc/{pid}/sessionid", flags)
+        value = os.read(descriptor, 33)
+        if len(value) > 32:
+            return None
+        found = int(value.decode("ascii").strip())
+        return found if 0 <= found <= 4294967294 else None
+    except (OSError, ValueError):
+        return None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _producer_exe(pid):
+    try:
+        value = os.readlink(f"/proc/{pid}/exe")
+    except OSError:
+        return ""
+    return value if len(value.encode("utf-8", errors="replace")) <= 256 else ""
+
+
 def _receipt(kind, operation_id, context, built, children=None, **values):
     broker_start_ticks = _start_ticks(os.getpid())
     if not broker_start_ticks:
@@ -413,6 +438,12 @@ def _receipt(kind, operation_id, context, built, children=None, **values):
         "broker_pid": os.getpid(), "broker_start_ticks": broker_start_ticks,
         "monotonic_ns": time.monotonic_ns(), **values,
     }
+    audit_session = _audit_session(os.getpid())
+    producer_exe = _producer_exe(os.getpid())
+    if audit_session is not None:
+        value["audit_session"] = audit_session
+    if producer_exe:
+        value["producer_exe"] = producer_exe
     syslog.openlog(ident="mojo-firewall-broker", facility=syslog.LOG_AUTHPRIV)
     syslog.syslog(syslog.LOG_INFO, json.dumps(value, sort_keys=True, separators=(",", ":")))
     return value

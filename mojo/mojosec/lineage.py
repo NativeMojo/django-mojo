@@ -487,7 +487,7 @@ def firewall_receipt(record):
         "monotonic_ns", "children",
     }
     optional = {"target_pid", "target_start_ticks", "returncode", "duration_ms",
-                "ok", "error"}
+                "ok", "error", "audit_session", "producer_exe"}
     if (not isinstance(value, dict) or not required.issubset(value) or
             not set(value).issubset(required | optional)):
         return None
@@ -544,10 +544,20 @@ def firewall_receipt(record):
             _integer(value.get("target_start_ticks")) is None):
         return None
     boot_id = str(record.get("_BOOT_ID") or "").replace("-", "").lower()
-    session = _integer(record.get("_AUDIT_SESSION"), 4294967294)
+    record_session = _integer(record.get("_AUDIT_SESSION"), 4294967294)
+    payload_session = _integer(value.get("audit_session"), 4294967294)
+    session = record_session if record_session is not None else payload_session
     tty = str(record.get("_TTY") or "")
-    exe = str(record.get("_EXE") or "")
+    record_exe = str(record.get("_EXE") or "")
+    payload_exe = str(value.get("producer_exe") or "")
+    exe = record_exe or payload_exe
     if (not re.fullmatch(r"[a-f0-9]{32}", boot_id) or session is None or tty or
+            ("audit_session" in value and payload_session is None) or
+            ("producer_exe" in value and payload_exe not in (
+                "/usr/bin/python3", "/usr/bin/python3.11", "/usr/bin/python3.12")) or
+            (record_session is not None and payload_session is not None and
+             record_session != payload_session) or
+            (record_exe and payload_exe and record_exe != payload_exe) or
             exe not in ("/usr/bin/python3", "/usr/bin/python3.11", "/usr/bin/python3.12")):
         return None
     value["boot_id"] = boot_id

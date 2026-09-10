@@ -1160,7 +1160,7 @@ class Store:
             "operation_id", "execution_id", "job_id", "function", "operation",
             "semantic", "argv_digest", "stdin_digest", "stdin_length", "count",
             "broker_pid", "broker_start_ticks", "target_exe", "boot_id",
-            "audit_session",
+            "audit_session", "producer_exe",
         )
         status = bool(
             begin and begin.get("operation") == "broker.status" and
@@ -1422,6 +1422,10 @@ class Store:
                     by_pid.get(begin["broker_pid"], ()),
                     begin["broker_pid"], begin["broker_start_ticks"],
                     begin["monotonic_ns"], result["monotonic_ns"])
+                if (broker is not None and begin.get("producer_exe") and
+                        broker.get("exe") != begin["producer_exe"]):
+                    conflicted = True
+                    continue
                 targets = []
                 for child in result["children"]:
                     target = self._one_pid_generation(
