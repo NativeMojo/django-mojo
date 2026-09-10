@@ -433,10 +433,11 @@ def test_negative_competing_generation_pins(opts):
 
 @th.unit_test("production CROND launch requires exact trusted syslog and PAM halves")
 def test_production_crond_launch_shape(opts):
+    from mojo.deploy.jobman import cron_command
     from mojo.mojosec.lineage import CROND_PAM_GRANTORS, CROND_SELINUX, crond_launch
 
     boot = "a" * 32
-    command = "/opt/api/bin/jobman start >> /opt/api/var/logs/jobman.log 2>&1"
+    command = cron_command("/opt/api")
     common = {"_BOOT_ID": boot, "_UID": "0",
               "_AUDIT_LOGINUID": "1000", "_AUDIT_SESSION": "71",
               "_SELINUX_CONTEXT": CROND_SELINUX}
@@ -609,6 +610,7 @@ def test_project_ancestors_is_bounded(opts):
 
 @th.unit_test("proven firewall operation resolves local-only and incomplete proof fails open")
 def test_pending_firewall_resolution(opts):
+    from mojo.deploy.jobman import cron_command
     from mojo.mojosec.events import observation
     from mojo.mojosec.lineage import CROND_SELINUX, crond_launch
     from mojo.mojosec.store import Store
@@ -660,7 +662,7 @@ def test_pending_firewall_resolution(opts):
                   monotonic_ns=1_100_000_000, ok=True, children=[{
                       "pid": 23, "start_ticks": 230, "exe": "/sbin/iptables",
                       "argv_digest": child_digest, "returncode": 0, "ok": True}])
-    command = "/opt/api/bin/jobman start >> /opt/api/var/logs/jobman.log 2>&1"
+    command = cron_command("/opt/api")
     common = {"_BOOT_ID": boot, "_UID": "0",
               "_AUDIT_LOGINUID": "1000", "_AUDIT_SESSION": str(session),
               "_SELINUX_CONTEXT": CROND_SELINUX}
@@ -687,12 +689,12 @@ def test_pending_firewall_resolution(opts):
         {"boot_id": boot, "audit_id": "5", "pid": 19, "ppid": 1,
          "audit_session": session, "exe": "/usr/bin/bash", "argv": ["/usr/bin/bash"],
          "monotonic": 300},
-        {"boot_id": boot, "audit_id": "6", "pid": 19, "ppid": 1,
+        {"boot_id": boot, "audit_id": "6", "pid": 18, "ppid": 19,
          "audit_session": session, "exe": "/usr/bin/python3",
          "argv": ["python3", "-m", "mojo.deploy.jobman", "start"], "monotonic": 400},
         {"boot_id": boot, "audit_id": "1", "pid": 20, "ppid": 21,
          "audit_session": session, "exe": "/usr/bin/sudo", "argv": ["/usr/bin/sudo"]},
-        {"boot_id": boot, "audit_id": "2", "pid": 21, "ppid": 19,
+        {"boot_id": boot, "audit_id": "2", "pid": 21, "ppid": 18,
          "audit_session": session, "exe": "/usr/bin/python3",
          "argv": ["/opt/api/bin/jobs.py", "engine", "foreground"], "pinned": True,
          "start_ticks": 210, "monotonic": 500},

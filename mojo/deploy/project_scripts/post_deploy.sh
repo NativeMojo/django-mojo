@@ -258,9 +258,10 @@ prepare_jobman_cron_restart() {
     (cd / && "$JOBMAN_SYSTEM_PYTHON" -E -P -m mojo.deploy.jobman repair \
         --root "$PROJ_PATH" --app-user "$APP_USER" --cron-path "$cron_path") ||
         die "jobman ownership repair failed"
-    "$JOBMAN_SUDO" -n -H -u "$APP_USER" -- \
-        "$PROJ_PATH/bin/jobman" preflight \
-        --app-user "$APP_USER" --cron-path "$cron_path" ||
+    (cd / && "$JOBMAN_SUDO" -n -H -u "$APP_USER" -- \
+        "$JOBMAN_SYSTEM_PYTHON" -E -P -m mojo.deploy.jobman \
+        --root "$PROJ_PATH" preflight \
+        --app-user "$APP_USER" --cron-path "$cron_path") ||
         die "cron account cannot execute Jobman safely"
     log "Verified cron service and Jobman launch permissions"
 }

@@ -7,6 +7,8 @@ import re
 import stat
 import time
 
+from mojo.deploy.jobman import cron_command
+
 
 MAX_ARGUMENTS = 64
 MAX_ARGUMENT_BYTES = 16 * 1024
@@ -38,8 +40,7 @@ def crond_launch(record, project_path, app_uid, app_gid):
     session = _integer(record.get("_AUDIT_SESSION"), 4294967294)
     if not re.fullmatch(r"[a-f0-9]{32}", boot) or session is None:
         return None
-    command = (f'{project_path}/bin/jobman start >> '
-               f'{project_path}/var/logs/jobman.log 2>&1')
+    command = cron_command(project_path)
     common = bool(str(record.get("_UID") or "") == "0" and
                   str(record.get("_AUDIT_LOGINUID") or "") == str(app_uid) and
                   str(record.get("_SELINUX_CONTEXT") or "") == CROND_SELINUX)

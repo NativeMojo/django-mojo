@@ -132,6 +132,8 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
             "  printf '* * * * * root true\\n' > \"$PROJ_PATH/var/deploy/cron.d/mojo\"\n"
             "  exit 0\nfi\n"
             "case \"$*\" in *manage.py*) exit \"${MANAGE_RC:-0}\" ;; esac\n"
+            "case \"$*\" in *mojo.deploy.jobman*preflight*) "
+            "exit \"${JOBMAN_PREFLIGHT_RC:-0}\" ;; esac\n"
             "exit 0\n")
         _write_executable(
             os.path.join(stubs, "install"),
@@ -209,9 +211,10 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
             "--cron-path %s/3_mojo_jobs" % (project, cron_etc), commands,
             "the root transaction must repair jobman's files without starting it")
         th.assert_in(
-            "sudo -n -H -u ec2-user -- %s preflight" % jobman_wrapper,
+            "sudo -n -H -u ec2-user -- %s -E -P -m mojo.deploy.jobman "
+            "--root %s preflight" % (os.path.join(stubs, "python3"), project),
             commands,
-            "preflight must execute the exact wrapper installed cron invokes")
+            "preflight must execute the exact installed module cron invokes")
         with open(os.path.join(nginx_etc, "conf.d", "app.conf")) as handle:
             th.assert_in("server_name _;", handle.read(),
                          "ordinary nginx syntax must not be semantically refused")
@@ -250,17 +253,16 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
         os.chmod(jobman_wrapper, 0o644)
         missing_wrapper = subprocess.run(
             argv, env=environment, capture_output=True, text=True, timeout=30)
-        th.assert_true(missing_wrapper.returncode != 0,
-                       "a non-executable cron Jobman wrapper must block retirement")
+        th.assert_eq(missing_wrapper.returncode, 0, missing_wrapper.stderr)
         os.chmod(jobman_wrapper, 0o755)
 
-        broken_wrapper_env = environment.copy()
-        broken_wrapper_env["JOBMAN_WRAPPER_RC"] = "1"
-        broken_wrapper = subprocess.run(
-            argv, env=broken_wrapper_env,
+        broken_preflight_env = environment.copy()
+        broken_preflight_env["JOBMAN_PREFLIGHT_RC"] = "1"
+        broken_preflight = subprocess.run(
+            argv, env=broken_preflight_env,
             capture_output=True, text=True, timeout=30)
-        th.assert_true(broken_wrapper.returncode != 0,
-                       "a broken cron Jobman wrapper must block retirement")
+        th.assert_true(broken_preflight.returncode != 0,
+                       "a failed direct Jobman preflight must block retirement")
 
         redirect_env = environment.copy()
         redirect_env["CURL_CODE"] = "301"

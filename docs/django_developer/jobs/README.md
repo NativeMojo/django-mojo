@@ -260,8 +260,9 @@ looking at.
 | Started by | the every-minute `3_mojo_jobs` cron | an operator, by hand |
 | Requires | nothing configured | Redis **and** Postgres, on every command including `status` |
 
-On a deployed node the cron runs `bin/jobman start` every minute, so `jobman` is
-what is actually managing the engine and scheduler there. Both always run as the
+On a deployed node the cron runs the installed `mojo.deploy.jobman` module every
+minute, so `jobman` is what is actually managing the engine and scheduler there.
+Both always run as the
 application account: a `jobman start` invoked as root resolves that account from
 trusted configuration and demotes itself before spawning anything (see
 [deploy/README.md](../deploy/README.md#jobman)) — a root engine would run every
@@ -278,12 +279,13 @@ No jobs CLI daemon-mode processes running; check deployed foreground processes w
 
 MojoSec proves that deployed origin from the real CROND launch record plus its
 matching PAM/Audit `USER_START`, then follows the audited bash → jobman → engine
-chain. Jobman invokes `bin/jobs.py` with its own absolute Python executable,
-bypassing the script's portable `/usr/bin/env` shebang so Linux Audit records
-one authoritative engine exec rather than a PATH-search sequence on the same
-PID. The CROND row itself retains real crond process metadata; its launch PID is
-joined to the later bash and jobman execs, which may be successive execs of that
-same PID. MojoSec does not invent a same-session long-lived crond exec.
+chain. Cron calls the installed module directly and keeps its bash parent alive,
+so bash, Jobman, and the engine have distinct PIDs. Jobman then invokes
+`bin/jobs.py` with its own absolute Python executable. Both choices bypass the
+portable `/usr/bin/env` wrapper exec sequence that made several identities
+compete for one PID. The CROND row itself retains real crond process metadata;
+its launch PID is joined to the later distinct Jobman and engine processes.
+MojoSec does not invent a same-session long-lived crond exec.
 
 `jobman` lives in `mojo.deploy` rather than in this app because it has to work
 on a box with no settings at all — see

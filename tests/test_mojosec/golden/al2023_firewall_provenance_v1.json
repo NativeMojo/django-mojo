@@ -8,7 +8,7 @@
       "_AUDIT_TYPE_NAME": "SYSCALL",
       "__MONOTONIC_TIMESTAMP": "500",
       "_AUDIT_FIELD_PID": "21",
-      "_AUDIT_FIELD_PPID": "19",
+      "_AUDIT_FIELD_PPID": "18",
       "_AUDIT_FIELD_UID": "1000",
       "_AUDIT_FIELD_EUID": "1000",
       "_AUDIT_FIELD_AUID": "1000",
@@ -16,7 +16,7 @@
       "_AUDIT_FIELD_EXE": "\"/usr/bin/python3\"",
       "_AUDIT_FIELD_SUCCESS": "yes",
       "_AUDIT_FIELD_EXIT": "0",
-      "MESSAGE": "SYSCALL success=yes exit=0 pid=21 ppid=19 uid=1000 euid=1000 auid=1000 ses=9 exe=\"/usr/bin/python3\""
+      "MESSAGE": "SYSCALL success=yes exit=0 pid=21 ppid=18 uid=1000 euid=1000 auid=1000 ses=9 exe=\"/usr/bin/python3\""
     },
     {
       "__CURSOR": "engine-execve",
@@ -68,7 +68,7 @@
       "_EXE": "/usr/sbin/crond",
       "SYSLOG_IDENTIFIER": "CROND",
       "_CMDLINE": "/usr/sbin/CROND -n",
-      "MESSAGE": "(ec2-user) CMD (/opt/api/bin/jobman start >> /opt/api/var/logs/jobman.log 2>&1)",
+      "MESSAGE": "(ec2-user) CMD (/usr/bin/python3 -E -P -m mojo.deploy.jobman --root /opt/api start >> /opt/api/var/logs/jobman.log 2>&1; exit $?)",
       "_SYSTEMD_UNIT": "session-9.scope",
       "_SYSTEMD_CGROUP": "/user.slice/user-1000.slice/session-9.scope",
       "__MONOTONIC_TIMESTAMP": "200"
@@ -102,10 +102,10 @@
       "__CURSOR": "x11808236",
       "_AUDIT_TYPE_NAME": "EXECVE",
       "_AUDIT_FIELD_ARGC": "3",
-      "MESSAGE": "EXECVE argc=3 a0=\"/usr/bin/bash\" a1=\"-c\" a2=2f6f70742f6170692f62696e2f6a6f626d616e207374617274203e3e202f6f70742f6170692f7661722f6c6f67732f6a6f626d616e2e6c6f6720323e2631",
+      "MESSAGE": "EXECVE argc=3 a0=\"/usr/bin/bash\" a1=\"-c\" a2=2f7573722f62696e2f707974686f6e33202d45202d50202d6d206d6f6a6f2e6465706c6f792e6a6f626d616e202d2d726f6f74202f6f70742f617069207374617274203e3e202f6f70742f6170692f7661722f6c6f67732f6a6f626d616e2e6c6f6720323e26313b206578697420243f",
       "_AUDIT_FIELD_A0": "\"/usr/bin/bash\"",
       "_AUDIT_FIELD_A1": "\"-c\"",
-      "_AUDIT_FIELD_A2": "2f6f70742f6170692f62696e2f6a6f626d616e207374617274203e3e202f6f70742f6170692f7661722f6c6f67732f6a6f626d616e2e6c6f6720323e2631"
+      "_AUDIT_FIELD_A2": "2f7573722f62696e2f707974686f6e33202d45202d50202d6d206d6f6a6f2e6465706c6f792e6a6f626d616e202d2d726f6f74202f6f70742f617069207374617274203e3e202f6f70742f6170692f7661722f6c6f67732f6a6f626d616e2e6c6f6720323e26313b206578697420243f"
     },
     {
       "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -114,8 +114,8 @@
       "__MONOTONIC_TIMESTAMP": "300",
       "__CURSOR": "p11808236",
       "_AUDIT_TYPE_NAME": "PROCTITLE",
-      "_AUDIT_FIELD_PROCTITLE": "2f7573722f62696e2f62617368002d63002f6f70742f6170692f62696e2f6a6f626d616e207374617274203e3e202f6f70742f6170692f7661722f6c6f67732f6a6f626d616e2e6c6f6720323e2631",
-      "MESSAGE": "PROCTITLE proctitle=2f7573722f62696e2f62617368002d63002f6f70742f6170692f62696e2f6a6f626d616e207374617274203e3e202f6f70742f6170692f7661722f6c6f67732f6a6f626d616e2e6c6f6720323e2631"
+      "_AUDIT_FIELD_PROCTITLE": "2f7573722f62696e2f62617368002d63002f7573722f62696e2f707974686f6e33202d45202d50202d6d206d6f6a6f2e6465706c6f792e6a6f626d616e202d2d726f6f74202f6f70742f617069207374617274203e3e202f6f70742f6170692f7661722f6c6f67732f6a6f626d616e2e6c6f6720323e26313b206578697420243f",
+      "MESSAGE": "PROCTITLE proctitle=2f7573722f62696e2f62617368002d63002f7573722f62696e2f707974686f6e33202d45202d50202d6d206d6f6a6f2e6465706c6f792e6a6f626d616e202d2d726f6f74202f6f70742f617069207374617274203e3e202f6f70742f6170692f7661722f6c6f67732f6a6f626d616e2e6c6f6720323e26313b206578697420243f"
     }
   ],
   "jobman": [
@@ -126,11 +126,11 @@
       "__MONOTONIC_TIMESTAMP": "400",
       "__CURSOR": "s11808237",
       "_AUDIT_TYPE_NAME": "SYSCALL",
-      "MESSAGE": "SYSCALL pid=19 ppid=1 uid=1000 euid=0 auid=1000 ses=9 tty=(none) exe=\"/usr/bin/python3\" success=yes exit=0",
-      "_AUDIT_FIELD_PID": "19",
-      "_AUDIT_FIELD_PPID": "1",
+      "MESSAGE": "SYSCALL pid=18 ppid=19 uid=1000 euid=1000 auid=1000 ses=9 tty=(none) exe=\"/usr/bin/python3\" success=yes exit=0",
+      "_AUDIT_FIELD_PID": "18",
+      "_AUDIT_FIELD_PPID": "19",
       "_AUDIT_FIELD_UID": "1000",
-      "_AUDIT_FIELD_EUID": "0",
+      "_AUDIT_FIELD_EUID": "1000",
       "_AUDIT_FIELD_AUID": "1000",
       "_AUDIT_FIELD_SES": "9",
       "_AUDIT_FIELD_TTY": "(none)",
@@ -145,12 +145,16 @@
       "__MONOTONIC_TIMESTAMP": "400",
       "__CURSOR": "x11808237",
       "_AUDIT_TYPE_NAME": "EXECVE",
-      "_AUDIT_FIELD_ARGC": "4",
-      "MESSAGE": "EXECVE argc=4 a0=\"python3\" a1=\"-m\" a2=\"mojo.deploy.jobman\" a3=\"start\"",
-      "_AUDIT_FIELD_A0": "\"python3\"",
-      "_AUDIT_FIELD_A1": "\"-m\"",
-      "_AUDIT_FIELD_A2": "\"mojo.deploy.jobman\"",
-      "_AUDIT_FIELD_A3": "\"start\""
+      "_AUDIT_FIELD_ARGC": "8",
+      "MESSAGE": "EXECVE argc=8 a0=\"/usr/bin/python3\" a1=\"-E\" a2=\"-P\" a3=\"-m\" a4=\"mojo.deploy.jobman\" a5=\"--root\" a6=\"/opt/api\" a7=\"start\"",
+      "_AUDIT_FIELD_A0": "\"/usr/bin/python3\"",
+      "_AUDIT_FIELD_A1": "\"-E\"",
+      "_AUDIT_FIELD_A2": "\"-P\"",
+      "_AUDIT_FIELD_A3": "\"-m\"",
+      "_AUDIT_FIELD_A4": "\"mojo.deploy.jobman\"",
+      "_AUDIT_FIELD_A5": "\"--root\"",
+      "_AUDIT_FIELD_A6": "\"/opt/api\"",
+      "_AUDIT_FIELD_A7": "\"start\""
     },
     {
       "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -159,8 +163,8 @@
       "__MONOTONIC_TIMESTAMP": "400",
       "__CURSOR": "p11808237",
       "_AUDIT_TYPE_NAME": "PROCTITLE",
-      "_AUDIT_FIELD_PROCTITLE": "707974686f6e33002d6d006d6f6a6f2e6465706c6f792e6a6f626d616e007374617274",
-      "MESSAGE": "PROCTITLE proctitle=707974686f6e33002d6d006d6f6a6f2e6465706c6f792e6a6f626d616e007374617274"
+      "_AUDIT_FIELD_PROCTITLE": "2f7573722f62696e2f707974686f6e33002d45002d50002d6d006d6f6a6f2e6465706c6f792e6a6f626d616e002d2d726f6f74002f6f70742f617069007374617274",
+      "MESSAGE": "PROCTITLE proctitle=2f7573722f62696e2f707974686f6e33002d45002d50002d6d006d6f6a6f2e6465706c6f792e6a6f626d616e002d2d726f6f74002f6f70742f617069007374617274"
     }
   ],
   "sudo": [
@@ -337,7 +341,7 @@
   "live": [
     {
       "pid": 21,
-      "ppid": 19,
+      "ppid": 18,
       "start_ticks": 210,
       "exe": "/usr/bin/python3",
       "cmdline": [

@@ -55,6 +55,8 @@ import stat
 import subprocess
 import sys
 
+from mojo.deploy.jobman import cron_command
+
 DEFAULT_ROOT = "/opt/api"
 DEFAULT_OWNER = "ec2-user:www"
 DEFAULT_CRON_USER = "ec2-user"
@@ -76,7 +78,7 @@ UNIT_SUFFIXES = (".service", ".timer")
 # Byte-for-byte the block this replaces, with the user field parameterised.
 CRON_TEMPLATE = """SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-* * * * * %(user)s %(root)s/bin/jobman start >> %(root)s/var/logs/jobman.log 2>&1
+* * * * * %(user)s %(command)s
 """
 
 # Logging: the repo's standard graceful-fallback idiom. On a node the except
@@ -342,7 +344,7 @@ def write_cron(cron_path, root, cron_user, dry_run):
 
 
 def cron_text(root, cron_user):
-    return CRON_TEMPLATE % {"user": cron_user, "root": root}
+    return CRON_TEMPLATE % {"user": cron_user, "command": cron_command(root)}
 
 
 def run_systemctl(args):

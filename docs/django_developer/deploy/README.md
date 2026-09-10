@@ -460,9 +460,10 @@ deployment itself does not call this tool.
 engine and scheduler. Cron is the normal start authority, not merely a
 backstop. Before an API deployment can commit, `jobman repair` runs as root,
 hands only Jobman's own files to the exact installed cron account, and runs a
-no-spawn `jobman preflight` through the actual cron wrapper as that account.
+no-spawn `jobman preflight` through the same fixed system Python and installed
+module used by cron, as that account.
 Together with the active cron service check, this catches the deployment
-failures that would strand the node: a broken wrapper, stale root ownership, an
+failures that would strand the node: a missing module, stale root ownership, an
 unwritable pid/log surface, or a missing runner.
 
 A successful API deployment records its result and schedules a bounded root
@@ -476,6 +477,12 @@ alarm; it does not roll back the activated release. The next every-minute cron
 tick starts the replacements. That fresh cron session is part of the MojoSec
 proof for firewall work, so the deploy process must not start the replacements
 directly.
+
+The cron entry calls `/usr/bin/python3 -E -P -m mojo.deploy.jobman` directly
+and keeps its bash parent alive until Jobman returns. This avoids the project's
+portable `env → bash → Python` wrapper chain, whose repeated execs share one PID
+and cannot be used as unambiguous Audit lineage. The project `bin/jobman` shim
+remains available for interactive commands.
 
 `start` runs `bin/jobs.py` through jobman's absolute current Python executable,
 not through the project's `/usr/bin/env` shebang. Besides pinning the child to
@@ -500,8 +507,9 @@ deployment now repairs the files, verifies cron and the application account's
 launch permissions, and uses its bounded root stop to retire the processes
 automatically. For operator recovery, run
 `sudo /usr/bin/python3 -E -P -m mojo.deploy.jobman repair --root /opt/api`, run
-`/opt/api/bin/jobman preflight` as the installed cron account, then run the same
-safe-path module command with `stop --root /opt/api`. The following cron tick
+`/usr/bin/python3 -E -P -m mojo.deploy.jobman --root /opt/api preflight` as the
+installed cron account, then run the same safe-path module command with
+`stop --root /opt/api`. The following cron tick
 starts the MojoSec-proven replacements. Use
 `journalctl -t mojo-deploy-recycle` to inspect automated deploy handoffs; manual
 recovery commands report directly and do not write that tag.

@@ -338,11 +338,16 @@ def test_cron_names_the_cron_user_and_writes_only_on_diff(opts):
                      f"writing the cron must be reported once, got: {changes}")
 
         text = _read(cron)
-        th.assert_in("* * * * * deploy /opt/api/bin/jobman start "
-                     ">> /opt/api/var/logs/jobman.log 2>&1", text,
+        th.assert_in(
+            "* * * * * deploy /usr/bin/python3 -E -P -m "
+            "mojo.deploy.jobman --root /opt/api start "
+            ">> /opt/api/var/logs/jobman.log 2>&1; exit $?", text,
                      f"the user field comes from --cron-user, kept separate "
                      f"from --owner so an ownership fix cannot silently change "
                      f"which account runs the engine fleet-wide. Got: {text!r}")
+        th.assert_true("/opt/api/bin/jobman" not in text,
+                       "cron must call the installed module directly so its "
+                       "Audit lineage has a distinct, unambiguous Jobman PID")
         th.assert_true(text.startswith(
             "SHELL=/bin/bash\n"
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"),

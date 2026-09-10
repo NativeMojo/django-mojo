@@ -15,9 +15,9 @@ the deploy handoff logs that refusal instead of claiming the cron restart began.
 
 `repair` is the root-only, no-spawn half of a deployment restart. It gives only
 jobman's own pid/log files back to the exact account named by the installed cron
-entry. `preflight` then runs as that account and checks the writable launch
-surface before the current processes retire. The next cron tick starts their
-replacements in a fresh audit session.
+entry. `preflight` then runs the same installed Python module as that account
+and checks the writable launch surface before the current processes retire. The
+next cron tick starts their replacements in a fresh audit session.
 
 WHAT THIS MANAGES, AND WHAT IT DELIBERATELY DOES NOT. There are two job process
 planes on a node and they are disjoint:
@@ -108,6 +108,20 @@ from mojo.deploy import app_user
 # component -> the name every output line uses. Insertion order IS the order a
 # bare `start`/`stop`/`status` walks them in.
 COMPONENTS = {"engine": "Engine", "scheduler": "Scheduler"}
+
+# Cron calls the installed module directly instead of the project's portable
+# ``/usr/bin/env bash`` shim.  The trailing shell builtin keeps cron's bash
+# alive while Python runs, giving Audit three distinct PIDs: cron shell,
+# Jobman, and the detached engine.  Re-executing the wrapper identities on one
+# PID makes the otherwise legitimate launch indistinguishable from conflicting
+# process evidence.
+CRON_SYSTEM_PYTHON = "/usr/bin/python3"
+
+
+def cron_command(root):
+    return (f"{CRON_SYSTEM_PYTHON} -E -P -m mojo.deploy.jobman "
+            f"--root {root} start >> {root}/var/logs/jobman.log 2>&1; exit $?")
+
 
 VAR_LOGS = ("var", "logs")
 VAR_PIDS = ("var", "pids")
@@ -380,9 +394,9 @@ def cmd_repair(root, candidate=None, cron_path=None):
 
 def _start_preflight(root, runner_path):
     """Return a fixed failure for a cron tick that could not safely start."""
-    # Deploy invokes preflight through the exact project wrapper used by cron,
-    # so reaching here proves the wrapper could execute and import this module.
-    # Validate the runner it will spawn and every write surface it uses.
+    # Deploy invokes preflight through the same fixed system Python and installed
+    # module used by cron. Validate the runner it will spawn and every write
+    # surface it uses.
     if not os.path.isfile(runner_path) or not os.access(runner_path, os.X_OK):
         return "jobs runner is missing or not executable: %s" % runner_path
     for path in (log_dir(root), pid_dir(root)):
