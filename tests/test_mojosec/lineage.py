@@ -315,6 +315,122 @@ def test_receipt_conflict_is_sticky(opts):
         store.close()
 
 
+def _review_engine():
+    return {"boot_id": "a" * 32, "audit_id": "10", "pid": 21, "ppid": 19,
+            "audit_session": 9, "start_ticks": 210, "exe": "/usr/bin/python3",
+            "pinned": True, "success": True, "eoe": True, "monotonic": 1000,
+            "argv": ["python", "/opt/api/bin/jobs.py", "engine", "foreground"]}
+
+
+def _review_store(root):
+    from mojo.mojosec.store import Store
+
+    return Store(root, "sensor", {
+        "window_seconds": 60, "flush_count": 10,
+        "max_aggregates": 100, "critical_reserve_aggregates": 10}, {
+        "max_spool_events": 100, "critical_reserve_events": 10,
+        "retry_min_seconds": 1, "retry_max_seconds": 60})
+
+
+@th.unit_test("PID-less late Audit contradictions invalidate the retained canonical identity")
+def test_pidless_late_audit_contradiction(opts):
+    from mojo.mojosec import lineage
+    from mojo.mojosec.store import Store
+
+    original = _review_engine()
+    assembler = lineage.CompoundAssembler()
+    clock = types.SimpleNamespace(time=lambda: 100.0)
+    with mock.patch.object(lineage, "time", clock):
+        assembler.ingest([_record(10, "EXECVE", message='EXECVE argc=1 a0="other"')])
+        clock.time = lambda: 103.0
+        negative = assembler.ingest([])["complete"][0]
+    th.assert_true(negative["pid"] is None and negative["ambiguous"],
+                   "the regression must exercise a real PID-less timed-out Audit fragment")
+    for legacy in (False, True):
+        with tempfile.TemporaryDirectory() as root:
+            store = _review_store(root)
+            with mock.patch.object(lineage, "enrich_process", return_value=_engine_live(original)):
+                store.ingest([], process_nodes=[original], audit_fragments=[])
+                if legacy:
+                    store.db.execute("UPDATE process_nodes SET generation='210'")
+                store.close()
+                store = _review_store(root)
+                store.ingest([], process_nodes=[negative])
+            rows = store.db.execute("SELECT payload,pinned FROM process_nodes").fetchall()
+            th.assert_eq(len(rows), 1, "negative evidence must target the retained canonical row")
+            node = json.loads(rows[0]["payload"])
+            th.assert_true(not Store._eligible_process_node(node) and not rows[0]["pinned"],
+                           "PID-less contradiction must revoke the old canonical proof and pin")
+            th.assert_eq(node["audit_session"], 9,
+                         "negative authority must remain discoverable in the original session")
+            store.close()
+
+
+@th.unit_test("negative competing exec generations veto process and parent selection")
+def test_negative_competing_generation_selection(opts):
+    from mojo.mojosec.store import Store
+
+    original = _review_engine()
+    for changes in ({"ambiguous": True}, {"incomplete": True}, {"eoe": False}):
+        negative = dict(original, audit_id="11", pinned=False, **changes)
+        for ticks in (210, None):
+            negative["start_ticks"] = ticks
+            nodes = [original, negative]
+            th.assert_eq(Store._one_pid_generation(nodes, 21, 210, 0, 2_000_000,
+                                                   exe="/usr/bin/python3"), None,
+                         "negative same-PID evidence must veto the old selectable exec")
+            th.assert_eq(Store._parent_node(nodes, {"ppid": 21}), None,
+                         "an old pin must not bypass a competing negative parent generation")
+    distinct = dict(original, audit_id="12", start_ticks=220, ambiguous=True, pinned=False)
+    th.assert_eq(Store._one_pid_generation([original, distinct], 21, 210, 0, 2_000_000), original,
+                 "known different PID start ticks must not veto a separately proven generation")
+    th.assert_eq(Store._parent_node([original, distinct], {"ppid": 21}), original,
+                 "negative evidence from a known distinct generation must not revoke this live anchor")
+
+
+@th.unit_test("negative competing exec generations durably revoke engine pins in either order")
+def test_negative_competing_generation_pins(opts):
+    from mojo.mojosec import lineage
+    from mojo.mojosec.store import Store
+
+    original = _review_engine()
+    negative = dict(original, audit_id="11", pinned=False, ambiguous=True)
+    for reverse in (False, True):
+        with tempfile.TemporaryDirectory() as root:
+            store = _review_store(root)
+            with mock.patch.object(lineage, "enrich_process", return_value=_engine_live(original)):
+                for node in ([negative, original] if reverse else [original, negative]):
+                    store.ingest([], process_nodes=[node])
+                    store.close()
+                    store = _review_store(root)
+                store.ingest([], process_nodes=[original])
+                store.ingest([])
+            rows = store.db.execute("SELECT payload,pinned FROM process_nodes").fetchall()
+            th.assert_true(all(not row["pinned"] and
+                               not Store._eligible_process_node(json.loads(row["payload"]))
+                               for row in rows),
+                           "a competing negative exec must revoke pins durably, independent of arrival order")
+            store.close()
+
+    with tempfile.TemporaryDirectory() as root:
+        store = _review_store(root)
+        with mock.patch.object(lineage, "enrich_process", return_value=_engine_live(original)):
+            store.ingest([], process_nodes=[original, dict(original, audit_id="12"), negative])
+            store.ingest([], process_nodes=[dict(original, audit_id="13")])
+        rows = store.db.execute("SELECT payload,pinned FROM process_nodes").fetchall()
+        th.assert_true(all(not row["pinned"] and json.loads(row["payload"])["ambiguous"]
+                           for row in rows),
+                       "negative evidence must revoke every competitor, independent of query order")
+        store.db.execute("UPDATE process_nodes SET payload=?,pinned=1 WHERE generation='audit-10'",
+                         (json.dumps(original),))
+        with mock.patch.object(lineage, "enrich_process", return_value=_engine_live(original)):
+            store.ingest([])
+        repaired = store.db.execute("SELECT payload,pinned FROM process_nodes WHERE generation='audit-10'").fetchone()
+        th.assert_true(not repaired["pinned"] and json.loads(repaired["payload"])["ambiguous"],
+                       "refresh must revoke a legacy pin already stored beside negative evidence")
+        store.close()
+
+
 @th.unit_test("production CROND launch requires exact trusted syslog and PAM halves")
 def test_production_crond_launch_shape(opts):
     from mojo.mojosec.lineage import CROND_PAM_GRANTORS, CROND_SELINUX, crond_launch

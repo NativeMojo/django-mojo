@@ -327,6 +327,7 @@ class Store:
             "CREATE INDEX IF NOT EXISTS process_nodes_session ON process_nodes(boot_id,audit_session,updated_at)",
             "CREATE INDEX IF NOT EXISTS process_nodes_updated ON process_nodes(pinned,updated_at)",
             "CREATE INDEX IF NOT EXISTS process_nodes_audit_identity ON process_nodes(boot_id,generation)",
+            "CREATE INDEX IF NOT EXISTS process_nodes_audit_serial ON process_nodes(boot_id,json_extract(payload,'$.audit_id'))",
             """CREATE TABLE IF NOT EXISTS origin_sessions (
                 boot_id TEXT NOT NULL, audit_session INTEGER NOT NULL,
                 origin_kind TEXT NOT NULL, actor TEXT NOT NULL DEFAULT '',
@@ -643,16 +644,23 @@ class Store:
             (now - PROCESS_NODE_TTL_SECONDS,))
         self._refresh_process_pins(now)
         for item in process_nodes or ():
-            if not item.get("pid"):
-                continue
             item = dict(item)
             generation = f"audit-{item.get('audit_id', '')}"[:128]
             # Preserve an existing canonical row (including pre-upgrade rows)
             # when enrichment appears/disappears or the PID gets reused later.
             prior_rows = self.db.execute(
-                "SELECT rowid,generation,payload FROM process_nodes WHERE boot_id=? AND generation=? "
-                "UNION SELECT rowid,generation,payload FROM process_nodes WHERE boot_id=? AND pid=?",
-                (item["boot_id"], generation, item["boot_id"], item["pid"])).fetchall()
+                "SELECT rowid,generation,payload FROM process_nodes WHERE boot_id=? "
+                "AND json_extract(payload,'$.audit_id')=?",
+                (item["boot_id"], item.get("audit_id"))).fetchall()
+            if not item.get("pid"):
+                if not prior_rows:
+                    continue
+                # After fragment eviction a late EXECVE-only record has no
+                # SYSCALL PID. The Audit identity still revokes its retained
+                # canonical row; keep that row's PID/session discoverable.
+                prior = json.loads(prior_rows[0]["payload"])
+                item = dict(prior, ambiguous=True, pinned=False,
+                            incomplete=bool(item.get("incomplete") or prior.get("incomplete")))
             canonical_row = None
             for prior_row in prior_rows:
                 prior = json.loads(prior_row["payload"])
@@ -683,7 +691,8 @@ class Store:
             payload = canonical_json(item)
             if len(payload.encode()) > 8192:
                 item.update(ambiguous=True, pinned=False, argv=[], live_ancestors=[])
-                payload = canonical_json(item)
+            self._invalidate_competing_process_nodes(item)
+            payload = canonical_json(item)
             self.db.execute(
                 "INSERT INTO process_nodes(boot_id,pid,generation,audit_session,payload,"
                 "observed_at,updated_at,pinned) VALUES(?,?,?,?,?,?,?,?) "
@@ -810,6 +819,7 @@ class Store:
         for row in rows:
             live = enrich_process(row["pid"])
             node = json.loads(row["payload"])
+            self._invalidate_competing_process_nodes(node)
             if live_engine_identity(node, live):
                 node["pinned"] = True
                 self.db.execute(
@@ -820,6 +830,35 @@ class Store:
                 self.db.execute(
                     "UPDATE process_nodes SET pinned=0,payload=? WHERE rowid=?",
                     (canonical_json(node), row["rowid"]))
+
+    @staticmethod
+    def _competing_process_generation(left, right):
+        """Only distinct known PID start ticks can exclude a competitor."""
+        return bool(left.get("pid") == right.get("pid") and
+                    (left.get("start_ticks") is None or right.get("start_ticks") is None or
+                     left["start_ticks"] == right["start_ticks"]))
+
+    def _invalidate_competing_process_nodes(self, item):
+        rows = self.db.execute(
+            "SELECT rowid,payload FROM process_nodes WHERE boot_id=? AND pid=?",
+            (item["boot_id"], item["pid"])).fetchall()
+        peers = []
+        for row in rows:
+            peer = json.loads(row["payload"])
+            if (peer.get("audit_id") == item.get("audit_id") or
+                    not self._competing_process_generation(item, peer)):
+                continue
+            peers.append((row["rowid"], peer))
+        if self._eligible_process_node(item) and all(
+                self._eligible_process_node(peer) for _, peer in peers):
+            return
+        # Re-exec can retain PID/start ticks. Negative evidence must veto all
+        # competitors regardless of row/arrival order and survive replay.
+        item.update(ambiguous=True, pinned=False)
+        for rowid, peer in peers:
+            peer.update(ambiguous=True, pinned=False)
+            self.db.execute("UPDATE process_nodes SET payload=?,pinned=0 WHERE rowid=?",
+                            (canonical_json(peer), rowid))
 
     def _record_jobman_origins(self, now):
         anchors = self.db.execute(
@@ -1101,13 +1140,13 @@ class Store:
     def _one_pid_generation(nodes, pid, start_ticks, earliest, latest, exe=None):
         found = []
         for node in nodes:
-            if node.get("pid") != pid or not Store._eligible_process_node(node):
-                continue
-            if exe is not None and node.get("exe") != exe:
+            if node.get("pid") != pid:
                 continue
             node_ticks = node.get("start_ticks")
             if node_ticks is not None and node_ticks != start_ticks:
                 continue
+            if not Store._eligible_process_node(node):
+                return None
             monotonic = node.get("monotonic")
             if node_ticks is None and not (
                     isinstance(monotonic, int) and
@@ -1116,13 +1155,17 @@ class Store:
             found.append(node)
         # More than one Audit exec generation for a PID in the proof window is
         # a reuse/order ambiguity, never a reason to guess.
-        return found[0] if len(found) == 1 else None
+        return (found[0] if len(found) == 1 and
+                (exe is None or found[0].get("exe") == exe) else None)
 
     @staticmethod
     def _parent_node(nodes, child):
-        found = [node for node in nodes
-                 if node.get("pid") == child.get("ppid") and
-                 Store._eligible_process_node(node)]
+        candidates = [node for node in nodes if node.get("pid") == child.get("ppid")]
+        found = [node for node in candidates if Store._eligible_process_node(node)]
+        if any(not Store._eligible_process_node(peer) and
+               Store._competing_process_generation(node, peer)
+               for node in found for peer in candidates):
+            return None
         if len(found) == 1:
             return found[0]
         # Several exec generations of one parent PID are safe only when one is
