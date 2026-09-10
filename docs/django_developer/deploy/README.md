@@ -282,6 +282,13 @@ detaches a recycle of both the engine and the scheduler. This bridge runs only
 after nginx and the API have passed; a broken candidate never needs Django to
 initiate rollback.
 
+When a locator shim starts the packaged updater as the application account,
+the updater carries that parent-owned-status bit through its passwordless
+`sudo` re-entry as a private argument and restores it inside the root
+transaction. This is deliberate: normal `sudo` environment reset removes the
+variable. Losing it would make a current canary look like a predecessor, report
+success twice, and prevent the parent from scheduling the JobEngine recycle.
+
 ## Rolling an updater release across existing fleets
 
 Do not SSH into every node. Use the fleet's remote-execution plane (for

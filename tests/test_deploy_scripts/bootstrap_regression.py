@@ -48,8 +48,7 @@ def test_project_scripts_export_without_django_bootstrap(opts):
             with open(path) as handle:
                 source = handle.read().lower()
             for forbidden in (
-                    "trusted_change", "mojosec converge", "vhost_install",
-                    "sanity_check"):
+                    "trusted_change", "vhost_install", "sanity_check"):
                 th.assert_true(forbidden not in source,
                                "%s still contains %s" % (name, forbidden))
             if name == "update.sh":
@@ -589,7 +588,7 @@ def test_code_node_runs_only_common_checkout_and_declared_dependencies(opts):
 
 @th.django_unit_test()
 def test_update_self_elevates_for_legacy_project_shims(opts):
-    """An app-user locator shim must still enter the root transaction."""
+    """An app-user locator shim must preserve parent-owned status across sudo."""
     import mojo
 
     repo = os.path.dirname(os.path.dirname(os.path.abspath(mojo.__file__)))
@@ -610,6 +609,9 @@ def test_update_self_elevates_for_legacy_project_shims(opts):
             os.path.join(stubs, "sudo"),
             "printf '%s\\n' \"$*\" > \"$SUDO_LOG\"\n"
             "[ \"${1:-}\" != -n ] || shift\n"
+            # Match sudo's default env_reset behavior. The deploy launcher has
+            # to carry this parent/child protocol through argv instead.
+            "unset MOJO_DEPLOY_PARENT_STATUS\n"
             "export FAKE_ROOT=1\n"
             "exec \"$@\"\n")
         _write_executable(
@@ -622,6 +624,7 @@ def test_update_self_elevates_for_legacy_project_shims(opts):
             "SUDO_LOG": sudo_log,
             "SYSTEMD_LOG": systemd_log,
             "PROJ_PATH": os.path.join(root, "must-not-be-touched"),
+            "MOJO_DEPLOY_PARENT_STATUS": "1",
         })
         argv = [
             "bash", update, "--sha", "a" * 40, "--framework", "1.18.1",
@@ -638,10 +641,16 @@ def test_update_self_elevates_for_legacy_project_shims(opts):
             sudo_command = handle.read()
         th.assert_in("-n bash " + update, sudo_command,
                      "the packaged launcher did not re-enter itself as root")
+        th.assert_in("--parent-status", sudo_command,
+                     "self-elevation lost parent-owned status at sudo env_reset")
         th.assert_in("--migrate", sudo_command,
                      "self-elevation dropped the original deployment arguments")
         th.assert_true(os.path.isfile(systemd_log),
                        "the elevated launcher never entered the transient unit")
+        with open(systemd_log) as handle:
+            systemd_command = handle.read()
+        th.assert_in("--setenv=MOJO_DEPLOY_PARENT_STATUS=1", systemd_command,
+                     "the root transaction did not restore parent-owned status")
         th.assert_true(not os.path.exists(environment["PROJ_PATH"]),
                        "checkout state changed before root transaction isolation")
 

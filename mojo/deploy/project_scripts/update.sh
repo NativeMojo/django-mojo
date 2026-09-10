@@ -70,7 +70,14 @@ APP_USER_CANDIDATE="${APP_USER:-}"
 RUN_UID="$(id -u)"
 if [ "$RUN_UID" != "0" ] && [ "${MOJO_DEPLOY_NO_SYSTEMD:-0}" != "1" ]; then
     self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-    exec sudo -n bash "$self" "$@"
+    parent_status_args=()
+    if [ -n "${MOJO_DEPLOY_PARENT_STATUS:-}" ]; then
+        # sudo's default env_reset drops the marker by design. Carry this one
+        # bit of framework-owned protocol through argv, then restore it only
+        # inside the privileged transaction below.
+        parent_status_args+=(--parent-status)
+    fi
+    exec sudo -n bash "$self" "${parent_status_args[@]}" "$@"
 fi
 TRANSACTION_ROOT="/var/lib/django-mojo-deploy"
 if [ "$RUN_UID" != "0" ] && [ -n "${MOJO_DEPLOY_STATE_ROOT:-}" ]; then
@@ -369,6 +376,7 @@ NODE_TYPE="api"
 MIGRATE=0
 MANUAL=0
 TRANSACTION=0
+PARENT_STATUS=0
 ORIGINAL_ARGS=("$@")
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -379,9 +387,15 @@ while [ "$#" -gt 0 ]; do
         --migrate) MIGRATE=1; shift ;;
         --manual) MANUAL=1; shift ;;
         --transaction) TRANSACTION=1; shift ;;
+        --parent-status) PARENT_STATUS=1; shift ;;
         *) usage; exit 2 ;;
     esac
 done
+
+if [ "$PARENT_STATUS" = "1" ]; then
+    MOJO_DEPLOY_PARENT_STATUS=1
+    export MOJO_DEPLOY_PARENT_STATUS
+fi
 
 valid_node_type "$NODE_TYPE" || die "invalid node type"
 if [ "$NODE_TYPE" != "api" ] && [ "$MIGRATE" = "1" ]; then

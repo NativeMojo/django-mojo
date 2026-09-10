@@ -79,7 +79,10 @@ Existing API projects do not need a source change when their update shim calls
 `python3 -m mojo.deploy locate update.sh`; that is the permanent supported
 endpoint. The packaged launcher enters through passwordless `sudo` itself when
 an existing project command starts that shim as the application account; the
-default deployment command already starts it through `sudo` directly.
+default deployment command already starts it through `sudo` directly. The
+launcher preserves the framework's parent-managed status across that `sudo`
+boundary, so the healthy candidate reports success once and the parent then
+recycles the JobEngine and scheduler exactly once.
 
 The trigger itself has no polling endpoint. Platform operators can inspect the
 durable deployment journal through `GET /api/account/admin/platform` and use
