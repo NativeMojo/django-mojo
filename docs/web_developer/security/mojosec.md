@@ -361,7 +361,7 @@ For broker child commands, AL2023 Audit records the resolved kernel executable
 `/sbin/*` argv path. Proof accepts only the known logical/resolved pair while
 still matching the exact argv path and digest from the broker receipt. If the
 short-lived process exits before start-tick enrichment, its exact Audit PID
-record must be within two seconds of the receipt pair. A terminal,
+record must be within five seconds of the receipt pair. A terminal,
 kernel-confirmed failed `execve` does not create a new process generation;
 missing, incomplete, or conflicting Audit outcomes still remain central.
 
