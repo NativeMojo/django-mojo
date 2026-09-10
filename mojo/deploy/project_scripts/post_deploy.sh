@@ -66,7 +66,15 @@ ASGI_WORKERS="${ASGI_WORKERS:-4}"
 NGINX_ETC="${NGINX_ETC:-/etc/nginx}"
 SYSTEMD_ETC="${SYSTEMD_ETC:-/etc/systemd/system}"
 CRON_ETC="${CRON_ETC:-/etc/cron.d}"
-JOBMAN_CRON_READY_SECONDS="${JOBMAN_CRON_READY_SECONDS:-75}"
+if [ "$(id -u)" = "0" ]; then
+    # Root never accepts an ambient interpreter path. `-E -P` below removes
+    # application environment and project cwd from the import search path.
+    JOBMAN_SYSTEM_PYTHON="/usr/bin/python3"
+    JOBMAN_SUDO="/usr/bin/sudo"
+else
+    JOBMAN_SYSTEM_PYTHON="${JOBMAN_SYSTEM_PYTHON:-/usr/bin/python3}"
+    JOBMAN_SUDO="${JOBMAN_SUDO:-/usr/bin/sudo}"
+fi
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() { echo "[$(date '+%H:%M:%S')] FATAL: $*" >&2; exit 1; }
@@ -92,8 +100,6 @@ done
 [ -n "$ACTION" ] || die "missing activation action"
 valid_node_type "$NODE_TYPE" || die "invalid node type"
 [ -n "$STATE" ] && [ -d "$STATE" ] || die "missing deployment transaction state"
-[[ "$JOBMAN_CRON_READY_SECONDS" =~ ^[0-9]+$ ]] ||
-    die "JOBMAN_CRON_READY_SECONDS must be a non-negative integer"
 if [ "$NODE_TYPE" != "api" ] && [ "$MIGRATE" = "1" ]; then
     die "only api nodes may migrate"
 fi
@@ -243,28 +249,20 @@ remove_retired() {
 }
 
 prepare_jobman_cron_restart() {
-    local waited=0 cron_path="$CRON_ETC/3_mojo_jobs"
+    local cron_path="$CRON_ETC/3_mojo_jobs"
     set_phase jobman_restart_preflight
     if ! systemctl is-active --quiet crond.service; then
         systemctl is-active --quiet cron.service ||
             die "cron service is not active; refusing JobEngine retirement"
     fi
-    python3 -m mojo.deploy.jobman repair \
-        --root "$PROJ_PATH" --app-user "$APP_USER" --cron-path "$cron_path" ||
+    (cd / && "$JOBMAN_SYSTEM_PYTHON" -E -P -m mojo.deploy.jobman repair \
+        --root "$PROJ_PATH" --app-user "$APP_USER" --cron-path "$cron_path") ||
         die "jobman ownership repair failed"
-    until python3 -m mojo.deploy.jobman ready \
-            --root "$PROJ_PATH" --app-user "$APP_USER" \
-            --cron-path "$cron_path" >/dev/null 2>&1; do
-        [ "$waited" -lt "$JOBMAN_CRON_READY_SECONDS" ] ||
-            die "installed jobs cron did not execute after ownership repair"
-        sleep 1
-        waited=$((waited + 1))
-        if ! systemctl is-active --quiet crond.service; then
-            systemctl is-active --quiet cron.service ||
-                die "cron service stopped during JobEngine readiness wait"
-        fi
-    done
-    log "Proved fresh cron Jobman execution"
+    "$JOBMAN_SUDO" -n -H -u "$APP_USER" -- \
+        "$JOBMAN_SYSTEM_PYTHON" -E -P -m mojo.deploy.jobman preflight \
+        --root "$PROJ_PATH" --app-user "$APP_USER" --cron-path "$cron_path" ||
+        die "cron account cannot execute Jobman safely"
+    log "Verified cron service and Jobman launch permissions"
 }
 
 probe_api() {

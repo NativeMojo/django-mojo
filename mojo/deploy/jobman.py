@@ -14,12 +14,10 @@ then a bounded wait for the corpse. A surviving process makes the command fail;
 the deploy handoff logs that refusal instead of claiming the cron restart began.
 
 `repair` is the root-only, no-spawn half of a deployment restart. It gives only
-jobman's own pid/log/readiness files back to the exact account named by the
-installed cron entry, then clears the previous readiness marker. A later
-application-account `start` validates its writable launch surface and writes a
-fresh marker. `ready` accepts only that recent, single-link regular marker. The
-deployment therefore proves the installed cron entry actually executed before
-it retires the current engine; only the following cron tick starts replacements.
+jobman's own pid/log files back to the exact account named by the installed cron
+entry. `preflight` then runs as that account and checks the writable launch
+surface before the current processes retire. The next cron tick starts their
+replacements in a fresh audit session.
 
 WHAT THIS MANAGES, AND WHAT IT DELIBERATELY DOES NOT. There are two job process
 planes on a node and they are disjoint:
@@ -251,10 +249,7 @@ def ensure_dirs(root):
 # node_setup own the directory policy), so a broad chown would strip the web
 # account's access to its own logs.
 JOBMAN_OWNED = ("job_engine.pid", "job_scheduler.pid", "job_engine.log",
-                "job_scheduler.log", "jobman.log", "jobman_cron_ready")
-
-READY_NAME = "jobman_cron_ready"
-READY_MAX_AGE_SECONDS = 120
+                "job_scheduler.log", "jobman.log")
 
 # Fixed locations only — never $PATH. This argv is exec'd by a root process
 # whose environment (and therefore PATH) came from whoever spawned it.
@@ -346,10 +341,6 @@ def repair_ownership(root, user):
     return ok
 
 
-def readiness_path(root):
-    return os.path.join(pid_dir(root), READY_NAME)
-
-
 def _cron_user(root, candidate=None, cron_path=None):
     """The exact valid account declared by the installed jobs cron entry."""
     if cron_path is None:
@@ -376,21 +367,12 @@ def _cron_user(root, candidate=None, cron_path=None):
 
 
 def cmd_repair(root, candidate=None, cron_path=None):
-    """Repair only jobman's files and invalidate the previous cron proof."""
+    """Repair only jobman's files; never spawn or trust app-written proof."""
     if os.geteuid() != 0:
         print("jobman: repair requires root", file=sys.stderr)
         return 1
     user = _cron_user(root, candidate=candidate, cron_path=cron_path)
     if not user or not repair_ownership(root, user):
-        return 1
-    marker = readiness_path(root)
-    try:
-        os.unlink(marker)
-    except FileNotFoundError:
-        pass
-    except OSError as err:
-        print("jobman: cannot clear previous cron readiness %s: %s"
-              % (marker, err), file=sys.stderr)
         return 1
     print("Jobman files repaired for cron account %s" % user)
     return 0
@@ -422,61 +404,25 @@ def _start_preflight(root, runner_path):
     return None
 
 
-def record_start_readiness(root, runner_path):
-    """Publish proof that this application-account start can launch safely."""
+def cmd_preflight(root, runner_path, candidate=None, cron_path=None):
+    """Prove the exact cron account can use Jobman's launch surface."""
+    if os.geteuid() == 0:
+        print("jobman: preflight must run as the cron account", file=sys.stderr)
+        return 1
+    user = _cron_user(root, candidate=candidate, cron_path=cron_path)
+    try:
+        current = pwd.getpwuid(os.geteuid()).pw_name
+    except KeyError:
+        current = None
+    if not user or current != user:
+        print("jobman: preflight identity does not match installed jobs cron",
+              file=sys.stderr)
+        return 1
     problem = _start_preflight(root, runner_path)
     if problem:
         print("jobman: %s" % problem, file=sys.stderr)
-        return False
-    path = readiness_path(root)
-    flags = os.O_WRONLY | os.O_CREAT
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(path, flags, 0o644)
-    except OSError as err:
-        print("jobman: cannot create cron readiness %s: %s"
-              % (path, err), file=sys.stderr)
-        return False
-    try:
-        found = os.fstat(fd)
-        if (not stat.S_ISREG(found.st_mode) or found.st_nlink != 1
-                or found.st_uid != os.geteuid()):
-            print("jobman: refusing unsafe cron readiness %s" % path,
-                  file=sys.stderr)
-            return False
-        os.fchmod(fd, 0o644)
-        os.ftruncate(fd, 0)
-        os.write(fd, ("%d %d\n" % (os.getpid(), time.time_ns())).encode())
-        os.fsync(fd)
-    except OSError as err:
-        print("jobman: cannot publish cron readiness %s: %s"
-              % (path, err), file=sys.stderr)
-        return False
-    finally:
-        os.close(fd)
-    return True
-
-
-def cmd_ready(root, candidate=None, cron_path=None):
-    """Prove a recent exact cron-account start invocation, without spawning."""
-    if os.geteuid() != 0:
-        print("jobman: ready requires root", file=sys.stderr)
         return 1
-    user = _cron_user(root, candidate=candidate, cron_path=cron_path)
-    if not user:
-        return 1
-    uid = pwd.getpwnam(user).pw_uid
-    path = readiness_path(root)
-    try:
-        found = os.lstat(path)
-    except OSError:
-        return 1
-    age = time.time() - found.st_mtime
-    if (not stat.S_ISREG(found.st_mode) or found.st_nlink != 1
-            or found.st_uid != uid or found.st_mode & 0o022
-            or age < -5 or age > READY_MAX_AGE_SECONDS):
-        return 1
-    print("Recent cron Jobman readiness proven for %s" % user)
+    print("Jobman launch surface ready for cron account %s" % user)
     return 0
 
 
@@ -582,9 +528,50 @@ def probe(root, runner_path, comp):
     """(pidfile path, pidfile present, managed PID or "", pgrep matches)."""
     path = pidfile(root, comp)
     present, pid = read_pidfile(path)
-    managed = pid if (pid and pid_alive(pid)) else ""
     matches = pgrep_matches(pattern_for(root, runner_path, comp))
+    # The pidfile is application-writable. It describes the managed member
+    # only when the independent expected-command scan finds the same PID.
+    managed = pid if (pid and pid in matches and pid_alive(pid)) else ""
     return path, present, managed, matches
+
+
+def _root_process_matches(pid, root, runner_path, comp):
+    """Recheck one elevated signal target's exact Jobman command line."""
+    proc = "/proc/%s" % pid
+    try:
+        with open(os.path.join(proc, "cmdline"), "rb") as handle:
+            argv = [part.decode("utf-8", "surrogateescape")
+                    for part in handle.read(65536).split(b"\0") if part]
+    except OSError:
+        return False
+    if len(argv) != 4 or argv[2:] != [comp, "foreground"]:
+        return False
+    relative = os.path.relpath(runner_path, root)
+    if argv[1] == runner_path:
+        return True
+    if argv[1] not in (relative, "./" + relative):
+        return False
+    try:
+        return (os.path.realpath(os.readlink(os.path.join(proc, "cwd")))
+                == os.path.realpath(root))
+    except OSError:
+        return False
+
+
+def verified_root_pids(pids, root, runner_path, comp):
+    """Return exact live Jobman targets and any live mismatches."""
+    verified = []
+    refused = []
+    for pid in pids:
+        if not pid.isdigit() or int(pid) <= 1:
+            refused.append(pid)
+            continue
+        if not _root_process_matches(pid, root, runner_path, comp):
+            if pid_alive(pid):
+                refused.append(pid)
+            continue
+        verified.append(pid)
+    return verified, refused
 
 
 def signal_pids(pids, sig):
@@ -718,11 +705,9 @@ def cmd_stop(root, runner_path, comp, grace=None):
     if grace is None:
         grace = TERM_POLLS * TERM_POLL_SECONDS
 
-    # Union of the managed PID and everything pgrep found. sorted(set(...)) is a
-    # LEXICAL sort over strings, which is what `sort -u` did.
-    pids = [managed] if managed else []
-    if matches:
-        pids = sorted(set(pids + matches))
+    # Signal authority comes only from the independent expected-command scan,
+    # never the app-writable pidfile. The pidfile remains status/cleanup state.
+    pids = sorted(set(pid for pid in matches if pid.isdigit()))
 
     if not pids:
         if present:
@@ -732,29 +717,44 @@ def cmd_stop(root, runner_path, comp, grace=None):
             print("%s not running" % name)
         return 0
 
+    if os.geteuid() == 0:
+        pids, refused = verified_root_pids(
+            pids, root, runner_path, comp)
+        if refused:
+            print("%s stop refused unverified PIDs: %s"
+                  % (name, " ".join(refused)))
+            return 1
+
     print("Stopping %s (PIDs: %s)..." % (name, " ".join(pids)))
     signal_pids(pids, signal.SIGTERM)
-
     remaining = wait_gone(pids, grace, TERM_POLL_SECONDS)
     survivors = []
     if remaining:
-        print("Force killing %s (PIDs: %s)..." % (name, " ".join(remaining)))
-        signal_pids(remaining, signal.SIGKILL)
+        if os.geteuid() == 0:
+            remaining, refused = verified_root_pids(
+                remaining, root, runner_path, comp)
+            if refused:
+                print("%s SIGKILL refused unverified PIDs: %s"
+                      % (name, " ".join(refused)))
+                return 1
+        if remaining:
+            print("Force killing %s (PIDs: %s)..."
+                  % (name, " ".join(remaining)))
+            signal_pids(remaining, signal.SIGKILL)
+            survivors = wait_gone(
+                remaining, KILL_WAIT_SECONDS, KILL_POLL_SECONDS)
         # WAIT FOR THE KILL. Signalling is not stopping: this used to fall
-        # straight through, so `stop` returned with the process still dying,
-        # the pidfile still naming it, and the caller's next `start` reporting
-        # "already running" and starting nothing. The deploy handoff now needs
-        # a truthful nonzero result before it leaves replacement to cron.
-        survivors = wait_gone(remaining, KILL_WAIT_SECONDS, KILL_POLL_SECONDS)
+        # straight through, so `stop` returned while the process survived.
         if survivors:
             print("%s did not exit after SIGKILL (PIDs: %s)"
                   % (name, " ".join(survivors)))
 
-    # Only remove the pidfile once ITS pid is gone. A pidfile naming a process
-    # that survived the kill is information, not litter.
+    # Remove an unmatched/stale pidfile after success. If cron raced the stop
+    # and already wrote a new expected PID, preserve that new manager record.
     if os.path.isfile(path):
         _, current = read_pidfile(path)
-        if not current or not pid_alive(current):
+        fresh = pgrep_matches(pattern_for(root, runner_path, comp))
+        if not current or current not in fresh:
             remove_file(path)
     if survivors:
         print("%s stop failed" % name)
@@ -764,7 +764,7 @@ def cmd_stop(root, runner_path, comp, grace=None):
 
 
 VERBS = {"start": cmd_start, "stop": cmd_stop, "status": cmd_status,
-         "repair": cmd_repair, "ready": cmd_ready}
+         "repair": cmd_repair, "preflight": cmd_preflight}
 
 
 # ---------------------------------------------------------------------------
@@ -793,9 +793,9 @@ def main(argv):
     parser.add_argument("--verbose", action="store_true",
                         help="log diagnostics to stderr")
     parser.add_argument("--app-user", default=None,
-                        help="repair/ready: expected installed cron account")
+                        help="repair/preflight: expected installed cron account")
     parser.add_argument("--cron-path", default=None,
-                        help="repair/ready: installed jobs cron path")
+                        help="repair/preflight: installed jobs cron path")
     args = parser.parse_args(argv)
     if args.grace is not None:
         # A usage error, not a silently ignored flag. It is also exit 2, which
@@ -826,16 +826,20 @@ def main(argv):
               file=sys.stderr)
         return 1
 
-    if args.command in ("repair", "ready"):
+    if args.command in ("repair", "preflight"):
         if args.component is not None:
             parser.error("%s does not accept a component" % args.command)
         if args.runner or args.grace is not None or args.verbose:
             parser.error("%s accepts only --root, --app-user and --cron-path"
                          % args.command)
-        return VERBS[args.command](
+        if args.command == "preflight":
+            return cmd_preflight(
+                root, runner_path, candidate=args.app_user,
+                cron_path=args.cron_path)
+        return cmd_repair(
             root, candidate=args.app_user, cron_path=args.cron_path)
     if args.app_user or args.cron_path:
-        parser.error("--app-user/--cron-path apply only to repair and ready")
+        parser.error("--app-user/--cron-path apply only to deploy gates")
 
     # BEFORE ensure_dirs: a root ensure_dirs on a fresh box would create
     # root-owned var directories — the exact brick the demotion exists to
@@ -865,8 +869,11 @@ def main(argv):
               file=sys.stderr)
         return 1
 
-    if args.command == "start" and not record_start_readiness(root, runner_path):
-        return 1
+    if args.command == "start":
+        problem = _start_preflight(root, runner_path)
+        if problem:
+            print("jobman: %s" % problem, file=sys.stderr)
+            return 1
 
     # Every verb dispatches uniformly as handler(root, runner_path, comp); the
     # partial is how --grace reaches cmd_stop without giving the other two a

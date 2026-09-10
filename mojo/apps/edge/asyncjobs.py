@@ -457,17 +457,17 @@ def _recycle_command():
 
     Bare `stop` on purpose — jobman's bare verb walks engine then scheduler
     (item #3429). Fixed non-interactive sudo preserves authority over any stale
-    root-owned component, and `ready` rechecks the fresh cron proof immediately
-    before retirement. The installed every-minute cron entry owns `start`:
+    root-owned component. The installed every-minute cron entry owns `start`:
     launching from cron gives the new JobEngine a fresh, independently auditable
     origin instead of inheriting the retiring engine's audit session. Every
     bounded outcome is written to the journal through fixed `/usr/bin/logger`.
     """
     return (
         'sleep 2; '
-        'if /usr/bin/sudo -n -- "$1" -m mojo.deploy.jobman ready '
-        '--root "$2" && /usr/bin/sudo -n -- "$1" '
-        '-m mojo.deploy.jobman stop --root "$2" --grace 2; then '
+        'if (/usr/bin/systemctl is-active --quiet crond.service '
+        '|| /usr/bin/systemctl is-active --quiet cron.service) '
+        '&& (cd / && /usr/bin/sudo -n -- /usr/bin/python3 -E -P '
+        '-m mojo.deploy.jobman stop --root "$1" --grace 2); then '
         '/usr/bin/logger -t mojo-deploy-recycle -- '
         '"job engine and scheduler stopped for cron restart"; '
         'else rc=$?; /usr/bin/logger -p user.err -t mojo-deploy-recycle -- '
@@ -478,7 +478,6 @@ def _recycle_engine_after_return():
     """Detach the recycle so the current job can finish normally."""
     import os
     import subprocess
-    import sys
 
     from django.conf import settings as django_settings
 
@@ -489,8 +488,7 @@ def _recycle_engine_after_return():
         return
     root = django_settings.PROJECT_ROOT
     subprocess.Popen(
-        ["bash", "-c", _recycle_command(), "deploy-recycle", sys.executable,
-         root],
+        ["bash", "-c", _recycle_command(), "deploy-recycle", root],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, start_new_session=True,
         env=os.environ.copy())

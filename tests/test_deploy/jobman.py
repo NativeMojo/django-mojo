@@ -19,7 +19,6 @@ would land in the middle of what it parses.
 
 import os
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -534,12 +533,11 @@ def test_stop_returns_only_once_the_engine_is_actually_dead(opts):
 
 @th.tier("extended")
 @th.django_unit_test()
-def test_cron_start_records_fresh_readiness_before_an_already_running_result(opts):
-    """The deploy gate clears this marker, so only a later successful cron
-    execution may recreate it. The common already-running path must do so."""
-    from mojo.deploy import jobman
-
+def test_cron_start_preflights_jobman_log_before_already_running(opts):
+    """Even the already-running path must prove cron can write every Jobman
+    file before reporting success."""
     base, root, stubs, ctl = _fixture()
+    blocked = os.path.join(root, "var", "logs", "jobman.log")
     try:
         os.makedirs(os.path.join(root, "var", "logs"), exist_ok=True)
         os.makedirs(os.path.join(root, "bin"), exist_ok=True)
@@ -553,19 +551,21 @@ def test_cron_start_records_fresh_readiness_before_an_already_running_result(opt
         _set_alive(ctl, [1000, 1100])
         _set_pgrep(ctl, "engine", [1000])
         _set_pgrep(ctl, "scheduler", [1100])
+        with open(blocked, "w") as handle:
+            handle.write("root poisoned\n")
+        os.chmod(blocked, 0o400)
 
         done = _run(["start", "--root", root], stubs, ctl)
-        marker = jobman.readiness_path(root)
 
-        th.assert_eq(done.returncode, 0, done.stderr.decode("utf-8", "replace"))
-        th.assert_true(os.path.isfile(marker),
-                       "a successful cron start tick must publish readiness")
-        found = os.lstat(marker)
-        th.assert_true(stat.S_ISREG(found.st_mode) and found.st_nlink == 1,
-                       "the readiness proof must be a single regular file")
-        th.assert_eq(found.st_uid, os.geteuid(),
-                     "the cron account itself must own its readiness proof")
+        th.assert_eq(done.returncode, 1,
+                     "an unwritable cron redirect target must fail preflight")
+        th.assert_in("jobman.log", done.stderr.decode("utf-8", "replace"),
+                     "the refusal must name the blocked cron log")
     finally:
+        try:
+            os.chmod(blocked, 0o644)
+        except OSError:
+            pass
         shutil.rmtree(base, ignore_errors=True)
 
 

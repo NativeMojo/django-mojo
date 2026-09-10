@@ -81,29 +81,27 @@ timed-out transaction. Restarting the job engine therefore cannot orphan an
 update. The parent process waits beyond both windows instead of killing a
 legitimate rollback.
 
-Before an API activation commits, the root transaction repairs only Jobman's
-pid, log, and readiness files to the exact account in the installed jobs cron,
-clears the previous readiness marker, and waits up to 75 seconds by default for
-that cron entry to execute successfully. An active cron daemon alone is not
-sufficient: the fresh marker proves the entry parsed, its shell redirection
-worked, and the application account can write every launch file. Failure leaves
-the current engine running and rolls the candidate back. The configurable
-`JOBMAN_CRON_READY_SECONDS` bound is documented with the Jobman deployment
-tools.
+Before an API activation commits, the root transaction requires the host cron
+service to be active, repairs only Jobman's pid and log files to the exact
+account in the installed jobs cron, and runs a no-spawn launch preflight as that
+account. This catches the practical outage cases without making deployment
+depend on the security sensor: a stopped cron daemon, stale root ownership, or
+an unwritable runner surface leaves the current engine running and rolls the
+candidate back.
 
 Current parents record node evidence after the script returns. API nodes then
 detach a bounded, journaled root stop of both the job engine and scheduler so
 the completed job can be acknowledged before the old processes exit. The stop
-rechecks the fresh cron proof and logs under `mojo-deploy-recycle`; it exits
-nonzero rather than logging success if any process survives. Because the
-handoff is detached after node evidence is recorded, that failure is an
-operational alarm rather than a rollback of the activated release. The
-installed every-minute cron entry starts both replacements in a fresh audit
-session; starting them from the retiring engine would inherit its session and
-prevent MojoSec from proving JobEngine-originated firewall work. `code` nodes
-receive no generic restart. A custom profile owns its service restart; if that
-restart kills the caller, the replacement engine consumes the transaction's
-bounded outcome and exact local identity to finalize the same deployment UUID.
+logs under `mojo-deploy-recycle` and exits nonzero rather than logging success
+if any process survives. Because the handoff is detached after node evidence is
+recorded, that failure is an operational alarm rather than a rollback of the
+activated release. The installed every-minute cron entry starts both
+replacements in a fresh audit session; starting them from the retiring engine
+would inherit its session and prevent MojoSec from proving JobEngine-originated
+firewall work. `code` nodes receive no generic restart. A custom profile owns
+its service restart; if that restart kills the caller, the replacement engine
+consumes the transaction's bounded outcome and exact local identity to finalize
+the same deployment UUID.
 
 One predecessor-generation callback remains solely for API adoption: when the
 parent does not set `MOJO_DEPLOY_PARENT_STATUS`, the healthy migrating canary

@@ -195,10 +195,12 @@ def test_recycle_command_leaves_restart_to_cron(opts):
     from mojo.apps.edge import asyncjobs
 
     command = asyncjobs._recycle_command()
-    th.assert_in('-m mojo.deploy.jobman stop --root "$2" --grace 2', command,
+    th.assert_in('-m mojo.deploy.jobman stop --root "$1" --grace 2', command,
                  "the recycle must stop BOTH components (bare stop verb)")
-    th.assert_in('/usr/bin/sudo -n -- "$1"', command,
-                 "the detached stop must retain authority over root leftovers")
+    th.assert_in('/usr/bin/sudo -n -- /usr/bin/python3 -E -P', command,
+                 "root stop must use the fixed safe-path system interpreter")
+    th.assert_true('"$1" -m mojo.deploy.jobman' not in command,
+                   "an app-selected interpreter must never cross sudo")
     th.assert_true("mojo.deploy.jobman start" not in command,
                    "a direct restart inherits an unprovable deploy audit session")
     th.assert_true(" stop engine" not in command,

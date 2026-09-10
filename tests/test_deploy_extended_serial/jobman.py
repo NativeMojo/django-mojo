@@ -154,6 +154,26 @@ def test_stop_reports_failure_when_a_process_survives_sigkill(opts):
 
 
 @th.django_unit_test()
+def test_stop_never_signals_a_live_pidfile_target_without_command_proof(opts):
+    """Pidfiles are application-writable. Root stop must not let one redirect
+    TERM/KILL to PID 1 or an unrelated privileged daemon."""
+    from mojo.deploy import jobman
+
+    with mock.patch.object(
+            jobman, "probe",
+            return_value=("/opt/api/var/pids/job_engine.pid",
+                          True, "1", [])), \
+            mock.patch.object(jobman, "signal_pids") as signal_pids:
+        result = jobman.cmd_stop(
+            "/opt/api", "/opt/api/bin/jobs.py", "engine", grace=0)
+
+    th.assert_eq(result, 0,
+                 "an unmatched pidfile is stale state, not a signal target")
+    th.assert_true(not signal_pids.called,
+                   "an unproven pidfile PID must never receive a signal")
+
+
+@th.django_unit_test()
 def test_root_resolution_prefers_flag_then_env_then_cwd(opts):
     from mojo.deploy import jobman as jm
 
