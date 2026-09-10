@@ -457,9 +457,12 @@ deployment itself does not call this tool.
 ### `jobman`
 
 `python3 -m mojo.deploy.jobman` starts, stops, and reports the foreground job
-engine and scheduler. Cron remains the normal start backstop. A successful
-deployment schedules a recycle of both components only after the invoking job
-has returned and recorded its result.
+engine and scheduler. Cron is the normal start authority, not merely a
+backstop. A successful API deployment schedules a stop of both components only
+after the invoking job has returned and recorded its result; the installed
+every-minute cron entry starts their replacements. That fresh cron session is
+part of the MojoSec proof for firewall work, so the deploy process must not
+start the replacements directly.
 
 `start` runs `bin/jobs.py` through jobman's absolute current Python executable,
 not through the project's `/usr/bin/env` shebang. Besides pinning the child to

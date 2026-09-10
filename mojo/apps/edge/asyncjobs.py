@@ -453,20 +453,17 @@ def _node_deploy_failed(deployment_id, sha, job, migrate, phase, message,
 
 
 def _recycle_command():
-    """The detached shell that replaces this node's job processes.
+    """The detached shell that retires this node's job processes.
 
-    Bare `stop`/`start` on purpose — jobman's bare verbs walk engine then
-    scheduler (item #3429): the scheduler must also pick up the release just
-    deployed, and on a node poisoned with root-owned job processes this
-    recycle is the only root-context event, so an engine-scoped recycle would
-    leave a root scheduler running old code forever. A root `stop` can kill
-    root processes; the replacement `start` demotes itself to the application
-    account (see mojo/deploy/jobman.py).
+    Bare `stop` on purpose — jobman's bare verb walks engine then scheduler
+    (item #3429), and a root stop can retire root-owned leftovers. The installed
+    every-minute cron entry owns `start`: launching from cron gives the new
+    JobEngine a fresh, independently auditable origin instead of inheriting the
+    retiring engine's audit session. Starting here would make otherwise valid
+    firewall broker work impossible for MojoSec to prove.
     """
-    return (
-        'sleep 2; "$1" -m mojo.deploy.jobman stop --root "$2" '
-        '--grace 2; sleep 1; "$1" -m mojo.deploy.jobman start '
-        '--root "$2"')
+    return ('sleep 2; "$1" -m mojo.deploy.jobman stop --root "$2" '
+            '--grace 2')
 
 
 def _recycle_engine_after_return():
