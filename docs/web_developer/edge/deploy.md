@@ -80,9 +80,12 @@ Existing API projects do not need a source change when their update shim calls
 endpoint. The packaged launcher enters through passwordless `sudo` itself when
 an existing project command starts that shim as the application account; the
 default deployment command already starts it through `sudo` directly. The
-launcher preserves the framework's parent-managed status across that `sudo`
-boundary, so the healthy candidate reports success once and the parent then
-recycles the JobEngine and scheduler exactly once.
+default command carries the framework's parent-managed status after its `sudo`
+boundary, while a non-root locator shim preserves the same bit through its own
+elevation. The healthy candidate therefore reports success once and the parent
+then recycles the JobEngine and scheduler exactly once. A custom command that
+places another `sudo` in front of the packaged updater must explicitly preserve
+that contract or be converted to one of these supported shapes.
 
 The trigger itself has no polling endpoint. Platform operators can inspect the
 durable deployment journal through `GET /api/account/admin/platform` and use

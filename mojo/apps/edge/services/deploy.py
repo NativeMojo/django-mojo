@@ -237,7 +237,8 @@ def deploy_script_argv():
     """
     default = [
         "sudo", "-n", "bash", "-c",
-        'exec bash "$(python3 -m mojo.deploy locate update.sh)" "$@"',
+        'exec bash "$(python3 -m mojo.deploy locate update.sh)" '
+        '--parent-status "$@"',
         "django-mojo-update",
     ]
     argv = settings.get_static("EDGE_DEPLOY_SCRIPT", default, kind="list")

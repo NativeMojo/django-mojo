@@ -187,8 +187,42 @@ def test_default_deploy_endpoint_and_node_type(opts):
                  "the default transaction must enter through passwordless sudo")
     th.assert_in("mojo.deploy locate update.sh", argv[4],
                  "API projects must not vendor or refresh framework shell")
+    th.assert_in("--parent-status", argv[4],
+                 "the default outer sudo must carry parent-owned status in argv")
     th.assert_eq(node_type, "api",
                  "existing nodes remain API until explicitly specialized")
+
+    # Exercise the real default argv shape through a sudo stub that performs
+    # the relevant part of env_reset. The updater must receive the literal
+    # protocol bit even though _run's environment marker is gone.
+    with tempfile.TemporaryDirectory() as root:
+        stubs = os.path.join(root, "bin")
+        os.makedirs(stubs)
+        update = os.path.join(root, "update.sh")
+        with open(update, "w") as handle:
+            handle.write("#!/bin/bash\nprintf '%s\\n' \"$@\"\n")
+        os.chmod(update, 0o755)
+        for name, body in (
+                ("sudo", "[ \"${1:-}\" != -n ] || shift\n"
+                         "unset MOJO_DEPLOY_PARENT_STATUS\nexec \"$@\"\n"),
+                ("python3", "printf '%s\\n' \"$UPDATE_SCRIPT\"\n")):
+            path = os.path.join(stubs, name)
+            with open(path, "w") as handle:
+                handle.write("#!/bin/bash\n" + body)
+            os.chmod(path, 0o755)
+        environment = os.environ.copy()
+        environment.update({
+            "PATH": stubs + ":/usr/bin:/bin",
+            "UPDATE_SCRIPT": update,
+        })
+        with mock.patch.dict(os.environ, environment, clear=True):
+            done = deploy._run(
+                argv + ["--sha", SHA_A, "--framework", "1.24.15",
+                        "--deployment", "11111111-1111-4111-8111-111111111111"],
+                timeout=5)
+        th.assert_eq(done.returncode, 0, done.stderr)
+        th.assert_eq(done.stdout.splitlines()[0], "--parent-status",
+                     "sudo env_reset stripped the default parent's ownership bit")
 
 
 @th.django_unit_test(
