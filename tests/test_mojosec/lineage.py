@@ -745,6 +745,31 @@ def test_pending_firewall_resolution(opts):
                      "proven expected automation must not create an ordinary Event")
         reopened.close()
 
+    status_begin = dict(
+        begin, operation="broker.status",
+        function="mojo.apps.incident.services.firewall_readiness.probe",
+        semantic="read broker enrollment status",
+        argv_digest=hashlib.sha256(
+            b"/usr/local/sbin/mojo-firewall-broker").hexdigest(),
+        target_exe="/usr/local/sbin/mojo-firewall-broker", children=[])
+    status_result = dict(
+        status_begin, kind="result", target_pid=22, target_start_ticks=220,
+        monotonic_ns=1_100_000_000, returncode=0, ok=True, children=[])
+    with tempfile.TemporaryDirectory() as root:
+        store = Store(root, "sensor", aggregation, delivery,
+                      local_only_diagnostic_path=os.path.join(root, "missing"))
+        with mock.patch("mojo.mojosec.lineage.enrich_process",
+                        return_value=_engine_live(nodes[3])):
+            store.ingest([dict(candidate, fingerprint="6" * 64)],
+                         audit_health=health, process_nodes=nodes,
+                         firewall_receipts=[status_begin, status_result],
+                         crond_launches=launches)
+        th.assert_eq(store.stats()["local_only_suppressed"], 1,
+                     "cron-owned read-only broker readiness must not become central noise")
+        th.assert_eq(store.pending_batch(10, 65536), [],
+                     "proven broker readiness must remain local-only")
+        store.close()
+
     unhealthy = dict(health, healthy=False, sequence=2, reason="lost")
     with tempfile.TemporaryDirectory() as root:
         store = Store(root, "sensor", aggregation, delivery,

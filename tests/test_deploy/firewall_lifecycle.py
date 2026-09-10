@@ -58,21 +58,41 @@ def test_failed_enrollment_rolls_back_every_managed_file(opts):
 @th.django_unit_test()
 def test_status_main_never_uses_mutation_lock_or_dispatch(opts):
     script = '''
-import io, sys
+import io, json, sys
 from mojo.deploy import firewall_broker as b
 b._verify_caller = lambda: None
 b._install_address_space_limit = lambda: None
 b.broker_status = lambda: {"ok": True, "schema": "mojo.firewall.broker", "version": 1, "permanent_set_name": "mojo_blocked"}
+receipts = []
+b._start_ticks = lambda pid: 42
+b.syslog.openlog = lambda **kwargs: None
+b.syslog.syslog = lambda priority, message: receipts.append(json.loads(message))
 def forbidden(*args):
     raise RuntimeError("status entered mutation machinery")
 b._acquire_host_lock = forbidden
 b.execute = forbidden
 sys.stdin = io.TextIOWrapper(io.BytesIO(b'{"operation":"broker.status"}'))
-sys.exit(b.main([]))
+code = b.main([])
+print(json.dumps(receipts), file=sys.stderr)
+sys.exit(code)
 '''
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=10)
     th.assert_eq(result.returncode, 0, "status must complete without mutation dispatch or host lock")
     th.assert_true(json.loads(result.stdout)["ok"], "status must return a bounded successful proof")
+    receipts = json.loads(result.stderr)
+    th.assert_eq([item["kind"] for item in receipts], ["begin", "result"],
+                 "status must publish one non-mutating proof pair")
+    th.assert_true(all(item["operation"] == "broker.status" and not item["children"]
+                       for item in receipts),
+                   "readiness proof must not claim a firewall child mutation")
+    from mojo.mojosec.lineage import firewall_receipt
+    parsed = [firewall_receipt({"SYSLOG_IDENTIFIER": "mojo-firewall-broker",
+                                "_UID": "0", "_PID": str(item["broker_pid"]),
+                                "_BOOT_ID": "a" * 32, "_AUDIT_SESSION": "9",
+                                "_TTY": "", "_EXE": "/usr/bin/python3.12",
+                                "MESSAGE": json.dumps(item)})
+              for item in receipts]
+    th.assert_true(all(parsed), "the sensor must accept both root-authored status receipts")
 
 
 @th.django_unit_test()

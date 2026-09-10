@@ -58,13 +58,17 @@ _RESOURCE_LIMIT_UNAVAILABLE_RESPONSE = (
 MAX_SET_NAME = 31
 MAX_CONFIG_BYTES = 4096
 _SET_NAME = re.compile(r"^[A-Za-z0-9_-]{1,31}$")
-_FUNCTION = re.compile(r"^mojo\.apps\.incident\.asyncjobs\.[A-Za-z0-9_]{1,96}$")
+READINESS_FUNCTION = "mojo.apps.incident.services.firewall_readiness.probe"
+_FUNCTION = re.compile(
+    r"^(?:mojo\.apps\.incident\.asyncjobs\.[A-Za-z0-9_]{1,96}|"
+    r"mojo\.apps\.incident\.services\.firewall_readiness\.probe)$")
 _CONTEXT_TOKEN = re.compile(r"^[A-Za-z0-9_.:@/+\-]{1,160}$")
 _CONTEXT_FIELDS = {
     "execution_id", "job_id", "function", "attempt", "channel", "runner", "broadcast",
 }
 _COMMON_FIELDS = {"operation", "context"}
 _OP_FIELDS = {
+    "broker.status": set(),
     "rules.contains": {"source"},
     "rule.insert": {"chain", "source"},
     "rule.delete": {"chain", "source"},
@@ -84,6 +88,7 @@ _OP_FIELDS = {
         "source", "cidrs", "temporary_present", "expected_permanent_set"},
 }
 _FUNCTION_OPERATIONS = {
+    READINESS_FUNCTION: {"broker.status"},
     "mojo.apps.incident.asyncjobs.broadcast_block_ip": {
         "rules.contains", "rule.insert", "ip.status", "ip.normalize"},
     "mojo.apps.incident.asyncjobs.broadcast_unblock_ip": {
@@ -276,7 +281,9 @@ def build_operation(request, function=None):
     if operation not in _FUNCTION_OPERATIONS.get(function, set()):
         raise BrokerError("function is not permitted to perform operation")
     built = {"operation": operation, "function": function, "stdin": "", "cidrs": []}
-    if operation == "rules.contains":
+    if operation == "broker.status":
+        built.update(argv=[BROKER_PATH], semantic="read broker enrollment status")
+    elif operation == "rules.contains":
         source = _network(request.get("source"))
         argv = [IPTABLES_SAVE]
         built.update(source=source, argv=argv, semantic="rules contain source")
@@ -877,6 +884,34 @@ def execute(request):
             "target execution failed", code="broker_target_failure") from err
 
 
+def execute_status(request):
+    """Return broker readiness with a root-authored, non-mutating proof pair."""
+    operation_id = uuid.uuid4().hex
+    context = {
+        "execution_id": operation_id, "job_id": operation_id,
+        "function": READINESS_FUNCTION,
+    }
+    built = build_operation(request, function=READINESS_FUNCTION)
+    begin = _receipt("begin", operation_id, context, built, children=[])
+    started = time.monotonic()
+    try:
+        result = broker_status()
+        _receipt(
+            "result", operation_id, context, built, children=[],
+            target_pid=os.getpid(),
+            target_start_ticks=begin["broker_start_ticks"], returncode=0,
+            duration_ms=int((time.monotonic() - started) * 1000), ok=True)
+        return result
+    except BrokerError as err:
+        _receipt(
+            "result", operation_id, context, built, children=[],
+            target_pid=os.getpid(),
+            target_start_ticks=begin["broker_start_ticks"], returncode=1,
+            duration_ms=int((time.monotonic() - started) * 1000), ok=False,
+            error=err.code)
+        raise
+
+
 def _verify_caller():
     if os.geteuid() != 0:
         raise BrokerError("broker must run as root", code="broker_caller_invalid")
@@ -1020,7 +1055,7 @@ def main(argv=None):
         payload = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
         request = parse_request(payload)
         if request["operation"] == "broker.status":
-            print(json.dumps(broker_status(), sort_keys=True, separators=(",", ":")))
+            print(json.dumps(execute_status(request), sort_keys=True, separators=(",", ":")))
             return 0
         descriptor = _acquire_host_lock()
         print(json.dumps(execute(request), sort_keys=True, separators=(",", ":")))

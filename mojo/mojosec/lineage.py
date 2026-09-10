@@ -471,8 +471,10 @@ def firewall_receipt(record):
             not re.fullmatch(r"[A-Za-z0-9_.:@+-]{1,160}",
                              str(value.get("execution_id") or "")) or
             not re.fullmatch(r"[A-Za-z0-9_.:@+-]{1,160}", str(value.get("job_id") or "")) or
-            not re.fullmatch(r"mojo\.apps\.incident\.asyncjobs\.[A-Za-z0-9_]{1,96}",
-                             str(value.get("function") or "")) or
+            not re.fullmatch(
+                r"(?:mojo\.apps\.incident\.asyncjobs\.[A-Za-z0-9_]{1,96}|"
+                r"mojo\.apps\.incident\.services\.firewall_readiness\.probe)",
+                str(value.get("function") or "")) or
             not re.fullmatch(r"[a-f0-9]{64}", str(value.get("argv_digest") or "")) or
             not re.fullmatch(r"[a-f0-9]{64}", str(value.get("stdin_digest") or "")) or
             value.get("operation") not in {
@@ -480,14 +482,16 @@ def firewall_receipt(record):
                 "permanent.add", "permanent.delete", "permanent.rule_ensure",
                 "permanent.normalize", "set.replace", "set.remove",
                 "set.rule_ensure", "set.status", "set.normalize",
-                "ip.status", "ip.normalize", "geolocated.normalize"} or
+                "ip.status", "ip.normalize", "geolocated.normalize",
+                "broker.status"} or
             not isinstance(value.get("semantic"), str) or
             not 1 <= len(value["semantic"]) <= 160 or
             any(ord(char) < 32 for char in value["semantic"]) or
             _integer(value.get("stdin_length"), 24 * 1024 * 1024) is None or
             _integer(value.get("count"), 250000) is None or
             value.get("target_exe") not in (
-                "/sbin/iptables", "/sbin/iptables-save", "/sbin/ipset") or
+                "/sbin/iptables", "/sbin/iptables-save", "/sbin/ipset",
+                "/usr/local/sbin/mojo-firewall-broker") or
             not _integer(value.get("broker_start_ticks")) or
             _integer(value.get("monotonic_ns")) is None or
             _integer(value.get("broker_pid"), 2 ** 31 - 1) !=

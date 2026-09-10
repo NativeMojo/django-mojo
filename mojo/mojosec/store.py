@@ -61,6 +61,7 @@ ANNOTATION_MAX_CORRELATION_SECONDS = MAX_TIER_CORRELATION_SECONDS
 LOCAL_ONLY_RECONCILE_LIMIT = 256
 SATURATING_COUNTER_MAX = 2 ** 63 - 1
 _BROKER_FUNCTION_OPERATIONS = {
+    "mojo.apps.incident.services.firewall_readiness.probe": {"broker.status"},
     "mojo.apps.incident.asyncjobs.broadcast_block_ip": {
         "rules.contains", "rule.insert", "ip.status", "ip.normalize"},
     "mojo.apps.incident.asyncjobs.broadcast_unblock_ip": {
@@ -1140,6 +1141,18 @@ class Store:
             "broker_pid", "broker_start_ticks", "target_exe", "boot_id",
             "audit_session",
         )
+        status = bool(
+            begin and begin.get("operation") == "broker.status" and
+            begin.get("target_exe") == "/usr/local/sbin/mojo-firewall-broker" and
+            begin.get("children") == [] and result and result.get("children") == [] and
+            result.get("target_pid") == begin.get("broker_pid") and
+            result.get("target_start_ticks") == begin.get("broker_start_ticks"))
+        mutation = bool(
+            begin and result and begin.get("operation") != "broker.status" and
+            begin.get("children") == [] and
+            isinstance(result.get("children"), list) and
+            1 <= len(result["children"]) <= 64 and
+            all(child.get("ok") is True for child in result["children"]))
         return bool(
             begin and result and result.get("ok") is True and
             not begin.get("_conflict") and not result.get("_conflict") and
@@ -1152,10 +1165,7 @@ class Store:
             isinstance(result.get("target_pid"), int) and result["target_pid"] > 0 and
             isinstance(result.get("target_start_ticks"), int) and
             result["target_start_ticks"] > 0 and
-            begin.get("children") == [] and
-            isinstance(result.get("children"), list) and
-            1 <= len(result["children"]) <= 64 and
-            all(child.get("ok") is True for child in result["children"]))
+            (status or mutation))
 
     @staticmethod
     def _eligible_process_node(node):
