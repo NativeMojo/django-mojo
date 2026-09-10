@@ -83,11 +83,12 @@ legitimate rollback.
 
 Before an API activation commits, the root transaction requires the host cron
 service to be active, repairs only Jobman's pid and log files to the exact
-account in the installed jobs cron, and runs a no-spawn launch preflight through
-the actual cron wrapper as that account. This catches the practical outage cases
-without making deployment depend on the security sensor: a stopped cron daemon,
-a broken wrapper, stale root ownership, or an unwritable runner surface leaves
-the current engine running and rolls the candidate back.
+account in the installed jobs cron, and runs, as that account, a no-spawn launch
+preflight through the same fixed system Python and installed Jobman module used
+by cron. This catches the practical outage cases without making deployment
+depend on the security sensor: a stopped cron daemon, a missing module, stale
+root ownership, or an unwritable runner surface leaves the current engine
+running and rolls the candidate back.
 
 Current parents record node evidence after the script returns. API nodes then
 detach a bounded, journaled root stop of both the job engine and scheduler so

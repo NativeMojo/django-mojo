@@ -85,14 +85,15 @@ boundary, while a non-root locator shim preserves the same bit through its own
 elevation. The healthy candidate therefore reports success once and the parent
 then stops the JobEngine and scheduler exactly once. Before that stop is
 allowed, deployment requires an active cron service, repairs stale root-owned
-Jobman files, and verifies the installed application account can run the exact
-cron wrapper and use its launch surface. The detached bounded root stop reports
-under the `mojo-deploy-recycle` journal tag and exits nonzero if a process
-survives. That handoff failure is an operator alarm, not a rollback of the
-already recorded node result. The next every-minute cron tick starts fresh
-replacements in a separately auditable session. A custom command that places
-another `sudo` in front of the packaged updater must explicitly preserve that
-contract or be converted to one of these supported shapes.
+Jobman files, and verifies the installed application account can run the same
+fixed system Python and installed Jobman module used by cron, and can write its
+launch surface. The detached bounded root stop reports under the
+`mojo-deploy-recycle` journal tag and exits nonzero if a process survives. That
+handoff failure is an operator alarm, not a rollback of the already recorded
+node result. The next every-minute cron tick starts fresh replacements in a
+separately auditable session. A custom command that places another `sudo` in
+front of the packaged updater must explicitly preserve that contract or be
+converted to one of these supported shapes.
 
 The trigger itself has no polling endpoint. Platform operators can inspect the
 durable deployment journal through `GET /api/account/admin/platform` and use
