@@ -60,9 +60,14 @@ The only context-free broker operation is stdin
 `{"operation":"broker.status"}` sent to exactly
 `sudo -n -- /usr/local/sbin/mojo-firewall-broker` with no broker arguments.
 It validates the sudo caller and protected enrollment/assets, returns a bounded
-schema/version/permanent-name proof, and invokes neither the mutation
-dispatcher nor its host lock. Mutation operations still require JobEngine
-context and independently recheck readiness immediately before broker work.
+schema/version/permanent-name proof, and emits a root-authored begin/result
+receipt pair for its own exact PID generation. Both receipts have no firewall
+children; the operation invokes neither the mutation dispatcher nor its host
+lock. MojoSec suppresses the corresponding sudo observation only when the pair
+and PID generation agree with exact cron JobEngine → sudo → broker lineage and
+the pinned engine origin. A failed status result or any incomplete proof remains
+an ordinary sudo Event. Mutation operations still require JobEngine context and
+independently recheck readiness immediately before broker work.
 
 The incident provider verifies the process's effective UID, the exact sudo
 operation, timeout, response shape, and permanent-name agreement. A background

@@ -1311,15 +1311,17 @@ lineage. Any resulting central Event receives at most eight compact ancestors;
 the complete graph and raw Audit records remain on the sensor.
 
 Application firewall work no longer invokes raw iptables/ipset sudo commands.
-The exact read-only `broker.status` request needs no JobEngine context and
-creates no mutation receipt or mutation lock; it only proves enrollment and
-protected authority assets for runner readiness.
-It sends one strict semantic JSON request to exactly
+The exact read-only `broker.status` request carries no caller-supplied JobEngine
+context and takes no mutation lock; it only proves enrollment and protected
+authority assets for runner readiness. The root broker assigns its operation
+identity and emits matching begin/result receipts for its own PID generation,
+with no firewall children in either receipt. It sends one strict semantic JSON
+request to exactly
 `sudo -n -- /usr/local/sbin/mojo-firewall-broker`; sudoers authorizes that
-empty-argument command only. The broker generates the operation ID, validates
-the SUDO caller and the same-runner JobEngine context, constructs all argv and
-restore input, and emits root-owned begin/result receipts. Requests are at most
-16 MiB/250,000 canonical networks; restore is at most 24 MiB. After imports the
+empty-argument command only. Mutation operations additionally validate the
+same-runner JobEngine context, construct all argv and restore input, and emit
+root-owned receipts for their firewall children. Requests are at most 16
+MiB/250,000 canonical networks; restore is at most 24 MiB. After imports the
 broker reads its current virtual address space from `/proc/self/statm` and adds
 256 MiB of growth headroom, with a 768 MiB absolute ceiling. A lower existing
 hard limit, an invalid baseline, or a failed `setrlimit` returns
@@ -1331,15 +1333,19 @@ heap. Scalar work has 15 seconds and bulk work 120 seconds. Output overflow is
 failure (64 KiB, or an 8 MiB hard ceiling for semantic rules reads).
 
 `jobman_firewall_operation_v1` is local-only only after healthy post-cutover
-cron/jobman → sudo → broker → target lineage and exact receipt/PID-generation
-agreement. SSH, TTY, IP attribution, direct legacy sudo, missing context,
-timeouts, restarts, audit gaps, eviction, receipt disagreement, and every
-incomplete proof retain the original rich sudo Event. Identical durable broker
-receipts are idempotent; conflicting begin/result duplicates remain invalid
-across restart and later successful replay. Malformed journal records veto
-suppression for the entire health bracket and make every node from that batch
-ineligible, even when the Audit sidecars themselves are healthy. Legacy direct grants
-remain for one rollback generation but never qualify for suppression.
+proof. Mutations require exact cron/jobman → sudo → broker → target lineage and
+receipt/PID-generation agreement. Read-only `broker.status` has no target
+child, so it instead requires exact cron JobEngine → sudo → broker lineage, the
+broker PID generation, its matching zero-child begin/result pair, and the
+pinned engine origin. A failed status result is never eligible. SSH, TTY, IP
+attribution, direct legacy sudo, missing context, timeouts, restarts, audit
+gaps, eviction, receipt disagreement, and every incomplete proof retain the
+original rich sudo Event. Identical durable broker receipts are idempotent;
+conflicting begin/result duplicates remain invalid across restart and later
+successful replay. Malformed journal records veto suppression for the entire
+health bracket and make every node from that batch ineligible, even when the
+Audit sidecars themselves are healthy. Legacy direct grants remain for one
+rollback generation but never qualify for suppression.
 The JobEngine context prevents accidental cross-job attribution through the
 normal API; it does not resist hostile Python already running in that process.
 

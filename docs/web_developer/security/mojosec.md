@@ -337,16 +337,21 @@ up to eight validated ancestors may be present. The wire and Event schemas are
 still version 1 and all additions are optional, so older sensors and retained
 receipts remain compatible.
 
-Expected firewall automation may be absent from the central Event feed only
-when the sensor proves healthy post-cutover jobman, sudo, root broker, and
-target lineage plus matching begin/result receipts. The fixed classifier is
+Expected firewall mutations may be absent from the central Event feed only when
+the sensor proves healthy post-cutover jobman, sudo, root broker, and target
+lineage plus matching begin/result receipts. The read-only `broker.status`
+check also emits a root-authored pair, but no firewall child: its result binds
+the broker's own PID generation and both receipt child lists are empty. Its sudo
+observation is suppressed only when that exact pair and generation join to cron
+JobEngine → sudo → broker lineage and the pinned engine origin. A failed result
+or unproven check remains an ordinary Event. The fixed classifier is
 `jobman_firewall_operation_v1`. Missing, stale, conflicting, interactive,
-direct, SSH-attributed, or audit-unhealthy activity is sent as an ordinary
-Event. A diagnostic window uses the existing eventless local-only receipt
-contract and does not create an Incident or enter learning/feedback metrics.
-The installed broker path enters safe-path Python directly, without a shell
-trampoline that would create an ambiguous second exec generation under the
-receipt's PID/start-ticks identity.
+direct, SSH-attributed, or audit-unhealthy activity is likewise sent as an
+ordinary Event. A diagnostic window uses the existing eventless local-only
+receipt contract and does not create an Incident or enter learning/feedback
+metrics. The installed broker path enters safe-path Python directly, without a
+shell trampoline that would create an ambiguous second exec generation under
+the receipt's PID/start-ticks identity.
 
 Proof reconciliation is deterministic under bounded bursts: each pass handles
 the oldest 512 pending firewall candidates. Candidate boot, Audit session and
