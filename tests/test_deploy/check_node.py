@@ -67,7 +67,7 @@ def _mojosec_systemd_show(dropins=""):
         "RestrictSUIDSGID": "yes", "LockPersonality": "yes",
         "RestrictRealtime": "yes", "RestrictNamespaces": "yes",
         "RestrictAddressFamilies": "AF_UNIX AF_INET AF_INET6",
-        "CapabilityBoundingSet": "cap_dac_read_search",
+        "CapabilityBoundingSet": "cap_dac_read_search cap_sys_ptrace",
         "AmbientCapabilities": "",
         "ReadWritePaths": "/var/lib/mojosec /run/mojosec",
     }
@@ -370,6 +370,18 @@ def test_mojosec_unit_audit_rejects_byte_drift_and_dropins(opts):
                  f"package-owned unit drift must fail: {statuses}")
     th.assert_eq(statuses.get("effective systemd sandbox drift"), cn.FAIL,
                  f"any drop-in must fail the effective sandbox audit: {statuses}")
+
+    old_capabilities = _mojosec_systemd_show().replace(
+        "cap_dac_read_search cap_sys_ptrace", "cap_dac_read_search")
+    report = cn.Report()
+    cn._audit_mojosec_unit(report, FakeRunner([
+        ("UNIT_TEXT", (0, "", "")),
+        ("systemctl show mojosec.service", (0, old_capabilities, "")),
+        ("systemd-analyze security", (0, "ok", "")),
+    ]), "sudo -n ")
+    statuses = _statuses(report, "mojosec")
+    th.assert_eq(statuses.get("effective systemd sandbox drift"), cn.FAIL,
+                 f"the sensor must retain cross-UID live executable access: {statuses}")
 
 
 @th.django_unit_test()

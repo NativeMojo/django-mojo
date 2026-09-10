@@ -836,7 +836,7 @@ def _audit_mojosec_unit(report, run, sudo, mode="observe"):
         drift.append("RestrictAddressFamilies=" + found.get(
             "RestrictAddressFamilies", "<missing>"))
     if set(found.get("CapabilityBoundingSet", "").lower().split()) != {
-            "cap_dac_read_search"}:
+            "cap_dac_read_search", "cap_sys_ptrace"}:
         drift.append("CapabilityBoundingSet=" + found.get(
             "CapabilityBoundingSet", "<missing>"))
     if set(found.get("ReadWritePaths", "").split()) != {

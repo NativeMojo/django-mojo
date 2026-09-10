@@ -1169,7 +1169,12 @@ they cannot be repaired by replaying an earlier valid fragment.
 
 `/proc` is immediate optional enrichment for
 PID generation, parents, cgroup/unit, namespace, executable, command line, and
-SELinux context. Audit remains durable truth: a short-lived process or ancestor
+SELinux context. The root service is bounded to `CAP_DAC_READ_SEARCH` and
+`CAP_SYS_PTRACE`: the latter is required only because Linux otherwise refuses
+the cross-UID `/proc/<pid>/exe` identity check for the application user's
+JobEngine. It has no ambient capabilities, retains `NoNewPrivileges`, and keeps
+the remaining systemd filesystem, namespace, kernel, and address-family
+restrictions. Audit remains durable truth: a short-lived process or ancestor
 that has already left `/proc` does not poison a complete Audit edge. A live
 `/proc` identity that conflicts with Audit, PID reuse, cycles, ordering
 conflicts, gaps, loss, or stale health makes suppression ineligible. Only the
@@ -1196,8 +1201,9 @@ bounded launch record survives polling and restart; a conflicting duplicate is
 sticky and makes the session permanently ineligible for suppression.
 
 The root-owned Audit health oneshot has only `CAP_AUDIT_CONTROL` and publishes
-a root-only sidecar every five seconds. The main sensor's capability set is
-unchanged. It validates boot, managed generation, rules digest, sequence,
+a root-only sidecar every five seconds. The main sensor's separate capability
+set is limited to the read/search and live process-identity capabilities above.
+It validates boot, managed generation, rules digest, sequence,
 freshness, loss, backlog, failure mode, and rate limit. Deployment accepts only
 the exact AL2023 `task,never` seed or a complete prior Mojo generation after
 hashing every rules source, the generated rules and the active rules. It keeps

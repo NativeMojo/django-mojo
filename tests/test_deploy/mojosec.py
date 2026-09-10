@@ -176,6 +176,7 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
             "NoNewPrivileges=true", "ProtectKernelModules=true",
             "ProtectSystem=strict", "ProtectHome=tmpfs", "BindReadOnlyPaths=",
             "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+            "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE",
             "ConditionPathExists=/etc/mojosec/config.json"):
         th.assert_in(expected, unit, f"service is missing deployment contract: {expected}")
     for forbidden in ("fail2ban", "iptables", "nft", "firewall", "/opt/api/var"):
