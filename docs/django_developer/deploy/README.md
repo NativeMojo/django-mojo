@@ -460,13 +460,14 @@ deployment itself does not call this tool.
 engine and scheduler. Cron is the normal start authority, not merely a
 backstop. Before an API deployment can commit, `jobman repair` runs as root,
 hands only Jobman's own files to the exact installed cron account, and runs a
-no-spawn `jobman preflight` as that account. Together with the active cron
-service check, this catches the deployment failures that would strand the node:
-stale root ownership, an unwritable pid/log surface, or a missing runner.
+no-spawn `jobman preflight` through the actual cron wrapper as that account.
+Together with the active cron service check, this catches the deployment
+failures that would strand the node: a broken wrapper, stale root ownership, an
+unwritable pid/log surface, or a missing runner.
 
-A successful API deployment schedules a bounded root stop of both components
-only after the invoking job has returned and recorded its result. The detached
-handoff uses fixed safe-path system Python, reports its outcome under the
+A successful API deployment records its result and schedules a bounded root
+stop of both components. The detached handoff waits briefly for the invoking
+job to return, uses fixed safe-path system Python, reports its outcome under the
 `mojo-deploy-recycle` journal tag, and exits nonzero rather than logging success
 if any process survives. It selects stop targets from the expected Jobman
 command scan, never from the application-writable pidfile alone. Because this
@@ -499,11 +500,11 @@ deployment now repairs the files, verifies cron and the application account's
 launch permissions, and uses its bounded root stop to retire the processes
 automatically. For operator recovery, run
 `sudo /usr/bin/python3 -E -P -m mojo.deploy.jobman repair --root /opt/api`, run
-`jobman preflight` as the installed cron account, then run the same safe-path
-module command with `stop --root /opt/api`. The following cron tick starts the
-MojoSec-proven replacements. Use `journalctl -t mojo-deploy-recycle` to inspect
-automated deploy handoffs; manual recovery commands report directly and do not
-write that tag.
+`/opt/api/bin/jobman preflight` as the installed cron account, then run the same
+safe-path module command with `stop --root /opt/api`. The following cron tick
+starts the MojoSec-proven replacements. Use
+`journalctl -t mojo-deploy-recycle` to inspect automated deploy handoffs; manual
+recovery commands report directly and do not write that tag.
 
 ### `node_setup`
 

@@ -380,8 +380,9 @@ def cmd_repair(root, candidate=None, cron_path=None):
 
 def _start_preflight(root, runner_path):
     """Return a fixed failure for a cron tick that could not safely start."""
-    # Reaching this function through the cron command already proves the
-    # project wrapper was executable. Validate the runner it will spawn.
+    # Deploy invokes preflight through the exact project wrapper used by cron,
+    # so reaching here proves the wrapper could execute and import this module.
+    # Validate the runner it will spawn and every write surface it uses.
     if not os.path.isfile(runner_path) or not os.access(runner_path, os.X_OK):
         return "jobs runner is missing or not executable: %s" % runner_path
     for path in (log_dir(root), pid_dir(root)):
