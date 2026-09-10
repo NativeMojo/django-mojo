@@ -386,6 +386,11 @@ sticky, and a live engine anchor must continue to match its boot, PID generation
 executable and complete command line. Malformed journal records also veto
 suppression, even with healthy Audit sidecars.
 
+Audit `NETFILTER_CFG` activity may reuse the PID of the firewall process. A
+later syscall compound with no `EXECVE` row and the explicit `key=(null)`
+marker is not treated as a second process generation. Managed exec/sudo records
+and unknown incomplete evidence keep their conservative proof behavior.
+
 The network-capable root sensor keeps only its filesystem read capability and
 never receives `CAP_SYS_PTRACE`. A separate resolver runs as `ec2-user` with no
 capabilities or IP network. Its root-owned mode-`0600` Unix socket accepts one

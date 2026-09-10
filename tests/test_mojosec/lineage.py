@@ -545,12 +545,12 @@ def test_crond_origin_missing_order_and_conflict(opts):
 def test_process_edge_eligibility_is_shared(opts):
     from mojo.mojosec.store import Store
 
-    valid = {"success": True, "eoe": True, "ambiguous": False,
+    valid = {"success": True, "process_exec": True, "eoe": True, "ambiguous": False,
              "incomplete": False, "argv": ["/usr/bin/true"]}
     for edge in ("anchor", "bash", "jobman", "engine", "sudo", "broker", "target"):
         th.assert_true(Store._eligible_process_node(dict(valid)),
                        f"the complete {edge} Audit edge should be eligible")
-        for field, value in (("success", False), ("eoe", False),
+        for field, value in (("success", False), ("process_exec", False), ("eoe", False),
                              ("ambiguous", True), ("incomplete", True),
                              ("argv", [])):
             changed = dict(valid, **{field: value})
@@ -598,6 +598,7 @@ def test_compound_confirmed_failed_exec(opts):
     result = CompoundAssembler().ingest([
         _record(45, "SYSCALL", _AUDIT_FIELD_PID="8", _AUDIT_FIELD_PPID="1",
                 _AUDIT_FIELD_EXE="/usr/sbin/xtables-nft-multi",
+                _AUDIT_FIELD_KEY="mojosec-app-exec",
                 _AUDIT_FIELD_SUCCESS="no", _AUDIT_FIELD_EXIT="-2"),
         _record(45, "PROCTITLE", _AUDIT_FIELD_PROCTITLE="2F7362696E2F69707461626C6573"),
     ])
@@ -605,6 +606,54 @@ def test_compound_confirmed_failed_exec(opts):
     th.assert_true(node["failure_confirmed"] and not node["success"] and
                    not node["eoe"],
                    "AL2023's terminal PROCTITLE plus success=no must identify a failed exec")
+
+
+@th.unit_test("non-exec NETFILTER compounds cannot veto a same-PID exec generation")
+def test_non_exec_netfilter_compound_is_not_process_authority(opts):
+    from mojo.mojosec.lineage import CompoundAssembler
+    from mojo.mojosec.store import Store
+
+    pid = "2792944"
+    rows = [
+        _record(
+            11884109, "SYSCALL", monotonic=100,
+            message=("SYSCALL arch=c000003e syscall=59 success=yes exit=0 "
+                     f"pid={pid} ppid=2792936 uid=0 euid=0 auid=1000 ses=140262 "
+                     "tty=(none) exe=/usr/sbin/xtables-nft-multi "
+                     "key=mojosec-app-exec")),
+        _record(
+            11884109, "EXECVE",
+            message=("EXECVE argc=3 a0=/sbin/iptables a1=-D "
+                     "a2=MOJO-MANAGED-INPUT")),
+        _record(11884109, "PROCTITLE", _AUDIT_FIELD_PROCTITLE="69707461626C6573"),
+        _record(
+            11884110, "SYSCALL", monotonic=101,
+            message=("SYSCALL arch=c000003e syscall=46 success=yes exit=288 "
+                     f"pid={pid} ppid=2792936 uid=0 euid=0 auid=1000 ses=140262 "
+                     "tty=(none) exe=/usr/sbin/xtables-nft-multi key=(null)")),
+        _record(11884110, "PROCTITLE", _AUDIT_FIELD_PROCTITLE="69707461626C6573"),
+    ]
+    nodes = CompoundAssembler().ingest(rows)["complete"]
+    good = next(node for node in nodes if node["audit_id"] == "11884109")
+    netfilter = next(node for node in nodes if node["audit_id"] == "11884110")
+
+    th.assert_true(netfilter.get("process_exec") is False,
+                   "the keyed NETFILTER syscall must be classified as non-exec")
+    th.assert_eq(
+        Store._one_pid_generation(
+            nodes, int(pid), 27929440, 0, 200_000,
+            exe="/usr/sbin/xtables-nft-multi"),
+        good,
+        "a non-exec record reusing the child PID must not veto the real exec generation",
+    )
+    with tempfile.TemporaryDirectory() as root:
+        store = _review_store(root)
+        store.ingest([], process_nodes=nodes)
+        stored = [json.loads(row["payload"])["audit_id"] for row in store.db.execute(
+            "SELECT payload FROM process_nodes WHERE pid=?", (int(pid),))]
+        th.assert_eq(stored, ["11884109"],
+                     "non-exec compounds must not enter the process-generation graph")
+        store.close()
 
 
 @th.unit_test("event lineage projection is bounded")
@@ -634,7 +683,7 @@ def test_incomplete_process_outcome_vetoes_competitor(opts):
         "boot_id": "a" * 32, "audit_id": "1", "pid": 7, "ppid": 1,
         "audit_session": 9, "exe": "/usr/bin/tool", "argv": ["/usr/bin/tool"],
         "argv_sha256": hashlib.sha256(b"/usr/bin/tool").hexdigest(),
-        "success": True, "failure_confirmed": False, "eoe": True,
+        "success": True, "process_exec": True, "failure_confirmed": False, "eoe": True,
         "ambiguous": False, "incomplete": False, "monotonic": 1_000_000,
     }
     incomplete = dict(

@@ -18,6 +18,9 @@ COMPOUND_TIMEOUT_SECONDS = 2
 FINALIZED_TTL_SECONDS = 10 * 60
 COMPOUND_CAP = 8192
 PROCTITLE_BOUNDARY = "audit-proctitle-v1"
+PROCESS_EXEC_KEYS = {
+    "mojosec-root-exec", "mojosec-app-exec", "mojosec-sudo",
+}
 # journald extracts the kernel Audit serial into _AUDIT_ID.  The timestamp
 # remains in _SOURCE_REALTIME_TIMESTAMP and must never be reconstructed from
 # MESSAGE text to form a compound identity.
@@ -180,6 +183,7 @@ def _normalize_record(record, kind):
             "subj": _field(record, message, "subj", "_SELINUX_CONTEXT"),
             "success": _field(record, message, "success"),
             "exit": _field(record, message, "exit"),
+            "key": _field(record, message, "key"),
             "monotonic": record.get("__MONOTONIC_TIMESTAMP"),
         }
     elif kind == "EXECVE":
@@ -275,11 +279,21 @@ class CompoundAssembler:
         success_value = str(syscall.get("success") or "").lower()
         success = success_value in ("yes", "1")
         exit_code = _integer(syscall.get("exit"))
+        audit_key = str(syscall.get("key") or "")
+        if "EXECVE" in item["rows"]:
+            process_exec = True
+        elif audit_key in PROCESS_EXEC_KEYS:
+            process_exec = True
+        elif audit_key == "(null)":
+            process_exec = False
+        else:
+            process_exec = None
         # A kernel-reported failed exec has no EXECVE argument record because
         # it never replaced the process image.  Preserve that narrow outcome
         # separately from the generic ``success=False`` used for missing or
         # incomplete SYSCALL evidence.
         failure_confirmed = bool(
+            process_exec is True and
             success_value in ("no", "0") and
             ("EOE" in item["rows"] or "PROCTITLE" in item["rows"]) and
             not item.get("ambiguous") and not item.get("incomplete"))
@@ -312,6 +326,7 @@ class CompoundAssembler:
             "selinux": str(syscall.get("subj") or "")[:256],
             "monotonic": _integer(syscall.get("monotonic")),
             "success": bool(success and exit_code == 0),
+            "process_exec": process_exec,
             "failure_confirmed": failure_confirmed,
             "eoe": "EOE" in item["rows"],
             "_completion": PROCTITLE_BOUNDARY if "PROCTITLE" in item["rows"] else "",
@@ -399,6 +414,7 @@ def eligible_process_node(node):
     argv = node.get("argv") if isinstance(node, dict) else None
     return bool(
         isinstance(node, dict) and node.get("success") is True and
+        node.get("process_exec") is not False and
         (node.get("eoe") is True or node.get("_completion") == PROCTITLE_BOUNDARY) and
         not node.get("ambiguous") and not node.get("incomplete") and
         isinstance(argv, list) and 1 <= len(argv) <= MAX_ARGUMENTS and

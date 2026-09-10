@@ -666,6 +666,12 @@ class Store:
         self._refresh_process_pins(now)
         for item in process_nodes or ():
             item = dict(item)
+            # Audit can emit later non-exec syscall compounds (for example
+            # NETFILTER_CFG) under the PID that performed an earlier exec.
+            # Those records are not process generations and cannot compete in
+            # the provenance graph.
+            if self._confirmed_non_exec(item):
+                continue
             # A failed execve does not replace the process image, so it is not
             # a competing PID generation in the provenance graph.
             if self._confirmed_failed_exec(item) and item.get("pid"):
@@ -877,7 +883,7 @@ class Store:
                             (canonical_json(node), row["rowid"]))
 
     def _invalidate_competing_process_nodes(self, item):
-        if self._confirmed_failed_exec(item):
+        if self._confirmed_failed_exec(item) or self._confirmed_non_exec(item):
             return
         rows = self.db.execute(
             "SELECT rowid,payload FROM process_nodes WHERE boot_id=? AND pid=?",
@@ -887,6 +893,7 @@ class Store:
             peer = json.loads(row["payload"])
             if (peer.get("audit_id") == item.get("audit_id") or
                     self._confirmed_failed_exec(peer) or
+                    self._confirmed_non_exec(peer) or
                     not self._competing_process_generation(item, peer)):
                 continue
             peers.append((row["rowid"], peer))
@@ -1193,12 +1200,19 @@ class Store:
                     node.get("failure_confirmed") is True)
 
     @staticmethod
+    def _confirmed_non_exec(node):
+        """Return true only when Audit explicitly identifies a non-exec syscall."""
+        return bool(isinstance(node, dict) and
+                    node.get("process_exec") is False)
+
+    @staticmethod
     def _one_pid_generation(nodes, pid, start_ticks, earliest, latest, exe=None):
         found = []
         for node in nodes:
             if node.get("pid") != pid:
                 continue
-            if Store._confirmed_failed_exec(node):
+            if (Store._confirmed_failed_exec(node) or
+                    Store._confirmed_non_exec(node)):
                 continue
             node_ticks = node.get("start_ticks")
             if node_ticks is not None and node_ticks != start_ticks:
@@ -1220,7 +1234,8 @@ class Store:
     @staticmethod
     def _parent_node(nodes, child):
         candidates = [node for node in nodes if node.get("pid") == child.get("ppid") and
-                      not Store._confirmed_failed_exec(node)]
+                      not Store._confirmed_failed_exec(node) and
+                      not Store._confirmed_non_exec(node)]
         found = [node for node in candidates if Store._eligible_process_node(node)]
         if any(not Store._eligible_process_node(peer) and
                Store._competing_process_generation(node, peer)

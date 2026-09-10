@@ -1162,6 +1162,12 @@ supported alternate boundary. The internal `eoe` flag remains false when EOE
 was not observed. PROCTITLE content never supplies missing EXECVE arguments.
 A two-second timeout retires a compound as incomplete; serial advancement,
 interleaved events, boot changes, and capacity eviction never prove completion.
+Linux Audit can emit a later `NETFILTER_CFG` syscall compound with the same PID
+as the firewall exec. A compound with no `EXECVE` row and the explicit
+`key=(null)` marker is excluded from the process-generation graph. Compounds
+tagged by the managed exec/sudo rules remain process authority even when a
+failed exec has no `EXECVE` row, and a missing or unknown key stays
+conservative.
 
 Only the Audit transport's trusted underscored type/identity fields and its
 MESSAGE payload contribute evidence. Non-underscored `AUDIT_FIELD_*` and
