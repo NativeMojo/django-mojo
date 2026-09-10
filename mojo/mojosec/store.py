@@ -624,6 +624,12 @@ class Store:
         self.db.execute("DELETE FROM audit_fragments WHERE updated_at < ?",
                         (now - AUDIT_FRAGMENT_TTL_SECONDS,))
         for item in fragments or ():
+            if not item.get("finalized") or item.get("ambiguous") or item.get("incomplete"):
+                # A late fragment can precede its timeout in the very poll
+                # that supplies the final receipt. Its exact Audit identity
+                # must veto retained proof before this transaction resolves
+                # observations, even though no new process node exists yet.
+                self._invalidate_fragment_identity(item)
             payload = canonical_json(item)
             if len(payload.encode()) > 32768:
                 continue
@@ -837,6 +843,18 @@ class Store:
         return bool(left.get("pid") == right.get("pid") and
                     (left.get("start_ticks") is None or right.get("start_ticks") is None or
                      left["start_ticks"] == right["start_ticks"]))
+
+    def _invalidate_fragment_identity(self, fragment):
+        rows = self.db.execute(
+            "SELECT rowid,payload FROM process_nodes WHERE boot_id=? "
+            "AND json_extract(payload,'$.audit_id')=?",
+            (fragment.get("boot_id"), fragment.get("audit_id"))).fetchall()
+        for row in rows:
+            node = json.loads(row["payload"])
+            node.update(ambiguous=True, pinned=False)
+            self._invalidate_competing_process_nodes(node)
+            self.db.execute("UPDATE process_nodes SET payload=?,pinned=0 WHERE rowid=?",
+                            (canonical_json(node), row["rowid"]))
 
     def _invalidate_competing_process_nodes(self, item):
         rows = self.db.execute(

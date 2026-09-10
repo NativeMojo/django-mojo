@@ -109,6 +109,20 @@ def _fixture_proc(root, live):
 
 @th.django_unit_test()
 def test_al2023_collector_store_provenance_golden_path(opts):
+    _assert_al2023_provenance()
+
+
+@th.django_unit_test()
+def test_late_fragment_vetoes_same_poll_final_receipt(opts):
+    _assert_al2023_provenance(("late_fragment_receipt", "unrelated_fragment_receipt",
+                              "other_boot_fragment_receipt"))
+
+
+def _assert_al2023_provenance(scenarios=(
+        "complete", "missing_execve", "missing_boundary", "argv_conflict",
+        "missing_receipt", "failed_receipt", "conflicting_receipt",
+        "unexpected_command", "unexpected_child", "interactive", "ssh", "audit_loss", "parser_loss",
+        "parser_loss_no_sidecar", "dead_engine", "sql_unpinned")):
     from mojo.deploy import audit
     from mojo.mojosec import lineage
     from mojo.mojosec.collectors import journal as journal_module
@@ -123,10 +137,6 @@ def test_al2023_collector_store_provenance_golden_path(opts):
     delivery = {"max_spool_events": 100, "critical_reserve_events": 10,
                 "retry_min_seconds": 1, "retry_max_seconds": 60}
     real_enrich = lineage.enrich_process
-    scenarios = ("complete", "missing_execve", "missing_boundary", "argv_conflict",
-                 "missing_receipt", "failed_receipt", "conflicting_receipt",
-                 "unexpected_command", "unexpected_child", "interactive", "ssh", "audit_loss", "parser_loss",
-                 "parser_loss_no_sidecar", "dead_engine", "sql_unpinned")
     for scenario in scenarios:
         fixture = json.loads(json.dumps(original))
         if scenario == "missing_execve":
@@ -190,6 +200,20 @@ def test_al2023_collector_store_provenance_golden_path(opts):
                     mock.patch.object(audit, "read_health", side_effect=lambda:
                                       None if unavailable else dict(health)):
                 for index, batch in enumerate(batches):
+                    if index == 2 and scenario.endswith("fragment_receipt"):
+                        # Evict completed assembler state while retaining the
+                        # eligible/pinned canonical engine and pending command.
+                        store.db.execute("DELETE FROM audit_fragments")
+                        th.assert_eq(store.stats()["provenance"]["engine_anchors"], 1,
+                                     "the race must begin with an eligible live engine anchor")
+                        th.assert_eq(store.stats()["provenance"]["pending_firewall"], 1,
+                                     "the final receipt must race an already-held broker observation")
+                        late = dict(fixture["engine"][1], _AUDIT_FIELD_A0='"contradiction"')
+                        if scenario == "unrelated_fragment_receipt":
+                            late["_AUDIT_ID"] = "99999999"
+                        elif scenario == "other_boot_fragment_receipt":
+                            late["_BOOT_ID"] = "b" * 32
+                        batch = batch + [late]
                     if index == 2 and scenario == "parser_loss_no_sidecar":
                         unavailable = True
                     if index == 2 and scenario == "audit_loss":
@@ -205,6 +229,11 @@ def test_al2023_collector_store_provenance_golden_path(opts):
                     with _patch_journal_popen(journal_module, payload, []):
                         runtime._poll_stream(collector)
                     th.assert_eq(errors, [], f"the {scenario} collector must execute successfully")
+                    if index == 2 and scenario == "late_fragment_receipt":
+                        th.assert_eq(store.stats()["local_only_suppressed"], 0,
+                                     "pre-timeout contradictory fragment must veto same-poll receipt suppression")
+                        th.assert_eq(store.stats()["provenance"]["engine_anchors"], 0,
+                                     "matching fragment uncertainty must immediately revoke the engine pin")
                     if index == 1 and scenario == "complete":
                         th.assert_eq(store.stats()["provenance"]["pending_firewall"], 1,
                                      "begin without result must durably hold the exact broker observation")
@@ -217,7 +246,7 @@ def test_al2023_collector_store_provenance_golden_path(opts):
                 store.reconcile_pending_firewall()
                 events = store.pending_batch(100, 65536)
                 sudo_events = [event for event in events if event["kind"] == "auth.sudo_command"]
-                if scenario == "complete":
+                if scenario in ("complete", "unrelated_fragment_receipt", "other_boot_fragment_receipt"):
                     th.assert_eq(sudo_events, [], "fully proven broker execution must stay local-only")
                     th.assert_eq(store.stats()["local_only_suppressed"], 1,
                                  "the production collector path must reach the fixed classifier")
