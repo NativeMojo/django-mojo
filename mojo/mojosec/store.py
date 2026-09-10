@@ -40,7 +40,9 @@ FIREWALL_PROOF_BATCH = 512
 FIREWALL_PROOF_RECEIPT_CAP = FIREWALL_PROOF_BATCH * 4
 FIREWALL_PROOF_PROCESS_NODE_CAP = FIREWALL_PROOF_BATCH * 8
 FIREWALL_PROOF_SQL_CHUNK = 400
-FIREWALL_PROCESS_FALLBACK_NS = 2_000_000_000
+# Python startup and the read-only readiness check can take slightly over two
+# seconds before the broker emits its first receipt on a busy node.
+FIREWALL_PROCESS_FALLBACK_NS = 5_000_000_000
 FIREWALL_RECEIPT_TTL_SECONDS = 7 * 24 * 60 * 60
 PROVENANCE_MAX_BYTES = 256 * 1024 * 1024
 STATE_MAX_BYTES = PROVENANCE_MAX_BYTES
@@ -1455,8 +1457,9 @@ class Store:
                 observed_ns = attributes["monotonic"] * 1000
                 if (sudo is None or sudo.get("exe") != "/usr/bin/sudo" or
                         sudo.get("pid") != attributes["producer_pid"] or
-                        not begin["monotonic_ns"] - 2_000_000_000 <= observed_ns <=
-                        result["monotonic_ns"] + 2_000_000_000):
+                        not begin["monotonic_ns"] - FIREWALL_PROCESS_FALLBACK_NS <=
+                        observed_ns <=
+                        result["monotonic_ns"] + FIREWALL_PROCESS_FALLBACK_NS):
                     continue
                 engine = self._parent_node(by_pid.get(sudo.get("ppid"), ()), sudo)
                 if (engine is None or not engine.get("pinned") or

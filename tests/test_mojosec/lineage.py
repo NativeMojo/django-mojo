@@ -852,10 +852,10 @@ def test_pending_firewall_resolution(opts):
         argv_digest=hashlib.sha256(
             b"/usr/local/sbin/mojo-firewall-broker").hexdigest(),
         target_exe="/usr/local/sbin/mojo-firewall-broker",
-        monotonic_ns=2_500_000_000, children=[])
+        monotonic_ns=3_100_000_000, children=[])
     status_result = dict(
         status_begin, kind="result", target_pid=22, target_start_ticks=220,
-        monotonic_ns=2_600_000_000, returncode=0, ok=True, children=[])
+        monotonic_ns=3_200_000_000, returncode=0, ok=True, children=[])
     status_nodes = [dict(node) for node in nodes]
     status_nodes[4].pop("start_ticks")
     status_nodes[4]["monotonic"] = 1_000_000
