@@ -28,6 +28,9 @@ failed writes restore the previous files. Paths reject symlinks, unsafe
 ownership/modes, and oversized files. `converge` repairs an enrolled host and
 does not enroll a new one. `off` removes the grant and wrapper and records
 disabled enrollment; permanent set identity and existing kernel rules remain.
+The wrapper is a direct `/usr/bin/python3 -EP` script rather than a shell
+trampoline. That preserves safe-path and environment isolation while producing
+one canonical broker exec generation for MojoSec receipt correlation.
 
 ## Declare the complete fleet
 

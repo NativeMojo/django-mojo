@@ -1275,7 +1275,9 @@ non-finite timestamps also fail closed. Runtime `healthy` and `reason`
 annotations remain internal; durable previous-health state selects the same
 canonical publisher fields before the next sequence comparison.
 
-Process nodes live locally for seven days (131,072 rows). Active compounds and
+Unpinned process nodes live locally for seven days (131,072 rows); up to 64
+active engine anchors are retained separately, and node audit accepts the
+combined bound. Active compounds and
 finalized tombstones share an 8,192-row/8 MiB budget and ten-minute retention;
 the journal atomically replaces their complete snapshot with its cursor, so an
 empty snapshot retires previous state while another collector's absent snapshot

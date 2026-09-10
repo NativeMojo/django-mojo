@@ -16,14 +16,16 @@ from testit import helpers as th
 
 
 @th.django_unit_test()
-def test_firewall_broker_wrapper_keeps_the_adaptive_resource_contract(opts):
+def test_firewall_broker_wrapper_executes_python_without_a_shell_generation(opts):
     from mojo.deploy import firewall_broker
     from mojo.deploy import mojosec as deploy
 
     th.assert_eq(
         deploy.BROKER_WRAPPER_TEXT,
-        "#!/bin/sh\nexec /usr/bin/python3 -E -P -m mojo.deploy.firewall_broker\n",
-        "deployment must execute the reviewed module with no caller arguments")
+        "#!/usr/bin/python3 -EP\n"
+        "import mojo.deploy.firewall_broker as broker\n\n"
+        "raise SystemExit(broker.main())\n",
+        "the reviewed broker path must directly enter safe Python with no shell exec generation")
     th.assert_eq(
         (firewall_broker.ADDRESS_SPACE_GROWTH_BYTES,
          firewall_broker.MAX_ADDRESS_SPACE_BYTES),

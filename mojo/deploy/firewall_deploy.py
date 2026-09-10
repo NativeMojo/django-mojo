@@ -15,7 +15,11 @@ CONFIG_PATH = "/etc/mojo-firewall.json"
 BROKER_CONFIG_PATH = "/etc/mojo-firewall-broker.json"
 BROKER_PATH = "/usr/local/sbin/mojo-firewall-broker"
 SUDOERS_PATH = "/etc/sudoers.d/70-mojo-firewall-broker"
-BROKER_WRAPPER_TEXT = "#!/bin/sh\nexec /usr/bin/python3 -E -P -m mojo.deploy.firewall_broker\n"
+BROKER_WRAPPER_TEXT = (
+    "#!/usr/bin/python3 -EP\n"
+    "import mojo.deploy.firewall_broker as broker\n\n"
+    "raise SystemExit(broker.main())\n"
+)
 SUDOERS_TEXT = 'ec2-user ALL=(root) NOPASSWD: /usr/local/sbin/mojo-firewall-broker ""\n'
 MAX_BYTES = 4096
 

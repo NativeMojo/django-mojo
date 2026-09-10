@@ -377,6 +377,12 @@ def test_mojosec_provenance_status_requires_a_live_engine_anchor(opts):
     }
     th.assert_true(cn._valid_provenance_status(healthy),
                    "healthy bounded provenance with a live engine anchor must pass")
+    th.assert_true(cn._valid_provenance_status(dict(
+        healthy, process_nodes=131072 + 64, engine_anchors=64)),
+        "the public bound must include the separately retained pinned anchors")
+    th.assert_true(not cn._valid_provenance_status(dict(
+        healthy, process_nodes=131072 + 64 + 1, engine_anchors=64)),
+        "the public bound must still reject state beyond both retention caps")
     for malformed in (
             None, {}, dict(healthy, audit_health=None),
             dict(healthy, engine_anchors=0), dict(healthy, process_nodes=True)):

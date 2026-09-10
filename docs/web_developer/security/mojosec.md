@@ -344,6 +344,9 @@ target lineage plus matching begin/result receipts. The fixed classifier is
 direct, SSH-attributed, or audit-unhealthy activity is sent as an ordinary
 Event. A diagnostic window uses the existing eventless local-only receipt
 contract and does not create an Incident or enter learning/feedback metrics.
+The installed broker path enters safe-path Python directly, without a shell
+trampoline that would create an ambiguous second exec generation under the
+receipt's PID/start-ticks identity.
 
 On AL2023 the sensor accepts a trusted same-event PROCTITLE as the compound
 boundary when journald omits the empty EOE. It still requires complete EXECVE

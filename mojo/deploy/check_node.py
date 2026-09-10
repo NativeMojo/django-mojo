@@ -67,6 +67,7 @@ import subprocess
 import sys
 
 from mojo.deploy.mojosec import DEPLOY_STATE_PATH as MOJOSEC_DEPLOY_STATE_PATH
+from mojo.mojosec.store import PROCESS_NODE_CAP, PROCESS_PINNED_CAP
 
 PASS = "PASS"
 WARN = "WARN"
@@ -1139,7 +1140,7 @@ def _valid_provenance_status(process):
         audit_health.get("lost") == 0 and audit_health.get("backlog_limit", 0) >= 8192 and
         all(isinstance(value, int) and not isinstance(value, bool)
             for value in integer_fields) and
-        0 <= process["process_nodes"] <= 131072 and
+        0 <= process["process_nodes"] <= PROCESS_NODE_CAP + PROCESS_PINNED_CAP and
         0 <= process["pending_firewall"] <= 4096 and
         process["engine_anchors"] >= 1)
 
