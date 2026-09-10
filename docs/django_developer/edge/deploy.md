@@ -42,12 +42,17 @@ locator, with:
 --node-type <type> [--migrate]
 ```
 
-Projects may override the complete argv, commonly with
-`["sudo", "-n", "/opt/api/aws/update.sh"]`. An existing `aws/update.sh` that
-delegates to `python3 -m mojo.deploy locate update.sh` remains current
-automatically and requires no project source update. SHA, framework version,
-deployment UUID and node type are validated before mutation. The parent does
-not inspect script source or add deployment security-policy gates.
+Projects may override the complete argv. A custom override that crosses
+`sudo` before reaching the packaged updater must place the private
+`--parent-status` bit after that boundary, for example
+`["sudo", "-n", "/opt/api/aws/update.sh", "--parent-status"]`. Alternatively,
+launch a locator shim as the application account and let the packaged updater
+carry the marker through its own elevation. An existing `aws/update.sh` that
+delegates to `python3 -m mojo.deploy locate update.sh` therefore needs no
+vendored framework body, but its launch shape must preserve this status
+contract. SHA, framework version, deployment UUID and node type are validated
+before mutation. The parent does not inspect script source, rewrite a custom
+argv, or add deployment security-policy gates.
 
 For an API node, zero exit means:
 
