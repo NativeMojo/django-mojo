@@ -1332,12 +1332,15 @@ The exact read-only `broker.status` request carries no caller-supplied JobEngine
 context and takes no mutation lock; it only proves enrollment and protected
 authority assets for runner readiness. The root broker assigns its operation
 identity and emits matching begin/result receipts for its own PID generation,
-with no firewall children in either receipt. It sends one strict semantic JSON
-request to exactly
-`sudo -n -- /usr/local/sbin/mojo-firewall-broker`; sudoers authorizes that
-empty-argument command only. Mutation operations additionally validate the
-same-runner JobEngine context, construct all argv and restore input, and emit
-root-owned receipts for their firewall children. Requests are at most 16
+with no firewall children in either receipt. Root-owned receipts also carry the
+broker's Audit session and executable because journald can lose those process
+fields after a short-lived broker exits. They fill only absent journal
+metadata: trusted journal values remain authoritative, and any disagreement
+invalidates the receipt pair. It sends one strict semantic JSON request to
+exactly `sudo -n -- /usr/local/sbin/mojo-firewall-broker`; sudoers authorizes
+that empty-argument command only. Mutation operations additionally validate
+the same-runner JobEngine context, construct all argv and restore input, and
+emit root-owned receipts for their firewall children. Requests are at most 16
 MiB/250,000 canonical networks; restore is at most 24 MiB. After imports the
 broker reads its current virtual address space from `/proc/self/statm` and adds
 256 MiB of growth headroom, with a 768 MiB absolute ceiling. A lower existing

@@ -344,7 +344,10 @@ check also emits a root-authored pair, but no firewall child: its result binds
 the broker's own PID generation and both receipt child lists are empty. Its sudo
 observation is suppressed only when that exact pair and generation join to cron
 JobEngine → sudo → broker lineage and the pinned engine origin. A failed result
-or unproven check remains an ordinary Event. The fixed classifier is
+or unproven check remains an ordinary Event. The root-owned pair carries the
+broker's Audit session and executable as fallback when journald loses metadata
+for the short-lived process. Trusted journal values still take precedence, and
+any disagreement invalidates the pair. The fixed classifier is
 `jobman_firewall_operation_v1`. Missing, stale, conflicting, interactive,
 direct, SSH-attributed, or audit-unhealthy activity is likewise sent as an
 ordinary Event. A diagnostic window uses the existing eventless local-only
