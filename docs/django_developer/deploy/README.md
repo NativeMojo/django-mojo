@@ -475,15 +475,16 @@ the application account (same ladder as the update transaction: cron entry →
 `APP_USER` → checkout owner, never `SUDO_USER`), repairs the ownership of its
 own pid/log files, and re-execs through `sudo -H -u` as that account — so the
 engine and scheduler never run as root no matter who started them. If no
-non-root account resolves it refuses loudly and lets cron remain the backstop.
-`stop` and `status` never demote: a root `stop` must be able to kill a
-root-owned engine.
+non-root account resolves it refuses loudly; cron can retry only after that
+account resolution is repaired. `stop` and `status` never demote: a root
+`stop` must be able to kill a root-owned engine.
 
-Manual remedies on a node whose job processes ended up root-owned:
-`sudo bin/jobman stop && sudo bin/jobman start` replaces live root components
-with correctly-owned ones; a root engine that already died leaves root-owned
-files that block the cron backstop, and a single `sudo bin/jobman start`
-(which demotes) repairs them and starts fresh.
+On a node whose job processes ended up root-owned, `sudo bin/jobman stop`
+retires them and the installed cron starts correctly owned replacements. If a
+dead root engine left jobman files that block the application-account cron,
+`sudo bin/jobman start` repairs their ownership and demotes before starting;
+stop that interactive replacement and let the next cron tick establish the
+MojoSec-proven origin before expecting firewall brokering.
 
 ### `node_setup`
 
