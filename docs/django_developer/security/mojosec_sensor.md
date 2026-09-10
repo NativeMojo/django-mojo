@@ -1316,9 +1316,10 @@ Audit records the child executable. The resolver recognizes only these fixed
 logical-to-kernel executable pairs and separately requires the exact logical
 path in argv plus the receipt's full argv digest. When a short-lived process
 exits before `/proc` enrichment can provide start ticks, its exact Audit PID
-record must fall within two seconds of the receipt pair. An explicitly failed
-`execve` is not a new process image and is excluded from the lineage graph;
-missing, incomplete, or ambiguous Audit identity still fails open.
+record must fall within two seconds of the receipt pair. A terminal Audit
+compound with an explicit kernel `success=no` is not a new process image and
+is excluded from the lineage graph; missing, incomplete, or conflicting Audit
+outcomes still fail open.
 
 Application firewall work no longer invokes raw iptables/ipset sudo commands.
 The exact read-only `broker.status` request carries no caller-supplied JobEngine

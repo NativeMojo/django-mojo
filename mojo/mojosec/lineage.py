@@ -272,8 +272,16 @@ class CompoundAssembler:
         argc = _integer(execve.get("argc"), MAX_ARGUMENTS)
         argv = []
         used = 0
-        success = str(syscall.get("success") or "").lower() in ("yes", "1")
+        success_value = str(syscall.get("success") or "").lower()
+        success = success_value in ("yes", "1")
         exit_code = _integer(syscall.get("exit"))
+        # A kernel-reported failed exec has no EXECVE argument record because
+        # it never replaced the process image.  Preserve that narrow outcome
+        # separately from the generic ``success=False`` used for missing or
+        # incomplete SYSCALL evidence.
+        failure_confirmed = bool(
+            success_value in ("no", "0") and "EOE" in item["rows"] and
+            not item.get("ambiguous") and not item.get("incomplete"))
         ambiguous = item["ambiguous"] or not syscall or not execve or argc is None
         if argc is not None:
             if any(f"a{index}" in execve for index in range(argc, MAX_ARGUMENTS)):
@@ -303,6 +311,7 @@ class CompoundAssembler:
             "selinux": str(syscall.get("subj") or "")[:256],
             "monotonic": _integer(syscall.get("monotonic")),
             "success": bool(success and exit_code == 0),
+            "failure_confirmed": failure_confirmed,
             "eoe": "EOE" in item["rows"],
             "_completion": PROCTITLE_BOUNDARY if "PROCTITLE" in item["rows"] else "",
             "ambiguous": ambiguous,

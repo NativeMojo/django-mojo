@@ -587,6 +587,23 @@ def test_compound_timeout_is_incomplete(opts):
     th.assert_true(result["complete"][0]["incomplete"] and
                    result["complete"][0]["ambiguous"],
                    "a compound without EOE must close after two seconds but never prove lineage")
+    th.assert_true(not result["complete"][0]["failure_confirmed"],
+                   "a missing Audit outcome must not become a confirmed failed exec")
+
+
+@th.unit_test("only a terminal kernel failure is a confirmed failed exec")
+def test_compound_confirmed_failed_exec(opts):
+    from mojo.mojosec.lineage import CompoundAssembler
+
+    result = CompoundAssembler().ingest([
+        _record(45, "SYSCALL", _AUDIT_FIELD_PID="8", _AUDIT_FIELD_PPID="1",
+                _AUDIT_FIELD_EXE="/usr/sbin/xtables-nft-multi",
+                _AUDIT_FIELD_SUCCESS="no", _AUDIT_FIELD_EXIT="-2"),
+        _record(45, "EOE"),
+    ])
+    node = result["complete"][0]
+    th.assert_true(node["failure_confirmed"] and not node["success"],
+                   "a terminal success=no SYSCALL must identify a failed exec")
 
 
 @th.unit_test("event lineage projection is bounded")
@@ -606,6 +623,34 @@ def test_project_ancestors_is_bounded(opts):
     th.assert_eq(Store._one_pid_generation(
         reused, 7, 10, 0, 1_000_000, exe="/bin/a"), None,
         "PID reuse or duplicate generations must never choose an arbitrary proof node")
+
+
+@th.unit_test("incomplete Audit outcomes remain negative process authority")
+def test_incomplete_process_outcome_vetoes_competitor(opts):
+    from mojo.mojosec.store import Store
+
+    complete = {
+        "boot_id": "a" * 32, "audit_id": "1", "pid": 7, "ppid": 1,
+        "audit_session": 9, "exe": "/usr/bin/tool", "argv": ["/usr/bin/tool"],
+        "argv_sha256": hashlib.sha256(b"/usr/bin/tool").hexdigest(),
+        "success": True, "failure_confirmed": False, "eoe": True,
+        "ambiguous": False, "incomplete": False, "monotonic": 1_000_000,
+    }
+    incomplete = dict(
+        complete, audit_id="2", argv=[], argv_sha256=hashlib.sha256(b"").hexdigest(),
+        success=False, failure_confirmed=False, eoe=False, ambiguous=True,
+        incomplete=True, monotonic=1_000_100)
+    with tempfile.TemporaryDirectory() as root:
+        store = _review_store(root)
+        store.ingest([], process_nodes=[complete, incomplete])
+        nodes = [json.loads(row["payload"]) for row in store.db.execute(
+            "SELECT payload FROM process_nodes WHERE pid=7")]
+        th.assert_eq(len(nodes), 2,
+                     "an incomplete real-PID compound must remain durable evidence")
+        th.assert_eq(Store._one_pid_generation(
+            nodes, 7, 70, 0, 2_000_000_000, exe="/usr/bin/tool"), None,
+            "an incomplete outcome must veto an otherwise eligible tickless generation")
+        store.close()
 
 
 @th.unit_test("proven firewall operation resolves local-only and incomplete proof fails open")
@@ -714,7 +759,7 @@ def test_pending_firewall_resolution(opts):
     failed_exec = dict(
         nodes[5], audit_id="7", start_ticks=None, argv=[],
         argv_sha256=hashlib.sha256(b"").hexdigest(), success=False,
-        monotonic=1_050_000)
+        failure_confirmed=True, monotonic=1_050_000)
     with tempfile.TemporaryDirectory() as root:
         os.chmod(root, 0o700)
         store = Store(root, "sensor", aggregation, delivery,

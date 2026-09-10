@@ -668,7 +668,7 @@ class Store:
             item = dict(item)
             # A failed execve does not replace the process image, so it is not
             # a competing PID generation in the provenance graph.
-            if item.get("success") is False and item.get("pid"):
+            if self._confirmed_failed_exec(item) and item.get("pid"):
                 continue
             generation = f"audit-{item.get('audit_id', '')}"[:128]
             # Preserve an existing canonical row (including pre-upgrade rows)
@@ -698,7 +698,8 @@ class Store:
                     self.db.execute("DELETE FROM process_nodes WHERE rowid=?",
                                     (prior_row["rowid"],))
                 immutable = ("pid", "ppid", "uid", "euid", "auid", "tty", "selinux",
-                             "exe", "argv", "argv_sha256", "audit_session", "success", "monotonic")
+                             "exe", "argv", "argv_sha256", "audit_session", "success",
+                             "failure_confirmed", "monotonic")
                 conflict = (prior.get("ambiguous") or prior.get("incomplete") or
                             any(prior.get(key) != item.get(key) for key in immutable) or
                             (prior.get("start_ticks") and item.get("start_ticks") and
@@ -876,7 +877,7 @@ class Store:
                             (canonical_json(node), row["rowid"]))
 
     def _invalidate_competing_process_nodes(self, item):
-        if item.get("success") is False:
+        if self._confirmed_failed_exec(item):
             return
         rows = self.db.execute(
             "SELECT rowid,payload FROM process_nodes WHERE boot_id=? AND pid=?",
@@ -885,7 +886,7 @@ class Store:
         for row in rows:
             peer = json.loads(row["payload"])
             if (peer.get("audit_id") == item.get("audit_id") or
-                    peer.get("success") is False or
+                    self._confirmed_failed_exec(peer) or
                     not self._competing_process_generation(item, peer)):
                 continue
             peers.append((row["rowid"], peer))
@@ -1186,12 +1187,18 @@ class Store:
         return eligible_process_node(node)
 
     @staticmethod
+    def _confirmed_failed_exec(node):
+        """Return true only for a complete, kernel-confirmed failed exec."""
+        return bool(isinstance(node, dict) and
+                    node.get("failure_confirmed") is True)
+
+    @staticmethod
     def _one_pid_generation(nodes, pid, start_ticks, earliest, latest, exe=None):
         found = []
         for node in nodes:
             if node.get("pid") != pid:
                 continue
-            if node.get("success") is False:
+            if Store._confirmed_failed_exec(node):
                 continue
             node_ticks = node.get("start_ticks")
             if node_ticks is not None and node_ticks != start_ticks:
@@ -1213,7 +1220,7 @@ class Store:
     @staticmethod
     def _parent_node(nodes, child):
         candidates = [node for node in nodes if node.get("pid") == child.get("ppid") and
-                      node.get("success") is not False]
+                      not Store._confirmed_failed_exec(node)]
         found = [node for node in candidates if Store._eligible_process_node(node)]
         if any(not Store._eligible_process_node(peer) and
                Store._competing_process_generation(node, peer)
