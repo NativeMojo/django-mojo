@@ -1175,10 +1175,15 @@ SELinux context. The network-capable root sensor remains bounded to
 identity check, so that one lookup goes through a root-only mode-`0600` Unix
 socket to a separate resolver running as `ec2-user`. The resolver accepts only
 a bounded numeric PID plus the already-read start ticks, double-reads that
-generation, returns only the executable path, disables core dumps, has no
-capabilities or IP network, and keeps the systemd filesystem, namespace, kernel,
-and device restrictions. Failure or disagreement returns no identity and keeps
-the event centrally visible. Audit remains durable truth: a short-lived process or ancestor
+generation, and its success response echoes those bound identifiers and adds
+only the executable path. It disables core dumps, has no capabilities or IP
+network, and keeps the systemd filesystem, namespace, kernel, and device
+restrictions. Failure or disagreement returns no identity and keeps the event
+centrally visible. Observe convergence installs both process-identity units and
+enables `mojosec-proc-identity.socket`; mode-off stops the resolver, disables
+the socket, and removes both unit files. `check_node --section mojosec` fails on
+unit bytes, socket state or permissions, and effective helper-sandbox drift.
+Audit remains durable truth: a short-lived process or ancestor
 that has already left `/proc` does not poison a complete Audit edge. A live
 `/proc` identity that conflicts with Audit, PID reuse, cycles, ordering
 conflicts, gaps, loss, or stale health makes suppression ineligible. Only the

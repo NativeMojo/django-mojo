@@ -353,12 +353,12 @@ executable and complete command line. Malformed journal records also veto
 suppression, even with healthy Audit sidecars.
 
 The network-capable root sensor keeps only its filesystem read capability and
-never receives `CAP_SYS_PTRACE`. A separate resolver runs as the application
-user with no capabilities or IP network. Its root-only Unix socket accepts one
-bounded PID/generation request and returns only a double-checked executable
-path; failure remains ordinary central evidence. This supports the exact live
-JobEngine check without relaxing any Audit, receipt, cron-origin, or command
-line requirement.
+never receives `CAP_SYS_PTRACE`. A separate resolver runs as `ec2-user` with no
+capabilities or IP network. Its root-owned mode-`0600` Unix socket accepts one
+bounded PID/start-ticks request. A successful response echoes those identifiers
+and adds only the double-checked executable path; failure remains ordinary
+central evidence. This supports the exact live JobEngine check without relaxing
+any Audit, receipt, cron-origin, or command-line requirement.
 
 Raw sudo observations are never sampled, rate-limited, or aggregated to reduce
 noise. An unexplained privileged action remains ordinary central evidence;
