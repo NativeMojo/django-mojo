@@ -1274,6 +1274,11 @@ malformed. Missing fields, booleans, negative or oversized counters, and
 non-finite timestamps also fail closed. Runtime `healthy` and `reason`
 annotations remain internal; durable previous-health state selects the same
 canonical publisher fields before the next sequence comparison.
+Firewall proof gating uses the most recently ingested health epoch for the
+candidate's boot (`observed_at`, then row insertion order), not the numerically
+largest publisher sequence. Publisher sequences can restart after a deployment;
+a stale high-sequence unhealthy sample therefore cannot override a newer
+healthy observation.
 
 Unpinned process nodes live locally for seven days (131,072 rows); up to 64
 active engine anchors are retained separately, and node audit accepts the
@@ -1291,8 +1296,18 @@ reported in sensor counters. A
 non-journal collector has no new Audit-health authority and therefore cannot
 flush a pending proof candidate; only an explicit unhealthy journal bracket or
 the ordinary expiry deadline does so.
-central Event receives at most eight compact ancestors; the complete graph and
-raw Audit records remain on the sensor.
+
+Firewall proof reconciliation handles the oldest 512 pending candidates per
+pass. It builds keyed indexes once from at most the newest 8,192 receipt rows in
+the 30-second window and 32,768 process nodes, ordered with pinned anchors first
+and then by recency, before narrowing each candidate by boot, Audit session,
+producer, broker PID and parent. Within those bounded work budgets, unrelated
+same-window process and receipt bursts cannot displace a candidate merely
+because it appeared outside the former small per-candidate lookup. A candidate
+without complete proof remains pending until later input or the 30-second
+fail-open deadline; the resolver never guesses from a partial pair or lineage.
+Any resulting central Event receives at most eight compact ancestors; the
+complete graph and raw Audit records remain on the sensor.
 
 Application firewall work no longer invokes raw iptables/ipset sudo commands.
 The exact read-only `broker.status` request needs no JobEngine context and
