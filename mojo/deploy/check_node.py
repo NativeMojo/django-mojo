@@ -934,6 +934,29 @@ def _audit_mojosec_unit(report, run, sudo, mode="observe"):
         else:
             report.fail("mojosec", "same-UID ptrace protection unavailable",
                         "resolver requires kernel.yama.ptrace_scope >= 1")
+        managed_ptrace = (
+            "import os,stat;from mojo.deploy import mojosec as m;"
+            "p=m.PTRACE_SYSCTL_PATH;fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW);"
+            "s=os.fstat(fd);got=os.read(fd,257);os.close(fd);"
+            "values=[v for v in (1,2,3) if got==m._ptrace_sysctl_text(v).encode()];"
+            "ok=(stat.S_ISREG(s.st_mode) and s.st_uid==0 and s.st_gid==0 and "
+            "stat.S_IMODE(s.st_mode)==0o644 and s.st_size==len(got) and "
+            "len(got)<=256 and len(values)==1);"
+            "print(values[0] if ok else '');raise SystemExit(0 if ok else 1)"
+        )
+        managed_rc, managed_out, _ = run(_mojosec_python(
+            sudo, f"-c {q(managed_ptrace)}", safe_path=True))
+        try:
+            managed_value = int(managed_out.strip())
+        except (TypeError, ValueError):
+            managed_value = 0
+        if (managed_rc == 0 and yama_rc == 0 and
+                managed_value == yama and managed_value >= 1):
+            report.passed("mojosec", "managed ptrace protection",
+                          f"persistent policy exactly preserves live value {managed_value}")
+        else:
+            report.fail("mojosec", "managed ptrace protection unavailable",
+                        "root-owned sysctl policy must exactly persist the live protected value")
     properties = (
         "User", "Group", "UMask", "WorkingDirectory", "Environment",
         "FragmentPath", "DropInPaths",
@@ -1232,7 +1255,8 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
         absent = run(
             "test ! -e /etc/systemd/system/mojosec-proc-identity.service && "
             "test ! -e /etc/systemd/system/mojosec-proc-identity.socket && "
-            "test ! -e /run/mojosec-proc-identity.sock"
+            "test ! -e /run/mojosec-proc-identity.sock && "
+            "test ! -e /etc/sysctl.d/90-mojosec-ptrace.conf"
         )[0] == 0
         if inactive and absent:
             report.passed("mojosec", "process identity helper retired",

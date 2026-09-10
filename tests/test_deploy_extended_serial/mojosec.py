@@ -26,9 +26,63 @@ def _provenance_deploy_mocks(deploy):
                 "generation": "a" * 64, "rules_sha256": "b" * 64}), \
             mock.patch("mojo.deploy.audit.restore_immediate"), \
             mock.patch("mojo.deploy.audit.restore_prior"), \
+            mock.patch.object(deploy, "_converge_ptrace_scope",
+                              return_value=(False, 1, 1)), \
+            mock.patch.object(deploy, "_read_ptrace_scope", return_value=1), \
+            mock.patch.object(deploy, "_restore_ptrace_scope"), \
             mock.patch.object(deploy.subprocess, "run",
                               return_value=mock.Mock(returncode=0, stderr="")):
         yield
+
+
+@th.django_unit_test()
+def test_ptrace_convergence_raises_weak_policy_without_lowering_stronger_policy(opts):
+    from mojo.deploy import mojosec as deploy
+
+    writes = []
+    runs = []
+    readings = iter((0, 1))
+    changed, prior, current = deploy._converge_ptrace_scope(
+        reader=lambda: next(readings),
+        writer=lambda path, text, mode: writes.append((path, text, mode)) or True,
+        runner=lambda argv: runs.append(argv),
+    )
+    th.assert_true(changed and prior == 0 and current == 1,
+                   "weak ptrace policy must be reported as a changed convergence")
+    th.assert_eq(writes, [(deploy.PTRACE_SYSCTL_PATH,
+                           deploy._ptrace_sysctl_text(1), 0o644)],
+                 "convergence must persist the minimum restricted-ptrace policy")
+    th.assert_eq(runs, [["/usr/sbin/sysctl", "-w", "kernel.yama.ptrace_scope=1"]],
+                 "weak live policy must be raised immediately")
+
+    writes = []
+    runs = []
+    readings = iter((2, 2))
+    changed, prior, current = deploy._converge_ptrace_scope(
+        reader=lambda: next(readings),
+        writer=lambda path, text, mode: writes.append((path, text, mode)) or True,
+        runner=lambda argv: runs.append(argv),
+    )
+    th.assert_true(changed and prior == 2 and current == 2,
+                   "persisting an existing stronger policy is still a managed change")
+    th.assert_eq(writes, [(deploy.PTRACE_SYSCTL_PATH,
+                           deploy._ptrace_sysctl_text(2), 0o644)],
+                 "convergence must preserve the stronger host policy exactly")
+    th.assert_eq(runs, [], "convergence must never lower or rewrite stronger live policy")
+
+
+@th.django_unit_test()
+def test_ptrace_rollback_restores_persistent_and_live_policy(opts):
+    from mojo.deploy import mojosec as deploy
+
+    snapshot = (b"prior policy\n", 0o640)
+    with mock.patch.object(deploy, "_restore_snapshot") as restore, \
+            mock.patch.object(deploy, "_read_ptrace_scope", return_value=1), \
+            mock.patch.object(deploy, "_run") as run:
+        deploy._restore_ptrace_scope(snapshot, 2)
+    restore.assert_called_once_with(deploy.PTRACE_SYSCTL_PATH, snapshot)
+    run.assert_called_once_with(
+        ["/usr/sbin/sysctl", "-w", "kernel.yama.ptrace_scope=2"])
 
 
 @th.django_unit_test()
@@ -310,6 +364,8 @@ def test_off_restores_audit_and_removes_feature_assets(opts):
                  deploy.PROC_IDENTITY_SOCKET_PATH):
         th.assert_in(path, removed,
                      f"off must remove the process resolver asset {path}")
+    th.assert_in(deploy.PTRACE_SYSCTL_PATH, removed,
+                 "off must remove the package-owned persistent ptrace policy")
     th.assert_in(("disable", "--now", deploy.PROC_IDENTITY_SOCKET), calls,
                  "off must disable the process identity socket")
 

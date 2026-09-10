@@ -780,6 +780,12 @@ capability tokens without ignoring extra capabilities or real Audit drift.
 Repair pre-adoption drift with a rolling restart or the next successful deploy.
 Daily restarts are not a security control or a substitute for generation proof.
 
+After candidate or previous-version activation, an enrolled host also runs the full
+MojoSec convergence from the installed framework before firewall convergence.
+The refresh bridge preserves runtime continuity; this second step installs new
+package-owned units, kernel policy, and other host assets. Unenrolled hosts and
+the intermediate rollback-candidate path remain unchanged.
+
 After release, follow normal canary/fleet ordering and require both MojoVerify
 nodes to report the released version from active, fresh generations with no new
 false broker missing-proof occurrences. Do not restart both as an out-of-band
@@ -1180,6 +1186,11 @@ only the executable path. It disables core dumps, has no capabilities or IP
 network, and keeps the systemd filesystem, namespace, kernel, and device
 restrictions. Its service starts only when `kernel.yama.ptrace_scope` is at
 least `1`, so another `ec2-user` process cannot attach during Python startup.
+Observe convergence persists the current protected value in root-owned
+`/etc/sysctl.d/90-mojosec-ptrace.conf`, raising `0` to `1` immediately but never
+lowering an existing `2` or `3`. A failed convergence restores the prior file
+and live value. Mode-off removes the package-owned persistent policy after the
+resolver is stopped but does not weaken the live kernel value.
 Failure or disagreement returns no identity and keeps the event
 centrally visible. Observe convergence installs both process-identity units and
 enables `mojosec-proc-identity.socket`; a changed socket is restarted. The
@@ -1189,7 +1200,7 @@ generations together. Mode-off stops the resolver, disables the socket, and
 removes both unit files and the runtime socket. `check_node --section mojosec`
 fails on unit bytes, effective listener/drop-in settings, socket state or
 permissions, Yama protection, effective helper-sandbox drift, and residue in
-off mode.
+off mode, including persistent sysctl residue.
 Audit remains durable truth: a short-lived process or ancestor
 that has already left `/proc` does not poison a complete Audit edge. A live
 `/proc` identity that conflicts with Audit, PID reuse, cycles, ordering

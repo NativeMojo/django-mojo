@@ -420,6 +420,21 @@ case "$ACTION" in
     activate-previous) activate_previous ;;
 esac
 
+# The narrow refresh bridge above preserves sensor continuity across N-1
+# activation. An enrolled host also needs the newly installed framework to
+# converge package-owned units and kernel protections before firewall work can
+# create process-lineage events.
+if { [ "$ACTION" = "activate" ] || [ "$ACTION" = "activate-previous" ]; } &&
+        [ -f /etc/mojosec/enrollment.json ]; then
+    if /usr/bin/python3 -E -P -m mojo.deploy.mojosec converge \
+            --project-path "$PROJ_PATH" \
+            --deployment-id "$(head -1 "$STATE/deployment" 2>/dev/null || true)"; then
+        :
+    else
+        echo "mojosec convergence degraded after activation" >&2 || :
+    fi
+fi
+
 # Candidate and previous activation may run legacy MojoSec-off cleanup.
 # Enrollment survives that cleanup; restore its authority after activation.
 if [ -f "$STATE/firewall_deploy.py" ]; then

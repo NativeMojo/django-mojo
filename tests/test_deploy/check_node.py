@@ -245,6 +245,7 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
          (0, _proc_identity_socket_show(), "")),
         ("/run/mojosec-proc-identity.sock", (0, "root root 600", "")),
         ("/proc/sys/kernel/yama/ptrace_scope", (0, "1", "")),
+        ("PTRACE_SYSCTL_PATH", (0, "1", "")),
         ("python3 -c", (0, status, "")),
         ("/run/mojosec/status.json", (0, "root root 640", "")),
         ("nginx -T", (0, "log_format mojosec_v1 escape=json\n"
@@ -275,6 +276,8 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
                  f"the effective listener must reject drop-ins and target drift: {statuses}")
     th.assert_eq(statuses.get("same-UID ptrace protection"), cn.PASS,
                  f"the kernel must protect the helper before Python starts: {statuses}")
+    th.assert_eq(statuses.get("managed ptrace protection"), cn.PASS,
+                 f"the persistent policy must preserve the live protected value: {statuses}")
     th.assert_eq(statuses.get("security log archives"), cn.PASS,
                  f"root-only rotated evidence must pass: {statuses}")
     th.assert_true(any("mojosec.json.log.*" in command for command in run.commands),

@@ -174,3 +174,21 @@ def test_modern_publication_recovery_refreshes_before_publishing_and_never_track
     assert 'record_unit "mojosec.service"' not in post, "sensor restart must never enter application unit rollback state"
     previous = (Path(__file__).parent / "fixtures/pre_refresh_update.sh").read_text()
     assert "mojosec_refresh" not in previous, "predecessor fixture must preserve the exact pre-adoption limitation"
+
+
+@th.django_unit_test()
+def test_post_deploy_converges_enrolled_mojosec_before_firewall_work(opts):
+    from mojo.deploy import mojosec_refresh
+
+    repo = Path(mojosec_refresh.__file__).resolve().parents[2]
+    post = (repo / "mojo/deploy/project_scripts/post_deploy.sh").read_text()
+    sensor = "/usr/bin/python3 -E -P -m mojo.deploy.mojosec converge"
+    firewall = "/usr/bin/python3 -E -s \"$STATE/firewall_deploy.py\" converge"
+    assert sensor in post, (
+        "ordinary deployments must converge the enrolled sensor from the newly "
+        "installed framework instead of only restarting its old unit")
+    assert f"if {sensor}" in post and "--deployment-id" in post, (
+        "ordinary convergence must carry deployment identity and remain an observer, "
+        "not become a new application-deployment veto")
+    assert post.index(sensor) < post.index(firewall), (
+        "sensor identity proof must converge before deployment queues firewall work")

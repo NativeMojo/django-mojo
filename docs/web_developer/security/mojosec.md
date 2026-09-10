@@ -30,6 +30,9 @@ attempt, with a 60-second budget and systemd job reconciliation/cancellation.
 Root-only `/etc/mojosec/runtime-refresh.json` retains pending/degraded results and
 recent failures. Observer errors never decide application deployment success.
 Legacy rollback reports unavailable loaded-version proof explicitly.
+After activation, every enrolled host also runs full MojoSec convergence from
+the installed framework before firewall work. That installs new sensor assets;
+unenrolled hosts remain untouched.
 
 The first upgrade adopts refresh when the candidate activation body starts and
 retains a wrapper for previous activation. An interruption before that boundary
@@ -359,10 +362,14 @@ bounded PID/start-ticks request. A successful response echoes those identifiers
 and adds only the double-checked executable path; failure remains ordinary
 central evidence. Startup requires `kernel.yama.ptrace_scope >= 1`, which
 protects the resolver from another same-UID process before Python begins. Its
+convergence persists that protection and raises a weak value to `1`, while
+preserving stronger host values of `2` or `3`. Mode-off removes the managed
+persistent setting without weakening the live kernel value. Its
 service declares `PartOf=mojosec.service`, so sensor restarts refresh an
 already-running resolver after framework deployments; a changed socket unit is
 also restarted. Node audit verifies the effective listener, service trigger,
-root ownership, mode, absence of drop-ins, Yama posture, and helper sandbox.
+root ownership, mode, absence of drop-ins, live and persistent Yama posture,
+and helper sandbox.
 Mode-off convergence stops the resolver, disables the socket, and removes both
 unit files and the runtime socket. This supports the exact live JobEngine check
 without relaxing any Audit, receipt, cron-origin, or command-line requirement.

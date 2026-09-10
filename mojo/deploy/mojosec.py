@@ -32,6 +32,8 @@ PROVENANCE_CAPABILITY = 1
 SERVICE_PATH = "/etc/systemd/system/mojosec.service"
 PROC_IDENTITY_SERVICE_PATH = "/etc/systemd/system/mojosec-proc-identity.service"
 PROC_IDENTITY_SOCKET_PATH = "/etc/systemd/system/mojosec-proc-identity.socket"
+PTRACE_SCOPE_PATH = "/proc/sys/kernel/yama/ptrace_scope"
+PTRACE_SYSCTL_PATH = "/etc/sysctl.d/90-mojosec-ptrace.conf"
 CONFIG_PATH = CANONICAL_CONFIG_PATH
 DESIRED_CONFIG_PATH = "/opt/api/var/mojosec.json"
 ENROLLMENT_PATH = "/etc/mojosec/enrollment.json"
@@ -300,6 +302,59 @@ def _run(argv):
         detail = (done.stderr or done.stdout).strip()[:500]
         raise DeployError(f"{' '.join(argv)} failed ({done.returncode}): {detail}")
     return done.stdout.strip()
+
+
+def _read_ptrace_scope(path=PTRACE_SCOPE_PATH):
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as err:
+        raise DeployError(f"cannot read kernel ptrace protection: {err}") from err
+    try:
+        info = os.fstat(descriptor)
+        payload = os.read(descriptor, 32)
+    finally:
+        os.close(descriptor)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0:
+        raise DeployError("kernel ptrace protection is not root-owned regular state")
+    try:
+        value = int(payload.decode("ascii", errors="strict").strip())
+    except (UnicodeError, ValueError) as err:
+        raise DeployError("kernel ptrace protection is invalid") from err
+    if value not in (0, 1, 2, 3):
+        raise DeployError("kernel ptrace protection is outside the supported range")
+    return value
+
+
+def _ptrace_sysctl_text(value):
+    if value not in (1, 2, 3):
+        raise DeployError("managed ptrace protection must be between 1 and 3")
+    return f"# Managed by django-mojo; required by the MojoSec identity resolver.\n" \
+           f"kernel.yama.ptrace_scope = {value}\n"
+
+
+def _converge_ptrace_scope(prior=None, reader=None, writer=None, runner=None):
+    """Persist at least Yama restricted-ptrace without lowering stronger policy."""
+    reader = reader or _read_ptrace_scope
+    writer = writer or _write_if_changed
+    runner = runner or _run
+    if prior is None:
+        prior = reader()
+    target = max(1, prior)
+    changed = writer(PTRACE_SYSCTL_PATH, _ptrace_sysctl_text(target), 0o644)
+    if prior < 1:
+        runner(["/usr/sbin/sysctl", "-w", f"kernel.yama.ptrace_scope={target}"])
+    current = reader()
+    if current < 1:
+        raise DeployError("kernel.yama.ptrace_scope did not reach the required value")
+    if current != target:
+        changed |= writer(PTRACE_SYSCTL_PATH, _ptrace_sysctl_text(current), 0o644)
+    return changed, prior, current
+
+
+def _restore_ptrace_scope(snapshot, prior):
+    _restore_snapshot(PTRACE_SYSCTL_PATH, snapshot)
+    if prior is not None and _read_ptrace_scope() != prior:
+        _run(["/usr/sbin/sysctl", "-w", f"kernel.yama.ptrace_scope={prior}"])
 
 
 def _lstat_regular(path, owner_uid=0, mode=None):
@@ -1066,6 +1121,9 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
     project_path = _normal_path(project_path, "MojoSec project path")
     unit_snapshot = service_state = retired_snapshot = None
     proc_identity_snapshot = None
+    ptrace_scope_snapshot = None
+    ptrace_scope_prior = None
+    ptrace_scope_value = None
     nginx_snapshot = deploy_state_snapshot = config_snapshot = None
     broker_snapshots = {}
     audit_state_snapshot = None
@@ -1074,6 +1132,8 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
     unit_changed = nginx_changed = config_changed = retired_changed = False
     proc_identity_service_changed = proc_identity_socket_changed = False
     proc_identity_changed = False
+    ptrace_scope_changed = False
+    ptrace_scope_started = False
     mutation_started = False
     prepared = None
     try:
@@ -1099,6 +1159,8 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         _require_root_install_dir(os.path.dirname(receiver_snippet_path), create=True)
         _require_root_install_dir(os.path.dirname(LOGROTATE_PATH))
         _require_root_install_dir(os.path.dirname(django_include_path))
+        if service_path == SERVICE_PATH:
+            _require_root_install_dir(os.path.dirname(PTRACE_SYSCTL_PATH))
         unit_snapshot = _owned_snapshot(service_path)
         deploy_state_snapshot = _owned_snapshot(DEPLOY_STATE_PATH)
         config_snapshot = _owned_snapshot(CONFIG_PATH)
@@ -1112,6 +1174,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         retired_snapshot = _retired_unit_snapshot()
         if service_path == SERVICE_PATH:
             proc_identity_snapshot = _proc_identity_unit_snapshot()
+            ptrace_scope_snapshot = _owned_snapshot(PTRACE_SYSCTL_PATH)
         nginx_paths = (nginx_path, receiver_snippet_path, LOGROTATE_PATH,
                        django_include_path)
         nginx_plane = prepared[2]["nginx_plane"] if prepared is not None else "standard"
@@ -1194,6 +1257,10 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                 broker_changed |= _write_if_changed(
                     AUDIT_STABLE_HELPER_PATH, handle.read(), 0o755)
         if mode == "observe" and service_path == SERVICE_PATH:
+            ptrace_scope_prior = _read_ptrace_scope()
+            ptrace_scope_started = True
+            (ptrace_scope_changed, ptrace_scope_prior,
+             ptrace_scope_value) = _converge_ptrace_scope(prior=ptrace_scope_prior)
             proc_identity_service_changed |= _write_if_changed(
                 PROC_IDENTITY_SERVICE_PATH, PROC_IDENTITY_SERVICE_TEXT, 0o644)
             proc_identity_socket_changed |= _write_if_changed(
@@ -1256,6 +1323,8 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                         "MojoSec off convergence left process identity resolver active")
                 for path in (PROC_IDENTITY_SERVICE_PATH, PROC_IDENTITY_SOCKET_PATH):
                     proc_identity_changed |= _remove_owned(path)
+                ptrace_scope_started = True
+                ptrace_scope_changed |= _remove_owned(PTRACE_SYSCTL_PATH)
             _systemctl("daemon-reload")
         else:
             _systemctl("enable", "--now", "mojosec-audit-health.timer")
@@ -1304,6 +1373,8 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             state["audit_rules_sha256"] = audit_state["rules_sha256"]
             state["content_roots"] = list(prepared[2].get("fim_content_roots", []))
             state["publish_broker"] = bool(state["content_roots"])
+            if ptrace_scope_value is not None:
+                state["ptrace_scope"] = ptrace_scope_value
             if content_digest:
                 state["content_graph_digest"] = content_digest
         _write_if_changed(DEPLOY_STATE_PATH,
@@ -1311,7 +1382,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                           0o600)
         _clear_degraded()
         return {"changed": unit_changed or nginx_changed or config_changed or retired_changed or
-                           broker_changed or proc_identity_changed,
+                           broker_changed or proc_identity_changed or ptrace_scope_changed,
                 **state}
     except (DeployError, OSError, ValueError) as err:
         rollback_errors = []
@@ -1334,6 +1405,11 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                 _restore_proc_identity_units(proc_identity_snapshot)
             except (DeployError, OSError, ValueError, RuntimeError) as rollback_error:
                 rollback_errors.append(f"process identity: {rollback_error}")
+            if ptrace_scope_started:
+                try:
+                    _restore_ptrace_scope(ptrace_scope_snapshot, ptrace_scope_prior)
+                except (DeployError, OSError, ValueError, RuntimeError) as rollback_error:
+                    rollback_errors.append(f"ptrace protection: {rollback_error}")
             try:
                 _restore_snapshot(CONFIG_PATH, config_snapshot)
             except (DeployError, OSError) as rollback_error:
@@ -1473,6 +1549,7 @@ def _journalable_converge_paths():
 
     return [
         SERVICE_PATH, PROC_IDENTITY_SERVICE_PATH, PROC_IDENTITY_SOCKET_PATH,
+        PTRACE_SYSCTL_PATH,
         NGINX_FRAGMENT_PATH, RECEIVER_SNIPPET_PATH,
         DJANGO_INCLUDE_PATH, LOGROTATE_PATH, AUDIT_HEALTH_SERVICE_PATH,
         AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH,
