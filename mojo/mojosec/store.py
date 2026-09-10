@@ -616,7 +616,17 @@ class Store:
         return result
 
     def _record_provenance(self, fragments, process_nodes, health, receipts,
-                           crond_launches, now):
+                           crond_launches, now, audit_uncertainty=None):
+        # Compact authority covers every touched compound, including keys
+        # evicted from the bounded snapshot. Apply it before retention or
+        # receipt resolution; never persist an enlarged fragment collection.
+        uncertain = {(item["boot_id"], item["audit_id"])
+                     for item in audit_uncertainty or ()}
+        uncertain.update((item["boot_id"], item["audit_id"])
+                         for item in fragments or () if not item.get("finalized") or
+                         item.get("ambiguous") or item.get("incomplete"))
+        for boot_id, audit_id in uncertain:
+            self._invalidate_fragment_identity({"boot_id": boot_id, "audit_id": audit_id})
         if fragments is not None:
             # The journal owns a full bounded snapshot, including finalized
             # tombstones. An explicit empty snapshot retires old fragments.
@@ -624,12 +634,6 @@ class Store:
         self.db.execute("DELETE FROM audit_fragments WHERE updated_at < ?",
                         (now - AUDIT_FRAGMENT_TTL_SECONDS,))
         for item in fragments or ():
-            if not item.get("finalized") or item.get("ambiguous") or item.get("incomplete"):
-                # A late fragment can precede its timeout in the very poll
-                # that supplies the final receipt. Its exact Audit identity
-                # must veto retained proof before this transaction resolves
-                # observations, even though no new process node exists yet.
-                self._invalidate_fragment_identity(item)
             payload = canonical_json(item)
             if len(payload.encode()) > 32768:
                 continue
@@ -1437,7 +1441,7 @@ class Store:
 
     def ingest(self, observations, cursor_key=None, cursor=None, ssh_sessions=None,
                audit_fragments=None, process_nodes=None, audit_health=None,
-               firewall_receipts=None, crond_launches=None):
+               firewall_receipts=None, crond_launches=None, audit_uncertainty=None):
         """Durably queue observations and advance their collector cursor atomically."""
         now = time.time()
         diagnostic = diagnostic_override(self.local_only_diagnostic_path, now=now)
@@ -1448,7 +1452,7 @@ class Store:
                 self._record_ssh_sessions(ssh_sessions, now)
             self._record_provenance(
                 audit_fragments, process_nodes, audit_health, firewall_receipts,
-                crond_launches, now)
+                crond_launches, now, audit_uncertainty=audit_uncertainty)
             for found in observations:
                 self._record_local_origin(found, now)
                 self._enrich_sudo(found, now)

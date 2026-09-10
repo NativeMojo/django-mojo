@@ -114,6 +114,7 @@ class Runtime:
                 result["observations"], cursor_key=collector.name, cursor=result["cursor"],
                 ssh_sessions=result.get("ssh_sessions"),
                 audit_fragments=result.get("audit_fragments"),
+                audit_uncertainty=result.get("audit_uncertainty"),
                 process_nodes=result.get("process_nodes"),
                 audit_health=health_value,
                 firewall_receipts=result.get("firewall_receipts"),

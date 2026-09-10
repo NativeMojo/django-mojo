@@ -68,11 +68,14 @@ def _popen_stream(payload, commands):
 
     def spawn(command, **kwargs):
         commands.append(command)
-        script = "import sys; sys.stdout.buffer.write(" + repr(payload) + ")"
-        return real_popen(
-            [sys.executable, "-c", script], stdout=kwargs["stdout"],
-            stderr=kwargs["stderr"], stdin=kwargs["stdin"], bufsize=kwargs["bufsize"],
-        )
+        script = "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"
+        with tempfile.TemporaryFile() as stream:
+            stream.write(payload)
+            stream.seek(0)
+            return real_popen(
+                [sys.executable, "-c", script], stdout=kwargs["stdout"],
+                stderr=kwargs["stderr"], stdin=stream, bufsize=kwargs["bufsize"],
+            )
 
     return spawn
 
@@ -116,6 +119,12 @@ def test_al2023_collector_store_provenance_golden_path(opts):
 def test_late_fragment_vetoes_same_poll_final_receipt(opts):
     _assert_al2023_provenance(("late_fragment_receipt", "unrelated_fragment_receipt",
                               "other_boot_fragment_receipt"))
+
+
+@th.django_unit_test()
+def test_evicted_fragment_vetoes_same_poll_final_receipt(opts):
+    _assert_al2023_provenance(("capacity_fragment_receipt", "capacity_unrelated_fragment_receipt",
+                              "capacity_other_boot_fragment_receipt"))
 
 
 def _assert_al2023_provenance(scenarios=(
@@ -178,7 +187,9 @@ def _assert_al2023_provenance(scenarios=(
             _fixture_proc(proc_root, fixture["live"])
             state = os.path.join(root, "state")
             store = Store(state, "sensor", aggregation, delivery)
-            collector = journal_module.JournalCollector(_journal_config(100))
+            collector = journal_module.JournalCollector(
+                _journal_config(20000, 8 * 1024 * 1024) if scenario.startswith("capacity_")
+                else _journal_config(100))
             errors = []
             runtime = Runtime.__new__(Runtime)
             runtime.store = store
@@ -209,10 +220,16 @@ def _assert_al2023_provenance(scenarios=(
                         th.assert_eq(store.stats()["provenance"]["pending_firewall"], 1,
                                      "the final receipt must race an already-held broker observation")
                         late = dict(fixture["engine"][1], _AUDIT_FIELD_A0='"contradiction"')
-                        if scenario == "unrelated_fragment_receipt":
+                        if scenario.endswith("unrelated_fragment_receipt"):
                             late["_AUDIT_ID"] = "99999999"
-                        elif scenario == "other_boot_fragment_receipt":
+                        elif scenario.endswith("other_boot_fragment_receipt"):
                             late["_BOOT_ID"] = "b" * 32
+                        if scenario.startswith("capacity_"):
+                            batch = batch + [{
+                                "__CURSOR": f"filler-{serial}", "_TRANSPORT": "audit",
+                                "_BOOT_ID": "a" * 32, "_AUDIT_ID": str(20000 + serial),
+                                "_AUDIT_TYPE_NAME": "CWD", "MESSAGE": "CWD cwd=\"/\"",
+                            } for serial in range(lineage.COMPOUND_CAP)]
                         batch = batch + [late]
                     if index == 2 and scenario == "parser_loss_no_sidecar":
                         unavailable = True
@@ -229,7 +246,13 @@ def _assert_al2023_provenance(scenarios=(
                     with _patch_journal_popen(journal_module, payload, []):
                         runtime._poll_stream(collector)
                     th.assert_eq(errors, [], f"the {scenario} collector must execute successfully")
-                    if index == 2 and scenario == "late_fragment_receipt":
+                    if index == 2 and scenario.startswith("capacity_"):
+                        retained = store.load_audit_fragments()
+                        th.assert_true(len(retained) <= lineage.COMPOUND_CAP,
+                                       "capacity pressure must not enlarge persisted fragment bounds")
+                        th.assert_true((late["_BOOT_ID"], late["_AUDIT_ID"]) not in retained,
+                                       "the regression must place the late fragment beyond retention cutoff")
+                    if index == 2 and scenario in ("late_fragment_receipt", "capacity_fragment_receipt"):
                         th.assert_eq(store.stats()["local_only_suppressed"], 0,
                                      "pre-timeout contradictory fragment must veto same-poll receipt suppression")
                         th.assert_eq(store.stats()["provenance"]["engine_anchors"], 0,
@@ -246,7 +269,8 @@ def _assert_al2023_provenance(scenarios=(
                 store.reconcile_pending_firewall()
                 events = store.pending_batch(100, 65536)
                 sudo_events = [event for event in events if event["kind"] == "auth.sudo_command"]
-                if scenario in ("complete", "unrelated_fragment_receipt", "other_boot_fragment_receipt"):
+                if (scenario == "complete" or scenario.endswith("unrelated_fragment_receipt") or
+                        scenario.endswith("other_boot_fragment_receipt")):
                     th.assert_eq(sudo_events, [], "fully proven broker execution must stay local-only")
                     th.assert_eq(store.stats()["local_only_suppressed"], 1,
                                  "the production collector path must reach the fixed classifier")

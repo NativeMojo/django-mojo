@@ -199,6 +199,14 @@ class JournalCollector:
             "observations": observations, "cursor": next_cursor,
             "malformed": malformed, "ssh_sessions": sessions,
             "audit_fragments": lineage["fragments"],
+            # Retention cannot discard this poll's negative authority. changed
+            # is unique by Audit identity and bounded by the journal record
+            # limit plus the existing compound cap; carry only compact keys.
+            "audit_uncertainty": [
+                {"boot_id": item["boot_id"], "audit_id": item["audit_id"]}
+                for item in lineage["changed"]
+                if malformed or not item.get("finalized") or item.get("ambiguous") or
+                item.get("incomplete")],
             "process_nodes": process_nodes, "firewall_receipts": receipts,
             "crond_launches": crond_launches,
         }
