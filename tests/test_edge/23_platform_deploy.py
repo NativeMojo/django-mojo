@@ -33,6 +33,26 @@ def test_github_delivery_dedupe(opts):
         source="github", source_delivery="delivery-1818").count() == 1
 
 
+@th.django_unit_test("GitHub delivery ids cannot redeploy the same commit")
+def test_github_same_sha_dedupes_across_deliveries(opts):
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import platform_deploy
+
+    sha = "7" * 40
+    first, replayed = platform_deploy.create(
+        sha, actor="github:first", source="github",
+        source_delivery="delivery-one", idempotency_key="request-one")
+    second, replayed_again = platform_deploy.create(
+        sha, actor="github:second", source="github",
+        source_delivery="delivery-two", idempotency_key="request-two")
+
+    assert replayed is False and replayed_again is True
+    assert first.pk == second.pk, \
+        "a new GitHub delivery id redeployed an unchanged commit"
+    assert PlatformDeployment.objects.filter(
+        source="github", sha=sha).count() == 1
+
+
 @th.django_unit_test("same-SHA callbacks are isolated by deployment UUID")
 def test_same_sha_stale_callback_refused(opts):
     from mojo.apps.edge.services import deploy, platform_deploy

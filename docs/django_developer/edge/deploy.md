@@ -11,6 +11,12 @@ advertising both channels is classified as API. A deployment with no live API
 runner fails before framework resolution, migration, or node mutation because
 there is no safe migration canary.
 
+The GitHub request key is derived from the commit SHA, not the delivery id.
+Separate deliveries for one unchanged commit therefore reuse the same durable
+attempt and cannot restart the fleet twice. An intentional same-SHA recovery
+still creates a new attempt through the Admin **Retry same SHA** action, whose
+source is `admin_retry` rather than `github`.
+
 ## Typed routing and canary
 
 Every node declares its lifecycle with file-only `EDGE_DEPLOY_NODE_TYPE`:

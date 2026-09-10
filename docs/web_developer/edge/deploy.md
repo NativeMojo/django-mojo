@@ -14,11 +14,14 @@ Unsigned or incorrectly signed requests return `403`.
 |---|---|
 | Deploy branch (`EDGE_DEPLOY_BRANCH`, default `main`) | `202 {"status":true,"queued":true,"sha":"..."}` |
 | Deploy branch while another deploy is active | `202` with `queued:false`; the newest commit is retained and runs next |
+| Another delivery for the same commit | `202` without another deploy; the existing attempt is reused |
 | Other branch, ping, non-push event, or branch deletion | `200` with `ignored:true` |
 | Coordination or queue unavailable | `503`; no blind deployment starts |
 
 The deployed commit is always the webhook's head SHA, never a branch name
-resolved later.
+resolved later. A repeated delivery for that same commit cannot restart the
+fleet. Platform operators can deliberately retry an unchanged commit from the
+deployment journal's **Retry same SHA** action.
 
 ## `POST /api/edge/deploy`
 

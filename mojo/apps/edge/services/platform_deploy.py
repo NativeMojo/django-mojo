@@ -145,6 +145,12 @@ def edge_roster(with_api=False):
 
 
 def request_key(source, sha, supplied=None):
+    if source == "github":
+        # A commit is the logical GitHub deployment. Separate webhook
+        # deliveries for that unchanged commit must not recycle the fleet
+        # twice; an intentional same-SHA retry uses the admin_retry source.
+        raw = f"{source}:{sha}"
+        return hashlib.sha256(raw.encode()).hexdigest()
     if supplied:
         supplied = _text(supplied, 128)
         if supplied:
