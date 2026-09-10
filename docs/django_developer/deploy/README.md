@@ -245,6 +245,15 @@ Preparation failures also attempt durable evidence and print a diagnostic.
 All observer failures are absorbed: application activation, rollback policy,
 exit status, and deployment identity retain their existing authority.
 
+After `activate` or `activate-previous` completes, a host with
+`/etc/mojosec/enrollment.json` runs full MojoSec convergence from the activated
+framework before firewall convergence. This reconciles package-owned units and
+persistent kernel policy according to the enrollment's `observe`/`off` mode —
+work that the narrow refresh cannot supply. A failure is reported as degraded
+and absorbed; it does not change the application activation or rollback
+outcome. Unenrolled hosts and the intermediate `rollback-candidate` path skip
+this step.
+
 Rollback invokes the retained stdlib-only helper after reinstalling the old
 package and before previous activation. Publication recovery checks the retained
 candidate. A rollback to a sensor without the new status fields records its

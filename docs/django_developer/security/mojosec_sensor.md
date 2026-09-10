@@ -782,9 +782,10 @@ Daily restarts are not a security control or a substitute for generation proof.
 
 After candidate or previous-version activation, an enrolled host also runs the full
 MojoSec convergence from the installed framework before firewall convergence.
-The refresh bridge preserves runtime continuity; this second step installs new
-package-owned units, kernel policy, and other host assets. Unenrolled hosts and
-the intermediate rollback-candidate path remain unchanged.
+The refresh bridge preserves runtime continuity; this second step reconciles
+package-owned units, kernel policy, and other host assets according to the
+enrollment's `observe`/`off` mode. Unenrolled hosts and the intermediate
+rollback-candidate path remain unchanged.
 
 After release, follow normal canary/fleet ordering and require both MojoVerify
 nodes to report the released version from active, fresh generations with no new

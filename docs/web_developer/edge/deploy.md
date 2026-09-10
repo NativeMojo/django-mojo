@@ -70,6 +70,11 @@ checks. Those systems may report separately, but cannot veto a release. This
 does not change trigger authentication: the webhook signature and manual
 `manage_deploy` permission above remain required.
 
+After activation, an enrolled host converges MojoSec host assets before
+firewall work. That observer step may report degradation but cannot veto the
+already-functional release; see [MojoSec operator runtime
+evidence](../security/mojosec.md#operator-runtime-evidence).
+
 Existing API projects do not need a source change when their update shim calls
 `python3 -m mojo.deploy locate update.sh`; that is the permanent supported
 endpoint. The packaged launcher enters through passwordless `sudo` itself when

@@ -103,5 +103,5 @@ completed` or `publication recovery failed` instead of claiming a rollback.
 
 Redis remains short-lived coordination and `PlatformDeployment` remains the
 durable attempt record. Both the installed identity and node evidence include
-the node type. Neither adds another release gate; independent MojoSec
-observation remains outside the deployment path.
+the node type. Neither adds another release gate; post-activation MojoSec
+convergence and independent observation remain outside release acceptance.

@@ -31,8 +31,9 @@ Root-only `/etc/mojosec/runtime-refresh.json` retains pending/degraded results a
 recent failures. Observer errors never decide application deployment success.
 Legacy rollback reports unavailable loaded-version proof explicitly.
 After activation, every enrolled host also runs full MojoSec convergence from
-the installed framework before firewall work. That installs new sensor assets;
-unenrolled hosts remain untouched.
+the installed framework before firewall work. That reconciles sensor assets
+according to the enrollment's `observe`/`off` mode; unenrolled hosts remain
+untouched.
 
 The first upgrade adopts refresh when the candidate activation body starts and
 retains a wrapper for previous activation. An interruption before that boundary
