@@ -332,10 +332,38 @@ def _ptrace_sysctl_text(value):
            f"kernel.yama.ptrace_scope = {value}\n"
 
 
+def _write_ptrace_scope(path, text, mode):
+    """Atomically replace content or metadata drift at the managed sysctl path."""
+    if path != PTRACE_SYSCTL_PATH or mode != 0o644:
+        raise DeployError("ptrace protection writer received an unsupported target")
+    payload = text.encode("utf-8")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        current = None
+        info = None
+    except OSError as err:
+        raise DeployError(f"cannot safely read {path}: {err}") from err
+    else:
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0:
+                raise DeployError(f"existing {path} is not a root-owned regular file")
+            current = os.read(descriptor, len(payload) + 1)
+        finally:
+            os.close(descriptor)
+    if (info is not None and info.st_gid == 0 and
+            stat.S_IMODE(info.st_mode) == mode and info.st_size == len(payload) and
+            current == payload):
+        return False
+    _atomic_write(path, payload, mode)
+    return True
+
+
 def _converge_ptrace_scope(prior=None, reader=None, writer=None, runner=None):
     """Persist at least Yama restricted-ptrace without lowering stronger policy."""
     reader = reader or _read_ptrace_scope
-    writer = writer or _write_if_changed
+    writer = writer or _write_ptrace_scope
     runner = runner or _run
     if prior is None:
         prior = reader()

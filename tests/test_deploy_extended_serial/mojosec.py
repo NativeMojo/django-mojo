@@ -86,6 +86,26 @@ def test_ptrace_rollback_restores_persistent_and_live_policy(opts):
 
 
 @th.django_unit_test()
+def test_ptrace_writer_atomically_replaces_writable_metadata_drift(opts):
+    from mojo.deploy import mojosec as deploy
+
+    text = deploy._ptrace_sysctl_text(1)
+    payload = text.encode("utf-8")
+    info = mock.Mock(
+        st_mode=deploy.stat.S_IFREG | 0o666, st_uid=0, st_gid=0,
+        st_size=len(payload))
+    with mock.patch.object(deploy.os, "open", return_value=17), \
+            mock.patch.object(deploy.os, "fstat", return_value=info), \
+            mock.patch.object(deploy.os, "read", return_value=payload), \
+            mock.patch.object(deploy.os, "close"), \
+            mock.patch.object(deploy, "_atomic_write") as atomic:
+        changed = deploy._write_ptrace_scope(deploy.PTRACE_SYSCTL_PATH, text, 0o644)
+    th.assert_true(changed,
+                   "unsafe metadata must be a real convergence change")
+    atomic.assert_called_once_with(deploy.PTRACE_SYSCTL_PATH, payload, 0o644)
+
+
+@th.django_unit_test()
 def test_active_nginx_audit_requires_cap_inside_both_exact_routes(opts):
     from mojo.deploy import mojosec as deploy
 
