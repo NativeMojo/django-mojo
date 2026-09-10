@@ -367,7 +367,9 @@ condition. Startup requires `kernel.yama.ptrace_scope >= 1`, which protects the
 resolver from another same-UID process before Python begins. Its convergence
 persists that protection and raises a weak value to `1`, while preserving
 stronger host values of `2` or `3`. Mode-off removes the managed persistent
-setting without weakening the live kernel value. Its
+setting without weakening the live kernel value. A timed-out, disconnected, or
+malformed client fails closed for that request without stopping the resolver;
+the socket remains available for the next identity lookup. Its
 service declares `PartOf=mojosec.service`, so sensor restarts refresh an
 already-running resolver after framework deployments; a changed socket unit is
 also restarted. Node audit verifies the effective listener, service trigger,

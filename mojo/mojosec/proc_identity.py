@@ -185,9 +185,14 @@ def serve():
         raise ProcessIdentityError("invalid process identity listener")
     while True:
         connection, _ = listener.accept()
-        with connection:
-            connection.settimeout(2.0)
-            handle_connection(connection)
+        try:
+            with connection:
+                connection.settimeout(2.0)
+                handle_connection(connection)
+        except (OSError, ProcessIdentityError, UnicodeError, ValueError):
+            # A timed-out or disconnected client is request-local. Keep the
+            # systemd listener alive for the next lineage lookup.
+            continue
 
 
 def main():

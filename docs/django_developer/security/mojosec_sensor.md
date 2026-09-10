@@ -1190,6 +1190,10 @@ other users' processes and `ProcSubset=all` — not `pid` — to retain read-onl
 `/proc/sys` state for the startup condition. Its service starts only when
 `kernel.yama.ptrace_scope` is at least `1`, so another `ec2-user` process cannot
 attach during Python startup.
+Each accepted connection is an isolated request boundary. A client timeout,
+disconnect, malformed request, or failed response write fails closed for that
+lookup and leaves the systemd listener serving the next request; only listener
+or startup failure terminates the resolver for systemd to restart.
 Observe convergence persists the current protected value in root-owned
 `/etc/sysctl.d/90-mojosec-ptrace.conf`, raising `0` to `1` immediately but never
 lowering an existing `2` or `3`. A failed convergence restores the prior file

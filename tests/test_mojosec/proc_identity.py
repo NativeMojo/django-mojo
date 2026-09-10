@@ -3,6 +3,7 @@ import os
 import socket
 import tempfile
 import threading
+from unittest import mock
 
 from testit import helpers as th
 
@@ -81,6 +82,37 @@ def test_helper_protocol(opts):
         client.close()
         th.assert_eq(refused, {"ok": False},
                      "an application-user client must receive no process identity")
+
+
+@th.unit_test("one disconnected helper client cannot terminate the listener")
+def test_helper_survives_disconnected_client(opts):
+    from mojo.mojosec import proc_identity
+
+    listener = mock.MagicMock()
+    listener.family = socket.AF_UNIX
+    listener.getsockopt.return_value = 1
+    first = mock.MagicMock()
+    second = mock.MagicMock()
+    listener.accept.side_effect = [
+        (first, None),
+        (second, None),
+        proc_identity.ProcessIdentityError("stop test listener"),
+    ]
+
+    with mock.patch.object(proc_identity.os, "geteuid", return_value=1000), \
+            mock.patch.dict(proc_identity.os.environ, {
+                "LISTEN_PID": str(os.getpid()), "LISTEN_FDS": "1",
+            }), \
+            mock.patch.object(proc_identity, "_disable_core_dumps"), \
+            mock.patch.object(proc_identity.socket, "socket", return_value=listener), \
+            mock.patch.object(proc_identity, "handle_connection", side_effect=[
+                BrokenPipeError(), None,
+            ]):
+        with th.assert_raises(proc_identity.ProcessIdentityError):
+            proc_identity.serve()
+
+    th.assert_eq(listener.accept.call_count, 3,
+                 "the listener must accept another client after a broken pipe")
 
 
 @th.unit_test("the sensor accepts only a generation-bound helper executable")
