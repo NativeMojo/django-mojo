@@ -701,7 +701,8 @@ def test_pending_firewall_resolution(opts):
         {"boot_id": boot, "audit_id": "3", "pid": 22, "ppid": 20,
          "audit_session": session, "start_ticks": 220, "exe": "/usr/bin/python3", "argv": []},
         {"boot_id": boot, "audit_id": "4", "pid": 23, "ppid": 22,
-         "audit_session": session, "start_ticks": 230, "exe": "/sbin/iptables", "argv": []},
+         "audit_session": session, "start_ticks": 230,
+         "exe": "/usr/sbin/xtables-nft-multi", "argv": ["/sbin/iptables"]},
     ]
     for node in nodes:
         node["success"] = True

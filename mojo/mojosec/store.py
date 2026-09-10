@@ -83,6 +83,11 @@ _BROKER_FUNCTION_OPERATIONS = {
     "mojo.apps.incident.asyncjobs.broadcast_reconcile_geolocated_ip": {
         "geolocated.normalize"},
 }
+_BROKER_CHILD_EXECUTABLES = {
+    "/sbin/iptables": {"/sbin/iptables", "/usr/sbin/xtables-nft-multi"},
+    "/sbin/iptables-save": {"/sbin/iptables-save", "/usr/sbin/xtables-nft-multi"},
+    "/sbin/ipset": {"/sbin/ipset", "/usr/sbin/ipset"},
+}
 
 
 class StoreError(RuntimeError):
@@ -1387,11 +1392,15 @@ class Store:
                 for child in result["children"]:
                     target = self._one_pid_generation(
                         by_pid.get(child["pid"], ()), child["pid"], child["start_ticks"],
-                        begin["monotonic_ns"], result["monotonic_ns"], exe=child["exe"])
+                        begin["monotonic_ns"], result["monotonic_ns"])
                     if target is None:
                         targets = []
                         break
                     if (target.get("ppid") != begin["broker_pid"] or
+                            target.get("exe") not in
+                            _BROKER_CHILD_EXECUTABLES.get(child["exe"], set()) or
+                            not target.get("argv") or
+                            target["argv"][0] != child["exe"] or
                             target.get("argv_sha256") != child["argv_digest"]):
                         conflicted = True
                         targets = []

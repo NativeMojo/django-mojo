@@ -68,6 +68,9 @@ and PID generation agree with exact cron JobEngine → sudo → broker lineage a
 the pinned engine origin. A failed status result or any incomplete proof remains
 an ordinary sudo Event. Mutation operations still require JobEngine context and
 independently recheck readiness immediately before broker work.
+On AL2023, Audit reports the resolved `/usr/sbin/xtables-nft-multi` or
+`/usr/sbin/ipset` executable behind the broker's fixed `/sbin/*` command. Proof
+accepts only those fixed pairs and still requires the exact recorded argv digest.
 
 The incident provider verifies the process's effective UID, the exact sudo
 operation, timeout, response shape, and permanent-name agreement. A background

@@ -1310,6 +1310,12 @@ candidate without complete proof remains pending until later input or the
 lineage. Any resulting central Event receives at most eight compact ancestors;
 the complete graph and raw Audit records remain on the sensor.
 
+AL2023 resolves `/sbin/iptables` and `/sbin/iptables-save` to
+`/usr/sbin/xtables-nft-multi`, and `/sbin/ipset` to `/usr/sbin/ipset`, before
+Audit records the child executable. The resolver recognizes only these fixed
+logical-to-kernel executable pairs and separately requires the exact logical
+path in argv plus the receipt's full argv digest.
+
 Application firewall work no longer invokes raw iptables/ipset sudo commands.
 The exact read-only `broker.status` request carries no caller-supplied JobEngine
 context and takes no mutation lock; it only proves enrollment and protected

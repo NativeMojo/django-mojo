@@ -353,6 +353,11 @@ metrics. The installed broker path enters safe-path Python directly, without a
 shell trampoline that would create an ambiguous second exec generation under
 the receipt's PID/start-ticks identity.
 
+For broker child commands, AL2023 Audit records the resolved kernel executable
+(`/usr/sbin/xtables-nft-multi` or `/usr/sbin/ipset`) rather than the fixed
+`/sbin/*` argv path. Proof accepts only the known logical/resolved pair while
+still matching the exact argv path and digest from the broker receipt.
+
 Proof reconciliation is deterministic under bounded bursts: each pass handles
 the oldest 512 pending firewall candidates. Candidate boot, Audit session and
 sudo producer PID first narrow the process-child lookup to possible broker
