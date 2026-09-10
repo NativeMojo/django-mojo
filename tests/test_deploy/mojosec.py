@@ -191,6 +191,7 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
     helper = deploy.PROC_IDENTITY_SERVICE_TEXT
     for expected in (
             "User=ec2-user", "PrivateNetwork=true", "ProcSubset=pid",
+            "PartOf=mojosec.service", "kernel/yama/ptrace_scope",
             "RestrictAddressFamilies=AF_UNIX", "CapabilityBoundingSet=\n",
             "ExecStart=/usr/bin/python3 -E -P -m mojo.mojosec.proc_identity"):
         th.assert_in(expected, helper,

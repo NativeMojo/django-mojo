@@ -201,6 +201,8 @@ def test_converge_lifecycle_is_an_exact_allowlist(opts):
                  "observe must enable and start the exact service")
     th.assert_in(("enable", "--now", deploy.PROC_IDENTITY_SOCKET), calls,
                  "observe must enable the root-only identity socket")
+    th.assert_in(("restart", deploy.PROC_IDENTITY_SOCKET), calls,
+                 "a changed active socket must load its new listener contract")
     th.assert_true(not any("*.service" in part for call in calls for part in call),
                    "deployment must never enable a service glob")
 

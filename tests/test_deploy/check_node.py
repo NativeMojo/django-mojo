@@ -79,7 +79,8 @@ def _proc_identity_systemd_show(dropins=""):
         "User": "ec2-user", "Group": "ec2-user", "UMask": "0077",
         "WorkingDirectory": "/",
         "FragmentPath": "/etc/systemd/system/mojosec-proc-identity.service",
-        "DropInPaths": dropins, "NoNewPrivileges": "yes", "PrivateTmp": "yes",
+        "DropInPaths": dropins, "PartOf": "mojosec.service",
+        "NoNewPrivileges": "yes", "PrivateTmp": "yes",
         "PrivateDevices": "yes", "PrivateNetwork": "yes", "ProtectHome": "yes",
         "ProtectSystem": "strict", "ProtectKernelTunables": "yes",
         "ProtectKernelModules": "yes", "ProtectKernelLogs": "yes",
@@ -88,6 +89,18 @@ def _proc_identity_systemd_show(dropins=""):
         "LockPersonality": "yes", "RestrictRealtime": "yes",
         "RestrictNamespaces": "yes", "RestrictAddressFamilies": "AF_UNIX",
         "CapabilityBoundingSet": "", "AmbientCapabilities": "",
+    }
+    return "\n".join(f"{key}={value}" for key, value in values.items())
+
+
+def _proc_identity_socket_show(dropins=""):
+    values = {
+        "FragmentPath": "/etc/systemd/system/mojosec-proc-identity.socket",
+        "DropInPaths": dropins,
+        "Listen": "/run/mojosec-proc-identity.sock (Stream)",
+        "Triggers": "mojosec-proc-identity.service",
+        "SocketMode": "0600",
+        "SocketUser": "root", "SocketGroup": "root",
     }
     return "\n".join(f"{key}={value}" for key, value in values.items())
 
@@ -228,7 +241,10 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
         ("systemctl show mojosec.service", (0, _mojosec_systemd_show(), "")),
         ("systemctl show mojosec-proc-identity.service",
          (0, _proc_identity_systemd_show(), "")),
+        ("systemctl show mojosec-proc-identity.socket",
+         (0, _proc_identity_socket_show(), "")),
         ("/run/mojosec-proc-identity.sock", (0, "root root 600", "")),
+        ("/proc/sys/kernel/yama/ptrace_scope", (0, "1", "")),
         ("python3 -c", (0, status, "")),
         ("/run/mojosec/status.json", (0, "root root 640", "")),
         ("nginx -T", (0, "log_format mojosec_v1 escape=json\n"
@@ -255,6 +271,10 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
                  f"the live helper socket must remain root-owned 0600: {statuses}")
     th.assert_eq(statuses.get("process identity helper sandbox"), cn.PASS,
                  f"the helper must run unprivileged without capabilities or IP: {statuses}")
+    th.assert_eq(statuses.get("process identity socket unit"), cn.PASS,
+                 f"the effective listener must reject drop-ins and target drift: {statuses}")
+    th.assert_eq(statuses.get("same-UID ptrace protection"), cn.PASS,
+                 f"the kernel must protect the helper before Python starts: {statuses}")
     th.assert_eq(statuses.get("security log archives"), cn.PASS,
                  f"root-only rotated evidence must pass: {statuses}")
     th.assert_true(any("mojosec.json.log.*" in command for command in run.commands),
@@ -379,6 +399,8 @@ def test_mojosec_auto_mode_keeps_legacy_nodes_informational(opts):
                  f"an upgraded legacy node with no enabled sensor must not fail: {failures}")
     th.assert_true(_find(report, "mojosec", "auto-derived mode: off") is not None,
                    "auto mode must explain that it derived the legacy node as off")
+    th.assert_true(_find(report, "mojosec", "process identity helper retired") is not None,
+                   "off mode must prove the helper service, socket, and files are absent")
 
 
 @th.django_unit_test()

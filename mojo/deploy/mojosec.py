@@ -147,6 +147,7 @@ PROC_IDENTITY_SERVICE_TEXT = """[Unit]
 Description=MojoSec unprivileged process identity resolver
 Requires=mojosec-proc-identity.socket
 After=mojosec-proc-identity.socket
+PartOf=mojosec.service
 
 [Service]
 Type=simple
@@ -159,6 +160,7 @@ Environment=PYTHONUSERBASE=
 Environment=PYTHONSTARTUP=
 Environment=PYTHONINSPECT=
 WorkingDirectory=/
+ExecCondition=/bin/sh -c 'v=$$(/bin/cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null) && [ "$$v" -ge 1 ]'
 ExecStart=/usr/bin/python3 -E -P -m mojo.mojosec.proc_identity
 Restart=on-failure
 RestartSec=5s
@@ -1070,6 +1072,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
     audit_converged = False
     audit_prior_restored = False
     unit_changed = nginx_changed = config_changed = retired_changed = False
+    proc_identity_service_changed = proc_identity_socket_changed = False
     proc_identity_changed = False
     mutation_started = False
     prepared = None
@@ -1191,10 +1194,12 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                 broker_changed |= _write_if_changed(
                     AUDIT_STABLE_HELPER_PATH, handle.read(), 0o755)
         if mode == "observe" and service_path == SERVICE_PATH:
-            proc_identity_changed |= _write_if_changed(
+            proc_identity_service_changed |= _write_if_changed(
                 PROC_IDENTITY_SERVICE_PATH, PROC_IDENTITY_SERVICE_TEXT, 0o644)
-            proc_identity_changed |= _write_if_changed(
+            proc_identity_socket_changed |= _write_if_changed(
                 PROC_IDENTITY_SOCKET_PATH, PROC_IDENTITY_SOCKET_TEXT, 0o644)
+            proc_identity_changed = (
+                proc_identity_service_changed or proc_identity_socket_changed)
         unit_changed = _write_if_changed(service_path, UNIT_TEXT, 0o644)
         edge_log_changed = False
         if mode == "observe" and nginx_plane == "edge":
@@ -1258,6 +1263,8 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                 _systemctl("enable", "--now", PROC_IDENTITY_SOCKET)
                 if proc_identity_changed:
                     _systemctl("stop", PROC_IDENTITY_SERVICE)
+                if proc_identity_socket_changed:
+                    _systemctl("restart", PROC_IDENTITY_SOCKET)
                 if (not _systemctl_is("is-enabled", PROC_IDENTITY_SOCKET) or
                         not _systemctl_is("is-active", PROC_IDENTITY_SOCKET)):
                     raise DeployError(

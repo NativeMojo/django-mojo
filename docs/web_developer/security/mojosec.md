@@ -357,7 +357,9 @@ never receives `CAP_SYS_PTRACE`. A separate resolver runs as `ec2-user` with no
 capabilities or IP network. Its root-owned mode-`0600` Unix socket accepts one
 bounded PID/start-ticks request. A successful response echoes those identifiers
 and adds only the double-checked executable path; failure remains ordinary
-central evidence. This supports the exact live JobEngine check without relaxing
+central evidence. The helper starts only with kernel same-UID ptrace protection,
+and sensor restarts also refresh an already-running helper after framework
+deployments. This supports the exact live JobEngine check without relaxing
 any Audit, receipt, cron-origin, or command-line requirement.
 
 Raw sudo observations are never sampled, rate-limited, or aggregated to reduce

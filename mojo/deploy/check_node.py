@@ -844,7 +844,7 @@ def _audit_mojosec_unit(report, run, sudo, mode="observe"):
 
         helper_properties = (
             "User", "Group", "UMask", "WorkingDirectory", "FragmentPath",
-            "DropInPaths", "NoNewPrivileges", "PrivateTmp", "PrivateDevices",
+            "DropInPaths", "PartOf", "NoNewPrivileges", "PrivateTmp", "PrivateDevices",
             "PrivateNetwork", "ProtectHome", "ProtectSystem",
             "ProtectKernelTunables", "ProtectKernelModules", "ProtectKernelLogs",
             "ProtectControlGroups", "ProtectClock", "ProtectHostname", "ProcSubset",
@@ -865,7 +865,8 @@ def _audit_mojosec_unit(report, run, sudo, mode="observe"):
             "User": "ec2-user", "Group": "ec2-user", "UMask": "0077",
             "WorkingDirectory": "/",
             "FragmentPath": "/etc/systemd/system/mojosec-proc-identity.service",
-            "DropInPaths": "", "NoNewPrivileges": "yes", "PrivateTmp": "yes",
+            "DropInPaths": "", "PartOf": "mojosec.service",
+            "NoNewPrivileges": "yes", "PrivateTmp": "yes",
             "PrivateDevices": "yes", "PrivateNetwork": "yes", "ProtectHome": "yes",
             "ProtectSystem": "strict", "ProtectKernelTunables": "yes",
             "ProtectKernelModules": "yes", "ProtectKernelLogs": "yes",
@@ -889,6 +890,50 @@ def _audit_mojosec_unit(report, run, sudo, mode="observe"):
             report.passed("mojosec", "process identity helper sandbox",
                           "app user; no capabilities, IP network, or systemd drop-ins")
 
+        socket_properties = (
+            "FragmentPath", "DropInPaths", "Listen", "Triggers", "SocketMode",
+            "SocketUser", "SocketGroup",
+        )
+        socket_command = "systemctl show mojosec-proc-identity.socket " + " ".join(
+            f"--property={name}" for name in socket_properties)
+        socket_rc, socket_out, _ = run(socket_command)
+        socket_found = {}
+        if socket_rc == 0 and len(socket_out) <= 16384:
+            for line in socket_out.splitlines():
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    socket_found[key] = value.strip()
+        socket_expected = {
+            "FragmentPath": "/etc/systemd/system/mojosec-proc-identity.socket",
+            "DropInPaths": "",
+            "Listen": "/run/mojosec-proc-identity.sock (Stream)",
+            "Triggers": "mojosec-proc-identity.service",
+            "SocketMode": "0600",
+            "SocketUser": "root", "SocketGroup": "root",
+        }
+        socket_drift = [
+            f"{key}={socket_found.get(key, '<missing>')}"
+            for key, value in socket_expected.items() if socket_found.get(key) != value
+        ]
+        if socket_drift:
+            report.fail("mojosec", "process identity socket unit drift",
+                        ", ".join(socket_drift))
+        else:
+            report.passed("mojosec", "process identity socket unit",
+                          "exact listener, service target, mode, and no drop-ins")
+
+        yama_rc, yama_out, _ = run(
+            "cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null")
+        try:
+            yama = int(yama_out.strip())
+        except (TypeError, ValueError):
+            yama = 0
+        if yama_rc == 0 and yama >= 1:
+            report.passed("mojosec", "same-UID ptrace protection",
+                          f"kernel.yama.ptrace_scope={yama} protects helper startup")
+        else:
+            report.fail("mojosec", "same-UID ptrace protection unavailable",
+                        "resolver requires kernel.yama.ptrace_scope >= 1")
     properties = (
         "User", "Group", "UMask", "WorkingDirectory", "Environment",
         "FragmentPath", "DropInPaths",
@@ -1177,6 +1222,24 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
 
     if present.get("service unit"):
         _audit_mojosec_unit(report, run, sudo, mode)
+
+    if mode == "off":
+        inactive = run(
+            "if systemctl is-active --quiet mojosec-proc-identity.service || "
+            "systemctl is-active --quiet mojosec-proc-identity.socket || "
+            "systemctl is-enabled --quiet mojosec-proc-identity.socket; then exit 1; fi"
+        )[0] == 0
+        absent = run(
+            "test ! -e /etc/systemd/system/mojosec-proc-identity.service && "
+            "test ! -e /etc/systemd/system/mojosec-proc-identity.socket && "
+            "test ! -e /run/mojosec-proc-identity.sock"
+        )[0] == 0
+        if inactive and absent:
+            report.passed("mojosec", "process identity helper retired",
+                          "off mode has no active or installed resolver assets")
+        else:
+            report.fail("mojosec", "process identity helper remains in off mode",
+                        "disable the resolver socket/service and remove managed assets")
 
     if mode == "observe" and present.get("runtime config"):
         command = _mojosec_python(

@@ -1178,11 +1178,16 @@ a bounded numeric PID plus the already-read start ticks, double-reads that
 generation, and its success response echoes those bound identifiers and adds
 only the executable path. It disables core dumps, has no capabilities or IP
 network, and keeps the systemd filesystem, namespace, kernel, and device
-restrictions. Failure or disagreement returns no identity and keeps the event
+restrictions. Its service starts only when `kernel.yama.ptrace_scope` is at
+least `1`, so another `ec2-user` process cannot attach during Python startup.
+Failure or disagreement returns no identity and keeps the event
 centrally visible. Observe convergence installs both process-identity units and
-enables `mojosec-proc-identity.socket`; mode-off stops the resolver, disables
+enables `mojosec-proc-identity.socket`; a changed socket is restarted, and the
+resolver is part of the sensor restart lifecycle so later framework deployments
+load both generations together. Mode-off stops the resolver, disables
 the socket, and removes both unit files. `check_node --section mojosec` fails on
-unit bytes, socket state or permissions, and effective helper-sandbox drift.
+unit bytes, effective listener/drop-in settings, socket state or permissions,
+Yama protection, effective helper-sandbox drift, and residue in off mode.
 Audit remains durable truth: a short-lived process or ancestor
 that has already left `/proc` does not poison a complete Audit edge. A live
 `/proc` identity that conflicts with Audit, PID reuse, cycles, ordering
