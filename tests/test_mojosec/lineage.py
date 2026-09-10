@@ -729,10 +729,18 @@ def test_pending_firewall_resolution(opts):
             reopened.ingest([], cursor_key="nginx", cursor={"offset": 1})
             th.assert_eq(reopened.stats()["provenance"]["pending_firewall"], 1,
                          "nginx ingest has no Audit authority and must preserve pending")
+            noise = [{
+                "boot_id": boot, "audit_id": str(1000 + index),
+                "pid": 1000 + index, "ppid": 1, "audit_session": session,
+                "exe": "/usr/bin/true", "argv": ["/usr/bin/true"],
+                "argv_sha256": hashlib.sha256(b"/usr/bin/true").hexdigest(),
+                "monotonic": 2_000_000 + index, "success": True, "eoe": True,
+            } for index in range(300)]
+            reopened.ingest([], audit_health=health, process_nodes=noise)
             reopened.ingest([], audit_health=health,
                             firewall_receipts=[begin, result])
         th.assert_eq(reopened.stats()["local_only_suppressed"], 1,
-                     "complete healthy process and receipt proof should suppress centrally")
+                     "proof must survive a burst beyond the old 256-process lookup window")
         th.assert_eq(reopened.pending_batch(10, 65536), [],
                      "proven expected automation must not create an ordinary Event")
         reopened.close()
@@ -747,6 +755,20 @@ def test_pending_firewall_resolution(opts):
                      "explicit unhealthy journal authority must fail open immediately")
         th.assert_eq(len(store.pending_batch(10, 65536)), 1,
                      "health failure must retain the ordinary sudo Event")
+        store.close()
+
+    reset_health = dict(health, sequence=900, healthy=False, reason="deploy-window")
+    current_health = dict(health, sequence=1, healthy=True, reason="")
+    with tempfile.TemporaryDirectory() as root:
+        store = Store(root, "sensor", aggregation, delivery,
+                      local_only_diagnostic_path=os.path.join(root, "missing"))
+        store.ingest([], audit_health=reset_health)
+        store.ingest([dict(candidate, fingerprint="7" * 64)],
+                     audit_health=current_health)
+        th.assert_eq(store.stats()["provenance"]["pending_firewall"], 1,
+                     "post-deploy health must win by observation time after sequence reset")
+        th.assert_eq(store.pending_batch(10, 65536), [],
+                     "stale higher health sequence must not fail open current broker work")
         store.close()
 
     bad_result = dict(result, children=[dict(result["children"][0],

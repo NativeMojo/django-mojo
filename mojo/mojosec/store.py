@@ -36,6 +36,9 @@ AUDIT_FRAGMENT_MAX_BYTES = 8 * 1024 * 1024
 HEALTH_EPOCH_CAP = 128
 PENDING_OPERATION_CAP = 4096
 FIREWALL_RECEIPT_CAP = 32768
+FIREWALL_PROOF_RECEIPT_CAP = PENDING_OPERATION_CAP * 2
+FIREWALL_PROOF_PROCESS_NODE_CAP = PENDING_OPERATION_CAP * 8
+FIREWALL_PROOF_BATCH = 512
 FIREWALL_RECEIPT_TTL_SECONDS = 7 * 24 * 60 * 60
 PROVENANCE_MAX_BYTES = 256 * 1024 * 1024
 STATE_MAX_BYTES = PROVENANCE_MAX_BYTES
@@ -1198,45 +1201,73 @@ class Store:
     def _resolve_pending_firewall(self, now, current_health=True):
         candidates = self.db.execute(
             "SELECT observation_id,payload FROM pending_firewall WHERE state='pending' "
-            "ORDER BY created LIMIT 512").fetchall()
-        for row in candidates:
-            observation = json.loads(row["payload"])
-            attributes = observation["attributes"]
-            if current_health is None:
-                continue
-            if current_health is False:
-                self._ingest_one(observation, now)
+            "ORDER BY created LIMIT ?", (FIREWALL_PROOF_BATCH,)).fetchall()
+        if not candidates:
+            return
+        if current_health is None:
+            return
+        if current_health is False:
+            for row in candidates:
+                self._ingest_one(json.loads(row["payload"]), now)
                 self._increment_saturating("provenance_health_fail_open")
                 self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
                                 (row["observation_id"],))
+            return
+        receipts = self.db.execute(
+            "SELECT operation_id,kind,payload FROM firewall_receipts "
+            "WHERE observed_at >= ? ORDER BY observed_at DESC LIMIT ?",
+            (now - 30, FIREWALL_PROOF_RECEIPT_CAP)).fetchall()
+        pairs = {}
+        for receipt in receipts:
+            pairs.setdefault(receipt["operation_id"], {})[receipt["kind"]] = json.loads(
+                receipt["payload"])
+        pairs_by_broker = {}
+        for operation_id, pair in pairs.items():
+            begin = pair.get("begin")
+            if begin is None:
                 continue
+            key = (begin.get("boot_id"), begin.get("audit_session"),
+                   begin.get("broker_pid"))
+            pairs_by_broker.setdefault(key, []).append((operation_id, pair))
+        node_rows = self.db.execute(
+            "SELECT payload,pinned,generation FROM process_nodes "
+            "WHERE pinned=1 OR updated_at>=? "
+            "ORDER BY pinned DESC,updated_at DESC,rowid DESC LIMIT ?",
+            (now - 30, FIREWALL_PROOF_PROCESS_NODE_CAP)).fetchall()
+        nodes_by_session = {}
+        for row in node_rows:
+            node = dict(json.loads(row["payload"]), pinned=bool(row["pinned"]),
+                        _generation=row["generation"])
+            key = (node.get("boot_id"), node.get("audit_session"))
+            session = nodes_by_session.setdefault(
+                key, {"by_pid": {}, "by_parent": {}})
+            session["by_pid"].setdefault(node.get("pid"), []).append(node)
+            session["by_parent"].setdefault(node.get("ppid"), []).append(node)
+        origins = {}
+        for row in candidates:
+            observation = json.loads(row["payload"])
+            attributes = observation["attributes"]
             health = self.db.execute(
                 "SELECT payload,healthy FROM audit_health_epochs WHERE boot_id=? "
-                "ORDER BY sequence DESC LIMIT 1", (attributes["boot_id"],)).fetchone()
+                "ORDER BY observed_at DESC,rowid DESC LIMIT 1",
+                (attributes["boot_id"],)).fetchone()
             if health is None or not health["healthy"]:
                 self._ingest_one(observation, now)
                 self._increment_saturating("provenance_health_fail_open")
                 self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
                                 (row["observation_id"],))
                 continue
-            receipts = self.db.execute(
-                "SELECT operation_id,kind,payload FROM firewall_receipts "
-                "WHERE observed_at >= ? ORDER BY observed_at DESC LIMIT 1024",
-                (now - 30,)).fetchall()
-            pairs = {}
-            for receipt in receipts:
-                pairs.setdefault(receipt["operation_id"], {})[receipt["kind"]] = json.loads(
-                    receipt["payload"])
-            nodes = self.db.execute(
-                "SELECT payload,pinned,generation FROM process_nodes WHERE boot_id=? AND audit_session=? "
-                "ORDER BY updated_at DESC LIMIT 256",
-                (attributes["boot_id"], attributes["audit_session"])).fetchall()
-            nodes = [dict(json.loads(node["payload"]), pinned=bool(node["pinned"]),
-                          _generation=node["generation"]) for node in nodes]
-            origin = self.db.execute(
-                "SELECT origin_kind,anchor_pid,anchor_generation,ambiguous "
-                "FROM origin_sessions WHERE boot_id=? AND audit_session=?",
-                (attributes["boot_id"], attributes["audit_session"])).fetchone()
+            session_key = (attributes["boot_id"], attributes["audit_session"])
+            session_nodes = nodes_by_session.get(
+                session_key, {"by_pid": {}, "by_parent": {}})
+            by_pid = session_nodes["by_pid"]
+            by_parent = session_nodes["by_parent"]
+            if session_key not in origins:
+                origins[session_key] = self.db.execute(
+                    "SELECT origin_kind,anchor_pid,anchor_generation,ambiguous "
+                    "FROM origin_sessions WHERE boot_id=? AND audit_session=?",
+                    session_key).fetchone()
+            origin = origins[session_key]
             if origin is not None and origin["ambiguous"]:
                 self._ingest_one(observation, now)
                 self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
@@ -1245,7 +1276,11 @@ class Store:
             if origin is None or origin["origin_kind"] != "cron_jobman":
                 continue
             conflicted = False
-            for operation_id, pair in pairs.items():
+            candidate_pairs = []
+            for child in by_parent.get(attributes["producer_pid"], ()):
+                candidate_pairs.extend(pairs_by_broker.get(
+                    (session_key[0], session_key[1], child.get("pid")), ()))
+            for operation_id, pair in candidate_pairs:
                 begin = pair.get("begin")
                 result = pair.get("result")
                 if begin and result and not self._receipt_pair_valid(begin, result):
@@ -1258,12 +1293,13 @@ class Store:
                         result.get("audit_session") != attributes["audit_session"]):
                     continue
                 broker = self._one_pid_generation(
-                    nodes, begin["broker_pid"], begin["broker_start_ticks"],
+                    by_pid.get(begin["broker_pid"], ()),
+                    begin["broker_pid"], begin["broker_start_ticks"],
                     begin["monotonic_ns"], result["monotonic_ns"])
                 targets = []
                 for child in result["children"]:
                     target = self._one_pid_generation(
-                        nodes, child["pid"], child["start_ticks"],
+                        by_pid.get(child["pid"], ()), child["pid"], child["start_ticks"],
                         begin["monotonic_ns"], result["monotonic_ns"], exe=child["exe"])
                     if target is None:
                         targets = []
@@ -1275,19 +1311,20 @@ class Store:
                         break
                     targets.append(target)
                 if broker is None or len(targets) != len(result["children"]):
-                    if any(node.get("ambiguous") or node.get("incomplete") for node in nodes
-                           if node.get("pid") in (
-                               begin["broker_pid"], result["target_pid"])):
+                    relevant = (list(by_pid.get(begin["broker_pid"], ())) +
+                                list(by_pid.get(result["target_pid"], ())))
+                    if any(node.get("ambiguous") or node.get("incomplete")
+                           for node in relevant):
                         conflicted = True
                     continue
-                sudo = self._parent_node(nodes, broker)
+                sudo = self._parent_node(by_pid.get(broker.get("ppid"), ()), broker)
                 observed_ns = attributes["monotonic"] * 1000
                 if (sudo is None or sudo.get("exe") != "/usr/bin/sudo" or
                         sudo.get("pid") != attributes["producer_pid"] or
                         not begin["monotonic_ns"] - 2_000_000_000 <= observed_ns <=
                         result["monotonic_ns"] + 2_000_000_000):
                     continue
-                engine = self._parent_node(nodes, sudo)
+                engine = self._parent_node(by_pid.get(sudo.get("ppid"), ()), sudo)
                 if (engine is None or not engine.get("pinned") or
                         engine.get("pid") != origin["anchor_pid"] or
                         engine.get("_generation") !=
@@ -1463,7 +1500,7 @@ class Store:
                     boot_id = found["attributes"]["boot_id"]
                     healthy = self.db.execute(
                         "SELECT healthy FROM audit_health_epochs WHERE boot_id=? "
-                        "ORDER BY sequence DESC LIMIT 1", (boot_id,)).fetchone()
+                        "ORDER BY observed_at DESC,rowid DESC LIMIT 1", (boot_id,)).fetchone()
                     if healthy is not None and healthy["healthy"]:
                         self.hold_firewall_observation(found, now=now)
                     else:
