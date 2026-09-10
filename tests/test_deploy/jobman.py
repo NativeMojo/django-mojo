@@ -772,4 +772,3 @@ def test_grace_is_a_stop_only_flag(opts):
                      f"(exit 2), got {done.returncode}: {done.stderr!r}")
     finally:
         shutil.rmtree(base, ignore_errors=True)
-

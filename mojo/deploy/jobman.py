@@ -65,6 +65,12 @@ pattern is the runner's path RELATIVE to the root:
 which matches both a relative spawn (`./bin/jobs.py engine foreground`) and an
 absolute one, so old and new processes co-match during a rollout.
 
+PROCESS START bypasses the runner's shebang and invokes it with this process's
+absolute `sys.executable`. That keeps the audited launch to one exact Python
+exec instead of the `/usr/bin/env` plus PATH-search exec chain produced by the
+project script's portable shebang. A missing, relative, or non-executable
+interpreter is refused before any child is spawned.
+
 This replaces `django-mojo-skeleton/bin/jobman`, which becomes a shim:
 
     #!/usr/bin/env bash
@@ -472,6 +478,14 @@ def cmd_start(root, runner_path, comp):
               file=sys.stderr)
         return 1
 
+    python_path = sys.executable or ""
+    if (not os.path.isabs(python_path)
+            or not os.path.isfile(python_path)
+            or not os.access(python_path, os.X_OK)):
+        print("jobman: Python interpreter %s is not an absolute executable"
+              % (python_path or "<empty>"), file=sys.stderr)
+        return 1
+
     log_path = logfile(root, comp)
     try:
         handle = open(log_path, "a")
@@ -505,7 +519,7 @@ def cmd_start(root, runner_path, comp):
         # survives the cron shell exiting — what `nohup ... &` bought, without
         # depending on nohup being installed.
         proc = subprocess.Popen(
-            [runner_path, comp, "foreground"],
+            [python_path, runner_path, comp, "foreground"],
             cwd=root, stdin=subprocess.DEVNULL, stdout=handle,
             stderr=subprocess.STDOUT, start_new_session=True, env=child_env)
     except OSError as err:

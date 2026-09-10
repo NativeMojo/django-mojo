@@ -440,6 +440,12 @@ engine and scheduler. Cron remains the normal start backstop. A successful
 deployment schedules a recycle of both components only after the invoking job
 has returned and recorded its result.
 
+`start` runs `bin/jobs.py` through jobman's absolute current Python executable,
+not through the project's `/usr/bin/env` shebang. Besides pinning the child to
+the already-selected environment, this gives Linux Audit one unambiguous Python
+exec generation for MojoSec lineage. Jobman refuses to spawn if its interpreter
+is not an absolute executable path.
+
 **A root `start` demotes itself.** Invoked as root, `jobman start` resolves
 the application account (same ladder as the update transaction: cron entry →
 `APP_USER` → checkout owner, never `SUDO_USER`), repairs the ownership of its

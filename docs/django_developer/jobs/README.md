@@ -278,9 +278,12 @@ No jobs CLI daemon-mode processes running; check deployed foreground processes w
 
 MojoSec proves that deployed origin from the real CROND launch record plus its
 matching PAM/Audit `USER_START`, then follows the audited bash → jobman → engine
-chain. The CROND row itself retains real crond process metadata; its launch PID
-is joined to the later bash and jobman execs, which may be successive execs of
-that same PID. MojoSec does not invent a same-session long-lived crond exec.
+chain. Jobman invokes `bin/jobs.py` with its own absolute Python executable,
+bypassing the script's portable `/usr/bin/env` shebang so Linux Audit records
+one authoritative engine exec rather than a PATH-search sequence on the same
+PID. The CROND row itself retains real crond process metadata; its launch PID is
+joined to the later bash and jobman execs, which may be successive execs of that
+same PID. MojoSec does not invent a same-session long-lived crond exec.
 
 `jobman` lives in `mojo.deploy` rather than in this app because it has to work
 on a box with no settings at all — see
