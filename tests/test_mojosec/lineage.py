@@ -591,7 +591,7 @@ def test_compound_timeout_is_incomplete(opts):
                    "a missing Audit outcome must not become a confirmed failed exec")
 
 
-@th.unit_test("only a terminal kernel failure is a confirmed failed exec")
+@th.unit_test("AL2023 PROCTITLE boundary confirms a terminal failed exec")
 def test_compound_confirmed_failed_exec(opts):
     from mojo.mojosec.lineage import CompoundAssembler
 
@@ -599,11 +599,12 @@ def test_compound_confirmed_failed_exec(opts):
         _record(45, "SYSCALL", _AUDIT_FIELD_PID="8", _AUDIT_FIELD_PPID="1",
                 _AUDIT_FIELD_EXE="/usr/sbin/xtables-nft-multi",
                 _AUDIT_FIELD_SUCCESS="no", _AUDIT_FIELD_EXIT="-2"),
-        _record(45, "EOE"),
+        _record(45, "PROCTITLE", _AUDIT_FIELD_PROCTITLE="2F7362696E2F69707461626C6573"),
     ])
     node = result["complete"][0]
-    th.assert_true(node["failure_confirmed"] and not node["success"],
-                   "a terminal success=no SYSCALL must identify a failed exec")
+    th.assert_true(node["failure_confirmed"] and not node["success"] and
+                   not node["eoe"],
+                   "AL2023's terminal PROCTITLE plus success=no must identify a failed exec")
 
 
 @th.unit_test("event lineage projection is bounded")

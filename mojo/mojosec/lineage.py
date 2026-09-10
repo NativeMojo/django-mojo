@@ -280,7 +280,8 @@ class CompoundAssembler:
         # separately from the generic ``success=False`` used for missing or
         # incomplete SYSCALL evidence.
         failure_confirmed = bool(
-            success_value in ("no", "0") and "EOE" in item["rows"] and
+            success_value in ("no", "0") and
+            ("EOE" in item["rows"] or "PROCTITLE" in item["rows"]) and
             not item.get("ambiguous") and not item.get("incomplete"))
         ambiguous = item["ambiguous"] or not syscall or not execve or argc is None
         if argc is not None:
