@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import types
 from unittest import mock
 
@@ -85,6 +86,168 @@ def _patch_journal_popen(journal_module, payload, commands):
         TimeoutExpired=subprocess.TimeoutExpired,
     )
     return mock.patch.object(journal_module, "subprocess", proxy)
+
+
+def _fixture_proc(root, live):
+    boot_path = os.path.join(root, "sys", "kernel", "random")
+    os.makedirs(boot_path, exist_ok=True)
+    with open(os.path.join(boot_path, "boot_id"), "w") as handle:
+        handle.write("a" * 32)
+    for node in live:
+        directory = os.path.join(root, str(node["pid"]))
+        os.makedirs(directory)
+        fields = [str(node["pid"]), "(python)", "S", str(node["ppid"])] + ["0"] * 17
+        fields.append(str(node["start_ticks"]))
+        with open(os.path.join(directory, "stat"), "w") as handle:
+            handle.write(" ".join(fields))
+        with open(os.path.join(directory, "cmdline"), "wb") as handle:
+            handle.write(b"\0".join(part.encode() for part in node["cmdline"]) + b"\0")
+        with open(os.path.join(directory, "cgroup"), "w") as handle:
+            handle.write("0::/user.slice/user-1000.slice/session-9.scope")
+        os.symlink(node["exe"], os.path.join(directory, "exe"))
+
+
+@th.django_unit_test()
+def test_al2023_collector_store_provenance_golden_path(opts):
+    from mojo.deploy import audit
+    from mojo.mojosec import lineage
+    from mojo.mojosec.collectors import journal as journal_module
+    from mojo.mojosec.runtime import Runtime
+    from mojo.mojosec.store import Store
+
+    with open(os.path.join(os.path.dirname(__file__), "golden",
+                           "al2023_firewall_provenance_v1.json")) as handle:
+        original = json.load(handle)
+    aggregation = {"window_seconds": 60, "flush_count": 10,
+                   "max_aggregates": 100, "critical_reserve_aggregates": 10}
+    delivery = {"max_spool_events": 100, "critical_reserve_events": 10,
+                "retry_min_seconds": 1, "retry_max_seconds": 60}
+    real_enrich = lineage.enrich_process
+    scenarios = ("complete", "missing_execve", "missing_boundary", "argv_conflict",
+                 "missing_receipt", "failed_receipt", "conflicting_receipt",
+                 "unexpected_command", "unexpected_child", "interactive", "ssh", "audit_loss", "parser_loss",
+                 "parser_loss_no_sidecar", "dead_engine", "sql_unpinned")
+    for scenario in scenarios:
+        fixture = json.loads(json.dumps(original))
+        if scenario == "missing_execve":
+            fixture["engine"].pop(1)
+        if scenario == "missing_boundary":
+            fixture["engine"].pop()
+        if scenario == "argv_conflict":
+            fixture["engine"][1]["_AUDIT_FIELD_A0"] = '"different"'
+        if scenario in ("failed_receipt", "conflicting_receipt"):
+            receipt = json.loads(fixture["receipts"][1]["MESSAGE"])
+            receipt["ok"] = False
+            changed = dict(fixture["receipts"][1], MESSAGE=json.dumps(receipt))
+            if scenario == "failed_receipt":
+                fixture["receipts"][1] = changed
+            else:
+                fixture["receipts"].insert(1, changed)
+        if scenario == "unexpected_command":
+            fixture["observation"]["MESSAGE"] += " --unexpected"
+        if scenario == "interactive":
+            fixture["observation"]["MESSAGE"] = fixture["observation"]["MESSAGE"].replace(
+                "PWD=", "TTY=pts/1 ; PWD=")
+        if scenario == "unexpected_child":
+            fixture["target"][1].update(_AUDIT_FIELD_A0='"/sbin/ipset"',
+                                        MESSAGE='EXECVE argc=1 a0="/sbin/ipset"')
+        if scenario == "ssh":
+            fixture["launches"].append({
+                "__CURSOR": "ssh-login", "_BOOT_ID": "a" * 32,
+                "_AUDIT_SESSION": "9", "_AUDIT_LOGINUID": "1000",
+                "_TRANSPORT": "audit", "_AUDIT_TYPE_NAME": "USER_LOGIN", "_UID": "0",
+                "MESSAGE": 'USER_LOGIN acct="ec2-user" exe="/usr/sbin/sshd" '
+                'addr=192.0.2.8 terminal=ssh res=success'})
+        health = {"schema": "mojosec.audit-health", "version": 1,
+                  "boot_id": "a" * 32, "generation": "c" * 64,
+                  "rules_sha256": "d" * 64, "sequence": 1, "enabled": 1,
+                  "failure": 1, "rate_limit": 0, "backlog_limit": 8192,
+                  "backlog": 0, "lost": 0, "updated_at": time.time()}
+        with tempfile.TemporaryDirectory() as root:
+            proc_root = os.path.join(root, "proc")
+            _fixture_proc(proc_root, fixture["live"])
+            state = os.path.join(root, "state")
+            store = Store(state, "sensor", aggregation, delivery)
+            collector = journal_module.JournalCollector(_journal_config(100))
+            errors = []
+            runtime = Runtime.__new__(Runtime)
+            runtime.store = store
+            runtime.collector_status = {}
+            runtime._collector_error = lambda name, err: errors.append(str(err))
+            batches = [
+                fixture["launches"] + fixture["bash"] + fixture["jobman"] + fixture["engine"][:2],
+                fixture["engine"][2:] + fixture["sudo"] + fixture["broker"] + fixture["target"] +
+                [fixture["observation"], fixture["receipts"][0]],
+                [] if scenario == "missing_receipt" else fixture["receipts"][1:],
+            ]
+            def parents(pid):
+                return lineage.walk_parents(pid, proc_root=proc_root)
+
+            unavailable = False
+            with mock.patch.object(lineage, "enrich_process", side_effect=lambda pid, **kw:
+                                   real_enrich(pid, proc_root=proc_root)), \
+                    mock.patch.object(journal_module, "walk_parents", side_effect=parents), \
+                    mock.patch.object(audit, "read_health", side_effect=lambda:
+                                      None if unavailable else dict(health)):
+                for index, batch in enumerate(batches):
+                    if index == 2 and scenario == "parser_loss_no_sidecar":
+                        unavailable = True
+                    if index == 2 and scenario == "audit_loss":
+                        health["lost"] = 1
+                    if index == 2 and scenario == "dead_engine":
+                        os.unlink(os.path.join(proc_root, "21", "stat"))
+                    if index == 2 and scenario == "sql_unpinned":
+                        # Resolver must honor current SQL, even a legacy stale JSON pin.
+                        store.db.execute("UPDATE process_nodes SET pinned=0 WHERE pid=21")
+                    payload = b"".join(json.dumps(row).encode() + b"\n" for row in batch)
+                    if index == 2 and scenario in ("parser_loss", "parser_loss_no_sidecar"):
+                        payload += b'{"__CURSOR":"malformed","MESSAGE":broken}\n'
+                    with _patch_journal_popen(journal_module, payload, []):
+                        runtime._poll_stream(collector)
+                    th.assert_eq(errors, [], f"the {scenario} collector must execute successfully")
+                    if index == 1 and scenario == "complete":
+                        th.assert_eq(store.stats()["provenance"]["pending_firewall"], 1,
+                                     "begin without result must durably hold the exact broker observation")
+                        th.assert_eq(store.stats()["provenance"]["engine_anchors"], 1,
+                                     "real /proc plus AL2023 Audit must create a live engine anchor")
+                    store.close()
+                    store = Store(state, "sensor", aggregation, delivery)
+                    runtime.store = store
+                store.db.execute("UPDATE pending_firewall SET expires=?", (time.time() - 1,))
+                store.reconcile_pending_firewall()
+                events = store.pending_batch(100, 65536)
+                sudo_events = [event for event in events if event["kind"] == "auth.sudo_command"]
+                if scenario == "complete":
+                    th.assert_eq(sudo_events, [], "fully proven broker execution must stay local-only")
+                    th.assert_eq(store.stats()["local_only_suppressed"], 1,
+                                 "the production collector path must reach the fixed classifier")
+                    th.assert_eq(store.db.execute("SELECT COUNT(*) FROM process_nodes").fetchone()[0], 6,
+                                 "poll/restart must preserve exactly the six canonical exec generations")
+                else:
+                    th.assert_eq(len(sudo_events), 1, f"{scenario} must retain ordinary sudo evidence")
+                    th.assert_eq(store.stats()["local_only_suppressed"], 0,
+                                 f"{scenario} must never suppress unproved privileged activity")
+                store.close()
+
+
+@th.django_unit_test()
+def test_journal_parser_loss_vetoes_new_nodes(opts):
+    from mojo.mojosec.collectors import journal as journal_module
+    from mojo.mojosec.lineage import eligible_process_node
+
+    with open(os.path.join(os.path.dirname(__file__), "golden",
+                           "al2023_firewall_provenance_v1.json")) as handle:
+        fixture = json.load(handle)
+    payload = b"".join(json.dumps(row).encode() + b"\n" for row in fixture["engine"])
+    payload += b'{"__CURSOR":"bad","MESSAGE":broken}\n'
+    with _patch_journal_popen(journal_module, payload, []), \
+            mock.patch.object(journal_module, "walk_parents", return_value={
+                "nodes": [], "ambiguous": False}):
+        result = journal_module.JournalCollector(_journal_config()).poll()
+    th.assert_eq(result["malformed"], 1, "parser loss must remain explicitly counted")
+    th.assert_true(result["process_nodes"] and all(
+        not eligible_process_node(node) for node in result["process_nodes"]),
+        "no node from a lossy journal batch may become suppression-eligible")
 
 
 @th.django_unit_test()

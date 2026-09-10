@@ -9,7 +9,9 @@ import time
 
 from ..detectors import detect_journal
 from ..attribution import AttributionResolver
-from ..lineage import CompoundAssembler, crond_launch, firewall_receipt, walk_parents
+from ..lineage import (
+    CompoundAssembler, crond_launch, firewall_receipt, live_engine_identity, walk_parents,
+)
 
 
 MAX_STDERR_BYTES = 4096
@@ -172,12 +174,7 @@ class JournalCollector:
                     node["cgroup"] = live.get("cgroup", "")
                     node["namespaces"] = live.get("namespaces", {})
                     node["selinux"] = node.get("selinux") or live.get("selinux", "")
-                    node["pinned"] = bool(
-                        os.path.basename(node.get("exe", "")).startswith("python3") and
-                        any(str(part).endswith("/bin/jobs.py") or part == "bin/jobs.py"
-                            for part in live.get("cmdline", [])) and
-                        "engine" in live.get("cmdline", []) and
-                        "foreground" in live.get("cmdline", []))
+                    node["pinned"] = live_engine_identity(node, live)
             process_nodes.append(node)
         receipts = [found for found in
                     (firewall_receipt(record) for record in parsed_records) if found]
@@ -192,6 +189,12 @@ class JournalCollector:
                 continue
             if detected:
                 observations.append(detected)
+        if malformed:
+            # A skipped record can contain a contradiction or a lost edge.
+            for node in process_nodes:
+                node.update(ambiguous=True, pinned=False)
+            for fragment in lineage["fragments"]:
+                fragment["ambiguous"] = True
         return {
             "observations": observations, "cursor": next_cursor,
             "malformed": malformed, "ssh_sessions": sessions,

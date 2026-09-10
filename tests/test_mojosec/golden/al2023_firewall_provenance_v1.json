@@ -1,0 +1,370 @@
+{
+  "engine": [
+    {
+      "__CURSOR": "engine-syscall",
+      "_TRANSPORT": "audit",
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808238",
+      "_AUDIT_TYPE_NAME": "SYSCALL",
+      "__MONOTONIC_TIMESTAMP": "500",
+      "_AUDIT_FIELD_PID": "21",
+      "_AUDIT_FIELD_PPID": "19",
+      "_AUDIT_FIELD_UID": "1000",
+      "_AUDIT_FIELD_EUID": "1000",
+      "_AUDIT_FIELD_AUID": "1000",
+      "_AUDIT_FIELD_SES": "9",
+      "_AUDIT_FIELD_EXE": "\"/usr/bin/python3\"",
+      "_AUDIT_FIELD_SUCCESS": "yes",
+      "_AUDIT_FIELD_EXIT": "0",
+      "MESSAGE": "SYSCALL success=yes exit=0 pid=21 ppid=19 uid=1000 euid=1000 auid=1000 ses=9 exe=\"/usr/bin/python3\""
+    },
+    {
+      "__CURSOR": "engine-execve",
+      "_TRANSPORT": "audit",
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808238",
+      "_AUDIT_TYPE_NAME": "EXECVE",
+      "_AUDIT_FIELD_ARGC": "4",
+      "_AUDIT_FIELD_A0": "\"python\"",
+      "_AUDIT_FIELD_A1": "\"/opt/api/bin/jobs.py\"",
+      "_AUDIT_FIELD_A2": "\"engine\"",
+      "_AUDIT_FIELD_A3": "\"foreground\"",
+      "MESSAGE": "EXECVE argc=4 a0=\"python\" a1=\"/opt/api/bin/jobs.py\" a2=\"engine\" a3=\"foreground\""
+    },
+    {
+      "__CURSOR": "engine-proctitle",
+      "_TRANSPORT": "audit",
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808238",
+      "_AUDIT_TYPE_NAME": "PROCTITLE",
+      "_AUDIT_FIELD_PROCTITLE": "707974686F6E002F6F70742F6170692F62696E2F6A6F62732E707900656E67696E6500666F726567726F756E64",
+      "MESSAGE": "PROCTITLE proctitle=707974686F6E002F6F70742F6170692F62696E2F6A6F62732E707900656E67696E6500666F726567726F756E64"
+    }
+  ],
+  "launches": [
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_UID": "0",
+      "_AUDIT_LOGINUID": "1000",
+      "_AUDIT_SESSION": "9",
+      "_SELINUX_CONTEXT": "system_u:system_r:crond_t:s0-s0:c0.c1023",
+      "__CURSOR": "pam",
+      "_TRANSPORT": "audit",
+      "_AUDIT_TYPE_NAME": "USER_START",
+      "__MONOTONIC_TIMESTAMP": "100",
+      "MESSAGE": "USER_START pid=411 uid=0 auid=1000 ses=9 msg='op=PAM:session_open grantors=pam_loginuid,pam_keyinit,pam_limits,pam_systemd acct=\"ec2-user\" exe=\"/usr/sbin/crond\" hostname=? addr=? terminal=cron res=success'"
+    },
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_UID": "0",
+      "_AUDIT_LOGINUID": "1000",
+      "_AUDIT_SESSION": "9",
+      "_SELINUX_CONTEXT": "system_u:system_r:crond_t:s0-s0:c0.c1023",
+      "__CURSOR": "crond",
+      "_TRANSPORT": "syslog",
+      "_PID": "19",
+      "_GID": "1000",
+      "_COMM": "crond",
+      "_EXE": "/usr/sbin/crond",
+      "SYSLOG_IDENTIFIER": "CROND",
+      "_CMDLINE": "/usr/sbin/CROND -n",
+      "MESSAGE": "(ec2-user) CMD (/opt/api/bin/jobman start >> /opt/api/var/logs/jobman.log 2>&1)",
+      "_SYSTEMD_UNIT": "session-9.scope",
+      "_SYSTEMD_CGROUP": "/user.slice/user-1000.slice/session-9.scope",
+      "__MONOTONIC_TIMESTAMP": "200"
+    }
+  ],
+  "bash": [
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808236",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "300",
+      "__CURSOR": "s11808236",
+      "_AUDIT_TYPE_NAME": "SYSCALL",
+      "MESSAGE": "SYSCALL pid=19 ppid=1 uid=1000 euid=0 auid=1000 ses=9 tty=(none) exe=\"/usr/bin/bash\" success=yes exit=0",
+      "_AUDIT_FIELD_PID": "19",
+      "_AUDIT_FIELD_PPID": "1",
+      "_AUDIT_FIELD_UID": "1000",
+      "_AUDIT_FIELD_EUID": "0",
+      "_AUDIT_FIELD_AUID": "1000",
+      "_AUDIT_FIELD_SES": "9",
+      "_AUDIT_FIELD_TTY": "(none)",
+      "_AUDIT_FIELD_EXE": "\"/usr/bin/bash\"",
+      "_AUDIT_FIELD_SUCCESS": "yes",
+      "_AUDIT_FIELD_EXIT": "0"
+    },
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808236",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "300",
+      "__CURSOR": "x11808236",
+      "_AUDIT_TYPE_NAME": "EXECVE",
+      "_AUDIT_FIELD_ARGC": "3",
+      "MESSAGE": "EXECVE argc=3 a0=\"/usr/bin/bash\" a1=\"-c\" a2=2f6f70742f6170692f62696e2f6a6f626d616e207374617274203e3e202f6f70742f6170692f7661722f6c6f67732f6a6f626d616e2e6c6f6720323e2631",
+      "_AUDIT_FIELD_A0": "\"/usr/bin/bash\"",
+      "_AUDIT_FIELD_A1": "\"-c\"",
+      "_AUDIT_FIELD_A2": "2f6f70742f6170692f62696e2f6a6f626d616e207374617274203e3e202f6f70742f6170692f7661722f6c6f67732f6a6f626d616e2e6c6f6720323e2631"
+    },
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808236",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "300",
+      "__CURSOR": "p11808236",
+      "_AUDIT_TYPE_NAME": "PROCTITLE",
+      "_AUDIT_FIELD_PROCTITLE": "2f7573722f62696e2f62617368002d63002f6f70742f6170692f62696e2f6a6f626d616e207374617274203e3e202f6f70742f6170692f7661722f6c6f67732f6a6f626d616e2e6c6f6720323e2631",
+      "MESSAGE": "PROCTITLE proctitle=2f7573722f62696e2f62617368002d63002f6f70742f6170692f62696e2f6a6f626d616e207374617274203e3e202f6f70742f6170692f7661722f6c6f67732f6a6f626d616e2e6c6f6720323e2631"
+    }
+  ],
+  "jobman": [
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808237",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "400",
+      "__CURSOR": "s11808237",
+      "_AUDIT_TYPE_NAME": "SYSCALL",
+      "MESSAGE": "SYSCALL pid=19 ppid=1 uid=1000 euid=0 auid=1000 ses=9 tty=(none) exe=\"/usr/bin/python3\" success=yes exit=0",
+      "_AUDIT_FIELD_PID": "19",
+      "_AUDIT_FIELD_PPID": "1",
+      "_AUDIT_FIELD_UID": "1000",
+      "_AUDIT_FIELD_EUID": "0",
+      "_AUDIT_FIELD_AUID": "1000",
+      "_AUDIT_FIELD_SES": "9",
+      "_AUDIT_FIELD_TTY": "(none)",
+      "_AUDIT_FIELD_EXE": "\"/usr/bin/python3\"",
+      "_AUDIT_FIELD_SUCCESS": "yes",
+      "_AUDIT_FIELD_EXIT": "0"
+    },
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808237",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "400",
+      "__CURSOR": "x11808237",
+      "_AUDIT_TYPE_NAME": "EXECVE",
+      "_AUDIT_FIELD_ARGC": "4",
+      "MESSAGE": "EXECVE argc=4 a0=\"python3\" a1=\"-m\" a2=\"mojo.deploy.jobman\" a3=\"start\"",
+      "_AUDIT_FIELD_A0": "\"python3\"",
+      "_AUDIT_FIELD_A1": "\"-m\"",
+      "_AUDIT_FIELD_A2": "\"mojo.deploy.jobman\"",
+      "_AUDIT_FIELD_A3": "\"start\""
+    },
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808237",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "400",
+      "__CURSOR": "p11808237",
+      "_AUDIT_TYPE_NAME": "PROCTITLE",
+      "_AUDIT_FIELD_PROCTITLE": "707974686f6e33002d6d006d6f6a6f2e6465706c6f792e6a6f626d616e007374617274",
+      "MESSAGE": "PROCTITLE proctitle=707974686f6e33002d6d006d6f6a6f2e6465706c6f792e6a6f626d616e007374617274"
+    }
+  ],
+  "sudo": [
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808239",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "1000000",
+      "__CURSOR": "s11808239",
+      "_AUDIT_TYPE_NAME": "SYSCALL",
+      "MESSAGE": "SYSCALL pid=20 ppid=21 uid=1000 euid=0 auid=1000 ses=9 tty=(none) exe=\"/usr/bin/sudo\" success=yes exit=0",
+      "_AUDIT_FIELD_PID": "20",
+      "_AUDIT_FIELD_PPID": "21",
+      "_AUDIT_FIELD_UID": "1000",
+      "_AUDIT_FIELD_EUID": "0",
+      "_AUDIT_FIELD_AUID": "1000",
+      "_AUDIT_FIELD_SES": "9",
+      "_AUDIT_FIELD_TTY": "(none)",
+      "_AUDIT_FIELD_EXE": "\"/usr/bin/sudo\"",
+      "_AUDIT_FIELD_SUCCESS": "yes",
+      "_AUDIT_FIELD_EXIT": "0"
+    },
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808239",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "1000000",
+      "__CURSOR": "x11808239",
+      "_AUDIT_TYPE_NAME": "EXECVE",
+      "_AUDIT_FIELD_ARGC": "4",
+      "MESSAGE": "EXECVE argc=4 a0=\"sudo\" a1=\"-n\" a2=\"--\" a3=\"/usr/local/sbin/mojo-firewall-broker\"",
+      "_AUDIT_FIELD_A0": "\"sudo\"",
+      "_AUDIT_FIELD_A1": "\"-n\"",
+      "_AUDIT_FIELD_A2": "\"--\"",
+      "_AUDIT_FIELD_A3": "\"/usr/local/sbin/mojo-firewall-broker\""
+    },
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808239",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "1000000",
+      "__CURSOR": "p11808239",
+      "_AUDIT_TYPE_NAME": "PROCTITLE",
+      "_AUDIT_FIELD_PROCTITLE": "7375646f002d6e002d2d002f7573722f6c6f63616c2f7362696e2f6d6f6a6f2d6669726577616c6c2d62726f6b6572",
+      "MESSAGE": "PROCTITLE proctitle=7375646f002d6e002d2d002f7573722f6c6f63616c2f7362696e2f6d6f6a6f2d6669726577616c6c2d62726f6b6572"
+    }
+  ],
+  "broker": [
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808240",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "1010000",
+      "__CURSOR": "s11808240",
+      "_AUDIT_TYPE_NAME": "SYSCALL",
+      "MESSAGE": "SYSCALL pid=22 ppid=20 uid=1000 euid=0 auid=1000 ses=9 tty=(none) exe=\"/usr/bin/python3\" success=yes exit=0",
+      "_AUDIT_FIELD_PID": "22",
+      "_AUDIT_FIELD_PPID": "20",
+      "_AUDIT_FIELD_UID": "1000",
+      "_AUDIT_FIELD_EUID": "0",
+      "_AUDIT_FIELD_AUID": "1000",
+      "_AUDIT_FIELD_SES": "9",
+      "_AUDIT_FIELD_TTY": "(none)",
+      "_AUDIT_FIELD_EXE": "\"/usr/bin/python3\"",
+      "_AUDIT_FIELD_SUCCESS": "yes",
+      "_AUDIT_FIELD_EXIT": "0"
+    },
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808240",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "1010000",
+      "__CURSOR": "x11808240",
+      "_AUDIT_TYPE_NAME": "EXECVE",
+      "_AUDIT_FIELD_ARGC": "2",
+      "MESSAGE": "EXECVE argc=2 a0=\"python3\" a1=\"/usr/local/sbin/mojo-firewall-broker\"",
+      "_AUDIT_FIELD_A0": "\"python3\"",
+      "_AUDIT_FIELD_A1": "\"/usr/local/sbin/mojo-firewall-broker\""
+    },
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808240",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "1010000",
+      "__CURSOR": "p11808240",
+      "_AUDIT_TYPE_NAME": "PROCTITLE",
+      "_AUDIT_FIELD_PROCTITLE": "707974686f6e33002f7573722f6c6f63616c2f7362696e2f6d6f6a6f2d6669726577616c6c2d62726f6b6572",
+      "MESSAGE": "PROCTITLE proctitle=707974686f6e33002f7573722f6c6f63616c2f7362696e2f6d6f6a6f2d6669726577616c6c2d62726f6b6572"
+    }
+  ],
+  "target": [
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808241",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "1020000",
+      "__CURSOR": "s11808241",
+      "_AUDIT_TYPE_NAME": "SYSCALL",
+      "MESSAGE": "SYSCALL pid=23 ppid=22 uid=1000 euid=0 auid=1000 ses=9 tty=(none) exe=\"/sbin/iptables\" success=yes exit=0",
+      "_AUDIT_FIELD_PID": "23",
+      "_AUDIT_FIELD_PPID": "22",
+      "_AUDIT_FIELD_UID": "1000",
+      "_AUDIT_FIELD_EUID": "0",
+      "_AUDIT_FIELD_AUID": "1000",
+      "_AUDIT_FIELD_SES": "9",
+      "_AUDIT_FIELD_TTY": "(none)",
+      "_AUDIT_FIELD_EXE": "\"/sbin/iptables\"",
+      "_AUDIT_FIELD_SUCCESS": "yes",
+      "_AUDIT_FIELD_EXIT": "0"
+    },
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808241",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "1020000",
+      "__CURSOR": "x11808241",
+      "_AUDIT_TYPE_NAME": "EXECVE",
+      "_AUDIT_FIELD_ARGC": "1",
+      "MESSAGE": "EXECVE argc=1 a0=\"/sbin/iptables\"",
+      "_AUDIT_FIELD_A0": "\"/sbin/iptables\""
+    },
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_AUDIT_ID": "11808241",
+      "_TRANSPORT": "audit",
+      "__MONOTONIC_TIMESTAMP": "1020000",
+      "__CURSOR": "p11808241",
+      "_AUDIT_TYPE_NAME": "PROCTITLE",
+      "_AUDIT_FIELD_PROCTITLE": "2f7362696e2f69707461626c6573",
+      "MESSAGE": "PROCTITLE proctitle=2f7362696e2f69707461626c6573"
+    }
+  ],
+  "observation": {
+    "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "_UID": "0",
+    "_AUDIT_LOGINUID": "1000",
+    "_AUDIT_SESSION": "9",
+    "_SELINUX_CONTEXT": "system_u:system_r:crond_t:s0-s0:c0.c1023",
+    "__CURSOR": "sudo-observation",
+    "_TRANSPORT": "syslog",
+    "SYSLOG_IDENTIFIER": "sudo",
+    "_COMM": "sudo",
+    "_EXE": "/usr/bin/sudo",
+    "_PID": "20",
+    "__MONOTONIC_TIMESTAMP": "1000000",
+    "MESSAGE": "ec2-user : PWD=/opt/api ; USER=root ; COMMAND=/usr/local/sbin/mojo-firewall-broker"
+  },
+  "receipts": [
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_UID": "0",
+      "_AUDIT_LOGINUID": "1000",
+      "_AUDIT_SESSION": "9",
+      "_SELINUX_CONTEXT": "system_u:system_r:crond_t:s0-s0:c0.c1023",
+      "__CURSOR": "receipt-begin",
+      "_PID": "22",
+      "_EXE": "/usr/bin/python3",
+      "SYSLOG_IDENTIFIER": "mojo-firewall-broker",
+      "MESSAGE": "{\"schema\":\"mojosec.firewall-receipt\",\"version\":1,\"kind\":\"begin\",\"operation_id\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"execution_id\":\"ffffffffffffffffffffffffffffffff\",\"job_id\":\"11111111111111111111111111111111\",\"function\":\"mojo.apps.incident.asyncjobs.broadcast_block_ip\",\"operation\":\"rule.insert\",\"semantic\":\"-I INPUT source DROP\",\"argv_digest\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"stdin_digest\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"stdin_length\":0,\"count\":0,\"broker_pid\":22,\"broker_start_ticks\":220,\"target_exe\":\"/sbin/iptables\",\"monotonic_ns\":1000000000,\"children\":[]}"
+    },
+    {
+      "_BOOT_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "_UID": "0",
+      "_AUDIT_LOGINUID": "1000",
+      "_AUDIT_SESSION": "9",
+      "_SELINUX_CONTEXT": "system_u:system_r:crond_t:s0-s0:c0.c1023",
+      "__CURSOR": "receipt-result",
+      "_PID": "22",
+      "_EXE": "/usr/bin/python3",
+      "SYSLOG_IDENTIFIER": "mojo-firewall-broker",
+      "MESSAGE": "{\"schema\":\"mojosec.firewall-receipt\",\"version\":1,\"kind\":\"result\",\"operation_id\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"execution_id\":\"ffffffffffffffffffffffffffffffff\",\"job_id\":\"11111111111111111111111111111111\",\"function\":\"mojo.apps.incident.asyncjobs.broadcast_block_ip\",\"operation\":\"rule.insert\",\"semantic\":\"-I INPUT source DROP\",\"argv_digest\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"stdin_digest\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"stdin_length\":0,\"count\":0,\"broker_pid\":22,\"broker_start_ticks\":220,\"target_exe\":\"/sbin/iptables\",\"monotonic_ns\":1100000000,\"children\":[{\"pid\":23,\"start_ticks\":230,\"exe\":\"/sbin/iptables\",\"argv_digest\":\"78df55810ec43e6bf62f35aab80c50a2c1b2c96bc67b8035bff748858c7f1e84\",\"returncode\":0,\"ok\":true}],\"target_pid\":23,\"target_start_ticks\":230,\"ok\":true,\"returncode\":0}"
+    }
+  ],
+  "live": [
+    {
+      "pid": 21,
+      "ppid": 19,
+      "start_ticks": 210,
+      "exe": "/usr/bin/python3",
+      "cmdline": [
+        "python",
+        "/opt/api/bin/jobs.py",
+        "engine",
+        "foreground"
+      ]
+    },
+    {
+      "pid": 22,
+      "ppid": 20,
+      "start_ticks": 220,
+      "exe": "/usr/bin/python3",
+      "cmdline": [
+        "python3",
+        "/usr/local/sbin/mojo-firewall-broker"
+      ]
+    },
+    {
+      "pid": 23,
+      "ppid": 22,
+      "start_ticks": 230,
+      "exe": "/sbin/iptables",
+      "cmdline": [
+        "/sbin/iptables"
+      ]
+    }
+  ]
+}

@@ -91,14 +91,22 @@ class Runtime:
                                {"healthy": False, "reason": "post_poll_sidecar_unavailable"})
                 bracket = bool(
                     pre_result["healthy"] and post_result["healthy"] and
+                    not result.get("malformed") and
                     pre_health["boot_id"] == post_health["boot_id"] and
                     pre_health["generation"] == post_health["generation"] and
                     pre_health["rules_sha256"] == post_health["rules_sha256"] and
                     post_health["lost"] == pre_health["lost"])
+                health_source = post_health
+                if result.get("malformed") and health_source is None:
+                    # Parser loss is explicit negative authority even when
+                    # the current sidecar is unavailable; never preserve an
+                    # older healthy epoch for this observation's later proof.
+                    health_source = pre_health or previous_health
                 health_value = (dict(
-                    post_health, healthy=bracket,
-                    reason="" if bracket else post_result.get("reason", "poll_health_changed"))
-                    if post_health is not None else None)
+                    health_source, healthy=bracket,
+                    reason=("journal_parser_loss" if result.get("malformed") else
+                            "" if bracket else post_result.get("reason", "poll_health_changed")))
+                    if health_source is not None else None)
             else:
                 health_value = None
                 result = collector.poll(cursor)

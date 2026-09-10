@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import stat
 import time
 
@@ -14,6 +13,9 @@ MAX_ARGUMENT_BYTES = 16 * 1024
 MAX_PARENT_DEPTH = 32
 MAX_EVENT_ANCESTORS = 8
 COMPOUND_TIMEOUT_SECONDS = 2
+FINALIZED_TTL_SECONDS = 10 * 60
+COMPOUND_CAP = 8192
+PROCTITLE_BOUNDARY = "audit-proctitle-v1"
 # journald extracts the kernel Audit serial into _AUDIT_ID.  The timestamp
 # remains in _SOURCE_REALTIME_TIMESTAMP and must never be reconstructed from
 # MESSAGE text to form a compound identity.
@@ -102,35 +104,55 @@ def compound_key(record):
 
 
 def _kind(record):
-    kind = str(record.get("_AUDIT_TYPE_NAME") or record.get("AUDIT_TYPE_NAME") or "").upper()
+    kind = str(record.get("_AUDIT_TYPE_NAME") or "").upper()
     return kind if kind in _AUDIT_TYPES else ""
 
 
 def _message_fields(record):
     message = str(record.get("MESSAGE") or "")
-    if len(message.encode("utf-8", errors="replace")) > 16384:
-        return {}
-    try:
-        parts = shlex.split(message, posix=True)
-    except ValueError:
-        return {}
+    if len(message.encode("utf-8", errors="replace")) > MAX_ARGUMENT_BYTES * 3:
+        raise ValueError("oversized Audit message")
     fields = {}
-    for part in parts:
-        if "=" not in part:
+    # Keep quotes: unquoted hex is Audit encoding, quoted hex is literal text.
+    tokens = re.findall(r'[^\s="\']+="[^"\n]*"(?=\s|$)|[^\s]+', message)
+    for token in tokens:
+        if "=" not in token:
             continue
-        key, value = part.split("=", 1)
-        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_\[\]]{0,63}", key) and len(value) <= 4096:
-            fields[key.lower()] = value
+        key, value = token.split("=", 1)
+        key = key.lower()
+        if key in fields and fields[key] != value:
+            raise ValueError("conflicting Audit message field")
+        fields[key] = value
     return fields
 
 
+def _audit_string(value):
+    if not isinstance(value, str) or len(value) > MAX_ARGUMENT_BYTES * 2:
+        raise ValueError("invalid Audit string")
+    if value.startswith('"'):
+        if len(value) < 2 or not value.endswith('"') or '"' in value[1:-1]:
+            raise ValueError("invalid quoted Audit string")
+        value = value[1:-1]
+    elif re.fullmatch(r"[a-fA-F0-9]+", value):
+        if len(value) % 2:
+            raise ValueError("invalid Audit hex")
+        value = bytes.fromhex(value).decode("utf-8", errors="strict")
+    elif '"' in value or any(char.isspace() for char in value):
+        raise ValueError("invalid unquoted Audit string")
+    if "\0" in value or len(value.encode("utf-8")) > MAX_ARGUMENT_BYTES:
+        raise ValueError("invalid Audit argument bytes")
+    return value
+
+
 def _field(record, message, name, *fallbacks):
-    for key in (f"_AUDIT_FIELD_{name.upper()}",
-                f"AUDIT_FIELD_{name.upper()}"):
-        if record.get(key) not in (None, ""):
-            return record[key]
-    if message.get(name.lower()) not in (None, ""):
-        return message[name.lower()]
+    decode = _audit_string if name == "exe" or re.fullmatch(r"a[0-9]+", name) else str
+    values = [decode(value) for value in (
+        record.get(f"_AUDIT_FIELD_{name.upper()}"), message.get(name.lower()))
+        if value is not None]
+    if values:
+        if any(value != values[0] for value in values):
+            raise ValueError("Audit representations disagree")
+        return values[0]
     for key in fallbacks:
         if record.get(key) not in (None, ""):
             return record[key]
@@ -139,6 +161,11 @@ def _field(record, message, name, *fallbacks):
 
 def _normalize_record(record, kind):
     message = _message_fields(record)
+    prefix = str(record.get("MESSAGE") or "").split(" ", 1)[0]
+    if prefix.startswith("type="):
+        prefix = prefix[5:]
+    if prefix in _AUDIT_TYPES and prefix != kind:
+        raise ValueError("Audit record types disagree")
     if kind == "SYSCALL":
         result = {
             "pid": _field(record, message, "pid", "_PID"),
@@ -155,11 +182,19 @@ def _normalize_record(record, kind):
             "monotonic": record.get("__MONOTONIC_TIMESTAMP"),
         }
     elif kind == "EXECVE":
+        names = set(message) | {key[len("_AUDIT_FIELD_"):].lower()
+                                for key in record if key.startswith("_AUDIT_FIELD_")}
+        for name in names:
+            match = re.fullmatch(r"a([0-9]+)(.*)", name)
+            if match and (int(match[1]) >= MAX_ARGUMENTS or match[2]):
+                raise ValueError("unsupported or oversized Audit argument index")
         result = {"argc": _field(record, message, "argc")}
         for index in range(MAX_ARGUMENTS):
             value = _field(record, message, f"a{index}")
             if value is not None:
                 result[f"a{index}"] = value
+    elif kind == "PROCTITLE":
+        result = {"proctitle": _field(record, message, "proctitle")}
     else:
         result = {}
     return {key: value for key, value in result.items() if value is not None}
@@ -171,7 +206,11 @@ class CompoundAssembler:
 
     def ingest(self, records):
         completed = []
-        changed = []
+        changed = {}
+        now = time.time()
+        self.fragments = {key: item for key, item in self.fragments.items()
+                          if not item.get("finalized") or
+                          float(item.get("updated_at", 0)) > now - FINALIZED_TTL_SECONDS}
         for record in records:
             key = compound_key(record)
             kind = _kind(record)
@@ -181,9 +220,13 @@ class CompoundAssembler:
                 "boot_id": key[0], "audit_id": key[1], "rows": {},
                 "ambiguous": False, "updated_at": time.time(),
             })
-            item["updated_at"] = time.time()
+            item["updated_at"] = now
             current = item["rows"].get(kind)
-            clean = _normalize_record(record, kind)
+            try:
+                clean = _normalize_record(record, kind)
+            except (ValueError, UnicodeError):
+                item["ambiguous"] = True
+                clean = {}
             if current is not None and current != clean:
                 # Audit may legitimately emit multiple EXECVE rows only when
                 # split arguments agree.  All other same-type disagreement is
@@ -200,19 +243,27 @@ class CompoundAssembler:
                     item["ambiguous"] = True
             else:
                 item["rows"][kind] = clean
-            changed.append(item)
-            if kind == "EOE":
-                completed.append(self._finish(item))
-                self.fragments.pop(key, None)
-        cutoff = time.time() - COMPOUND_TIMEOUT_SECONDS
+            changed[key] = item
+        cutoff = now - COMPOUND_TIMEOUT_SECONDS
         for key, item in list(self.fragments.items()):
-            if float(item.get("updated_at", 0)) <= cutoff:
+            terminal = "EOE" in item["rows"] or "PROCTITLE" in item["rows"]
+            if not item.get("finalized") and not terminal and float(item.get("updated_at", 0)) <= cutoff:
                 item["ambiguous"] = True
                 item["incomplete"] = True
-                completed.append(self._finish(item))
-                self.fragments.pop(key, None)
+                changed[key] = item
+            if key in changed and (terminal or item.get("incomplete") or item.get("finalized")):
+                node = self._finish(item)
+                item["ambiguous"] = node["ambiguous"]
+                digest = hashlib.sha256(json.dumps(node, sort_keys=True).encode()).hexdigest()
+                if digest != item.get("final_digest"):
+                    completed.append(node)
+                item["finalized"] = True
+                item["final_digest"] = digest
+        # Limits retire evidence, never manufacture complete nodes.
+        self.fragments = dict(sorted(self.fragments.items(), key=lambda pair:
+                                     pair[1]["updated_at"], reverse=True)[:COMPOUND_CAP])
         return {"complete": completed, "fragments": list(self.fragments.values()),
-                "changed": changed}
+                "changed": list(changed.values())}
 
     def _finish(self, item):
         syscall = item["rows"].get("SYSCALL", {})
@@ -224,6 +275,8 @@ class CompoundAssembler:
         exit_code = _integer(syscall.get("exit"))
         ambiguous = item["ambiguous"] or not syscall or not execve or argc is None
         if argc is not None:
+            if any(f"a{index}" in execve for index in range(argc, MAX_ARGUMENTS)):
+                ambiguous = True
             for index in range(argc):
                 value = execve.get(f"a{index}")
                 if not isinstance(value, str):
@@ -250,6 +303,7 @@ class CompoundAssembler:
             "monotonic": _integer(syscall.get("monotonic")),
             "success": bool(success and exit_code == 0),
             "eoe": "EOE" in item["rows"],
+            "_completion": PROCTITLE_BOUNDARY if "PROCTITLE" in item["rows"] else "",
             "ambiguous": ambiguous,
             "incomplete": bool(item.get("incomplete")),
         }
@@ -274,6 +328,8 @@ def _read_proc_file(root, pid, name, maximum):
 def enrich_process(pid, proc_root="/proc"):
     """Read a compact identity from one live process; absence is expected."""
     try:
+        with open(os.path.join(proc_root, "sys/kernel/random/boot_id"), encoding="ascii") as handle:
+            boot_id = handle.read(64).strip().replace("-", "").lower()
         first_stat = _read_proc_file(proc_root, pid, "stat", 4096).decode().split()
         if len(first_stat) < 22:
             return None
@@ -306,11 +362,36 @@ def enrich_process(pid, proc_root="/proc"):
         if component.endswith((".service", ".scope")) and len(component) <= 256:
             unit = component
     return {
-        "pid": pid, "ppid": ppid, "start_ticks": start_ticks, "exe": exe,
+        "pid": pid, "ppid": ppid, "start_ticks": start_ticks, "exe": exe, "boot_id": boot_id,
         "cmdline": [value.decode("utf-8", errors="replace")[:512] for value in cmdline[:16]],
         "cgroup": cgroup[:1024], "unit": unit, "selinux": selinux[:256],
         "namespaces": namespaces,
     }
+
+
+def eligible_process_node(node):
+    argv = node.get("argv") if isinstance(node, dict) else None
+    return bool(
+        isinstance(node, dict) and node.get("success") is True and
+        (node.get("eoe") is True or node.get("_completion") == PROCTITLE_BOUNDARY) and
+        not node.get("ambiguous") and not node.get("incomplete") and
+        isinstance(argv, list) and 1 <= len(argv) <= MAX_ARGUMENTS and
+        all(isinstance(part, str) for part in argv) and
+        sum(len(part.encode("utf-8", errors="replace")) for part in argv) <= MAX_ARGUMENT_BYTES)
+
+
+def live_engine_identity(node, live):
+    """The same complete Audit and live generation contract at pin and refresh."""
+    argv = node.get("argv", [])
+    return bool(eligible_process_node(node) and live and
+                node.get("boot_id") == live.get("boot_id") and
+                node.get("pid") == live.get("pid") and
+                node.get("start_ticks") and node["start_ticks"] == live.get("start_ticks") and
+                node.get("exe") == live.get("exe") and
+                os.path.basename(node.get("exe", "")).startswith("python3") and
+                argv == live.get("cmdline") and len(argv) >= 3 and
+                argv[-2:] == ["engine", "foreground"] and
+                (argv[-3].endswith("/bin/jobs.py") or argv[-3] == "bin/jobs.py"))
 
 
 def walk_parents(pid, proc_root="/proc", maximum=MAX_PARENT_DEPTH):

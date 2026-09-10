@@ -326,6 +326,7 @@ class Store:
             )""",
             "CREATE INDEX IF NOT EXISTS process_nodes_session ON process_nodes(boot_id,audit_session,updated_at)",
             "CREATE INDEX IF NOT EXISTS process_nodes_updated ON process_nodes(pinned,updated_at)",
+            "CREATE INDEX IF NOT EXISTS process_nodes_audit_identity ON process_nodes(boot_id,generation)",
             """CREATE TABLE IF NOT EXISTS origin_sessions (
                 boot_id TEXT NOT NULL, audit_session INTEGER NOT NULL,
                 origin_kind TEXT NOT NULL, actor TEXT NOT NULL DEFAULT '',
@@ -615,6 +616,10 @@ class Store:
 
     def _record_provenance(self, fragments, process_nodes, health, receipts,
                            crond_launches, now):
+        if fragments is not None:
+            # The journal owns a full bounded snapshot, including finalized
+            # tombstones. An explicit empty snapshot retires old fragments.
+            self.db.execute("DELETE FROM audit_fragments")
         self.db.execute("DELETE FROM audit_fragments WHERE updated_at < ?",
                         (now - AUDIT_FRAGMENT_TTL_SECONDS,))
         for item in fragments or ():
@@ -638,17 +643,53 @@ class Store:
             (now - PROCESS_NODE_TTL_SECONDS,))
         self._refresh_process_pins(now)
         for item in process_nodes or ():
+            if not item.get("pid"):
+                continue
+            item = dict(item)
+            generation = f"audit-{item.get('audit_id', '')}"[:128]
+            # Preserve an existing canonical row (including pre-upgrade rows)
+            # when enrichment appears/disappears or the PID gets reused later.
+            prior_rows = self.db.execute(
+                "SELECT rowid,generation,payload FROM process_nodes WHERE boot_id=? AND generation=? "
+                "UNION SELECT rowid,generation,payload FROM process_nodes WHERE boot_id=? AND pid=?",
+                (item["boot_id"], generation, item["boot_id"], item["pid"])).fetchall()
+            canonical_row = None
+            for prior_row in prior_rows:
+                prior = json.loads(prior_row["payload"])
+                if prior.get("audit_id") != item.get("audit_id"):
+                    continue
+                if canonical_row is None:
+                    canonical_row = prior_row
+                    generation = prior_row["generation"]
+                else:
+                    self.db.execute("DELETE FROM process_nodes WHERE rowid=?",
+                                    (prior_row["rowid"],))
+                immutable = ("pid", "ppid", "uid", "euid", "auid", "tty", "selinux",
+                             "exe", "argv", "argv_sha256", "audit_session", "success", "monotonic")
+                conflict = (prior.get("ambiguous") or prior.get("incomplete") or
+                            any(prior.get(key) != item.get(key) for key in immutable) or
+                            (prior.get("start_ticks") and item.get("start_ticks") and
+                             prior["start_ticks"] != item["start_ticks"]))
+                if conflict:
+                    item["ambiguous"] = True
+                # The original identity remains addressable even if a late
+                # contradiction supplies a different PID after tombstone eviction.
+                item["pid"] = json.loads(canonical_row["payload"])["pid"]
+                if prior.get("start_ticks"):
+                    item["start_ticks"] = prior["start_ticks"]
+            from .lineage import enrich_process, live_engine_identity
+            item["pinned"] = bool(item.get("pinned") and live_engine_identity(
+                item, enrich_process(item["pid"])))
             payload = canonical_json(item)
             if len(payload.encode()) > 8192:
-                continue
-            generation = str(item.get("start_ticks") or
-                             f"audit-{item.get('audit_id', '')}")[:128]
+                item.update(ambiguous=True, pinned=False, argv=[], live_ancestors=[])
+                payload = canonical_json(item)
             self.db.execute(
                 "INSERT INTO process_nodes(boot_id,pid,generation,audit_session,payload,"
                 "observed_at,updated_at,pinned) VALUES(?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(boot_id,pid,generation) DO UPDATE SET "
                 "payload=excluded.payload,audit_session=excluded.audit_session,"
-                "updated_at=excluded.updated_at,pinned=max(process_nodes.pinned,excluded.pinned)",
+                "updated_at=excluded.updated_at,pinned=excluded.pinned",
                 (item["boot_id"], item["pid"], generation,
                  item.get("audit_session"), payload, now, now,
                  int(bool(item.get("pinned")))))
@@ -658,10 +699,15 @@ class Store:
             "DELETE FROM process_nodes WHERE rowid IN (SELECT rowid FROM process_nodes "
             "WHERE pinned=0 ORDER BY updated_at DESC,rowid DESC LIMIT -1 OFFSET ?)",
             (PROCESS_NODE_CAP,))
-        self.db.execute(
-            "UPDATE process_nodes SET pinned=0 WHERE rowid IN (SELECT rowid FROM "
-            "process_nodes WHERE pinned=1 ORDER BY updated_at DESC,rowid DESC "
-            "LIMIT -1 OFFSET ?)", (PROCESS_PINNED_CAP,))
+        excess = self.db.execute(
+            "SELECT rowid,payload FROM process_nodes WHERE pinned=1 "
+            "ORDER BY updated_at DESC,rowid DESC LIMIT -1 OFFSET ?",
+            (PROCESS_PINNED_CAP,)).fetchall()
+        for row in excess:
+            node = json.loads(row["payload"])
+            node["pinned"] = False
+            self.db.execute("UPDATE process_nodes SET pinned=0,payload=? WHERE rowid=?",
+                            (canonical_json(node), row["rowid"]))
         self._prune_payload_budget(
             "process_nodes", "updated_at", PROCESS_NODE_MAX_BYTES,
             where="pinned=0")
@@ -683,6 +729,16 @@ class Store:
         self.db.execute("DELETE FROM firewall_receipts WHERE observed_at < ?",
                         (now - FIREWALL_RECEIPT_TTL_SECONDS,))
         for item in receipts or ():
+            item = dict(item)
+            prior = self.db.execute(
+                "SELECT payload FROM firewall_receipts WHERE operation_id=? AND kind=?",
+                (item["operation_id"], item["kind"])).fetchone()
+            if prior is not None:
+                previous = json.loads(prior["payload"])
+                if previous == item:
+                    continue
+                # Keep the first attestation and a sticky private conflict bit.
+                item = dict(previous, _conflict=True)
             payload = canonical_json(item)
             if len(payload.encode()) > 32768:
                 continue
@@ -746,23 +802,24 @@ class Store:
 
     def _refresh_process_pins(self, now):
         """Touch an anchor only while /proc proves the same PID generation."""
-        from .lineage import enrich_process
+        from .lineage import enrich_process, live_engine_identity
 
         rows = self.db.execute(
-            "SELECT rowid,pid,generation FROM process_nodes WHERE pinned=1 "
+            "SELECT rowid,pid,generation,payload FROM process_nodes WHERE pinned=1 "
             "ORDER BY updated_at DESC LIMIT ?", (PROCESS_PINNED_CAP,)).fetchall()
         for row in rows:
             live = enrich_process(row["pid"])
-            payload = self.db.execute(
-                "SELECT payload FROM process_nodes WHERE rowid=?", (row["rowid"],)).fetchone()
-            node = json.loads(payload["payload"]) if payload is not None else {}
-            if (self._eligible_process_node(node) and live is not None and
-                    str(live["start_ticks"]) == row["generation"]):
+            node = json.loads(row["payload"])
+            if live_engine_identity(node, live):
+                node["pinned"] = True
                 self.db.execute(
-                    "UPDATE process_nodes SET updated_at=? WHERE rowid=?", (now, row["rowid"]))
+                    "UPDATE process_nodes SET updated_at=?,payload=? WHERE rowid=?",
+                    (now, canonical_json(node), row["rowid"]))
             else:
+                node["pinned"] = False
                 self.db.execute(
-                    "UPDATE process_nodes SET pinned=0 WHERE rowid=?", (row["rowid"],))
+                    "UPDATE process_nodes SET pinned=0,payload=? WHERE rowid=?",
+                    (canonical_json(node), row["rowid"]))
 
     def _record_jobman_origins(self, now):
         anchors = self.db.execute(
@@ -1020,6 +1077,7 @@ class Store:
         )
         return bool(
             begin and result and result.get("ok") is True and
+            not begin.get("_conflict") and not result.get("_conflict") and
             all(begin.get(key) == result.get(key) for key in exact) and
             begin.get("operation") in _BROKER_FUNCTION_OPERATIONS.get(
                 begin.get("function"), set()) and
@@ -1036,13 +1094,8 @@ class Store:
 
     @staticmethod
     def _eligible_process_node(node):
-        argv = node.get("argv")
-        return bool(
-            isinstance(node, dict) and node.get("success") is True and
-            node.get("eoe") is True and not node.get("ambiguous") and
-            not node.get("incomplete") and isinstance(argv, list) and
-            1 <= len(argv) <= 64 and all(isinstance(part, str) for part in argv) and
-            sum(len(part.encode("utf-8", errors="replace")) for part in argv) <= 16384)
+        from .lineage import eligible_process_node
+        return eligible_process_node(node)
 
     @staticmethod
     def _one_pid_generation(nodes, pid, start_ticks, earliest, latest, exe=None):
@@ -1110,10 +1163,11 @@ class Store:
                 pairs.setdefault(receipt["operation_id"], {})[receipt["kind"]] = json.loads(
                     receipt["payload"])
             nodes = self.db.execute(
-                "SELECT payload FROM process_nodes WHERE boot_id=? AND audit_session=? "
+                "SELECT payload,pinned,generation FROM process_nodes WHERE boot_id=? AND audit_session=? "
                 "ORDER BY updated_at DESC LIMIT 256",
                 (attributes["boot_id"], attributes["audit_session"])).fetchall()
-            nodes = [json.loads(node["payload"]) for node in nodes]
+            nodes = [dict(json.loads(node["payload"]), pinned=bool(node["pinned"]),
+                          _generation=node["generation"]) for node in nodes]
             origin = self.db.execute(
                 "SELECT origin_kind,anchor_pid,anchor_generation,ambiguous "
                 "FROM origin_sessions WHERE boot_id=? AND audit_session=?",
@@ -1171,8 +1225,7 @@ class Store:
                 engine = self._parent_node(nodes, sudo)
                 if (engine is None or not engine.get("pinned") or
                         engine.get("pid") != origin["anchor_pid"] or
-                        str(engine.get("start_ticks") or
-                            f"audit-{engine.get('audit_id', '')}") !=
+                        engine.get("_generation") !=
                         origin["anchor_generation"] or
                         not any("bin/jobs.py" in str(part) for part in engine.get("argv", [])) or
                         "engine" not in engine.get("argv", []) or

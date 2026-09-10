@@ -1148,14 +1148,36 @@ MojoSec records selective Linux Audit execution breadcrumbs rather than every
 process. The managed AL2023 policy captures root-EUID execution, execution by
 the deployed application AUID, and the exact sudo executable path. Audit
 `SYSCALL`, `EXECVE`, `PROCTITLE`, `CWD`, and `EOE` rows are assembled by boot
-ID plus Audit serial across polls; EOE closes a compound and a two-second
-timeout closes it as incomplete. `/proc` is immediate optional enrichment for
+ID plus Audit serial across polls. A trusted same-event EOE or PROCTITLE
+closes the compound after the entire collected batch has been checked. AL2023
+journald drops the empty EOE payload; the kernel's preceding PROCTITLE is the
+supported alternate boundary. The internal `eoe` flag remains false when EOE
+was not observed. PROCTITLE content never supplies missing EXECVE arguments.
+A two-second timeout retires a compound as incomplete; serial advancement,
+interleaved events, boot changes, and capacity eviction never prove completion.
+
+Only the Audit transport's trusted underscored type/identity fields and its
+MESSAGE payload contribute evidence. Non-underscored `AUDIT_FIELD_*` and
+`AUDIT_TYPE_NAME` values cannot supply process identity, argv, or completion.
+Quoted Audit arguments lose their surrounding quotes; unquoted hex tokens
+decode as strict UTF-8. A quoted hex-looking argument stays literal text.
+Malformed strings, incomplete argc/argv, and disagreement between structured
+fields and MESSAGE leave the compound ambiguous. Duplicate terminals are
+idempotent, and late contradictions invalidate the canonical retained node.
+Finalized compounds retain bounded private tombstones across polls and restart;
+they cannot be repaired by replaying an earlier valid fragment.
+
+`/proc` is immediate optional enrichment for
 PID generation, parents, cgroup/unit, namespace, executable, command line, and
 SELinux context. Audit remains durable truth: a short-lived process or ancestor
 that has already left `/proc` does not poison a complete Audit edge. A live
 `/proc` identity that conflicts with Audit, PID reuse, cycles, ordering
 conflicts, gaps, loss, or stale health makes suppression ineligible. Only the
 long-lived JobEngine anchor must still have a live verified PID generation.
+Pin creation and refresh use the same predicate: complete eligible Audit proof,
+current boot, PID/start ticks, executable, and complete matching engine command
+line. Death, PID reuse, re-exec, or command-line mismatch clears both the SQL
+and JSON pin. Resolution reads the current SQL pin state.
 
 The cron origin is not inferred from a fabricated same-session `crond` exec.
 It requires both halves of the production AL2023 launch: the trusted root
@@ -1210,8 +1232,11 @@ non-finite timestamps also fail closed. Runtime `healthy` and `reason`
 annotations remain internal; durable previous-health state selects the same
 canonical publisher fields before the next sequence comparison.
 
-Process nodes live locally for seven days (131,072 rows), incomplete compounds
-for ten minutes (8,192), origin sessions for 30 days (4,096), health epochs for
+Process nodes live locally for seven days (131,072 rows). Active compounds and
+finalized tombstones share an 8,192-row/8 MiB budget and ten-minute retention;
+the journal atomically replaces their complete snapshot with its cursor, so an
+empty snapshot retires previous state while another collector's absent snapshot
+does not clear it. Origin sessions live for 30 days (4,096), health epochs for
 128 samples, and root-owned firewall receipt payloads for seven days (32,768 and 32
 MiB). Pending broker observations are capped at 4,096/32 MiB and wait at most
 30 seconds. Payload pruning targets a 256 MiB provenance operating budget and
@@ -1248,12 +1273,16 @@ failure (64 KiB, or an 8 MiB hard ceiling for semantic rules reads).
 cron/jobman → sudo → broker → target lineage and exact receipt/PID-generation
 agreement. SSH, TTY, IP attribution, direct legacy sudo, missing context,
 timeouts, restarts, audit gaps, eviction, receipt disagreement, and every
-incomplete proof retain the original rich sudo Event. Legacy direct grants
+incomplete proof retain the original rich sudo Event. Identical durable broker
+receipts are idempotent; conflicting begin/result duplicates remain invalid
+across restart and later successful replay. Malformed journal records veto
+suppression for the entire health bracket and make every node from that batch
+ineligible, even when the Audit sidecars themselves are healthy. Legacy direct grants
 remain for one rollback generation but never qualify for suppression.
 The JobEngine context prevents accidental cross-job attribution through the
 normal API; it does not resist hostile Python already running in that process.
 
-Do not rate-limit or aggregate raw `auth.sudo_command` observations at the
+Do not sample, rate-limit, or aggregate raw `auth.sudo_command` observations at the
 sensor. Missing, conflicting, or incomplete root proof is the security evidence
 that distinguishes an unexplained privileged command from an approved broker
 operation. The receiver instead counts each digest-matched durable receipt's

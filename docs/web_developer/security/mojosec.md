@@ -341,6 +341,22 @@ direct, SSH-attributed, or audit-unhealthy activity is sent as an ordinary
 Event. A diagnostic window uses the existing eventless local-only receipt
 contract and does not create an Incident or enter learning/feedback metrics.
 
+On AL2023 the sensor accepts a trusted same-event PROCTITLE as the compound
+boundary when journald omits the empty EOE. It still requires complete EXECVE
+arguments: quoted strings are unwrapped, unquoted hex is decoded, and a quoted
+hex-looking literal stays literal. PROCTITLE never repairs missing argv, and
+timeouts or a newer Audit serial never prove completion. Conflicting
+representations and late contradictory fragments remain ineligible across
+polls/restarts through bounded local finalized state. Receipt conflicts are
+sticky, and a live engine anchor must continue to match its boot, PID generation,
+executable and complete command line. Malformed journal records also veto
+suppression, even with healthy Audit sidecars.
+
+Raw sudo observations are never sampled, rate-limited, or aggregated to reduce
+noise. An unexplained privileged action remains ordinary central evidence;
+absence of a proven broker Event does not imply missing collection. These
+changes add no REST fields, settings, or public wire schema version.
+
 The operator-facing learning endpoints are separate from machine ingestion.
 They require a User with global security permissions. That authority may come
 from an interactive JWT or a positively validated per-user `UserAPIKey` Bearer

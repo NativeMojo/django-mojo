@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import time
+import types
 from unittest import mock
 
 
@@ -18,6 +19,29 @@ def _record(serial, kind, **values):
     }
     record.update(values)
     return record
+
+
+def _engine_live(node):
+    return {key: node[key] for key in ("boot_id", "pid", "start_ticks", "exe")} | {
+        "cmdline": node["argv"]}
+
+
+@th.unit_test("AL2023 engine completes from trusted PROCTITLE without synthetic EOE")
+def test_al2023_proctitle_engine(opts):
+    from mojo.mojosec.lineage import CompoundAssembler
+    from mojo.mojosec.store import Store
+
+    with open(os.path.join(os.path.dirname(__file__), "golden",
+                           "al2023_firewall_provenance_v1.json")) as handle:
+        fixture = json.load(handle)
+    result = CompoundAssembler().ingest(fixture["engine"])
+    th.assert_eq(len(result["complete"]), 1,
+                 "trusted same-event PROCTITLE must complete the production engine")
+    node = result["complete"][0]
+    th.assert_eq(node["argv"], ["python", "/opt/api/bin/jobs.py", "engine", "foreground"],
+                 "quoted Audit argv must decode before engine matching")
+    th.assert_true(not node["eoe"] and Store._eligible_process_node(node),
+                   "PROCTITLE must prove the boundary without inventing an EOE")
 
 
 @th.unit_test("audit compounds assemble across polls and terminate only at EOE")
@@ -82,6 +106,213 @@ def test_production_journal_shape(opts):
     synthetic = dict(syscall, _AUDIT_ID="1780000000.123:9012")
     th.assert_eq(compound_key(synthetic), None,
                  "legacy synthetic timestamp identities must not be accepted")
+
+
+@th.unit_test("Audit argv decoding preserves quoted literals and rejects conflicting evidence")
+def test_audit_string_and_trust_matrix(opts):
+    from mojo.mojosec.lineage import CompoundAssembler
+    from mojo.mojosec.store import Store
+
+    base = [_record(91, "SYSCALL", message=(
+        'SYSCALL pid=42 ppid=1 success=yes exit=0 exe="/usr/bin/python3"')),
+        _record(91, "EXECVE", message='EXECVE argc=1 a0="6162"'),
+        _record(91, "PROCTITLE", message="PROCTITLE proctitle=6162")]
+    cases = [('"6162"', "6162"), ("6162", "ab"),
+             ("68656c6c6f20776f726c64", "hello world"),
+             ("636166c3a9", "café"), ('""', "")]
+    for encoded, expected in cases:
+        rows = [dict(row) for row in base]
+        rows[1].update(MESSAGE=f"EXECVE argc=1 a0={encoded}", _AUDIT_FIELD_A0=encoded)
+        node = CompoundAssembler().ingest(rows)["complete"][0]
+        th.assert_eq(node["argv"], [expected], "Audit quote/hex semantics must be exact")
+        th.assert_true(Store._eligible_process_node(node), "valid decoded argv must prove an edge")
+    mutations = [
+        (1, {"_AUDIT_FIELD_A0": '"different"'}),
+        (1, {"MESSAGE": "EXECVE argc=1 a0=abc"}),
+        (1, {"MESSAGE": "EXECVE argc=1 a0=ff"}),
+        (1, {"MESSAGE": "EXECVE argc=1 a0=6100"}),
+        (1, {"MESSAGE": 'EXECVE argc=1 a0="unterminated'}),
+        (1, {"MESSAGE": 'EXECVE argc=1 a0="python"suffix'}),
+        (1, {"MESSAGE": 'EXECVE argc=1 a0="x" a0="y"'}),
+        (1, {"MESSAGE": 'EXECVE argc=1 a0="x" a1="extra"'}),
+        (1, {"MESSAGE": 'EXECVE argc=1 a0="x" a64="overflow"'}),
+        (1, {"MESSAGE": 'EXECVE argc=1 a0="x" a0_len=1'}),
+        (0, {"_AUDIT_FIELD_PID": "99"}),
+        (0, {"MESSAGE": "EXECVE pid=42"}),
+        (1, {"MESSAGE": "EXECVE argc=2 a0=python"}),
+        (1, {"MESSAGE": "EXECVE argc=1", "AUDIT_FIELD_A0": "python"}),
+    ]
+    for index, changes in mutations:
+        rows = [dict(row) for row in base]
+        rows[index].update(changes)
+        node = CompoundAssembler().ingest(rows)["complete"][0]
+        th.assert_true(not Store._eligible_process_node(node),
+                       f"malformed/conflicting/untrusted evidence must not prove: {changes}")
+    rows = [dict(row) for row in base]
+    rows[-1].pop("_AUDIT_TYPE_NAME")
+    rows[-1]["AUDIT_TYPE_NAME"] = "PROCTITLE"
+    th.assert_eq(CompoundAssembler().ingest(rows)["complete"], [],
+                 "caller-supplied record type must not supply completion")
+
+
+@th.unit_test("finalized Audit state is durable idempotent and sticky ambiguous")
+def test_finalized_compound_lifecycle(opts):
+    from mojo.mojosec.lineage import CompoundAssembler
+    from mojo.mojosec.store import Store
+
+    with open(os.path.join(os.path.dirname(__file__), "golden",
+                           "al2023_firewall_provenance_v1.json")) as handle:
+        rows = json.load(handle)["engine"]
+    aggregation = {"window_seconds": 60, "flush_count": 10,
+                   "max_aggregates": 100, "critical_reserve_aggregates": 10}
+    delivery = {"max_spool_events": 100, "critical_reserve_events": 10,
+                "retry_min_seconds": 1, "retry_max_seconds": 60}
+    with tempfile.TemporaryDirectory() as root:
+        store = Store(root, "sensor", aggregation, delivery)
+        first = CompoundAssembler().ingest(rows[:2])
+        store.ingest([], audit_fragments=first["fragments"])
+        store.ingest([], cursor_key="nginx", cursor={"offset": 1})
+        th.assert_eq(len(store.load_audit_fragments()), 1,
+                     "another collector must not clear journal state")
+        store.close()
+        store = Store(root, "sensor", aggregation, delivery)
+        second = CompoundAssembler(store.load_audit_fragments()).ingest(rows[2:])
+        store.ingest([], audit_fragments=second["fragments"], process_nodes=second["complete"])
+        store.close()
+        store = Store(root, "sensor", aggregation, delivery)
+        replay = CompoundAssembler(store.load_audit_fragments()).ingest(rows)
+        th.assert_eq(replay["complete"], [], "restart replay must not emit another generation")
+        contradiction = dict(rows[1], _AUDIT_FIELD_A0='"attacker"')
+        late = CompoundAssembler(store.load_audit_fragments()).ingest([contradiction])
+        store.ingest([], audit_fragments=late["fragments"], process_nodes=late["complete"])
+        stored = store.db.execute("SELECT payload FROM process_nodes").fetchall()
+        th.assert_eq(len(stored), 1, "late fragments must update one canonical Audit identity")
+        th.assert_true(json.loads(stored[0]["payload"])["ambiguous"],
+                       "late contradictory argv must revoke eligibility")
+        restore = CompoundAssembler(store.load_audit_fragments()).ingest(rows)
+        th.assert_true(all(item["ambiguous"] for item in restore["fragments"]),
+                       "valid replay cannot clear a persisted conflict")
+        store.ingest([], audit_fragments=[])
+        th.assert_eq(store.load_audit_fragments(), {}, "empty snapshot must retire stale state")
+        evicted = [dict(row) for row in rows]
+        evicted[0]["_AUDIT_FIELD_PID"] = "99"
+        evicted[0]["MESSAGE"] = evicted[0]["MESSAGE"].replace("pid=21", "pid=99")
+        fresh = CompoundAssembler().ingest(evicted)
+        store.ingest([], process_nodes=fresh["complete"])
+        stored = store.db.execute("SELECT payload FROM process_nodes").fetchall()
+        th.assert_eq(len(stored), 1,
+                     "a contradictory PID after tombstone eviction must not create a new identity")
+        th.assert_true(json.loads(stored[0]["payload"])["ambiguous"],
+                       "canonical retained node must stay unusable after the contradiction")
+        oversized = dict(second["complete"][0], argv=["x" * 16000])
+        store.ingest([], process_nodes=[oversized])
+        stored = json.loads(store.db.execute("SELECT payload FROM process_nodes").fetchone()[0])
+        th.assert_true(stored["ambiguous"] and not stored["pinned"],
+                       "oversized contradictions cannot leave an earlier valid node usable")
+        store.close()
+
+    same_batch = CompoundAssembler().ingest(rows + [contradiction])
+    th.assert_eq(len(same_batch["complete"]), 1, "publish only after the entire batch is checked")
+    th.assert_true(same_batch["complete"][0]["ambiguous"],
+                   "contradiction after the terminal in a batch must poison its single node")
+    partial = CompoundAssembler().ingest(rows[2:])
+    repaired = CompoundAssembler({(item["boot_id"], item["audit_id"]): item
+                                  for item in partial["fragments"]}).ingest(rows[:2])
+    th.assert_true(not repaired["complete"] or repaired["complete"][0]["ambiguous"],
+                   "a finalized incomplete node cannot be repaired with later argv")
+    interleaved = CompoundAssembler().ingest(rows[:2] + [
+        _record(99999999, "PROCTITLE"), dict(rows[-1], _BOOT_ID="b" * 32)])
+    th.assert_true(not any(node["audit_id"] == "11808238" and not node["ambiguous"]
+                           for node in interleaved["complete"]),
+                   "serial movement and a different boot cannot complete the original event")
+
+
+@th.unit_test("finalized compounds respect bounded retention and never infer completion from eviction")
+def test_compound_retention_bounds(opts):
+    from mojo.mojosec import lineage
+
+    with open(os.path.join(os.path.dirname(__file__), "golden",
+                           "al2023_firewall_provenance_v1.json")) as handle:
+        rows = json.load(handle)["engine"]
+    clock = types.SimpleNamespace(time=lambda: 100.0)
+    with mock.patch.object(lineage, "time", clock):
+        assembler = lineage.CompoundAssembler()
+        assembler.ingest(rows)
+        clock.time = lambda: 701.0
+        th.assert_eq(assembler.ingest([])["fragments"], [],
+                     "finalized tombstones must expire at their bounded ten-minute horizon")
+    with mock.patch.object(lineage, "COMPOUND_CAP", 2):
+        result = lineage.CompoundAssembler().ingest([
+            _record(serial, "SYSCALL", _AUDIT_FIELD_PID=str(serial)) for serial in range(1, 5)])
+    th.assert_eq(len(result["fragments"]), 2, "the compound cache must enforce its count bound")
+    th.assert_eq(result["complete"], [], "capacity eviction must never manufacture completion")
+
+
+@th.unit_test("engine pins require current complete Audit and live identity at refresh")
+def test_live_engine_pin_matrix(opts):
+    from mojo.mojosec.lineage import live_engine_identity
+    from mojo.mojosec.store import Store
+
+    node = {"boot_id": "a" * 32, "audit_id": "10", "pid": 21, "ppid": 19,
+            "start_ticks": 210, "exe": "/usr/bin/python3", "pinned": True,
+            "success": True, "eoe": True,
+            "argv": ["python", "/opt/api/bin/jobs.py", "engine", "foreground"]}
+    live = _engine_live(node)
+    th.assert_true(live_engine_identity(node, live), "the exact live engine must pin")
+    invalid = [None, dict(live, boot_id="b" * 32), dict(live, pid=99),
+               dict(live, start_ticks=211), dict(live, exe="/usr/bin/bash"),
+               dict(live, cmdline=["python", "/opt/api/bin/jobs.py", "engine"])]
+    aggregation = {"window_seconds": 60, "flush_count": 10,
+                   "max_aggregates": 100, "critical_reserve_aggregates": 10}
+    delivery = {"max_spool_events": 100, "critical_reserve_events": 10,
+                "retry_min_seconds": 1, "retry_max_seconds": 60}
+    for changed in invalid:
+        th.assert_true(not live_engine_identity(node, changed),
+                       "death, boot change, reuse, re-exec or argv mismatch must unpin")
+        with tempfile.TemporaryDirectory() as root:
+            store = Store(root, "sensor", aggregation, delivery)
+            with mock.patch("mojo.mojosec.lineage.enrich_process", return_value=live):
+                store.ingest([], process_nodes=[node])
+                store.db.execute("UPDATE process_nodes SET payload=?", (json.dumps(
+                    dict(node, pinned=False)),))
+                store.ingest([])
+                repaired = store.db.execute("SELECT payload FROM process_nodes").fetchone()
+                th.assert_true(json.loads(repaired["payload"])["pinned"],
+                               "live refresh must repair a legacy false JSON pin beside true SQL")
+            with mock.patch("mojo.mojosec.lineage.enrich_process", return_value=changed):
+                store.ingest([])
+            row = store.db.execute("SELECT pinned,payload FROM process_nodes").fetchone()
+            th.assert_true(not row["pinned"] and not json.loads(row["payload"])["pinned"],
+                           "SQL and JSON must agree that the stale anchor is unpinned")
+            store.close()
+
+
+@th.unit_test("durable receipt conflicts survive valid replay and restart")
+def test_receipt_conflict_is_sticky(opts):
+    from mojo.mojosec.lineage import firewall_receipt
+    from mojo.mojosec.store import Store
+
+    with open(os.path.join(os.path.dirname(__file__), "golden",
+                           "al2023_firewall_provenance_v1.json")) as handle:
+        receipts = [firewall_receipt(row) for row in json.load(handle)["receipts"]]
+    aggregation = {"window_seconds": 60, "flush_count": 10,
+                   "max_aggregates": 100, "critical_reserve_aggregates": 10}
+    delivery = {"max_spool_events": 100, "critical_reserve_events": 10,
+                "retry_min_seconds": 1, "retry_max_seconds": 60}
+    with tempfile.TemporaryDirectory() as root:
+        store = Store(root, "sensor", aggregation, delivery)
+        store.ingest([], firewall_receipts=receipts + receipts)
+        th.assert_eq(store.db.execute("SELECT COUNT(*) FROM firewall_receipts").fetchone()[0], 2,
+                     "identical begin/result replay must be idempotent")
+        store.ingest([], firewall_receipts=[dict(receipts[1], ok=False)])
+        store.close()
+        store = Store(root, "sensor", aggregation, delivery)
+        store.ingest([], firewall_receipts=receipts)
+        pair = {row["kind"]: json.loads(row["payload"]) for row in store.db.execute(
+            "SELECT kind,payload FROM firewall_receipts")}
+        th.assert_true(not Store._receipt_pair_valid(pair["begin"], pair["result"]),
+                       "later success cannot erase a contradictory durable result")
+        store.close()
 
 
 @th.unit_test("production CROND launch requires exact trusted syslog and PAM halves")
@@ -176,7 +407,9 @@ def test_crond_origin_missing_order_and_conflict(opts):
         with tempfile.TemporaryDirectory() as root:
             store = Store(root, "sensor", aggregation, delivery,
                           local_only_diagnostic_path=os.path.join(root, "missing"))
-            store.ingest([], process_nodes=nodes, crond_launches=launches)
+            with mock.patch("mojo.mojosec.lineage.enrich_process",
+                            return_value=_engine_live(nodes[2])):
+                store.ingest([], process_nodes=nodes, crond_launches=launches)
             origin = store.db.execute(
                 "SELECT ambiguous FROM origin_sessions WHERE boot_id=? AND audit_session=9",
                 (boot,)).fetchone()
@@ -363,13 +596,15 @@ def test_pending_firewall_resolution(opts):
         os.chmod(root, 0o700)
         store = Store(root, "sensor", aggregation, delivery,
                       local_only_diagnostic_path=os.path.join(root, "missing"))
-        store.ingest([], audit_health=health, process_nodes=nodes,
-                     crond_launches=launches)
+        with mock.patch("mojo.mojosec.lineage.enrich_process",
+                        return_value=_engine_live(nodes[3])):
+            store.ingest([], audit_health=health, process_nodes=nodes,
+                         crond_launches=launches)
         store.close()
         reopened = Store(root, "sensor", aggregation, delivery,
                          local_only_diagnostic_path=os.path.join(root, "missing"))
         with mock.patch("mojo.mojosec.lineage.enrich_process",
-                        return_value={"start_ticks": 210}):
+                        return_value=_engine_live(nodes[3])):
             reopened.ingest([candidate], audit_health=health)
             th.assert_eq(reopened.stats()["provenance"]["pending_firewall"], 1,
                          "healthy journal observation should wait for later proof")
@@ -402,8 +637,10 @@ def test_pending_firewall_resolution(opts):
     with tempfile.TemporaryDirectory() as root:
         store = Store(root, "sensor", aggregation, delivery,
                       local_only_diagnostic_path=os.path.join(root, "missing"))
-        store.ingest([bad_candidate], audit_health=health, process_nodes=nodes,
-                     firewall_receipts=[begin, bad_result], crond_launches=launches)
+        with mock.patch("mojo.mojosec.lineage.enrich_process",
+                        return_value=_engine_live(nodes[3])):
+            store.ingest([bad_candidate], audit_health=health, process_nodes=nodes,
+                         firewall_receipts=[begin, bad_result], crond_launches=launches)
         events = store.pending_batch(10, 65536)
         th.assert_eq(len(events), 1,
                      "one child argv mismatch must immediately fail open ordinary")
