@@ -349,14 +349,17 @@ trampoline that would create an ambiguous second exec generation under the
 receipt's PID/start-ticks identity.
 
 Proof reconciliation is deterministic under bounded bursts: each pass handles
-the oldest 512 pending firewall candidates against keyed indexes of at most the
-newest 8,192 receipt rows and 32,768 pinned-or-recent process nodes. A complete
-match within that corpus is not hidden by unrelated same-window activity; an
-unmatched candidate remains pending for later evidence or fails open as an
-ordinary Event at its 30-second deadline. Health gating uses the newest locally
-observed epoch for that boot, not the numerically greatest publisher sequence,
-because the sequence can restart after deployment. A stale higher sequence
-therefore cannot override newer health.
+the oldest 512 pending firewall candidates. Candidate boot, Audit session and
+sudo producer PID first narrow the process-child lookup to possible broker
+PIDs; only receipts for those brokers are loaded, with a 2,048-row cap. The
+resolver combines candidate producer PIDs and pinned-engine anchors with broker
+and target PIDs from those receipt pairs, then loads process nodes for at most
+4,096 exact PIDs. Unrelated global rows are not decoded into the proof work
+set. An unmatched candidate remains pending for later evidence or fails open as
+an ordinary Event at its 30-second deadline. Health gating uses the newest
+locally observed epoch for that boot, not the numerically greatest publisher
+sequence, because the sequence can restart after deployment. A stale higher
+sequence therefore cannot override newer health.
 
 On AL2023 the sensor accepts a trusted same-event PROCTITLE as the compound
 boundary when journald omits the empty EOE. It still requires complete EXECVE

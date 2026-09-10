@@ -1298,16 +1298,17 @@ flush a pending proof candidate; only an explicit unhealthy journal bracket or
 the ordinary expiry deadline does so.
 
 Firewall proof reconciliation handles the oldest 512 pending candidates per
-pass. It builds keyed indexes once from at most the newest 8,192 receipt rows in
-the 30-second window and 32,768 process nodes, ordered with pinned anchors first
-and then by recency, before narrowing each candidate by boot, Audit session,
-producer, broker PID and parent. Within those bounded work budgets, unrelated
-same-window process and receipt bursts cannot displace a candidate merely
-because it appeared outside the former small per-candidate lookup. A candidate
-without complete proof remains pending until later input or the 30-second
-fail-open deadline; the resolver never guesses from a partial pair or lineage.
-Any resulting central Event receives at most eight compact ancestors; the
-complete graph and raw Audit records remain on the sensor.
+pass. It groups them by boot and Audit session, then queries recent process
+children only for those candidates' sudo producer PIDs to discover possible
+broker PIDs. Receipt loading is restricted to those broker PIDs and capped at
+2,048 rows. The resolver combines candidate producer PIDs and pinned-engine
+anchors with broker and target PIDs from the resulting receipt pairs, then
+loads process nodes only for that exact set, capped at 4,096 PIDs. Unrelated
+global receipt and process rows are never decoded into the proof work set. A
+candidate without complete proof remains pending until later input or the
+30-second fail-open deadline; the resolver never guesses from a partial pair or
+lineage. Any resulting central Event receives at most eight compact ancestors;
+the complete graph and raw Audit records remain on the sensor.
 
 Application firewall work no longer invokes raw iptables/ipset sudo commands.
 The exact read-only `broker.status` request needs no JobEngine context and
