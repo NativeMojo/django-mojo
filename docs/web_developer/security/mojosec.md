@@ -361,7 +361,8 @@ never receives `CAP_SYS_PTRACE`. A separate resolver runs as `ec2-user` with no
 capabilities or IP network. Its root-owned mode-`0600` Unix socket accepts one
 bounded PID/start-ticks request. A successful response echoes those identifiers
 and adds only the double-checked executable path; failure remains ordinary
-central evidence. Startup requires `kernel.yama.ptrace_scope >= 1`, which
+central evidence. Its private `/proc` view hides other users' processes but
+retains read-only kernel state. Startup requires `kernel.yama.ptrace_scope >= 1`, which
 protects the resolver from another same-UID process before Python begins. Its
 convergence persists that protection and raises a weak value to `1`, while
 preserving stronger host values of `2` or `3`. Mode-off removes the managed
