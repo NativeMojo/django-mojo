@@ -7,8 +7,10 @@ under the parallel default tier.
 
 import os
 import shutil
+import stat
 import sys
 import tempfile
+from types import SimpleNamespace
 from unittest import mock
 
 from testit import helpers as th
@@ -78,6 +80,77 @@ def test_start_refuses_a_non_absolute_python_before_spawn(opts):
                        "jobman must validate Python before spawning anything")
     finally:
         shutil.rmtree(base, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_repair_verb_hands_jobman_files_to_the_cron_account_without_starting(opts):
+    """The deploy handoff must repair root-poisoned pid/log files without
+    spawning a replacement in the retiring engine's Audit session."""
+    from mojo.deploy import jobman
+
+    root = "/opt/api"
+    existing = {
+        os.path.join(root, "var", "pids", "job_engine.pid"),
+        os.path.join(root, "var", "pids", "job_scheduler.pid"),
+        os.path.join(root, "var", "logs", "job_engine.log"),
+        os.path.join(root, "var", "logs", "job_scheduler.log"),
+        os.path.join(root, "var", "logs", "jobman.log"),
+    }
+    owners = {path: 0 for path in existing}
+
+    def fake_lstat(path):
+        if path not in owners:
+            raise FileNotFoundError(path)
+        return SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o644, st_nlink=1,
+            st_uid=owners[path], st_gid=77)
+
+    def fake_lchown(path, uid, gid):
+        th.assert_eq(gid, 77, "repair must preserve the existing group")
+        owners[path] = uid
+
+    cron_path = "/etc/cron.d/3_mojo_jobs"
+    with mock.patch.object(jobman.os, "geteuid", return_value=0), \
+            mock.patch.object(jobman.app_user, "cron_app_user",
+                              return_value="appu"), \
+            mock.patch.object(jobman.app_user, "resolve_app_user",
+                              return_value="appu") as resolve, \
+            mock.patch.object(jobman.pwd, "getpwnam",
+                              return_value=SimpleNamespace(pw_uid=1234)), \
+            mock.patch.object(jobman.os, "lstat", side_effect=fake_lstat), \
+            mock.patch.object(jobman.os, "lchown", side_effect=fake_lchown), \
+            mock.patch.object(jobman, "cmd_start") as start:
+        result = jobman.main([
+            "repair", "--root", root, "--app-user", "appu",
+            "--cron-path", cron_path])
+
+    th.assert_eq(result, 0, "a complete ownership repair must succeed")
+    th.assert_eq(set(owners.values()), {1234},
+                 "every jobman-owned pid/log file must return to cron")
+    th.assert_true(not start.called,
+                   "repair must never spawn a deploy-session replacement")
+    resolve.assert_called_once_with(
+        root, candidate="appu", cron_path=cron_path)
+
+
+@th.django_unit_test()
+def test_stop_reports_failure_when_a_process_survives_sigkill(opts):
+    """The detached logger must not report success after EPERM or a stubborn
+    process leaves a root-owned component running."""
+    from mojo.deploy import jobman
+
+    with mock.patch.object(
+            jobman, "probe",
+            return_value=("/opt/api/var/pids/job_engine.pid",
+                          True, "4321", ["4321"])), \
+            mock.patch.object(jobman, "signal_pids"), \
+            mock.patch.object(jobman, "wait_gone",
+                              side_effect=[["4321"], ["4321"]]):
+        result = jobman.cmd_stop(
+            "/opt/api", "/opt/api/bin/jobs.py", "engine", grace=0)
+
+    th.assert_eq(result, 1,
+                 "a surviving process must make the bounded stop fail")
 
 
 @th.django_unit_test()

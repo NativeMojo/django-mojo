@@ -83,11 +83,14 @@ default deployment command already starts it through `sudo` directly. The
 default command carries the framework's parent-managed status after its `sudo`
 boundary, while a non-root locator shim preserves the same bit through its own
 elevation. The healthy candidate therefore reports success once and the parent
-then stops the JobEngine and scheduler exactly once. Their installed
-every-minute cron entry starts fresh replacements in a separately auditable
-session. A custom command that places another `sudo` in front of the packaged
-updater must explicitly preserve that contract or be converted to one of these
-supported shapes.
+then stops the JobEngine and scheduler exactly once. Before that stop is
+allowed, deployment repairs any stale root-owned Jobman files and waits for the
+installed cron entry itself to execute successfully; an active daemon without a
+working entry is refused. The bounded root stop is journaled and fails if a
+process survives. The next every-minute cron tick starts fresh replacements in
+a separately auditable session. A custom command that places another `sudo` in
+front of the packaged updater must explicitly preserve that contract or be
+converted to one of these supported shapes.
 
 The trigger itself has no polling endpoint. Platform operators can inspect the
 durable deployment journal through `GET /api/account/admin/platform` and use

@@ -19,6 +19,7 @@ would land in the middle of what it parses.
 
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -406,10 +407,9 @@ def test_cli_bare_status_prints_both_components_in_order(opts):
 #
 # Everything above stubs `ps`/`pgrep`, which is right for the output contract
 # and useless for the lifecycle: whether `stop` actually WAITED can only be
-# answered by a real process that really ignores SIGTERM. update.sh now starts
-# the engine again right after stopping it, so a `stop` that returns early
-# leaves `cmd_start` looking at a live process and printing "already running"
-# — a restart that reports success and starts nothing.
+# answered by a real process that really ignores SIGTERM. A caller that starts
+# again after `stop`, including the next cron tick, must not find a dying process
+# and report "already running" while starting nothing.
 
 # A stand-in for bin/jobs.py that survives SIGTERM. `time.sleep` in a loop
 # rather than `signal.pause()`: the point is a process that is genuinely
@@ -534,10 +534,46 @@ def test_stop_returns_only_once_the_engine_is_actually_dead(opts):
 
 @th.tier("extended")
 @th.django_unit_test()
+def test_cron_start_records_fresh_readiness_before_an_already_running_result(opts):
+    """The deploy gate clears this marker, so only a later successful cron
+    execution may recreate it. The common already-running path must do so."""
+    from mojo.deploy import jobman
+
+    base, root, stubs, ctl = _fixture()
+    try:
+        os.makedirs(os.path.join(root, "var", "logs"), exist_ok=True)
+        os.makedirs(os.path.join(root, "bin"), exist_ok=True)
+        for name in ("jobman", "jobs.py"):
+            path = os.path.join(root, "bin", name)
+            with open(path, "w") as handle:
+                handle.write("#!/bin/bash\nexit 0\n")
+            os.chmod(path, 0o755)
+        _write_pidfile(root, "engine", 1000)
+        _write_pidfile(root, "scheduler", 1100)
+        _set_alive(ctl, [1000, 1100])
+        _set_pgrep(ctl, "engine", [1000])
+        _set_pgrep(ctl, "scheduler", [1100])
+
+        done = _run(["start", "--root", root], stubs, ctl)
+        marker = jobman.readiness_path(root)
+
+        th.assert_eq(done.returncode, 0, done.stderr.decode("utf-8", "replace"))
+        th.assert_true(os.path.isfile(marker),
+                       "a successful cron start tick must publish readiness")
+        found = os.lstat(marker)
+        th.assert_true(stat.S_ISREG(found.st_mode) and found.st_nlink == 1,
+                       "the readiness proof must be a single regular file")
+        th.assert_eq(found.st_uid, os.geteuid(),
+                     "the cron account itself must own its readiness proof")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+@th.tier("extended")
+@th.django_unit_test()
 def test_stop_then_start_actually_restarts_the_engine(opts):
-    """The whole point of the fix, end to end: update.sh stops the engine and
-    immediately starts it again. A `start` that prints 'already running' after
-    a `stop` is a restart that silently did nothing."""
+    """The lifecycle primitive remains sound for a later cron tick. A `start`
+    that prints 'already running' after a completed `stop` silently did nothing."""
     from mojo.deploy import jobman  # noqa: F401 — the module under test
 
     base, root, _stubs, _ctl = _fixture()

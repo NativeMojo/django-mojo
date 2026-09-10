@@ -456,14 +456,22 @@ def _recycle_command():
     """The detached shell that retires this node's job processes.
 
     Bare `stop` on purpose — jobman's bare verb walks engine then scheduler
-    (item #3429), and a root stop can retire root-owned leftovers. The installed
-    every-minute cron entry owns `start`: launching from cron gives the new
-    JobEngine a fresh, independently auditable origin instead of inheriting the
-    retiring engine's audit session. Starting here would make otherwise valid
-    firewall broker work impossible for MojoSec to prove.
+    (item #3429). Fixed non-interactive sudo preserves authority over any stale
+    root-owned component, and `ready` rechecks the fresh cron proof immediately
+    before retirement. The installed every-minute cron entry owns `start`:
+    launching from cron gives the new JobEngine a fresh, independently auditable
+    origin instead of inheriting the retiring engine's audit session. Every
+    bounded outcome is written to the journal through fixed `/usr/bin/logger`.
     """
-    return ('sleep 2; "$1" -m mojo.deploy.jobman stop --root "$2" '
-            '--grace 2')
+    return (
+        'sleep 2; '
+        'if /usr/bin/sudo -n -- "$1" -m mojo.deploy.jobman ready '
+        '--root "$2" && /usr/bin/sudo -n -- "$1" '
+        '-m mojo.deploy.jobman stop --root "$2" --grace 2; then '
+        '/usr/bin/logger -t mojo-deploy-recycle -- '
+        '"job engine and scheduler stopped for cron restart"; '
+        'else rc=$?; /usr/bin/logger -p user.err -t mojo-deploy-recycle -- '
+        '"job process recycle refused or failed (exit $rc)"; exit "$rc"; fi')
 
 
 def _recycle_engine_after_return():

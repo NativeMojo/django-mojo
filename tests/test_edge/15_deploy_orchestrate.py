@@ -197,7 +197,11 @@ def test_recycle_command_leaves_restart_to_cron(opts):
     command = asyncjobs._recycle_command()
     th.assert_in('-m mojo.deploy.jobman stop --root "$2" --grace 2', command,
                  "the recycle must stop BOTH components (bare stop verb)")
+    th.assert_in('/usr/bin/sudo -n -- "$1"', command,
+                 "the detached stop must retain authority over root leftovers")
     th.assert_true("mojo.deploy.jobman start" not in command,
                    "a direct restart inherits an unprovable deploy audit session")
     th.assert_true(" stop engine" not in command,
                    "an engine-scoped recycle leaves the scheduler behind")
+    th.assert_in("/usr/bin/logger", command,
+                 "the detached bounded stop must leave an observable result")

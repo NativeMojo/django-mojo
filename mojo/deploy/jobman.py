@@ -10,10 +10,16 @@
     python3 -m mojo.deploy.jobman stop engine --grace 2   # shorter TERM wait
 
 `stop` DOES NOT RETURN UNTIL THE PROCESSES ARE GONE — SIGTERM, then SIGKILL,
-then a bounded wait for the corpse. update.sh stops and immediately restarts
-this engine, and a `stop` that returned early made the following `start` print
-"already running" and start nothing, leaving the node with no engine until the
-next cron minute.
+then a bounded wait for the corpse. A surviving process makes the command fail;
+the deploy handoff logs that refusal instead of claiming the cron restart began.
+
+`repair` is the root-only, no-spawn half of a deployment restart. It gives only
+jobman's own pid/log/readiness files back to the exact account named by the
+installed cron entry, then clears the previous readiness marker. A later
+application-account `start` validates its writable launch surface and writes a
+fresh marker. `ready` accepts only that recent, single-link regular marker. The
+deployment therefore proves the installed cron entry actually executed before
+it retires the current engine; only the following cron tick starts replacements.
 
 WHAT THIS MANAGES, AND WHAT IT DELIBERATELY DOES NOT. There are two job process
 planes on a node and they are disjoint:
@@ -245,7 +251,10 @@ def ensure_dirs(root):
 # node_setup own the directory policy), so a broad chown would strip the web
 # account's access to its own logs.
 JOBMAN_OWNED = ("job_engine.pid", "job_scheduler.pid", "job_engine.log",
-                "job_scheduler.log", "jobman.log")
+                "job_scheduler.log", "jobman.log", "jobman_cron_ready")
+
+READY_NAME = "jobman_cron_ready"
+READY_MAX_AGE_SECONDS = 120
 
 # Fixed locations only — never $PATH. This argv is exec'd by a root process
 # whose environment (and therefore PATH) came from whoever spawned it.
@@ -288,14 +297,15 @@ def demotion_argv(user, root, component=None, runner=None, verbose=False):
 def repair_ownership(root, user):
     """Hand jobman's own pid/log files back to `user`, uid only.
 
-    Best-effort by design: gid and mode are preserved (the group is how the
-    web account reads through), directories are untouched, and a file that
-    cannot be repaired fails loudly later at cmd_start's existing open.
+    Gid and mode are preserved (the group is how the web account reads
+    through), directories are untouched, and every unsafe or unrepaired file
+    makes the root caller fail closed before the current engine is retired.
     """
+    ok = True
     try:
         uid = pwd.getpwnam(user).pw_uid
     except KeyError:
-        return
+        return False
     for directory in (pid_dir(root), log_dir(root)):
         for name in JOBMAN_OWNED:
             path = os.path.join(directory, name)
@@ -308,6 +318,9 @@ def repair_ownership(root, user):
             # be handed over, and these directories are group-writable
             # (setgid 2775) — so anything link-shaped is left alone.
             if not stat.S_ISREG(found.st_mode) or found.st_nlink != 1:
+                print("jobman: refusing unsafe owned path %s" % path,
+                      file=sys.stderr)
+                ok = False
                 continue
             if found.st_uid == uid:
                 continue
@@ -316,6 +329,155 @@ def repair_ownership(root, user):
             except OSError as err:
                 print("jobman: cannot repair ownership of %s: %s"
                       % (path, err), file=sys.stderr)
+                ok = False
+                continue
+            try:
+                repaired = os.lstat(path)
+            except OSError as err:
+                print("jobman: cannot verify ownership of %s: %s"
+                      % (path, err), file=sys.stderr)
+                ok = False
+                continue
+            if (not stat.S_ISREG(repaired.st_mode)
+                    or repaired.st_nlink != 1 or repaired.st_uid != uid):
+                print("jobman: ownership repair did not secure %s" % path,
+                      file=sys.stderr)
+                ok = False
+    return ok
+
+
+def readiness_path(root):
+    return os.path.join(pid_dir(root), READY_NAME)
+
+
+def _cron_user(root, candidate=None, cron_path=None):
+    """The exact valid account declared by the installed jobs cron entry."""
+    if cron_path is None:
+        cron_path = os.path.join(
+            app_user.DEFAULT_CRON_DIR, app_user.CRON_NAME)
+    declared = app_user.cron_app_user(cron_path)
+    if not app_user.valid_app_user(declared):
+        print("jobman: installed jobs cron has no valid application account",
+              file=sys.stderr)
+        return None
+    if candidate and declared != candidate:
+        print("jobman: installed jobs cron account does not match --app-user",
+              file=sys.stderr)
+        return None
+    # Keep one resolver contract for the deployment and manual root-start paths,
+    # but never let a fallback rung make a malformed installed cron look ready.
+    resolved = app_user.resolve_app_user(
+        root, candidate=candidate, cron_path=cron_path)
+    if resolved != declared:
+        print("jobman: installed jobs cron account did not resolve exactly",
+              file=sys.stderr)
+        return None
+    return declared
+
+
+def cmd_repair(root, candidate=None, cron_path=None):
+    """Repair only jobman's files and invalidate the previous cron proof."""
+    if os.geteuid() != 0:
+        print("jobman: repair requires root", file=sys.stderr)
+        return 1
+    user = _cron_user(root, candidate=candidate, cron_path=cron_path)
+    if not user or not repair_ownership(root, user):
+        return 1
+    marker = readiness_path(root)
+    try:
+        os.unlink(marker)
+    except FileNotFoundError:
+        pass
+    except OSError as err:
+        print("jobman: cannot clear previous cron readiness %s: %s"
+              % (marker, err), file=sys.stderr)
+        return 1
+    print("Jobman files repaired for cron account %s" % user)
+    return 0
+
+
+def _start_preflight(root, runner_path):
+    """Return a fixed failure for a cron tick that could not safely start."""
+    # Reaching this function through the cron command already proves the
+    # project wrapper was executable. Validate the runner it will spawn.
+    if not os.path.isfile(runner_path) or not os.access(runner_path, os.X_OK):
+        return "jobs runner is missing or not executable: %s" % runner_path
+    for path in (log_dir(root), pid_dir(root)):
+        if (not os.path.isdir(path)
+                or not os.access(path, os.W_OK | os.X_OK)):
+            return "cron account cannot write jobman directory: %s" % path
+    for directory in (pid_dir(root), log_dir(root)):
+        for name in JOBMAN_OWNED:
+            path = os.path.join(directory, name)
+            try:
+                found = os.lstat(path)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return "cron account cannot inspect jobman path: %s" % path
+            if not stat.S_ISREG(found.st_mode) or found.st_nlink != 1:
+                return "cron account refuses unsafe jobman path: %s" % path
+            if not os.access(path, os.W_OK):
+                return "cron account cannot write jobman path: %s" % path
+    return None
+
+
+def record_start_readiness(root, runner_path):
+    """Publish proof that this application-account start can launch safely."""
+    problem = _start_preflight(root, runner_path)
+    if problem:
+        print("jobman: %s" % problem, file=sys.stderr)
+        return False
+    path = readiness_path(root)
+    flags = os.O_WRONLY | os.O_CREAT
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o644)
+    except OSError as err:
+        print("jobman: cannot create cron readiness %s: %s"
+              % (path, err), file=sys.stderr)
+        return False
+    try:
+        found = os.fstat(fd)
+        if (not stat.S_ISREG(found.st_mode) or found.st_nlink != 1
+                or found.st_uid != os.geteuid()):
+            print("jobman: refusing unsafe cron readiness %s" % path,
+                  file=sys.stderr)
+            return False
+        os.fchmod(fd, 0o644)
+        os.ftruncate(fd, 0)
+        os.write(fd, ("%d %d\n" % (os.getpid(), time.time_ns())).encode())
+        os.fsync(fd)
+    except OSError as err:
+        print("jobman: cannot publish cron readiness %s: %s"
+              % (path, err), file=sys.stderr)
+        return False
+    finally:
+        os.close(fd)
+    return True
+
+
+def cmd_ready(root, candidate=None, cron_path=None):
+    """Prove a recent exact cron-account start invocation, without spawning."""
+    if os.geteuid() != 0:
+        print("jobman: ready requires root", file=sys.stderr)
+        return 1
+    user = _cron_user(root, candidate=candidate, cron_path=cron_path)
+    if not user:
+        return 1
+    uid = pwd.getpwnam(user).pw_uid
+    path = readiness_path(root)
+    try:
+        found = os.lstat(path)
+    except OSError:
+        return 1
+    age = time.time() - found.st_mtime
+    if (not stat.S_ISREG(found.st_mode) or found.st_nlink != 1
+            or found.st_uid != uid or found.st_mode & 0o022
+            or age < -5 or age > READY_MAX_AGE_SECONDS):
+        return 1
+    print("Recent cron Jobman readiness proven for %s" % user)
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -574,14 +736,15 @@ def cmd_stop(root, runner_path, comp, grace=None):
     signal_pids(pids, signal.SIGTERM)
 
     remaining = wait_gone(pids, grace, TERM_POLL_SECONDS)
+    survivors = []
     if remaining:
         print("Force killing %s (PIDs: %s)..." % (name, " ".join(remaining)))
         signal_pids(remaining, signal.SIGKILL)
         # WAIT FOR THE KILL. Signalling is not stopping: this used to fall
         # straight through, so `stop` returned with the process still dying,
         # the pidfile still naming it, and the caller's next `start` reporting
-        # "already running" and starting nothing. update.sh now restarts the
-        # engine itself, which makes that failure a node with no engine.
+        # "already running" and starting nothing. The deploy handoff now needs
+        # a truthful nonzero result before it leaves replacement to cron.
         survivors = wait_gone(remaining, KILL_WAIT_SECONDS, KILL_POLL_SECONDS)
         if survivors:
             print("%s did not exit after SIGKILL (PIDs: %s)"
@@ -593,11 +756,15 @@ def cmd_stop(root, runner_path, comp, grace=None):
         _, current = read_pidfile(path)
         if not current or not pid_alive(current):
             remove_file(path)
+    if survivors:
+        print("%s stop failed" % name)
+        return 1
     print("%s stopped" % name)
     return 0
 
 
-VERBS = {"start": cmd_start, "stop": cmd_stop, "status": cmd_status}
+VERBS = {"start": cmd_start, "stop": cmd_stop, "status": cmd_status,
+         "repair": cmd_repair, "ready": cmd_ready}
 
 
 # ---------------------------------------------------------------------------
@@ -625,6 +792,10 @@ def main(argv):
                              % (TERM_POLLS * TERM_POLL_SECONDS))
     parser.add_argument("--verbose", action="store_true",
                         help="log diagnostics to stderr")
+    parser.add_argument("--app-user", default=None,
+                        help="repair/ready: expected installed cron account")
+    parser.add_argument("--cron-path", default=None,
+                        help="repair/ready: installed jobs cron path")
     args = parser.parse_args(argv)
     if args.grace is not None:
         # A usage error, not a silently ignored flag. It is also exit 2, which
@@ -655,6 +826,17 @@ def main(argv):
               file=sys.stderr)
         return 1
 
+    if args.command in ("repair", "ready"):
+        if args.component is not None:
+            parser.error("%s does not accept a component" % args.command)
+        if args.runner or args.grace is not None or args.verbose:
+            parser.error("%s accepts only --root, --app-user and --cron-path"
+                         % args.command)
+        return VERBS[args.command](
+            root, candidate=args.app_user, cron_path=args.cron_path)
+    if args.app_user or args.cron_path:
+        parser.error("--app-user/--cron-path apply only to repair and ready")
+
     # BEFORE ensure_dirs: a root ensure_dirs on a fresh box would create
     # root-owned var directories — the exact brick the demotion exists to
     # prevent. See "root demotion" above.
@@ -666,7 +848,8 @@ def main(argv):
                   "application account resolves (cron entry, $APP_USER, "
                   "checkout owner)", file=sys.stderr)
             return 1
-        repair_ownership(root, user)
+        if not repair_ownership(root, user):
+            return 1
         demoted = demotion_argv(user, root, component=args.component,
                                 runner=args.runner, verbose=args.verbose)
         try:
@@ -680,6 +863,9 @@ def main(argv):
     if problem is not None and args.command != "status":
         print("jobman: cannot create %s: %s" % (os.path.join(root, "var"), problem),
               file=sys.stderr)
+        return 1
+
+    if args.command == "start" and not record_start_readiness(root, runner_path):
         return 1
 
     # Every verb dispatches uniformly as handler(root, runner_path, comp); the

@@ -458,11 +458,22 @@ deployment itself does not call this tool.
 
 `python3 -m mojo.deploy.jobman` starts, stops, and reports the foreground job
 engine and scheduler. Cron is the normal start authority, not merely a
-backstop. A successful API deployment schedules a stop of both components only
-after the invoking job has returned and recorded its result; the installed
-every-minute cron entry starts their replacements. That fresh cron session is
-part of the MojoSec proof for firewall work, so the deploy process must not
-start the replacements directly.
+backstop. Before an API deployment can commit, `jobman repair` runs as root,
+hands only Jobman's own files to the exact installed cron account, and clears
+the old readiness marker. The transaction then waits up to 75 seconds for the
+installed cron entry to invoke `jobman start`: that invocation checks the
+runner, directories, and existing Jobman files, then writes a fresh single-link
+marker even when both components are already running. This proves the actual
+cron entry works; checking only that the daemon is active would miss syntax,
+PAM, SELinux, redirection, and permission failures.
+
+A successful API deployment schedules a bounded root stop of both components
+only after the invoking job has returned and recorded its result. The detached
+handoff rechecks the fresh cron marker, reports its outcome under the
+`mojo-deploy-recycle` journal tag, and returns failure if any process survives.
+The next every-minute cron tick starts the replacements. That fresh cron
+session is part of the MojoSec proof for firewall work, so the deploy process
+must not start the replacements directly.
 
 `start` runs `bin/jobs.py` through jobman's absolute current Python executable,
 not through the project's `/usr/bin/env` shebang. Besides pinning the child to
@@ -476,15 +487,19 @@ the application account (same ladder as the update transaction: cron entry →
 own pid/log files, and re-execs through `sudo -H -u` as that account — so the
 engine and scheduler never run as root no matter who started them. If no
 non-root account resolves it refuses loudly; cron can retry only after that
-account resolution is repaired. `stop` and `status` never demote: a root
-`stop` must be able to kill a root-owned engine.
+account resolution is repaired. `stop`, `repair`, `ready`, and `status` never
+demote. `repair` and `ready` are root-only deployment gates; a root `stop` must
+be able to kill a root-owned engine. `stop` returns nonzero when a process
+survives its bounded TERM/KILL wait, so the detached journal result cannot
+report a false success.
 
-On a node whose job processes ended up root-owned, `sudo bin/jobman stop`
-retires them and the installed cron starts correctly owned replacements. If a
-dead root engine left jobman files that block the application-account cron,
-`sudo bin/jobman start` repairs their ownership and demotes before starting;
-stop that interactive replacement and let the next cron tick establish the
-MojoSec-proven origin before expecting firewall brokering.
+On a node whose job processes or Jobman files ended up root-owned, a normal API
+deployment now repairs the files, proves a cron tick, and uses its bounded root
+stop to retire the processes automatically. For operator recovery, run
+`sudo python3 -m mojo.deploy.jobman repair --root /opt/api`, leave process
+creation to the installed cron, and confirm
+`journalctl -t mojo-deploy-recycle`; do not leave a manually started replacement
+running, because it lacks the cron audit origin required for MojoSec brokering.
 
 ### `node_setup`
 

@@ -121,6 +121,10 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
         _write_executable(
             os.path.join(stubs, "python3"),
             "echo \"python3 $*\" >> \"$COMMAND_LOG\"\n"
+            "if [ \"${1:-}\" = -m ] && "
+            "[ \"${2:-}\" = mojo.deploy.jobman ] && "
+            "[ \"${3:-}\" = ready ] && "
+            "[ \"${CRON_READY:-1}\" != 1 ]; then exit 1; fi\n"
             "if [ \"${1:-}\" = -m ] && [ \"${2:-}\" = mojo.deploy ]; then\n"
             "  mkdir -p \"$PROJ_PATH/var/deploy/systemd\" \"$PROJ_PATH/var/deploy/cron.d\"\n"
             "  printf '[Service]\\n' > \"$PROJ_PATH/var/deploy/systemd/mojo-asgi.service\"\n"
@@ -132,10 +136,16 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
             os.path.join(stubs, "install"),
             "src=\"${@: -2:1}\"; dest=\"${@: -1}\"\n"
             "mkdir -p \"$(dirname \"$dest\")\"; cp -f \"$src\" \"$dest\"\n")
-        for name in ("pip", "git", "systemctl", "nginx"):
+        for name in ("pip", "git", "nginx"):
             _write_executable(
                 os.path.join(stubs, name),
                 "echo \"%s $*\" >> \"$COMMAND_LOG\"\nexit 0\n" % name)
+        _write_executable(
+            os.path.join(stubs, "systemctl"),
+            "echo \"systemctl $*\" >> \"$COMMAND_LOG\"\n"
+            "if [ \"${1:-}\" = is-active ] && "
+            "[ \"${CRON_ACTIVE:-1}\" != 1 ]; then exit 3; fi\n"
+            "exit 0\n")
         _write_executable(
             os.path.join(stubs, "curl"),
             "echo \"curl $*\" >> \"$COMMAND_LOG\"\n"
@@ -178,6 +188,16 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
                      "nginx itself must be the configuration gate")
         th.assert_in("curl -ksS", commands,
                      "the restarted API must be probed over HTTP")
+        th.assert_in("systemctl is-active --quiet crond.service", commands,
+                     "the deploy must prove the installed cron authority is active")
+        th.assert_in(
+            "python3 -m mojo.deploy.jobman repair --root %s --app-user ec2-user "
+            "--cron-path %s/3_mojo_jobs" % (project, cron_etc), commands,
+            "the root transaction must repair jobman's files without starting it")
+        th.assert_in(
+            "python3 -m mojo.deploy.jobman ready --root %s --app-user ec2-user "
+            "--cron-path %s/3_mojo_jobs" % (project, cron_etc), commands,
+            "a fresh exact cron execution must be proven before retirement")
         with open(os.path.join(nginx_etc, "conf.d", "app.conf")) as handle:
             th.assert_in("server_name _;", handle.read(),
                          "ordinary nginx syntax must not be semantically refused")
@@ -196,6 +216,42 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
         with open(os.path.join(nginx_etc, "nginx.conf")) as handle:
             th.assert_eq(handle.read(), "old nginx\n",
                          "rollback must restore the previous nginx bytes")
+
+        with open(command_log, "w"):
+            pass
+        inactive_env = environment.copy()
+        inactive_env["CRON_ACTIVE"] = "0"
+        inactive = subprocess.run(
+            argv, env=inactive_env, capture_output=True, text=True, timeout=30)
+        th.assert_true(inactive.returncode != 0,
+                       "an inactive cron authority must refuse engine retirement")
+        with open(os.path.join(active, "phase")) as handle:
+            th.assert_eq(handle.read().strip(), "jobman_restart_preflight",
+                         "the refusal must identify the cron readiness gate")
+        with open(command_log) as handle:
+            inactive_commands = handle.read()
+        th.assert_true("systemctl restart mojo-asgi.service" not in inactive_commands,
+                       "cron readiness must fail before the candidate is committed")
+
+        with open(command_log, "w"):
+            pass
+        silent_cron_env = environment.copy()
+        silent_cron_env.update({
+            "CRON_READY": "0",
+            "JOBMAN_CRON_READY_SECONDS": "0",
+        })
+        silent = subprocess.run(
+            argv, env=silent_cron_env,
+            capture_output=True, text=True, timeout=30)
+        th.assert_true(silent.returncode != 0,
+                       "an active daemon that never executes the cron entry must fail")
+        with open(os.path.join(active, "phase")) as handle:
+            th.assert_eq(handle.read().strip(), "jobman_restart_preflight",
+                         "missing exact cron proof must retain the readiness phase")
+        with open(command_log) as handle:
+            silent_commands = handle.read()
+        th.assert_true("systemctl restart mojo-asgi.service" not in silent_commands,
+                       "a missing cron tick must not commit the candidate")
 
         redirect_env = environment.copy()
         redirect_env["CURL_CODE"] = "301"

@@ -81,15 +81,24 @@ timed-out transaction. Restarting the job engine therefore cannot orphan an
 update. The parent process waits beyond both windows instead of killing a
 legitimate rollback.
 
+Before an API activation commits, the root transaction repairs only Jobman's
+pid, log, and readiness files to the exact account in the installed jobs cron,
+clears the previous readiness marker, and waits up to 75 seconds for that cron
+entry to execute successfully. An active cron daemon alone is not sufficient:
+the fresh marker proves the entry parsed, its shell redirection worked, and the
+application account can write every launch file. Failure leaves the current
+engine running and rolls the candidate back.
+
 Current parents record node evidence after the script returns. API nodes then
-detach a short stop of both the job engine and scheduler so the completed job
-can be acknowledged before the old processes exit. The installed every-minute
-cron entry starts both replacements in a fresh audit session; starting them
-from the retiring engine would inherit its session and prevent MojoSec from
-proving JobEngine-originated firewall work. `code` nodes receive no generic
-restart. A custom profile owns its service restart; if that restart kills the
-caller, the replacement engine consumes the transaction's bounded outcome and
-exact local identity to finalize the same deployment UUID.
+detach a bounded, journaled root stop of both the job engine and scheduler so
+the completed job can be acknowledged before the old processes exit. The stop
+rechecks the fresh cron proof and fails if any process survives. The installed
+every-minute cron entry starts both replacements in a fresh audit session;
+starting them from the retiring engine would inherit its session and prevent
+MojoSec from proving JobEngine-originated firewall work. `code` nodes receive
+no generic restart. A custom profile owns its service restart; if that restart
+kills the caller, the replacement engine consumes the transaction's bounded
+outcome and exact local identity to finalize the same deployment UUID.
 
 One predecessor-generation callback remains solely for API adoption: when the
 parent does not set `MOJO_DEPLOY_PARENT_STATUS`, the healthy migrating canary
