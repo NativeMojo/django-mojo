@@ -41,23 +41,43 @@ def on_get_permissions(request, account):
     })
 
 
+def _perm_list(value):
+    """Normalize a submitted permission value to a list, or None to clear.
+
+    An empty / blank value means "remove this account's perms", which is what
+    set_view_perms/set_write_perms(None) does.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple, set)):
+        perms = [str(p).strip() for p in value if str(p).strip()]
+        return perms or None
+    perms = [p.strip() for p in str(value).split(",") if p.strip()]
+    return perms or None
+
+
 def on_set_permissions(request, account):
     """
-    Set view permissions for an account.
+    Set view and/or write permissions for an account.
+
+    Each list is written ONLY when its key is actually present in the request.
+    The previous version did ``request.DATA.get("view_permissions", "").split(",")``,
+    which yields ``[""]`` for an absent key — truthy — so a caller setting only
+    write permissions silently overwrote the view list with a permission string
+    that can never match any user.
     """
-    view_perms = request.DATA.get("view_permissions", "").split(",")
-    write_perms = request.DATA.get("write_permissions", "").split(",")
+    if "view_permissions" in request.DATA:
+        metrics.set_view_perms(account, _perm_list(request.DATA.get("view_permissions")))
+    if "write_permissions" in request.DATA:
+        metrics.set_write_perms(account, _perm_list(request.DATA.get("write_permissions")))
 
-    if view_perms:
-        metrics.set_view_perms(account, view_perms)
-    if write_perms:
-        metrics.set_write_perms(account, write_perms)
-
+    # Report what is actually stored now, so a one-sided POST shows the
+    # untouched list rather than the echo of what the caller did not send.
     return JsonResponse({
         "id": account,
         "account": account,
-        "view_permissions": view_perms,
-        "write_permissions": write_perms,
+        "view_permissions": metrics.get_view_perms(account),
+        "write_permissions": metrics.get_write_perms(account),
         "action": "set",
         "status": True
     })

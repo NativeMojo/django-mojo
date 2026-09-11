@@ -3,6 +3,7 @@ from datetime import timedelta
 import datetime
 from mojo.helpers.settings import settings
 from mojo.helpers import dates
+import mojo.errors
 
 GRANULARITIES = ['minutes', 'hours', 'days', 'weeks', 'months', 'years']
 GRANULARITY_PREFIX_MAP = {
@@ -325,6 +326,71 @@ def previous_bucket(when, granularity):
     raise ValueError(f"Invalid granularity: {granularity}")
 
 
+# Approximate length of one bucket, used only to SIZE a requested range before
+# any key is generated. Months/years are deliberately short (28 / 365 days) so
+# the estimate over-counts rather than under-counts.
+_BUCKET_SECONDS = {
+    'minutes': 60,
+    'hours': 3600,
+    'days': 86400,
+    'weeks': 7 * 86400,
+    'months': 28 * 86400,
+    'years': 365 * 86400,
+}
+
+# Default cap on how many time buckets one read may span. 10,000 buckets is
+# ~6.9 days at `minutes`, ~416 days at `hours` and ~27 years at `days` — well
+# above any real dashboard range, and far below the point where building the
+# key list is itself the outage.
+DEFAULT_MAX_RANGE_BUCKETS = 10000
+
+
+def count_buckets(dt_start, dt_end, granularity):
+    """Number of buckets an inclusive range spans at ``granularity``.
+
+    An estimate, not the exact iteration count — it exists to size a request
+    cheaply, before ``generate_slugs_for_range`` allocates one string per
+    bucket. Returns 0 for an empty or inverted range.
+    """
+    seconds = _BUCKET_SECONDS.get(granularity)
+    if seconds is None:
+        raise ValueError("Invalid granularity for slug generation.")
+    try:
+        span = (dt_end - dt_start).total_seconds()
+    except TypeError:
+        # Mixed naive/aware bounds cannot be sized here; the iteration itself
+        # raises on the same comparison a moment later.
+        return 0
+    if span <= 0:
+        return 0
+    return int(span // seconds) + 1
+
+
+def check_range_bounds(dt_start, dt_end, granularity):
+    """Refuse a range wider than ``METRICS_MAX_RANGE_BUCKETS``.
+
+    Every read endpoint reaches the Redis keyspace through
+    ``generate_slugs_for_range``, which materialises one key string per bucket
+    (and ``fetch`` then builds a second, tagged copy before the MGET). Without
+    a bound, ``dt_start=1900-01-01&dt_end=2100-01-01&granularity=minutes`` is
+    ~105M buckets — many gigabytes of strings from a single request, on an
+    endpoint that can be reached anonymously. So the size check runs here,
+    BEFORE anything is allocated.
+    """
+    max_buckets = settings.get_static("METRICS_MAX_RANGE_BUCKETS", DEFAULT_MAX_RANGE_BUCKETS)
+    try:
+        max_buckets = int(max_buckets)
+    except (TypeError, ValueError):
+        max_buckets = DEFAULT_MAX_RANGE_BUCKETS
+    if max_buckets <= 0:
+        return
+    buckets = count_buckets(dt_start, dt_end, granularity)
+    if buckets > max_buckets:
+        raise mojo.errors.ValueException(
+            f"date range too wide: {buckets} {granularity} buckets exceeds "
+            f"METRICS_MAX_RANGE_BUCKETS ({max_buckets})")
+
+
 def get_date_range(dt_start, dt_end, granularity):
     if dt_start is None and dt_end is None:
         dt_end = normalize_datetime(None)
@@ -333,4 +399,5 @@ def get_date_range(dt_start, dt_end, granularity):
         dt_end = dt_start + GRANULARITY_END_MAP[granularity]
     elif dt_start is None:
         dt_start = dt_end - GRANULARITY_END_MAP[granularity]
+    check_range_bounds(dt_start, dt_end, granularity)
     return dt_start, dt_end

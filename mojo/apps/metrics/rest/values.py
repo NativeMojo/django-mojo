@@ -263,12 +263,26 @@ def on_get_value(request):
     account = request.DATA.get("account", "public")
     default = request.DATA.get("default")
     category = request.DATA.get("category", None)
+
+    # Permission BEFORE any Redis read: the category branch below resolves a
+    # caller-supplied account, so checking afterwards let an unauthorized
+    # caller's account name reach Redis.
+    check_view_permissions(request, account)
+
+    # Accept either `slugs` (list / comma-string) or singular `slug`, as
+    # `fetch` does (base.py) — and reject the no-parameter call with the same
+    # 400 rather than falling off the end of the chain with `slugs` unbound.
+    # That UnboundLocalError became a 500 plus one level-12 rest_error incident
+    # per request, from an endpoint any anonymous caller can reach.
     if "slugs" in request.DATA:
         slugs = request.DATA.get_typed("slugs", typed=list)
+    elif "slug" in request.DATA:
+        slugs = request.DATA.get_typed("slug", typed=list)
     elif category:
         slugs = list(metrics.get_category_slugs(category, account=account))
-
-    check_view_permissions(request, account)
+    else:
+        raise mojo.errors.ValueException(
+            "missing required parameter: slug, slugs, or category")
 
     # Handle comma-separated string input
     if isinstance(slugs, str):

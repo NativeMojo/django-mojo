@@ -88,6 +88,19 @@ def check_view_permissions(request, account="public"):
         if perms != "public":
             if not request.user.is_authenticated or not _global_perm(request, perms):
                 raise mojo.errors.PermissionDeniedException()
+    else:
+        # "public" reads are open by default — that is deliberate, and the
+        # default is unchanged. What was broken is that the chain used to END
+        # at `elif account != "public"`, so a view perm an operator CONFIGURED
+        # on the public account via POST /api/metrics/permissions was never
+        # consulted: the documented lock-down control returned {"status": true}
+        # and enforced nothing. Mirrors check_write_permissions below, with the
+        # opposite default (open, not closed).
+        perms = metrics.get_view_perms("public")
+        if not perms or perms == "public":
+            return
+        if not request.user.is_authenticated or not _global_perm(request, perms):
+            raise mojo.errors.PermissionDeniedException()
 
 
 def check_write_permissions(request, account="public"):
