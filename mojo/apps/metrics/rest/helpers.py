@@ -25,7 +25,39 @@ def _global_perm(request, permission):
     return request.user.has_permission(permission)
 
 
-def _check_group_account_permission(request, account, permission):
+# GroupMember.has_permission answers True for these regardless of what is
+# stored ("all"/"authenticated"/"member" unconditionally, "full_member" from the
+# guest marker — member.py), so a consumer typo in METRICS_GROUP_*_ROLES would
+# open a brand's counters to every member of the group. Refused, not honored.
+_ALWAYS_TRUE_PERMS = frozenset({"all", "authenticated", "member", "full_member"})
+
+
+def _consumer_roles(setting_name):
+    """Extra permission keys a deployment nominates for its OWN group accounts.
+
+    Read from a Django setting — METRICS_GROUP_VIEW_ROLES for reads,
+    METRICS_GROUP_WRITE_ROLES for writes. Unset or empty (the default) is [],
+    so a deployment that declares nothing behaves exactly as before. NOT the
+    same thing as metrics.get_view_perms(): that is per-account policy in
+    Redis; this is a deployment-wide role vocabulary the consumer owns, and it
+    is consulted ONLY on the group-<pk> branch — never for global, user-<pk>,
+    public or a custom account.
+    """
+    roles = settings.get_static(setting_name, None) or []
+    if isinstance(roles, str):
+        roles = [roles]
+    return [role for role in roles if role]
+
+
+def _merge_roles(permission, extra_roles):
+    merged = list(permission) if isinstance(permission, (list, tuple, set)) else [permission]
+    for role in extra_roles or []:
+        if role not in merged and role not in _ALWAYS_TRUE_PERMS:
+            merged.append(role)
+    return merged
+
+
+def _check_group_account_permission(request, account, permission, extra_roles=None):
     if not account.startswith("group-"):
         return False
     if not request.user.is_authenticated:
@@ -42,6 +74,12 @@ def _check_group_account_permission(request, account, permission):
     # reads any tenant its acting member can reach.
     if not identity_allows_group(request, group):
         raise mojo.errors.PermissionDeniedException()
+    # Consumer roles widen BOTH grant paths below, deliberately: the user-level
+    # read is how a platform-wide role reaches a brand account without
+    # membership, and _global_perm keeps its is_override_user_session guard so
+    # a confined credential still cannot borrow its user's untenanted dict.
+    if extra_roles:
+        permission = _merge_roles(permission, extra_roles)
     if _global_perm(request, permission):
         return True
     if group is None or not group.user_has_permission(request.user, permission, False):
@@ -77,7 +115,8 @@ def check_view_permissions(request, account="public"):
     if account == "global":
         if not request.user.is_authenticated or not _global_perm(request, ["view_metrics", "metrics"]):
             raise mojo.errors.PermissionDeniedException()
-    elif _check_group_account_permission(request, account, ["view_metrics", "metrics"]):
+    elif _check_group_account_permission(request, account, ["view_metrics", "metrics"],
+                                         _consumer_roles("METRICS_GROUP_VIEW_ROLES")):
         return
     elif _check_user_account_permission(request, account, ["view_metrics", "metrics"]):
         return
@@ -117,7 +156,8 @@ def check_write_permissions(request, account="public"):
     if account == "global":
         if not request.user.is_authenticated or not _global_perm(request, ["write_metrics", "metrics"]):
             raise mojo.errors.PermissionDeniedException()
-    elif _check_group_account_permission(request, account, ["write_metrics", "metrics"]):
+    elif _check_group_account_permission(request, account, ["write_metrics", "metrics"],
+                                         _consumer_roles("METRICS_GROUP_WRITE_ROLES")):
         return
     elif _check_user_account_permission(request, account, ["write_metrics", "metrics"]):
         return

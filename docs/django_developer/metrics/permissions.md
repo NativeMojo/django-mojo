@@ -34,6 +34,8 @@ check_view_permissions(request, account):
     account starts with "group-"?
         → user must have "view_metrics" or "metrics" at system level
           OR group-level "view_metrics"/"metrics" permission
+          (plus any key in METRICS_GROUP_VIEW_ROLES — see
+          "Consumer-declared group roles" below; default: none)
     account starts with "user-"?
         → user must have "view_metrics" or "metrics" at system level
           OR be the user whose ID matches the account
@@ -205,6 +207,44 @@ When the account is `group-<id>`, the system checks permissions at two levels:
 2. **Group-level**: Does the user have `view_metrics` or `metrics` within the group's membership permissions?
 
 Either check passing grants access. If neither passes, a `PermissionDeniedException` is raised.
+
+### Consumer-declared group roles
+
+A deployment that has collapsed its permission vocabulary into a few role keys
+(`admin` / `viewer` / …) and no longer grants `view_metrics` to anyone can
+nominate those keys as satisfying **its own group accounts**:
+
+```python
+# settings
+METRICS_GROUP_VIEW_ROLES = ["admin", "compliance", "viewer"]   # GET /api/metrics/*?account=group-<pk>
+METRICS_GROUP_WRITE_ROLES = []                                  # POST /api/metrics/record?account=group-<pk>
+```
+
+The contract:
+
+- **Default is empty.** Unset, `None` or `[]` leaves the gate byte-identical to
+  the flow above — a deployment that declares nothing is unaffected. A bare
+  string is accepted as a one-element list.
+- **Two lists, never one.** The same helper serves both gates; a single list
+  would silently make every reader a writer.
+- **Only the `group-<pk>` branch reads them.** `global`, `user-<pk>`, `public`
+  and custom accounts keep their unwidened `["view_metrics", "metrics"]` /
+  per-account Redis checks — `global` carries every tenant's counters and must
+  never widen.
+- **Both grant paths widen.** A nominated key satisfies the user-level check
+  (a platform-wide role reaches every brand's account without membership —
+  the same reach a user-level `view_metrics` has always had) and the
+  group-member check. The user-level path keeps its
+  `is_override_user_session` guard, so a confined credential (ApiKey,
+  GroupScopedToken) still cannot borrow its user's untenanted dict, and the
+  `identity_allows_group` tenant bound still runs first.
+- **Always-true tokens are refused.** `GroupMember.has_permission` answers
+  True for `all` / `authenticated` / `member` / `full_member` regardless of
+  what is stored, so a typo naming one of them would open a brand's counters
+  to every member. They are dropped from the merge, not honored.
+- Not the same thing as `metrics.set_view_perms(account, …)` — that is
+  per-account policy in Redis and is never consulted for a `group-` account;
+  this is a deployment-wide role vocabulary the consumer owns in settings.
 
 ## User-Scoped Permissions
 
