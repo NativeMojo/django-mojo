@@ -14,18 +14,18 @@ Compiled assets use a relative base; Portal API requests always use same-origin
 
 ## Pinned identity and offline replacement
 
-The current artifact is portal-mojo **0.2.3**, source revision
-`ec2cf8037afbf3ebb57192a54a5786c149895cc5`, built clean with Node
+The current artifact is portal-mojo **0.2.4**, source revision
+`b039433111194fae8beaaa1a80615b11237e5645`, built clean with Node
 **24.21.0** / npm **11.19.0** and lockfile SHA-256
-`92cd7305e4929293a61def2bd87f32439c732a1bbb0b91de3d840cd412148bac`.
-Its 116-file inventory includes the Vite manifest and lazy chunks.
+`2eaae471bdd0f0dfa0c363585853e18429731ebbfa7c31a1132393b40e53cd5f`.
+Its 117-file inventory includes the Vite manifest and lazy chunks.
 The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 
-`8012f664ecb2ead262a240549fc33e70ac45c75d1cb6bded1e8c17e217049efb`
+`886ac48352cb99430075a9c0f2152b331a968f6938837cc394861cd39746b10d`
 
-This pin comes from the successful [portal-mojo 0.2.3 release build](https://github.com/NativeMojo/portal-mojo/actions/runs/34546230351),
-artifact `portal-mojo-admin-0.2.3-ec2cf8037afbf3ebb57192a54a5786c149895cc5`
-(GitHub artifact ID `10179244830`). The complete artifact includes hidden
+This pin comes from the successful [portal-mojo 0.2.4 release build](https://github.com/NativeMojo/portal-mojo/actions/runs/34629692460),
+artifact `portal-mojo-admin-0.2.4-b039433111194fae8beaaa1a80615b11237e5645`
+(GitHub artifact ID `10275931681`). The complete artifact includes hidden
 `.vite` content; verify the manifest digest before vendoring it.
 
 Stop processes serving/importing the checkout before replacing the artifact:
@@ -33,7 +33,7 @@ Stop processes serving/importing the checkout before replacing the artifact:
 ```bash
 uv run python scripts/vendor_admin_portal.py \
   --source /absolute/path/to/verified/dist/admin \
-  --expected-manifest-sha256 8012f664ecb2ead262a240549fc33e70ac45c75d1cb6bded1e8c17e217049efb
+  --expected-manifest-sha256 886ac48352cb99430075a9c0f2152b331a968f6938837cc394861cd39746b10d
 uv run python scripts/vendor_admin_portal.py --check
 ```
 
@@ -59,6 +59,18 @@ startup and delivers only its validated allowlist. Provenance and
 `.vite/manifest.json` ship in the package but return HTTP 404.
 
 ## Included Portal behavior
+
+Portal 0.2.4 keeps toast notifications visible and interactive above native
+modal backdrops, including nested dialogs. Phone Hub connection tests use the
+provider's `success` result: a successful REST envelope alone no longer means
+the connection worked. Results remain visible in Overview and Connection,
+test mode is shown as a warning, and configuration scope explicitly identifies
+the system default or group. Editing is disabled while a test is pending;
+saving credentials clears the previous result.
+
+Confirmation dialogs now explain the effect of disabling an API key or
+webhook, granting group/member management permissions, and removing metadata
+keys before the write proceeds.
 
 Portal 0.2.3 adds **Phone Hub → SMS → Send SMS** for a recipient and custom
 message. The composer uses the existing `POST /api/phonehub/sms/send` endpoint

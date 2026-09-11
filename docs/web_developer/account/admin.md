@@ -1,6 +1,17 @@
 # Packaged Admin Security client
 
-The packaged Portal is **portal-mojo 0.2.3**. Its updated detail dialogs keep
+The packaged Portal is **portal-mojo 0.2.4**. Toast notifications remain visible
+and interactive above modal backdrops, including nested dialogs. Phone Hub
+connection tests read the provider's `success` verdict, retain the result in
+Overview and Connection, and distinguish test mode from verified connectivity.
+The detail subtitle and Connection section show whether the configuration is
+the system default or belongs to a group. Editing is disabled during a pending
+test, and saving credentials clears the previous result.
+
+Confirmation dialogs explain the effect of disabling API keys or webhooks,
+granting group/member management permissions, and removing metadata keys.
+
+Its updated detail dialogs keep
 navigation usable at narrow widths and put lifecycle actions in context menus.
 Phone Hub also provides **SMS → Send SMS** with a recipient and custom body.
 The composer requires SMS visibility plus `sys.send_sms` or `sys.comms` and
