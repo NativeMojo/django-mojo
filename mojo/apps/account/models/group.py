@@ -836,7 +836,8 @@ class Group(MojoSecrets, MojoModel):
             if "auth_domain" in changed_fields:
                 # Try to find old value — tracker may not have it, so clear broadly
                 # by scanning for any cache entry pointing to this group
-                for key in r.scan_iter(f"{self.AUTH_DOMAIN_CACHE_PREFIX}*"):
+                for key in r.scan_iter(f"{self.AUTH_DOMAIN_CACHE_PREFIX}*",
+                                       count=1000):
                     cached = r.get(key)
                     if cached and int(cached) == self.pk:
                         r.delete(key)

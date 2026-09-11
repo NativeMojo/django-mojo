@@ -67,7 +67,7 @@ def invalidate_all():
 def _invalidate_pattern(pattern):
     try:
         r = get_connection()
-        for key in r.scan_iter(pattern):
+        for key in r.scan_iter(pattern, count=1000):
             r.delete(key)
     except Exception as exc:
         logit.error("geofence", f"cache invalidate failed for {pattern}: {exc}")

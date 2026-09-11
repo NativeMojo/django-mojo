@@ -8,6 +8,14 @@ from objict import objict, nobjict
 # Hash-slot tagging helpers
 # =========================
 
+# redis-py's scan_iter defaults to COUNT 10 — one network round trip per ten
+# keys. The metrics keyspace is the largest one this process owns (a
+# long-lived install accumulates tens of thousands of permanent `perm:`
+# keys), so the default turns every sweep below into thousands of round
+# trips. Measured on a 74,734-key db: 0.885s at COUNT 10, 0.023s at 1000.
+_SCAN_COUNT = 1000
+
+
 def _tag(account: str) -> str:
     """Constant hash tag per account so all that account's keys share one slot."""
     # Anything inside {...} is the cluster hash-tag.
@@ -227,7 +235,7 @@ def __delete_keys_with_prefix(tagged_prefix, redis_conn):
     """
     total_deleted = 0
     pattern = f"{tagged_prefix}*"
-    for key in redis_conn.scan_iter(match=pattern):
+    for key in redis_conn.scan_iter(match=pattern, count=_SCAN_COUNT):
         redis_conn.delete(key)
         total_deleted += 1
     return total_deleted
@@ -389,7 +397,8 @@ def get_accounts_with_permissions(redis_con=None):
     accounts = {}
 
     # View perms
-    for key in redis_con.scan_iter(match="{mets:*}:mets:*:perm:v"):
+    for key in redis_con.scan_iter(match="{mets:*}:mets:*:perm:v",
+                                   count=_SCAN_COUNT):
         key_str = key.decode('utf-8') if isinstance(key, bytes) else key
         parts = key_str.split(':')
         # format after tagging: {mets:<acct>}:mets:<acct>:perm:v
@@ -405,7 +414,8 @@ def get_accounts_with_permissions(redis_con=None):
                 accounts[acct]["view_permissions"] = perms
 
     # Write perms
-    for key in redis_con.scan_iter(match="{mets:*}:mets:*:perm:w"):
+    for key in redis_con.scan_iter(match="{mets:*}:mets:*:perm:w",
+                                   count=_SCAN_COUNT):
         key_str = key.decode('utf-8') if isinstance(key, bytes) else key
         parts = key_str.split(':')
         if len(parts) >= 4:
@@ -452,7 +462,7 @@ def list_accounts_with_data(redis_con=None):
     if redis_con is None:
         redis_con = redis.get_connection()
     accounts = set()
-    for key in redis_con.scan_iter(match="mets:*:slugs"):
+    for key in redis_con.scan_iter(match="mets:*:slugs", count=_SCAN_COUNT):
         key_str = key.decode("utf-8") if isinstance(key, bytes) else key
         # Format: mets:<account>:slugs (account may contain '-' and digits)
         if not key_str.startswith("mets:") or not key_str.endswith(":slugs"):
@@ -480,7 +490,7 @@ def list_gauge_slugs(account, prefix=None, limit=500, redis_con=None):
     pattern = f"{val_prefix_redis_key}*"
 
     slugs = []
-    for key in redis_con.scan_iter(match=pattern):
+    for key in redis_con.scan_iter(match=pattern, count=_SCAN_COUNT):
         key_str = key.decode("utf-8") if isinstance(key, bytes) else key
         # Extract the bit after ":val:" — that's our normalized slug
         marker = ":val:"
