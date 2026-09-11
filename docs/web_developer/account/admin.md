@@ -5,10 +5,13 @@ navigation usable at narrow widths and put lifecycle actions in context menus.
 Phone Hub also provides **SMS → Send SMS** with a recipient and custom body.
 The composer requires SMS visibility plus `sys.send_sms` or `sys.comms` and
 posts only `{to_number, body}` to `/api/phonehub/sms/send`, using the system
-configuration and default sender. It shows the returned status, retains failed
-drafts, and refreshes SMS history after every attempted send. After an uncertain
-result, check the audit before retrying. An accepted request does not establish
-delivery to the recipient.
+configuration and default sender. It shows the returned SMS record's
+`data.status`, retains drafts after transport or malformed-response failures,
+and refreshes SMS history after every attempted send. A successful envelope can
+contain a `failed` or `undelivered` record; only `delivered` confirms delivery.
+After an uncertain result, check the audit before retrying. The
+[SMS endpoint reference](../phonehub/README.md#send-an-sms) documents the request
+and response formats.
 
 See the [packaged artifact guide](../../django_developer/account/admin.md)
 for the exact release identity and offline installation proof.
@@ -73,7 +76,7 @@ Deterministic states are available through `bin/admin_preview
 --security-state STATE`; they cover full/empty, unavailable/partial/failed/stale,
 view-only/no-access, 401/440/409, recovery, and malformed-contract paths. The
 opt-in Chrome rider is documented in the
-[framework guide](../../django_developer/account/admin.md#preview-and-browser-proof).
+[framework guide](../../django_developer/account/admin.md#preview-csp-and-release-proof).
 
 For acceptance against a real installation, run:
 

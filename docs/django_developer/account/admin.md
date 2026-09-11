@@ -64,10 +64,13 @@ Portal 0.2.3 adds **Phone Hub → SMS → Send SMS** for a recipient and custom
 message. The composer uses the existing `POST /api/phonehub/sms/send` endpoint
 with only `to_number` and `body`, so sending uses the effective system
 configuration and default sender. SMS visibility and the separate global
-`sys.send_sms` or `sys.comms` grant are both required. It preserves failed
-drafts, displays the returned delivery status, and refreshes the audit list
-after every attempted send. An uncertain result must be checked in the audit
-before retrying.
+`sys.send_sms` or `sys.comms` grant are both required. It preserves drafts
+after transport or malformed-response failures, displays the returned
+SMS record's `data.status`, and refreshes the audit list after every attempted
+send. A successful envelope can contain a `failed` or `undelivered` record;
+only `delivered` confirms delivery. An uncertain result must be checked in the
+audit before retrying. See the [Phone Hub REST contract](../phonehub/rest.md)
+for the request and response formats.
 
 The bundle also includes responsive detail dialogs and contextual lifecycle
 actions, improved Phone Hub configuration, a direct Dashboard destination,
