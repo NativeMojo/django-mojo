@@ -102,6 +102,14 @@ GET /api/metrics/fetch?slug=page_views&granularity=days&dt_start=2024-01-01&dt_e
 | `child_kind` | unset | When set with `account=group-<parent_id>`, sums the metric across all active descendants of the parent whose `kind` matches. See [Parent-Group Fan-Out](#parent-group-fan-out). |
 | `breakdown` | `false` | When `true` (with `child_kind`), returns one series per child group instead of summing. Single-slug only. |
 
+**Range cap.** A request whose `dt_start`/`dt_end` span more than
+`METRICS_MAX_RANGE_BUCKETS` buckets (default 10,000) at the requested
+`granularity` returns **400** — the range is rejected before any data is read.
+10,000 buckets is ~6.9 days at `minutes`, ~416 days at `hours` and ~27 years at
+`days`, so any ordinary dashboard window is inside it; widen the granularity
+rather than the cap. The same limit applies to `/series`, `value/get`,
+`categories`, `category_slugs`, `category_fetch` and `discover`.
+
 **Response (single slug):**
 
 ```json
@@ -138,6 +146,10 @@ GET /api/metrics/fetch?slug=page_views&granularity=days&dt_start=2024-01-01&dt_e
 ```
 GET /api/metrics/value/get?slugs=page_views,user_signups&granularity=hours
 ```
+
+Accepts `slugs` (comma-separated), the singular `slug`, or `category`. A request
+carrying **none** of the three returns **400** (`missing required parameter:
+slug, slugs, or category`) — it used to be a 500.
 
 ```json
 {

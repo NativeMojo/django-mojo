@@ -38,13 +38,23 @@ check_view_permissions(request, account):
         → user must have "view_metrics" or "metrics" at system level
           OR be the user whose ID matches the account
     account == "public"?
-        → allowed (no auth)
+        → look up per-account view perms from Redis
+        → if not set (the default), allowed (no auth)
+        → if "public", allowed (no auth)
+        → if set to anything else, user must have that permission
     otherwise (custom account)?
         → look up per-account view perms from Redis
         → if "public", allowed
         → if set, user must have that permission
         → if not set, denied
 ```
+
+The `public` branch used to be a flat `allowed (no auth)` that never read the
+configured value at all, so `metrics.set_view_perms("public", "view_metrics")`
+(and the equivalent `POST /api/metrics/permissions`) returned success and
+enforced nothing. The **default is unchanged** — an unconfigured `public`
+account is still anonymously readable, which is what most deployments want —
+but a deployment that locks it down now actually gets a `403`.
 
 ### Write Permission Flow
 
@@ -167,6 +177,19 @@ POST /api/metrics/permissions/<account>
 ```
 
 Permission values are comma-separated strings. Use `"public"` to allow unauthenticated access.
+
+**Each list is written only when its key is present in the request body.** A
+POST carrying just `write_permissions` leaves the view list untouched, and vice
+versa. (Before this was fixed, an absent key was read as `""`, split into
+`[""]` — truthy — and silently overwrote the other list with a permission
+string no user can hold.) Send an **empty** value to clear a list explicitly:
+
+```json
+{"view_permissions": ""}
+```
+
+The response reports what is stored after the write, not an echo of what was
+sent, so a one-sided POST shows the untouched list's real value.
 
 **Remove all permissions for an account:**
 

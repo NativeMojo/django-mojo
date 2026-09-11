@@ -170,6 +170,30 @@ Pass `breakdown=true` (or call `fetch_group_fanout(..., breakdown=True)`) to ret
 
 Response keys are child `name`; when two children share a name both keys become `name#<id>` to avoid silent merging. The response includes a `groups` map of `key -> id`.
 
+## Range Cap
+
+Every read path reaches Redis through `utils.generate_slugs_for_range`, which
+materialises **one key string per bucket** (and `fetch` then builds a second,
+tagged copy before the MGET). A request that supplies both `dt_start` and
+`dt_end` used to be unbounded: `dt_start=1900-01-01&dt_end=2100-01-01&granularity=minutes`
+is ~105M buckets — many gigabytes of strings from a single request, on
+endpoints that can be reached anonymously when the account is `public`.
+
+`utils.get_date_range` now calls `utils.check_range_bounds` after resolving
+both bounds and **before** any key is generated. A range spanning more than
+`METRICS_MAX_RANGE_BUCKETS` buckets raises `ValueException` (400):
+
+```
+date range too wide: 86401 minutes buckets exceeds METRICS_MAX_RANGE_BUCKETS (10000)
+```
+
+Because the check lives in the one shared helper, every read endpoint inherits
+it — `fetch`, `series`, `value/get` (category branch), `categories`,
+`category_slugs`, `category_fetch` and `discover`. Set the setting to `0` to
+disable the cap entirely (not recommended on any internet-reachable
+deployment). `utils.count_buckets(dt_start, dt_end, granularity)` is the public
+estimator, if you want to size a range before issuing a read.
+
 ## Settings
 
 | Setting | Default | Description |
@@ -177,3 +201,4 @@ Response keys are child `name`; when two children share a name both keys become 
 | `METRICS_TIMEZONE` | `"America/Los_Angeles"` | Default timezone for metric recording |
 | `METRICS_TRACK_USER_ACTIVITY` | `False` | Auto-record per-user activity metrics |
 | `METRICS_FANOUT_MAX_CHILDREN` | `200` | Hard cap on the number of child groups a single fan-out fetch will dispatch to. Requests resolving more children return 400. |
+| `METRICS_MAX_RANGE_BUCKETS` | `10000` | Hard cap on how many time buckets one read may span, checked before any Redis key is generated. Wider ranges return 400. 10,000 buckets is ~6.9 days at `minutes`, ~416 days at `hours`, ~27 years at `days`. `0` disables the cap. |
