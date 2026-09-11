@@ -50,11 +50,18 @@ Sets `cancel_requested=True`. Running jobs must check via `check_cancel_requeste
 
 ### POST /api/jobs/retry
 
-Retry a failed job.
+Retry a failed, canceled, or expired job.
 
 **Body**: `{"job_id": "...", "delay": 60}` (delay optional, in seconds)
 
-Resets the job to `pending` and re-publishes it.
+Publishes a replacement job (new id, same func/payload/channel) with a fresh
+expiration — the larger of `JOBS_DEFAULT_EXPIRES_SEC` and the original's own
+window, plus `delay`. The original keeps its terminal status and diagnostics
+and gains `metadata.retried_as`; the replacement carries
+`metadata.retried_from`; a `retry` event on the original records the new id.
+Refused with `Job already retried as <id>` while that replacement is still
+pending/running/completed. Same contract via the `retry_request` model action
+and `JobManager.retry_job`.
 
 ## CRUD Endpoints
 
@@ -241,8 +248,8 @@ mgr.resume_channel("maintenance")
 # Cancel a job
 mgr.cancel_job(job_id)
 
-# Retry a failed job
-mgr.retry_job(job_id, delay=60)
+# Retry a failed/canceled/expired job — returns the replacement id, or False
+new_id = mgr.retry_job(job_id, delay=60)
 ```
 
 ### Orphaned running rows

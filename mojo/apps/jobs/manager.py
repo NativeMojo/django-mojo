@@ -1164,55 +1164,33 @@ class JobManager:
 
     def retry_job(self, job_id: str, delay: Optional[int] = None) -> bool:
         """
-        Retry a failed job.
+        Retry a failed, canceled or expired job.
+
+        Delegates to JobActionsService.retry_job so both paths share one
+        contract: a replacement is published with a fresh lifetime, the
+        original stays a terminal record linked to it, and a second retry is
+        refused while the replacement is live.
 
         Args:
             job_id: Job identifier
             delay: Delay in seconds before retry (default: immediate)
 
         Returns:
-            True if retry scheduled, False otherwise
+            The replacement job id (a list of ids for a fanned-out broadcast)
+            if the retry was scheduled, False otherwise.
         """
         try:
             job = Job.objects.get(id=job_id)
-
-            if job.status not in ('failed', 'canceled'):
-                logit.warn(f"Cannot retry job {job_id} in status {job.status}")
-                return False
-
-            # Reset job for retry
-            job.status = 'pending'
-            job.attempt = 0
-            job.last_error = ''
-            job.stack_trace = ''
-
-            if delay:
-                job.run_at = timezone.now() + timedelta(seconds=delay)
-            else:
-                job.run_at = None
-
-            job.save()
-
-            # Re-publish to Redis
-            from . import publish
-
-            return publish(
-                func=job.func,
-                payload=job.payload,
-                channel=job.channel,
-                run_at=job.run_at,
-                broadcast=job.broadcast,
-                max_retries=job.max_retries,
-                expires_at=job.expires_at,
-                max_exec_seconds=job.max_exec_seconds
-            )
-
         except Job.DoesNotExist:
             logit.error(f"Job {job_id} not found")
             return False
-        except Exception as e:
-            logit.error(f"Failed to retry job {job_id}: {e}")
+
+        from .services import JobActionsService
+        result = JobActionsService.retry_job(job, delay=delay)
+        if not result.get('status'):
+            logit.warn(f"Cannot retry job {job_id}: {result.get('error')}")
             return False
+        return result['new_job_id']
 
     def _get_channel_metrics(self, channel: str) -> Dict[str, Any]:
         """Get recent metrics for a channel."""

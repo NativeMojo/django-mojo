@@ -69,7 +69,7 @@ from mojo.apps.jobs.models import Job
 | Action | Description |
 |--------|-------------|
 | `cancel_request` | Request cancellation |
-| `retry_request` | Reset and re-publish a failed job |
+| `retry_request` | Publish a replacement for a failed, canceled, or expired job (fresh expiration; the original stays terminal and records `metadata.retried_as`) |
 | `get_status` | Get detailed status with recent events |
 | `publish_job` | Create a new job from this one as a template |
 

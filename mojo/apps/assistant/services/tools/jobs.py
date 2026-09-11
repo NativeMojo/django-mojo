@@ -426,7 +426,7 @@ def _tool_delete_scheduled_task(params, user):
     name="retry_job",
     domain="jobs",
     permission="manage_jobs",
-    description="Retry a failed job. Requires operator approval: calling this tool creates an approval card and does not execute.",
+    description="Retry a failed, canceled, or expired job. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {

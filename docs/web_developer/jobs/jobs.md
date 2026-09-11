@@ -30,7 +30,7 @@ Both `view_jobs` and `manage_jobs` grant read access. Write/action endpoints req
 | GET | `/api/jobs/logs/<id>` | `view_jobs` | Get log detail |
 | GET | `/api/jobs/status/<job_id>` | `view_jobs` | Quick status check for a job |
 | POST | `/api/jobs/cancel` | `manage_jobs` | Cancel a job |
-| POST | `/api/jobs/retry` | `manage_jobs` | Retry a failed or canceled job |
+| POST | `/api/jobs/retry` | `manage_jobs` | Retry a failed, canceled, or expired job |
 | GET | `/api/jobs/health` | `view_jobs` | Health overview for all channels |
 | GET | `/api/jobs/health/<channel>` | `view_jobs` | Health detail for one channel |
 | GET | `/api/jobs/stats` | `view_jobs` | System-wide statistics |
@@ -290,7 +290,11 @@ When `forced` is `true`, the runner was unresponsive and the cancel was applied 
 
 #### Retry a Job
 
-Re-enqueues a `failed`, `canceled`, or `expired` job. A new attempt is scheduled using the same function, payload, and channel.
+Publishes a **replacement** for a `failed`, `canceled`, or `expired` job — a new job id with the same function, payload, and channel. The original row is left as it is (its status, attempt count and error diagnostics are the record of what happened) and gains `metadata.retried_as` naming the replacement; the replacement carries `metadata.retried_from`; and a `retry` event on the original records `new_job_id`.
+
+The replacement gets a **fresh expiration**: the larger of the publish default (`JOBS_DEFAULT_EXPIRES_SEC`) and the window the original was published with, extended by `delay`. The original's own `expires_at` is never reused — before this contract an expired job's retry inherited its past deadline and expired before it ran.
+
+A second retry is **refused while the replacement is still `pending`, `running` or `completed`** (see the error below), so a double-click or a second operator cannot run the same work twice. Once that replacement has itself failed, been canceled or expired, the original may be retried again; `retried_as` then points at the newest replacement.
 
 **Request (immediate retry):**
 
@@ -332,6 +336,16 @@ POST /api/jobs/job/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4
 {
   "status": false,
   "error": "Cannot retry job in running state"
+}
+```
+
+**Error (already retried, replacement still live):**
+
+```json
+{
+  "status": false,
+  "error": "Job already retried as b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5 — retry that job instead",
+  "new_job_id": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5"
 }
 ```
 
@@ -498,7 +512,9 @@ Cancels a job by ID. Body parameter, not URL segment. Requires `manage_jobs`.
 
 **POST** `/api/jobs/retry`
 
-Retries a failed or canceled job by ID. Optionally delays the retry. Requires `manage_jobs`.
+Retries a failed, canceled, or expired job by ID. Optionally delays the retry. Requires `manage_jobs`. Same semantics as the `retry_request` action above: a replacement is published with a fresh expiration, the original stays a terminal record linked to it, and a second retry is refused while the replacement is live.
+
+A job that was fanned out to a specific runner (its `channel` is that runner's box-direct id) is retried onto that same channel; if the runner is gone the replacement waits there unconsumed and the `jobs:unconsumed_channel` incident names it.
 
 **Request:**
 
@@ -586,7 +602,7 @@ Events are append-only audit records automatically created by the system at each
 | `running` | Execution began |
 | `completed` | Execution finished successfully |
 | `failed` | Execution threw an exception |
-| `retry` | Job has been re-enqueued after failure |
+| `retry` | A replacement was published for this job (manual retry) — `details.new_job_id` names it; automatic retries after a handler exception reschedule the same job instead |
 | `canceled` | Job was canceled |
 | `expired` | Job expired before being claimed |
 | `released` | Runner released the job back to the queue |
