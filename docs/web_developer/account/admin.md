@@ -1,5 +1,18 @@
 # Packaged Admin Security client
 
+The packaged Portal is **portal-mojo 0.2.3**. Its updated detail dialogs keep
+navigation usable at narrow widths and put lifecycle actions in context menus.
+Phone Hub also provides **SMS → Send SMS** with a recipient and custom body.
+The composer requires SMS visibility plus `sys.send_sms` or `sys.comms` and
+posts only `{to_number, body}` to `/api/phonehub/sms/send`, using the system
+configuration and default sender. It shows the returned status, retains failed
+drafts, and refreshes SMS history after every attempted send. After an uncertain
+result, check the audit before retrying. An accepted request does not establish
+delivery to the recipient.
+
+See the [packaged artifact guide](../../django_developer/account/admin.md)
+for the exact release identity and offline installation proof.
+
 Admin v2 exposes Security at `#/security-operations` with Overview, Cases,
 Incidents & events, Rules, Firewall & IPSets, and Recommendations. This is the
 seventh packaged feature destination. Admin v1 is compatible and still keeps its

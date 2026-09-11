@@ -14,25 +14,26 @@ Compiled assets use a relative base; Portal API requests always use same-origin
 
 ## Pinned identity and offline replacement
 
-The current artifact is portal-mojo **0.2.2**, source revision
-`b61a053842400a07f2bc625af0d37db0bae8e001`, built clean with Node
+The current artifact is portal-mojo **0.2.3**, source revision
+`ec2cf8037afbf3ebb57192a54a5786c149895cc5`, built clean with Node
 **24.21.0** / npm **11.19.0** and lockfile SHA-256
-`573f34453fb06def1bbbad428afba04af286afa738aa92fe58a4862dda341ac4`.
+`92cd7305e4929293a61def2bd87f32439c732a1bbb0b91de3d840cd412148bac`.
 Its 116-file inventory includes the Vite manifest and lazy chunks.
 The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 
-`934e89e2ce913583463469d7eda4c4ef3c5015ce9f3d51fb9894a75ce61b2031`
+`8012f664ecb2ead262a240549fc33e70ac45c75d1cb6bded1e8c17e217049efb`
 
-The paired work items record the producer's retrieval path, verification and
-revision. This pin was retrieved from
-`/Users/ians/Projects/mojo/nativemojo/portal-mojo/dist/admin`.
+This pin comes from the successful [portal-mojo 0.2.3 release build](https://github.com/NativeMojo/portal-mojo/actions/runs/34546230351),
+artifact `portal-mojo-admin-0.2.3-ec2cf8037afbf3ebb57192a54a5786c149895cc5`
+(GitHub artifact ID `10179244830`). The complete artifact includes hidden
+`.vite` content; verify the manifest digest before vendoring it.
 
 Stop processes serving/importing the checkout before replacing the artifact:
 
 ```bash
 uv run python scripts/vendor_admin_portal.py \
   --source /absolute/path/to/verified/dist/admin \
-  --expected-manifest-sha256 934e89e2ce913583463469d7eda4c4ef3c5015ce9f3d51fb9894a75ce61b2031
+  --expected-manifest-sha256 8012f664ecb2ead262a240549fc33e70ac45c75d1cb6bded1e8c17e217049efb
 uv run python scripts/vendor_admin_portal.py --check
 ```
 
@@ -56,6 +57,22 @@ and package commands load it directly, so they work even when an invalid v2
 tree prevents Django startup. The runtime loader proves the pinned bytes at
 startup and delivers only its validated allowlist. Provenance and
 `.vite/manifest.json` ship in the package but return HTTP 404.
+
+## Included Portal behavior
+
+Portal 0.2.3 adds **Phone Hub → SMS → Send SMS** for a recipient and custom
+message. The composer uses the existing `POST /api/phonehub/sms/send` endpoint
+with only `to_number` and `body`, so sending uses the effective system
+configuration and default sender. SMS visibility and the separate global
+`sys.send_sms` or `sys.comms` grant are both required. It preserves failed
+drafts, displays the returned delivery status, and refreshes the audit list
+after every attempted send. An uncertain result must be checked in the audit
+before retrying.
+
+The bundle also includes responsive detail dialogs and contextual lifecycle
+actions, improved Phone Hub configuration, a direct Dashboard destination,
+and expanded incident/event evidence. These are frontend updates against the
+existing APIs; no database migration is needed.
 
 ## Private source sessions
 
