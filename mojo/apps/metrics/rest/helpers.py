@@ -29,7 +29,13 @@ def _global_perm(request, permission):
 # stored ("all"/"authenticated"/"member" unconditionally, "full_member" from the
 # guest marker — member.py), so a consumer typo in METRICS_GROUP_*_ROLES would
 # open a brand's counters to every member of the group. Refused, not honored.
+# A "sys."-prefixed key is refused too: the member path strips the prefix and
+# reads the USER's global dict (member.py), which would both re-admit "sys.all"
+# and let an override ApiKey / GroupScopedToken borrow its user's untenanted
+# grants — exactly what _global_perm's is_override_user_session guard blocks.
+# User-level reach is already the _global_perm path; "sys." adds nothing legit.
 _ALWAYS_TRUE_PERMS = frozenset({"all", "authenticated", "member", "full_member"})
+_SYS_PREFIX = "sys."
 
 
 def _consumer_roles(setting_name):
@@ -52,8 +58,9 @@ def _consumer_roles(setting_name):
 def _merge_roles(permission, extra_roles):
     merged = list(permission) if isinstance(permission, (list, tuple, set)) else [permission]
     for role in extra_roles or []:
-        if role not in merged and role not in _ALWAYS_TRUE_PERMS:
-            merged.append(role)
+        if role in merged or role in _ALWAYS_TRUE_PERMS or role.startswith(_SYS_PREFIX):
+            continue
+        merged.append(role)
     return merged
 
 

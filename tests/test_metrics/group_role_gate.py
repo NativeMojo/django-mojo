@@ -6,7 +6,9 @@ accounts. The hook lives only inside ``_check_group_account_permission``:
 ``global``, ``user-<pk>``, ``public`` and custom accounts never see the list,
 and the tokens ``GroupMember.has_permission`` answers True for unconditionally
 (``all`` / ``authenticated`` / ``member`` / ``full_member``) are refused so a
-settings typo cannot open a brand's counters to every member.
+settings typo cannot open a brand's counters to every member — as is any
+``sys.``-prefixed key, which the member path resolves against the USER's
+global dict.
 
 In-process, no HTTP client. The default tier may not mutate
 ``django.conf.settings``, so the resolved role list is INJECTED into the gate
@@ -123,8 +125,12 @@ def test_always_true_tokens_refused(opts):
 
     assert helpers._merge_roles(["view_metrics"], ["member", PROBE_ROLE, "view_metrics"]) == \
         ["view_metrics", PROBE_ROLE], "merge must drop always-true tokens and duplicates"
+    assert helpers._merge_roles(["view_metrics"], ["sys.all", f"sys.{PROBE_ROLE}"]) == \
+        ["view_metrics"], (
+        "a sys.-prefixed key reads the USER's global dict through the member path "
+        "and must be refused, not honored")
     request = _request_for(_member(opts))
-    for token in ("all", "authenticated", "member", "full_member"):
+    for token in ("all", "authenticated", "member", "full_member", "sys.all", "sys.authenticated"):
         with th.assert_raises(me.PermissionDeniedException):
             helpers._check_group_account_permission(
                 request, f"group-{opts.brand_a}", VIEW, [token])

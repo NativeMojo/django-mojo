@@ -241,7 +241,11 @@ The contract:
 - **Always-true tokens are refused.** `GroupMember.has_permission` answers
   True for `all` / `authenticated` / `member` / `full_member` regardless of
   what is stored, so a typo naming one of them would open a brand's counters
-  to every member. They are dropped from the merge, not honored.
+  to every member. They are dropped from the merge, not honored — and so is
+  any `sys.`-prefixed key, which the member path resolves against the
+  *user's* global dict (re-admitting `sys.all`, and letting a confined
+  credential borrow its user's untenanted grants). User-level reach is the
+  `_global_perm` path already; nominate the bare key.
 - Not the same thing as `metrics.set_view_perms(account, …)` — that is
   per-account policy in Redis and is never consulted for a `group-` account;
   this is a deployment-wide role vocabulary the consumer owns in settings.
