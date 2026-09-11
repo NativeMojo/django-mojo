@@ -294,7 +294,7 @@ Publishes a **replacement** for a `failed`, `canceled`, or `expired` job — a n
 
 The replacement gets a **fresh expiration**: the larger of the publish default (`JOBS_DEFAULT_EXPIRES_SEC`) and the window the original was published with, extended by `delay`. The original's own `expires_at` is never reused — before this contract an expired job's retry inherited its past deadline and expired before it ran.
 
-A second retry is **refused while the replacement is still `pending`, `running` or `completed`** (see the error below), so a double-click or a second operator cannot run the same work twice. Once that replacement has itself failed, been canceled or expired, the original may be retried again; `retried_as` then points at the newest replacement.
+A second retry is **refused while the replacement is still `pending`, `running` or `completed`** (see the error below), so a double-click or a later second operator does not run the same work twice. The check is not locked — two requests landing in the same instant can both publish — so treat it as double-submit protection, not a hard exactly-once guarantee. Once that replacement has itself failed, been canceled or expired, the original may be retried again; `retried_as` then points at the newest replacement.
 
 **Request (immediate retry):**
 

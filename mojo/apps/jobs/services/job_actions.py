@@ -174,6 +174,8 @@ class JobActionsService:
             from mojo.apps.jobs import publish, JOBS_DEFAULT_EXPIRES_SEC
 
             delay_seconds = int(delay) if delay else 0
+            if delay_seconds < 0:
+                return {'status': False, 'error': 'delay must be zero or more seconds'}
 
             # publish() derived the original's expires_at from the same `now`
             # as `created`, so their difference is the expires_in the publisher
