@@ -408,7 +408,7 @@ or override that actor context.
 | `get_queue_health` | `view_jobs` | No | Per-channel queue depth and worker status |
 | `list_scheduled_tasks` | `view_jobs` | No | List the user's scheduled tasks |
 | `cancel_job` | `manage_jobs` | Yes | Cancel a pending or running job |
-| `retry_job` | `manage_jobs` | Yes | Requeue a failed, canceled, or expired job |
+| `retry_job` | `manage_jobs` | Yes | Publish a replacement for a failed, canceled, or expired job (original stays terminal) |
 | `create_scheduled_task` | `manage_jobs` | Yes | Create a new recurring scheduled task |
 | `update_scheduled_task` | `manage_jobs` | Yes | Edit a scheduled task (name, schedule, payload, enabled state) |
 | `delete_scheduled_task` | `manage_jobs` | Yes | Delete a scheduled task |

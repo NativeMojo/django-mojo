@@ -125,7 +125,20 @@ class JobActionsService:
     @staticmethod
     def retry_job(job, delay: Optional[int] = None) -> Dict[str, Any]:
         """
-        Retry a failed or canceled job.
+        Retry a failed, canceled or expired job by publishing a REPLACEMENT.
+
+        The original row is left as the terminal record it is — status,
+        attempt, diagnostics and finished_at untouched — and gains
+        metadata['retried_as'] naming the replacement; the replacement carries
+        metadata['retried_from'], and a 'retry' event on the original links
+        the two ids. A second retry is refused while that replacement is still
+        pending/running/completed, so a double-click cannot run the work twice.
+
+        The replacement gets a fresh lifetime: the larger of the publish
+        default and the window the original was published with, extended by
+        `delay` so a delayed retry is still alive when the scheduler promotes
+        it. The original's expires_at is never reused — an expired source would
+        otherwise produce a replacement that expires before it runs.
 
         Args:
             job: Job model instance
@@ -141,44 +154,66 @@ class JobActionsService:
                 'error': f'Cannot retry job in {job.status} state'
             }
 
-        # Reset job for retry
-        job.status = 'pending'
-        job.attempt = 0
-        job.last_error = ''
-        job.stack_trace = ''
-        job.cancel_requested = False
-        job.runner_id = None
-        job.started_at = None
-        job.finished_at = None
+        from mojo.apps.jobs.models import Job, JobEvent
 
-        # Set run_at if delay specified
-        if delay:
-            job.run_at = timezone.now() + timedelta(seconds=int(delay))
-        else:
-            job.run_at = None
+        # Once-only: a live replacement (a list of them for a fanned-out
+        # broadcast) blocks another retry. One that itself ended terminal
+        # does not — the newest id overwrites retried_as below.
+        prior = job.metadata.get('retried_as')
+        if prior:
+            prior_ids = prior if isinstance(prior, list) else [prior]
+            if Job.objects.filter(pk__in=prior_ids).exclude(
+                    status__in=('failed', 'canceled', 'expired')).exists():
+                return {
+                    'status': False,
+                    'error': f'Job already retried as {prior} — retry that job instead',
+                    'new_job_id': prior
+                }
 
-        job.save()
-
-        # Re-publish to Redis
         try:
-            from mojo.apps.jobs import publish
+            from mojo.apps.jobs import publish, JOBS_DEFAULT_EXPIRES_SEC
 
-            # Re-publish the job
+            delay_seconds = int(delay) if delay else 0
+            if delay_seconds < 0:
+                return {'status': False, 'error': 'delay must be zero or more seconds'}
+
+            # publish() derived the original's expires_at from the same `now`
+            # as `created`, so their difference is the expires_in the publisher
+            # chose — publishers size that window to their max_retries, and
+            # the replacement inherits that budget.
+            lifetime = JOBS_DEFAULT_EXPIRES_SEC
+            if job.expires_at:
+                lifetime = max(lifetime, int((job.expires_at - job.created).total_seconds()))
+
+            # Immediate mirror on purpose: inside a transaction publish() would
+            # defer the mirror and swallow its failure, and a manual retry that
+            # reports success for a job that never queued is the worst outcome.
             new_job_id = publish(
                 func=job.func,
                 payload=job.payload,
                 channel=job.channel,
-                run_at=job.run_at,
+                delay=delay_seconds or None,
                 broadcast=job.broadcast,
                 max_retries=job.max_retries,
                 backoff_base=job.backoff_base,
                 backoff_max=job.backoff_max_sec,
-                expires_at=job.expires_at,
+                expires_in=lifetime + delay_seconds,
                 max_exec_seconds=job.max_exec_seconds
             )
+            new_ids = new_job_id if isinstance(new_job_id, list) else [new_job_id]
+
+            # Back-link, only while the replacement's metadata is still empty:
+            # a fast runner may already have claimed it, and the engine saves
+            # the handler's in-memory metadata on completion — an unconditional
+            # update here could erase handler output. Losing the back-link in
+            # that race is fine; the retry event below is the authoritative link.
+            Job.objects.filter(pk__in=new_ids, metadata={}).update(
+                metadata={'retried_from': job.id}, modified=timezone.now())
+
+            job.metadata['retried_as'] = new_job_id
+            job.save(update_fields=['metadata', 'modified'])
 
             # Record event
-            from mojo.apps.jobs.models import JobEvent
             JobEvent.objects.create(
                 job=job,
                 channel=job.channel,
@@ -186,7 +221,8 @@ class JobActionsService:
                 details={
                     'retry_requested': True,
                     'new_job_id': new_job_id,
-                    'delay': delay
+                    'delay': delay,
+                    'previous_status': job.status
                 }
             )
 

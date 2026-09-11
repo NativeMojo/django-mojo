@@ -207,7 +207,11 @@ class Job(models.Model, MojoModel):
 
     def on_action_retry_request(self, value):
         """
-        Retry this failed/cancelled job via REST API action.
+        Retry this failed/canceled/expired job via REST API action.
+
+        Publishes a replacement with a fresh lifetime; this row stays a
+        terminal record and gains metadata['retried_as'] naming it. Refused
+        while a previous replacement is still live.
 
         Args:
             value: Can be boolean True or dict with 'delay' key for delayed retry
