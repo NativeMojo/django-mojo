@@ -87,7 +87,7 @@ Users can update any of the following fields on their own record:
 | `first_name` | Scanned for inappropriate content (advisory — flagged and allowed, not rejected) |
 | `last_name` | Scanned for inappropriate content (advisory — flagged and allowed, not rejected) |
 | `phone_number` | First-time set only — see [Phone Number](#5-phone-number) for replacing an existing number |
-| `dob` | Date of birth (`YYYY-MM-DD`). Changing this resets `is_dob_verified` to `false` |
+| `dob` | **First-time set only** (`YYYY-MM-DD`) — once a date of birth is stored it cannot be changed, cleared or re-set by the account owner; see below |
 | `metadata` | Free-form JSON; app-defined |
 | `avatar` | File ID from a completed upload — see [Avatar](#2-avatar) |
 
@@ -99,6 +99,7 @@ Fields **not** writable by the account owner:
 | `username` | Use `POST /api/auth/username/change` — see [Username Change](#12-username-change) |
 | `is_email_verified` | Internal token flows only |
 | `is_phone_verified` | Internal token flows only |
+| `dob` (change, clear or re-set once stored) | Admin tier (`users` / `manage_users` / superuser). Date of birth is an eligibility record on age-gated deployments, not a preference — a correction is a support operation and is audit-logged. Re-posting the **unchanged** value is a `200` no-op, so round-tripping the user object is safe |
 | `is_dob_verified` | System-only — never REST-writable; reset automatically when `dob` changes |
 | `is_active` | Manager / superuser |
 | `permissions` | Manager with `manage_users` |

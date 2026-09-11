@@ -112,6 +112,8 @@ detaches the relation without deleting the File.
 | `requires_mfa` | Admin tier |
 | `email`, `username`, `phone_number` (replace) | Admin tier |
 | `phone_number` (clear or first-set) | Anyone with edit access |
+| `dob` (change, clear or re-set once stored) | Admin tier — audit-logged as `dob:changed`; re-posting the unchanged value is a `200` no-op |
+| `dob` (first set, when none is stored) | Anyone with edit access |
 | `is_active`, `org`, `org_id` | Admin tier |
 | `permissions` (most keys) | Admin tier (matching `USER_PERMS_PROTECTION` rules) |
 | `new_password` (admin reset) | Admin tier — no `current_password` needed |

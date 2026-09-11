@@ -12,6 +12,7 @@ from mojo.apps.account.utils.jwtoken import JWToken
 from mojo.apps import metrics
 from .device import UserDevice
 from objict import objict
+import datetime
 import uuid
 
 _USER_ADMIN = ["users", "manage_users"]
@@ -43,6 +44,27 @@ USER_LAST_ACTIVITY_FREQ = settings.get_static("USER_LAST_ACTIVITY_FREQ", 300)
 # which is a stronger guarantee than a permission check.
 # is_superuser and is_staff are also superuser-only via their dedicated setters.
 SUPERUSER_ONLY_FIELDS = frozenset(("is_dob_verified",))
+
+
+def _coerce_dob(value):
+    """Normalize a REST-posted date of birth to a `datetime.date` (or None).
+
+    The generic DateField branch in on_rest_save_field runs a string through
+    dates.parse_datetime, which yields a tz-aware datetime — so a DateField
+    would hold a datetime during the pre-save hook and an identical re-post
+    would still register as a change. Doing the parse here, in the setter,
+    means the change record compares date to date.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    try:
+        return datetime.date.fromisoformat(str(value).strip())
+    except ValueError:
+        raise merrors.ValueException("Invalid date of birth")
 
 # Fields that require any admin tier — `users` (domain category), `manage_users`
 # (strict admin), or superuser. `users` and `manage_users` are treated as
@@ -687,6 +709,12 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             raise merrors.ValueException(f"Invalid phone number: {value}")
         self.phone_number = normalized
 
+    def set_dob(self, value):
+        parsed = _coerce_dob(value)
+        if parsed is not None and parsed > dates.utcnow().date():
+            raise merrors.ValueException("Invalid date of birth")
+        self.dob = parsed
+
     def validate_email(self):
         import re
         if not self.email:
@@ -1025,6 +1053,17 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             if old_phone and self.phone_number:
                 raise merrors.PermissionDeniedException(
                     "Use the phone change flow to update an existing phone number")
+        if "dob" in changed_fields and not admin_caller:
+            # Date of birth is an eligibility field on age-gated deployments, not a
+            # profile preference. Once a row HAS one, only an admin may correct it —
+            # change, clear and re-set are all refused. Setting one for the first
+            # time (stored value NULL) stays open for deployments that collect DOB
+            # after signup. Mirrors the phone_number block above.
+            if changed_fields.get("dob"):
+                raise merrors.PermissionDeniedException(
+                    "Date of birth cannot be changed after registration",
+                    branch="user.dob_immutable",
+                    event_type="edit_permission_denied")
         if "password" in changed_fields:
             raise merrors.PermissionDeniedException("You are not allowed to change password")
         if "new_password" in changed_fields:
@@ -1039,6 +1078,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if "phone_number" in changed_fields:
             old_phone = changed_fields.get("phone_number")
             self.log(kind="phone:changed", log=f"{old_phone} to {self.phone_number}")
+        if "dob" in changed_fields:
+            # After the guard above the only non-create writer that reaches this
+            # is an admin, so this line is the compliance record for a correction.
+            self.log(kind="dob:changed", log=f"{changed_fields['dob']} to {self.dob}")
         if "is_active" in changed_fields:
             if not self.is_active:
                 metrics.record("user_deactivated", category="user", min_granularity="hours")

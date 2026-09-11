@@ -24,7 +24,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 | `is_phone_verified` | BooleanField | Phone number verified flag |
 | `requires_mfa` | BooleanField | MFA required at login (superuser-only writable) |
 | `is_dob_verified` | BooleanField | DOB verified flag (system-only, never REST-writable) |
-| `dob` | DateField (nullable) | Date of birth — PII, cleared by `pii_anonymize()` |
+| `dob` | DateField (nullable) | Date of birth — PII, cleared by `pii_anonymize()`; immutable to the account holder once set (admin tier corrects) |
 | `permissions` | JSONField | Key-based permission dict |
 | `metadata` | JSONField | Arbitrary user metadata. The `metadata["protected"]` sub-key is system-only — see below. |
 | `org` | FK → Group | Primary organization/tenant |
@@ -196,6 +196,33 @@ Gated by `_handle_existing_user_pre_save`:
 
 Phone clear (setting `null`) and first-set (when the user has none) are
 allowed for anyone with edit access.
+
+### Date of Birth (`dob`) — immutable to the account holder once set
+
+Also gated in `_handle_existing_user_pre_save`, mirroring the phone block.
+On an age-gated deployment `dob` is the eligibility record — it is what a
+downstream KYC provider is told at customer creation — so a self-edit after
+registration is an age-gate bypass, not a profile tweak.
+
+- **First set** (stored value `NULL`) — allowed for anyone with edit access,
+  so a deployment that collects DOB after signup keeps working.
+- **Change, clear (`null` / `""`) or re-set once a value is stored** — admin
+  tier only. A non-admin write raises `PermissionDeniedException` with
+  `branch="user.dob_immutable"` / `event_type="edit_permission_denied"`.
+- **Identical re-post** — a `200` no-op. The `set_dob` setter normalizes the
+  posted value to a `datetime.date` *before* the change is recorded (the
+  generic DateField path would hand the hook a tz-aware `datetime`, so every
+  post would register as a change), which is also why an unchanged post does
+  not reset `is_dob_verified`. `set_dob` rejects an unparseable or future
+  date with `ValueException` (400).
+- **Admin correction** is audited as `dob:changed` with before/after, and the
+  existing `is_dob_verified = False` reset in `on_rest_pre_save` still fires.
+
+The gate is the row's own stored value, not a setting — no per-deployment
+configuration. `pii_anonymize()` clears `dob` through a direct
+`save(update_fields=...)`, never REST, so erasure is unaffected. Do **not**
+gate on `is_dob_verified`: nothing in the framework ever sets it to `True`
+and it is in `NO_SAVE_FIELDS`, so such a gate would be permanently open.
 
 ## Protected Field Setters
 
