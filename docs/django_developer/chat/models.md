@@ -72,7 +72,9 @@ A single message in a room.
   [Rules](rules.md)); Python `default=list`, persistent `db_default=[]`.
   The migration gives existing rows null score/empty reasons without rescoring.
   Old writers omitting both columns still insert successfully after migration
-  or an application-only rollback.
+  or an application-only rollback. These defaults protect inserts only:
+  old edits leave existing scores/reasons untouched. Follow the
+  [writer rollout and rollback procedure](rules.md#writer-rollout-and-rollback).
 
 All three moderation fields are server-owned (`NO_SAVE_FIELDS`) and included
 in both `list` and `default` REST graphs, history, send/edit acks and events.

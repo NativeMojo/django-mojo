@@ -268,11 +268,11 @@ Bundled in `mojo/helpers/content_guard/data/`:
 
 ## Caller Responsibility for "block" Decisions
 
-content_guard returns `decision="block"` deterministically based on its rules. **What the caller does with that decision is the caller's choice.** A hard rejection is appropriate for usernames and text moderation surfaces, but may not be correct for display names.
+content_guard returns `decision="block"` deterministically based on its rules. **What the caller does with that decision is the caller's choice.** Username, comment and contact-form callers reject blocked content; display names and chat use advisory handling.
 
-`User.validate_name_fields` treats a name "block" as **advisory**: it logs the flagged name and allows the save instead of raising an error. This is intentional — content_guard's substring matching over-blocks legitimate real names that merely contain a high-severity substring (e.g. Matsushita, Harshita, Scunthorpe). The scoring logic inside content_guard is unchanged; only this specific caller's response to "block" differs.
+`User.validate_name_fields` treats a name "block" as **advisory**: it logs the flagged name and allows the save instead of raising an error. This is intentional — content_guard's substring matching over-blocks legitimate real names that merely contain a high-severity substring (e.g. Matsushita, Harshita, Scunthorpe). The scoring logic inside content_guard is unchanged.
 
-Other callers (comment/chat/contact_form moderation) continue to hard-block on `decision="block"` and are unaffected.
+Comment and contact-form moderation continue to hard-block on `decision="block"`. [Chat moderation](../chat/rules.md) maps `block` to advisory `masked`, preserving the real body, reasons and score at every severity; consumers choose what to hide.
 
 ---
 

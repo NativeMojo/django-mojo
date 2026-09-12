@@ -70,6 +70,26 @@ before enabling advisory posting: old pages may render bodies automatically.
 The framework supplies no REST send endpoint or notification preview producer;
 those adapters belong to the host application.
 
+### Writer rollout and rollback
+
+Mixed-version chat writers are not supported. Drain all old writers before
+enabling new scored sends or edits: an old edit updates body/decision without
+replacing score/reasons, leaving a stale numeric score authoritative in clients.
+
+Before an application-only rollback, stop all chat writers and invalidate
+existing moderation scores/reasons while retaining bodies and decisions:
+
+```python
+from mojo.apps.chat.models import ChatMessage
+
+ChatMessage.objects.all().update(moderation_score=None, moderation_reasons=[])
+```
+
+Keep the additive schema in place, then start the old application. Old edits
+now retain null scores and use decision fallback. After re-upgrade, these rows
+remain unscored until edited by a new writer; history is not rescored. Before
+enabling new writers again, drain the old writers as for the initial rollout.
+
 ## Card Payloads — `check_payload_rules`
 
 ```python

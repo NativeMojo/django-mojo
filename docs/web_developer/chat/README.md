@@ -354,6 +354,13 @@ the consumer display/notification handling before enabling advisory posting,
 because old pages may render those bodies automatically. The framework provides
 no REST send or notification adapter; those are host application integrations.
 
+Mixed-version chat writers are unsupported. Backend rollout must drain old
+writers before enabling scoring. Application rollback requires stopping writers
+and clearing every message's score/reasons to null/[] before old writers resume;
+otherwise old edits can leave a stale numeric score. Clients use decision
+fallback for these rows, including after re-upgrade until a newly scored edit.
+See the [backend rollout procedure](../../django_developer/chat/rules.md#writer-rollout-and-rollback).
+
 Permission checks, rate limits, kind/metadata validation and explicit room
 URL/phone/media/length rules still refuse normally. For older installations,
 continue handling their existing `{"type":"error","error":"Message blocked
