@@ -60,7 +60,7 @@ def _resolve_group(request):
     # 2. Query param fallback. Effective activeness (DM-048): a group under a
     # deactivated ancestor must not brand the page either — matches the
     # hostname path above (resolve_by_auth_domain verifies the chain).
-    group_uuid = request.GET.get('group_uuid', '')
+    group_uuid = getattr(request, 'DATA', {}).get('group_uuid', '')
     if group_uuid:
         try:
             group = Group.objects.filter(uuid=group_uuid, is_active=True).first()
@@ -95,9 +95,6 @@ def on_login_page(request):
     otherwise be destroyed before any client-side handler could see it.
     """
     from mojo.apps.account.services import token_landing
-    from mojo.apps.account.services.bouncer.learner import check_signature_cache
-    from mojo.apps.account.services.bouncer.environment import EnvironmentService
-    from mojo.apps.account.services.bouncer.scoring import RiskScorer, ScoringContext
 
     if DISABLE_LOGIN:
         from django.http import Http404
@@ -107,62 +104,7 @@ def on_login_page(request):
     if landing is not None:
         return landing
 
-    group = _resolve_group(request)
-    ua = request.user_agent
-    fingerprint_id = request.DATA.get('fp', '')
-
-    # 1. Redis signature cache — fastest check, no scoring
-    matched, sig_type, sig_value = check_signature_cache(request.ip, ua, fingerprint_id)
-    if matched:
-        logger.info(f"bouncer: pre-screen blocked by signature {sig_type}:{sig_value} ip={request.ip}")
-        try:
-            metrics.record("bouncer:pre_screen_blocks", category="bouncer")
-        except Exception:
-            pass
-        return _serve_decoy(request)
-
-    # 2. Pass cookie — known good device, skip challenge
-    pass_cookie = request.COOKIES.get('mbp', '')
-    if pass_cookie:
-        cookie_muid = verify_pass_cookie(pass_cookie, request.ip)
-        if cookie_muid:
-            return _serve_login(request, group=group)
-
-    # 3. Server-side pre-screen (headers + geo)
-    geo_ip = _geolocate(request.ip)
-    server_signals = EnvironmentService.analyze_request(request, geo_ip)
-    # Pre-screen scoring: server signals only (headers + geo).
-    # Don't pass request — IdentityAnalyzer would penalize missing cookies
-    # that haven't been set yet (first visit). Identity signals are for the
-    # assess API call after JS has run, not the page view.
-    context = ScoringContext(
-        client_signals={},
-        server_signals=server_signals,
-        device_session=None,
-        page_type='login',
-        request=None,
-    )
-    result = RiskScorer.score(context)
-
-    if result.decision == 'block':
-        logger.info(f"bouncer: pre-screen blocked ip={request.ip} score={result.score}")
-        try:
-            metrics.record("bouncer:pre_screen_blocks", category="bouncer")
-        except Exception:
-            pass
-        return _serve_decoy(request)
-
-    # 4. Serve challenge page — tier based on pre-screen risk
-    #    Tier 1 (low/unknown): static button, fixed position
-    #    Tier 2 (medium):      button shifts to a few predefined spots
-    #    Tier 3 (high):        floating/moving button
-    if result.score >= 40:
-        challenge_tier = 3
-    elif result.score >= 20:
-        challenge_tier = 2
-    else:
-        challenge_tier = 1
-    return _serve_challenge(request, challenge_tier, page_type='login', group=group)
+    return _hosted_page(request, 'login')
 
 
 # ---------------------------------------------------------------------------
@@ -177,59 +119,12 @@ _ABS_REGISTER_PATH = f'/{_REGISTER_PATH}'
 @md.public_endpoint("Bouncer-gated registration page")
 def on_register_page(request):
     """Same bouncer gate as login — serves challenge, full page, or decoy."""
-    from mojo.apps.account.services.bouncer.learner import check_signature_cache
-    from mojo.apps.account.services.bouncer.environment import EnvironmentService
-    from mojo.apps.account.services.bouncer.scoring import RiskScorer, ScoringContext
 
     if DISABLE_LOGIN:
         from django.http import Http404
         raise Http404("Page not found")
 
-    group = _resolve_group(request)
-    ua = request.user_agent
-    fingerprint_id = request.DATA.get('fp', '')
-
-    matched, sig_type, sig_value = check_signature_cache(request.ip, ua, fingerprint_id)
-    if matched:
-        logger.info(f"bouncer: pre-screen blocked by signature {sig_type}:{sig_value} ip={request.ip}")
-        try:
-            metrics.record("bouncer:pre_screen_blocks", category="bouncer")
-        except Exception:
-            pass
-        return _serve_decoy(request)
-
-    pass_cookie = request.COOKIES.get('mbp', '')
-    if pass_cookie:
-        cookie_muid = verify_pass_cookie(pass_cookie, request.ip)
-        if cookie_muid:
-            return _serve_login(request, page_mode='register', group=group)
-
-    geo_ip = _geolocate(request.ip)
-    server_signals = EnvironmentService.analyze_request(request, geo_ip)
-    context = ScoringContext(
-        client_signals={},
-        server_signals=server_signals,
-        device_session=None,
-        page_type='registration',
-        request=None,
-    )
-    result = RiskScorer.score(context)
-
-    if result.decision == 'block':
-        logger.info(f"bouncer: pre-screen blocked ip={request.ip} score={result.score}")
-        try:
-            metrics.record("bouncer:pre_screen_blocks", category="bouncer")
-        except Exception:
-            pass
-        return _serve_decoy(request)
-
-    if result.score >= 40:
-        challenge_tier = 3
-    elif result.score >= 20:
-        challenge_tier = 2
-    else:
-        challenge_tier = 1
-    return _serve_challenge(request, challenge_tier, page_type='registration', group=group)
+    return _hosted_page(request, 'registration')
 
 
 # ---------------------------------------------------------------------------
@@ -446,9 +341,10 @@ def _auth_context(request, group=None, include_registration_extras=False):
     return context
 
 
-def _serve_login(request, page_mode='login', group=None):
+def _serve_login(request, page_mode='login', group=None, hosted_config=None):
     ctx = _auth_context(
         request, group=group, include_registration_extras=True)
+    ctx['hosted_bouncer'] = hosted_config
     ctx['page_mode'] = page_mode
     if page_mode == 'register':
         ctx['page_title'] = 'Create Account'
@@ -459,7 +355,7 @@ def _serve_login(request, page_mode='login', group=None):
     return _render_with_csp(request, 'account/login.html', ctx)
 
 
-def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
+def _serve_challenge(request, challenge_tier=1, page_type='login', group=None, hosted_config=None):
     from mojo.apps.account.services import auth_config
     from mojo.apps.account.services import register_schema
 
@@ -469,7 +365,8 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
         'btn_seed': secrets.token_hex(6),
         'challenge_tier': challenge_tier,
     }
-    api_base = settings.get_static('BOUNCER_API_BASE', '')
+    api_base = ''
+    # Hosted recovery always verifies cookies on the page's own origin.
     # After challenge, redirect back to the page that sent them here
     if page_type == 'registration':
         redirect_path = settings.get_static('BOUNCER_REGISTER_PATH', 'register')
@@ -506,6 +403,11 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
             request_data, register_schema.extra_field_names(extra_fields))
         for key, value in extra_values.items():
             fwd_params.setdefault(key, value)
+    if page_type == 'public_message':
+        from mojo.apps.account.services import public_message
+        kind = request_data.get('kind', '')
+        if public_message.get_kind(kind) is not None:
+            fwd_params['kind'] = kind
     group_qs = f'?{urlencode(fwd_params)}' if fwd_params else ''
     # Challenge page: default branding from settings, opt-in override per group
     cfg = auth_config.resolve_auth_config(group=group, request=request)
@@ -514,8 +416,15 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
         'BOUNCER_CHALLENGE_LOGO_URL', _DEFAULT_CHALLENGE_LOGO, group=group)
     brand_name = theme.app_title or settings.get(
         'BOUNCER_CHALLENGE_BRAND', _DEFAULT_CHALLENGE_BRAND, group=group)
-    return render(request, 'account/bouncer_challenge.html', {
+    if hosted_config is None:
+        from mojo.apps.account.services.bouncer.hosted_gate import descriptor
+        hosted_config = descriptor(request, page_type, group)
+    hosted_config = {**hosted_config, 'redirect_url': f'/{redirect_path}{group_qs}',
+                     'page_type': page_type}
+    ctx = {
         'render_ctx': render_ctx,
+        'csp_nonce': secrets.token_urlsafe(24),
+        'hosted_bouncer': hosted_config,
         'api_base': api_base,
         'login_url': f'/{redirect_path}{group_qs}',
         'page_type': page_type,
@@ -524,16 +433,31 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
         'auth_provider_name': theme.auth_provider_name or 'DJANGO MOJO',
         'accent_color': auth_config.normalize_accent_color(theme.accent_color),
         'group_uuid': group_uuid,
-    })
+    }
+    return _render_with_csp(request, 'account/bouncer_challenge.html', ctx,
+                            frame_ancestors="" if page_type == 'public_message' else "'none'")
 
 
-def _serve_decoy(request):
-    api_base = settings.get_static('BOUNCER_API_BASE', '')
-    return render(request, 'account/bouncer_decoy.html', {
-        'api_base': api_base,
-        'logo_url': settings.get_static('BOUNCER_LOGO_URL', ''),
-        'accent_color': settings.get_static('BOUNCER_ACCENT_COLOR', ''),
-    })
+def _serve_decoy(request, *, selected=False, group=None):
+    ctx = _auth_context(request, group=group)
+    ctx['selected_decoy'] = selected
+    return _render_with_csp(request, 'account/bouncer_decoy.html', ctx)
+
+
+def _hosted_page(request, purpose):
+    from mojo.apps.account.services.bouncer import hosted_gate
+
+    group = _resolve_group(request)
+    action, config = hosted_gate.page_check(request, purpose, group)
+    if action == 'decoy':
+        return _serve_decoy(request, selected=True, group=group)
+    if action == 'allow':
+        if purpose == 'public_message':
+            return _serve_contact(request, kind=request.DATA.get('kind', ''),
+                                  group=group, hosted_config=config)
+        return _serve_login(request, page_mode='register' if purpose == 'registration' else 'login',
+                            group=group, hosted_config=config)
+    return _serve_challenge(request, page_type=purpose, group=group, hosted_config=config)
 
 
 # ---------------------------------------------------------------------------
@@ -548,66 +472,19 @@ _ABS_CONTACT_PATH = f'/{_CONTACT_PATH}'
 @md.public_endpoint("Bouncer-gated public message (contact/support) page")
 def on_contact_page(request):
     """Same bouncer gate as login/register — serves challenge, full page, or decoy."""
-    from mojo.apps.account.services.bouncer.learner import check_signature_cache
-    from mojo.apps.account.services.bouncer.environment import EnvironmentService
-    from mojo.apps.account.services.bouncer.scoring import RiskScorer, ScoringContext
 
     if DISABLE_LOGIN:
         from django.http import Http404
         raise Http404("Page not found")
 
-    group = _resolve_group(request)
-    ua = request.user_agent
-    fingerprint_id = request.DATA.get('fp', '')
-    kind = request.DATA.get('kind', '')
-
-    matched, sig_type, sig_value = check_signature_cache(request.ip, ua, fingerprint_id)
-    if matched:
-        logger.info(f"bouncer: pre-screen blocked by signature {sig_type}:{sig_value} ip={request.ip}")
-        try:
-            metrics.record("bouncer:pre_screen_blocks", category="bouncer")
-        except Exception:
-            pass
-        return _serve_decoy(request)
-
-    pass_cookie = request.COOKIES.get('mbp', '')
-    if pass_cookie:
-        cookie_muid = verify_pass_cookie(pass_cookie, request.ip)
-        if cookie_muid:
-            return _serve_contact(request, kind=kind, group=group)
-
-    geo_ip = _geolocate(request.ip)
-    server_signals = EnvironmentService.analyze_request(request, geo_ip)
-    context = ScoringContext(
-        client_signals={},
-        server_signals=server_signals,
-        device_session=None,
-        page_type='public_message',
-        request=None,
-    )
-    result = RiskScorer.score(context)
-
-    if result.decision == 'block':
-        logger.info(f"bouncer: pre-screen blocked ip={request.ip} score={result.score}")
-        try:
-            metrics.record("bouncer:pre_screen_blocks", category="bouncer")
-        except Exception:
-            pass
-        return _serve_decoy(request)
-
-    if result.score >= 40:
-        challenge_tier = 3
-    elif result.score >= 20:
-        challenge_tier = 2
-    else:
-        challenge_tier = 1
-    return _serve_challenge(request, challenge_tier, page_type='public_message', group=group)
+    return _hosted_page(request, 'public_message')
 
 
-def _serve_contact(request, kind='', group=None):
+def _serve_contact(request, kind='', group=None, hosted_config=None):
     from mojo.apps.account.services import public_message as svc
 
     ctx = _auth_context(request, group=group)
+    ctx['hosted_bouncer'] = hosted_config
     kind_ctx = svc.render_context_for_kind(kind)
     ctx.update(kind_ctx)
     ctx['page_title'] = kind_ctx['kind_title']

@@ -41,6 +41,7 @@
 
     var _baseURL = '';
     var _endpoints = {};
+    var _bouncerTokenProvider = null;
 
     var KEYS = {
         access:  'access_token',
@@ -128,6 +129,16 @@
                 if (!res.ok) throw json;
                 return json;
             });
+        });
+    }
+
+    function protectedPost(url, body, purpose) {
+        var payload = _withDevice(body);
+        if (!_bouncerTokenProvider) return post(url, payload);
+        return MojoAuth.getBouncerToken(purpose).then(function (token) {
+            if (!token) throw new Error('Verification is unavailable. Reload the page to continue.');
+            payload.bouncer_token = token;
+            return post(url, payload);
         });
     }
 
@@ -285,11 +296,18 @@
          * @param {object} config
          * @param {string} config.baseURL  - API base URL e.g. 'https://api.example.com'
          * @param {object} [config.endpoints] - Override any default endpoint paths
+         * @param {function} [config.bouncerTokenProvider] - Async single-use token provider by purpose
          */
         init: function (config) {
             if (!config || !config.baseURL) throw new Error('MojoAuth.init: baseURL is required');
             _baseURL = config.baseURL;
             _endpoints = Object.assign({}, config.endpoints || {});
+            _bouncerTokenProvider = typeof config.bouncerTokenProvider === 'function' ? config.bouncerTokenProvider : null;
+        },
+
+        getBouncerToken: function (purpose) {
+            if (!_bouncerTokenProvider) return Promise.resolve(_bouncerToken());
+            return Promise.resolve().then(function () { return _bouncerTokenProvider(purpose); });
         },
 
         // -----------------------------------------------------------------------
@@ -316,7 +334,7 @@
         login: function (username, password, options) {
             var payload = { username: username, password: password };
             if (options && options.group_uuid) payload.group_uuid = options.group_uuid;
-            return post(ep('login'), _withDevice(payload))
+            return protectedPost(ep('login'), payload, 'login')
                 .then(function (resp) {
                     var d = resp.data || resp;
                     // MFA challenge — tokens not issued yet, return raw for caller to handle
@@ -344,7 +362,7 @@
          * @returns {Promise<object>}
          */
         register: function (payload) {
-            return post(ep('register'), _withDevice(Object.assign({}, payload || {})))
+            return protectedPost(ep('register'), Object.assign({}, payload || {}), 'registration')
                 .then(function (resp) {
                     var d = resp.data || resp;
                     if (d.requires_verification) return d;
@@ -366,7 +384,7 @@
          * @returns {Promise<{session_token, expires_in}>}
          */
         startPhoneRegister: function (phone) {
-            return post(ep('phoneRegisterStart'), _withDevice({ phone: phone }))
+            return protectedPost(ep('phoneRegisterStart'), { phone: phone }, 'registration')
                 .then(function (resp) { return resp.data || resp; });
         },
 

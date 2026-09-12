@@ -7,7 +7,11 @@
   {% if accent_color %}
   <style>:root{--ma-primary:{{ accent_color }};}</style>
   {% endif %}
-  <link rel="stylesheet" href="{% load static %}{% static 'account/mojo-auth.css' %}">
+  <link rel="stylesheet" href="{{ api_base }}/api/account/static/mojo-auth.css">
+  <style>
+    .mbg-field{display:block;margin:18px 0}.mbg-field input{display:block;width:100%;margin-top:6px;padding:12px;font:inherit;border:1px solid #aab3c5;border-radius:8px}
+    #mbg-decoy-form fieldset{border:0;padding:0;margin:0}#mbg-decoy-form button{width:100%;padding:12px;font:inherit;cursor:pointer}
+  </style>
 </head>
 <body>
   <div class="ma-page">
@@ -19,10 +23,14 @@
       {% endif %}
 
       <div id="view-signin" class="ma-view">
+        {% if selected_decoy %}
+        {% include "account/_bouncer_selected_decoy.html" %}
+        <details><summary>Need help?</summary><p>Contact the site operator through their usual support channel. You do not need to enter a password to get help.</p></details>
+        {% else %}
         <h1 class="ma-title">Sign In</h1>
         <p id="ma-message" class="ma-message" style="display:none"></p>
 
-        <form id="decoy-form" autocomplete="on">
+        <form id="decoy-form" autocomplete="on" method="post">
           <div class="ma-field">
             <label class="ma-label" for="username">Username or Email</label>
             <input class="ma-input" type="text" id="username" name="username"
@@ -42,11 +50,16 @@
         <div class="ma-footer">
           <a href="#" class="ma-link">Forgot password?</a>
         </div>
+        {% endif %}
       </div>
     </div>
   </div>
 
-  <script>
+  {% if selected_decoy %}
+  <script nonce="{{ csp_nonce }}" src="/api/account/static/mojo-hosted-bouncer.js"></script>
+  <script nonce="{{ csp_nonce }}">MojoHostedBouncer.mountDecoy(document);</script>
+  {% else %}
+  <script nonce="{{ csp_nonce }}">
   (function() {
     var form = document.getElementById('decoy-form');
     var msg = document.getElementById('ma-message');
@@ -84,5 +97,6 @@
     });
   })();
   </script>
+  {% endif %}
 </body>
 </html>

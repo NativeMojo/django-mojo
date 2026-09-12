@@ -194,19 +194,21 @@ def refresh_sig_cache():
     redis.set(SIG_CACHE_KEY, json.dumps(sigs_by_type), ex=3600)
 
 
-def check_signature_cache(request_ip, user_agent='', fingerprint_id=''):
+def check_signature_cache(request_ip, user_agent='', fingerprint_id='', *, redis=None, strict=False):
     """
     Check Redis signature cache for pre-screen blocks.
     Returns (matched, sig_type, value) or (False, None, None).
     Fast path — O(1) lookup before any scoring runs.
     """
-    redis = get_connection()
+    redis = get_connection() if redis is None else redis
     try:
         raw = redis.get(SIG_CACHE_KEY)
         if not raw:
             return False, None, None
         sigs = json.loads(raw)
     except Exception:
+        if strict:
+            raise
         return False, None, None
 
     if request_ip and 'ip' in sigs:

@@ -66,6 +66,10 @@
 
     {{ login_methods|json_script:"mat-login-methods" }}
     <script nonce="{{ csp_nonce }}" src="{{ api_base }}/api/account/static/mojo-auth.js"></script>
+    {% if hosted_bouncer %}
+    {{ hosted_bouncer|json_script:"mat-hosted-bouncer" }}
+    <script nonce="{{ csp_nonce }}" src="/api/account/static/mojo-hosted-bouncer.js"></script>
+    {% endif %}
     {% if admin_source_session %}<script nonce="{{ csp_nonce }}" src="/api/account/static/admin-source-session.js"></script>{% endif %}
     <script nonce="{{ csp_nonce }}">
     (function () {
@@ -302,7 +306,9 @@
         }
 
         // Init MojoAuth — API_BASE defaults to current origin (same-server API)
-        MojoAuth.init({ baseURL: API_BASE });
+        var bouncerConfig = document.getElementById('mat-hosted-bouncer');
+        MojoAuth.init({ baseURL: API_BASE, bouncerTokenProvider: bouncerConfig
+            ? MojoHostedBouncer.tokenProvider(JSON.parse(bouncerConfig.textContent)) : null });
 
         // Session check — skipped on the passkey enrollment page, where the
         // visitor is already authenticated and must not be auto-redirected.

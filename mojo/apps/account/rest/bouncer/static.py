@@ -69,6 +69,12 @@ def on_mojo_bouncer_js(request):
     return _serve_static('mojo-bouncer.js')
 
 
+@md.GET('account/static/mojo-hosted-bouncer.js')
+@md.public_endpoint("Hosted recovery controls and scoped form-token provider")
+def on_mojo_hosted_bouncer_js(request):
+    return _serve_static('mojo-hosted-bouncer.js')
+
+
 @md.GET('account/static/mojo-bouncer.css')
 @md.public_endpoint("Serves mojo-bouncer.css — bouncer overlay stylesheet")
 def on_mojo_bouncer_css(request):

@@ -71,6 +71,10 @@ def on_bouncer_assess(request):
     On allow/monitor: returns a signed bouncer token + sets HttpOnly pass cookie.
     On block: returns decision only, no token. Fires incident + learning job.
     """
+    if 'hosted_gate' in request.DATA:
+        from mojo.apps.account.services.bouncer import hosted_gate
+        return hosted_gate.assess(request)
+
     from mojo.apps.account.models.bouncer_device import BouncerDevice
     from mojo.apps.account.models.bouncer_signal import BouncerSignal
 
@@ -256,10 +260,10 @@ def _safe_signals(signals):
     return result
 
 
-def _set_pass_cookie(response, muid, ip):
+def _set_pass_cookie(response, muid, ip, *, issued_at=None):
     """Set a signed HttpOnly pass cookie so the bouncer gate is skipped next visit."""
     import time
-    issued = str(int(time.time()))
+    issued = str(int(time.time()) if issued_at is None else int(issued_at))
     ip_prefix = '.'.join(ip.split('.')[:3]) if ip else ''
     data = f"{muid}:{ip_prefix}:{issued}"
     sig = crypto_sign(data)[:16]
@@ -272,7 +276,7 @@ def _set_pass_cookie(response, muid, ip):
     cookie_domain = settings.get_static('BOUNCER_PASS_COOKIE_DOMAIN', '') or None
     response.set_cookie(
         'mbp', value,
-        max_age=ttl,
+        max_age=max(0, ttl - (int(time.time()) - int(issued))),
         httponly=True,
         secure=not settings.DEBUG,
         samesite='Lax',

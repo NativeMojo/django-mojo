@@ -71,8 +71,7 @@
         for (var i = 0; i < inputs.length; i++) {
             data[inputs[i].name] = inputs[i].value;
         }
-        var bt = (window.MojoAuth && window.MojoAuth.getBouncerToken) ? window.MojoAuth.getBouncerToken() : "";
-        if (bt) data.bouncer_token = bt;
+        if (window._matConfig && window._matConfig.groupUuid) data.group_uuid = window._matConfig.groupUuid;
         return data;
     }
 
@@ -81,11 +80,15 @@
         window._mat.hideMessage();
         window._mat.setLoading(submitBtn, true);
 
-        fetch(submitUrl, {
+        MojoAuth.getBouncerToken('public_message').then(function (token) {
+        var payload = collect();
+        if (token) payload.bouncer_token = token;
+        return fetch(submitUrl, {
             method: "POST",
             credentials: "include",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(collect()),
+            body: JSON.stringify(payload),
+        });
         })
         .then(function (resp) { return resp.json().then(function (body) { return { ok: resp.ok, status: resp.status, body: body }; }); })
         .then(function (r) {

@@ -164,6 +164,8 @@ def sensitive_body_label(request):
     method = str(getattr(request, "method", "") or "").upper()
     if path.startswith(f"{API_ROOT}/auth/"):
         return "account_auth"
+    if path == f"{API_ROOT}/account/bouncer/assess":
+        return "bouncer_assessment"
     if method == "POST" and path in (
             f"{API_ROOT}/login", f"{API_ROOT}/account/jwt/login",
             f"{API_ROOT}/refresh_token", f"{API_ROOT}/token/refresh",

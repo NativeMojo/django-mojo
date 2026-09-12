@@ -502,6 +502,41 @@ class IdentityAnalyzer(BaseSignalAnalyzer):
 
 
 # ---------------------------------------------------------------------------
+# Recovery credit is specific to these exact built-in classes. Plugins retain
+# their complete contribution even if they reuse an analyzer or signal name.
+# It is computed before clipping; never subtract credit from the public score.
+# New built-in signals are nonrecoverable until deliberately listed here.
+# ---------------------------------------------------------------------------
+
+_RECOVERABLE = {
+    EnvironmentAnalyzer: frozenset((
+        'chrome_runtime_missing', 'languages_empty', 'screen_zero',
+        'outer_size_zero', 'document_focus_never')),
+    BehaviorAnalyzer: frozenset((
+        'no_interaction', 'first_interaction_too_fast', 'rapid_click', 'mouse_straightness')),
+    GeoAnalyzer: frozenset(('geo_vpn', 'geo_tor', 'geo_proxy', 'geo_datacenter')),
+    HeaderAnalyzer: frozenset((
+        'header_missing_accept', 'header_missing_accept_language', 'signal_contradiction')),
+    HistoryAnalyzer: frozenset(('history_high_risk_device', 'history_high_event_count')),
+    GateChallengeAnalyzer: frozenset((
+        'gate_click_too_fast', 'gate_no_interaction_desktop', 'gate_excessive_attempts')),
+    IdentityAnalyzer: frozenset((
+        'muid_missing', 'msid_missing', 'mtab_missing', 'muid_duid_changed',
+        'concurrent_mtabs', 'msid_too_long')),
+}
+
+
+def recovery_contribution(analyzer_cls, contribution, triggered, *, weight=None):
+    weight = _weight if weight is None else weight
+    allowed = _RECOVERABLE.get(analyzer_cls, ())
+    positive = max(0, contribution)
+    credit = min(positive, sum(max(0, weight(s)) for s in set(triggered) if s in allowed))
+    history = 0
+    if analyzer_cls is HistoryAnalyzer and 'history_blocked_device' in triggered:
+        history = min(positive - credit, max(0, weight('history_blocked_device')))
+    return credit, history
+
+
 # Risk scorer
 # ---------------------------------------------------------------------------
 
@@ -515,27 +550,36 @@ class RiskScorer:
     """
 
     @classmethod
-    def score(cls, context):
+    def score(cls, context, *, analyzers=None):
         total = 0
+        recovery_credit = 0
+        historical_block = 0
+        analysis_failed = False
         all_triggered = []
         signal_scores = {}
 
-        for analyzer_cls in _ANALYZER_REGISTRY:
+        for analyzer_cls in (_ANALYZER_REGISTRY if analyzers is None else analyzers):
             try:
                 contribution, triggered = analyzer_cls.analyze(context)
                 total += contribution
                 all_triggered.extend(triggered)
                 signal_scores[analyzer_cls.name] = contribution
+                credit, history = recovery_contribution(analyzer_cls, contribution, triggered)
+                recovery_credit += credit
+                historical_block += history
             except Exception:
+                analysis_failed = True
                 logger.exception(f"bouncer: analyzer {analyzer_cls.name} failed")
 
-        total = min(total, 100)
-        decision = cls.decide(total, context.page_type)
+        score = min(total, 100)
+        decision = cls.decide(score, context.page_type)
         return ScoringResult(
-            score=total,
+            score=score,
             decision=decision,
             triggered_signals=all_triggered,
             signal_scores=signal_scores,
+            metadata={'uncapped_score': total, 'recovery_credit': recovery_credit,
+                      'historical_block': historical_block, 'analysis_failed': analysis_failed},
         )
 
     @classmethod
