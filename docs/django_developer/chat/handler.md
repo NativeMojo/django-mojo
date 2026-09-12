@@ -20,7 +20,8 @@ Flow:
    whitelists the kind, validates `metadata`, applies the rate limit, the room
    rules, the card payload rules and moderation, persists the row and publishes
    to `chat:5`
-6. Return ack with `message_id`, `room_id`, `kind`, `metadata`, `created`
+6. Return ack with `message_id`, `room_id`, `kind`, `metadata`, `created`,
+   `moderation_decision`, `moderation_reasons`, `moderation_score`
 
 `_handle_send` owns the frame shape, the membership checks and the `client_key`
 idempotency contract; everything from validation onward lives in the send
@@ -119,7 +120,11 @@ route can let a client write it directly. (`ChatMessage` has no
 **Ack and broadcast shape.** Both the `chat_message_ack` frame and the
 `chat_message` broadcast carry `kind` and `metadata`, so a client renders the
 message without a second fetch. The `client_key` echo described above is
-unchanged and rides on both.
+unchanged and rides on both. Both always carry the persisted
+`moderation_decision`, `moderation_reasons` and `moderation_score`, including
+`allow`/`[]`/`0` and unscored `null`. The single `_send_ack` builder covers
+fresh, retry and unique-constraint-race acks. Language scores, including
+`high_severity`, succeed; real non-language errors still echo valid keys.
 
 **Test seam.** `_handle_send(user, data, *, publisher=None)` takes an optional
 `publisher` callable with the same signature as `publish_topic(topic, payload)`.
@@ -133,9 +138,16 @@ production callers omit it and the realtime publisher is used.
 ```
 
 - Author or room admin can edit
-- Re-runs room rules and content_guard on new body
-- Sets `edited_at` timestamp
-- Publishes `chat_message_edited` event to room topic
+- Re-runs room rules and `check_moderation_scored` on the new body
+- Saves the real body, `edited_at` and decision/reasons/score together
+- Publishes `chat_message_edited` and returns `chat_edit_ack`; both include all
+  three moderation fields, including explicit `allow`/`[]`/`0` on clean edits
+- All language severities store; permission/room-rule refusal leaves body,
+  timestamps and moderation untouched and publishes nothing
+
+`_handle_edit(user, data, *, publisher=None)` has the same capture seam as send.
+Consumer display and notification behavior follows [Rules](rules.md); the
+framework never redacts the authorized body or rescales the classifier score.
 
 ### chat_flag — Flag a message (moderator)
 

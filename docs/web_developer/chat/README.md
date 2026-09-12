@@ -40,8 +40,8 @@ All require JWT authentication via `Authorization: Bearer <token>`.
 
 Pagination: pass `limit` (max 200) and `before` (message ID cursor).
 
-Each history row is `{id, user_id, body, kind, edited_at, moderation_decision, created,
-metadata, client_key}`. `client_key` carries the key on your own messages and is `null`
+Each history row is `{id, user_id, body, kind, edited_at, moderation_decision,
+moderation_reasons, moderation_score, created, metadata, client_key}`. `client_key` carries the key on your own messages and is `null`
 on everyone else's — but **do not treat that as privacy**: your key is broadcast to every
 room subscriber on the live `chat_message` frame by design. A `client_key` must be an
 opaque per-send identifier (a fresh UUID or ULID) and must never encode anything you would
@@ -130,7 +130,8 @@ Send via the existing realtime WebSocket connection. All require authentication.
 Response:
 ```json
 {"type": "chat_message_ack", "message_id": 123, "room_id": 5,
- "kind": "text", "metadata": {}, "created": "...", "client_key": "01J8Z0K3Q0X"}
+ "kind": "text", "metadata": {}, "created": "...", "client_key": "01J8Z0K3Q0X",
+ "moderation_decision": "allow", "moderation_reasons": [], "moderation_score": 0}
 ```
 
 `kind` and `metadata` are optional — see [Message kinds](#message-kinds) and
@@ -141,6 +142,15 @@ Response:
 ```json
 {"type": "chat_edit", "message_id": 42, "body": "updated text"}
 ```
+Response:
+```json
+{"type": "chat_edit_ack", "message_id": 42, "edited_at": "...",
+ "moderation_decision": "allow", "moderation_reasons": [], "moderation_score": 0}
+```
+
+Replace all three local moderation fields on an accepted edit; a clean score
+clears prior hidden state. Permission and explicit room-rule refusals preserve
+the existing message and publish no edit event.
 
 ### React to message
 ```json
@@ -293,14 +303,62 @@ the send frame.
 
 | Event type | Description |
 |-----------|-------------|
-| `chat_message` | New message `{message_id, room_id, user_id, body, kind, metadata, created, client_key?, moderation_decision?}` — `client_key` is present only when the sender supplied one; `moderation_decision` appears only as `"warn"` |
-| `chat_message_edited` | Message edited `{message_id, body, edited_at}` |
+| `chat_message` | New message `{message_id, room_id, user_id, body, kind, metadata, created, client_key?, moderation_decision, moderation_reasons, moderation_score}` — `client_key` is present only when the sender supplied one |
+| `chat_message_edited` | Message edited `{message_id, room_id, user_id, body, edited_at, moderation_decision, moderation_reasons, moderation_score}` |
 | `chat_message_flagged` | Message flagged (hide it) `{message_id}` |
 | `chat_reaction` | Reaction changed `{message_id, user_id, emoji, action}` — `action` is `added`/`removed`; not sent for a no-op |
 | `chat_typing` | User is typing `{room_id, user_id}` |
 | `chat_read` | Messages read `{room_id, user_id, up_to_message_id}` — the id is server-resolved, not the sender's raw value, and the event only fires when one resolved |
 | `chat_member_joined` | Member joined `{room_id, user_id}` |
 | `chat_member_left` | Member left `{room_id, user_id}` |
+
+## Advisory moderation and display
+
+Language at every severity is saved and scored. `high_severity` is a reason
+code, never a special refusal. Normal sends, retries and race acknowledgements,
+new-message events, edit events/acks, history and both moderator graphs always
+carry these server-owned fields:
+
+| Field | Meaning |
+|---|---|
+| `moderation_score` | Integer 0–100 when classified. **0** means clean; **null** means legacy/unscored. |
+| `moderation_reasons` | List of category codes, empty when none; never matched phrases. |
+| `moderation_decision` | `allow`, `warn`, `masked`, or legacy `block`. Only classifier `block` becomes `masked`. |
+
+For example, a single severe hit scores 50 and stays `warn`; a three-link
+message scores 75 and stores as `masked`. Low-score allows may still have
+reasons. Reasons are `high_severity`, `deny_hit`, `repeated_profanity`,
+`spam_link`, `spam_phone`, `excessive_repetition`, `repeated_words`,
+`excessive_caps`. The server's existing classifier and wordlists are unchanged.
+Backend integrations use `check_moderation_scored(body)` returning
+`(decision, reasons, score)`; `check_moderation(body)` remains a two-tuple.
+
+**Use numeric score for presentation.** Maestro hides messages at score **>=35**,
+the current warning threshold, and gives each viewer a local **Show** action.
+A valid numeric score is authoritative even if a legacy decision disagrees.
+When the score is absent, null or invalid, fall back to legacy
+`warn`/`masked`/`block`. Do not coerce null to 0. Existing rows are not rescored;
+old rows get null/[] and trusted-server bypass messages get allow/[]/null.
+The framework leaves the display threshold to each consumer.
+
+Authorized responses and events contain the **real body**. Hiding is viewer
+presentation, not access control. Preserve ordinary history/unread behavior;
+flags, membership, join bounds and disappearing-message expiry still apply.
+The three moderation fields cannot be supplied by clients or overridden by
+kind metadata. Accepted edits replace all three; clean edits return
+allow/[]/0 so a previous hidden state clears.
+
+**Notifications must use `Hidden by moderation` for hidden previews**, including
+file captions; preserve real bodies in authorized message responses. Upgrade
+the consumer display/notification handling before enabling advisory posting,
+because old pages may render those bodies automatically. The framework provides
+no REST send or notification adapter; those are host application integrations.
+
+Permission checks, rate limits, kind/metadata validation and explicit room
+URL/phone/media/length rules still refuse normally. For older installations,
+continue handling their existing `{"type":"error","error":"Message blocked
+by moderation","reasons":[...]}` frame and optional `client_key`; new advisory
+language sends do not reach that path. No new error-code scheme is introduced.
 
 ## Message Format
 

@@ -109,6 +109,7 @@ fixed here, not in `ChatMessage.RestMeta.GRAPHS`:
         {
             "id": 482, "user_id": 7, "body": "hello", "kind": "text",
             "edited_at": null, "moderation_decision": "allow",
+            "moderation_reasons": [], "moderation_score": 0,
             "created": "2026-08-30T12:00:00+00:00",
             "metadata": {}, "client_key": "01J8Z0K3Q0X"
         }
@@ -124,6 +125,15 @@ fixed here, not in `ChatMessage.RestMeta.GRAPHS`:
 `GRAPHS["default"]` includes it, so `/api/chat/room/flagged?graph=default` returns it on
 every flagged row. Treat `client_key` as room-visible. `metadata` is always an object
 (`{}` when empty).
+
+All rows carry persisted `moderation_decision`, `moderation_reasons` and
+`moderation_score`. Numeric 0 is clean; null means legacy/unscored. Existing
+history is not rescored. All severity levels retain their real body in
+responses and count normally as unread. Consumers choose what to hide
+(Maestro uses score >=35), permit Show, and suppress hidden notification
+previews; see [Rules](rules.md#consumer-display-and-notification-contract).
+Both ChatMessage REST graphs carry the same moderation fields, including the
+moderator list. Clients cannot overwrite them through generic REST saves.
 
 `has_more` is `len(messages) == limit`, and `cursor` is the last row's `pk`
 only when `has_more` — otherwise `null`.

@@ -5,7 +5,7 @@
 Each room has a `rules` JSONField. [`send_message`](services.md) enforces these
 before persisting, gated by `enforce_room_policy` — the WebSocket handler no
 longer carries its own copy. `chat_edit` still enforces `check_rules` and
-`check_moderation` directly in the handler.
+`check_moderation_scored` directly in the handler.
 
 | Rule | Default | Description |
 |------|---------|-------------|
@@ -18,16 +18,57 @@ longer carries its own copy. `chat_edit` still enforces `check_rules` and
 
 ## Content Guard Integration
 
-Every message send and edit runs through `content_guard.check_text(body, surface="chat")`:
+Every classified send and edit calls the chat adapter:
 
-- **block** — message rejected, not persisted, error returned to sender
-- **warn** — message persisted with `moderation_decision="warn"`
-- **allow** — message persisted normally
+```python
+from mojo.apps.chat.rules import check_moderation, check_moderation_scored
 
-URL and phone number detection reuses content_guard's existing match types (`spam_link`, `url`, `spam_phone`, `phone`).
+decision, reasons, score = check_moderation_scored(body)
+decision, reasons = check_moderation(body)  # compatible two-tuple
+```
 
-`body` is the moderated surface. `check_moderation` and `check_rules` both read
-`body` only.
+The scored helper calls `content_guard.check_text(body, surface="chat")` once
+and returns `(decision, list(result.reasons), result.score)`. Only classifier
+`block` changes to `masked`; `allow` and `warn` are unchanged. The generic
+classifier's normalization, wordlists, scores and thresholds are unchanged.
+
+**Language moderation is advisory at every severity.** Even `high_severity`
+stores and acknowledges normally. A single high-severity hit scores 50 and
+stays `warn`; two distinct ordinary deny terms score 75 and become `masked`.
+There is no special severity refusal. Room rules, permissions and rate limits
+still refuse independently. `enforce_room_policy=False` is the trusted-server
+bypass: it skips classification and stores `allow`, `[]`, `null`.
+
+All classified messages persist `moderation_decision`, `moderation_reasons`
+and `moderation_score`, including low-score `allow` messages with reasons.
+Score is an integer **0–100**; **0** means classified clean, while **null**
+means legacy/unscored. Existing history is never re-scored or backfilled.
+Reasons are category codes: `high_severity`, `deny_hit`, `repeated_profanity`,
+`spam_link`, `spam_phone`, `excessive_repetition`, `repeated_words`,
+`excessive_caps`. They contain neither matched phrases nor normalized text.
+
+`body` is the moderated surface, preserved subject to existing whitespace
+trimming. Authorized history and events retain the real body. Moderation does
+not change message visibility, unread counts, join bounds, flags or TTL bounds.
+URL/phone room rules reuse existing match types (`spam_link`, `url`,
+`spam_phone`, `phone`). Opaque kind metadata cannot set top-level moderation.
+
+### Consumer display and notification contract
+
+The consumer owns its display threshold. Maestro initially hides valid numeric
+scores **>=35**, the current warning threshold, and offers each viewer a local
+Show action. Numeric score is authoritative, including 0; absent, null or
+invalid scores fall back to legacy `warn`/`masked`/`block` decisions. `masked`
+records a classifier block; it does not redact stored content or impose the UI
+threshold. Successful edits replace all three fields together; clean edits
+return `allow`/`[]`/`0` so clients clear prior hidden state.
+
+Consumers must substitute **`Hidden by moderation`** for hidden message
+notification previews, including file captions, while preserving the real body
+in authorized message responses. Ship compatible display/preview handling
+before enabling advisory posting: old pages may render bodies automatically.
+The framework supplies no REST send endpoint or notification preview producer;
+those adapters belong to the host application.
 
 ## Card Payloads — `check_payload_rules`
 
@@ -46,7 +87,7 @@ applies only the `allow_urls` and `allow_phone_numbers` branches. It
 early-returns when both rules are on, which is the default.
 
 **The moderation classifier is deliberately NOT applied to payloads.**
-`check_moderation`'s `block` is a heuristic; running it over ids, slugs and
+The classifier's score is a heuristic; running it over ids, slugs and
 external references produces false positives with no recourse, and the
 human-visible moderated surface is `body`.
 

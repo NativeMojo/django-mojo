@@ -63,7 +63,22 @@ A single message in a room.
   runs `full_clean` on the save path, so `ChatMessage.objects.create` accepts
   any string. Enforcement lives in
   [`send_message`](services.md#kind-whitelist), which is the one creation path.
-- `moderation_decision` — `"allow"`, `"warn"`, or `"block"`
+- `moderation_decision` — `"allow"`, `"warn"`, `"masked"`, or legacy `"block"`.
+  `masked` is the advisory chat mapping of classifier `block`.
+- `moderation_score` — nullable positive small integer, classifier score 0–100.
+  **0** is classified clean; **null** is legacy/unscored, including trusted
+  bypass messages. Python and persistent database defaults are `None`.
+- `moderation_reasons` — JSON list of classifier category codes (see
+  [Rules](rules.md)); Python `default=list`, persistent `db_default=[]`.
+  The migration gives existing rows null score/empty reasons without rescoring.
+  Old writers omitting both columns still insert successfully after migration
+  or an application-only rollback.
+
+All three moderation fields are server-owned (`NO_SAVE_FIELDS`) and included
+in both `list` and `default` REST graphs, history, send/edit acks and events.
+Kind metadata remains opaque and cannot override them. Real bodies are stored
+at every severity; consumer display/notification policy belongs to
+[Rules & Moderation](rules.md#consumer-display-and-notification-contract).
 - `edited_at` — set when message is edited
 - `is_flagged` — True if flagged by moderator (hidden from normal history)
 - `flagged_by`, `flagged_at` — who flagged and when
