@@ -56,9 +56,13 @@ def _challenge_destination(request, page_type="registration", tier=1):
     html = _serve_challenge(
         request, challenge_tier=tier, page_type=page_type,
     ).content.decode("utf-8")
-    match = re.search(r'redirectUrl:\s*"([^"]*)"', html)
-    assert match is not None, "the challenge must render one redirectUrl string"
-    return json.loads(f'"{match.group(1)}"'), html
+    return _read_destination(html), html
+
+
+def _read_destination(html):
+    match = re.search(r'<script[^>]*id="mbg-config"[^>]*>(.*?)</script>', html, re.S)
+    assert match is not None, "the challenge must render its hosted JSON configuration"
+    return json.loads(match.group(1))["redirect_url"]
 
 
 @th.django_unit_test("bouncer challenge preserves schema-declared registration attribution")
@@ -160,9 +164,7 @@ def test_challenge_uses_resolved_extra_field_config(opts):
         html = _serve_challenge(
             request, challenge_tier=1, page_type="registration", group=child,
         ).content.decode("utf-8")
-        match = re.search(r'redirectUrl:\s*"([^"]*)"', html)
-        assert match is not None, "the inherited-config challenge must render redirectUrl"
-        inherited_destination = json.loads(f'"{match.group(1)}"')
+        inherited_destination = _read_destination(html)
         params = parse_qs(urlsplit(inherited_destination).query)
         assert params.get("ref") == ["inherited-ref"], \
             f"string shorthand inherited from a parent must forward, got {inherited_destination!r}"
@@ -184,8 +186,8 @@ def test_all_challenge_tiers_share_safe_destination(opts):
         destination, html = _challenge_destination(
             request, page_type="login", tier=tier)
         destinations.append(destination)
-        assert html.count("window.location.href = CFG.redirectUrl") == 2, \
-            f"tier {tier} success and error paths must use CFG.redirectUrl"
+        assert '/api/account/static/mojo-hosted-bouncer.js' in html, \
+            f"legacy tier argument {tier} must use the hosted cookie-confirming controller"
 
     assert destinations == ["/auth?ref=partner-42"] * 3, \
         f"all challenge tiers must use the same destination, got {destinations!r}"
