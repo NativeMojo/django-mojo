@@ -1,5 +1,6 @@
 """Hosted-page recovery policy and protocol. Legacy assess callers do not enter here."""
 import re
+import secrets
 
 from mojo.helpers import logit
 from mojo.helpers.redis import get_bounded_connection
@@ -70,7 +71,9 @@ def descriptor(request, purpose, group=None, *, action='check', form=False, redi
         if owned:
             redis = get_bounded_connection(timeout=1, read_from_replicas=False)
         store = ChallengeStore(redis, request.get_host().lower(), muid)
-        return store.issue(purpose, getattr(group, 'uuid', '') or '', action=action, form=form)
+        issued = store.issue(purpose, getattr(group, 'uuid', '') or '', action=action, form=form)
+        _metric('form_issued' if form else 'issued')
+        return issued
     except Exception:
         logger.warning('bouncer: hosted challenge state unavailable')
         return {'next_action': 'error', 'reason': 'unavailable'}
@@ -102,7 +105,24 @@ def page_check(request, purpose, group=None):
             redis.close()
 
 
+def recovery_reference(reason='operator'):
+    reference = secrets.token_hex(6)
+    logger.info(f'bouncer: hosted recovery reference={reference} reason={reason}')
+    return reference
+
+
+def _metric(action):
+    from mojo.apps import metrics
+    try:
+        metrics.record(f'bouncer:hosted:{action}', category='bouncer')
+    except Exception:
+        pass
+
+
 def _response(action, *, status=200, **fields):
+    _metric(action)
+    if action in ('recovery', 'error'):
+        fields['reference'] = recovery_reference(fields.get('reason', 'operator'))
     return JsonResponse({'status': status < 400, 'data': {
         'decision': 'allow' if action in ('check_cookie', 'allow', 'token') else 'block',
         'next_action': action, **fields}}, status=status)
@@ -111,9 +131,7 @@ def _response(action, *, status=200, **fields):
 def _audit(request, record, action, result, device, server_signals):
     """No event endpoint, incident promotion, learner or client-controlled event data."""
     from mojo.apps.account.models import BouncerSignal
-    from mojo.apps import metrics
     try:
-        metrics.record(f'bouncer:hosted:{action}', category='bouncer')
         BouncerSignal.objects.create(
             device=device, muid=identity(request, returning=True),
             page_type=record['purpose'], stage='assess', ip_address=request.ip,
@@ -154,6 +172,7 @@ def assess(request):
         purpose = record['purpose']
         if purpose not in PURPOSES:
             return _response('error', status=400, reason='invalid')
+        request.group = None
         if record['group_uuid']:
             group = Group.objects.filter(uuid=record['group_uuid'], is_active=True).first()
             if group is None or not group.is_effectively_active():
@@ -162,8 +181,12 @@ def assess(request):
         # Client group/purpose values cannot replace the render-issued scope.
         action, result, device, server_signals = screen(request, purpose, redis, signals)
         if operation in ('confirm', 'token'):
-            if action in ('decoy', 'recovery') or record['stage'] in ('decoy', 'recovery'):
-                return _response(action if action in ('decoy', 'recovery') else record['stage'], reason='operator')
+            record = store.authorize(capability, action)
+            if record is None:
+                return _response('recovery', status=409, reason='expired')
+            if record['stage'] in ('decoy', 'recovery'):
+                _audit(request, record, record['stage'], result, device, server_signals)
+                return _response(record['stage'], reason='operator')
             cookie = request.COOKIES.get('mbp', '')
             if verify_pass_cookie(cookie, request.ip) != muid:
                 return _response('recovery', status=409, reason='cookies')
@@ -173,7 +196,8 @@ def assess(request):
                 return _response('allow')
             if not record['form']:
                 return _response('recovery', status=403, reason='restart')
-            token = TokenManager.issue(duid='', fingerprint_id='', ip=request.ip,
+            token = TokenManager.issue(duid=request.DATA.get('duid') or getattr(request, 'duid', '') or '',
+                                       fingerprint_id=device.fingerprint_id if device else '', ip=request.ip,
                                        risk_score=result.score, page_type=purpose)
             return _response('token', token=token)
         outcome = store.complete(capability, operation, request_id,

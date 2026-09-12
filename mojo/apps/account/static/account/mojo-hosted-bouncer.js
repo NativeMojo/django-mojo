@@ -18,15 +18,17 @@
       unavailable: 'Verification is temporarily unavailable. Please try again shortly.',
       invalid: 'We couldn’t read that response. Please try again.'
     };
-    return messages[data.reason] || 'We couldn’t verify this visit. Please contact the site operator for help.';
+    var text = messages[data.reason] || 'We couldn’t verify this visit. Please contact the site operator for help.';
+    return text + (data.reference ? ' Reference: ' + data.reference : '');
   }
 
   function Client(config) { this.config = config; }
-  Client.prototype.send = function (operation, fields, signals) {
+  Client.prototype.send = function (operation, fields, signals, context) {
     var controller = new AbortController();
     var timeout = setTimeout(function () { controller.abort(); }, 8000);
     var body = {hosted_gate: Object.assign({version: 1, descriptor: this.config.descriptor,
       operation: operation, request_id: requestId()}, fields || {}), signals: signals || {}};
+    if (context && context.duid) body.duid = context.duid;
     return fetch('/api/account/bouncer/assess', {method: 'POST', credentials: 'same-origin',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body), signal: controller.signal})
       .then(function (response) {
@@ -43,8 +45,8 @@
 
   function tokenProvider(config) {
     var client = new Client(config);
-    return function () {
-      return client.send('token').then(function (data) {
+    return function (purpose, context) {
+      return client.send('token', null, null, context).then(function (data) {
         if (data.next_action !== 'token' || typeof data.token !== 'string' || !data.token) throw new Error(message(data));
         return data.token;
       });

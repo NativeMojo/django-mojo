@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_rejected_check_stays_on_recovery(opts):
     import objict
     from django.test import RequestFactory
-    from mojo.apps.account.rest.bouncer.views import _serve_challenge
+    from mojo.apps.account.rest.bouncer.views import _serve_challenge, _serve_login
     from test_account.test_admin_security_browser import _port, _json, _new_page, _stop
     import time
 
@@ -78,6 +78,221 @@ def test_rejected_check_stays_on_recovery(opts):
             time.sleep(1.4)
             assert len([p for p in visits if p == '/auth']) == before, "a blocked assessment must not reload the challenge"
             assert not page.evaluate("window.__verifiedSeen || document.body.textContent.includes('Verified')"), "a blocked assessment must never display Verified"
+    finally:
+        if page:
+            page.close()
+        _stop(chrome)
+        server.shutdown()
+        server.server_close()
+
+
+@th.django_unit_test('rendered slider supports pointer, touch, keyboard, honest failures and credential-free decoys')
+def test_browser_interaction_matrix(opts):
+    import base64
+    import time
+    import objict
+    from django.test import RequestFactory
+    from mojo.apps.account.rest.bouncer.views import _serve_challenge, _serve_login
+    from test_account.test_admin_security_browser import _port, _json, _new_page, _stop
+    executable = os.environ.get('MOJO_BOUNCER_CHROME', '')
+    assert executable and Path(executable).is_file(), 'select installed Chrome with MOJO_BOUNCER_CHROME'
+    state = {'mode': 'success', 'posts': [], 'visits': []}
+    request = RequestFactory().get('/auth')
+    request.DATA = objict.objict()
+    request.muid = 'browser-matrix'
+    request.ip = '127.0.0.1'
+    request.user_agent = 'Mozilla/5.0'
+    cfg = {'descriptor': 'x' * 32, 'next_action': 'slider', 'target': 50, 'tolerance': 8, 'attempts_remaining': 3}
+    html = _serve_challenge(request, hosted_config=cfg).content.decode().replace('"redirect_url": "/auth"', '"redirect_url": "/finished"').encode()
+    nonce = __import__('re').search(rb'<script nonce="([^"]+)"', html).group(1).decode()
+    login_html = _serve_login(request, hosted_config=cfg).content
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            state['visits'].append(self.path)
+            if self.path.startswith('/api/account/static/'):
+                body = (ROOT / 'mojo/apps/account/static/account' / self.path.rsplit('/', 1)[-1]).read_bytes()
+                kind = 'text/css' if self.path.endswith('.css') else 'application/javascript'
+            else:
+                body = b'<h1>Destination reached</h1>' if self.path == '/finished' else (login_html if self.path.startswith('/real-login') else html)
+                kind = 'text/html'
+            self.send_response(200)
+            self.send_header('Content-Type', kind)
+            rendered_nonce = __import__('re').search(rb'<script nonce="([^"]+)"', body)
+            active_nonce = rendered_nonce.group(1).decode() if rendered_nonce else nonce
+            self.send_header('Content-Security-Policy', f"default-src 'self'; script-src 'self' 'nonce-{active_nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+            state['posts'].append(body)
+            op = body['hosted_gate']['operation']
+            mode = state['mode']
+            data = {'decision': 'allow', 'next_action': 'allow' if op == 'confirm' else 'check_cookie'}
+            status, content_type = 200, 'application/json'
+            if mode == 'cookies':
+                data = {'decision': 'block', 'next_action': 'recovery', 'reason': 'cookies'} if op == 'confirm' else data
+            elif mode == 'decoy':
+                data = {'decision': 'block', 'next_action': 'decoy'}
+            elif mode == 'cooldown':
+                data = {'decision': 'block', 'next_action': 'cooldown', 'retry_after': 60}
+            elif mode == 'http':
+                status = 503
+            elif mode == 'html':
+                content_type = 'text/html'
+            self.send_response(status)
+            self.send_header('Content-Type', content_type)
+            self.end_headers()
+            self.wfile.write(b'not json' if mode == 'json' else json.dumps({'status': True, 'data': data}).encode())
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    chrome = page = None
+    try:
+        with tempfile.TemporaryDirectory(prefix='bouncer-matrix-') as profile:
+            port = _port()
+            chrome = subprocess.Popen([executable, '--headless=new', '--no-first-run', '--no-default-browser-check', '--disable-gpu',
+                '--disable-background-networking', '--remote-debugging-address=127.0.0.1', f'--remote-debugging-port={port}', f'--user-data-dir={profile}', 'about:blank'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            _json(f'http://127.0.0.1:{port}/json/version', time.monotonic() + 10)
+            page = _new_page(port, 'about:blank')
+            def fresh(mode='success', query=''):
+                state.update(mode=mode, posts=[])
+                page.call('Page.navigate', {'url': f'http://127.0.0.1:{server.server_port}/auth{query}'})
+                page.wait("!!document.querySelector('#mbg-slider:not([disabled])')", 'enabled slider')
+            def rect():
+                return page.evaluate("(()=>{let r=document.getElementById('mbg-slider').getBoundingClientRect();return {left:r.left,width:r.width,y:r.top+r.height/2}})()")
+            def key(name, code):
+                page.call('Input.dispatchKeyEvent', {'type': 'keyDown', 'key': name, 'windowsVirtualKeyCode': code})
+                page.call('Input.dispatchKeyEvent', {'type': 'keyUp', 'key': name, 'windowsVirtualKeyCode': code})
+            def confirm():
+                page.evaluate("document.getElementById('mbg-continue').click();true")
+            def keyboard_target():
+                page.evaluate("document.getElementById('mbg-slider').focus();true")
+                key('Home', 36)
+                for _ in range(50):
+                    key('ArrowRight', 39)
+            page.call('Emulation.setDeviceMetricsOverride', {'width': 1100, 'height': 820, 'deviceScaleFactor': 1, 'mobile': False})
+            fresh()
+            keyboard_target()
+            assert page.evaluate("document.activeElement.id==='mbg-slider' && document.getElementById('mbg-status').getAttribute('aria-live')==='polite'"), 'keyboard focus and live status must stay available'
+            Path('/tmp/bouncer-4309-desktop.png').write_bytes(base64.b64decode(page.call('Page.captureScreenshot', {'format': 'png'})['data']))
+            assert len(state['posts']) == 0, 'keyboard positioning must wait for explicit Confirm'
+            confirm()
+            page.wait("location.pathname==='/finished'", 'confirmed destination')
+            assert [p['hosted_gate']['operation'] for p in state['posts']] == ['submit', 'confirm'], 'successful slider must confirm cookie before one navigation'
+            fresh()
+            box = rect()
+            page.call('Input.dispatchMouseEvent', {'type': 'mousePressed', 'x': box['left'] + 8, 'y': box['y'], 'button': 'left', 'clickCount': 1})
+            page.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': box['left'] + box['width']/2, 'y': box['y'], 'button': 'left', 'buttons': 1})
+            page.call('Input.dispatchMouseEvent', {'type': 'mouseReleased', 'x': box['left'] + box['width']/2, 'y': box['y'], 'button': 'left', 'clickCount': 1})
+            page.wait("location.pathname==='/finished'", 'pointer release destination')
+            assert abs(state['posts'][0]['hosted_gate']['answer'] - 50) <= 8, 'pointer drag must send actual target position'
+            page.call('Emulation.setDeviceMetricsOverride', {'width': 360, 'height': 800, 'deviceScaleFactor': 1, 'mobile': True})
+            page.call('Emulation.setTouchEmulationEnabled', {'enabled': True})
+            page.call('Emulation.setEmulatedMedia', {'features': [{'name': 'prefers-reduced-motion', 'value': 'reduce'}]})
+            fresh()
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), 'narrow layout must not overflow horizontally'
+            Path('/tmp/bouncer-4309-narrow.png').write_bytes(base64.b64decode(page.call('Page.captureScreenshot', {'format': 'png'})['data']))
+            box = rect()
+            for kind, x in [('touchStart', box['left']+8), ('touchMove', box['left']+box['width']/2), ('touchEnd', 0)]:
+                points = [] if kind == 'touchEnd' else [{'x': x, 'y': box['y'], 'id': 1}]
+                page.call('Input.dispatchTouchEvent', {'type': kind, 'touchPoints': points})
+            page.wait("location.pathname==='/finished'", 'touch release destination')
+            fresh()
+            box = rect()
+            for kind in ['touchStart', 'touchEnd']:
+                page.call('Input.dispatchTouchEvent', {'type': kind, 'touchPoints': [] if kind == 'touchEnd' else [{'x': box['left']+box['width']/2, 'y': box['y'], 'id': 1}]})
+            if page.evaluate("location.pathname!='/finished'"):
+                confirm()
+            page.wait("location.pathname==='/finished'", 'tap positioning destination')
+            for mode in ('cookies', 'http', 'html', 'json', 'cooldown', 'decoy'):
+                fresh(mode)
+                keyboard_target()
+                confirm()
+                time.sleep(0.25)
+                assert page.evaluate("location.pathname==='/auth' && !document.body.textContent.includes('Verified')"), f'{mode} must never show success or navigate'
+                if mode == 'cookies':
+                    assert page.evaluate("document.getElementById('mbg-status').textContent.includes('cookies')"), 'missing cookie must explain recovery'
+                if mode == 'cooldown':
+                    assert page.evaluate("document.getElementById('mbg-continue').disabled"), 'cooldown must disable retry and issue no automatic requests'
+                if mode == 'decoy':
+                    before = len(state['posts'])
+                    page.evaluate("document.getElementById('mbg-password').value='Never transmit';document.getElementById('mbg-signin').click();true")
+                    assert len(state['posts']) == before and page.evaluate("document.getElementById('mbg-password').value===''") , 'selected decoy must clear passwords locally without transmitting'
+            # Storage denial still leaves controls and the original reset URL usable.
+            script = page.call('Page.addScriptToEvaluateOnNewDocument', {'source': "Object.defineProperty(window,'sessionStorage',{get(){throw new Error('blocked')}});Object.defineProperty(window,'localStorage',{get(){throw new Error('blocked')}});"})
+            fresh('success', '?token=pr%3Afixture-reset')
+            before = state['visits'].count('/auth?token=pr%3Afixture-reset')
+            keyboard_target()
+            confirm()
+            time.sleep(0.4)
+            assert state['visits'].count('/auth?token=pr%3Afixture-reset') == before + 1, 'storage-refused reset recovery must reload the original URL exactly once'
+            page.call('Page.removeScriptToEvaluateOnNewDocument', {'identifier': script['identifier']})
+            fresh()
+            providers = page.evaluate("""(async()=>{
+              await new Promise((resolve,reject)=>{let s=document.createElement('script');s.src='/api/account/static/mojo-auth.js';s.onload=resolve;s.onerror=reject;document.head.append(s)});
+              localStorage.setItem('mojo_device_uid','bound-browser');
+              const calls=[];let index=0;
+              window.fetch=async(url,options)=>{
+                const body=JSON.parse(options.body);calls.push({url,body});
+                const data=body.hosted_gate ? {decision:'allow',next_action:'token',token:'fresh-'+(++index)} : {mfa_required:true,requires_verification:true};
+                return {ok:true,headers:{get:()=> 'application/json'},json:async()=>({status:true,data})};
+              };
+              MojoAuth.init({baseURL:'https://auth.example.test',bouncerTokenProvider:MojoHostedBouncer.tokenProvider({descriptor:'x'.repeat(32)})});
+              await MojoAuth.login('example','secret',{group_uuid:'group-fixture'});
+              await MojoAuth.startPhoneRegister('+15550004309');
+              await MojoAuth.register({email:'fixture@example.test',password:'secret'});
+              const before=calls.length;
+              MojoAuth.init({baseURL:location.origin,bouncerTokenProvider:()=>Promise.reject(new Error('verification unavailable'))});
+              let refused=false;try{await MojoAuth.login('example','secret')}catch(e){refused=true}
+              const stopped=refused && calls.length===before;
+              MojoAuth.init({baseURL:location.origin});
+              await MojoAuth.login('example','secret');
+              return {calls,stopped};
+            })()""")
+            calls = providers['calls']
+            assert providers['stopped'], 'provider failure must stop the protected submission'
+            assert [c['url'] for c in calls[:6:2]] == ['/api/account/bouncer/assess'] * 3, 'hosted control stays same-origin even with a configured auth API origin'
+            assert [c['body'].get('duid') for c in calls[:6:2]] == ['bound-browser'] * 3, 'only device context must flow to each hosted token request'
+            assert [c['body'].get('bouncer_token') for c in calls[1:6:2]] == ['fresh-1', 'fresh-2', 'fresh-3'], 'login, phone-start and register require separate fresh tokens'
+            assert all(c['url'].startswith('https://auth.example.test/') for c in calls[1:6:2]), 'actual authentication preserves the configured API origin'
+            assert calls[1]['body']['group_uuid'] == 'group-fixture', 'async token acquisition must retain the login group'
+            assert 'bouncer_token' not in calls[-1]['body'], 'without a provider the legacy no-token behavior remains'
+            for blocked in (False, True):
+                init = None
+                if blocked:
+                    init = page.call('Page.addScriptToEvaluateOnNewDocument', {'source': "Object.defineProperty(window,'sessionStorage',{get(){throw new Error('blocked')}})"})
+                page.call('Page.navigate', {'url': f'http://127.0.0.1:{server.server_port}/real-login?token=pr%3Afirst-click'})
+                page.wait("!!window._mat && document.getElementById('view-set-password').classList.contains('is-active')", 'first-click reset form')
+                assert page.evaluate("!location.search.includes('token')"), 'first-click reset removes its token from the visible URL'
+                reset = page.evaluate("""(async()=>{
+                  const sent=[];let completed=false;
+                  MojoAuth.resetWithToken=(token,password)=>{sent.push(token);return sent.length===1?Promise.reject({error:'weak password'}):Promise.resolve({})};
+                  window._mat.onAuthSuccess=()=>{completed=true};
+                  const form=document.getElementById('form-set-password');
+                  document.getElementById('set-password-new').value='weak';
+                  document.getElementById('set-password-confirm').value='weak';
+                  form.dispatchEvent(new Event('submit',{cancelable:true,bubbles:true}));
+                  await new Promise(r=>setTimeout(r,20));
+                  let clean=true;try{clean=sessionStorage.getItem('mat_reset_token')===null}catch(_){}
+                  document.getElementById('set-password-new').value='Stronger-Password-4309!';
+                  document.getElementById('set-password-confirm').value='Stronger-Password-4309!';
+                  form.dispatchEvent(new Event('submit',{cancelable:true,bubbles:true}));
+                  await new Promise(r=>setTimeout(r,20));
+                  return {sent,clean,completed};
+                })()""")
+                assert reset['sent'] == ['pr:first-click', 'pr:first-click'] and reset['clean'] and reset['completed'], f'weak-password retry must retain only page memory and finish even when storage is refused (blocked={blocked}): {reset}'
+                if init:
+                    page.call('Page.removeScriptToEvaluateOnNewDocument', {'identifier': init['identifier']})
+            page.call('Emulation.setScriptExecutionDisabled', {'value': True})
+            fresh_url = f'http://127.0.0.1:{server.server_port}/auth'
+            page.call('Page.navigate', {'url': fresh_url})
+            time.sleep(0.25)
+            assert page.evaluate("document.getElementById('mbg-decoy-fields').disabled && !document.getElementById('mbg-password').name && !document.getElementById('mbg-password').closest('form')"), 'without JavaScript the decoy must have no enabled submitting credentials'
     finally:
         if page:
             page.close()

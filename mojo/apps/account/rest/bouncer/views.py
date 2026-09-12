@@ -342,6 +342,8 @@ def _auth_context(request, group=None, include_registration_extras=False):
 
 
 def _serve_login(request, page_mode='login', group=None, hosted_config=None):
+    if hosted_config:
+        request._sensitive_body_label = 'hosted_bouncer_page'
     ctx = _auth_context(
         request, group=group, include_registration_extras=True)
     ctx['hosted_bouncer'] = hosted_config
@@ -356,6 +358,7 @@ def _serve_login(request, page_mode='login', group=None, hosted_config=None):
 
 
 def _serve_challenge(request, challenge_tier=1, page_type='login', group=None, hosted_config=None):
+    request._sensitive_body_label = 'hosted_bouncer_page'
     from mojo.apps.account.services import auth_config
     from mojo.apps.account.services import register_schema
 
@@ -419,6 +422,9 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None, h
     if hosted_config is None:
         from mojo.apps.account.services.bouncer.hosted_gate import descriptor
         hosted_config = descriptor(request, page_type, group)
+    if hosted_config.get('next_action') in ('recovery', 'error') and not hosted_config.get('reference'):
+        from mojo.apps.account.services.bouncer.hosted_gate import recovery_reference
+        hosted_config = {**hosted_config, 'reference': recovery_reference(hosted_config.get('reason', 'operator'))}
     hosted_config = {**hosted_config, 'redirect_url': f'/{redirect_path}{group_qs}',
                      'page_type': page_type}
     ctx = {
@@ -481,6 +487,8 @@ def on_contact_page(request):
 
 
 def _serve_contact(request, kind='', group=None, hosted_config=None):
+    if hosted_config:
+        request._sensitive_body_label = 'hosted_bouncer_page'
     from mojo.apps.account.services import public_message as svc
 
     ctx = _auth_context(request, group=group)

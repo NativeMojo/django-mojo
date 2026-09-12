@@ -1,8 +1,10 @@
 # Bouncer — Django Developer Reference
 
-Server-gated bot detection for django-mojo. Bots never receive the login form,
-field names, or auth API endpoint URLs. The challenge is server-rendered; all
-signals are scored server-side before any auth surface is exposed.
+Server-side risk screening for django-mojo's hosted login, registration, and
+contact pages, plus a separate embeddable bouncer SDK. Hosted pages use a
+bounded recovery check before exposing the real form. The slider is a modest
+effort check, not proof that a visitor is human; authentication, token
+enforcement, permissions, and rate limits remain separate controls.
 
 See also: [Auth Pages](auth_pages.md) for the login/registration page setup,
 branding, OAuth configuration, and nginx setup.
@@ -12,42 +14,177 @@ branding, OAuth configuration, and nginx setup.
 ## How It Works
 
 ```
-Request → GET BOUNCER_LOGIN_PATH (default: /auth)
-              ↓
-     1. Redis signature cache (IP, subnet, UA, fingerprint)
-        matched → serve decoy immediately
-              ↓
-     2. Pass cookie present and valid
-        valid  → serve full login page
-              ↓
-     3. Server-side pre-screen (headers + GeoIP scoring)
-        clearly bot → serve decoy
-              ↓
-     4. Serve challenge page (randomized per render)
-              ↓
-     mojo-bouncer.js collects signals, user clicks target
-              ↓
-     POST /api/account/bouncer/assess
-        allow/monitor → signed token + HttpOnly pass cookie
-        block         → no token, BotLearner job queued
-              ↓
-     JS stores token, redirects to login URL
-     (navigation controls and safe schema-declared registration extras forwarded)
-              ↓
-     GET BOUNCER_LOGIN_PATH again — pass cookie present
-              ↓
-     Serve full login page (mojo-auth.js webapp)
-              ↓
-     mojo-auth.js attaches bouncer_token to every auth API call
-              ↓
-     @md.requires_bouncer_token('login') on login endpoint validates token
+GET /auth, /register, or /contact
+  → current risk/signature/restriction check
+  → valid matching _muid + mbp cookies: real page with scoped form descriptor
+  → otherwise: Continue / target slider / operator recovery / selected decoy
+  → hosted check or slider completion: set mbp
+  → separate hosted confirm operation: verify returned cookie and restrictions
+  → navigate once to the real page
+  → acquire a fresh token before each protected form submission
+  → existing @md.requires_bouncer_token decorator validates and consumes token
 ```
+
+`mojo-hosted-bouncer.js` owns this flow. It does not use the public
+`mojo-bouncer.js` SDK or store a challenge token in localStorage.
+
+### Hosted decision policy
+
+| Situation | Result |
+|---|---|
+| Active signature match or retained current evidence reaches the page's block threshold | Selected decoy, including when the restriction arrives during a check |
+| Existing `blocked` device history or streaming freeze, without qualifying current evidence | Operator-recovery guidance; restriction remains |
+| Valid pass for the returning `_muid`, with no current restriction | Real page |
+| Raw score allows, no pass | One Continue check |
+| Recoverable uncertainty | Target slider with tap/click and keyboard alternatives |
+| Three wrong answers | 60-second cooldown, then explicit Retry |
+| Expired descriptor, missing cookies, unavailable state, or failed request | Recovery/error guidance; no success or automatic navigation |
+
+`services/bouncer/hosted_gate.py` applies this policy on page loads and hosted
+operations. `RiskScorer` retains its public score and decision; its private
+metadata tracks the uncapped total, recoverable contribution, historical block
+contribution, and analyzer failures. Recovery credit is bounded by the actual
+positive contribution of explicitly listed built-in analyzer classes. It covers
+ordinary interaction, browser-capability, identity/session, privacy-network,
+header, and non-blocked-history friction. Plugin contributions, automation
+artifacts, headless UA, honeypot completion, known attacker/abuser evidence, and
+historical blocks receive no recovery credit. Credit is calculated before the
+public score is capped at 100. Analyzer failure ends in recovery.
+
+Hosted outcomes write neutral `BouncerSignal` rows (`decision='log'`) and
+`bouncer:hosted:<action>` metrics directly. They do not enter the legacy event,
+incident-promotion, or learner paths. Wrong answers, keyboard/touch use, storage
+refusal, and transport failures do not promote device reputation. Successful
+recovery never clears device tiers, signatures, streaming high-water scores,
+user enforcement flags, geofence rules, or throttles. Incorrect legacy blocked
+records require operator review; no automatic rehabilitation is performed.
+
+### Hosted descriptor protocol
+
+**POST `/api/account/bouncer/assess`** is public, with the existing IP limit
+(60/minute) and returning `_muid` limit (30/minute). A `hosted_gate` object
+selects the hosted protocol; invalid hosted input never falls back to legacy
+assessment. Hosted controls send same-origin requests with site cookies,
+independently of `BOUNCER_API_BASE`. There is no new Origin allowlist; authority
+comes from the opaque render-issued descriptor and its server-held binding.
+
+```json
+{
+  "hosted_gate": {
+    "version": 1,
+    "descriptor": "<opaque-render-issued-descriptor>",
+    "operation": "submit",
+    "request_id": "<unique-request-id>",
+    "answer": 50
+  },
+  "signals": {"behavior": {}, "gate_challenge": {}}
+}
+```
+
+| Operation | Purpose |
+|---|---|
+| `check` | Continue or obtain the current slider/cooldown state |
+| `submit` | Verify a finite numeric slider answer from 0 through 100 |
+| `confirm` | Confirm the exact granted pass cookie returned on a separate request |
+| `token` | Use a real-page form descriptor and valid pass to issue a fresh token |
+
+`version` is 1; `descriptor` is a 32-character URL-safe identifier; `request_id`
+is 8–64 alphanumeric, underscore, or hyphen characters. `signals` is optional
+and must be an object whose section values are objects. The renderer binds the
+descriptor to the lowercased request host, returning `_muid`, resolved group,
+and purpose (`login`, `registration`, or `public_message`). Client purpose/group
+fields cannot replace that scope. A middleware-generated identity cannot stand
+in for a missing returning cookie.
+
+`hosted_challenge.ChallengeStore` uses atomic Redis transitions with a shared
+retry budget per host and `_muid`, across purposes, tabs, and reloads. Challenge
+descriptors last **5 minutes**; real-page form descriptors last **30 minutes**.
+At most eight descriptors are retained per identity; oldest entries are evicted.
+The target is 25–75 on a 0–100 scale, with ±8 tolerance. Three wrong answers
+within the retry window start a **60-second cooldown**. A new descriptor does
+not reset the budget. Retry after cooldown is explicit. Repeating a submission's
+`request_id` does not spend another attempt; lost grant responses retain the
+original cookie issue time rather than extending its lifetime.
+
+Responses use the normal JSON envelope, with an explicit action:
+
+```json
+{"status": true, "data": {"decision": "allow", "next_action": "check_cookie"}}
+```
+
+`check_cookie`, `allow`, and `token` carry `decision='allow'`; unresolved
+`slider`, `cooldown`, `decoy`, `recovery`, and `error` outcomes carry
+`decision='block'`. A slider response also includes `target`, `tolerance`, and
+`attempts_remaining`; cooldown includes `retry_after` seconds. `check_cookie`
+sets `mbp` but permits no navigation until `confirm` returns `allow`. Only
+`token` returns a token. Reasons distinguish `cookies`, `expired`, `restart`,
+`operator`, `unavailable`, and `invalid`, without detector details. Invalid
+protocol input returns 400; missing cookies/expired state return 409; invalid
+form scope or inactive group can return 403; unavailable state returns 503.
+The existing rate limiter can return 429. Clients must validate HTTP status,
+JSON shape, and `next_action`, and never treat an arbitrary 200 as a pass.
+Recovery/error responses may include an opaque `reference` for the operator to
+find the corresponding recovery log entry; it is not a descriptor or credential.
+
+Assessment bodies and descriptor-bearing hosted HTML responses are redacted by the shared sensitive-body logging policy.
+Descriptors, answers, credentials, and reset tokens are not stored in hosted
+outcome audit payloads.
+
+### Form tokens and deployment
+
+`auth_base.html` installs an optional async `bouncerTokenProvider` in
+`MojoAuth.init()`. `MojoAuth.getBouncerToken(purpose, context)` always returns a Promise.
+The provider runs before `login` (`login`), `register` and
+`startPhoneRegister` (`registration`); `contact.html` awaits it explicitly with
+`public_message`. Each protected submission, including a retry after wrong
+credentials, gets a fresh single-use token. Provider failure stops submission
+and shows recovery guidance. Other MojoAuth calls keep their existing behavior;
+without a provider, the legacy token lookup and request behavior are unchanged.
+The provider receives `(purpose, context)`, where `context.duid` carries the
+protected request's device ID when present. The hosted token request forwards
+that ID so the token and its consuming request share the existing device binding.
+
+The hosted provider uses the descriptor's server-held purpose, not the caller's
+argument. It checks the returning pass and current restrictions, then uses the
+existing `TokenManager`, token format, exact-IP binding, nonce store, and TTL.
+A configured external `BOUNCER_API_BASE` still needs compatible signing keys and
+shared nonce infrastructure with the page origin. Hosted verification does not
+follow that external base. CORS permission alone does not make tokens portable
+between installations.
+
+### Recovery and selected decoys
+
+The slider supports drag-and-release, tap/click positioning plus Confirm, and
+arrow keys plus Confirm, with visible focus and live status. Requests have an
+8-second client timeout. Network/JSON failures show an explicit Retry; cookie,
+expired-check, and operator restrictions explain the next step without claiming
+verification. Help stays on the ungated shell and points to the operator's usual
+support channel. Embedded contact pages with unavailable cookies can open the
+same contact page in a top-level tab.
+
+A **selected decoy** uses a local rejection sink: no credential-bearing form
+submission, no named credential inputs, and disabled controls until its script
+initializes. Clicking Sign In clears the password and displays a generic error
+locally. It neither calls scanner endpoints nor emits `honeypot_post` events.
+Explicit `/login`, `/signin`, and `/signup` scanner honeypots retain their
+existing POST and logging behavior.
+
+### Legacy API and SDK compatibility
+
+Bodies without `hosted_gate` keep the existing `allow` / `monitor` / `block`
+assessment contract, scoring/persistence/learning, cross-origin token issuance,
+and pass-cookie behavior. `mojo-bouncer.js`, `mojo-sentinel.js`, `/event`, and
+nginx `/verify_pass` keep their existing semantics. The hosted recovery protocol
+does not harden the SDK's existing fail-open behavior or establish a universal
+human-attestation boundary. The sections below describe those shared or legacy
+facilities where applicable.
 
 ---
 
 ## Opt-In Setup
 
-All bouncer features are opt-in via settings. Existing projects are unaffected.
+Token enforcement is opt-in via settings. The hosted auth/contact pages always
+use their page gate; `BOUNCER_REQUIRE_TOKEN=False` does not disable it.
 
 ```python
 # settings.py
@@ -157,12 +294,14 @@ device.fingerprint_id
 device.linked_duids  # list of duids sharing the same browser fingerprint
 ```
 
-Risk tiers:
+Risk tiers (hosted recovery does not change these legacy assessment tiers):
 - `unknown` — first seen
 - `low` — passed challenge
 - `medium` — triggered 1–2 signals
 - `high` — triggered 3+ signals or failed challenge repeatedly
-- `blocked` — confirmed bot; pre-screen rejects immediately
+- `blocked` — retained restriction; hosted recovery requires operator review
+  unless independent current evidence selects a decoy. Older rows do not prove
+  how the device acquired the tier.
 
 ### `BouncerSignal`
 
@@ -269,7 +408,7 @@ Add `'my_signal': 30` to `BOUNCER_SCORE_WEIGHTS` in settings.
 
 ## Adaptive Bot Signature Learning
 
-After every confirmed block with `risk_score >= BOUNCER_LEARN_MIN_SCORE`, the
+After a legacy assessment block with `risk_score >= BOUNCER_LEARN_MIN_SCORE`, the
 `learn_from_block` background job:
 
 1. Marks the `BouncerDevice` as `risk_tier='blocked'`
@@ -280,6 +419,7 @@ After every confirmed block with `risk_score >= BOUNCER_LEARN_MIN_SCORE`, the
 6. Rebuilds the Redis signature cache used by pre-screen
 
 The Redis cache is also rebuilt by the scheduled `refresh_bouncer_sig_cache` job.
+Hosted recovery outcomes do not invoke this job.
 
 ---
 
@@ -332,8 +472,11 @@ names (`client_id`, `response_type`, `scope`, `code_challenge`,
 All values are encoded with `urlencode`; they cannot alter the server-selected
 root-relative destination path. Undeclared parameters (including `utm_*`) are
 not forwarded. Contact and passkey pages and OAuth-consent destinations do not
-receive registration extras. Password-reset `mat_reset_token` handling and
-redirect canonicalization are unchanged.
+receive registration extras. Password-reset tokens retain the same-tab
+`mat_reset_token` handoff, with a confirmed-cookie reload of the original URL
+when storage is unavailable; see [Auth Pages](auth_pages.md#a-reset-link-survives-a-cold-bouncer-challenge).
+Redirect canonicalization is unchanged. Contact challenges preserve a valid
+`kind` from the public-message schema.
 
 ### Configuring a white-label group
 
@@ -419,17 +562,19 @@ See [group.md](group.md) for the full `auth_domain` field and `resolve_by_auth_d
 ## Templates
 
 - `account/login.html` — full mojo-auth webapp. Override in your project's templates dir.
-- `account/bouncer_challenge.html` — challenge page using default branding; override logo/brand via `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` per group.
-- `account/bouncer_decoy.html` — honeypot login at `/login`, `/signin`.
+- `account/bouncer_challenge.html` — hosted Continue/slider/recovery shell; override logo/brand via `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` per group.
+- `account/bouncer_decoy.html` — selected safe sink or explicit scanner honeypot, selected by server context.
+- `account/_bouncer_selected_decoy.html` — non-submitting credential UI shared by initial and post-assessment selected decoys.
 
 Static assets in `account/static/account/`:
 - `mojo-auth.js` — authentication webapp
 - `mojo-auth.css` — stylesheet (CSS variable theming)
 - `mojo-bouncer.js` — embeddable bot-detection gate (v2.0.0) for any page
+- `mojo-hosted-bouncer.js` — hosted descriptor client, recovery controls, and form-token provider
 - `mojo-bouncer.css` — overlay stylesheet
 - `mojo-sentinel.js` — lightweight in-session telemetry client
 
-All five are served via `/account/static/<filename>` from the bouncer host.
+These assets are served via `/api/account/static/<filename>` from the bouncer host.
 
 ---
 
@@ -584,6 +729,8 @@ exact config.
 ## Cross-Origin Embedding
 
 **Credentialed cross-origin access to the public bouncer API is ON by default.**
+This is the legacy API contract. The hosted client uses same-origin requests
+and render-issued descriptors; it introduces no new CORS allowlist.
 This is a REST API platform: anybody can call it, and third-party callers are the
 point. Out of the box the CORS middleware echoes any well-formed `http(s)`
 request `Origin` back with `Access-Control-Allow-Credentials: true` on the three
@@ -745,7 +892,7 @@ same bot protection that covers login also covers every inbound message.
 ```
 Request → GET BOUNCER_CONTACT_PATH (default: /contact)
               ↓  (same pipeline as /auth, page_type='public_message')
-     signature cache → pass cookie → pre-screen → decoy / challenge / page
+     current restrictions → matching pass → decoy / recovery / challenge / page
               ↓
      POST /api/account/bouncer/message
         @md.requires_bouncer_token('public_message') — single-use token

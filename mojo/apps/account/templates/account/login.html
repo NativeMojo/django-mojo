@@ -295,7 +295,9 @@
     }
 
     (function () {
-        var email = sessionStorage.getItem("mat_reset_email");
+        if (attemptedResetToken || readResetToken()) return;
+        var email;
+        try { email = sessionStorage.getItem("mat_reset_email"); } catch (_) { return; }
         if (!email) return;
         $("reset-email-display").textContent = email;
         showView("resetCode");

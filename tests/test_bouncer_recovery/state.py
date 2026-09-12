@@ -62,3 +62,45 @@ def test_invalid_proof_and_scope(opts):
         result = store.complete(challenge['descriptor'], 'submit', 'invalid', policy='slider', answer=answer)
         assert result['next_action'] == 'error', "non-finite, non-number or out-of-range answers are invalid"
     assert json.loads(redis.data[store.key])['attempts'] == 0, "malformed transport data does not count as a wrong answer"
+
+
+@th.django_unit_test('real Redis serializes parallel misses and preserves grants and expiry')
+def test_real_redis_parallel_transitions(opts):
+    from concurrent.futures import ThreadPoolExecutor
+    import uuid
+    from mojo.helpers.redis import get_bounded_connection
+    from mojo.apps.account.services.bouncer.hosted_challenge import ChallengeStore
+    redis = get_bounded_connection(timeout=1, read_from_replicas=False)
+    now = [1000]
+    store = ChallengeStore(redis, 'parallel.test', uuid.uuid4().hex, clock=lambda: now[0])
+    try:
+        challenge = store.issue('login', action='slider')
+        def miss(index):
+            return store.complete(challenge['descriptor'], 'submit', str(index), policy='slider', answer=0)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            results = list(pool.map(miss, range(3)))
+        state = json.loads(redis.get(store.key))
+        assert state['attempts'] == 3 and sum(r['next_action'] == 'cooldown' for r in results) == 1, 'parallel misses must have one atomic exhaustion transition'
+        form = store.issue('login', form=True)
+        assert store.authorize(form['descriptor'], 'decoy')['stage'] == 'decoy', 'form restrictions must persist atomically'
+        assert store.authorize(form['descriptor'], 'check')['stage'] == 'decoy', 'a later clean request must retain the form restriction'
+        assert store.authorize(form['descriptor'], 'recovery')['stage'] == 'decoy', 'operator recovery cannot downgrade a selected decoy'
+        now[0] += 301
+        assert store.read(challenge['descriptor']) is None, 'challenge expires after five minutes'
+        assert store.complete(challenge['descriptor'], 'submit', 'expired', policy='check', answer=challenge['target'])['reason'] == 'expired', 'expired challenge cannot grant a pass'
+    finally:
+        redis.delete(store.key)
+        redis.close()
+
+
+@th.django_unit_test('state failures never return a grant')
+def test_unavailable_state(opts):
+    from mojo.apps.account.services.bouncer.hosted_challenge import ChallengeStore, ChallengeUnavailable
+    class BusyRedis(MemoryRedis):
+        def eval(self, *args):
+            return 0
+    try:
+        ChallengeStore(BusyRedis(), 'site.test', 'browser').issue('login')
+    except ChallengeUnavailable:
+        return
+    raise AssertionError('failed atomic state write must end in unavailability, never an issued challenge')

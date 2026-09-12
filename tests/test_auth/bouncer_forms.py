@@ -458,14 +458,14 @@ def test_login_html_clears_the_reset_stash_on_failure(opts):
     body = handler[1].split('onForm("form-magic"', 1)[0]
 
     assert_eq(
-        body.count('sessionStorage.removeItem("mat_reset_token")'), 2,
+        body.count('clearResetToken()'), 2,
         "the set-password handler must clear the stashed pr: token on BOTH "
         "resolutions of the redemption attempt — the success path and the "
         "failure path. Clearing it only on success leaves a dead token to be "
         "replayed on the next token-less visit")
     assert_true(
         '.catch(function (err) {' in body and
-        'sessionStorage.removeItem("mat_reset_token")' in
+        'clearResetToken()' in
         body.split('.catch(function (err) {', 1)[1],
         "one of those two removals must live inside the catch — the failure "
         "path is the one that used to leave the stash behind")
@@ -797,16 +797,7 @@ def test_register_step3_final_path_intact(opts):
 
 @th.django_unit_test("bouncer_challenge.html: redirectUrl JS string carries unescaped & (regression for &amp;)")
 def test_bouncer_challenge_redirect_url_not_html_entity_escaped(opts):
-    """The challenge template interpolates `login_url` into a JS string literal.
-
-    Without `|escapejs`, Django's default HTML autoescape rewrites `&` to
-    `&amp;`. The challenge JS then assigns that string verbatim to
-    `window.location.href`, so the next page sees `?amp;redirect=...` instead
-    of `?redirect=...`. The redirect param is silently dropped and the
-    post-register flow lands at AUTH_SUCCESS_REDIRECT (the API root) instead
-    of the SPA callback. This test renders _serve_challenge directly and
-    asserts the rendered `redirectUrl:` JS line never contains `&amp;`.
-    """
+    """JSON data-block parsing must preserve real query delimiters, never &amp;."""
     import objict
     from django.test import RequestFactory
     from mojo.apps.account.rest.bouncer.views import _serve_challenge
@@ -829,34 +820,15 @@ def test_bouncer_challenge_redirect_url_not_html_entity_escaped(opts):
         request, challenge_tier=1, page_type='registration', group=opts.group)
     html = response.content.decode('utf-8')
 
-    idx = html.find('redirectUrl:')
-    assert_true(idx != -1, "bouncer_challenge.html must declare a `redirectUrl:` JS property")
-    # Pull the single-line JS assignment (up to its trailing comma).
-    snippet = html[idx:idx+400]
-    line_end = snippet.find(',')
-    js_line = snippet[:line_end] if line_end != -1 else snippet
-
-    assert_true(
-        '&amp;' not in js_line,
-        f"bouncer_challenge.html `redirectUrl` JS string must not contain "
-        f"`&amp;` — the var is interpolated into a JS string literal, so use "
-        f"the `|escapejs` filter, not Django's default HTML autoescape. "
-        f"`&amp;` here makes the browser parse the post-challenge URL as "
-        f"`?amp;redirect=...` and silently drops the redirect param. "
-        f"Got: {js_line!r}"
-    )
-    # After the fix, escapejs renders `&` as the JS Unicode escape `&`
-    # (and `=` as `=`). The JS engine decodes those to literal `&` / `=`
-    # at runtime, so the URL the browser navigates to has the real ampersand.
-    # We tolerate either form: the unescaped `&redirect=` (e.g. if someone
-    # later switches to `|safe`) OR the escapejs form `&redirect`.
-    assert_true(
-        '&redirect=' in js_line or '\\u0026redirect' in js_line,
-        f"bouncer_challenge.html `redirectUrl` must carry the forwarded "
-        f"`redirect` param through the challenge — _serve_challenge built "
-        f"login_url with the redirect, but the template dropped it. "
-        f"Got: {js_line!r}"
-    )
+    import json
+    from urllib.parse import urlsplit, parse_qs
+    block = re.search(r'<script id="mbg-config"[^>]*>(.*?)</script>', html, re.S)
+    assert_true(block is not None, "hosted redirect must be carried in the JSON data block")
+    url = json.loads(block.group(1))['redirect_url']
+    assert_true('&amp;' not in url, "browser redirect must contain real query delimiters")
+    query = parse_qs(urlsplit(url).query)
+    assert_eq(query.get('redirect'), [callback], "challenge must preserve the complete callback URL")
+    assert_eq(query.get('group_uuid'), [opts.group.uuid], "callback and group must survive together")
 
 
 @th.django_unit_test("register.html: DOB renders three segmented inputs (MM/DD/YYYY)")
@@ -1200,13 +1172,11 @@ _STYLE_INTERPOLATIONS_REVIEWED = {
     # deliberate (the value IS CSS) and it is admin-set group config, not
     # visitor input — the same trust level as uploading a .css file.
     ("auth_base.html", "custom_css|safe"),
-    # bouncer_challenge.html suffixes every generated class/keyframe name with a
-    # per-render nonce (secrets.token_hex(6) — hex only, no CSS metacharacters)
-    # so selectors cannot be cached across renders. Not attacker-influenced.
-    ("bouncer_challenge.html", "render_ctx.css_nonce"),
-    # bouncer_decoy.html paints one accent colour, sourced from
-    # settings.get_static (conf-file-only, never DB/Redis-writable), into a
-    # :root custom property. Operator config, not request input.
+    # _serve_challenge runs the tenant accent through normalize_accent_color:
+    # only a six-digit hex colour is returned, with a fixed hex fallback.
+    # A visitor/config value cannot contribute CSS metacharacters here.
+    ("bouncer_challenge.html", "accent_color|default:'#6384ff'"),
+    # _auth_context normalizes the decoy accent to six-digit hex too.
     ("bouncer_decoy.html", "accent_color"),
 }
 
@@ -1359,39 +1329,30 @@ def test_challenge_preserves_reset_token(opts):
     request.DATA = objict.objict()
     html = _serve_challenge(request, group=opts.group).content.decode('utf-8')
 
-    assert_true('sessionStorage.setItem(\'mat_reset_token\'' in html
-                or 'sessionStorage.setItem("mat_reset_token"' in html,
-                "the challenge page must stash a pr: token before its redirect "
-                "— without it the printed/emailed reset link fails its FIRST "
-                "click for every visitor who is not already signed in")
-    assert_true("window.location.search" in html,
-                "the token has to be read from the URL the visitor arrived on")
-    assert_true("'pr:'" in html or '"pr:"' in html,
-                "only password-reset tokens are stashed — nothing else in a "
-                "query string should end up in storage")
-
-    # Anchor on the redirect STATEMENT, not the first mention of the config
-    # key — the stash's own explanatory comment names CFG.redirectUrl and sits
-    # above the setItem, which is exactly where a comment belongs.
-    stash = html.index("mat_reset_token")
-    redirect = html.index("window.location.href = CFG.redirectUrl")
-    assert_true(stash < redirect,
-                f"the stash must happen BEFORE the redirect that loses the "
-                f"query string (stash at {stash}, redirect at {redirect})")
+    from pathlib import Path
+    import mojo
+    source = (Path(mojo.__file__).resolve().parent / 'apps/account/static/account/mojo-hosted-bouncer.js').read_text()
+    assert_true('/api/account/static/mojo-hosted-bouncer.js' in html,
+                "rendered challenge must load its hosted storage/navigation controller")
+    assert_true("sessionStorage.setItem('mat_reset_token'" in source and 'root.location.search' in source,
+                "hosted controller must stash the arriving reset token")
+    assert_true("'pr:'" in source, "only password-reset tokens may enter this stash")
+    assert_true(source.index("sessionStorage.setItem('mat_reset_token'") < source.index('root.location.replace'),
+                "reset stash must precede navigation; executed storage/refusal behavior is covered by the browser matrix")
 
 
 @th.django_unit_test("login.html reaches its setPassword view from the stashed token")
 def test_login_reads_the_stashed_reset_token(opts):
     html = _render('account/login.html', group=opts.group)
 
-    assert_true('sessionStorage.getItem("mat_reset_token")' in html,
+    assert_true("sessionStorage.getItem('mat_reset_token')" in html,
                 "login.html must read the token the challenge stashed")
 
     # The fallback read further down (the reset submit handler) has always been
     # there; what was missing is a branch that ACTUALLY REACHES the password
     # view when the token is not in the URL. Without it the visitor lands on a
     # sign-in form holding a valid token nothing ever looks at.
-    marker = 'else if (sessionStorage.getItem("mat_reset_token"))'
+    marker = 'else if (readResetToken())'
     assert_true(marker in html,
                 f"login.html must fall back to the stashed token when the URL "
                 f"carries none — expected `{marker}` at the token-detection "

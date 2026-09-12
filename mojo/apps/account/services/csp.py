@@ -1,23 +1,10 @@
 """
 Content-Security-Policy for the framework-hosted auth pages.
 
-Scope — deliberately narrow. Only the four pages rendered from
-`account/auth_base.html` carry this header: the login, register, passkey
-enrollment and contact pages. Those are the highest-value pages the framework
-serves (login/register/passkey hold access and refresh tokens in
-`localStorage`), and they are the only templates stamped with a nonce.
-
-This is NOT a framework-wide default and must not become one. A nonce is only
-valid for a response whose markup carries the same value, so blanket middleware
-cannot know which templates are nonce-aware — it would silently break every
-un-nonce'd inline block (`bouncer_challenge.html`, `bouncer_decoy.html`, and
-`token_landing_base.html` with the three confirmation landings that extend it:
-`email_verify_landing.html`, `email_change_landing.html`,
-`account_deactivate_landing.html`). Consuming applications own the CSP for
-their own pages.
-
-(Unrelated name collision: `render_ctx.css_nonce` on the bouncer challenge page
-is an anti-automation class-name randomizer, not a CSP nonce.)
+Scope — deliberately narrow: framework-hosted login, registration, passkey,
+contact, bouncer challenge and decoy pages. Consuming applications own the CSP
+for their pages. Token landing templates remain outside this helper, so this
+must not become a blanket middleware policy.
 
 The nonce contract
 ------------------

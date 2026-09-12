@@ -101,9 +101,9 @@
                 window._mat.showMessage(msg, "error");
             }
         })
-        .catch(function () {
+        .catch(function (error) {
             window._mat.setLoading(submitBtn, false);
-            window._mat.showMessage("Network error — please try again.", "error");
+            window._mat.showMessage(error.message || "Network error — please try again.", "error");
         });
     });
 })();

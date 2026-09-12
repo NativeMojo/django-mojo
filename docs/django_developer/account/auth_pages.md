@@ -10,13 +10,14 @@ link support. All branding and feature configuration is controlled through the
 ## Overview
 
 The framework serves fully-featured auth pages directly from Django — no
-separate frontend app required. Pages are bouncer-gated so bots never see the
-login form, and all branding is configured via the structured auth config
-object (group-owned, deep-merged from the parent chain).
+separate frontend app required. Pages use the hosted bouncer risk/recovery gate
+before exposing the real form, and all branding is configured via the structured
+auth config object (group-owned, deep-merged from the parent chain).
 
 ```
 /auth       → bouncer gate → login page
 /register   → bouncer gate → registration page
+/contact    → bouncer gate → contact/support page
 /passkey    → passkey enrollment page (authenticated, not bouncer-gated)
 /login      → honeypot decoy (traps bots)
 /signin     → honeypot decoy
@@ -66,6 +67,7 @@ The auth pages load CSS and JS from API endpoints (no Django static files):
 ```
 GET /api/account/static/mojo-auth-theme.css   → responsive layout + appearance presets
 GET /api/account/static/mojo-auth.js          → MojoAuth library
+GET /api/account/static/mojo-hosted-bouncer.js → hosted recovery and form-token provider
 GET /api/account/static/mojo-auth.css         → legacy light theme (if needed)
 ```
 
@@ -165,8 +167,9 @@ placing a file with the same path in your project's `TEMPLATES` directories.
 | `register.html` | Registration page — extends base; redirects to `/passkey` when `passkey_prompt != off` |
 | `passkey_enroll.html` | Standalone passkey enrollment page |
 | `oauth_consent.html` | OAuth 2.1 consent screen — extends base; see [oauth_server.md](oauth_server.md) |
-| `bouncer_challenge.html` | Bouncer challenge (default branded, opt-in override per group) |
-| `bouncer_decoy.html` | Honeypot decoy login page |
+| `bouncer_challenge.html` | Hosted Continue/slider/recovery shell (default branded, opt-in override per group) |
+| `bouncer_decoy.html` | Selected local decoy sink or explicit scanner honeypot, selected by server context |
+| `_bouncer_selected_decoy.html` | Non-submitting selected-decoy UI, also used after assessment |
 
 ### Template blocks (in `auth_base.html`)
 
@@ -182,7 +185,8 @@ placing a file with the same path in your project's `TEMPLATES` directories.
 
 ### Content Security Policy — nonce your inline scripts
 
-The four hosted pages (`/auth`, `/register`, `/passkey`, `/contact`) **can** be
+The hosted pages (`/auth`, `/register`, `/passkey`, `/contact`), including their
+challenge and selected-decoy shells, **can** be
 served with a nonce-based `Content-Security-Policy`, where `script-src` carries a
 fresh per-request nonce and **no `'unsafe-inline'`**, so any `<script>` without
 that nonce will not execute.
@@ -252,7 +256,7 @@ A `<style>` block is raw-text too — and there is no `escapecss` filter. So a
 it must instead be a value that is provably **not attacker-influenced** (admin-set
 config, a per-render hex nonce, a conf-file-only setting). The three that ship
 this way — `auth_base.html`'s `custom_css|safe`, `bouncer_challenge.html`'s
-`render_ctx.css_nonce`, `bouncer_decoy.html`'s `accent_color` — are enumerated in
+`accent_color`, and `bouncer_decoy.html`'s `accent_color` — are enumerated in
 a reviewed allowlist; adding another is a security decision, not a formatting one.
 
 Both rules are enforced by a standing audit:
@@ -369,10 +373,11 @@ explanation.
 | `/signin` | GET/POST | (same) | Honeypot decoy |
 | `/signup` | GET/POST | (same) | Honeypot decoy |
 | `/api/auth/config` | GET | `on_auth_config` | Public auth config for custom front-ends |
-| `/api/account/bouncer/assess` | POST | `on_bouncer_assess` | Bouncer signal assessment |
+| `/api/account/bouncer/assess` | POST | `on_bouncer_assess` | Public legacy signal assessment or render-descriptor hosted check/submit/confirm/token operation; see [Bouncer](bouncer.md#hosted-descriptor-protocol) |
 | `/api/account/bouncer/event` | POST | `on_bouncer_event` | Client event reporting |
 | `/api/account/static/mojo-auth-theme.css` | GET | Static | Responsive layout and appearance presets |
 | `/api/account/static/mojo-auth.js` | GET | Static | MojoAuth JS library |
+| `/api/account/static/mojo-hosted-bouncer.js` | GET | Static | Public hosted recovery controls and scoped form-token provider |
 | `/api/account/static/mojo-auth.css` | GET | Static | Legacy light theme CSS |
 | `/api/auth/verify/email/confirm` | GET | `on_email_verify_confirm` | Email-verification confirmation landing (`ev:`) — renders only |
 | `/api/auth/email/change/confirm` | GET | `on_email_change_confirm_get` | Email-change confirmation landing (`ec:`) — renders only |
@@ -443,14 +448,21 @@ credential into a redirect target the bouncer constructs.
 So the token makes the hop through `sessionStorage` instead, which survives a
 same-origin, same-tab navigation — which is exactly what that redirect is:
 
-1. `bouncer_challenge.html` reads `token` from `window.location.search`, and
+1. The hosted challenge client reads `token` from `window.location.search`, and
    if it starts with `pr:`, stashes it as `sessionStorage["mat_reset_token"]`
    **before** its redirect.
 2. `login.html`, at its token-detection point, falls back to that key when the
-   URL carries no token: `else if (sessionStorage.getItem("mat_reset_token"))`
+   URL carries no token: the guarded `readResetToken()` helper
    → open the set-password view.
 
-Both halves are template/JS only. There is **no** auth route change, no new
+If sessionStorage refuses the write, the hosted client first confirms the pass
+cookie, then performs one reload of the original reset-link URL. That URL
+already contains the token; it is never appended to another destination.
+`login.html` keeps the URL token in page memory before attempting storage and
+strips it from the address bar. Stash reads, writes, and deletes are guarded,
+so refused storage does not prevent the set-password form from opening or submitting. An arriving or stashed reset link takes precedence over an older code-reset email saved in the tab.
+
+Both paths are template/JS only. There is **no** auth route change, no new
 forwarding allowlist entry, and no token added to any query string the server
 emits.
 
@@ -470,8 +482,8 @@ live. The token stays in a page-closure variable for the rest of that page
 load, so the weak-password retry — which the server deliberately does not burn
 the token on — still works.
 
-Overriding either template? Keep both halves, or reset links stop working on
-first click for exactly the visitors who most need them.
+Template overrides must retain the hosted client's handoff, confirmed-cookie
+fallback, and login page's guarded token handling for first-click reset links.
 
 **Anti-enumeration UX (SMS view).** `on_sms_login` is deliberately generic — it
 returns the same success response whether or not the phone number has an account,
@@ -758,7 +770,50 @@ resolves down the parent chain.
 
 ## Bouncer Gate
 
-See [bouncer.md](bouncer.md) for the full bouncer settings reference.
+`/auth`, `/register`, and `/contact` share `hosted_gate.page_check()`. A valid
+`mbp` pass must match the returning `_muid`, and current restrictions are checked
+before serving a real page. Low risk without a pass gets Continue; recoverable
+uncertainty gets a target slider. The slider supports drag-and-release,
+tap/click plus Confirm, and arrow keys plus Confirm, with live status and visible
+focus. It is a modest recovery interaction, not proof of humanity.
+
+Three wrong answers start a 60-second cooldown shared across tabs, reloads,
+and purposes for the same host/cookie identity; Retry is explicit. Challenge
+descriptors expire after 5 minutes. Success appears only after a separate
+same-origin `confirm` request verifies the exact pass cookie and current policy.
+Failures stay on the shell with connection, cookie, expiry, or operator guidance.
+Help uses the operator's usual support channel; embedded contact cookie failures
+can offer a top-level tab. Current qualifying bot evidence selects a decoy whose
+credentials never leave the browser. Historical `blocked` devices and streaming
+freezes require operator review; a check never clears those restrictions.
+
+### Hosted form-token integration
+
+The real page receives a 30-minute form descriptor in `hosted_bouncer`.
+`auth_base.html` loads `mojo-hosted-bouncer.js` and passes
+`MojoHostedBouncer.tokenProvider(config)` as the optional async
+`bouncerTokenProvider` to `MojoAuth.init()`. Template overrides must preserve
+the inert `json_script` config block and this initialization.
+
+`MojoAuth.getBouncerToken(purpose, context)` returns a Promise. `login`, `register`, and
+`startPhoneRegister` await the provider before posting; contact awaits it with
+`public_message`. A new single-use token is acquired for each protected attempt,
+including wrong-password retries and phone-start followed by registration.
+Provider failure stops the request. The hosted provider uses the descriptor's
+server-held purpose/group; the caller's purpose argument cannot change them.
+No hosted token is transported through localStorage.
+Providers receive the optional `context.duid` for the protected request's device
+binding; it does not override the descriptor's purpose or group.
+
+Without a provider, MojoAuth retains the existing request/token lookup behavior.
+The public `mojo-bouncer.js` SDK and legacy assess requests are unchanged. Hosted
+requests always use the page origin, even with an external `BOUNCER_API_BASE`;
+split deployments still require shared signing and nonce infrastructure for
+the auth API to validate their tokens. No new Origin allowlist or authentication
+exception is introduced, and `BOUNCER_REQUIRE_TOKEN` keeps its existing semantics.
+
+See [bouncer.md](bouncer.md) for the protocol, response actions, recovery policy,
+and settings reference.
 
 | Setting | Default | Description |
 |---------|---------|-------------|

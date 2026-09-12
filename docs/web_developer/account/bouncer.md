@@ -1,8 +1,9 @@
 # Bouncer — Web Developer Reference
 
-Server-gated bot detection for django-mojo. Bots never receive the login form, field
-names, or auth API endpoint URLs. The challenge is server-rendered; all signals are
-scored server-side before any auth surface is exposed.
+Server-side risk screening for hosted auth/contact pages and a separate
+embeddable SDK. Hosted pages use a bounded Continue or target-slider check.
+The slider is a recovery interaction, not proof of a human; authentication,
+token enforcement, permissions, and rate limits remain separate controls.
 
 See also: [Auth Pages](auth_pages.md) for the login/registration page customization,
 OAuth setup, branding settings, and URL parameters.
@@ -11,42 +12,188 @@ OAuth setup, branding settings, and URL parameters.
 
 ## How the Login Flow Works
 
-When `BOUNCER_LOGIN_PATH` is configured (e.g. `access`), the login flow has three stages:
+The hosted login path defaults to `/auth` (`BOUNCER_LOGIN_PATH` can change it).
+Registration and contact use the same gate:
 
 ```
 1. User visits /{BOUNCER_LOGIN_PATH}
       ↓
-   Django pre-screens (IP, headers, GeoIP, device cookie)
+   Django checks current risk, signatures, and retained restrictions
       ↓
-   Known good device (pass cookie) → serve full login page immediately
-   Suspicious / unknown           → serve challenge page
-   Clearly bot                    → serve decoy honeypot page
+   Valid matching _muid + mbp cookies → real page
+   Low risk without a pass            → Continue check
+   Recoverable uncertainty            → target slider
+   Current qualifying bot evidence    → selected decoy
+   Existing blocked/frozen restriction → operator recovery
 
 2. Challenge page (if shown)
-      mojo-bouncer.js collects behavioral signals
-      User clicks the moving target button
-      POST /api/account/bouncer/assess → decision + bouncer_token
-      JS stores token in localStorage, redirects to /{BOUNCER_LOGIN_PATH}
-      navigation controls and safe schema-declared registration extras are forwarded
+      mojo-hosted-bouncer.js sends a render-issued descriptor to assess
+      Server verifies Continue or slider answer and sets the pass cookie
+      Separate confirm request verifies the returned cookie and current restrictions
+      Only confirmed success navigates once to /{BOUNCER_LOGIN_PATH}
+      Safe navigation/registration parameters are forwarded
 
 3. Full login page (after passing challenge or on valid pass cookie)
       mojo-auth.js webapp loads — login form, OAuth, passkeys, magic link
-      Every auth API call includes bouncer_token in the request body
-      Server validates token before processing credentials
+      Each protected form submission acquires a fresh scoped bouncer_token
+      Existing endpoint decorators validate and consume the token
 ```
 
-### Decoy Paths
+### Retry and recovery
+
+The slider accepts drag-and-release, tap/click positioning plus Confirm, or
+arrow keys plus Confirm. The target and instructions are visible, with focus
+indicators and live status. Three wrong answers start a **60-second cooldown**,
+then an explicit Retry. The server shares this budget across tabs, reloads,
+and hosted purposes for the same host and `_muid`; opening a new check does not
+reset it. An expired check asks for a reload. Connection failures, non-JSON or
+invalid responses, and the 8-second request timeout show an error and Retry.
+None claims success or automatically navigates.
+
+Site cookies must work. Missing cookies show cookie guidance; an embedded
+contact page can offer opening the same page in a top-level tab. Unavailable
+verification and existing device blocks/frozen sessions retain their restriction
+and show recovery guidance. Help points to the operator's usual support channel
+from the current shell, rather than sending the visitor through gated `/contact`.
+Old blocked records require operator review, even if their original verdict was
+a false positive. Successful checks do not clear reputation or enforcement state.
+
+### Selected decoys and scanner paths
+
+A decoy selected by hosted screening uses a local rejection sink: Sign In
+clears the password and shows a generic error without sending credentials or
+submitting a form. Controls remain disabled until its script initializes, with
+no-JavaScript guidance. This also applies when an assessment selects the decoy
+after the page loaded. These interactions do not trigger scanner learning.
 
 Requests to `/login`, `/signin`, and any configured `BOUNCER_DECOY_PATHS` receive a
 visually identical login page whose form POSTs to a dead endpoint. That endpoint always
 returns a plausible-looking error with a realistic delay. Detection is never revealed.
+These explicit scanner honeypots, including `/signup`, retain their existing
+semantics and are separate from the selected decoy sink.
 
 ---
 
-## Assess Endpoint
+## Hosted Assess Protocol
 
-The challenge page POSTs behavioral signals here. Called by `mojo-bouncer.js` — not
-called directly by application code in the normal flow.
+**POST** `/api/account/bouncer/assess`
+
+No authentication required. Rate-limited per IP (60/minute) and returning
+`_muid` cookie (30/minute). The hosted renderer supplies an opaque descriptor;
+`mojo-hosted-bouncer.js` sends it with `credentials: 'same-origin'` to the page
+origin, ignoring `BOUNCER_API_BASE`. This is client routing, not a new Origin
+allowlist. The server validates descriptor/cookie/host scope and retains the
+legacy CORS policy.
+
+```json
+{
+  "hosted_gate": {
+    "version": 1,
+    "descriptor": "<opaque-render-issued-descriptor>",
+    "operation": "submit",
+    "request_id": "<unique-request-id>",
+    "answer": 50
+  },
+  "signals": {"behavior": {}, "gate_challenge": {}}
+}
+```
+
+| Field | Contract |
+|---|---|
+| `version` | Required; supported version is `1` |
+| `descriptor` | Required; 32 URL-safe alphanumeric/underscore/hyphen characters, issued by the renderer |
+| `operation` | Required; `check`, `submit`, `confirm`, or `token` |
+| `request_id` | Required; 8–64 alphanumeric/underscore/hyphen characters; reuse for a transport retry of the same submission |
+| `answer` | For `submit`; finite JSON number from 0 to 100, not a string or boolean |
+| `signals` | Optional top-level object; each section value must also be an object |
+
+Challenge descriptors last **5 minutes** and real-page form descriptors last
+**30 minutes**. The renderer binds each to the host, returning `_muid`, resolved
+group, and purpose (`login`, `registration`, or `public_message`). Request-body
+purpose/group fields cannot change that scope. At most eight descriptors are
+retained per identity; a new one can evict the oldest. A descriptor is not an
+auth token and is not stored in localStorage.
+
+Responses have an explicit `next_action`:
+
+```json
+{
+  "status": true,
+  "data": {
+    "decision": "block",
+    "next_action": "slider",
+    "target": 50,
+    "tolerance": 8,
+    "attempts_remaining": 3
+  }
+}
+```
+
+| `next_action` | Client behavior |
+|---|---|
+| `slider` | Show the target ± tolerance; `submit` the answer |
+| `cooldown` | Display `retry_after` seconds; require explicit Retry afterward |
+| `check_cookie` | Cookie grant only; send `confirm` on a separate request |
+| `allow` | Confirmed pass; navigate once |
+| `token` | Use the returned `token` for one protected form request |
+| `decoy` | Show the selected local decoy sink |
+| `recovery` | Stay on the page and show the reason's recovery guidance |
+| `error` | Stay on the page and offer a useful retry |
+
+Initial render configuration may also use `check` for the Continue button.
+`check_cookie`, `allow`, and `token` carry `decision='allow'`; unresolved actions
+carry `decision='block'`. Branch on the known action, not just `status` or
+`decision`. Granting a cookie is insufficient: `confirm` checks the exact
+issued pass and current restrictions before returning `allow`. Repeating a
+slider submission's request ID does not spend another attempt.
+
+Reasons are `cookies`, `expired`, `restart`, `operator`, `unavailable`, or
+`invalid`. Invalid protocol input returns 400; missing cookies/expired state
+return 409; inactive group or invalid form scope can return 403; unavailable
+state returns 503. The shared rate limiter can return 429. Validate HTTP status,
+content type, JSON shape, and action; no failure permits an automatic redirect.
+Malformed `hosted_gate` input remains a hosted error and never selects legacy
+assessment.
+Recovery/error responses may include an opaque `reference`. Show it with the
+message so the operator can find the matching recovery log; it is not a credential.
+
+### Fresh form tokens
+
+The hosted templates install an optional async provider:
+
+```javascript
+MojoAuth.init({
+  baseURL: window.location.origin,
+  bouncerTokenProvider: MojoHostedBouncer.tokenProvider(formDescriptorConfig),
+});
+
+const token = await MojoAuth.getBouncerToken('public_message');
+```
+
+`formDescriptorConfig` is the real page's server-rendered config. The hosted
+provider sends `operation='token'` and uses its server-bound purpose; the
+function argument cannot request another scope. `getBouncerToken(purpose, context)`
+always returns a Promise. The optional provider receives `(purpose, context)`;
+`context.duid`, when present, carries the protected request's device ID into
+token issuance. `login`, `register`, and `startPhoneRegister` await the
+provider automatically with `login`, `registration`, and `registration`
+respectively. Contact awaits it explicitly with `public_message`. Each
+submission, including a credential retry or phone-start followed by register,
+gets a fresh single-use token. Provider failure stops the form request.
+
+Other MojoAuth methods retain their current behavior. Without a provider,
+existing clients keep the legacy lookup/request path, and `getBouncerToken()`
+resolves the legacy lookup result. Hosted token transport does not use
+localStorage. See [Auth Pages](auth_pages.md) for template integration.
+
+---
+
+## Legacy Assess Endpoint
+
+The public `mojo-bouncer.js` SDK and custom clients send behavioral signals
+without `hosted_gate`. Their existing API, scoring, learning, and cross-origin
+token behavior remain unchanged. The following request/response contract is
+separate from the hosted descriptor flow above.
 
 **POST** `/api/account/bouncer/assess`
 
@@ -130,7 +277,7 @@ to skip the interactive challenge on subsequent visits within its TTL.
 }
 ```
 
-No token is returned. The challenge page should display a neutral error state — do not
+No token is returned. A legacy client should display a neutral error state — do not
 reveal that a bot was detected.
 
 ### Error Responses
@@ -179,7 +326,7 @@ Response:
 
 ---
 
-## Attaching the Bouncer Token to Auth Calls
+## Attaching Legacy Bouncer Tokens to Auth Calls
 
 Once a token is obtained from the assess endpoint, include it in every auth API call:
 
@@ -236,6 +383,13 @@ A missing `duid` is treated as `unknown` tier — all signals still run, nothing
 
 ## Pass Cookie
 
+Hosted checks set the cookie on `check_cookie` and verify it with `confirm`
+before navigating. Hosted pages also recheck restrictions and require its muid
+to match the returning `_muid`; a valid cookie does not override a new restriction.
+The existing cookie format and TTL (default 24 hours) are unchanged.
+
+For the legacy API:
+
 On an allow/monitor decision, the backend sets an `mbp` HttpOnly cookie alongside the
 JSON response. To receive it, the fetch call must include credentials:
 
@@ -254,7 +408,7 @@ receives the full login page directly.
 
 ---
 
-## Implementing Your Own Client (Non-mojo-auth.js)
+## Implementing a Legacy API Client (Non-mojo-auth.js)
 
 If you are building a custom login flow rather than using `mojo-auth.js`:
 
@@ -270,7 +424,7 @@ login attempt. Calling it multiple times per session is rate-limited.
 
 ---
 
-## Error Handling
+## Legacy Token Error Handling
 
 | Scenario | Behavior |
 |----------|----------|
@@ -329,6 +483,7 @@ original request are forwarded to the post-challenge login redirect:
 | `force_reauth` | Force the credential form instead of accepting an existing session |
 | `auth_theme` | Valid hosted-auth layout override |
 | `auth_appearance` | Valid hosted-auth appearance override |
+| `kind` | Valid contact/support kind on `/contact` only |
 | Declared `registration.extra_fields` name | Registration attribution on `/auth` and `/register` only |
 
 An attribution name is eligible only when the resolved auth config declares it;
@@ -455,7 +610,10 @@ GET /api/account/bouncer/device?sort=-event_count&size=20
 
 ### Signals — `/api/account/bouncer/signal`
 
-Every bouncer assessment is recorded as a `BouncerSignal`. This is a **read-only** audit trail — every challenge attempt, every scoring decision, with full signal payloads.
+`BouncerSignal` is a **read-only** audit trail. Legacy assessments include signal
+payloads; hosted check/submission outcomes use `decision='log'`, empty
+`raw_signals`, and `server_signals.hosted_gate.action`. Hosted outcomes do not
+promote incidents, train signatures, or increase the device's risk tier.
 
 #### List Signals
 
@@ -570,7 +728,9 @@ GET /api/account/bouncer/signal?stage=assess&sort=-created
 
 Bot signatures are patterns the bouncer uses for **pre-screening** — matching known bots before running the full scoring pipeline. Signatures are auto-learned from confirmed blocks and can also be created manually.
 
-Pre-screen matches serve the honeypot decoy page immediately, with zero scoring overhead.
+Active signature matches select a decoy on hosted pages. Existing blocked
+device history alone produces operator-recovery guidance; it is not evidence
+that a visitor has just triggered a current signature.
 
 #### List Signatures
 
@@ -691,6 +851,8 @@ GET /api/account/bouncer/signature?source=manual
 ## Bouncer Events in the Incident System
 
 Bouncer events flow into the incident system automatically. High-confidence detections trigger firewall blocks via default rules.
+This is the legacy assessment/event pipeline. Hosted recovery outcomes use the
+neutral audit path described above and do not feed these rules.
 
 ### Event Flow
 
@@ -745,6 +907,7 @@ Time-series metrics for bouncer activity are recorded under the `bouncer` catego
 | `bouncer:honeypot_catches` | Credential attempts on decoy pages |
 | `bouncer:signatures_learned` | Auto-created bot signatures |
 | `bouncer:campaigns` | Coordinated bot campaign detections |
+| `bouncer:hosted:<action>` | Neutral hosted check/submission outcomes, such as `slider`, `cooldown`, and `check_cookie` |
 
 ### Query Examples
 
@@ -817,6 +980,9 @@ GET /api/incident/event?category__startswith=security:bouncer&search={muid}&sort
 
 The bouncer ships two embeddable JS files. Both are served from the bouncer
 host at `/account/static/`.
+These keep the legacy API/SDK contract, including existing failure behavior.
+The hosted-only `mojo-hosted-bouncer.js` descriptor client is separate and is
+not a replacement for cross-origin embeds.
 
 ### mojo-bouncer.js — one-shot gate
 

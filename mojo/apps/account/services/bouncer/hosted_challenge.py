@@ -83,6 +83,17 @@ class ChallengeStore:
             result['issued'] = record['issued']
         return result
 
+    def authorize(self, descriptor, policy):
+        """Serialize fresh restrictions with grants, including form descriptors."""
+        def authorize(state, now):
+            record = state['descriptors'].get(descriptor)
+            if not record or record['expires'] < now:
+                return None
+            if policy == 'decoy' or (policy == 'recovery' and record['stage'] != 'decoy'):
+                record['stage'] = policy
+            return dict(record)
+        return self._change(authorize)
+
     def complete(self, descriptor, operation, request_id, *, policy, answer=None):
         def complete(state, now):
             record = state['descriptors'].get(descriptor)
@@ -91,7 +102,7 @@ class ChallengeStore:
             if record['form']:
                 return {'next_action': 'recovery', 'reason': 'restart'}
             # A new restriction always wins, even over a cached success.
-            if policy in ('decoy', 'recovery'):
+            if policy == 'decoy' or (policy == 'recovery' and record['stage'] != 'decoy'):
                 record['stage'] = policy
             if record['stage'] in ('decoy', 'recovery'):
                 return self._view(record, state, now)

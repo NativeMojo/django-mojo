@@ -17,12 +17,15 @@ config. See [Auth Config](auth_config.md) for details and the
 |-----|---------|
 | `/auth` | Login page (default, configurable via `BOUNCER_LOGIN_PATH`) |
 | `/register` | Registration page (configurable via `BOUNCER_REGISTER_PATH`) |
+| `/contact` | Contact/support page (configurable via `BOUNCER_CONTACT_PATH`) |
 | `/passkey` | Passkey enrollment page (authenticated, not bouncer-gated) |
 | `/api/account/oauth/authorize` | OAuth 2.1 consent screen for a third-party app (configurable via `OAUTH_SERVER_PATH`) — see [oauth_server.md](oauth_server.md) |
 
-Both `/auth` and `/register` are protected by the bouncer bot detection gate.
-On first visit, users see a brief verification challenge. After passing, they
-receive an HttpOnly pass cookie that skips the challenge on subsequent visits.
+`/auth`, `/register`, and `/contact` use the hosted bouncer gate. Without a pass,
+low-risk visits get Continue and uncertain visits get a target-slider check.
+Confirmed success sets an HttpOnly pass cookie; later visits skip the check
+while the cookie identity matches and there is no current restriction. See
+[Bouncer Challenge](#bouncer-challenge) for retries and recovery.
 
 ---
 
@@ -431,6 +434,7 @@ token.
 ```
 GET /api/account/static/mojo-auth-theme.css   → responsive layout + appearance presets
 GET /api/account/static/mojo-auth.js          → MojoAuth library
+GET /api/account/static/mojo-hosted-bouncer.js → hosted recovery and form-token provider
 ```
 
 Served with `Cache-Control: public, max-age=86400` in production.
@@ -469,24 +473,79 @@ the backend note in `docs/django_developer/security/csp.md`.
 
 ## Honeypot Decoy Pages
 
+These are the explicit scanner routes; their existing behavior is unchanged.
+
 | Path | GET | POST |
 |------|-----|------|
 | `/login` | Decoy login page | Logs credentials, returns "Invalid credentials" |
 | `/signin` | Decoy login page | Same |
 | `/signup` | Decoy login page | Same |
 
+A decoy selected on `/auth`, `/register`, or `/contact` is different: it shows
+a generic rejection locally, clears the password, and never submits credentials
+or calls the scanner POST endpoints. Controls are disabled until JavaScript
+initializes, with no-JavaScript help text. Its help stays on the current page.
+
 ---
 
 ## Bouncer Challenge
 
-| Pre-screen score | Challenge | Friction |
-|-----------------|-----------|----------|
-| < 20 | Static button, centered | Near-zero |
-| 20–39 | Button shifts between spots | Low |
-| >= 40 | Moving target button | Moderate |
+| Situation | Experience |
+|---|---|
+| Low risk without a pass | Continue button |
+| Recoverable uncertainty | Move a slider into the highlighted target area and release |
+| Three wrong answers | 60-second cooldown, then explicit Retry |
+| Current qualifying bot evidence or active signature | Selected local decoy sink |
+| Existing blocked device/frozen session | Operator-recovery guidance; restriction remains |
+| Missing cookies, expired check, server or connection failure | Honest recovery/error message; no automatic navigation |
 
-After passing, an HttpOnly `mbp` pass cookie is set (24h TTL). Subsequent
-visits skip the challenge.
+The slider also supports tap/click positioning plus Confirm and arrow keys plus
+Confirm. Instructions, visible focus, and live status support those alternatives.
+It is a modest effort check, not proof that a visitor is human. Wrong answers,
+input modality, storage refusal, and connection failures do not train bot
+signatures or increase device risk.
+
+The server owns the target, expiry, and retry budget. Challenge descriptors last
+5 minutes, and the budget is shared across purposes, reloads, and tabs for the
+same host and `_muid`. A new page does not reset the wrong-answer count. After
+an accepted check the client sends a separate same-origin `confirm` request to
+verify the exact HttpOnly `mbp` cookie and current restrictions. Only confirmed
+success displays Verified and navigates once. The pass TTL remains 24 hours by
+default; later valid passes still cannot bypass new restrictions.
+
+Failed requests time out after 8 seconds and offer Retry. Cookie failure explains
+that site cookies must be allowed; an embedded contact page can offer a top-level
+tab. Expired checks explain that a reload is needed. Other retained restrictions
+point to the operator's usual support channel from the current shell. Existing
+blocked/frozen records require operator review and are never automatically
+cleared by completing a check.
+
+### MojoAuth token provider
+
+The hosted templates install an optional async `bouncerTokenProvider` in
+`MojoAuth.init()`. `MojoAuth.getBouncerToken(purpose, context)` always returns a Promise:
+
+```javascript
+const token = await MojoAuth.getBouncerToken('public_message');
+// Include token as bouncer_token in the contact submission.
+```
+
+The real page's form descriptor lasts 30 minutes and is scoped server-side to
+its host, returning cookie, group, and purpose. `login`, `register`, and
+`startPhoneRegister` obtain a fresh single-use token automatically before each
+protected submission; contact awaits it explicitly. Retries after incorrect
+credentials and phone-start followed by registration each acquire a new token.
+Provider failure stops the form request and shows recovery guidance. The hosted
+provider cannot change purpose just because a caller supplies another argument.
+Optional `context.duid` supplies the protected request's device ID to the provider.
+
+The provider uses same-origin hosted assessment requests and keeps tokens out of
+localStorage. An expired form descriptor requires reloading the page. Other
+MojoAuth methods retain their current behavior; without the optional provider,
+the legacy token lookup/request behavior remains. Public `mojo-bouncer.js`
+embeds and assess bodies without `hosted_gate` keep their existing API/SDK
+semantics. See [Bouncer](bouncer.md#hosted-assess-protocol) for the typed request
+and response contract; this flow introduces no new CORS allowlist.
 
 ### A `pr:` reset link works on the first click
 
@@ -504,8 +563,11 @@ What this means for you:
   address bar even when it did not.
 - The hand-off is **per tab**, and that is fine: opening the link in a new tab
   simply runs the challenge page again there, which stashes the token again.
-  What does not survive is a tab where `sessionStorage` is unavailable — some
-  private-browsing configurations — and there the link needs a second click.
+  If `sessionStorage` is unavailable, the client confirms the pass cookie and
+  reloads the original same-origin reset-link URL once. The login page retains
+  that URL token in memory before attempting storage and strips it from the
+  address bar. No token is appended to another destination, and refused storage
+  does not require a second click on the email link. This reset link takes precedence over an older code-reset email saved in the tab.
 - **The stash is spent by the first attempt.** `/auth` removes it as soon as a
   redemption resolves either way, so a failed reset does not leave a dead token
   for the next visit to replay. Retrying with a stronger password on the same

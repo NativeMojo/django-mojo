@@ -135,7 +135,7 @@
     function protectedPost(url, body, purpose) {
         var payload = _withDevice(body);
         if (!_bouncerTokenProvider) return post(url, payload);
-        return MojoAuth.getBouncerToken(purpose).then(function (token) {
+        return MojoAuth.getBouncerToken(purpose, {duid: payload.duid || ''}).then(function (token) {
             if (!token) throw new Error('Verification is unavailable. Reload the page to continue.');
             payload.bouncer_token = token;
             return post(url, payload);
@@ -305,9 +305,9 @@
             _bouncerTokenProvider = typeof config.bouncerTokenProvider === 'function' ? config.bouncerTokenProvider : null;
         },
 
-        getBouncerToken: function (purpose) {
+        getBouncerToken: function (purpose, context) {
             if (!_bouncerTokenProvider) return Promise.resolve(_bouncerToken());
-            return Promise.resolve().then(function () { return _bouncerTokenProvider(purpose); });
+            return Promise.resolve().then(function () { return _bouncerTokenProvider(purpose, context || {}); });
         },
 
         // -----------------------------------------------------------------------
