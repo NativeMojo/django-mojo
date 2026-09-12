@@ -17,6 +17,7 @@ MESSAGE_KIND_CHOICES = [
 MODERATION_CHOICES = [
     ("allow", "Allow"),
     ("warn", "Warn"),
+    ("masked", "Masked"),
     ("block", "Block"),
 ]
 
@@ -27,19 +28,22 @@ class ChatMessage(models.Model, MojoModel):
         # user pinned so comms admins can't spoof message authorship.
         NO_SAVE_FIELDS = [
             "user", "is_flagged", "flagged_by", "flagged_at",
-            "moderation_decision", "client_key", "metadata",
+            "moderation_decision", "moderation_reasons", "moderation_score",
+            "client_key", "metadata",
         ]
         GRAPHS = {
             "list": {
                 "fields": [
                     "id", "room", "user", "body", "kind", "metadata",
+                    "moderation_decision", "moderation_reasons", "moderation_score",
                     "edited_at", "created",
                 ],
             },
             "default": {
                 "fields": [
                     "id", "room", "user", "body", "kind",
-                    "moderation_decision", "edited_at",
+                    "moderation_decision", "moderation_reasons", "moderation_score",
+                    "edited_at",
                     "is_flagged", "flagged_by", "flagged_at",
                     "metadata", "client_key", "created",
                 ],
@@ -58,6 +62,12 @@ class ChatMessage(models.Model, MojoModel):
     moderation_decision = models.CharField(
         max_length=10, choices=MODERATION_CHOICES, default="allow",
     )
+    # Null is unscored/legacy; classified clean is 0. Database defaults keep
+    # old writers working after migration or an application-only rollback.
+    moderation_score = models.PositiveSmallIntegerField(
+        null=True, blank=True, default=None, db_default=None,
+    )
+    moderation_reasons = models.JSONField(default=list, db_default=[], blank=True)
     edited_at = models.DateTimeField(null=True, blank=True)
     is_flagged = models.BooleanField(default=False, db_index=True)
     flagged_by = models.ForeignKey(

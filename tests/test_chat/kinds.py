@@ -21,7 +21,7 @@ TEST_PASSWORD = 'TestPass1!'
 ROOM_PREFIX = "test-kinds-"
 
 # Three links score 25 each against a block threshold of 70.
-BLOCKED_BODY = (
+HIGH_SCORE_BODY = (
     "http://spam-one.example http://spam-two.example http://spam-three.example")
 
 
@@ -555,17 +555,24 @@ def test_server_authored_file_still_moderates_caption(opts):
     room = _make_room("gate-moderation", opts.user1)
 
     msg, error = send_message(
-        room, opts.user1, BLOCKED_BODY, kind="file",
+        room, opts.user1, HIGH_SCORE_BODY, kind="file",
         metadata={"file": {"id": 7, "filename": "report.pdf"}},
         client_authored=False, broadcast=False, validators={})
 
-    assert_true(msg is None, "expected the caption to be moderated and blocked")
-    assert_eq(
-        error["error"], "Message blocked by moderation",
-        f"expected a moderation block, got {error['error']}")
-    assert_eq(
-        ChatMessage.objects.filter(room=room).count(), 0,
-        "expected the blocked file message not to be stored")
+    assert_eq(error, None, f"expected advisory caption moderation, got {error}")
+    assert_eq(msg.body, HIGH_SCORE_BODY, "expected the actual caption to be stored")
+    assert_eq(msg.moderation_decision, "masked", "expected high-score caption to be masked")
+    assert_eq(msg.moderation_score, 75, "expected raw classifier score on the caption")
+    assert_eq(msg.moderation_reasons, ["spam_link"], "expected persisted caption reasons")
+    severe, severe_error = send_message(
+        room, opts.user1, "fuck", kind="file", metadata={"file": {"id": 9}},
+        client_authored=False, broadcast=False, validators={})
+    assert_eq(severe_error, None, f"expected severe caption to store, got {severe_error}")
+    assert_eq(severe.body, "fuck", "expected severe caption body preserved")
+    assert_eq(severe.moderation_decision, "warn", "a single severe hit stays warn")
+    assert_eq(severe.moderation_score, 50, "expected raw severe caption score")
+    assert_eq(severe.moderation_reasons, ["high_severity"], "expected severe reason code")
+    assert_eq(ChatMessage.objects.filter(room=room).count(), 2, "both captions must be stored")
 
     # And the room's own rules still apply to a server-authored caption.
     strict = _make_room("gate-rules", opts.user1, rules={"max_message_length": 10})
@@ -581,9 +588,12 @@ def test_server_authored_file_still_moderates_caption(opts):
     # With the policy gate explicitly off, the same caption goes through --
     # that is what the join/leave sites use.
     allowed, allowed_error = send_message(
-        room, opts.user1, BLOCKED_BODY, kind="system",
+        room, opts.user1, HIGH_SCORE_BODY, kind="system",
         client_authored=False, enforce_room_policy=False, broadcast=False)
     assert_eq(
         allowed_error, None,
         f"expected enforce_room_policy=False to skip moderation, got {allowed_error}")
     assert_true(allowed is not None, "expected the unmoderated system message to store")
+    assert_eq(allowed.moderation_decision, "allow", "bypass decision must be allow")
+    assert_eq(allowed.moderation_reasons, [], "bypass must have no classifier reasons")
+    assert_eq(allowed.moderation_score, None, "bypass score must be null, not clean zero")

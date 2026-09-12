@@ -56,6 +56,8 @@ def on_chat_room_messages(request):
             "kind": msg.kind,
             "edited_at": msg.edited_at.isoformat() if msg.edited_at else None,
             "moderation_decision": msg.moderation_decision,
+            "moderation_reasons": msg.moderation_reasons,
+            "moderation_score": msg.moderation_score,
             "created": msg.created.isoformat(),
             "metadata": msg.metadata,
             # Author-scoped: client keys are client-chosen and may encode
