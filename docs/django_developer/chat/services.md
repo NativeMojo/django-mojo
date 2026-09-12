@@ -22,8 +22,9 @@ msg, error = send_message(room, user, body, kind="text", metadata=None, *,
 ```
 
 Returns `(message, None)` on success and `(None, error_dict)` on refusal. The
-error dict is already frame-shaped: `{"type": "error", "error": "..."}`, plus
-`reasons` on a moderation block.
+error dict is already frame-shaped: `{"type": "error", "error": "..."}`.
+Language scores never refuse a send; permission, rate, validation and explicit
+room-rule errors retain their existing behavior.
 
 The WebSocket handler (`_handle_send`) and the three server-authored system
 messages in `rest/rooms.py` both go through it.
@@ -74,8 +75,8 @@ author one. `system` likewise.
 5. Room rules — `check_rules(room, body, kind)` (`enforce_room_policy`)
 6. Card payload rules — `check_payload_rules(room, metadata)`
    (`client_authored and enforce_room_policy`)
-7. Moderation — `check_moderation(body)` (`enforce_room_policy`)
-8. Persist
+7. Moderation — `check_moderation_scored(body)` (`enforce_room_policy`)
+8. Persist body, decision, reasons and score together
 9. Publish the `chat_message` frame when `broadcast`
 10. `room.save(update_fields=["modified"])`
 
@@ -88,6 +89,21 @@ reference is not that. See [Rules & Moderation](rules.md).
 a server-authored message. An `IntegrityError` from the partial unique
 constraint propagates to the caller, which is how the handler's dedupe recovery
 still works. See [WebSocket Handler](handler.md).
+
+### Advisory moderation state
+
+Classified sends save the real trimmed body and all three server-owned fields:
+`moderation_decision`, `moderation_reasons`, `moderation_score`. The scored
+helper returns `(decision, reasons, score)`; only classifier `block` maps to
+`masked`, even for severe language. Clean messages store `allow`/`[]`/`0`;
+low-score allows retain their reasons. Trusted `enforce_room_policy=False`
+sends store `allow`/`[]`/`null` because no classification ran.
+
+Every `chat_message` broadcast includes these persisted fields. Optional
+`broadcast_extra` may add consumer fields but cannot replace authoritative
+message fields. Metadata remains unchanged and cannot set moderation state.
+See [Rules](rules.md) for score bounds, legacy null handling, the consumer's
+>=35 display policy and required `Hidden by moderation` notification previews.
 
 ### Metadata contract
 
@@ -148,7 +164,7 @@ send_message(room, user, caption, kind="file",
 
 `file ∈ SERVER_KINDS` passes the whitelist, no validator is required
 (`file ∉ VALIDATED_KINDS`), and `enforce_room_policy` defaults `True` so the
-caption still runs the room's rate limit, `check_rules` and `check_moderation`.
+caption still runs the room's rate limit, `check_rules` and `check_moderation_scored`.
 
 One gap is preserved deliberately: `check_rules`'s `allow_media` branch tests
 `kind == "image"` only, so a `file` message in an `allow_media=False` room is

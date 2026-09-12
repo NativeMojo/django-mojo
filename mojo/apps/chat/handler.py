@@ -71,6 +71,9 @@ def _send_ack(msg, room, client_key):
         "room_id": room.pk,
         "kind": msg.kind,
         "metadata": msg.metadata,
+        "moderation_decision": msg.moderation_decision,
+        "moderation_reasons": msg.moderation_reasons,
+        "moderation_score": msg.moderation_score,
         "created": msg.created.isoformat(),
     }
     if client_key:
@@ -212,10 +215,13 @@ def _handle_send(user, data, *, publisher=None):
     return _send_ack(msg, room, client_key)
 
 
-def _handle_edit(user, data):
-    """Handle editing an existing message."""
+def _handle_edit(user, data, *, publisher=None):
+    """Edit body and advisory moderation state together.
+
+    `publisher` captures accepted edit events in tests; production omits it.
+    """
     from .models import ChatMessage, ChatMembership
-    from .rules import check_rules, check_moderation
+    from .rules import check_rules, check_moderation_scored
     from mojo.apps.realtime import publish_topic
 
     message_id = data.get("message_id")
@@ -243,30 +249,40 @@ def _handle_edit(user, data):
         return {"type": "error", "error": rule_errors[0]}
 
     # Content moderation
-    decision, reasons = check_moderation(body)
-    if decision == "block":
-        return {"type": "error", "error": "Edited message blocked by moderation", "reasons": reasons}
+    decision, reasons, score = check_moderation_scored(body)
 
     # Update
     msg.body = body
     msg.edited_at = dates.utcnow()
     msg.moderation_decision = decision
-    msg.save(update_fields=["body", "edited_at", "moderation_decision"])
+    msg.moderation_reasons = reasons
+    msg.moderation_score = score
+    msg.save(update_fields=[
+        "body", "edited_at", "moderation_decision", "moderation_reasons",
+        "moderation_score",
+    ])
 
     # Publish edit event
-    publish_topic(msg.room.topic, {
+    publish = publisher or publish_topic
+    publish(msg.room.topic, {
         "type": "chat_message_edited",
         "message_id": msg.pk,
         "room_id": msg.room_id,
         "user_id": user.pk,
         "body": body,
         "edited_at": msg.edited_at.isoformat(),
+        "moderation_decision": msg.moderation_decision,
+        "moderation_reasons": msg.moderation_reasons,
+        "moderation_score": msg.moderation_score,
     })
 
     return {
         "type": "chat_edit_ack",
         "message_id": msg.pk,
         "edited_at": msg.edited_at.isoformat(),
+        "moderation_decision": msg.moderation_decision,
+        "moderation_reasons": msg.moderation_reasons,
+        "moderation_score": msg.moderation_score,
     }
 
 

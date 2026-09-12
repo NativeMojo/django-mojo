@@ -2,7 +2,7 @@
 Room rules enforcement for chat messages.
 
 Checks per-room content policies (URLs, phone numbers, media, length)
-and runs content_guard moderation. Returns (decision, errors) tuple.
+and provides advisory content_guard moderation adapters.
 """
 import time
 from mojo.helpers.redis.client import get_connection
@@ -102,15 +102,22 @@ def check_payload_rules(room, metadata):
     return errors
 
 
-def check_moderation(body):
-    """
-    Run content_guard moderation on message body.
+def check_moderation_scored(body):
+    """Return advisory (decision, reasons, score) for a chat body.
 
-    Returns (decision, reasons) where decision is "allow", "warn", or "block".
+    Preserve classifier scores/reasons, including high_severity. Only block
+    becomes masked: consumers decide what to hide, and may reveal the body.
     """
     from mojo.helpers import content_guard
     result = content_guard.check_text(body, surface="chat")
-    return result.decision, result.reasons
+    decision = "masked" if result.decision == "block" else result.decision
+    return decision, list(result.reasons), result.score
+
+
+def check_moderation(body):
+    """Compatibility two-tuple: advisory (decision, reasons)."""
+    decision, reasons, score = check_moderation_scored(body)
+    return decision, reasons
 
 
 def check_rate_limit(room, user):

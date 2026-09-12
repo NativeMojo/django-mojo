@@ -267,8 +267,8 @@ def send_message(room, user, body, kind="text", metadata=None, *,
         Publish the `chat_message` frame on the room topic. Server-authored
         callers that publish their own event pass False.
     broadcast_extra
-        Merged into the broadcast frame -- how the handler puts `client_key`
-        on the wire.
+        Adds fields to the broadcast frame -- how the handler puts
+        `client_key` on the wire. Cannot override authoritative message fields.
     client_key
         Stored on the row. The idempotency LOOKUP stays in the handler; it is
         client-authored replay protection and is meaningless server-side.
@@ -278,7 +278,7 @@ def send_message(room, user, body, kind="text", metadata=None, *,
     """
     from ..models import ChatMessage
     from ..rules import (
-        check_rules, check_moderation, check_rate_limit, check_payload_rules)
+        check_rules, check_moderation_scored, check_rate_limit, check_payload_rules)
     from mojo.apps.realtime import publish_topic
 
     publish = publisher or publish_topic
@@ -301,7 +301,7 @@ def send_message(room, user, body, kind="text", metadata=None, *,
     if not body and not metadata:
         return None, _error("body or metadata is required")
 
-    decision = "allow"
+    decision, reasons, score = "allow", [], None
     if enforce_room_policy:
         # 4. Rate limit
         if not check_rate_limit(room, user):
@@ -323,9 +323,7 @@ def send_message(room, user, body, kind="text", metadata=None, *,
         # 7. Moderation -- `body` is the moderated surface. The classifier is
         # deliberately NOT run over payloads: ids and slugs produce false
         # positives with no recourse.
-        decision, reasons = check_moderation(body)
-        if decision == "block":
-            return None, _error("Message blocked by moderation", reasons=reasons)
+        decision, reasons, score = check_moderation_scored(body)
 
     # 8. Persist
     with transaction.atomic():
@@ -336,25 +334,29 @@ def send_message(room, user, body, kind="text", metadata=None, *,
             kind=kind,
             metadata=metadata,
             moderation_decision=decision,
+            moderation_reasons=reasons,
+            moderation_score=score,
             client_key=client_key,
         )
 
     # 9. Publish
     if broadcast:
-        msg_data = {
+        # Extras may add consumer fields, but never replace authoritative
+        # persisted message data (especially moderation state).
+        msg_data = dict(broadcast_extra or {})
+        msg_data.update({
             "type": "chat_message",
             "message_id": msg.pk,
             "room_id": room.pk,
             "user_id": getattr(user, "pk", None),
-            "body": body,
-            "kind": kind,
-            "metadata": metadata,
+            "body": msg.body,
+            "kind": msg.kind,
+            "metadata": msg.metadata,
+            "moderation_decision": msg.moderation_decision,
+            "moderation_reasons": msg.moderation_reasons,
+            "moderation_score": msg.moderation_score,
             "created": msg.created.isoformat(),
-        }
-        if decision == "warn":
-            msg_data["moderation_decision"] = "warn"
-        if broadcast_extra:
-            msg_data.update(broadcast_extra)
+        })
         publish(room.topic, msg_data)
 
     # 10. Bump the room so room lists reorder
