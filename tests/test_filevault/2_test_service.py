@@ -49,7 +49,8 @@ def setup_vault_service(opts):
     VaultData.objects.filter(group=group).delete()
 
     # ensure a system default FileManager exists for filevault tests
-    base_path = "/tmp/mojo-fileman-tests"
+    from mojo.helpers import paths
+    base_path = str(paths.VAR_ROOT / "filevault-tests")
     sys_manager = FileManager.objects.filter(
         user=None, group=None, is_default=True, is_active=True
     ).first()
@@ -70,8 +71,8 @@ def setup_vault_service(opts):
         sys_manager.backend_url = "file:///"
         sys_manager.is_default = True
         sys_manager.is_active = True
-        sys_manager.set_settings({"base_path": base_path})
-        sys_manager.save()
+    sys_manager.set_settings({"base_path": base_path})
+    sys_manager.save()
 
     # ensure this manager is the system default
     FileManager.objects.filter(

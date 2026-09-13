@@ -18,7 +18,7 @@ anything that would run `systemctl`. `install_units` is filesystem-only for
 exactly that reason — `enable_timers` owns the systemctl half.
 """
 
-import getpass
+import pwd
 import os
 import shutil
 import stat
@@ -191,10 +191,10 @@ def test_var_dirs_refuses_file_to_symlink_race(opts):
 def test_var_dirs_unresolvable_owner_is_a_warning_not_a_refusal(opts):
     from mojo.deploy import node_setup as ns
 
-    uid, gid = ns.resolve_owner(getpass.getuser())
+    uid, gid = ns.resolve_owner(pwd.getpwuid(os.getuid()).pw_name)
     th.assert_eq(uid, os.getuid(),
                  f"resolving the current user must yield the current uid, got "
-                 f"{uid} for {getpass.getuser()!r}")
+                 f"{uid} for {pwd.getpwuid(os.getuid()).pw_name!r}")
     th.assert_true(gid is not None,
                    "a spec with no ':group' must fall back to the user's own "
                    "primary group rather than returning nothing")

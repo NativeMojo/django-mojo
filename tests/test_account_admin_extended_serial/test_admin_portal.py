@@ -35,10 +35,8 @@ ADMIN_PASSWORD = "Admin_portal_serial_pw_99"
 
 @th.django_unit_setup()
 def setup_admin_portal_serial(opts):
-    from django.core.cache import cache
     from mojo.apps.account.models import User
 
-    cache.clear()
     User.objects.filter(email=ADMIN_EMAIL).delete()
     user = User.objects.create_user(username=ADMIN_EMAIL, email=ADMIN_EMAIL,
                                     password=ADMIN_PASSWORD)

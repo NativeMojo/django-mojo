@@ -114,6 +114,12 @@ rechecked before truncation to detect a path changed during the reset.
 uvicorn process log at `testproject/var/asgi.log` is outside the framework log
 directory and is not part of this reset.
 
+File-selected runs (`-t package.file`) include their executed results in the
+JSON report's top-level totals and per-module entries, including selections
+mixed with whole packages. An extra-gated test is recorded as skipped with its
+reason regardless of whether `requires_extra` wraps the unit-test decorator
+or is wrapped by it.
+
 ### Dev-server host/port (`dev_server.conf`)
 
 The test server's host and port come from a small `key=value` file with two keys:

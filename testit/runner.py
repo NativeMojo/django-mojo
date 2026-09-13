@@ -949,7 +949,18 @@ def run_test(opts, module, func_name, module_name, test_name):
     helpers._set_active_test(test_key.replace(".", ":"))
     try:
         getattr(module, func_name)(opts)
-    except helpers.TestitSkip:
+    except helpers.TestitSkip as skip:
+        # An outer requires_extra decorator can skip before the unit-test
+        # wrapper starts accounting. Skips caught inside that wrapper never
+        # reach here, so this records the otherwise missing result once.
+        func = getattr(module, func_name)
+        name = getattr(func, "_test_name", None) or func_name.removeprefix("test_")
+        helpers._increment("total")
+        helpers._increment("skipped")
+        helpers._record_result(name, status="skipped", detail=str(skip))
+        dfn = helpers._get_display_fn()
+        if dfn:
+            dfn("test_result", name=name, status="skipped", detail=str(skip))
         return
     except helpers.TestitAbort:
         raise
@@ -1743,20 +1754,37 @@ def _build_agent_report(opts, display=None, conf_drift=None):
             if module_tiers.get(name):
                 entry["tier"] = module_tiers[name]
             modules[name] = entry
-    else:
-        # Build per-module stats from records
-        for record in helpers.TEST_RUN.records:
-            mod = record.get("module") or "unknown"
-            if mod not in modules:
-                modules[mod] = {"tests": 0, "passed": 0, "failed": 0, "skipped": 0}
-            modules[mod]["tests"] += 1
-            status = record.get("status", "")
-            if status == "passed":
-                modules[mod]["passed"] += 1
-            elif status in ("failed", "error"):
-                modules[mod]["failed"] += 1
-            elif status == "skipped":
-                modules[mod]["skipped"] += 1
+
+    # File selections run outside the rich display. Merge their recorded
+    # outcomes even when a package selection already has a tracker for the
+    # same module. Trackers also contain whole-module skips with no records,
+    # so retain their counts and add only outcomes they did not observe.
+    recorded = {}
+    for record in helpers.TEST_RUN.records:
+        mod = record.get("module") or "unknown"
+        counts = recorded.setdefault(
+            mod, {"tests": 0, "passed": 0, "failed": 0, "skipped": 0})
+        counts["tests"] += 1
+        status = record.get("status", "")
+        if status == "error":
+            status = "failed"
+        if status in ("passed", "failed", "skipped"):
+            counts[status] += 1
+    for mod, counts in recorded.items():
+        if mod not in modules:
+            modules[mod] = counts
+            continue
+        entry = modules[mod]
+        if entry.get("skipped_reason"):
+            # Whole-module skips emit no records; a selected file in the
+            # same package is an additional execution, even if it also skips.
+            for key, value in counts.items():
+                entry[key] += value
+            continue
+        for status in ("passed", "failed", "skipped"):
+            extra = max(0, counts[status] - entry[status])
+            entry[status] += extra
+            entry["tests"] += extra
 
     duration = (helpers.TEST_RUN.finished_at or time.time()) - (helpers.TEST_RUN.started_at or time.time())
 

@@ -23,10 +23,8 @@ SECURITY_VIEWER_EMAIL = "admin_portal_security_viewer@test.com"
 
 @th.django_unit_setup()
 def setup_admin_portal_foundation(opts):
-    from django.core.cache import cache
     from mojo.apps.account.models import User
 
-    cache.clear()
     User.objects.filter(email__in=[
         ADMIN_EMAIL, USER_EMAIL, ADMIN_ONLY_EMAIL, SECURITY_VIEWER_EMAIL,
     ]).delete()

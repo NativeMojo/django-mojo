@@ -89,7 +89,8 @@ def setup_vault_access_log(opts):
     if scoping is not None:
         scoping._ensure_file_manager(FileManager)
     else:
-        base_path = "/tmp/mojo-fileman-tests"
+        from mojo.helpers import paths
+        base_path = str(paths.VAR_ROOT / "filevault-tests")
         fm, _ = FileManager.objects.get_or_create(
             user=None, group=None, name="Test FileManager (file)",
             defaults={"backend_type": FileManager.FILE_SYSTEM,

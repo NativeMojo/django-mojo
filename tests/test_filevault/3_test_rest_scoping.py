@@ -65,7 +65,8 @@ def _decode_token_payload(token):
 
 def _ensure_file_manager(FileManager):
     """A filesystem-backed system default FileManager (required by upload_file)."""
-    base_path = "/tmp/mojo-fileman-tests"
+    from mojo.helpers import paths
+    base_path = str(paths.VAR_ROOT / "filevault-tests")
     sys_manager = FileManager.objects.filter(
         user=None, group=None, is_default=True, is_active=True).first()
     if sys_manager is None or sys_manager.backend_type != FileManager.FILE_SYSTEM:
@@ -81,8 +82,8 @@ def _ensure_file_manager(FileManager):
         sys_manager.backend_url = "file:///"
         sys_manager.is_default = True
         sys_manager.is_active = True
-        sys_manager.set_settings({"base_path": base_path})
-        sys_manager.save()
+    sys_manager.set_settings({"base_path": base_path})
+    sys_manager.save()
     FileManager.objects.filter(
         user=None, group=None, is_default=True
     ).exclude(pk=sys_manager.pk).update(is_default=False)

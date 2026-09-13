@@ -386,6 +386,22 @@ Each tree needs its own `.venv` and its own `testproject/` — both gitignored,
 both regenerated. That is the cost: a `uv sync` and a `create_testproject` per
 tree.
 
+### Fixture storage and operating-system identity
+
+Filesystem fixtures must use a directory under `mojo.helpers.paths.VAR_ROOT`
+(or a test-owned temporary directory), not a fixed shared `/tmp` path. A fixed
+path can belong to another developer and also defeats worktree isolation.
+When reusing a filesystem `FileManager`, refresh its fixture path so an older
+row cannot retain a path from a previous checkout.
+
+Tests that compare filesystem ownership must derive the account from
+`pwd.getpwuid(os.getuid())`. `getpass.getuser()` trusts environment labels such
+as `LOGNAME`, which can disagree with the process's actual user.
+
+Within a parallel run, never clear the shared cache from a fixture. Delete
+only fixture-owned keys; a blanket `cache.clear()` can erase another test's
+active login challenge or session.
+
 **What worktrees do not isolate:** migration numbering. django-mojo ships its
 own migrations, so two trees adding a model to the same app both generate
 `0002_*.py`. They do not clash on disk — they clash at merge, and Django needs

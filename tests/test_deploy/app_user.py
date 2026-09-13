@@ -136,11 +136,11 @@ def test_name_validation_rejects_every_dangerous_shape(opts):
 
 @th.django_unit_test()
 def test_full_validation_requires_a_real_non_root_account(opts):
-    import getpass
+    import pwd
 
     from mojo.deploy import app_user
 
-    me = getpass.getuser()
+    me = pwd.getpwuid(os.getuid()).pw_name
     th.assert_true(app_user.valid_app_user(me),
                    "the current (non-root) account must validate")
     th.assert_true(not app_user.valid_app_user("root"),
@@ -153,11 +153,11 @@ def test_full_validation_requires_a_real_non_root_account(opts):
 @th.django_unit_test()
 def test_the_cron_entry_outranks_an_explicit_candidate(opts):
     """The deployed cron entry is the fleet's statement of intent (#2246)."""
-    import getpass
+    import pwd
 
     from mojo.deploy import app_user
 
-    me = getpass.getuser()
+    me = pwd.getpwuid(os.getuid()).pw_name
     with tempfile.TemporaryDirectory() as root:
         cron_path = os.path.join(root, "3_mojo_jobs")
         with open(cron_path, "w") as handle:
@@ -175,11 +175,11 @@ def test_the_cron_entry_outranks_an_explicit_candidate(opts):
 
 @th.django_unit_test()
 def test_the_ladder_falls_through_to_the_checkout_owner(opts):
-    import getpass
+    import pwd
 
     from mojo.deploy import app_user
 
-    me = getpass.getuser()
+    me = pwd.getpwuid(os.getuid()).pw_name
     with tempfile.TemporaryDirectory() as root:
         missing_cron = os.path.join(root, "no-such-cron")
         th.assert_eq(
@@ -228,9 +228,9 @@ def test_the_cron_parser_reads_field_six_of_the_first_schedule_line(opts):
 
 @th.django_unit_test()
 def test_app_user_subcommand_resolves_and_fails_closed(opts):
-    import getpass
+    import pwd
 
-    me = getpass.getuser()
+    me = pwd.getpwuid(os.getuid()).pw_name
     with tempfile.TemporaryDirectory() as root:
         empty_cron = os.path.join(root, "cron-empty")
         os.makedirs(empty_cron)
