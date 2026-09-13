@@ -1063,3 +1063,216 @@ def test_stamp_wins_and_corrupt_gid_refuses(opts):
                      f"{why} must NEVER produce a token — a corrupt stamp is a "
                      f"corrupt code, not a licence to fall back to a JWT: "
                      f"{resp.response}")
+
+
+def _login_request(user, group=None):
+    from django.test import RequestFactory
+    from objict import objict
+
+    request = RequestFactory().post("/api/auth/exchange")
+    request.DATA = objict()
+    request.user = user
+    if group is not None:
+        request.group = group
+    request.ip = "127.0.0.1"
+    request.device = None
+    request.duid = ""
+    request.bearer = None
+    request.user_agent = ""
+    request.META["HTTP_X_MOJO_TEST_GEOFENCE_ENABLED"] = "0"
+    return request
+
+
+@th.django_unit_test("group login copies trusted context before geofence, audit and callback")
+def test_group_login_copies_trusted_context(opts):
+    from unittest.mock import patch
+    from mojo.apps.account.models import Group, User
+    from mojo.apps.account.models.login_event import UserLoginEvent
+    from mojo.apps.account.rest import user as user_rest
+    from mojo.apps.account.services.geofence import enforcement
+    from mojo.models.rest import ACTIVE_REQUEST
+
+    user = User.objects.get(pk=opts.member_id)
+    foreign = User.objects.get(pk=opts.outsider_id)
+    trusted = Group.objects.get(pk=opts.group_a_id)
+    wrong = Group.objects.get(pk=opts.child_a_id)
+    for request_group in (None, wrong):
+        request = _login_request(foreign, request_group)
+        before = request.__dict__.copy()
+        with patch.object(enforcement, "enforce", wraps=enforcement.enforce) as enforce, \
+                patch.object(UserLoginEvent, "track", wraps=UserLoginEvent.track) as track, \
+                patch.object(user_rest, "_record_session_activity",
+                             wraps=user_rest._record_session_activity) as record, \
+                patch.object(user_rest.account_extensions, "fire_user_login") as fire:
+            request_context = ACTIVE_REQUEST.set(request)
+            try:
+                response = user_rest.group_token_login(request, user, trusted)
+                assert_true(ACTIVE_REQUEST.get() is request,
+                            "device tracking must restore the caller's ambient request")
+            finally:
+                ACTIVE_REQUEST.reset(request_context)
+
+        assert_eq(response.status_code, 200, "an eligible member must still receive a token")
+        assert_true(request.__dict__ == before,
+                  "the original request must retain its user, group and geofence state")
+        login_request = enforce.call_args.args[0]
+        assert_true(login_request is not request,
+                    "geofencing must evaluate a copied request")
+        assert_true(login_request.group is trusted,
+                    "the trusted destination must be bound before enforcement")
+        assert_true(enforce.call_args.kwargs["user"] is user,
+                    "geofencing must use the credential-verified user")
+        assert_true(track.call_args.args[0] is login_request,
+                    "login tracking must receive the same trusted request")
+        assert_true(login_request.device is not None,
+                    "device tracking must populate the copied request")
+        assert_eq(login_request.device.user_id, user.pk,
+                  "the copied request's device must belong to the verified user")
+        assert_true(record.call_args.args[0] is login_request,
+                    "security-history recording must receive the same trusted request")
+        assert_eq(fire.call_count, 1, "a successful handoff must fire one login extension")
+        assert_eq(set(fire.call_args.kwargs), {"user", "request", "source", "is_new_user"},
+                  "the extension keyword contract must remain unchanged")
+        assert_true(fire.call_args.kwargs["request"] is login_request,
+                    "the application extension must receive the trusted request")
+        assert_true(fire.call_args.kwargs["user"] is user,
+                    "the extension's user must be the verified subject, never the foreign bearer")
+
+
+@th.django_unit_test("group login failed mint and forced-password challenge have no success effects")
+def test_group_login_failure_and_challenge_no_success(opts):
+    from unittest.mock import patch
+    from mojo.apps.account.models import Group, User
+    from mojo.apps.account.models.login_event import UserLoginEvent
+    from mojo.apps.account.rest import user as user_rest
+    from mojo.apps.account.services import group_token
+
+    user = User.objects.get(pk=opts.member_id)
+    trusted = Group.objects.get(pk=opts.group_a_id)
+    request = _login_request(User.objects.get(pk=opts.outsider_id))
+    before_request = request.__dict__.copy()
+    before_login = user.last_login
+    with patch.object(group_token, "mint", side_effect=RuntimeError("test mint failed")) as mint, \
+            patch.object(UserLoginEvent, "track") as track, \
+            patch.object(user_rest, "_record_session_activity") as record, \
+            patch.object(user_rest.account_extensions, "fire_user_login") as fire:
+        try:
+            user_rest.group_token_login(request, user, trusted)
+            raise AssertionError("a mint failure must propagate")
+        except RuntimeError as exc:
+            assert_eq(str(exc), "test mint failed", "the original mint error must propagate")
+        assert_eq(mint.call_count, 1, "the failure must exercise the real mint boundary")
+        user.requires_password_change = True
+        response = user_rest.group_token_login(request, user, trusted)
+        import json
+        assert_true(json.loads(response.content)["data"]["requires_password_change"],
+                    "the forced-password challenge must retain its response")
+        assert_eq(mint.call_count, 1, "the challenge must not attempt another token mint")
+        assert_eq(track.call_count, 0, "failed and unfinished logins must not be tracked")
+        assert_eq(record.call_count, 0, "failed and unfinished logins must not write success audit")
+        assert_eq(fire.call_count, 0, "failed and unfinished logins must not fire a login extension")
+    user.refresh_from_db()
+    assert_eq(user.last_login, before_login, "neither exit may persist a successful login")
+    assert_true(request.__dict__ == before_request, "neither exit may mutate the original request")
+
+
+@th.django_unit_test("group login keeps disabled membership, ancestor and user mint restrictions")
+def test_group_login_keeps_mint_restrictions(opts):
+    from unittest.mock import patch
+    from mojo import errors as merrors
+    from mojo.apps.account.models import Group, User
+    from mojo.apps.account.models.member import GroupMember
+    from mojo.apps.account.models.login_event import UserLoginEvent
+    from mojo.apps.account.rest import user as user_rest
+
+    user = User.objects.get(pk=opts.member_id)
+    group = Group.objects.get(pk=opts.group_a_id)
+    membership = GroupMember.objects.get(user=user, group=group)
+    dark_child = Group.objects.get(uuid=opts.dark_child_uuid)
+    dark_child.add_member(user)
+    before_login = user.last_login
+    inactive_user = User.objects.get(pk=opts.member_id)
+    inactive_user.is_active = False
+    with patch.object(UserLoginEvent, "track") as track, \
+            patch.object(user_rest, "_record_session_activity") as record, \
+            patch.object(user_rest.account_extensions, "fire_user_login") as fire:
+        cases = [
+            (user, dark_child, "an inactive ancestor despite direct membership"),
+            (user, Group.objects.get(pk=opts.child_a_id), "parent-only membership"),
+            (User.objects.get(pk=opts.super_id), group, "a superuser"),
+            (User.objects.get(pk=opts.outsider_id), group, "a non-member"),
+            (inactive_user, group, "a disabled user"),
+        ]
+        try:
+            cases.append((user, group, "a disabled direct membership"))
+            for subject, destination, why in cases:
+                if why == "a disabled direct membership":
+                    GroupMember.objects.filter(pk=membership.pk).update(is_active=False)
+                request = _login_request(user)
+                before_request = request.__dict__.copy()
+                with th.assert_raises(merrors.PermissionDeniedException):
+                    user_rest.group_token_login(request, subject, destination)
+                assert_true(request.__dict__ == before_request,
+                          f"a refusal for {why} must preserve the original request")
+        finally:
+            GroupMember.objects.filter(pk=membership.pk).update(is_active=True)
+        assert_eq(track.call_count, 0, "mint restrictions must prevent login tracking")
+        assert_eq(record.call_count, 0, "mint restrictions must prevent success audit")
+        assert_eq(fire.call_count, 0, "mint restrictions must prevent the success extension")
+    user.refresh_from_db()
+    assert_eq(user.last_login, before_login, "a refused mint must not advance last_login")
+
+
+@th.django_unit_test("a trusted-group geofence block precedes token minting")
+def test_group_login_geofence_precedes_mint(opts):
+    from unittest.mock import patch
+    from mojo.apps.account.models import Group, User
+    from mojo.apps.account.rest import user as user_rest
+    from mojo.apps.account.services import group_token
+
+    user = User.objects.get(pk=opts.member_id)
+    trusted = Group.objects.get(pk=opts.group_a_id)
+    trusted.metadata = {"geofence": {"country": {"in": ["CA"]}}}
+    request = _login_request(
+        User.objects.get(pk=opts.super_id), Group.objects.get(pk=opts.child_a_id))
+    request.META.update({
+        "HTTP_X_MOJO_TEST_GEOFENCE_ENABLED": "1",
+        "HTTP_X_MOJO_TEST_GEO": '{"country_code":"US"}',
+        "HTTP_X_MOJO_TEST_GEOFENCE_SYSTEM": "{}",
+        "HTTP_X_MOJO_TEST_GEOFENCE_ALLOWLIST": "[]",
+        "HTTP_X_MOJO_TEST_GEOFENCE_ALLOW_PRIVATE": "0",
+        "HTTP_X_MOJO_TEST_GEOFENCE_CACHE_TTL": "0",
+    })
+    before = request.__dict__.copy()
+    with patch.object(group_token, "mint", wraps=group_token.mint) as mint, \
+            patch.object(user_rest.account_extensions, "fire_user_login") as fire:
+        response = user_rest.group_token_login(request, user, trusted)
+    assert_eq(response.status_code, 403,
+              "the verified user must be blocked by the trusted group's policy")
+    assert_eq(mint.call_count, 0, "geofence denial must happen before a group token is minted")
+    assert_eq(fire.call_count, 0, "the denial must not fire a success callback")
+    assert_true(request.__dict__ == before, "the denial must leave the original request unchanged")
+
+
+@th.django_unit_test("a failing device tracker restores the caller's ambient request")
+def test_group_login_tracking_error_restores_context(opts):
+    from unittest.mock import patch
+    from mojo.apps.account.models import Group, User
+    from mojo.apps.account.rest import user as user_rest
+    from mojo.models.rest import ACTIVE_REQUEST
+
+    user = User.objects.get(pk=opts.member_id)
+    trusted = Group.objects.get(pk=opts.group_a_id)
+    request = _login_request(User.objects.get(pk=opts.outsider_id))
+    before = request.__dict__.copy()
+    request_context = ACTIVE_REQUEST.set(request)
+    try:
+        with patch.object(User, "track", side_effect=RuntimeError("test tracker failed")):
+            with th.assert_raises(RuntimeError):
+                user_rest.group_token_login(request, user, trusted)
+        assert_true(ACTIVE_REQUEST.get() is request,
+                    "a raising tracker must restore the caller's ambient request")
+        assert_true(request.__dict__ == before,
+                    "a raising tracker must leave the original request unchanged")
+    finally:
+        ACTIVE_REQUEST.reset(request_context)

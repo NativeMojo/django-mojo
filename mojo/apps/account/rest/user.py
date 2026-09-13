@@ -1,5 +1,6 @@
 import time
 import uuid
+from copy import copy
 from django.db import transaction
 from mojo import decorators as md
 from mojo.apps.account.utils.jwtoken import JWToken
@@ -1015,6 +1016,13 @@ def group_token_login(request, user, group):
     """
     from mojo.apps.account.services import group_token
     from mojo.apps.account.services.geofence import enforcement
+    from mojo.models.rest import ACTIVE_REQUEST
+
+    # The destination was validated and stamped on the handoff code. Bind it
+    # before geofencing and keep that context through audit and extensions,
+    # without changing the caller's request or trusting its group selection.
+    request = copy(request)
+    request.group = group
 
     blocked = enforcement.enforce(request, scope="auth", user=user)
     if blocked is not None:
@@ -1035,7 +1043,13 @@ def group_token_login(request, user, group):
     # The targeted update mirrors jwt_login and User.touch(), keeping a full
     # save() off the login path.
     User.objects.filter(pk=user.pk).update(last_login=now)
-    user.track()
+    # track() reads the ambient request and assigns its device. Scope that
+    # write to the copy too, then restore the caller's ambient context.
+    request_context = ACTIVE_REQUEST.set(request)
+    try:
+        user.track()
+    finally:
+        ACTIVE_REQUEST.reset(request_context)
     try:
         from mojo.apps.account.models.login_event import UserLoginEvent
         UserLoginEvent.track(request, user, device=request.device,

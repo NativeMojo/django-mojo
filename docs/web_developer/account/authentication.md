@@ -189,6 +189,14 @@ retryable by the client:
   state changed between the mint and the exchange. Every guard is re-run at
   exchange, and a refusal **never** falls back to issuing a JWT.
 
+A gated exchange also applies the destination group's geofence policy before
+issuing a token. The group comes from the server-issued handoff code; omitting
+`group`/`group_uuid` or naming another brand on the exchange request cannot
+change that policy or the successful login's brand attribution. A geographic
+refusal returns the standard `403` with `error="geofence_blocked"` and creates
+no successful-login record or callback. The successful token response above is
+unchanged.
+
 **OAuth is refused for gated destinations.** If your app runs its **own** OAuth
 callback page, `GET /api/auth/oauth/<provider>/begin` and
 `POST /api/auth/oauth/<provider>/complete` answer

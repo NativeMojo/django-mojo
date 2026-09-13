@@ -589,6 +589,20 @@ pages from.
 JWT pair is never constructed. The mint runs **before any side effect**, so a
 refused mint leaves no `last_login` and no login event behind.
 
+The trusted group stamped on the handoff code is bound to a shallow copy of
+the request **before geofencing**. Enforcement, login tracking, security-history
+recording, and `USER_LOGIN_HANDLER` all receive that copy. Its `request.group`
+is the destination group even when the incoming request omitted a group or
+named another one; the caller's original request is unchanged. Geofencing and
+the extension's `user` argument use the code's verified subject, including when
+the incoming request carries another user's bearer. A geofence block returns
+before minting, and a refused mint or forced-password challenge fires no
+successful-login hook.
+
+`User.track()` uses the framework's ambient request to attach a device, so
+that call temporarily uses the same copy and restores the ambient context on
+exit. The login event and callback retain the signed-in user's device.
+
 | Side effect | Gated exchange |
 |---|---|
 | geofence enforcement (`scope="auth"`) | yes, first |
@@ -1100,7 +1114,8 @@ def on_user_registered(*, user, request, group, source, extra):
 
 #### `USER_LOGIN_HANDLER`
 
-Fires from every successful `jwt_login()` call, across all login paths. Errors are caught, logged, and swallowed — they never affect the login response.
+Fires from every successful `jwt_login()` call and gated `group_token_login()`
+exchange. Errors are caught, logged, and swallowed — they never affect the login response.
 
 ```python
 # settings.py
@@ -1114,6 +1129,13 @@ def on_user_login(*, user, request, source, is_new_user):
 ```
 
 `source` values: `"password"`, `"magic"`, `"oauth"`, `"email_verify"`, `"invite"`, `"password_reset"`, `"email_change"`, `"sessions_revoke"`, `"totp"`, `"totp_mfa"`, `"totp_recovery"`, `"passkey"`, `"sms"`, `"sms_mfa"`, `"handoff"`, `"handoff:grouptoken"`.
+
+For `source="handoff:grouptoken"`, read the trusted destination from
+`request.group`. The request is a shallow copy scoped to that exchange; no new
+`group` keyword is passed. Always use the explicit `user` argument as the
+authenticated subject: `request.user` still describes the incoming request and
+may be anonymous or carry an unrelated bearer. Other login sources retain
+their existing request context.
 
 **Error contract asymmetry:**
 
