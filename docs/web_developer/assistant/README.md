@@ -263,18 +263,24 @@ After creation, use the standard `POST /api/assistant` or WebSocket `assistant_m
 GET /api/assistant/conversation
 ```
 
-List the requesting user's past conversations. Admins see all conversations; non-admins see only their own.
+List the requesting user's past conversations. Ordinary `assistant` holders
+see only their own conversations. Global `view_admin` permits oversight of
+other users' conversations; group-level grants do not widen access.
+Key-backed sessions cannot inherit either owner access or administrator oversight.
 
-> **Filter by `user` unless you mean it.** `Conversation.VIEW_PERMS` accepts
-> `view_admin` outright and `owner` is only the *fallback*, so an unfiltered list
-> returns **every** operator's conversation titles to a `view_admin` holder. A
-> per-operator history list must pass `?user=<your id>`. (Continuation stays
-> owner-only regardless: both the REST and WebSocket paths look a conversation
-> up with `user=<caller>`.)
+For a personal history list, global `view_admin` holders should pass
+`?user=<your id>`. Other users are always constrained to their own rows,
+including with `user` or `group` filters, a detail graph, downloads or
+aggregation modes. Request parameters cannot remove that owner constraint.
 
-**Permission**: `view_admin`
+**Permission**: authenticated owner, or global `view_admin` for oversight.
 
-**Query parameters**: Standard RestMeta pagination (`limit`, `page`, `order_by`).
+**Query parameters**: Standard RestMeta filtering and pagination.
+
+Foreign read queries and detail reads through this conversation endpoint are
+audited. The audit excludes conversation contents, titles and supplied filter
+values, and is not attributed to a caller-supplied group. This applies to the
+conversation REST endpoint, not generic administrator model tools or exports.
 
 **Response**:
 
@@ -303,7 +309,9 @@ GET /api/assistant/conversation/<id>?graph=detail
 
 Get a conversation. Use `?graph=detail` to include the full message history. Without it, the response contains only the conversation fields (no messages).
 
-**Permission**: `view_admin` + owner
+**Permission**: conversation owner, or global `view_admin` for oversight.
+An ordinary `assistant` holder cannot read another user's conversation,
+including its messages and pending action cards in the detail graph.
 
 **Response** (default graph — no messages):
 
@@ -811,7 +819,11 @@ In verbose mode (`verbose: true`), each result also includes `log` (full content
 
 ## Multi-turn Conversations
 
-The assistant maintains conversation context across multiple requests. To continue a conversation, pass the `conversation_id` from the previous response:
+The assistant maintains conversation context across multiple requests.
+Continuation over REST or WebSocket is owner-only: global `view_admin`
+oversight does not let an administrator send turns in another user's
+conversation. To continue your conversation, pass the `conversation_id` from
+the previous response:
 
 ```javascript
 // First message

@@ -1235,10 +1235,25 @@ Tracks a multi-turn conversation between a user and the assistant.
 
 | Setting | Value | Effect |
 |---|---|---|
-| `VIEW_PERMS` | `["view_admin", "owner"]` | Admins see all; owners see only their own conversations |
-| `OWNER_FIELD` | `"user"` | List auto-filters to `user=request.user` for non-admins |
+| `VIEW_PERMS` | `["view_admin", "owner"]` | Global `view_admin` retains oversight; ordinary users read only their own conversations |
+| `OWNER_FIELD` | `"user"` | List queries remain constrained to `user=request.user` without global oversight |
 | `CAN_DELETE` | `True` | Owner or admin may delete via `DELETE /api/assistant/conversation/<pk>` |
 | `NO_REST_SAVE` | `True` | Conversations are created by the agent service, not via direct POST |
+
+Conversation list and detail reads are owner-only for ordinary `assistant`
+holders. Global `view_admin` retains access to other users' conversations;
+a group-level grant does not confer that oversight.
+Key-backed sessions cannot inherit either owner access or administrator oversight. The owner constraint
+applies before list filters, downloads and aggregation, so a supplied `user`,
+`group`, graph or query mode cannot widen it. REST and WebSocket continuation
+still require the caller to own the conversation, including for administrators.
+
+Foreign reads through the REST conversation endpoint are audited: detail
+reads identify the target conversation, and list queries record oversight when
+the authorized query includes foreign conversations. Audit metadata excludes
+conversation contents, titles and user-supplied filters, and does not inherit
+the caller's group context. This audit covers the conversation REST endpoint;
+it does not describe generic administrator model-tool or export auditing.
 
 The `detail` graph includes nested messages using the message `default` graph:
 
