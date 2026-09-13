@@ -212,6 +212,10 @@ global `edge_node` permission, which is protected: a group administrator cannot
 grant it to an API key, and a member-scoped grant plus `?group=` does not open
 them. Nothing in a portal should call these.
 
+The material endpoint retains its `503` temporarily unavailable response when
+KMS cannot decrypt the private key. Retry the fetch; do not reissue the
+certificate in response to a custody outage.
+
 Each `desired_state` vhost carries non-secret certificate identity and revision
 metadata (`certificate` and `certificate_serial`). Changing the serial during
 an in-place renewal changes the desired-state generation, so nodes follow the

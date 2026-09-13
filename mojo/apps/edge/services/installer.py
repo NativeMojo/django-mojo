@@ -56,10 +56,10 @@ enabled-uniqueness constraint (row vs row, in the database) and the
 `conflicting server name` stderr scan below (row vs a hand-written block).
 
 **One tenant cannot freeze the fleet.** Certificate material can be unreadable
-for reasons unrelated to the row (KMS down — `KSMSecrets` returns an empty
-mapping). With a single abort path, one tenant's broken certificate would stop
-every node in the pool from converging, including on an urgent renewal of the
-platform's own certificate, and it would fail silent-but-serving until
+for reasons unrelated to the row (KMS down — `KSMSecrets` raises
+`SecretsUnavailableError`). With a single abort path, one tenant's broken
+certificate would stop every node in the pool from converging, including on an
+urgent renewal of the platform's own certificate, and it would fail silent-but-serving until
 something expired. nginx's all-or-nothing loading requires the *generation* to
 be complete; it does not require the generation to contain every vhost.
 
@@ -82,6 +82,7 @@ import subprocess
 
 from mojo.helpers import logit
 from mojo.helpers.settings import settings
+from mojo.models.secrets import SecretsUnavailableError
 
 from mojo.apps.edge.services import render, www_sync
 
@@ -317,16 +318,19 @@ def _write_material(generation, certificate, private_key=None):
     itself — the caller decides whether the owning vhost is droppable.
 
     ``private_key`` is an injection seam for tests: a loader called with the
-    certificate, returning its PEM (or None for unreadable custody). None
-    means the row's own KMS-backed ``private_key_pem``.
+    certificate, returning its PEM (or None for unreadable custody). It may
+    also raise SecretsUnavailableError. None means the row's own KMS-backed
+    ``private_key_pem``.
     """
-    if private_key is not None:
-        private_key = private_key(certificate)
-    else:
-        private_key = certificate.private_key_pem
+    try:
+        if private_key is not None:
+            private_key = private_key(certificate)
+        else:
+            private_key = certificate.private_key_pem
+    except SecretsUnavailableError:
+        return False
     if not private_key or not certificate.cert_pem:
-        # KSMSecrets returns an empty mapping when KMS decryption fails, so
-        # this means "custody unavailable", not "this certificate has no key".
+        # Incomplete material follows the same custody-unavailable policy.
         return False
 
     target = render.cert_dir(generation, certificate.pk)

@@ -880,6 +880,18 @@ class Integration(KSMSecrets, MojoModel):
     ...
 ```
 
+Both `MojoSecrets` and `KSMSecrets` raise on decryption failure rather than
+treating an unreadable store as empty. For `KSMSecrets`, an unreadable
+encrypted blob raises `SecretsUnavailableError` (a
+`RuntimeError` subclass, imported from `mojo.models.secrets`) from `.secrets`,
+`get_secret`, or a setter that needs the existing mapping. It does not return
+an empty mapping or the requested default. Failed reads preserve the ciphertext and do not cache an empty mapping,
+so the same instance can retry after KMS recovers.
+An unrelated save preserves the existing ciphertext; dirty secret state
+without a loaded mapping raises instead of clearing it. Use `clear_secrets()`
+only for an intentional deletion. `refresh_from_db()` discards the cached
+mapping and pending secret changes.
+
 Two settings are required, both read with `get_static` (file settings only —
 never the DB-backed store, which would recurse through the very secrets this
 client decrypts):
@@ -890,8 +902,9 @@ client decrypts):
 | `AWS_KEY` / `AWS_SECRET` | Credentials for the KMS client. When unset, boto3 falls back to its own chain (env vars, instance profile), so instance-role deployments need neither. |
 
 `AWS_REGION` selects the region, defaulting to `AWS_DEFAULT_REGION` then
-`us-east-1`. Without `KMS_KEY_ID` any save or read of a `KSMSecrets` row raises
-`RuntimeError: KMS_KEY_ID must be configured to use KSMSecrets`.
+`us-east-1`. Reading existing ciphertext without usable KMS configuration
+raises `SecretsUnavailableError`. Encryption requires `KMS_KEY_ID`; a missing
+key raises `RuntimeError: KMS_KEY_ID must be configured to use KSMSecrets`.
 
 ## Key Properties
 

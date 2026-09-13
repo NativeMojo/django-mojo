@@ -1,6 +1,7 @@
 import mojo.decorators as md
 import mojo.errors as me
 from mojo.helpers import logit
+from mojo.models.secrets import SecretsUnavailableError
 from mojo.apps.dnsman.models import Certificate, Domain
 from mojo.apps.dnsman.rest.gates import require_platform_admin
 from mojo.apps.dnsman.services import certs
@@ -193,12 +194,13 @@ def on_certificate_material(request, pk=None):
             and certs.has_still_valid_material(certificate)):
         raise me.ValueException(f"Certificate is {certificate.status}, not active")
 
-    private_key_pem = certificate.private_key_pem
+    try:
+        private_key_pem = certificate.private_key_pem
+    except SecretsUnavailableError:
+        private_key_pem = None
     if not private_key_pem or not certificate.cert_pem:
-        # KSMSecrets returns an empty mapping when KMS decryption fails, so an
-        # empty key on an active certificate means the custody layer is
-        # unavailable — not that the certificate has no key. Reporting this as
-        # "no key" would send a consumer off to reissue for no reason.
+        # Unreadable or missing material must retain the custody-unavailable
+        # response so consumers retry instead of reissuing a certificate.
         logit.error(f"dnsman: certificate {certificate.pk} material unavailable (KMS?)")
         raise me.ValueException("Certificate material temporarily unavailable", code=503)
 

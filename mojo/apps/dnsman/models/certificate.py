@@ -125,8 +125,8 @@ class Certificate(KSMSecrets, MojoModel):
     @property
     def has_material(self):
         """
-        KSMSecrets returns an empty mapping when KMS decryption fails, so an
-        empty key on an otherwise-active certificate means 'temporarily
-        unavailable', not 'no key'. Callers must distinguish the two.
+        Return whether both certificate and private-key material are present.
+        KMS decryption failure raises SecretsUnavailableError; callers must
+        distinguish unavailable custody from absent material.
         """
         return bool(self.cert_pem and self.private_key_pem)

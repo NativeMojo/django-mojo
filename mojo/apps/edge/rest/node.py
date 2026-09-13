@@ -29,6 +29,7 @@ should serve is the failure this design exists to avoid.
 import mojo.decorators as md
 from mojo import errors as me
 from mojo.helpers import logit
+from mojo.models.secrets import SecretsUnavailableError
 
 from mojo.apps.dnsman.models import Certificate
 from mojo.apps.dnsman.services import certs
@@ -123,12 +124,13 @@ def on_node_material(request, pk=None):
         raise me.ValueException(
             f"Certificate is {certificate.status}, not active")
 
-    private_key_pem = certificate.private_key_pem
+    try:
+        private_key_pem = certificate.private_key_pem
+    except SecretsUnavailableError:
+        private_key_pem = None
     if not private_key_pem or not certificate.cert_pem:
-        # KSMSecrets returns an empty mapping when KMS decryption fails, so an
-        # empty key on an active certificate means the custody layer is
-        # unavailable — not that the certificate has no key. Reporting it as
-        # "no key" would send the installer off to reissue for no reason.
+        # Unreadable or missing material must retain the custody-unavailable
+        # response so the installer retries instead of reissuing.
         logit.error(
             f"edge: certificate {certificate.pk} material unavailable (KMS?)")
         raise me.ValueException(

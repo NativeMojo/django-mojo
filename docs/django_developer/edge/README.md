@@ -242,8 +242,10 @@ Three properties this buys, each with its own test:
 - **A collision is a failure even though nginx exits 0.** The installer scans
   stderr for `conflicting server name`.
 - **One tenant cannot freeze the fleet.** Certificate material can be
-  unreadable for reasons unrelated to the row (`KSMSecrets` returns an empty
-  mapping when KMS is down). A single abort path would stop every node in the
+  unreadable for reasons unrelated to the row (`KSMSecrets` raises
+  `SecretsUnavailableError` when KMS is down). The installer handles that
+  error as unavailable material: exclude a tenant vhost, abort for a platform
+  vhost. A single abort path would stop every node in the
   pool from converging — including on an urgent renewal of the platform's own
   certificate — and would fail silent-but-serving until something expired.
 

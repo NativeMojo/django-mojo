@@ -710,6 +710,8 @@ logged.
 
 A `503` here means the custody layer (KMS) is temporarily unavailable — **not**
 that the certificate has no key. Retry; do not reissue.
+KMS decryption errors retain this response and never return a successful
+payload with an empty private key.
 
 ### Keeping a serving host in sync
 

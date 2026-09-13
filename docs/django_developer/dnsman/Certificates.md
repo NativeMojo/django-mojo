@@ -171,10 +171,12 @@ gated, access-logged endpoint (`GET /api/dnsman/certificate/material/<pk>`),
 which requires `manage_dns` rather than `view_dns` — seeing that a certificate
 exists is not the same as being entitled to its key.
 
-`KSMSecrets` returns an empty mapping when KMS decryption fails, so an empty key
-on an *active* certificate means the custody layer is unavailable, not that the
-certificate has no key. The endpoint reports that as `503`, because reporting it
-as "no key" would send a consumer off to reissue for no reason.
+`KSMSecrets` raises `SecretsUnavailableError` when KMS decryption fails.
+The material endpoint catches that error and retains its `503` temporarily
+unavailable response, also used for missing material on an active certificate.
+Consumers should retry rather than reissue. `Certificate.has_material` can
+raise the same error; Python callers must distinguish unavailable custody
+from absent material.
 
 ## Renewal and sync
 
