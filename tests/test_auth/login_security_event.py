@@ -359,3 +359,123 @@ def test_group_attribution_requires_active_direct_membership(opts):
     assert_eq(row.group_id, opts.group_member_id,
               f"reactivating the membership must restore attribution, got "
               f"{row.group_id!r}")
+
+
+def _capture_handoff_login(*, user, request, source, is_new_user):
+    """Keep the exact extension signature; adding a group kwarg must fail."""
+    from tests.test_register import _capture
+    group = getattr(request, "group", None)
+    _capture._append(request, "login", {
+        "user_id": user.pk,
+        "group_id": group.pk if group is not None else None,
+        "source": source,
+        "is_new_user": is_new_user,
+    })
+
+
+@th.django_unit_test("handoff callback and audit use the trusted destination with a foreign bearer")
+def test_handoff_trusted_context_overrides_request_brand(opts):
+    from mojo.apps.account.services import auth_handoff, group_token
+    from mojo.decorators.limits import clear_rate_limits
+    from tests.test_register import _capture
+
+    assert_true(opts.client.login(opts.username, PWORD),
+                "the foreign bearer must be present on the exchange")
+    foreign_count = _count(opts.user_id)
+    try:
+        for request_group in (None, opts.group_outsider_id):
+            capture_id = _capture.new_capture_id()
+            code = auth_handoff.create_handoff_code(
+                opts.attrib_user, group_id=opts.group_member_id)
+            payload = {"code": code}
+            if request_group is not None:
+                payload["group"] = request_group
+            before = _count(opts.attrib_id)
+            clear_rate_limits(ip="127.0.0.1", key="auth_exchange")
+            try:
+                resp = opts.client.post("/api/auth/exchange", payload, headers={
+                    "X-Mojo-Test-User-Login-Handler": "tests.test_auth.login_security_event._capture_handoff_login",
+                    "X-Mojo-Test-Capture-Id": capture_id,
+                })
+                assert_eq(resp.status_code, 200,
+                          "a valid handoff must exchange despite the request's foreign identity")
+                data = resp.response.data
+                assert_eq(data.token_type, "grouptoken", "the token scheme must remain scoped")
+                assert_true(str(data.access_token).startswith("gt1."),
+                            "the handoff must retain its group-token response")
+                assert_true("refresh_token" not in data,
+                            "the exchange must not grant a platform refresh token")
+                assert_eq(data.group.id, opts.group_member_id,
+                          "the response must name the signed destination")
+                assert_eq(data.user.id, opts.attrib_id,
+                          "the response must identify the code's verified user")
+                assert_eq(data.expires_in, group_token.get_ttl(),
+                          "the group-token lifetime must be preserved")
+                assert_eq(_count(opts.attrib_id), before + 1,
+                          "the verified subject must receive exactly one login row")
+                assert_eq(_count(opts.user_id), foreign_count,
+                          "the foreign bearer's login history must not change")
+                row = _login_rows(opts.attrib_id).order_by("-id").first()
+                assert_eq(row.group_id, opts.group_member_id,
+                          "audit must use the trusted destination, regardless of request group")
+                assert_eq(_capture.read_capture(capture_id).get("login"), [{
+                    "user_id": opts.attrib_id,
+                    "group_id": opts.group_member_id,
+                    "source": "handoff:grouptoken",
+                    "is_new_user": False,
+                }], "the existing callback must receive the verified user and trusted brand once")
+            finally:
+                _capture.clear_capture(capture_id)
+    finally:
+        opts.client.logout()
+
+
+@th.django_unit_test("handoff geofence denies a blocked destination despite an allowed request brand")
+def test_handoff_geofence_uses_trusted_destination(opts):
+    from mojo.apps.account.models import Group, User
+    from mojo.apps.account.models.login_event import UserLoginEvent
+    from mojo.apps.account.services import auth_handoff
+    from mojo.decorators.limits import clear_rate_limits
+    from tests.test_register import _capture
+
+    group = Group.objects.get(pk=opts.group_member_id)
+    previous = group.metadata
+    capture_id = _capture.new_capture_id()
+    group.metadata = dict(previous or {}, geofence={"country": {"in": ["CA"]}})
+    group.save(update_fields=["metadata", "modified"])
+    user = User.objects.get(pk=opts.attrib_id)
+    before_login = user.last_login
+    before_events = UserLoginEvent.objects.filter(user_id=user.pk).count()
+    before_rows = _count(user.pk)
+    opts.client.logout()
+    try:
+        code = auth_handoff.create_handoff_code(user, group_id=group.pk)
+        clear_rate_limits(ip="127.0.0.1", key="auth_exchange")
+        resp = opts.client.post("/api/auth/exchange", {
+            "code": code, "group": opts.group_outsider_id,
+        }, headers={
+            "X-Mojo-Test-Geo": '{"country_code":"US","region":"California","region_code":"CA"}',
+            "X-Mojo-Test-Geofence-System": "{}",
+            "X-Mojo-Test-Geofence-Allowlist": "[]",
+            "X-Mojo-Test-Geofence-Enabled": "1",
+            "X-Mojo-Test-Geofence-Allow-Private": "0",
+            "X-Mojo-Test-Geofence-Cache-Ttl": "0",
+            "X-Mojo-Test-User-Login-Handler": "tests.test_auth.login_security_event._capture_handoff_login",
+            "X-Mojo-Test-Capture-Id": capture_id,
+        })
+        assert_eq(resp.status_code, 403,
+                  "the trusted destination's Canadian-only policy must block the US exchange")
+        assert_eq(resp.response.error, "geofence_blocked",
+                  "the refusal must come from geofencing")
+        assert_true("access_token" not in (resp.response.get("data") or {}),
+                    "a blocked destination must return no token")
+        user.refresh_from_db()
+        assert_eq(user.last_login, before_login, "a blocked handoff must not advance last_login")
+        assert_eq(UserLoginEvent.objects.filter(user_id=user.pk).count(), before_events,
+                  "a blocked handoff must not create a UserLoginEvent")
+        assert_eq(_count(user.pk), before_rows, "a blocked handoff must leave no success audit")
+        assert_true(not _capture.read_capture(capture_id).get("login"),
+                    "a blocked handoff must not fire the successful-login extension")
+    finally:
+        Group.objects.filter(pk=group.pk).update(metadata=previous)
+        _capture.clear_capture(capture_id)
