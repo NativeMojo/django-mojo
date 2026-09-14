@@ -37,6 +37,7 @@ auth config object (group-owned, deep-merged from the parent chain).
 BOUNCER_LOGIN_PATH    = 'auth'      # real login page path (default: 'auth')
 BOUNCER_REGISTER_PATH = 'register'  # real registration page path
 BOUNCER_PASSKEY_PATH  = 'passkey'   # passkey enrollment page path
+BOUNCER_RECOVERY_SUPPORT_URL = 'https://support.example.com/help'  # reachable without Bouncer
 
 # ---- Deployment-wide auth config default ----
 AUTH_CONFIG = {
@@ -87,9 +88,22 @@ server {
     }
 
     location /api/account/static/ {
+        auth_request off;
         proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
         proxy_cache_valid 200 1d;
         add_header X-Cache $upstream_cache_status;
+    }
+
+    # Public review intake must work without a pass. Django still authorizes
+    # GET queue reads and POST /resolve using global security permissions.
+    location ^~ /api/auth/bouncer/recovery {
+        auth_request off;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     location / {
@@ -149,7 +163,7 @@ credentials before enabling a provider, or its button dead-ends on the
 provider's error page.
 
 The OAuth callback URL is the auth page itself (`/auth?code=xxx&state=yyy`).
-The `mbp` pass cookie uses `SameSite=Lax` so it is included on the OAuth
+The `mbp` pass and `mbs` hosted-session cookies use `SameSite=Lax` so they are included on the OAuth
 redirect back from the provider.
 
 ---
@@ -168,8 +182,8 @@ placing a file with the same path in your project's `TEMPLATES` directories.
 | `passkey_enroll.html` | Standalone passkey enrollment page |
 | `oauth_consent.html` | OAuth 2.1 consent screen — extends base; see [oauth_server.md](oauth_server.md) |
 | `bouncer_challenge.html` | Hosted Continue/recovery shell (default branded, opt-in override per group) |
-| `bouncer_decoy.html` | Selected local decoy sink or explicit scanner honeypot, selected by server context |
-| `_bouncer_selected_decoy.html` | Non-submitting selected-decoy UI, also used after assessment |
+| `bouncer_decoy.html` | Explicit scanner honeypot |
+| `bouncer_review_result.html` | No-JavaScript review receipt/error page |
 
 ### Template blocks (in `auth_base.html`)
 
@@ -186,7 +200,7 @@ placing a file with the same path in your project's `TEMPLATES` directories.
 ### Content Security Policy — nonce your inline scripts
 
 The hosted pages (`/auth`, `/register`, `/passkey`, `/contact`), including their
-challenge and selected-decoy shells, **can** be
+challenge shells, **can** be
 served with a nonce-based `Content-Security-Policy`, where `script-src` carries a
 fresh per-request nonce and **no `'unsafe-inline'`**, so any `<script>` without
 that nonce will not execute.
@@ -374,6 +388,9 @@ explanation.
 | `/signup` | GET/POST | (same) | Honeypot decoy |
 | `/api/auth/config` | GET | `on_auth_config` | Public auth config for custom front-ends |
 | `/api/account/bouncer/assess` | POST | `on_bouncer_assess` | Public legacy signal assessment or render-descriptor hosted check/submit/confirm/token operation; see [Bouncer](bouncer.md#hosted-descriptor-protocol) |
+| `/api/auth/bouncer/recovery` | POST | `on_review_request` | Public signed-ticket review intake; no pass/cookies required; [request/response](bouncer.md#recovery-and-review-intake) |
+| `/api/auth/bouncer/recovery` | GET | `on_review_queue` | Global `view_security` / `manage_security` / `security`; bounded queue or exact reference lookup |
+| `/api/auth/bouncer/recovery/resolve` | POST | `on_review_resolve` | Global `manage_security` / `security`; records resolution, does not clear restrictions |
 | `/api/account/bouncer/event` | POST | `on_bouncer_event` | Client event reporting |
 | `/api/account/static/mojo-auth-theme.css` | GET | Static | Responsive layout and appearance presets |
 | `/api/account/static/mojo-auth.js` | GET | Static | MojoAuth JS library |
@@ -771,19 +788,47 @@ resolves down the parent chain.
 ## Bouncer Gate
 
 `/auth`, `/register`, and `/contact` share `hosted_gate.page_check()`. A valid
-`mbp` pass must match the returning `_muid`, and current restrictions are checked
+v2 `mbp` pass must match `mbs` and the returning `_muid`, and current restrictions are checked
 before serving a real page. Low risk without a pass and recoverable uncertainty
 both get Continue, with touch, mouse, and keyboard activation, live status, and
-visible focus. Continue is not proof of humanity. The hosted slider and its
+visible focus. Stationary touch-down and activation count without mouse movement;
+missing measurements are unknown. Continue is not proof of humanity. The hosted slider and its
 three-miss cooldown are removed; old slider state and cached misses do not
 prevent Continue after current policy checks. Challenge
 descriptors expire after 5 minutes. Success appears only after a separate
 same-origin `confirm` request verifies the exact pass cookie and current policy.
 Failures stay on the shell with connection, cookie, expiry, or operator guidance.
-Help uses the operator's usual support channel; embedded contact cookie failures
-can offer a top-level tab. Current qualifying bot evidence selects a decoy whose
-credentials never leave the browser. Historical `blocked` devices and streaming
-freezes require operator review; a check never clears those restrictions.
+Embedded contact cookie failures can offer a top-level tab. Current qualifying
+bot evidence, active signatures, historical `blocked` devices, and streaming
+freezes show honest recovery with a review form; a check never clears those
+restrictions. Scanner decoys remain confined to their explicit routes.
+
+Retry is manual and hidden after three errors; 429 shows a bounded wait before
+retrying. Restart reloads for a new descriptor. Review requires a signed,
+host-bound 30-minute ticket, a valid email, and an optional note of at most 500
+characters. Its independent limit is 30 requests per IP per 300 seconds. The
+form works without cookies or JavaScript and returns an HTML receipt in that
+case. No credential is required, and recording/closing a review never unblocks
+the visitor.
+
+Assign an operator to the queue and follow the
+[remediation runbook](bouncer.md#operator-remediation-runbook): inspect the
+reference, correct only adjudicated device/signature/session restrictions,
+refresh the signature cache after edits, record the resolution, then restart
+with a new descriptor. Configure `BOUNCER_RECOVERY_SUPPORT_URL` to reachable
+external support for storage outages; gated `/contact` is not a fallback.
+
+Hosted v2 `mbp` and HttpOnly session cookie `mbs` share cookie scope and survive
+IP changes within one browser session. Legacy passes retain IP-prefix binding.
+Deploy Python workers, templates, and `mobile-1` scripts as a coherent pool:
+old workers cannot validate v2 passes. No migrations are required. Keep version
+queries in static-cache keys and honor `no-store` on descriptor-bearing HTML.
+
+Before production, validate physical iPhone Safari, physical Android Chrome,
+and the actual Maestro app WebView, including stationary taps, network changes,
+cookie/storage refusal, no-JavaScript review, timeout/429, and retained blocks.
+Emulated touch does not establish these results. There is no camera/dot
+challenge, passkey waiver, or automatic restriction override in this milestone.
 
 ### Hosted form-token integration
 
@@ -803,6 +848,11 @@ No hosted token is transported through localStorage.
 Providers receive the optional `context.duid` for the protected request's device
 binding; it does not override the descriptor's purpose or group.
 
+For `login`, `register`, and `startPhoneRegister`, only the exact `403` error
+`Invalid bouncer token` triggers one automatic fresh-token retry, before
+credential/action processing. Network errors, uncertain outcomes, and credential
+failures are never automatically replayed. Contact retains its explicit flow.
+
 Without a provider, MojoAuth retains the existing request/token lookup behavior.
 The public `mojo-bouncer.js` SDK and legacy assess requests are unchanged. Hosted
 requests always use the page origin, even with an external `BOUNCER_API_BASE`;
@@ -819,3 +869,4 @@ and settings reference.
 | `BOUNCER_REGISTER_PATH` | `'register'` | Real registration page URL path |
 | `BOUNCER_PASSKEY_PATH` | `'passkey'` | Passkey enrollment page URL path |
 | `BOUNCER_CONTACT_PATH` | `'contact'` | Bouncer-gated contact/support page URL path |
+| `BOUNCER_RECOVERY_SUPPORT_URL` | `''` | File-backed, navigation-validated external support link on the recovery shell; configure a reachable outage fallback |

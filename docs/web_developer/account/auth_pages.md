@@ -23,8 +23,8 @@ config. See [Auth Config](auth_config.md) for details and the
 
 `/auth`, `/register`, and `/contact` use the hosted bouncer gate. Without a pass,
 low-risk visits and recoverable uncertainty get Continue.
-Confirmed success sets an HttpOnly pass cookie; later visits skip the check
-while the cookie identity matches and there is no current restriction. See
+Confirmed success sets HttpOnly `mbp` and `mbs` cookies; later visits skip the
+check while those cookies and the returning `_muid` match and there is no current restriction. See
 [Bouncer Challenge](#bouncer-challenge) for retries and recovery.
 
 ---
@@ -239,7 +239,7 @@ Two helpers back this and are safe to reuse in a custom UI:
 5. Backend exchanges code for tokens, creates/links user
 6. User is redirected to success page
 
-The `mbp` pass cookie uses `SameSite=Lax` so it is included on the OAuth
+The `mbp` pass and `mbs` session cookies use `SameSite=Lax` so they are included on the OAuth
 redirect back from the provider.
 
 ---
@@ -481,10 +481,9 @@ These are the explicit scanner routes; their existing behavior is unchanged.
 | `/signin` | Decoy login page | Same |
 | `/signup` | Decoy login page | Same |
 
-A decoy selected on `/auth`, `/register`, or `/contact` is different: it shows
-a generic rejection locally, clears the password, and never submits credentials
-or calls the scanner POST endpoints. Controls are disabled until JavaScript
-initializes, with no-JavaScript help text. Its help stays on the current page.
+High-risk and signature-matched visitors to `/auth`, `/register`, and `/contact`
+receive honest recovery guidance and a review form; these hosted pages do not
+present fake credential forms.
 
 ---
 
@@ -494,12 +493,13 @@ initializes, with no-JavaScript help text. Its help stays on the current page.
 |---|---|
 | Low risk without a pass | Continue button |
 | Recoverable uncertainty | Continue button |
-| Current qualifying bot evidence or active signature | Selected local decoy sink |
+| Current qualifying bot evidence or active signature | Honest recovery and review form; restriction remains |
 | Existing blocked device/frozen session | Operator-recovery guidance; restriction remains |
 | Missing cookies, expired check, server or connection failure | Honest recovery/error message; no automatic navigation |
 
 Continue supports touch, mouse, and keyboard activation, with visible focus and
-live status. It is not proof that a visitor is human. Input modality, storage
+live status. Stationary touch-down and activation count without mouse movement;
+missing measurements are unknown. It is not proof that a visitor is human. Input modality, storage
 refusal, and connection failures do not train bot
 signatures or increase device risk.
 
@@ -507,16 +507,44 @@ The hosted slider and its three-miss cooldown are removed. Old slider state and
 cached misses do not prevent Continue after current policy checks. The server
 owns the descriptor scope and expiry; challenge descriptors last 5 minutes.
 After an accepted check the client sends a separate same-origin `confirm` request to
-verify the exact HttpOnly `mbp` cookie and current restrictions. Only confirmed
+verify the exact HttpOnly `mbp` pass, its `mbs` session cookie, and current restrictions. Only confirmed
 success displays Verified and navigates once. The pass TTL remains 24 hours by
 default; later valid passes still cannot bypass new restrictions.
 
-Failed requests time out after 8 seconds and offer Retry. Cookie failure explains
-that site cookies must be allowed; an embedded contact page can offer a top-level
-tab. Expired checks explain that a reload is needed. Other retained restrictions
-point to the operator's usual support channel from the current shell. Existing
-blocked/frozen records require operator review and are never automatically
-cleared by completing a check.
+Failed requests time out after 8 seconds and offer manual Retry. After three
+errors, use Restart or help; a 429 disables assessment Retry until the displayed
+wait expires. Cookie failure offers restart/help; an embedded contact page can
+offer a top-level tab. Expired checks require restarting for a new descriptor.
+Existing blocked/frozen records are never automatically cleared.
+
+The shell's review form POSTs `/api/auth/bouncer/recovery` with its signed
+30-minute host-bound ticket, a required email, and an optional note (max 500
+characters). It works without JavaScript or cookies and needs no password/pass.
+Its independent limit is 30 requests per IP per 300 seconds. Success records a
+pending review and returns a reference; it does not grant access. Queue reads
+and resolution require global security permissions. See the
+[Recovery Review API](bouncer.md#recovery-review-api) for payloads, errors, and
+the operator remediation procedure. An assigned operator must inspect the
+evidence and explicitly correct adjudicated restrictions; marking a review
+reviewed never unblocks the visitor.
+
+Operators must configure `BOUNCER_RECOVERY_SUPPORT_URL` to reachable external
+support for database/intake outages and keep recovery/static routes outside
+nginx `auth_request`. Django still protects queue GETs and resolution POSTs.
+The configured support link appears on the shell without sending visitors
+through gated `/contact`.
+
+Hosted v2 passes survive IP changes within a browser session using the `mbp` +
+`mbs` pair. `mbp` defaults to 24 hours; `mbs` is a session cookie. Legacy passes
+retain their IP-prefix binding and protected form tokens still bind to the
+exact request IP. Roll out workers, templates, and versioned `mobile-1` scripts
+together: old workers cannot validate v2 passes. No migration is required.
+
+Physical iPhone Safari, physical Android Chrome, and the actual Maestro app
+WebView still need pre-production validation for taps, Wi-Fi/cellular changes,
+refused cookies/storage, no-JavaScript review, timeout/429, and retained blocks.
+Emulated touch is not physical-device proof. This milestone adds no camera/dot
+challenge, passkey waiver, or automatic restriction override.
 
 ### MojoAuth token provider
 
@@ -536,6 +564,12 @@ credentials and phone-start followed by registration each acquire a new token.
 Provider failure stops the form request and shows recovery guidance. The hosted
 provider cannot change purpose just because a caller supplies another argument.
 Optional `context.duid` supplies the protected request's device ID to the provider.
+
+With the hosted provider, `login`, `register`, and `startPhoneRegister` acquire
+one replacement token and retry only for the exact `403` error
+`Invalid bouncer token`, which occurs before credentials/actions are processed.
+Network failures, uncertain outcomes, and credential errors are never
+automatically replayed. Contact retains its explicit token/submission flow.
 
 The provider uses same-origin hosted assessment requests and keeps tokens out of
 localStorage. An expired form descriptor requires reloading the page. Other

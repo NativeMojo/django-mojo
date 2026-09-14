@@ -20,10 +20,10 @@ Registration and contact use the same gate:
       ↓
    Django checks current risk, signatures, and retained restrictions
       ↓
-   Valid matching _muid + mbp cookies → real page
+   Valid matching _muid + mbp + mbs cookies → real page
    Low risk without a pass            → Continue check
    Recoverable uncertainty            → Continue check
-   Current qualifying bot evidence    → selected decoy
+   Current qualifying bot evidence    → operator recovery
    Existing blocked/frozen restriction → operator recovery
 
 2. Challenge page (if shown)
@@ -42,33 +42,36 @@ Registration and contact use the same gate:
 ### Retry and recovery
 
 Continue accepts touch, mouse, and keyboard activation, with visible focus and
-live status. The hosted slider and its three-miss cooldown are removed;
+live status. A stationary touch-down and button activation count as interaction;
+mouse movement is not required. Missing measurements are treated as unknown,
+not measured zero. The hosted slider and its three-miss cooldown are removed;
 in-flight slider state and cached misses do not prevent Continue after current
 policy checks. An expired check asks for a reload. Connection failures, non-JSON or
-invalid responses, and the 8-second request timeout show an error and Retry.
+invalid responses, and the 8-second request timeout show an error and manual
+Retry. After three errors, use Restart or help. A 429 disables assessment Retry
+until `Retry-After` (default 60 seconds, bounded to 1–3600 seconds).
 None claims success or automatically navigates.
 
 Site cookies must work. Missing cookies show cookie guidance; an embedded
 contact page can offer opening the same page in a top-level tab. Unavailable
 verification and existing device blocks/frozen sessions retain their restriction
-and show recovery guidance. Help points to the operator's usual support channel
-from the current shell, rather than sending the visitor through gated `/contact`.
+and show recovery guidance. The current shell offers a review form requiring
+only an email and optional note, without a pass, cookies, or JavaScript. An
+operator-configured external support link provides a fallback during outages.
 Old blocked records require operator review, even if their original verdict was
 a false positive. Successful checks do not clear reputation or enforcement state.
 
-### Selected decoys and scanner paths
+### Scanner paths
 
-A decoy selected by hosted screening uses a local rejection sink: Sign In
-clears the password and shows a generic error without sending credentials or
-submitting a form. Controls remain disabled until its script initializes, with
-no-JavaScript guidance. This also applies when an assessment selects the decoy
-after the page loaded. These interactions do not trigger scanner learning.
+High-risk and signature-matched visitors to hosted `/auth`, `/register`, and
+`/contact` now get honest recovery guidance and the review form. They are not
+asked to submit credentials to a fake login form.
 
 Requests to `/login`, `/signin`, and any configured `BOUNCER_DECOY_PATHS` receive a
 visually identical login page whose form POSTs to a dead endpoint. That endpoint always
 returns a plausible-looking error with a realistic delay. Detection is never revealed.
 These explicit scanner honeypots, including `/signup`, retain their existing
-semantics and are separate from the selected decoy sink.
+semantics.
 
 ---
 
@@ -128,7 +131,7 @@ Responses have an explicit `next_action`:
 | `check_cookie` | Cookie grant only; send `confirm` on a separate request |
 | `allow` | Confirmed pass; navigate once |
 | `token` | Use the returned `token` for one protected form request |
-| `decoy` | Show the selected local decoy sink |
+| `decoy` | Legacy denied state; current client presents operator recovery |
 | `recovery` | Stay on the page and show the reason's recovery guidance |
 | `error` | Stay on the page and offer a useful retry |
 
@@ -147,8 +150,9 @@ state returns 503. The shared rate limiter can return 429. Validate HTTP status,
 content type, JSON shape, and action; no failure permits an automatic redirect.
 Malformed `hosted_gate` input remains a hosted error and never selects legacy
 assessment.
-Recovery/error responses may include an opaque `reference`. Show it with the
-message so the operator can find the matching recovery log; it is not a credential.
+Responses may include a `reference` for the diagnostic row. Recovery/error
+responses may also include a signed `review_ticket` for the intake below.
+Show the reference with the message. Neither grants access.
 
 ### Fresh form tokens
 
@@ -174,10 +178,161 @@ respectively. Contact awaits it explicitly with `public_message`. Each
 submission, including a credential retry or phone-start followed by register,
 gets a fresh single-use token. Provider failure stops the form request.
 
+With this provider, `login`, `register`, and `startPhoneRegister` retry once with
+a fresh token only for the exact `403` error `Invalid bouncer token`. That
+rejection occurs before credentials/actions are processed. Network failures,
+uncertain outcomes, and credential errors are never automatically replayed.
+Contact retains its explicit token/submission flow.
+
 Other MojoAuth methods retain their current behavior. Without a provider,
 existing clients keep the legacy lookup/request path, and `getBouncerToken()`
 resolves the legacy lookup result. Hosted token transport does not use
 localStorage. See [Auth Pages](auth_pages.md) for template integration.
+
+### Cookies and deployment compatibility
+
+New hosted passes use `mbp` with a v2 signature and a separate `mbs` HttpOnly
+session cookie. Both share domain/path, `SameSite=Lax`, and `Secure` outside
+DEBUG. The signature binds the host or configured cookie domain, `_muid`,
+`mbs`, and issue time. The pair survives IP changes within the same browser
+session; current restrictions still apply. `mbp` defaults to 24 hours, while
+`mbs` is a browser-session cookie. Legacy passes keep their original IP-prefix
+binding; form tokens still bind to the exact request IP.
+
+Deploy the Python workers, templates, and `mobile-1` scripts to a coherent pool:
+old workers cannot validate v2 passes. Preserve the scripts' version query
+strings in cache keys and do not cache descriptor-bearing HTML (`no-store`,
+`no-referrer`). No migration is needed; descriptor protocol version 1 and
+third-party legacy SDK calls remain supported.
+
+---
+
+## Recovery Review API
+
+### Submit a request
+
+**POST `/api/auth/bouncer/recovery`** — public; no authentication, Bouncer pass,
+cookies, or JavaScript required. Its independent limit is **30 requests per IP
+per 300 seconds**. Use the signed ticket supplied by the hosted page/response;
+it is bound to that host and expires 30 minutes after its diagnostic was created.
+
+```json
+{
+  "review_ticket": "<signed-ticket-from-hosted-page>",
+  "email": "visitor@example.com",
+  "note": "I cannot continue from the mobile app."
+}
+```
+
+`email` is required and must be valid, at most 254 characters. `note` is optional,
+at most 500 characters; do not include passwords or verification codes. Optional
+`reported_failure` accepts `cookies`, `expired`, `restart`, `operator`,
+`unavailable`, `invalid`, `limited`, or `network` as client-reported context.
+
+JSON success:
+
+```json
+{
+  "status": true,
+  "data": {
+    "reference": "501-0123456789abcdef01234567",
+    "review_state": "pending",
+    "message": "Your request is recorded for review. This does not grant access. Keep your reference for support."
+  }
+}
+```
+
+Form-encoded POSTs receive an HTML receipt/error page, so the provided form works
+without JavaScript. Repeating the ticket preserves the first request and its
+current review state. The response uses `Cache-Control: no-store` and
+`Referrer-Policy: no-referrer`. Invalid/expired tickets and contact fields return
+400, the independent rate limit returns 429, and intake failure returns 503.
+JSON failures use `status: false`, `data: {reason, message}` (the rate limiter
+uses its standard error envelope). An unavailable diagnostic store provides a
+nonce-only log reference without a usable ticket; use external support then.
+
+### Read the operator queue
+
+**GET `/api/auth/bouncer/recovery`** — requires a global User permission of
+`view_security`, `manage_security`, or `security`. Group/member grants and API
+keys are insufficient.
+
+```text
+GET /api/auth/bouncer/recovery
+GET /api/auth/bouncer/recovery?before=501
+GET /api/auth/bouncer/recovery?reference=501-0123456789abcdef01234567
+```
+
+Response: `{"status": true, "data": {"items": [...], "before": 501}}`.
+Each request scans at most 2000 rows by descending primary key and returns at
+most 50 pending reviews. Follow `before` until null, even if `items` is empty.
+The cursor is a positive integer. Exact reference lookup returns one diagnostic
+regardless of review state, with `before: null`; malformed/missing references
+or invalid cursors return 400.
+
+Items contain `reference`, `signal_id`, `muid`, `msid`, `page_type`, `ip`,
+`risk_score`, `triggered_signals`, `created`, and `details`. Restricted `details`
+include host/group, user agent, bounded interaction counts, score components,
+and `restriction` (reason, signature type/value, device tier, session risk).
+`details.review` includes state, email, note, and request time, plus reviewer,
+resolution, and review time after closure. Keep this evidence in the operator
+interface; do not copy it into public recovery messages.
+
+### Resolve a review
+
+**POST `/api/auth/bouncer/recovery/resolve`** — requires global User
+`manage_security` or `security` (no group grants or API keys).
+
+```json
+{
+  "reference": "501-0123456789abcdef01234567",
+  "resolution": "Reviewed the reported visit; recorded the evidence and any targeted corrections."
+}
+```
+
+`resolution` must be nonblank and at most 1000 characters. Response:
+`{"status": true, "data": {"reference": "501-0123456789abcdef01234567", "review_state": "reviewed"}}`.
+Invalid reviews/resolutions return 400. The first resolution records the
+operator's user ID and time; repeated resolution preserves it. **Reviewed does
+not mean unblocked.** This endpoint clears no device, signature, session, or
+other restriction and sends no automatic follow-up email.
+
+### Operator remediation
+
+Assign a queue owner and a process for regular review and visitor follow-up.
+For each request:
+
+1. Look up the exact reference and inspect its restricted evidence. Read the
+   linked `/api/account/bouncer/signal/<signal_id>?graph=detail` and
+   `/api/account/bouncer/device?muid=<muid>` history before deciding.
+2. Correct only an adjudicated false positive using the existing device or
+   signature endpoint: POST `/api/account/bouncer/device/<id>` with the reviewed
+   `risk_tier`, or POST `/api/account/bouncer/signature/<id>` with the specific
+   `is_active`/`sig_type`/`value` correction and notes. These writes require `manage_users`,
+   `manage_security`, `security`, or `users`; preserve valid blocks and history.
+3. Have the backend operator call
+   `mojo.apps.account.services.bouncer.learner.refresh_sig_cache()` after any
+   signature change. A REST edit alone can leave the old cache active for one
+   hour.
+4. Have the backend operator inspect and explicitly correct only an adjudicated
+   Redis `bouncer:session_risk:<muid>` freeze and any application freeze-handler
+   effects. Never blanket-flush Redis or all session-risk keys. Device/signature
+   edits do not clear this state.
+5. Record the resolution, including whether restrictions remain, then have the
+   visitor restart for a new descriptor. Old denied descriptors stay denied;
+   all current checks still apply. Closing a review is not an access override.
+
+Before production, configure `BOUNCER_RECOVERY_SUPPORT_URL` to a reachable
+external support channel for database/intake outages and exempt recovery/static
+routes from nginx `auth_request`; Django still protects GET and resolve. See
+the [backend runbook](../../django_developer/account/bouncer.md#operator-remediation-runbook).
+
+**Physical iPhone Safari, physical Android Chrome, and the actual Maestro app
+WebView still require validation before production.** Check stationary taps,
+Wi-Fi/cellular changes, refused cookies/storage, no-JavaScript review, 429 and
+timeouts, and retained restrictions after review. Emulated touch is not proof
+of physical-device behavior. This milestone adds no camera or dot challenge,
+passkey waiver, or automatic restriction override.
 
 ---
 
@@ -511,18 +666,18 @@ When `BOUNCER_REQUIRE_TOKEN=True` and token validation fails:
 {
   "status": false,
   "code": 403,
-  "error": "bouncer_token_invalid"
+  "error": "Invalid bouncer token"
 }
 ```
 
 | `error` value | Cause |
 |---------------|-------|
-| `bouncer_token_required` | No `bouncer_token` field in request |
-| `bouncer_token_invalid` | Token failed signature or structure validation |
-| `bouncer_token_expired` | Token TTL elapsed |
-| `bouncer_token_ip_mismatch` | Request IP differs from token issue IP |
-| `bouncer_token_consumed` | Nonce already used (replay attempt) |
-| `bouncer_token_scope` | Token `page_type` does not match this endpoint |
+| `Bouncer token required` | No `bouncer_token` field in request |
+| `Invalid bouncer token` | Invalid signature/structure, expired or consumed token, wrong IP/device, or wrong endpoint scope |
+
+Detailed reasons remain in security events. The hosted provider's single retry
+matches only the exact invalid-token error and `code: 403`; do not infer a
+credential failure or automatically replay other errors.
 
 ---
 
@@ -530,7 +685,11 @@ When `BOUNCER_REQUIRE_TOKEN=True` and token validation fails:
 
 Three REST endpoints provide full admin visibility into bouncer activity. Use these to build security dashboards, investigate bot attacks, and manage bot signatures.
 
-**Permissions required:** `manage_users` OR `admin_security`
+**Read permissions:** `manage_users`, `view_security`, `manage_security`,
+`security`, or `users`. Device/signature writes require `manage_users`,
+`manage_security`, `security`, or `users`. These groupless models require global
+grants and deny API keys. Recovery queue/resolve use the narrower permissions
+documented above.
 
 ### Devices — `/api/account/bouncer/device`
 
@@ -721,8 +880,8 @@ GET /api/account/bouncer/signal?stage=assess&sort=-created
 
 Bot signatures are patterns the bouncer uses for **pre-screening** — matching known bots before running the full scoring pipeline. Signatures are auto-learned from confirmed blocks and can also be created manually.
 
-Active signature matches select a decoy on hosted pages. Existing blocked
-device history alone produces operator-recovery guidance; it is not evidence
+Active signature matches and existing blocked devices produce honest
+operator-recovery guidance on hosted pages. Device history alone is not evidence
 that a visitor has just triggered a current signature.
 
 #### List Signatures
@@ -1137,6 +1296,15 @@ docs/web_developer/account/nginx/example-protected-site.conf
 Copy `mojo-bouncer.conf` into your nginx `conf.d/` directory (or somewhere
 on the include path).
 
+On the auth host, `/api/auth/bouncer/recovery` (including `/resolve`) and needed
+`/api/account/static/` assets must bypass nginx `auth_request`. Django still
+requires global security permissions for queue GETs and resolve POSTs; public
+intake validates its signed host-bound ticket. Keep the hosted challenge pages
+and assessment route reachable as well. The supplied include gates only the
+locations where it is explicitly enabled; if your auth host inherits a server
+gate, add `auth_request off` exceptions using its normal Django upstream. See
+the [auth-host example](../../django_developer/account/auth_pages.md#2-nginx--static-assets--favicon).
+
 ### Use
 
 In any `server { }` block:
@@ -1164,16 +1332,19 @@ server {
    `GET /api/account/bouncer/verify_pass` on the bouncer host.
 2. verify_pass first consults the Redis signature cache — known-bot IPs/UAs
    get 401 with `X-Bouncer-Reason: signature` at the edge.
-3. Otherwise, the mbp pass cookie is validated. 200 if valid, 401 if not.
+3. Otherwise, the pass is validated (`mbp` plus `mbs` for v2; legacy IP binding
+   for old passes). 200 if valid, 401 if not.
 4. nginx serves `/vip/foo` on 200; redirects to the bouncer challenge page
    (with `?redirect=` set to the original URL) on 401. After the user
    passes the challenge, the bouncer redirects them back, this time
-   carrying a valid mbp cookie, and the next nginx pass succeeds.
+   carrying the valid pass cookies, and the next nginx pass succeeds if no
+   signature restriction remains.
 
 ### Required deployment shape
 
-The mbp cookie must reach both the bouncer host AND the protected nginx
-host. Two shapes work:
+Both `mbp` and the hosted `mbs` session cookie must reach the bouncer host AND
+the protected nginx host. `BOUNCER_PASS_COOKIE_DOMAIN` applies to both, and the
+include forwards the full Cookie header. Two shapes work:
 
 | Shape | Static / app host | Bouncer host | Configuration |
 |---|---|---|---|
