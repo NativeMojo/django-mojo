@@ -2,10 +2,9 @@
 Django-rendered page views for the bouncer gate.
 
 Login page (BOUNCER_LOGIN_PATH, default 'access'):
-  1. Check Redis signature cache (IP/subnet/UA) → serve decoy immediately
-  2. Check pass cookie → skip challenge, render full login page
-  3. Run server-side pre-screen signals → if clearly bot → serve decoy
-  4. Otherwise → render randomized challenge page
+  1. Check current signatures and risk → offer review for restricted requests
+  2. Check the session-bound pass → render the real form when allowed
+  3. Otherwise → render the Continue check with a reachable recovery path
 
 Decoy pages (common bot paths: /login, /signin):
   Always serve the honeypot login — looks identical to the real thing but

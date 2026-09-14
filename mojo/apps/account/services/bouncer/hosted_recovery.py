@@ -1,5 +1,6 @@
 """Hosted diagnostics and operator review. A review ticket never grants access."""
 import hmac
+import hashlib
 import ipaddress
 import re
 import secrets
@@ -11,11 +12,33 @@ from django.db import transaction
 
 from mojo.helpers import dates, logit
 from mojo.helpers.crypto import sign, secret_keys
+from mojo.helpers.redis import get_bounded_connection
+from mojo.helpers.settings import settings
 
 VERSION = 'mobile-1'
 TICKET_TTL = 1800
 REFERENCE = re.compile(r'([1-9][0-9]{0,18})-([a-f0-9]{24})\Z')
 logger = logit.get_logger('bouncer', 'bouncer.log')
+_BUDGET = """
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then redis.call('EXPIRE', KEYS[1], 300) end
+return count <= tonumber(ARGV[1]) and 1 or 0
+"""
+
+
+def _admit(ip):
+    """Bound writes even when callers change cookies/hosts; failure skips storage."""
+    def limit(name, default):
+        value = settings.get_static(name, default)
+        return value if type(value) is int and value > 0 else default
+
+    with get_bounded_connection(timeout=1, read_from_replicas=False) as redis:
+        # Check the service budget first to bound IP-key growth during a flood.
+        if not redis.eval(_BUDGET, 1, 'bouncer:hosted:diagnostics:global',
+                          limit('BOUNCER_DIAGNOSTIC_GLOBAL_LIMIT', 3000)):
+            return False
+        key = 'bouncer:hosted:diagnostics:ip:' + hashlib.sha256((ip or 'unknown').encode()).hexdigest()
+        return bool(redis.eval(_BUDGET, 1, key, limit('BOUNCER_DIAGNOSTIC_IP_LIMIT', 300)))
 
 
 def _identity(request, name):
@@ -36,6 +59,8 @@ def record(request, purpose, action, reason, *, result=None, device=None, group=
             ip = str(ipaddress.ip_address(getattr(request, 'ip', None)))
         except ValueError:
             ip = None
+        if not _admit(ip):
+            return {'reference': nonce}
         host = request.get_host().lower()
         behavior = (signals or {}).get('behavior', {})
         counts = {key: min(value, 10000) for key, value in behavior.items()

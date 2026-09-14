@@ -203,6 +203,18 @@ group, user agent, bounded input counts, score components, and restriction
 details; the row carries IP, muid, msid, and triggered signals. Public responses
 expose only a reference and, when persistence succeeds, a signed review ticket.
 If persistence fails, a nonce-only log reference is shown without a ticket.
+Diagnostic writes have independent five-minute Redis budgets:
+`BOUNCER_DIAGNOSTIC_IP_LIMIT` defaults to 300 and
+`BOUNCER_DIAGNOSTIC_GLOBAL_LIMIT` defaults to 3000 across all hosts. Positive
+file-backed integer overrides are supported. Exhaustion or unavailable Redis
+skips the insert and ticket without blocking the page. A budget-exhausted
+reference is display-only; it does not identify a stored diagnostic. Existing
+tickets remain usable for intake. Configure the external support path below.
+
+Generic signal graphs retain diagnostic metadata but omit `hosted_gate.review`.
+Raw `server_signals` filters, ordering, and aggregations are sensitive; review
+email, notes, and resolution are exposed only through the protected recovery
+endpoint, not through `users`/`manage_users` signal access.
 
 The handlers in `rest/bouncer/recovery.py` expose:
 

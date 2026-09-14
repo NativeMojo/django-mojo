@@ -52,7 +52,8 @@ class BouncerSignal(models.Model, MojoModel):
     created = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class RestMeta:
-        SENSITIVE_FIELDS = ['token_nonce']
+        SENSITIVE_FIELDS = ['token_nonce', 'server_signals']
+        NO_SHOW_FIELDS = ['server_signals']
         VIEW_PERMS = ['manage_users', 'view_security', 'manage_security', 'security', 'users']
         SAVE_PERMS = []  # read-only via REST
         SEARCH_FIELDS = ['muid', 'duid', 'ip_address', 'decision']
@@ -75,9 +76,10 @@ class BouncerSignal(models.Model, MojoModel):
                 'fields': [
                     'id', 'muid', 'duid', 'msid', 'mtab', 'session_id',
                     'stage', 'ip_address', 'page_type', 'risk_score', 'decision',
-                    'triggered_signals', 'raw_signals', 'server_signals',
+                    'triggered_signals', 'raw_signals',
                     'token_nonce', 'created',
                 ],
+                'extra': [('public_server_signals', 'server_signals')],
                 'graphs': {
                     'device': 'default',
                     'geo_ip': 'default',
@@ -96,3 +98,11 @@ class BouncerSignal(models.Model, MojoModel):
 
     def __str__(self):
         return f"BouncerSignal<{self.muid} {self.decision} score={self.risk_score}>"
+
+    def public_server_signals(self):
+        """Review contact and resolution are available only via the recovery API."""
+        signals = dict(self.server_signals or {})
+        if isinstance(signals.get('hosted_gate'), dict):
+            signals['hosted_gate'] = {key: value for key, value in signals['hosted_gate'].items()
+                                      if key != 'review'}
+        return signals

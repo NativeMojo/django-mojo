@@ -766,6 +766,17 @@ GET /api/account/bouncer/device?sort=-event_count&size=20
 payloads; hosted check/submission outcomes use `decision='log'`, empty
 `raw_signals`, and `server_signals.hosted_gate.action`. Hosted outcomes do not
 promote incidents, train signatures, or increase the device's risk tier.
+Generic signal graphs omit `server_signals.hosted_gate.review`; contact email,
+notes, and resolution are available only from the global-security recovery
+queue. Raw `server_signals` cannot be used for filtering, ordering, or
+aggregation to infer that private data.
+
+Hosted diagnostic writes are bounded independently of page access (default
+300 per IP and 3000 globally per five minutes, configurable by the operator).
+If that budget or storage is unavailable, the page still renders a reference
+and configured support link, but has no review ticket/form. A budget-exhausted
+reference is display-only, not a stored review. Previously issued tickets are
+still usable.
 
 #### List Signals
 
