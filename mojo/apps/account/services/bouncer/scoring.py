@@ -170,13 +170,16 @@ class BehaviorAnalyzer(BaseSignalAnalyzer):
         score = 0
         triggered = []
 
+        event_fields = ('mouse_move_count', 'scroll_event_count', 'keystroke_count', 'touch_event_count', 'activation_count')
+        measured = any(key in behavior for key in event_fields)
         total_events = (
             behavior.get('mouse_move_count', 0)
             + behavior.get('scroll_event_count', 0)
             + behavior.get('keystroke_count', 0)
             + behavior.get('touch_event_count', 0)
+            + behavior.get('activation_count', 0)
         )
-        if total_events == 0:
+        if measured and total_events == 0:
             w = _weight('no_interaction')
             score += w
             if w > 0:
@@ -368,9 +371,9 @@ class GateChallengeAnalyzer(BaseSignalAnalyzer):
             if w > 0:
                 triggered.append('gate_click_too_fast')
 
-        is_touch = challenge.get('is_touch_device', False)
-        if not is_touch:
-            if not challenge.get('had_mouse_movement') and not challenge.get('had_touch_events'):
+        is_touch = challenge.get('is_touch_device')
+        if is_touch is False and not challenge.get('had_activation'):
+            if challenge.get('had_mouse_movement') is False and challenge.get('had_touch_events') is False:
                 w = _weight('gate_no_interaction_desktop')
                 score += w
                 if w > 0:

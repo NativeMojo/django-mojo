@@ -79,8 +79,8 @@ def test_hosted_scope_and_restrictions(opts):
         assert TokenManager.validate_and_consume(token, '127.0.0.1')['page_type'] == 'registration', 'registration token remains accepted by the existing manager'
         strong = {'environment': {'webdriver_flag': True, 'playwright_artifacts': True, 'puppeteer_artifacts': True}}
         denied = operation(client, form['descriptor'], 'token', strong)
-        assert denied.next_action == 'decoy', f'current strong evidence must route to decoy: {denied}'
-        assert operation(client, form['descriptor'], 'token').next_action == 'decoy', 'omitting evidence must not erase a previously observed restriction'
+        assert denied.next_action == 'recovery', f'current strong evidence must remain denied with recovery: {denied}'
+        assert operation(client, form['descriptor'], 'token').next_action == 'recovery', 'omitting evidence must not erase a previously observed restriction'
         muid = client.session.cookies.get('_muid')
         assert not BouncerDevice.objects.filter(muid=muid, risk_tier='blocked').exists(), 'hosted decoy/recovery must not promote history or feed scanner learning'
         other = RestClient(opts.client.host)

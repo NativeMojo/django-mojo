@@ -3,3 +3,4 @@ from .event import *
 from .views import *
 from .static import *
 from .public_message import *
+from .recovery import *

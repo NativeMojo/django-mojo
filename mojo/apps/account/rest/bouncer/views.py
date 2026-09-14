@@ -174,6 +174,9 @@ def _render_with_csp(request, template, ctx, frame_ancestors="'none'"):
     from mojo.apps.account.services import csp
 
     response = render(request, template, ctx)
+    if ctx.get('hosted_bouncer'):
+        response['Cache-Control'] = 'no-store'
+        response['Referrer-Policy'] = 'no-referrer'
     return csp.apply(response, ctx.get('csp_nonce', ''),
                      api_base=ctx.get('api_base', ''),
                      frame_ancestors=frame_ancestors)
@@ -422,9 +425,9 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None, h
     if hosted_config is None:
         from mojo.apps.account.services.bouncer.hosted_gate import descriptor
         hosted_config = descriptor(request, page_type, group)
-    if hosted_config.get('next_action') in ('recovery', 'error') and not hosted_config.get('reference'):
-        from mojo.apps.account.services.bouncer.hosted_gate import recovery_reference
-        hosted_config = {**hosted_config, 'reference': recovery_reference(hosted_config.get('reason', 'operator'))}
+    if not hosted_config.get('reference'):
+        from mojo.apps.account.services.bouncer.hosted_gate import _diagnostic
+        hosted_config = {**hosted_config, **_diagnostic(request, page_type, hosted_config['next_action'], hosted_config.get('reason', 'operator'))}
     hosted_config = {**hosted_config, 'redirect_url': f'/{redirect_path}{group_qs}',
                      'page_type': page_type}
     ctx = {
@@ -433,6 +436,7 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None, h
         'hosted_bouncer': hosted_config,
         'api_base': api_base,
         'login_url': f'/{redirect_path}{group_qs}',
+        'recovery_support_url': auth_config.normalize_navigation_url(settings.get_static('BOUNCER_RECOVERY_SUPPORT_URL', '')),
         'page_type': page_type,
         'logo_url': logo_url,
         'brand_name': brand_name,
@@ -455,8 +459,6 @@ def _hosted_page(request, purpose):
 
     group = _resolve_group(request)
     action, config = hosted_gate.page_check(request, purpose, group)
-    if action == 'decoy':
-        return _serve_decoy(request, selected=True, group=group)
     if action == 'allow':
         if purpose == 'public_message':
             return _serve_contact(request, kind=request.DATA.get('kind', ''),

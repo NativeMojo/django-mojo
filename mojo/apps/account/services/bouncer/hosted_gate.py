@@ -1,6 +1,5 @@
 """Hosted-page recovery policy and protocol. Legacy assess callers do not enter here."""
 import re
-import secrets
 
 from mojo.helpers import logit
 from mojo.helpers.redis import get_bounded_connection
@@ -25,14 +24,14 @@ def identity(request, *, returning=False):
 
 def route(result, page_type, *, matched=False, blocked=False, frozen=False):
     if matched:
-        return 'decoy'
+        return 'recovery'
     metadata = result.metadata
     if metadata.get('analysis_failed'):
         return 'recovery'
     remaining = metadata['uncapped_score'] - metadata['recovery_credit']
     current = remaining - metadata['historical_block']
     if RiskScorer.decide(current, page_type) == 'block':
-        return 'decoy'
+        return 'recovery'
     if blocked or frozen or RiskScorer.decide(remaining, page_type) == 'block':
         return 'recovery'
     return 'check'
@@ -47,7 +46,7 @@ def screen(request, purpose, redis, signals=None):
     muid = identity(request)
     device = BouncerDevice.objects.filter(muid=muid).first() if muid else None
     fingerprint = device.fingerprint_id if device else ''
-    matched, _, _ = check_signature_cache(
+    matched, sig_type, sig_value = check_signature_cache(
         request.ip, request.user_agent, fingerprint, redis=redis, strict=True)
     raw_risk = redis.get(f'bouncer:session_risk:{muid}') if muid else None
     bands = settings.get_static('BOUNCER_SESSION_BANDS') or {}
@@ -59,6 +58,14 @@ def screen(request, purpose, redis, signals=None):
         request=request if signals is not None else None))
     action = route(result, purpose, matched=matched,
                    blocked=bool(device and device.risk_tier == 'blocked'), frozen=frozen)
+    result.metadata['restriction'] = {
+        'reason': ('signature' if matched else 'analysis' if result.metadata.get('analysis_failed')
+                   else 'frozen' if frozen else 'history' if device and device.risk_tier == 'blocked'
+                   else 'risk' if action == 'recovery' else 'check'),
+        'signature_type': sig_type, 'signature_value': sig_value,
+        'device_tier': device.risk_tier if device else '',
+        'session_risk': int(raw_risk) if raw_risk else 0,
+    }
     return action, result, device, server_signals
 
 
@@ -86,29 +93,34 @@ def page_check(request, purpose, group=None):
     """Return (action, descriptor); a returning pass still honors current restrictions."""
     from mojo.apps.account.rest.bouncer.assess import verify_pass_cookie
 
+    request.group = group
     redis = None
     try:
         redis = get_bounded_connection(timeout=1, read_from_replicas=False)
-        action, _, _, _ = screen(request, purpose, redis)
+        action, result, device, _ = screen(request, purpose, redis)
         if action in ('decoy', 'recovery'):
-            return action, {'next_action': action, 'reason': 'operator'}
+            return 'recovery', {'next_action': 'recovery', 'reason': 'operator',
+                                **_diagnostic(request, purpose, 'recovery', result.metadata['restriction']['reason'], result, device)}
         muid = identity(request, returning=True)
-        pass_muid = verify_pass_cookie(request.COOKIES.get('mbp', ''), request.ip)
+        pass_muid = verify_pass_cookie(request.COOKIES.get('mbp', ''), request.ip,
+                                       host=request.get_host(), session_key=request.COOKIES.get('mbs', ''))
         if muid and pass_muid == muid:
             return 'allow', descriptor(request, purpose, group, form=True, redis=redis)
-        return action, descriptor(request, purpose, group, action=action, redis=redis)
+        config = descriptor(request, purpose, group, action=action, redis=redis)
+        return action, {**config, **_diagnostic(request, purpose, action, config.get('reason', 'check'), result, device)}
     except Exception:
         logger.warning('bouncer: hosted pre-screen unavailable')
-        return 'error', {'next_action': 'error', 'reason': 'unavailable'}
+        return 'error', {'next_action': 'error', 'reason': 'unavailable',
+                         **_diagnostic(request, purpose, 'error', 'unavailable')}
     finally:
         if redis is not None:
             redis.close()
 
 
-def recovery_reference(reason='operator'):
-    reference = secrets.token_hex(6)
-    logger.info(f'bouncer: hosted recovery reference={reference} reason={reason}')
-    return reference
+def _diagnostic(request, purpose, action, reason, result=None, device=None, signals=None):
+    from mojo.apps.account.services.bouncer import hosted_recovery
+    return hosted_recovery.record(request, purpose, action, reason, result=result, device=device,
+                                  group=getattr(request, 'group', None), signals=signals)
 
 
 def _metric(action):
@@ -121,24 +133,9 @@ def _metric(action):
 
 def _response(action, *, status=200, **fields):
     _metric(action)
-    if action in ('recovery', 'error'):
-        fields['reference'] = recovery_reference(fields.get('reason', 'operator'))
     return JsonResponse({'status': status < 400, 'data': {
         'decision': 'allow' if action in ('check_cookie', 'allow', 'token') else 'block',
         'next_action': action, **fields}}, status=status)
-
-
-def _audit(request, record, action, result, device, server_signals):
-    """No event endpoint, incident promotion, learner or client-controlled event data."""
-    from mojo.apps.account.models import BouncerSignal
-    try:
-        BouncerSignal.objects.create(
-            device=device, muid=identity(request, returning=True),
-            page_type=record['purpose'], stage='assess', ip_address=request.ip,
-            raw_signals={}, server_signals={**server_signals, 'hosted_gate': {'action': action}},
-            risk_score=result.score, decision='log', triggered_signals=result.triggered_signals)
-    except Exception:
-        logger.warning('bouncer: hosted outcome audit unavailable')
 
 
 def assess(request):
@@ -146,72 +143,86 @@ def assess(request):
     from mojo.apps.account.services.bouncer.token_manager import TokenManager
     from mojo.apps.account.models import Group
 
+    purpose, result, device, signals = 'unknown', None, None, {}
+
+    def respond(action, *, status=200, **fields):
+        # Older descriptors retain their denial, while current UI offers recovery.
+        if action == 'decoy':
+            action = 'recovery'
+        reason = fields.get('reason', 'operator' if action == 'recovery' else action)
+        if reason == 'operator' and result:
+            reason = result.metadata.get('restriction', {}).get('reason', reason)
+        diagnostic = _diagnostic(request, purpose, action, reason, result, device, signals)
+        if action not in ('recovery', 'error'):
+            diagnostic.pop('review_ticket', None)
+        return _response(action, status=status, **fields, **diagnostic)
+
     data = request.DATA.get('hosted_gate')
     if not isinstance(data, dict) or data.get('version') != 1:
-        return _response('error', status=400, reason='invalid')
+        return respond('error', status=400, reason='invalid')
     operation = data.get('operation')
     capability = data.get('descriptor')
     request_id = data.get('request_id')
     if (operation not in ('check', 'submit', 'confirm', 'token')
             or not isinstance(capability, str) or not _CAPABILITY.fullmatch(capability)
             or not isinstance(request_id, str) or not _REQUEST_ID.fullmatch(request_id)):
-        return _response('error', status=400, reason='invalid')
+        return respond('error', status=400, reason='invalid')
     muid = identity(request, returning=True)
     if not muid:
-        return _response('recovery', status=409, reason='cookies')
+        return respond('recovery', status=409, reason='cookies')
     signals = request.DATA.get('signals', {})
     if not isinstance(signals, dict) or any(not isinstance(v, dict) for v in signals.values()):
-        return _response('error', status=400, reason='invalid')
+        return respond('error', status=400, reason='invalid')
     redis = None
     try:
         redis = get_bounded_connection(timeout=1, read_from_replicas=False)
         store = ChallengeStore(redis, request.get_host().lower(), muid)
         record = store.read(capability)
         if record is None:
-            return _response('recovery', status=409, reason='expired')
+            return respond('recovery', status=409, reason='expired')
         purpose = record['purpose']
         if purpose not in PURPOSES:
-            return _response('error', status=400, reason='invalid')
+            return respond('error', status=400, reason='invalid')
         request.group = None
         if record['group_uuid']:
             group = Group.objects.filter(uuid=record['group_uuid'], is_active=True).first()
             if group is None or not group.is_effectively_active():
-                return _response('recovery', status=403, reason='operator')
+                return respond('recovery', status=403, reason='operator')
             request.group = group
         # Client group/purpose values cannot replace the render-issued scope.
         action, result, device, server_signals = screen(request, purpose, redis, signals)
         if operation in ('confirm', 'token'):
             record = store.authorize(capability, action)
             if record is None:
-                return _response('recovery', status=409, reason='expired')
+                return respond('recovery', status=409, reason='expired')
             if record['stage'] in ('decoy', 'recovery'):
-                _audit(request, record, record['stage'], result, device, server_signals)
-                return _response(record['stage'], reason='operator')
+                return respond(record['stage'], reason='operator')
             cookie = request.COOKIES.get('mbp', '')
-            if verify_pass_cookie(cookie, request.ip) != muid:
-                return _response('recovery', status=409, reason='cookies')
+            if verify_pass_cookie(cookie, request.ip, host=request.get_host(),
+                                  session_key=request.COOKIES.get('mbs', '')) != muid:
+                return respond('recovery', status=409, reason='cookies')
             if operation == 'confirm':
                 if record['stage'] != 'granted' or cookie.split(':')[1] != str(record['issued']):
-                    return _response('recovery', status=409, reason='restart')
-                return _response('allow')
+                    return respond('recovery', status=409, reason='restart')
+                return respond('allow')
             if not record['form']:
-                return _response('recovery', status=403, reason='restart')
+                return respond('recovery', status=403, reason='restart')
             token = TokenManager.issue(duid=request.DATA.get('duid') or getattr(request, 'duid', '') or '',
                                        fingerprint_id=device.fingerprint_id if device else '', ip=request.ip,
                                        risk_score=result.score, page_type=purpose)
-            return _response('token', token=token)
+            return respond('token', token=token)
         outcome = store.complete(capability, operation, request_id,
                                  policy=action, answer=data.get('answer'))
         action = outcome.pop('next_action')
         issued = outcome.pop('issued', None)
-        _audit(request, record, action, result, device, server_signals)
-        response = _response(action, **outcome)
+        response = respond(action, **outcome)
         if action == 'check_cookie' and issued is not None:
-            _set_pass_cookie(response, muid, request.ip, issued_at=issued)
+            _set_pass_cookie(response, muid, request.ip, issued_at=issued, host=request.get_host(),
+                             session_key=request.COOKIES.get('mbs', ''))
         return response
     except Exception:
         logger.warning('bouncer: hosted assessment unavailable')
-        return _response('error', status=503, reason='unavailable')
+        return respond('error', status=503, reason='unavailable')
     finally:
         if redis is not None:
             redis.close()

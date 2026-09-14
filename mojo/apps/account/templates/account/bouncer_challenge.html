@@ -18,8 +18,11 @@
     [hidden]{display:none!important}
     .mbg-help{margin-top:24px;font-size:14px;color:#b4bfd6}a{color:#c1d0ff}.mbg-provider{margin-top:28px;font-size:12px;color:#9aa9c8}
     .mbg-hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
-    .mbg-field{display:block;margin:18px 0}.mbg-field input{display:block;width:100%;margin-top:6px;padding:12px;
+    .mbg-secondary{margin-top:12px;background:transparent;border-color:#56617b}
+    .mbg-field{display:block;margin:18px 0}.mbg-field input,.mbg-field textarea{display:block;width:100%;margin-top:6px;padding:12px;
       font:inherit;border:1px solid #78839b;border-radius:8px;background:#0d1527;color:white}
+    textarea{resize:vertical;min-height:88px}summary{min-height:44px;cursor:pointer;padding:10px 0}
+    #mbg-reference{overflow-wrap:anywhere}#mbg-review-status{min-height:24px}
     fieldset{border:0;margin:0;padding:0}
     @media(max-width:420px){body{padding:16px}.mbg-card{padding:26px 22px}}
   </style>
@@ -33,17 +36,29 @@
       <p id="mbg-status" role="status" aria-live="polite">Select Continue to proceed securely.</p>
       <div class="mbg-hp" aria-hidden="true"><input id="mbg-hp-field" type="text" tabindex="-1" autocomplete="off"></div>
       <button id="mbg-continue" type="button" disabled>Continue</button>
+      <button id="mbg-restart" class="mbg-secondary" type="button" hidden>Restart this check</button>
       <a id="mbg-top-level" href="{{ login_url }}" target="_blank" rel="noopener" hidden>Open this page in a new tab</a>
-      <noscript><p>Enable JavaScript to continue. If you need help, contact the site operator through their usual support channel.</p></noscript>
+      <noscript><p>JavaScript is needed for verification. You can still request help using the form below.</p></noscript>
     </section>
-    <section id="mbg-decoy" hidden>
-      {% include "account/_bouncer_selected_decoy.html" %}
-    </section>
-    <details class="mbg-help"><summary>Need help?</summary><p>If this check keeps failing, contact the site operator through their usual support channel. You do not need to enter a password to get help.</p></details>
+    <details id="mbg-help" class="mbg-help" {% if hosted_bouncer.next_action == 'recovery' or hosted_bouncer.next_action == 'error' %}open{% endif %}>
+      <summary>Having trouble? Get help</summary>
+      <p>You can ask the site operator to review this visit. You won’t need to sign in or enter a password.</p>
+      <p id="mbg-reference">{% if hosted_bouncer.reference %}Reference: {{ hosted_bouncer.reference }}{% endif %}</p>
+      <form id="mbg-review-form" method="post" action="/api/auth/bouncer/recovery" {% if not hosted_bouncer.review_ticket %}hidden{% endif %}>
+        <input id="mbg-review-ticket" name="review_ticket" type="hidden" value="{{ hosted_bouncer.review_ticket|default:'' }}">
+        <label class="mbg-field">Email for follow-up<input id="mbg-review-email" name="email" type="email" autocomplete="email" maxlength="254" required></label>
+        <label class="mbg-field">What happened? (optional)<textarea id="mbg-review-note" name="note" maxlength="500" placeholder="For example: I’m trying to sign in from the mobile app."></textarea></label>
+        <p>Please don’t include passwords or verification codes.</p>
+        <button id="mbg-review-submit" type="submit">Request a review</button>
+        <p id="mbg-review-status" role="status" aria-live="polite"></p>
+      </form>
+      {% if not hosted_bouncer.review_ticket %}<p>Review requests are temporarily unavailable. Please try again later or contact site support.</p>{% endif %}
+      {% if recovery_support_url %}<p><a href="{{ recovery_support_url }}" rel="noreferrer noopener">Contact site support</a></p>{% endif %}
+    </details>
     <p class="mbg-provider">Secure sign-in via {{ auth_provider_name }}</p>
   </main>
   {{ hosted_bouncer|json_script:"mbg-config" }}
-  <script nonce="{{ csp_nonce }}" src="/api/account/static/mojo-hosted-bouncer.js?v=continue-2"></script>
+  <script nonce="{{ csp_nonce }}" src="/api/account/static/mojo-hosted-bouncer.js?v=mobile-1"></script>
   <script nonce="{{ csp_nonce }}">MojoHostedBouncer.mount(document, JSON.parse(document.getElementById('mbg-config').textContent));</script>
 </body>
 </html>

@@ -130,12 +130,21 @@ def test_browser_interaction_matrix(opts):
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
             state['posts'].append(body)
+            if self.path == '/api/auth/bouncer/recovery':
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'status': True, 'data': {'reference': 'review-browser-fixture', 'review_state': 'pending', 'message': 'Your request is recorded for review.'}}).encode())
+                return
             op = body['hosted_gate']['operation']
             mode = state['mode']
             data = {'decision': 'allow', 'next_action': 'allow' if op == 'confirm' else 'check_cookie'}
             status, content_type = 200, 'application/json'
             if mode == 'cookies':
                 data = {'decision': 'block', 'next_action': 'recovery', 'reason': 'cookies'} if op == 'confirm' else data
+            elif mode == 'limited':
+                status = 429
+                data = {}
             elif mode == 'decoy':
                 data = {'decision': 'block', 'next_action': 'decoy'}
             elif mode == 'http':
@@ -193,20 +202,35 @@ def test_browser_interaction_matrix(opts):
                 page.call('Input.dispatchTouchEvent', {'type': kind, 'touchPoints': [] if kind == 'touchEnd' else [{'x': box['left']+box['width']/2, 'y': box['y'], 'id': 1}]})
             page.wait("location.pathname==='/finished'", 'single mobile tap destination')
             assert [p['hosted_gate']['operation'] for p in state['posts']] == ['check', 'confirm'], 'one mobile tap must confirm the cookie and reach the destination without dragging'
+            tap = state['posts'][0]['signals']
+            assert tap['behavior']['touch_event_count'] > 0, 'a stationary mobile tap must be measured without dragging'
+            assert tap['gate_challenge'].get('had_activation') is True, 'Continue activation must be reported before the assessment'
             fresh()
             page.evaluate("MojoHostedBouncer.mount(document, {descriptor:'x'.repeat(32),next_action:'slider',redirect_url:'/finished'});true")
             assert page.evaluate("document.getElementById('mbg-continue').textContent==='Continue' && !document.getElementById('mbg-continue').disabled"), 'legacy page configuration must still expose Continue'
-            for mode in ('cookies', 'http', 'html', 'json', 'decoy'):
+            for mode in ('cookies', 'http', 'html', 'json', 'decoy', 'limited'):
                 fresh(mode)
                 confirm()
                 time.sleep(0.25)
                 assert page.evaluate("location.pathname==='/auth' && !document.body.textContent.includes('Verified')"), f'{mode} must never show success or navigate'
                 if mode == 'cookies':
                     assert page.evaluate("document.getElementById('mbg-status').textContent.includes('cookies')"), 'missing cookie must explain recovery'
+                if mode == 'limited':
+                    assert page.evaluate("document.getElementById('mbg-status').textContent.includes('Too many checks') && document.getElementById('mbg-continue').disabled"), '429 must explain the wait and keep review reachable'
                 if mode == 'decoy':
-                    before = len(state['posts'])
-                    page.evaluate("document.getElementById('mbg-password').value='Never transmit';document.getElementById('mbg-signin').click();true")
-                    assert len(state['posts']) == before and page.evaluate("document.getElementById('mbg-password').value===''") , 'selected decoy must clear passwords locally without transmitting'
+                    assert page.evaluate("document.getElementById('mbg-help').open && !document.querySelector('input[type=password]')"), 'a legacy hosted decoy response must offer recovery without collecting credentials'
+            fresh('cookies')
+            confirm()
+            page.wait("document.getElementById('mbg-help').open", 'recovery help')
+            page.evaluate("document.getElementById('mbg-review-email').value='mobile@example.test';document.getElementById('mbg-review-note').value='Mobile check failed';document.getElementById('mbg-review-submit').click();true")
+            page.wait("document.getElementById('mbg-review-status').textContent.includes('recorded')", 'review receipt')
+            assert state['posts'][-1]['email'] == 'mobile@example.test' and 'hosted_gate' not in state['posts'][-1], 'review submission must use independent intake, not the failed assess path'
+            Path('/tmp/bouncer-mobile-review.png').write_bytes(base64.b64decode(page.call('Page.captureScreenshot', {'format': 'png'})['data']))
+            fresh('html')
+            for _ in range(3):
+                confirm()
+                time.sleep(0.15)
+            assert page.evaluate("document.getElementById('mbg-continue').hidden && !document.getElementById('mbg-restart').hidden && document.getElementById('mbg-help').open"), 'three interrupted attempts must offer restart/review instead of endless Retry'
             # Storage denial still leaves controls and the original reset URL usable.
             script = page.call('Page.addScriptToEvaluateOnNewDocument', {'source': "Object.defineProperty(window,'sessionStorage',{get(){throw new Error('blocked')}});Object.defineProperty(window,'localStorage',{get(){throw new Error('blocked')}});"})
             fresh('success', '?token=pr%3Afixture-reset')
@@ -245,6 +269,18 @@ def test_browser_interaction_matrix(opts):
             assert all(c['url'].startswith('https://auth.example.test/') for c in calls[1:6:2]), 'actual authentication preserves the configured API origin'
             assert calls[1]['body']['group_uuid'] == 'group-fixture', 'async token acquisition must retain the login group'
             assert 'bouncer_token' not in calls[-1]['body'], 'without a provider the legacy no-token behavior remains'
+            retry = page.evaluate("""(async()=>{
+              let proofs=0, posts=0;
+              MojoAuth.init({baseURL:location.origin,bouncerTokenProvider:async()=> 'proof-'+(++proofs)});
+              window.fetch=async()=>{posts++;return {ok:false,json:async()=>({status:false,error:'Invalid bouncer token',code:403})}};
+              try{await MojoAuth.login('example','secret')}catch(_){}
+              const rejected={proofs,posts}; proofs=0;posts=0;
+              window.fetch=async()=>{posts++;return {ok:false,json:async()=>({status:false,error:'Invalid username or password',code:401})}};
+              try{await MojoAuth.login('example','secret')}catch(_){}
+              return {rejected,credentials:{proofs,posts}};
+            })()""")
+            assert retry['rejected'] == {'proofs': 2, 'posts': 2}, 'an explicit pre-credential token rejection gets exactly one fresh-token retry'
+            assert retry['credentials'] == {'proofs': 1, 'posts': 1}, 'wrong credentials must never be automatically retried'
             for blocked in (False, True):
                 init = None
                 if blocked:
@@ -275,7 +311,7 @@ def test_browser_interaction_matrix(opts):
             fresh_url = f'http://127.0.0.1:{server.server_port}/auth'
             page.call('Page.navigate', {'url': fresh_url})
             time.sleep(0.25)
-            assert page.evaluate("document.getElementById('mbg-decoy-fields').disabled && !document.getElementById('mbg-password').name && !document.getElementById('mbg-password').closest('form')"), 'without JavaScript the decoy must have no enabled submitting credentials'
+            assert page.evaluate("!!document.querySelector('#mbg-review-form[method=post] input[name=review_ticket]') && !document.querySelector('input[type=password]')"), 'without JavaScript visitors can still submit a review and no password form is present'
     finally:
         if page:
             page.close()

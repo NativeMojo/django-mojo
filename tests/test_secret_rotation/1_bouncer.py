@@ -117,3 +117,29 @@ def test_pass_cookie_rotation(opts):
     with mock.patch.object(assess, "crypto_keys", FakeKeys([key_b])):
         assert_eq(assess.verify_pass_cookie(old_cookie, ip), None,
                   "old-key cookie must stop verifying once the fallback is removed")
+
+
+@th.django_unit_test('hosted session cookies share explicit subdomain scope and rotate signing keys')
+def test_hosted_cookie_scope_rotation(opts):
+    import time
+    from django.http import HttpResponse
+    from mojo.apps.account.rest.bouncer import assess
+    from mojo.helpers.crypto import sign
+    from types import SimpleNamespace
+    primary, fallback = 'hosted-primary-fixture', 'hosted-fallback-fixture'
+    # Patch the account-local settings reference only in this serial package.
+    config = SimpleNamespace(DEBUG=True, get_static=lambda key, default=None: {
+        'BOUNCER_PASS_COOKIE_DOMAIN': '.Example.Test', 'BOUNCER_PASS_COOKIE_TTL': 86400,
+    }.get(key, default))
+    with mock.patch.object(assess, 'settings', config):
+        response = HttpResponse()
+        assess._set_pass_cookie(response, 'scope-fixture', '192.0.2.1', host='auth.example.test')
+        session = response.cookies['mbs'].value
+        assert response.cookies['mbs']['domain'] == response.cookies['mbp']['domain'], 'both cookies must share the configured domain'
+        assert assess.verify_pass_cookie(response.cookies['mbp'].value, '198.51.100.1', host='app.example.test', session_key=session) == 'scope-fixture', 'shared-domain request must verify without host-only device cookies'
+        issued = str(int(time.time()))
+        cookie = 'scope-fixture:' + issued + ':v2.' + sign(f'hosted-pass:v2:.example.test:scope-fixture:{session}:{issued}', fallback)[:32]
+        with mock.patch.object(assess, 'crypto_keys', FakeKeys([primary, fallback])):
+            assert assess.verify_pass_cookie(cookie, '', host='auth.example.test', session_key=session) == 'scope-fixture', 'fallback signing keys must validate hosted v2 cookies'
+        with mock.patch.object(assess, 'crypto_keys', FakeKeys([primary])):
+            assert assess.verify_pass_cookie(cookie, '', host='auth.example.test', session_key=session) is None, 'removing fallback must revoke the old signature'

@@ -135,11 +135,20 @@
     function protectedPost(url, body, purpose) {
         var payload = _withDevice(body);
         if (!_bouncerTokenProvider) return post(url, payload);
-        return MojoAuth.getBouncerToken(purpose, {duid: payload.duid || ''}).then(function (token) {
-            if (!token) throw new Error('Verification is unavailable. Reload the page to continue.');
-            payload.bouncer_token = token;
-            return post(url, payload);
-        });
+        function attempt(retried) {
+            return MojoAuth.getBouncerToken(purpose, {duid: payload.duid || ''}).then(function (token) {
+                if (!token) throw new Error('Verification is unavailable. Reload the page to continue.');
+                payload.bouncer_token = token;
+                return post(url, payload).catch(function (error) {
+                    // This rejection is raised by the Bouncer decorator before
+                    // credentials or an action are processed. Never replay an
+                    // uncertain network outcome or an actual credential failure.
+                    if (!retried && error && error.error === 'Invalid bouncer token' && error.code === 403) return attempt(true);
+                    throw error;
+                });
+            });
+        }
+        return attempt(false);
     }
 
     function get(url, headers) {

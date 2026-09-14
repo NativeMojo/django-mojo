@@ -1,4 +1,6 @@
 import hmac
+import re
+import secrets
 import uuid
 
 from django.http import HttpResponse
@@ -260,13 +262,25 @@ def _safe_signals(signals):
     return result
 
 
-def _set_pass_cookie(response, muid, ip, *, issued_at=None):
+def pass_cookie_scope(host):
+    return (settings.get_static('BOUNCER_PASS_COOKIE_DOMAIN', '') or host).lower()
+
+
+def _set_pass_cookie(response, muid, ip, *, issued_at=None, host='', session_key=''):
     """Set a signed HttpOnly pass cookie so the bouncer gate is skipped next visit."""
     import time
     issued = str(int(time.time()) if issued_at is None else int(issued_at))
     ip_prefix = '.'.join(ip.split('.')[:3]) if ip else ''
     data = f"{muid}:{ip_prefix}:{issued}"
-    sig = crypto_sign(data)[:16]
+    if host:
+        # A separate session cookie shares mbp's domain, including nginx's
+        # documented cross-subdomain flow. Neither cookie works alone.
+        if not re.fullmatch(r'[a-f0-9]{64}', session_key or ''):
+            session_key = secrets.token_hex(32)
+        data = f'hosted-pass:v2:{pass_cookie_scope(host)}:{muid}:{session_key}:{issued}'
+        sig = 'v2.' + crypto_sign(data)[:32]
+    else:
+        sig = crypto_sign(data)[:16]
     value = f"{muid}:{issued}:{sig}"
 
     ttl = settings.get_static('BOUNCER_PASS_COOKIE_TTL', 86400)
@@ -274,6 +288,9 @@ def _set_pass_cookie(response, muid, ip, *, issued_at=None):
     # under a common parent (e.g. ".example.com"), enabling nginx auth_request
     # gating from app subdomains against the bouncer host. Unset → host-only.
     cookie_domain = settings.get_static('BOUNCER_PASS_COOKIE_DOMAIN', '') or None
+    if host:
+        response.set_cookie('mbs', session_key, httponly=True,
+                            secure=not settings.DEBUG, samesite='Lax', domain=cookie_domain)
     response.set_cookie(
         'mbp', value,
         max_age=max(0, ttl - (int(time.time()) - int(issued))),
@@ -313,7 +330,8 @@ def on_verify_pass(request):
     # 2. Pass cookie validation
     cookie_value = request.COOKIES.get('mbp', '')
     if cookie_value:
-        muid = verify_pass_cookie(cookie_value, request.ip)
+        muid = verify_pass_cookie(cookie_value, request.ip, host=request.get_host(),
+                                  session_key=request.COOKIES.get('mbs', ''))
         if muid:
             resp = HttpResponse(status=200)
             resp['X-Bouncer-Muid'] = muid
@@ -324,7 +342,7 @@ def on_verify_pass(request):
     return resp
 
 
-def verify_pass_cookie(cookie_value, ip):
+def verify_pass_cookie(cookie_value, ip, *, host='', session_key=''):
     """Validate a pass cookie. Returns muid string on success, None on failure."""
     import time
     try:
@@ -334,15 +352,22 @@ def verify_pass_cookie(cookie_value, ip):
         muid, issued_str, provided_sig = parts
         issued = int(issued_str)
         ttl = settings.get_static('BOUNCER_PASS_COOKIE_TTL', 86400)
-        if int(time.time()) - issued > ttl:
+        age = int(time.time()) - issued
+        if age < 0 or age > ttl:
             return None
         ip_prefix = '.'.join(ip.split('.')[:3]) if ip else ''
         data = f"{muid}:{ip_prefix}:{issued_str}"
+        hosted = provided_sig.startswith('v2.')
+        if hosted:
+            if (not host or not re.fullmatch(r'[a-f0-9]{64}', session_key or '')
+                    or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', muid)):
+                return None
+            data = f'hosted-pass:v2:{pass_cookie_scope(host)}:{muid}:{session_key}:{issued_str}'
         # Try the primary SECRET_KEY, then each SECRET_KEY_FALLBACKS entry so
         # cookies signed before a key rotation stay valid. Issuance
         # (_set_pass_cookie) always signs with the primary.
         for secret_key in crypto_keys.secret_keys():
-            expected_sig = crypto_sign(data, secret_key)[:16]
+            expected_sig = ('v2.' + crypto_sign(data, secret_key)[:32]) if hosted else crypto_sign(data, secret_key)[:16]
             if hmac.compare_digest(provided_sig, expected_sig):
                 return muid
         return None
