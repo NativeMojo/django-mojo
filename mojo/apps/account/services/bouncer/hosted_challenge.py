@@ -1,7 +1,6 @@
 """Bounded, atomic state for hosted recovery, independent of the public SDK."""
 import hashlib
 import json
-import math
 import secrets
 import time
 
@@ -9,11 +8,8 @@ CHALLENGE_TTL = 300
 FORM_TTL = 1800
 STATE_TTL = 1860
 MAX_DESCRIPTORS = 8
-ATTEMPTS = 3
-COOLDOWN = 60
-TOLERANCE = 8
 
-# One key owns both the descriptors and the shared retry budget. Comparing the
+# One key owns the bounded descriptors. Comparing the
 # serialized value avoids lost updates across workers; the callback has no I/O.
 _CAS = """
 local old = redis.call('GET', KEYS[1]) or ''
@@ -37,6 +33,7 @@ class ChallengeStore:
     def _change(self, operation):
         for _ in range(8):
             raw = self.redis.get(self.key) or ''
+            # Retain the legacy shape while older workers may share this key.
             state = json.loads(raw) if raw else {'descriptors': {}, 'attempts': 0, 'cooldown': 0}
             result = operation(state, self.clock())
             encoded = json.dumps(state, separators=(',', ':'), sort_keys=True)
@@ -56,10 +53,11 @@ class ChallengeStore:
                 del entries[min(entries, key=lambda key: entries[key]['created'])]
             record = {'purpose': purpose, 'group_uuid': group_uuid, 'created': now,
                       'expires': now + (FORM_TTL if form else CHALLENGE_TTL),
-                      'target': secrets.randbelow(51) + 25, 'stage': action,
-                      'form': form, 'results': {}, 'issued': None}
+                      'stage': 'check' if action in ('slider', 'cooldown') else action,
+                      # Legacy workers still expect these fields during rollout.
+                      'form': form, 'target': 50, 'results': {}, 'issued': None}
             entries[descriptor] = record
-            return {'descriptor': descriptor, **self._view(record, state, now)}
+            return {'descriptor': descriptor, **self._view(record)}
         return self._change(issue)
 
     def read(self, descriptor):
@@ -70,15 +68,11 @@ class ChallengeStore:
             return None
         return record
 
-    def _view(self, record, state, now):
+    def _view(self, record):
         stage = record['stage']
-        if stage not in ('decoy', 'recovery', 'granted') and state['cooldown'] > now:
-            return {'next_action': 'cooldown', 'retry_after': math.ceil(state['cooldown'] - now)}
-        action = 'check_cookie' if stage == 'granted' else stage
-        result = {'next_action': action}
-        if stage == 'slider':
-            result.update(target=record['target'], tolerance=TOLERANCE,
-                          attempts_remaining=max(0, ATTEMPTS - state['attempts']))
+        if stage in ('slider', 'cooldown'):
+            stage = 'check'
+        result = {'next_action': 'check_cookie' if stage == 'granted' else stage}
         if stage == 'granted':
             result['issued'] = record['issued']
         return result
@@ -105,38 +99,13 @@ class ChallengeStore:
             if policy == 'decoy' or (policy == 'recovery' and record['stage'] != 'decoy'):
                 record['stage'] = policy
             if record['stage'] in ('decoy', 'recovery'):
-                return self._view(record, state, now)
-            if request_id in record['results']:
-                return record['results'][request_id]
-            if record['stage'] == 'granted':
-                return self._view(record, state, now)
-            if state['cooldown'] > now:
-                return self._view(record, state, now)
-            if state['cooldown'] or state.get('window_end', 0) < now:
-                state.update(attempts=0, cooldown=0, window_end=now + CHALLENGE_TTL)
-            if operation == 'check':
-                if record['stage'] == 'slider' or policy == 'slider':
-                    record['stage'] = 'slider'
-                else:
-                    record.update(stage='granted', issued=int(now))
-                # Checks are idempotent in state; storing them would let reloads
-                # crowd the bounded answer cache or replay an obsolete grant.
-                return self._view(record, state, now)
-            if record['stage'] != 'slider':
-                return {'next_action': 'recovery', 'reason': 'restart'}
-            if type(answer) not in (int, float) or not math.isfinite(answer) or not 0 <= answer <= 100:
+                return self._view(record)
+            if operation not in ('check', 'submit'):
                 return {'next_action': 'error', 'reason': 'invalid'}
-            if abs(answer - record['target']) <= TOLERANCE:
+            # Old pages may still submit a slider answer. Treat that as Continue,
+            # ignoring obsolete misses/cooldowns, only after fresh restrictions.
+            # Persist one grant timestamp so network retries confirm the same cookie.
+            if record['stage'] != 'granted':
                 record.update(stage='granted', issued=int(now))
-            else:
-                state['attempts'] += 1
-                if state['attempts'] >= ATTEMPTS:
-                    state['cooldown'] = now + COOLDOWN
-            result = self._view(record, state, now)
-            # No request can grow this map without spending an attempt or
-            # completing the record. Clear only at a new, explicit budget.
-            if len(record['results']) >= ATTEMPTS + 1:
-                record['results'].clear()
-            record['results'][request_id] = result
-            return result
+            return self._view(record)
         return self._change(complete)

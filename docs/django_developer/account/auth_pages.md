@@ -167,7 +167,7 @@ placing a file with the same path in your project's `TEMPLATES` directories.
 | `register.html` | Registration page — extends base; redirects to `/passkey` when `passkey_prompt != off` |
 | `passkey_enroll.html` | Standalone passkey enrollment page |
 | `oauth_consent.html` | OAuth 2.1 consent screen — extends base; see [oauth_server.md](oauth_server.md) |
-| `bouncer_challenge.html` | Hosted Continue/slider/recovery shell (default branded, opt-in override per group) |
+| `bouncer_challenge.html` | Hosted Continue/recovery shell (default branded, opt-in override per group) |
 | `bouncer_decoy.html` | Selected local decoy sink or explicit scanner honeypot, selected by server context |
 | `_bouncer_selected_decoy.html` | Non-submitting selected-decoy UI, also used after assessment |
 
@@ -772,13 +772,11 @@ resolves down the parent chain.
 
 `/auth`, `/register`, and `/contact` share `hosted_gate.page_check()`. A valid
 `mbp` pass must match the returning `_muid`, and current restrictions are checked
-before serving a real page. Low risk without a pass gets Continue; recoverable
-uncertainty gets a target slider. The slider supports drag-and-release,
-tap/click plus Confirm, and arrow keys plus Confirm, with live status and visible
-focus. It is a modest recovery interaction, not proof of humanity.
-
-Three wrong answers start a 60-second cooldown shared across tabs, reloads,
-and purposes for the same host/cookie identity; Retry is explicit. Challenge
+before serving a real page. Low risk without a pass and recoverable uncertainty
+both get Continue, with touch, mouse, and keyboard activation, live status, and
+visible focus. Continue is not proof of humanity. The hosted slider and its
+three-miss cooldown are removed; old slider state and cached misses do not
+prevent Continue after current policy checks. Challenge
 descriptors expire after 5 minutes. Success appears only after a separate
 same-origin `confirm` request verifies the exact pass cookie and current policy.
 Failures stay on the shell with connection, cookie, expiry, or operator guidance.

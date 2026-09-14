@@ -27,8 +27,6 @@ def operation(client, descriptor, op, signals=None, **fields):
 def pass_gate(client, path='/auth'):
     challenge = config(client.get(path))
     outcome = operation(client, challenge['descriptor'], 'check', {'behavior': {'mouse_move_count': 0}})
-    if outcome.next_action == 'slider':
-        outcome = operation(client, challenge['descriptor'], 'submit', answer=outcome.target)
     assert outcome.next_action == 'check_cookie', f'eligible visitor must reach cookie confirmation: {outcome}'
     assert operation(client, challenge['descriptor'], 'confirm').next_action == 'allow', 'returning pass must be confirmed'
     return config(client.get(path), 'mat-hosted-bouncer')
@@ -109,8 +107,6 @@ def test_history_recovery_and_cookie_rejection(opts):
         device.delete()
         new = config(client.get('/auth'))
         grant = operation(client, new['descriptor'], 'check')
-        if grant.next_action == 'slider':
-            grant = operation(client, new['descriptor'], 'submit', answer=grant.target)
         assert grant.next_action == 'check_cookie', 'eligible visitor must receive only a provisional grant'
         client.session.cookies.set('mbp', None)
         assert operation(client, new['descriptor'], 'confirm').reason == 'cookies', 'missing pass must prevent final confirmation'
@@ -178,8 +174,6 @@ def test_late_freeze_and_unavailable_state(opts):
         first = config(client.get('/auth'))
         muid = client.session.cookies.get('_muid')
         grant = operation(client, first['descriptor'], 'check')
-        if grant.next_action == 'slider':
-            grant = operation(client, first['descriptor'], 'submit', answer=grant.target)
         assert grant.next_action == 'check_cookie', 'pre-freeze browser must reach provisional grant'
         risk_key = 'bouncer:session_risk:' + muid
         keys.append(risk_key)

@@ -40,9 +40,9 @@ def test_hosted_routing_matrix(opts):
     for page in ('login', 'registration', 'public_message'):
         for raw in (0, 39, 40, 59, 60, 180):
             value = result(raw, page=page)
-            expected = 'decoy' if value.decision == 'block' else ('check' if value.decision == 'allow' else 'slider')
+            expected = 'decoy' if value.decision == 'block' else 'check'
             assert route(value, page) == expected, f'{page} must honor its actual configured boundary at {raw}'
-        assert route(result(100, 100, page=page), page) == 'slider', 'ordinary uncertainty at the raw cap remains recoverable'
+        assert route(result(100, 100, page=page), page) == 'check', 'ordinary uncertainty at the raw cap remains recoverable'
         assert route(result(180, 80, page=page), page) == 'decoy', 'uncapped retained block cannot be erased by recovery credit'
         assert route(result(100, 0, 100, page), page, blocked=True) == 'recovery', 'ambiguous historical block gets operator recovery'
         assert route(result(0, page=page), page, frozen=True) == 'recovery', 'stream freeze remains authoritative'

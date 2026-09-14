@@ -38,7 +38,7 @@ def test_rejected_check_stays_on_recovery(opts):
 
         def do_GET(self):
             if self.path.startswith('/api/account/static/'):
-                asset = ROOT / 'mojo/apps/account/static/account' / self.path.rsplit('/', 1)[-1]
+                asset = ROOT / 'mojo/apps/account/static/account' / self.path.split('?', 1)[0].rsplit('/', 1)[-1]
                 body = asset.read_bytes()
                 kind = 'application/javascript'
             else:
@@ -86,7 +86,7 @@ def test_rejected_check_stays_on_recovery(opts):
         server.server_close()
 
 
-@th.django_unit_test('rendered slider supports pointer, touch, keyboard, honest failures and credential-free decoys')
+@th.django_unit_test('rendered Continue supports mouse, touch, keyboard, honest failures and credential-free decoys')
 def test_browser_interaction_matrix(opts):
     import base64
     import time
@@ -102,7 +102,7 @@ def test_browser_interaction_matrix(opts):
     request.muid = 'browser-matrix'
     request.ip = '127.0.0.1'
     request.user_agent = 'Mozilla/5.0'
-    cfg = {'descriptor': 'x' * 32, 'next_action': 'slider', 'target': 50, 'tolerance': 8, 'attempts_remaining': 3}
+    cfg = {'descriptor': 'x' * 32, 'next_action': 'check'}
     html = _serve_challenge(request, hosted_config=cfg).content.decode().replace('"redirect_url": "/auth"', '"redirect_url": "/finished"').encode()
     nonce = __import__('re').search(rb'<script nonce="([^"]+)"', html).group(1).decode()
     login_html = _serve_login(request, hosted_config=cfg).content
@@ -114,7 +114,7 @@ def test_browser_interaction_matrix(opts):
         def do_GET(self):
             state['visits'].append(self.path)
             if self.path.startswith('/api/account/static/'):
-                body = (ROOT / 'mojo/apps/account/static/account' / self.path.rsplit('/', 1)[-1]).read_bytes()
+                body = (ROOT / 'mojo/apps/account/static/account' / self.path.split('?', 1)[0].rsplit('/', 1)[-1]).read_bytes()
                 kind = 'text/css' if self.path.endswith('.css') else 'application/javascript'
             else:
                 body = b'<h1>Destination reached</h1>' if self.path == '/finished' else (login_html if self.path.startswith('/real-login') else html)
@@ -138,8 +138,6 @@ def test_browser_interaction_matrix(opts):
                 data = {'decision': 'block', 'next_action': 'recovery', 'reason': 'cookies'} if op == 'confirm' else data
             elif mode == 'decoy':
                 data = {'decision': 'block', 'next_action': 'decoy'}
-            elif mode == 'cooldown':
-                data = {'decision': 'block', 'next_action': 'cooldown', 'retry_after': 60}
             elif mode == 'http':
                 status = 503
             elif mode == 'html':
@@ -162,63 +160,49 @@ def test_browser_interaction_matrix(opts):
             def fresh(mode='success', query=''):
                 state.update(mode=mode, posts=[])
                 page.call('Page.navigate', {'url': f'http://127.0.0.1:{server.server_port}/auth{query}'})
-                page.wait("!!document.querySelector('#mbg-slider:not([disabled])')", 'enabled slider')
+                page.wait("!!document.querySelector('#mbg-continue:not([disabled])')", 'enabled Continue')
             def rect():
-                return page.evaluate("(()=>{let r=document.getElementById('mbg-slider').getBoundingClientRect();return {left:r.left,width:r.width,y:r.top+r.height/2}})()")
+                return page.evaluate("(()=>{let r=document.getElementById('mbg-continue').getBoundingClientRect();return {left:r.left,width:r.width,y:r.top+r.height/2}})()")
             def key(name, code):
-                page.call('Input.dispatchKeyEvent', {'type': 'keyDown', 'key': name, 'windowsVirtualKeyCode': code})
+                page.call('Input.dispatchKeyEvent', {'type': 'keyDown', 'key': name, 'windowsVirtualKeyCode': code, 'text': '\r' if name == 'Enter' else ''})
                 page.call('Input.dispatchKeyEvent', {'type': 'keyUp', 'key': name, 'windowsVirtualKeyCode': code})
             def confirm():
                 page.evaluate("document.getElementById('mbg-continue').click();true")
-            def keyboard_target():
-                page.evaluate("document.getElementById('mbg-slider').focus();true")
-                key('Home', 36)
-                for _ in range(50):
-                    key('ArrowRight', 39)
             page.call('Emulation.setDeviceMetricsOverride', {'width': 1100, 'height': 820, 'deviceScaleFactor': 1, 'mobile': False})
             fresh()
-            keyboard_target()
-            assert page.evaluate("document.activeElement.id==='mbg-slider' && document.getElementById('mbg-status').getAttribute('aria-live')==='polite'"), 'keyboard focus and live status must stay available'
-            Path('/tmp/bouncer-4309-desktop.png').write_bytes(base64.b64decode(page.call('Page.captureScreenshot', {'format': 'png'})['data']))
-            assert len(state['posts']) == 0, 'keyboard positioning must wait for explicit Confirm'
-            confirm()
-            page.wait("location.pathname==='/finished'", 'confirmed destination')
-            assert [p['hosted_gate']['operation'] for p in state['posts']] == ['submit', 'confirm'], 'successful slider must confirm cookie before one navigation'
+            assert page.evaluate("!document.querySelector('input[type=range]') && !document.body.textContent.includes('slider')"), 'hosted page must expose a Continue button without a drag requirement'
+            page.evaluate("document.getElementById('mbg-continue').focus();true")
+            assert page.evaluate("document.activeElement.id==='mbg-continue' && document.getElementById('mbg-status').getAttribute('aria-live')==='polite'"), 'keyboard focus and live status must stay available'
+            Path('/tmp/bouncer-no-slider-desktop.png').write_bytes(base64.b64decode(page.call('Page.captureScreenshot', {'format': 'png'})['data']))
+            key('Enter', 13)
+            page.wait("location.pathname==='/finished'", 'keyboard destination')
+            assert [p['hosted_gate']['operation'] for p in state['posts']] == ['check', 'confirm'], 'Continue must confirm the cookie before navigation'
             fresh()
             box = rect()
-            page.call('Input.dispatchMouseEvent', {'type': 'mousePressed', 'x': box['left'] + 8, 'y': box['y'], 'button': 'left', 'clickCount': 1})
-            page.call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': box['left'] + box['width']/2, 'y': box['y'], 'button': 'left', 'buttons': 1})
-            page.call('Input.dispatchMouseEvent', {'type': 'mouseReleased', 'x': box['left'] + box['width']/2, 'y': box['y'], 'button': 'left', 'clickCount': 1})
-            page.wait("location.pathname==='/finished'", 'pointer release destination')
-            assert abs(state['posts'][0]['hosted_gate']['answer'] - 50) <= 8, 'pointer drag must send actual target position'
+            for kind in ('mousePressed', 'mouseReleased'):
+                page.call('Input.dispatchMouseEvent', {'type': kind, 'x': box['left'] + box['width']/2, 'y': box['y'], 'button': 'left', 'clickCount': 1})
+            page.wait("location.pathname==='/finished'", 'mouse destination')
             page.call('Emulation.setDeviceMetricsOverride', {'width': 360, 'height': 800, 'deviceScaleFactor': 1, 'mobile': True})
             page.call('Emulation.setTouchEmulationEnabled', {'enabled': True})
             page.call('Emulation.setEmulatedMedia', {'features': [{'name': 'prefers-reduced-motion', 'value': 'reduce'}]})
             fresh()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), 'narrow layout must not overflow horizontally'
-            Path('/tmp/bouncer-4309-narrow.png').write_bytes(base64.b64decode(page.call('Page.captureScreenshot', {'format': 'png'})['data']))
+            Path('/tmp/bouncer-no-slider-mobile.png').write_bytes(base64.b64decode(page.call('Page.captureScreenshot', {'format': 'png'})['data']))
             box = rect()
-            for kind, x in [('touchStart', box['left']+8), ('touchMove', box['left']+box['width']/2), ('touchEnd', 0)]:
-                points = [] if kind == 'touchEnd' else [{'x': x, 'y': box['y'], 'id': 1}]
-                page.call('Input.dispatchTouchEvent', {'type': kind, 'touchPoints': points})
-            page.wait("location.pathname==='/finished'", 'touch release destination')
-            fresh()
-            box = rect()
-            for kind in ['touchStart', 'touchEnd']:
+            for kind in ('touchStart', 'touchEnd'):
                 page.call('Input.dispatchTouchEvent', {'type': kind, 'touchPoints': [] if kind == 'touchEnd' else [{'x': box['left']+box['width']/2, 'y': box['y'], 'id': 1}]})
-            if page.evaluate("location.pathname!='/finished'"):
-                confirm()
-            page.wait("location.pathname==='/finished'", 'tap positioning destination')
-            for mode in ('cookies', 'http', 'html', 'json', 'cooldown', 'decoy'):
+            page.wait("location.pathname==='/finished'", 'single mobile tap destination')
+            assert [p['hosted_gate']['operation'] for p in state['posts']] == ['check', 'confirm'], 'one mobile tap must confirm the cookie and reach the destination without dragging'
+            fresh()
+            page.evaluate("MojoHostedBouncer.mount(document, {descriptor:'x'.repeat(32),next_action:'slider',redirect_url:'/finished'});true")
+            assert page.evaluate("document.getElementById('mbg-continue').textContent==='Continue' && !document.getElementById('mbg-continue').disabled"), 'legacy page configuration must still expose Continue'
+            for mode in ('cookies', 'http', 'html', 'json', 'decoy'):
                 fresh(mode)
-                keyboard_target()
                 confirm()
                 time.sleep(0.25)
                 assert page.evaluate("location.pathname==='/auth' && !document.body.textContent.includes('Verified')"), f'{mode} must never show success or navigate'
                 if mode == 'cookies':
                     assert page.evaluate("document.getElementById('mbg-status').textContent.includes('cookies')"), 'missing cookie must explain recovery'
-                if mode == 'cooldown':
-                    assert page.evaluate("document.getElementById('mbg-continue').disabled"), 'cooldown must disable retry and issue no automatic requests'
                 if mode == 'decoy':
                     before = len(state['posts'])
                     page.evaluate("document.getElementById('mbg-password').value='Never transmit';document.getElementById('mbg-signin').click();true")
@@ -227,7 +211,6 @@ def test_browser_interaction_matrix(opts):
             script = page.call('Page.addScriptToEvaluateOnNewDocument', {'source': "Object.defineProperty(window,'sessionStorage',{get(){throw new Error('blocked')}});Object.defineProperty(window,'localStorage',{get(){throw new Error('blocked')}});"})
             fresh('success', '?token=pr%3Afixture-reset')
             before = state['visits'].count('/auth?token=pr%3Afixture-reset')
-            keyboard_target()
             confirm()
             time.sleep(0.4)
             assert state['visits'].count('/auth?token=pr%3Afixture-reset') == before + 1, 'storage-refused reset recovery must reload the original URL exactly once'
