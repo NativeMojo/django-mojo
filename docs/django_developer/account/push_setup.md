@@ -129,37 +129,56 @@ from mojo.apps.account.models import PushConfig
 
 config = PushConfig.objects.get(name="Production FCM")
 
-# Test with no token — validates credentials only
+# Authenticate with FCM and validate project send permission, without delivery
 result = config.test_fcm_connection()
 print(result)
-# {'success': True, 'message': 'FCM v1 credentials valid (dummy token rejected by FCM)', ...}
+# {'success': True, 'outcome': 'validated', 'validation_only': True, ...}
 
-# Test with a real device token — validates end-to-end delivery
+# Legacy real-token send — requires test_mode=False; confirm receipt on the device
 result = config.test_fcm_connection(test_token="<real-device-token>")
 print(result)
-# {'success': True, 'message_id': '...', ...}
+# {'success': True, 'outcome': 'accepted', 'validation_only': False, 'message_id': '...', ...}
 ```
+
+The no-token check uses FCM `validate_only=True` and still contacts FCM when `test_mode=True`. It never delivers a notification. Missing credentials, authentication failures, and provider rejections return `success=False` with a safe `error_code` and `message`; a dummy-token rejection is never proof that the credentials work.
 
 ### Via REST API
 
 ```
 POST /api/account/devices/push/config/1/test
 Authorization: Bearer <token>
-{ "device_token": "<optional-real-token>" }
+Content-Type: application/json
+
+{}
 ```
+
+Requires global `manage_push_config` or `comms`. Success returns HTTP 200 with `{"status":true,"data":result}`; the result includes `success`, `outcome="validated"`, `validation_only=true`, `test_mode`, `fcm_version`, `message_id`, `error_code`, and `message`. Failed checks return HTTP 400 with `{"status":false,"error":"...","data":result}`. This validates the selected saved config, including an inactive one; it does not activate it.
+
+For a tracked device test, use the numeric `id` returned by device registration/listing:
+
+```
+GET /api/account/devices/push/test?device_id=42
+
+POST /api/account/devices/push/test
+{"device_id":42,"message":"Please confirm receipt"}
+```
+
+Both calls require global `send_notifications` or `comms` and permission to view device 42. GET reports local readiness without FCM traffic; POST sends to that one registered token using the device owner's active org config or system fallback. Test mode, inactive/disabled registration, a disabled `test` category, missing token/config/credentials block the real send. Inspect `data.outcome`: `accepted` means FCM accepted the request; `unknown` means acceptance is uncertain and you should check the device before sending again. Neither confirms receipt. See the [REST reference](../../web_developer/account/push.md#test-endpoint) for the full response contract.
+
+The config endpoint still accepts `{"device_token":"<real-token>"}` for legacy callers (max 4096 characters). A nonempty token requests a real send, blocks under test mode, and does not create a delivery-history record.
 
 ---
 
 ## Step 6 — Enable Test Mode for Development
 
-Set `test_mode=True` on the config to skip real FCM calls during development. Notifications are logged instead.
+Set `test_mode=True` on the config to simulate ordinary sends during development. Notifications are logged instead.
 
 ```python
 config.test_mode = True
 config.save()
 ```
 
-All `RegisteredDevice.send()` calls will succeed (returning a delivery record with `status=sent`) without making any FCM HTTP requests. Useful for local development and CI.
+Eligible ordinary `RegisteredDevice.send()` calls return a delivery record with legacy `status="sent"` and `push_outcome="simulated"`, without FCM traffic. The caller-wide test endpoint reports these in `simulated_count`, with `sent_count=0` and `success=false` if every result is simulated. Real device tests block in this mode. No-token configuration verification remains a real FCM call, so mock the provider for offline tests.
 
 ---
 
@@ -207,4 +226,4 @@ await fetch('/api/account/devices/push/register', {
 ## See Also
 
 - [Push Notifications — Django Developer Reference](push.md) — models, service layer, permissions
-- [Push Notifications — REST API Reference](../../../web_developer/account/push.md) — all endpoints, mobile examples
+- [Push Notifications — REST API Reference](../../web_developer/account/push.md) — all endpoints, mobile examples
