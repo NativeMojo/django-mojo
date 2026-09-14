@@ -108,6 +108,10 @@ def check_moderation_scored(body):
     Preserve classifier scores/reasons, including high_severity. Only block
     becomes masked: consumers decide what to hide, and may reveal the body.
     """
+    from mojo.helpers.settings import settings
+    if not settings.get("CHAT_MODERATION_ENABLED", True, kind="bool"):
+        return "allow", [], None
+
     from mojo.helpers import content_guard
     result = content_guard.check_text(body, surface="chat")
     decision = "masked" if result.decision == "block" else result.decision

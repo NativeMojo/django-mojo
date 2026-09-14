@@ -314,7 +314,7 @@ the send frame.
 
 ## Advisory moderation and display
 
-Language at every severity is saved and scored. `high_severity` is a reason
+With moderation enabled, language at every severity is saved and scored. `high_severity` is a reason
 code, never a special refusal. Normal sends, retries and race acknowledgements,
 new-message events, edit events/acks, history and both moderator graphs always
 carry these server-owned fields:
@@ -333,6 +333,17 @@ reasons. Reasons are `high_severity`, `deny_hit`, `repeated_profanity`,
 Backend integrations use `check_moderation_scored(body)` returning
 `(decision, reasons, score)`; `check_moderation(body)` remains a two-tuple.
 
+The application can disable classification with `CHAT_MODERATION_ENABLED=False`.
+Its framework default is `True`; a global runtime DB Setting overrides the file
+setting and is read with boolean coercion (including text `"false"`). Disabled
+new sends and accepted edits return `allow` / `[]` / `null`. Replace all three
+local fields on edits so previous masking metadata clears. Re-enabling affects
+subsequent classifications; the setting alone does not alter historical rows or
+idempotent retry responses. Historical presentation is a separate application
+choice. Authorization and explicit room rules still apply, including URL/phone
+rules. This requires a framework release containing the switch on every writer;
+older application/file-caption fallbacks must also honor the disabled setting.
+
 **Use numeric score for presentation.** Maestro hides messages at score **>=35**,
 the current warning threshold, and gives each viewer a local **Show** action.
 A valid numeric score is authoritative even if a legacy decision disagrees.
@@ -345,7 +356,7 @@ Authorized responses and events contain the **real body**. Hiding is viewer
 presentation, not access control. Preserve ordinary history/unread behavior;
 flags, membership, join bounds and disappearing-message expiry still apply.
 The three moderation fields cannot be supplied by clients or overridden by
-kind metadata. Accepted edits replace all three; clean edits return
+kind metadata. Accepted edits replace all three; clean edits with moderation enabled return
 allow/[]/0 so a previous hidden state clears.
 
 **Notifications must use `Hidden by moderation` for hidden previews**, including

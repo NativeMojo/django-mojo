@@ -27,7 +27,31 @@ decision, reasons, score = check_moderation_scored(body)
 decision, reasons = check_moderation(body)  # compatible two-tuple
 ```
 
-The scored helper calls `content_guard.check_text(body, surface="chat")` once
+### Application moderation switch
+
+`CHAT_MODERATION_ENABLED` defaults to `True`. The chat adapter reads it using
+`settings.get("CHAT_MODERATION_ENABLED", True, kind="bool")`: a global runtime
+DB `Setting` overrides the file setting, which overrides the framework default.
+Boolean coercion accepts text values such as `"false"`; deleting the DB override
+restores the file/default behavior. Unrecognized text values use the default `True`.
+
+When disabled, `check_moderation_scored` returns `("allow", [], None)` without
+calling the language classifier; the legacy wrapper returns `("allow", [])`.
+New sends persist that unscored state. Accepted edits replace all three fields,
+clearing any previous score/reasons on the edited message. Re-enabling restores
+advisory classification for subsequent sends and edits.
+
+The switch does not bypass authorization, rate limits, length/media constraints,
+or explicit room URL/phone rules. Those room rules may still call content_guard
+for URL/phone detection. Do not use `enforce_room_policy=False` as this switch:
+it also bypasses unrelated room policies.
+
+Changing the setting does not rewrite history or reclassify idempotent retries.
+Consumers separately decide how to display historical scores. Host applications
+and file-caption adapters must use a framework release containing this switch;
+older-version fallbacks must explicitly honor the host's disabled setting.
+
+When enabled, the scored helper calls `content_guard.check_text(body, surface="chat")` once
 and returns `(decision, list(result.reasons), result.score)`. Only classifier
 `block` changes to `masked`; `allow` and `warn` are unchanged. The generic
 classifier's normalization, wordlists, scores and thresholds are unchanged.
@@ -60,7 +84,7 @@ scores **>=35**, the current warning threshold, and offers each viewer a local
 Show action. Numeric score is authoritative, including 0; absent, null or
 invalid scores fall back to legacy `warn`/`masked`/`block` decisions. `masked`
 records a classifier block; it does not redact stored content or impose the UI
-threshold. Successful edits replace all three fields together; clean edits
+threshold. Successful edits replace all three fields together; clean edits with moderation enabled
 return `allow`/`[]`/`0` so clients clear prior hidden state.
 
 Consumers must substitute **`Hidden by moderation`** for hidden message
