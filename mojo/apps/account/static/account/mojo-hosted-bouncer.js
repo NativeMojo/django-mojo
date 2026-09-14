@@ -65,10 +65,9 @@
   }
 
   function mount(doc, config) {
-    var client = new Client(config), action = config.next_action, busy = false, navigated = false;
+    var client = new Client(config), busy = false, navigated = false;
     var button = doc.getElementById('mbg-continue'), status = doc.getElementById('mbg-status');
-    var slider = doc.getElementById('mbg-slider'), panel = doc.getElementById('mbg-slider-panel');
-    var pending = null, countdown = null, pointerMoved = false, resetFallback = false;
+    var pending = null, resetFallback = false;
     var behavior = {mouse_move_count: 0, touch_event_count: 0, keystroke_count: 0};
     var token = new URLSearchParams(root.location.search).get('token');
     if (token && token.indexOf('pr:') === 0) {
@@ -81,33 +80,14 @@
     doc.addEventListener('keydown', function () { behavior.keystroke_count += 1; });
 
     function show(data) {
-      action = data.next_action;
-      if (countdown) { clearInterval(countdown); countdown = null; }
-      panel.hidden = action !== 'slider';
+      // An in-flight page may contain the retired slider/cooldown config.
+      var action = data.next_action;
+      if (action === 'slider' || action === 'cooldown') action = 'check';
       button.hidden = false;
       button.disabled = busy;
-      slider.disabled = busy || action !== 'slider';
-      if (action === 'slider') {
-        if (!Number.isFinite(data.target) || !Number.isFinite(data.tolerance)) throw new Error('Invalid target');
-        var low = Math.max(0, data.target - data.tolerance), high = Math.min(100, data.target + data.tolerance);
-        doc.getElementById('mbg-heading').textContent = 'A quick check';
-        doc.getElementById('mbg-target-label').textContent = 'Move between ' + low + ' and ' + high + ', then release.';
-        doc.getElementById('mbg-target').style.left = low + '%';
-        doc.getElementById('mbg-target').style.width = (high - low) + '%';
-        status.textContent = data.attempts_remaining < 3 ? 'Try the highlighted area. ' + data.attempts_remaining + ' attempts left.' : 'Move the slider into the highlighted area.';
-        button.textContent = 'Confirm';
-      } else if (action === 'check') {
+      if (action === 'check') {
         button.textContent = 'Continue';
         status.textContent = 'Select Continue to proceed securely.';
-      } else if (action === 'cooldown') {
-        var until = Date.now() + Math.max(1, Math.min(60, data.retry_after || 60)) * 1000;
-        button.textContent = 'Retry'; button.disabled = true;
-        function tick() {
-          var left = Math.max(0, Math.ceil((until - Date.now()) / 1000));
-          status.textContent = left ? 'Take a moment. You can try again in ' + left + ' seconds.' : 'You can try the check again now.';
-          if (!left) { clearInterval(countdown); countdown = null; button.disabled = false; }
-        }
-        tick(); countdown = setInterval(tick, 1000);
       } else if (action === 'decoy') {
         doc.getElementById('mbg-check').hidden = true;
         doc.getElementById('mbg-decoy').hidden = false;
@@ -128,13 +108,13 @@
       else root.location.replace(config.redirect_url);
     }
 
-    function submit(operation) {
+    function submit() {
       if (busy || navigated) return;
-      busy = true; button.disabled = slider.disabled = true;
-      if (!pending) pending = {operation: operation, fields: {request_id: requestId(), answer: Number(slider.value)}};
+      busy = true; button.disabled = true;
+      if (!pending) pending = {request_id: requestId()};
       status.textContent = 'Checking…';
       var signals = {behavior: behavior, gate_challenge: {honeypot_filled: !!doc.getElementById('mbg-hp-field').value}};
-      client.send(pending.operation, pending.fields, signals).then(function (data) {
+      client.send('check', pending, signals).then(function (data) {
         pending = null;
         if (data.next_action !== 'check_cookie') return data;
         return client.send('confirm').then(function (confirmed) {
@@ -146,18 +126,11 @@
         if (!navigated) show(data);
       }).catch(function () {
         busy = false;
-        action = 'error'; panel.hidden = true;
         status.textContent = 'The connection was interrupted. Please try again.';
         button.textContent = 'Retry'; button.hidden = false; button.disabled = false;
       });
     }
-    button.addEventListener('click', function () { submit(action === 'slider' ? 'submit' : 'check'); });
-    slider.addEventListener('input', function () {
-      pointerMoved = true;
-      doc.getElementById('mbg-value').textContent = 'Position: ' + slider.value;
-    });
-    slider.addEventListener('pointerdown', function () { pointerMoved = false; });
-    slider.addEventListener('pointerup', function () { if (pointerMoved) submit('submit'); });
+    button.addEventListener('click', submit);
     try { show(config); }
     catch (_) { show({next_action: 'error', reason: 'invalid'}); }
   }

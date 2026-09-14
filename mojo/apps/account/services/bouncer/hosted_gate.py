@@ -35,7 +35,7 @@ def route(result, page_type, *, matched=False, blocked=False, frozen=False):
         return 'decoy'
     if blocked or frozen or RiskScorer.decide(remaining, page_type) == 'block':
         return 'recovery'
-    return 'check' if result.decision == 'allow' else 'slider'
+    return 'check'
 
 
 def screen(request, purpose, redis, signals=None):
