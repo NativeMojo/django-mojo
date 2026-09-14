@@ -58,3 +58,29 @@ def test_diagnostic_write_budget(opts):
         redis.delete(key)
         redis.close()
         BouncerSignal.objects.filter(muid=request.muid).delete()
+
+
+@th.django_unit_test('IP-denied diagnostic attempts preserve global capacity for other visitors')
+def test_diagnostic_admission_is_atomic(opts):
+    import uuid
+    from mojo.helpers.redis import get_bounded_connection
+    from mojo.apps.account.services.bouncer.hosted_recovery import _BUDGET
+    prefix = 'test:bouncer-budget:' + uuid.uuid4().hex
+    global_key, ip_key, fresh_ip = prefix + ':global', prefix + ':ip', prefix + ':new'
+    redis = get_bounded_connection(timeout=1, read_from_replicas=False)
+    try:
+        redis.set(global_key, 1, ex=300)
+        redis.set(ip_key, 300, ex=300)
+        allowed = redis.eval(_BUDGET, 2, global_key, ip_key, 3000, 300)
+        assert not allowed, 'an exhausted IP must not be admitted'
+        assert redis.get(global_key) == '1', 'IP-denied traffic must not consume global capacity'
+        redis.set(global_key, 3000, ex=300)
+        assert not redis.eval(_BUDGET, 2, global_key, fresh_ip, 3000, 300), 'global exhaustion must reject new writes'
+        assert redis.get(fresh_ip) is None, 'global denial must not create unbounded per-IP keys'
+        redis.delete(global_key, ip_key)
+        assert redis.eval(_BUDGET, 2, global_key, ip_key, 3000, 300), 'available budgets must admit the write'
+        assert redis.get(global_key) == redis.get(ip_key) == '1', 'admission must charge both budgets once'
+        assert 0 < redis.ttl(global_key) <= 300 and 0 < redis.ttl(ip_key) <= 300, 'both budgets must expire'
+    finally:
+        redis.delete(global_key, ip_key, fresh_ip)
+        redis.close()

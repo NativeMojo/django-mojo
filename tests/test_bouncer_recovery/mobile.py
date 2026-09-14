@@ -72,6 +72,10 @@ def test_cookie_free_review_and_operator_lifecycle(opts):
         anonymous.session.cookies.clear()
         repeat = anonymous.post('/api/auth/bouncer/recovery', {**body, 'note': 'replacement'})
         assert repeat.status_code == 200 and repeat.json.data.reference == failed.reference, 'lost-response retry must be idempotent'
+        anonymous.session.cookies.clear()
+        receipt = anonymous.session.post(anonymous.host + 'api/auth/bouncer/recovery', data=body, timeout=10)
+        assert receipt.status_code == 200 and 'text/html' in receipt.headers.get('Content-Type', ''), 'cookie-free form submission must return an HTML receipt without JavaScript'
+        assert failed.reference in receipt.text and 'recorded for review' in receipt.text, 'the no-JavaScript receipt must confirm the exact recorded request'
         row.refresh_from_db()
         assert row.server_signals['hosted_gate']['review']['note'] == body['note'], 'duplicate submission must not overwrite the original request'
         assert 'review_ticket' not in str(row.server_signals) and not row.raw_signals, 'ticket and raw payload must not be retained'

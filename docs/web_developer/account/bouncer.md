@@ -775,8 +775,9 @@ Hosted diagnostic writes are bounded independently of page access (default
 300 per IP and 3000 globally per five minutes, configurable by the operator).
 If that budget or storage is unavailable, the page still renders a reference
 and configured support link, but has no review ticket/form. A budget-exhausted
-reference is display-only, not a stored review. Previously issued tickets are
-still usable.
+reference is display-only, not a stored review. Diagnostic-budget exhaustion
+does not invalidate existing tickets; intake still requires available storage,
+an unexpired ticket, and its independent rate limit.
 
 #### List Signals
 
