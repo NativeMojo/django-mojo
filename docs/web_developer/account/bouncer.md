@@ -1,8 +1,8 @@
 # Bouncer — Web Developer Reference
 
 Server-side risk screening for hosted auth/contact pages and a separate
-embeddable SDK. Hosted pages use a bounded Continue or target-slider check.
-The slider is a recovery interaction, not proof of a human; authentication,
+embeddable SDK. Hosted pages use a Continue check.
+Continue is not proof of a human; authentication,
 token enforcement, permissions, and rate limits remain separate controls.
 
 See also: [Auth Pages](auth_pages.md) for the login/registration page customization,
@@ -22,13 +22,13 @@ Registration and contact use the same gate:
       ↓
    Valid matching _muid + mbp cookies → real page
    Low risk without a pass            → Continue check
-   Recoverable uncertainty            → target slider
+   Recoverable uncertainty            → Continue check
    Current qualifying bot evidence    → selected decoy
    Existing blocked/frozen restriction → operator recovery
 
 2. Challenge page (if shown)
       mojo-hosted-bouncer.js sends a render-issued descriptor to assess
-      Server verifies Continue or slider answer and sets the pass cookie
+      Server checks current policy and sets the pass cookie
       Separate confirm request verifies the returned cookie and current restrictions
       Only confirmed success navigates once to /{BOUNCER_LOGIN_PATH}
       Safe navigation/registration parameters are forwarded
@@ -41,12 +41,10 @@ Registration and contact use the same gate:
 
 ### Retry and recovery
 
-The slider accepts drag-and-release, tap/click positioning plus Confirm, or
-arrow keys plus Confirm. The target and instructions are visible, with focus
-indicators and live status. Three wrong answers start a **60-second cooldown**,
-then an explicit Retry. The server shares this budget across tabs, reloads,
-and hosted purposes for the same host and `_muid`; opening a new check does not
-reset it. An expired check asks for a reload. Connection failures, non-JSON or
+Continue accepts touch, mouse, and keyboard activation, with visible focus and
+live status. The hosted slider and its three-miss cooldown are removed;
+in-flight slider state and cached misses do not prevent Continue after current
+policy checks. An expired check asks for a reload. Connection failures, non-JSON or
 invalid responses, and the 8-second request timeout show an error and Retry.
 None claims success or automatically navigates.
 
@@ -90,9 +88,8 @@ legacy CORS policy.
   "hosted_gate": {
     "version": 1,
     "descriptor": "<opaque-render-issued-descriptor>",
-    "operation": "submit",
-    "request_id": "<unique-request-id>",
-    "answer": 50
+    "operation": "check",
+    "request_id": "<unique-request-id>"
   },
   "signals": {"behavior": {}, "gate_challenge": {}}
 }
@@ -102,9 +99,9 @@ legacy CORS policy.
 |---|---|
 | `version` | Required; supported version is `1` |
 | `descriptor` | Required; 32 URL-safe alphanumeric/underscore/hyphen characters, issued by the renderer |
-| `operation` | Required; `check`, `submit`, `confirm`, or `token` |
+| `operation` | Required; `check`, `confirm`, or `token`; legacy `submit` is accepted as Continue after current policy checks |
 | `request_id` | Required; 8–64 alphanumeric/underscore/hyphen characters; reuse for a transport retry of the same submission |
-| `answer` | For `submit`; finite JSON number from 0 to 100, not a string or boolean |
+| `answer` | Retired; ignored on legacy `submit` requests |
 | `signals` | Optional top-level object; each section value must also be an object |
 
 Challenge descriptors last **5 minutes** and real-page form descriptors last
@@ -120,19 +117,14 @@ Responses have an explicit `next_action`:
 {
   "status": true,
   "data": {
-    "decision": "block",
-    "next_action": "slider",
-    "target": 50,
-    "tolerance": 8,
-    "attempts_remaining": 3
+    "decision": "allow",
+    "next_action": "check_cookie"
   }
 }
 ```
 
 | `next_action` | Client behavior |
 |---|---|
-| `slider` | Show the target ± tolerance; `submit` the answer |
-| `cooldown` | Display `retry_after` seconds; require explicit Retry afterward |
 | `check_cookie` | Cookie grant only; send `confirm` on a separate request |
 | `allow` | Confirmed pass; navigate once |
 | `token` | Use the returned `token` for one protected form request |
@@ -144,8 +136,9 @@ Initial render configuration may also use `check` for the Continue button.
 `check_cookie`, `allow`, and `token` carry `decision='allow'`; unresolved actions
 carry `decision='block'`. Branch on the known action, not just `status` or
 `decision`. Granting a cookie is insufficient: `confirm` checks the exact
-issued pass and current restrictions before returning `allow`. Repeating a
-slider submission's request ID does not spend another attempt.
+issued pass and current restrictions before returning `allow`. Retries preserve
+the original grant timestamp. New responses do not issue slider targets or
+cooldowns; the hosted client treats legacy render actions as Continue.
 
 Reasons are `cookies`, `expired`, `restart`, `operator`, `unavailable`, or
 `invalid`. Invalid protocol input returns 400; missing cookies/expired state
@@ -907,7 +900,7 @@ Time-series metrics for bouncer activity are recorded under the `bouncer` catego
 | `bouncer:honeypot_catches` | Credential attempts on decoy pages |
 | `bouncer:signatures_learned` | Auto-created bot signatures |
 | `bouncer:campaigns` | Coordinated bot campaign detections |
-| `bouncer:hosted:<action>` | Neutral hosted check/submission outcomes, such as `slider`, `cooldown`, and `check_cookie` |
+| `bouncer:hosted:<action>` | Neutral hosted outcomes, such as `check_cookie`, `allow`, and `recovery`; historical slider/cooldown metrics may remain |
 
 ### Query Examples
 

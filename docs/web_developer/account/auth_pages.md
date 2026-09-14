@@ -22,7 +22,7 @@ config. See [Auth Config](auth_config.md) for details and the
 | `/api/account/oauth/authorize` | OAuth 2.1 consent screen for a third-party app (configurable via `OAUTH_SERVER_PATH`) — see [oauth_server.md](oauth_server.md) |
 
 `/auth`, `/register`, and `/contact` use the hosted bouncer gate. Without a pass,
-low-risk visits get Continue and uncertain visits get a target-slider check.
+low-risk visits and recoverable uncertainty get Continue.
 Confirmed success sets an HttpOnly pass cookie; later visits skip the check
 while the cookie identity matches and there is no current restriction. See
 [Bouncer Challenge](#bouncer-challenge) for retries and recovery.
@@ -493,22 +493,20 @@ initializes, with no-JavaScript help text. Its help stays on the current page.
 | Situation | Experience |
 |---|---|
 | Low risk without a pass | Continue button |
-| Recoverable uncertainty | Move a slider into the highlighted target area and release |
-| Three wrong answers | 60-second cooldown, then explicit Retry |
+| Recoverable uncertainty | Continue button |
 | Current qualifying bot evidence or active signature | Selected local decoy sink |
 | Existing blocked device/frozen session | Operator-recovery guidance; restriction remains |
 | Missing cookies, expired check, server or connection failure | Honest recovery/error message; no automatic navigation |
 
-The slider also supports tap/click positioning plus Confirm and arrow keys plus
-Confirm. Instructions, visible focus, and live status support those alternatives.
-It is a modest effort check, not proof that a visitor is human. Wrong answers,
-input modality, storage refusal, and connection failures do not train bot
+Continue supports touch, mouse, and keyboard activation, with visible focus and
+live status. It is not proof that a visitor is human. Input modality, storage
+refusal, and connection failures do not train bot
 signatures or increase device risk.
 
-The server owns the target, expiry, and retry budget. Challenge descriptors last
-5 minutes, and the budget is shared across purposes, reloads, and tabs for the
-same host and `_muid`. A new page does not reset the wrong-answer count. After
-an accepted check the client sends a separate same-origin `confirm` request to
+The hosted slider and its three-miss cooldown are removed. Old slider state and
+cached misses do not prevent Continue after current policy checks. The server
+owns the descriptor scope and expiry; challenge descriptors last 5 minutes.
+After an accepted check the client sends a separate same-origin `confirm` request to
 verify the exact HttpOnly `mbp` cookie and current restrictions. Only confirmed
 success displays Verified and navigates once. The pass TTL remains 24 hours by
 default; later valid passes still cannot bypass new restrictions.

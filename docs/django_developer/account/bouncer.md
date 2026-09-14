@@ -2,8 +2,8 @@
 
 Server-side risk screening for django-mojo's hosted login, registration, and
 contact pages, plus a separate embeddable bouncer SDK. Hosted pages use a
-bounded recovery check before exposing the real form. The slider is a modest
-effort check, not proof that a visitor is human; authentication, token
+Continue check before exposing the real form. Continue is not proof that a
+visitor is human; authentication, token
 enforcement, permissions, and rate limits remain separate controls.
 
 See also: [Auth Pages](auth_pages.md) for the login/registration page setup,
@@ -17,8 +17,8 @@ branding, OAuth configuration, and nginx setup.
 GET /auth, /register, or /contact
   → current risk/signature/restriction check
   → valid matching _muid + mbp cookies: real page with scoped form descriptor
-  → otherwise: Continue / target slider / operator recovery / selected decoy
-  → hosted check or slider completion: set mbp
+  → otherwise: Continue / operator recovery / selected decoy
+  → accepted hosted check: set mbp
   → separate hosted confirm operation: verify returned cookie and restrictions
   → navigate once to the real page
   → acquire a fresh token before each protected form submission
@@ -36,8 +36,7 @@ GET /auth, /register, or /contact
 | Existing `blocked` device history or streaming freeze, without qualifying current evidence | Operator-recovery guidance; restriction remains |
 | Valid pass for the returning `_muid`, with no current restriction | Real page |
 | Raw score allows, no pass | One Continue check |
-| Recoverable uncertainty | Target slider with tap/click and keyboard alternatives |
-| Three wrong answers | 60-second cooldown, then explicit Retry |
+| Recoverable uncertainty | One Continue check |
 | Expired descriptor, missing cookies, unavailable state, or failed request | Recovery/error guidance; no success or automatic navigation |
 
 `services/bouncer/hosted_gate.py` applies this policy on page loads and hosted
@@ -53,7 +52,7 @@ public score is capped at 100. Analyzer failure ends in recovery.
 
 Hosted outcomes write neutral `BouncerSignal` rows (`decision='log'`) and
 `bouncer:hosted:<action>` metrics directly. They do not enter the legacy event,
-incident-promotion, or learner paths. Wrong answers, keyboard/touch use, storage
+incident-promotion, or learner paths. Keyboard/touch use, storage
 refusal, and transport failures do not promote device reputation. Successful
 recovery never clears device tiers, signatures, streaming high-water scores,
 user enforcement flags, geofence rules, or throttles. Incorrect legacy blocked
@@ -73,9 +72,8 @@ comes from the opaque render-issued descriptor and its server-held binding.
   "hosted_gate": {
     "version": 1,
     "descriptor": "<opaque-render-issued-descriptor>",
-    "operation": "submit",
-    "request_id": "<unique-request-id>",
-    "answer": 50
+    "operation": "check",
+    "request_id": "<unique-request-id>"
   },
   "signals": {"behavior": {}, "gate_challenge": {}}
 }
@@ -83,8 +81,8 @@ comes from the opaque render-issued descriptor and its server-held binding.
 
 | Operation | Purpose |
 |---|---|
-| `check` | Continue or obtain the current slider/cooldown state |
-| `submit` | Verify a finite numeric slider answer from 0 through 100 |
+| `check` | Continue after current risk and restriction checks |
+| `submit` | Compatibility alias for Continue; legacy `answer` is ignored |
 | `confirm` | Confirm the exact granted pass cookie returned on a separate request |
 | `token` | Use a real-page form descriptor and valid pass to issue a fresh token |
 
@@ -96,15 +94,15 @@ and purpose (`login`, `registration`, or `public_message`). Client purpose/group
 fields cannot replace that scope. A middleware-generated identity cannot stand
 in for a missing returning cookie.
 
-`hosted_challenge.ChallengeStore` uses atomic Redis transitions with a shared
-retry budget per host and `_muid`, across purposes, tabs, and reloads. Challenge
+`hosted_challenge.ChallengeStore` uses atomic Redis transitions per host and
+`_muid`, across purposes, tabs, and reloads. Challenge
 descriptors last **5 minutes**; real-page form descriptors last **30 minutes**.
 At most eight descriptors are retained per identity; oldest entries are evicted.
-The target is 25–75 on a 0–100 scale, with ±8 tolerance. Three wrong answers
-within the retry window start a **60-second cooldown**. A new descriptor does
-not reset the budget. Retry after cooldown is explicit. Repeating a submission's
-`request_id` does not spend another attempt; lost grant responses retain the
-original cookie issue time rather than extending its lifetime.
+The hosted slider and its three-miss cooldown are retired. Existing slider
+state, cached misses, and cooldowns do not prevent Continue after current policy
+checks. Legacy Redis fields remain for rolling compatibility, and in-flight
+`submit` operations are accepted as Continue. Retries retain the original cookie
+issue time rather than extending its lifetime; selected restrictions remain sticky.
 
 Responses use the normal JSON envelope, with an explicit action:
 
@@ -113,9 +111,8 @@ Responses use the normal JSON envelope, with an explicit action:
 ```
 
 `check_cookie`, `allow`, and `token` carry `decision='allow'`; unresolved
-`slider`, `cooldown`, `decoy`, `recovery`, and `error` outcomes carry
-`decision='block'`. A slider response also includes `target`, `tolerance`, and
-`attempts_remaining`; cooldown includes `retry_after` seconds. `check_cookie`
+`decoy`, `recovery`, and `error` outcomes carry `decision='block'`. New responses
+do not issue slider targets or cooldowns. `check_cookie`
 sets `mbp` but permits no navigation until `confirm` returns `allow`. Only
 `token` returns a token. Reasons distinguish `cookies`, `expired`, `restart`,
 `operator`, `unavailable`, and `invalid`, without detector details. Invalid
@@ -154,8 +151,8 @@ between installations.
 
 ### Recovery and selected decoys
 
-The slider supports drag-and-release, tap/click positioning plus Confirm, and
-arrow keys plus Confirm, with visible focus and live status. Requests have an
+Continue supports touch, mouse, and keyboard activation, with visible focus and
+live status. Requests have an
 8-second client timeout. Network/JSON failures show an explicit Retry; cookie,
 expired-check, and operator restrictions explain the next step without claiming
 verification. Help stays on the ungated shell and points to the operator's usual
@@ -562,7 +559,7 @@ See [group.md](group.md) for the full `auth_domain` field and `resolve_by_auth_d
 ## Templates
 
 - `account/login.html` — full mojo-auth webapp. Override in your project's templates dir.
-- `account/bouncer_challenge.html` — hosted Continue/slider/recovery shell; override logo/brand via `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` per group.
+- `account/bouncer_challenge.html` — hosted Continue/recovery shell; override logo/brand via `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` per group.
 - `account/bouncer_decoy.html` — selected safe sink or explicit scanner honeypot, selected by server context.
 - `account/_bouncer_selected_decoy.html` — non-submitting credential UI shared by initial and post-assessment selected decoys.
 
