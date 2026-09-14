@@ -37,16 +37,20 @@ class PushConfig(MojoSecrets, MojoModel):
         SEARCH_FIELDS = ["name"]
         GRAPHS = {
             "basic": {
-                "fields": ["id", "name", "test_mode", "default_sound", "is_active", "fcm_project_id"]
+                "fields": ["id", "name", "test_mode", "default_sound", "is_active", "fcm_project_id", "has_fcm_credentials", "fcm_client_email"]
             },
             "default": {
                 "exclude": ["mojo_secrets"],  # Never expose encrypted secrets
+                "fields": ["id", "created", "modified", "name", "is_active", "test_mode",
+                           "default_sound", "fcm_project_id", "has_fcm_credentials", "fcm_client_email"],
                 "graphs": {
                     "group": "basic"
                 }
             },
             "full": {
                 "exclude": ["mojo_secrets"],  # Never expose encrypted secrets
+                "fields": ["id", "created", "modified", "name", "is_active", "test_mode",
+                           "default_sound", "fcm_project_id", "has_fcm_credentials", "fcm_client_email"],
                 "graphs": {
                     "group": "default"
                 }
@@ -88,7 +92,8 @@ class PushConfig(MojoSecrets, MojoModel):
         data = self.get_secret('fcm_service_account', '')
         if data:
             try:
-                return json.loads(data) if isinstance(data, str) else data
+                parsed = json.loads(data) if isinstance(data, str) else data
+                return parsed if isinstance(parsed, dict) else None
             except json.JSONDecodeError:
                 return None
         return None
@@ -98,110 +103,38 @@ class PushConfig(MojoSecrets, MojoModel):
         """Get FCM project ID from service account JSON."""
         service_account = self.get_fcm_service_account()
         if service_account:
-            return service_account.get('project_id')
+            value = service_account.get('project_id')
+            return value[:200] if isinstance(value, str) else None
         return None
 
-    def test_fcm_connection(self, test_token=None):
-        """
-        Test FCM configuration by attempting to send a test notification.
+    @property
+    def has_fcm_credentials(self):
+        """Presence is not a claim that the credential is valid."""
+        return bool(self.get_secret('fcm_service_account', ''))
 
-        Args:
-            test_token: Optional FCM device token to test with.
-                       If not provided, uses a dummy token (will fail but validates credentials).
+    @property
+    def fcm_client_email(self):
+        account = self.get_fcm_service_account() or {}
+        value = account.get('client_email')
+        return value[:254] if isinstance(value, str) else None
 
-        Returns:
-            dict with 'success' (bool), 'message' (str), and optional 'error' details
-        """
-        from mojo.helpers import logit
-
-        if self.test_mode:
-            return {
-                'success': True,
-                'message': 'Config is in test mode - FCM not tested',
-                'test_mode': True
-            }
-
-        service_account = self.get_fcm_service_account()
-        if not service_account:
-            return {
-                'success': False,
-                'message': 'No FCM service account configured',
-                'error': 'missing_credentials',
-                'note': 'Use set_fcm_service_account() to configure FCM v1'
-            }
-
-        try:
-            from mojo.helpers.fcm import FCMv1Client
-            # Initialize FCM v1 client
-            fcm_client = FCMv1Client(service_account)
-
-            # Use provided token or a dummy one
-            token = test_token or "dummy_test_token_for_credential_validation"
-
-            # Attempt to send test notification
-            result = fcm_client.send(
-                token=token,
-                title="FCM Test",
-                body="Testing FCM v1 configuration"
-            )
-
-            # Check result
-            if result.get('success'):
-                return {
-                    'success': True,
-                    'message': 'FCM v1 configuration valid - notification sent successfully',
-                    'message_id': result.get('message_id'),
-                    'fcm_version': 'v1'
-                }
-            else:
-                # Check error type
-                error = result.get('error', {})
-                error_code = error.get('code') if isinstance(error, dict) else None
-                error_message = error.get('message') if isinstance(error, dict) else str(error)
-                status_code = result.get('status_code')
-
-                # Invalid token is actually success (credentials are valid)
-                if (status_code == 400 and
-                    ('INVALID_ARGUMENT' in str(error_code) or
-                     'not a valid FCM registration token' in error_message or
-                     'invalid' in error_message.lower())):
-                    return {
-                        'success': True,
-                        'message': 'FCM v1 credentials valid (dummy token rejected by FCM)',
-                        'note': 'Your FCM credentials work! Provide a real device token to test actual delivery',
-                        'fcm_version': 'v1',
-                        'fcm_error': 'INVALID_ARGUMENT (expected - dummy token used)'
-                    }
-                elif status_code == 401 or status_code == 403:
-                    return {
-                        'success': False,
-                        'message': 'FCM v1 credentials invalid or unauthorized',
-                        'error': 'invalid_credentials',
-                        'details': error_message,
-                        'status_code': status_code
-                    }
-                else:
-                    return {
-                        'success': False,
-                        'message': f'FCM v1 test failed: {error_message}',
-                        'error': 'request_failed',
-                        'status_code': status_code,
-                        'details': error
-                    }
-
-        except ValueError as e:
-            # Service account JSON is malformed
-            return {
-                'success': False,
-                'message': 'Invalid service account JSON',
-                'error': 'invalid_json',
-                'details': str(e)
-            }
-        except Exception as e:
-            error_str = str(e)
-            return {
-                'success': False,
-                'message': f'FCM v1 test failed: {error_str}',
-                'error': 'request_failed',
-                'details': error_str
-            }
+    def test_fcm_connection(self, test_token=None, client_factory=None):
+        """Validate with FCM; an explicit legacy token requests a real send."""
+        from mojo.helpers.fcm import FCMv1Client
+        from mojo.apps.account.services.push import provider_test_result
+        validation = not test_token
+        account = self.get_fcm_service_account()
+        if not account:
+            result = {'success': False, 'outcome': 'blocked', 'error_code': 'missing_credentials'}
+        elif test_token and self.test_mode:
+            result = {'success': False, 'outcome': 'blocked', 'error_code': 'test_mode'}
+        else:
+            try:
+                client = (client_factory or FCMv1Client)(account)
+                result = client.validate() if validation else client.send(
+                    token=test_token, title='FCM Test', body='Testing FCM configuration')
+            except Exception:
+                result = {'success': False, 'outcome': 'blocked', 'error_code': 'invalid_credentials'}
+        result = provider_test_result(result, validation=validation)
+        result.update(test_mode=self.test_mode, validation_only=validation, fcm_version='v1')
+        return result

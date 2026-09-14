@@ -51,11 +51,11 @@ class RegisteredDevice(models.Model, MojoModel):
         SEARCH_FIELDS = ["device_name", "device_id"]
         GRAPHS = {
             "basic": {
-                "fields": ["id", "device_id", "platform", "device_name", "push_enabled", "last_seen"]
+                "fields": ["id", "device_id", "platform", "device_name", "push_enabled", "is_active", "last_seen"]
             },
             "default": {
                 "fields": ["id", "device_id", "platform", "device_name", "app_version",
-                          "os_version", "push_enabled", "push_preferences", "last_seen"],
+                          "os_version", "push_enabled", "is_active", "push_preferences", "last_seen"],
                 "graphs": {
                     "user": "basic"
                 }
@@ -70,7 +70,8 @@ class RegisteredDevice(models.Model, MojoModel):
     def __str__(self):
         return f"{self.device_name or self.device_id} ({self.platform}) - {self.user.username}"
 
-    def send(self, title=None, body=None, data=None, category="general", action_url=None):
+    def send(self, title=None, body=None, data=None, category="general", action_url=None,
+             config=None, require_live=False, client_factory=None):
         """
         Send push notification to this device via FCM.
         Simple and stupid - just send it.
@@ -95,9 +96,13 @@ class RegisteredDevice(models.Model, MojoModel):
             return None
 
         # Get push config
-        config = PushConfig.get_for_user(self.user)
+        config = config if config is not None else PushConfig.get_for_user(self.user)
         if not config:
             logit.info(f"No push config available for user {self.user.username}")
+            return None
+
+        if require_live and (config.test_mode or not config.is_active
+                             or not self.is_active or not self.push_enabled):
             return None
 
         # Create delivery record
@@ -119,16 +124,20 @@ class RegisteredDevice(models.Model, MojoModel):
                 return delivery
 
             # Real FCM send
-            success = self._send_fcm(delivery, config)
+            success = self._send_fcm(delivery, config, client_factory=client_factory)
             if success:
                 metrics.record("push_sent")
                 delivery.mark_sent()
+            elif delivery.platform_data.get("outcome") == "unknown":
+                delivery.error_message = "FCM acceptance unknown; check the device before sending again."
+                delivery.save(update_fields=["error_message"])
             else:
                 metrics.record("push_failed")
-                delivery.mark_failed("FCM delivery failed")
+                from mojo.apps.account.services.push import provider_test_result
+                delivery.mark_failed(provider_test_result(delivery.platform_data)["message"])
 
-        except Exception as e:
-            error_msg = f"Push notification failed: {str(e)}"
+        except Exception:
+            error_msg = "Push notification could not be completed. Check server logs."
             logit.error(error_msg)
             delivery.mark_failed(error_msg)
 
@@ -160,50 +169,29 @@ class RegisteredDevice(models.Model, MojoModel):
         }
         delivery.save(update_fields=['platform_data'])
 
-    def _send_fcm(self, delivery, config):
-        """Send via FCM v1 API."""
-        from mojo.helpers import logit
+    def _send_fcm(self, delivery, config, client_factory=None):
+        """Send once and retain bounded evidence, including ambiguous acceptance."""
         from mojo.helpers.fcm import FCMv1Client
-
+        from mojo.apps.account.services.push import provider_test_result
         try:
-            service_account_json = config.get_fcm_service_account()
-            if not service_account_json:
-                logit.error("No FCM service account configured")
-                return False
-
-            # Initialize FCM v1 client
-            try:
-                fcm_client = FCMv1Client(service_account_json)
-            except Exception as e:
-                logit.error(f"Failed to initialize FCM client: {e}")
-                return False
-
-            # Build data payload
-            data_message = delivery.data_payload.copy() if delivery.data_payload else {}
+            client = (client_factory or FCMv1Client)(config.get_fcm_service_account())
+            data = dict(delivery.data_payload or {})
             if delivery.action_url:
-                data_message['action_url'] = delivery.action_url
-
-            # Send notification via FCM v1
-            result = fcm_client.send(
-                token=self.device_token,
-                title=delivery.title,
-                body=delivery.body,
-                data=data_message if data_message else None,
-                sound=config.default_sound if (delivery.title or delivery.body) else None
-            )
-
-            # Store response
-            delivery.platform_data = {
-                'fcm_version': 'v1',
-                'message_id': result.get('message_id'),
-                'success': result.get('success', False),
-                'status_code': result.get('status_code'),
-                'error': result.get('error')
-            }
-            delivery.save(update_fields=['platform_data'])
-
-            return result.get('success', False)
-
-        except Exception as e:
-            logit.error(f"FCM send failed: {e}")
-            return False
+                data['action_url'] = delivery.action_url
+        except Exception:
+            result = {'success': False, 'outcome': 'blocked', 'error_code': 'invalid_credentials'}
+        else:
+            try:
+                result = client.send(token=self.device_token, title=delivery.title, body=delivery.body,
+                                     data=data or None,
+                                     sound=config.default_sound if (delivery.title or delivery.body) else None)
+            except Exception:
+                result = {'success': False, 'outcome': 'unknown', 'error_code': 'acceptance_unknown'}
+        safe = provider_test_result(result)
+        delivery.platform_data = {
+            'fcm_version': 'v1', 'message_id': safe['message_id'], 'success': safe['success'],
+            'outcome': safe['outcome'], 'error_code': safe['error_code'], 'config_id': config.pk,
+            'status_code': result.get('status_code') if isinstance(result, dict) else None,
+        }
+        delivery.save(update_fields=['platform_data'])
+        return safe['success']

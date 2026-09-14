@@ -48,11 +48,11 @@ class NotificationDelivery(models.Model, MojoModel):
         SEARCH_FIELDS = ["title", "category"]
         GRAPHS = {
             "basic": {
-                "fields": ["id", "title", "category", "status", "sent_at", "created"]
+                "fields": ["id", "title", "category", "status", "sent_at", "created", "push_outcome"]
             },
             "default": {
                 "fields": ["id", "title", "body", "category", "action_url", "data_payload", "status",
-                          "sent_at", "delivered_at", "error_message", "created"],
+                          "sent_at", "delivered_at", "error_message", "created", "push_outcome"],
                 "graphs": {
                     "user": "basic",
                     "device": "basic"
@@ -70,6 +70,17 @@ class NotificationDelivery(models.Model, MojoModel):
     def __str__(self):
         display_title = self.title or f"[{self.category} data]"
         return f"{display_title} -> {self.device} ({self.status})"
+
+    @property
+    def push_outcome(self):
+        evidence = self.platform_data if isinstance(self.platform_data, dict) else {}
+        if evidence.get('test_mode') is True:
+            return 'simulated'
+        if self.status == 'delivered' and self.delivered_at:
+            return 'delivered'
+        if evidence.get('outcome') in ('accepted', 'rejected', 'blocked', 'unknown'):
+            return evidence['outcome']
+        return self.status
 
     def mark_sent(self):
         """Mark notification as sent with timestamp."""

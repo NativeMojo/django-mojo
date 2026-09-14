@@ -29,7 +29,7 @@ class FCMv1Client:
     OAUTH_ENDPOINT = "https://oauth2.googleapis.com/token"
     SCOPES = ["https://www.googleapis.com/auth/firebase.messaging"]
 
-    def __init__(self, service_account_json):
+    def __init__(self, service_account_json, http=None):
         """
         Initialize FCM client with service account credentials.
 
@@ -41,6 +41,9 @@ class FCMv1Client:
         else:
             self.credentials = service_account_json
 
+        if not isinstance(self.credentials, dict):
+            raise ValueError("Service account JSON must be an object")
+        self.http = http or requests
         self.project_id = self.credentials.get('project_id')
         if not self.project_id:
             raise ValueError("Service account JSON missing 'project_id'")
@@ -81,16 +84,17 @@ class FCMv1Client:
         signed_jwt = jwt.encode(payload, private_key, algorithm='RS256')
 
         # Exchange JWT for access token
-        response = requests.post(
+        response = self.http.post(
             self.OAUTH_ENDPOINT,
             data={
                 'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
                 'assertion': signed_jwt
-            }
+            },
+            timeout=(5, 20),
         )
 
         if response.status_code != 200:
-            raise Exception(f"Failed to get access token: {response.text}")
+            raise ValueError("FCM authentication failed")
 
         token_data = response.json()
         self._access_token = token_data['access_token']
@@ -113,8 +117,6 @@ class FCMv1Client:
         Returns:
             dict with success status and response details
         """
-        access_token = self._get_access_token()
-
         # Build message payload
         message = {
             "token": token
@@ -160,35 +162,74 @@ class FCMv1Client:
         if apns_config:
             message['apns'] = apns_config
 
-        # Send request
+        return self._post_message(message)
+
+    def validate(self):
+        """Authenticate and validate project send permission without delivery."""
+        return self._post_message({
+            'topic': 'mojo_configuration_check',
+            'notification': {'title': 'Configuration check', 'body': 'Validation only'},
+        }, validate_only=True)
+
+    def _post_message(self, message, validate_only=False):
+        try:
+            access_token = self._get_access_token()
+        except Exception:
+            return {'success': False, 'outcome': 'blocked', 'error_code': 'authentication_failed'}
+
         url = self.FCM_ENDPOINT.format(project_id=self.project_id)
         headers = {
             'Authorization': f'Bearer {access_token}',
             'Content-Type': 'application/json'
         }
 
-        response = requests.post(
-            url,
-            headers=headers,
-            json={'message': message}
-        )
-        resp_msg = response.json() if response.text else {}
+        payload = {'message': message}
+        if validate_only:
+            payload['validate_only'] = True
+        try:
+            response = self.http.post(url, headers=headers, json=payload, timeout=(5, 20))
+        except requests.RequestException:
+            return {'success': False, 'outcome': 'blocked' if validate_only else 'unknown',
+                    'error_code': 'provider_unavailable' if validate_only else 'acceptance_unknown'}
+        try:
+            resp_msg = response.json() if response.text else {}
+        except ValueError:
+            resp_msg = {}
+        if not isinstance(resp_msg, dict):
+            resp_msg = {}
         if settings.LOG_PUSH_MESSAGES:
             from mojo.helpers import logit
-            logit.info("FCM PUSH", "sending:", message, "received:", response.json())
-        # Parse response
+            logit.info("FCM PUSH", "HTTP status:", response.status_code, "validation:", validate_only)
         if response.status_code == 200:
+            message_id = resp_msg.get('name')
+            if (not isinstance(message_id, str) or len(message_id) > 500
+                    or not message_id.startswith(f'projects/{self.project_id}/messages/')
+                    or not message_id.rsplit('/', 1)[-1]):
+                return {'success': False, 'outcome': 'blocked' if validate_only else 'unknown',
+                        'error_code': 'invalid_provider_response', 'status_code': 200}
             return {
                 'success': True,
-                'message_id': resp_msg.get('name'),
-                'status_code': response.status_code
+                'outcome': 'validated' if validate_only else 'accepted',
+                'message_id': message_id,
+                'status_code': response.status_code,
             }
         else:
+            error = resp_msg.get('error')
+            error = error if isinstance(error, dict) else {}
+            code = error.get('status')
+            for detail in error.get('details', []) if isinstance(error.get('details'), list) else []:
+                if isinstance(detail, dict) and detail.get('@type') == 'type.googleapis.com/google.firebase.fcm.v1.FcmError':
+                    code = detail.get('errorCode', code)
+            allowed = {'INVALID_ARGUMENT', 'UNREGISTERED', 'SENDER_ID_MISMATCH', 'QUOTA_EXCEEDED',
+                       'UNAVAILABLE', 'INTERNAL', 'THIRD_PARTY_AUTH_ERROR', 'PERMISSION_DENIED',
+                       'UNAUTHENTICATED', 'NOT_FOUND'}
+            code = code if isinstance(code, str) and code in allowed else 'provider_rejected'
             return {
                 'success': False,
+                'outcome': 'rejected',
                 'status_code': response.status_code,
-                'error': resp_msg.get('error', {}),
-                'message': resp_msg.get('error', {}).get('message', 'Unknown error')
+                'error_code': code,
+                'error': {'code': code},
             }
 
     def send_multicast(self, tokens, title=None, body=None, data=None, sound=None, badge=None):

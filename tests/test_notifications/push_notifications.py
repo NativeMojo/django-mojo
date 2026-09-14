@@ -463,8 +463,8 @@ def test_push_test_endpoint(opts):
         assert False, error_details
 
     data = resp.response.data
-    assert data.success == True, "Test notification should be successful"
-    assert "test notifications sent" in data.message.lower(), "Should confirm test notifications were sent"
+    assert data.success is False, "Simulated test notifications must not claim provider acceptance"
+    assert data.simulated_count > 0 and data.sent_count == 0, "Simulation must be counted separately from accepted sends"
 
 
 @th.django_unit_test()
@@ -792,10 +792,10 @@ def test_push_config_fcm_test_api(opts):
     assert config is not None, "Expected test_api_config to exist (created in test_push_config_api)"
 
     resp = opts.client.post(f"/api/account/devices/push/config/{config.id}/test")
-    assert resp.status_code == 200, f"Config test failed: {resp.status_code} {resp.response.data}"
+    assert resp.status_code == 400, "A config with no credentials must fail its real connection check"
 
     data = resp.response.data
-    assert 'success' in data, "Response should include success field"
+    assert data.success is False and data.error_code == "missing_credentials", "Missing credentials must remain a structured failure"
     assert 'message' in data, "Response should include message field"
 
 

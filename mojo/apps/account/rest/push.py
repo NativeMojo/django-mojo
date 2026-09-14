@@ -187,33 +187,54 @@ def send_notification(request):
     })
 
 
+@md.requires_global_perms("send_notifications", "comms")
+def _test_registered_device(request):
+    from mojo.apps.account.services.push import device_test_readiness, test_registered_device
+    value = request.DATA.get('device_id')
+    if (isinstance(value, bool) or len(str(value)) > 19 or not str(value).isdigit()
+            or not 1 <= int(value) <= 9223372036854775807):
+        return response.error('device_id must be a positive registered-device ID')
+    device = RegisteredDevice.objects.select_related('user__org').filter(pk=int(value)).first()
+    if device is None or not RegisteredDevice.rest_check_permission(request, 'VIEW_PERMS', instance=device):
+        return response.error('Registered device not found', status=404)
+    if request.method == 'GET':
+        return response.success(device_test_readiness(device, PushConfig.get_for_user(device.user)))
+    title = request.DATA.get('title', 'Push Test')
+    message = request.DATA.get('message', 'This is a test notification')
+    if not isinstance(title, str) or not title.strip() or len(title) > 200:
+        return response.error('Title must contain 1–200 characters')
+    if not isinstance(message, str) or not message.strip() or len(message) > 1000:
+        return response.error('Message must contain 1–1000 characters')
+    return response.success(test_registered_device(device, title.strip(), message.strip()))
+
+
+@md.GET('account/devices/push/test')
 @md.POST('account/devices/push/test')
 @md.requires_auth()
 def test_push_config(request):
-    """
-    Test push configuration by sending a test notification to requesting user's devices.
-
-    POST /api/account/devices/push/test
-    {
-        "message": "Custom test message" # optional
-    }
-    """
-    test_message = request.DATA.get('message', 'This is a test notification')
-
-    results = send_to_user(
-        user=request.user,
-        title="Push Test",
-        body=test_message,
-        category="test"
-    )
-
+    """Test caller devices, or one registered device with explicit admin permission."""
+    if request.DATA.get('device_id') is not None:
+        return _test_registered_device(request)
+    if request.method == 'GET':
+        return response.error('device_id is required for readiness')
+    if not rhelper.is_request_user(request) or rhelper.is_key_backed_session(request):
+        return response.error('Permission denied', status=403)
+    message = request.DATA.get('message', 'This is a test notification')
+    if not isinstance(message, str) or not message.strip() or len(message) > 1000:
+        return response.error('Message must contain 1–1000 characters')
+    results = send_to_user(user=request.user, title="Push Test", body=message, category="test")
     if not results:
-        return response.error('No registered devices found for testing')
-
+        return response.error('No eligible devices or push configuration found for testing')
+    outcomes = [r.push_outcome for r in results if r]
+    accepted = outcomes.count('accepted') + outcomes.count('delivered')
+    simulated = outcomes.count('simulated')
+    unknown = outcomes.count('unknown')
+    failed = len(outcomes) - accepted - simulated - unknown
     return response.success({
-        'success': True,
-        'message': f'Test notifications sent to {len(results)} devices',
-        'results': [r.to_dict('basic') for r in results if r]
+        'success': accepted == len(outcomes) and accepted > 0,
+        'message': f'{accepted} accepted by FCM, {failed} failed, {simulated} simulated, {unknown} unknown. Confirm receipt on the devices.',
+        'sent_count': accepted, 'failed_count': failed, 'simulated_count': simulated,
+        'unknown_count': unknown, 'results': [r.to_dict('basic') for r in results if r],
     })
 
 
@@ -258,9 +279,11 @@ def test_push_config_connection(request, pk):
     # Optional: test with a real device token
     test_token = request.DATA.get('device_token')
 
+    if test_token is not None and (not isinstance(test_token, str) or len(test_token) > 4096):
+        return response.error('device_token must be a string of at most 4096 characters')
     result = config.test_fcm_connection(test_token=test_token)
 
     if result['success']:
         return response.success(result)
     else:
-        return response.error(result['message'], data=result)
+        return response.JsonResponse({'status': False, 'error': result['message'], 'data': result}, status=400)
