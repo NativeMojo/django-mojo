@@ -37,7 +37,6 @@ def test_review_not_in_general_signals(opts):
 
 @th.django_unit_test('diagnostic budget exhaustion does not persist rows or issue unusable tickets')
 def test_diagnostic_write_budget(opts):
-    import hashlib
     import uuid
     from django.test import RequestFactory
     from mojo.helpers.redis import get_bounded_connection
@@ -46,7 +45,7 @@ def test_diagnostic_write_budget(opts):
     request = RequestFactory().get('/auth', HTTP_HOST='budget-' + uuid.uuid4().hex + '.test')
     request.ip = '198.18.0.17'
     request.muid = uuid.uuid4().hex
-    key = 'bouncer:hosted:diagnostics:ip:' + hashlib.sha256(request.ip.encode()).hexdigest()
+    _, key = service._budget_keys(request.ip)
     redis = get_bounded_connection(timeout=1, read_from_replicas=False)
     try:
         redis.set(key, 300, ex=300)
@@ -60,12 +59,21 @@ def test_diagnostic_write_budget(opts):
         BouncerSignal.objects.filter(muid=request.muid).delete()
 
 
+@th.django_unit_test('diagnostic budgets share one Redis Cluster hash slot')
+def test_diagnostic_cluster_slot(opts):
+    from redis.crc import key_slot
+    from mojo.apps.account.services.bouncer.hosted_recovery import _budget_keys
+    for ip in ('198.18.0.17', '2001:db8::1', None):
+        keys = _budget_keys(ip)
+        assert len({key_slot(key.encode()) for key in keys}) == 1, 'multi-key admission must work on supported Redis Cluster deployments'
+
+
 @th.django_unit_test('IP-denied diagnostic attempts preserve global capacity for other visitors')
 def test_diagnostic_admission_is_atomic(opts):
     import uuid
     from mojo.helpers.redis import get_bounded_connection
     from mojo.apps.account.services.bouncer.hosted_recovery import _BUDGET
-    prefix = 'test:bouncer-budget:' + uuid.uuid4().hex
+    prefix = 'test:bouncer-budget:{' + uuid.uuid4().hex + '}'
     global_key, ip_key, fresh_ip = prefix + ':global', prefix + ':ip', prefix + ':new'
     redis = get_bounded_connection(timeout=1, read_from_replicas=False)
     try:

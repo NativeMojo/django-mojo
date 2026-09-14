@@ -34,6 +34,12 @@ return 1
 """
 
 
+def _budget_keys(ip):
+    digest = hashlib.sha256((ip or 'unknown').encode()).hexdigest()
+    # Both keys must share a slot for atomic admission on Redis Cluster.
+    return 'bouncer:{hosted-diagnostics}:global', 'bouncer:{hosted-diagnostics}:ip:' + digest
+
+
 def _admit(ip):
     """Bound writes even when callers change cookies/hosts; failure skips storage."""
     def limit(name, default):
@@ -42,8 +48,7 @@ def _admit(ip):
 
     with get_bounded_connection(timeout=1, read_from_replicas=False) as redis:
         # Reject before charging either budget or creating any new IP key.
-        key = 'bouncer:hosted:diagnostics:ip:' + hashlib.sha256((ip or 'unknown').encode()).hexdigest()
-        return bool(redis.eval(_BUDGET, 2, 'bouncer:hosted:diagnostics:global', key,
+        return bool(redis.eval(_BUDGET, 2, *_budget_keys(ip),
                                limit('BOUNCER_DIAGNOSTIC_GLOBAL_LIMIT', 3000),
                                limit('BOUNCER_DIAGNOSTIC_IP_LIMIT', 300)))
 
