@@ -758,6 +758,24 @@ class WebSocketHandler:
         """Process message from Redis pub/sub"""
         message_type = data.get("type")
 
+        topic = data.get("topic")
+        if message_type == "topic_message" and isinstance(topic, str) and topic.startswith("chat:"):
+            # Membership can change after subscribe, and disconnect is only
+            # best-effort. Recheck every chat frame before exposing its payload.
+            # Also drop queued frames after a successful local unsubscribe.
+            if topic not in self.subscribed_topics:
+                return
+            allowed = False
+            try:
+                if self.authenticated and callable(getattr(self.user, "on_realtime_can_subscribe", None)):
+                    allowed = await asyncio.get_event_loop().run_in_executor(
+                        None, self.user.on_realtime_can_subscribe, topic)
+            except Exception:
+                self._log_exception("Chat delivery authorization failed")
+            if not allowed:
+                await self.unsubscribe_from_topic(topic)
+                return
+
         if message_type in ["broadcast", "topic_message", "direct_message"]:
             # Forward to client wrapped in {"type": "message", "data": ...}
             client_message = {
