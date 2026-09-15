@@ -173,6 +173,11 @@ Use [category permissions](admin_portal.md#category-permissions-use-these-in-you
 }
 ```
 
+If an application's required member-save cleanup fails, that individual save
+is rolled back and the request fails. Refresh the member before retrying:
+a request changing several permissions can contain multiple saves, and earlier
+successful saves may remain committed.
+
 ### Guest Members (view-only)
 
 Setting the `guest` marker makes a member view-only for any endpoint whose

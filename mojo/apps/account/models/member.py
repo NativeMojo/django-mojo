@@ -1,4 +1,4 @@
-from django.db import models
+from django.db import models, router, transaction
 from mojo.models import MojoModel
 from mojo import errors as merrors
 from mojo.helpers.settings import settings
@@ -68,6 +68,19 @@ class GroupMember(models.Model, MojoModel):
 
     def __str__(self):
         return f"{self.user.username}@{self.group.name}"
+
+    def save(self, *args, **kwargs):
+        """Commit the member and synchronous signal cleanup together."""
+        # Match Django's write routing, including the legacy positional using
+        # argument, and pin super().save to that same connection.
+        using = kwargs.get("using") or (args[2] if len(args) > 2 else None)
+        using = using or router.db_for_write(type(self), instance=self)
+        if len(args) > 2:
+            args = (*args[:2], using, *args[3:])
+        else:
+            kwargs["using"] = using
+        with transaction.atomic(using=using):
+            return super().save(*args, **kwargs)
 
     @property
     def username(self):
