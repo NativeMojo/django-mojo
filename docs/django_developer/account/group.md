@@ -306,6 +306,21 @@ member.permissions["manage_content"] = True
 member.save()
 ```
 
+### Member save transactions
+
+`GroupMember.save()` encloses the member write and its synchronous Django
+`pre_save`/`post_save` receivers in one transaction on the write database.
+A receiver that raises rolls back that save and its same-database cleanup.
+This lets applications remove dependent access together with a member role.
+Receivers must propagate cleanup failures and use the signal's `using` alias.
+Schedule external notifications with `transaction.on_commit(..., using=using)`.
+
+The boundary covers each save, including `add_permission` and
+`remove_permission`; a multi-permission REST payload can perform several saves
+and is not made request-atomic. Bulk updates bypass saves and signals. Use
+ordinary `save()` inside application-owned transactions; the legacy
+`atomic_save()` helper still explicitly commits after `save()` returns.
+
 ### Membership Tiers: `member` vs `full_member`
 
 `GroupMember.has_permission` recognizes two membership tiers:
