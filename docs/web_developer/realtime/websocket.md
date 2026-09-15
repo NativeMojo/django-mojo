@@ -138,6 +138,22 @@ Custom message types depend on your app's implementation.
 
 ---
 
+## Server-Initiated Disconnect
+
+When the backend calls `disconnect_user()`, each current connection that receives the Redis control command is sent this top-level frame:
+
+```json
+{"type": "disconnect", "reason": "forced_disconnect"}
+```
+
+The server then closes the socket without requiring the client to reply or close it. Clients can use the frame to display the reason and handle connection cleanup in `onclose`.
+
+This is a best-effort action delivered through Redis pub/sub to the user's currently registered connections. It does not persistently revoke credentials or prevent a new connection from authenticating; connections opened after the backend's lookup are not covered.
+
+Ordinary direct messages retain their `{"type": "message", "data": ...}` envelope. A `disconnect` type nested inside `data` is application data, not this server control frame.
+
+---
+
 ## Sending Custom Messages
 
 Send any JSON payload with a `message_type` field:
@@ -164,6 +180,7 @@ The server routes it to a registered handler or the model's `on_realtime_message
 | `unsubscribed` | Unsubscribe action succeeded |
 | `notification` | Push message from server |
 | `pong` | Response to ping |
+| `disconnect` | Server closes the socket (`reason: "forced_disconnect"`) |
 
 ### Client → Server
 

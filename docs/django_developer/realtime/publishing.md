@@ -97,6 +97,26 @@ send_event_to_user("user", 42, {"type": "assistant_response", "response": "..."}
 
 The difference matters for client-side event routing. `send_event_to_user` avoids the need to unwrap a `message` envelope.
 
+## disconnect_user()
+
+Request closure of a user's current WebSocket connections:
+
+```python
+from mojo.apps.realtime.manager import disconnect_user
+
+disconnect_user("user", 42)
+```
+
+This publishes a disconnect control command through Redis to each connection currently registered for the given `user_type` and `user_id`. On receipt, the server sends this top-level client frame and closes the socket without requiring client cooperation:
+
+```json
+{"type": "disconnect", "reason": "forced_disconnect"}
+```
+
+Delivery is best-effort via Redis pub/sub; the call does not wait for confirmation that sockets have closed. It does nothing when no connections are registered. It does not persistently revoke credentials or prevent reconnecting, and connections opened after the lookup are not covered.
+
+Ordinary `send_to_connection(connection_id, message_data)` behavior is unchanged: payloads are delivered inside `{"type": "message", "data": ...}` with a timestamp. A `"type": "disconnect"` inside that payload remains application data and does not trigger server-side closure; use `disconnect_user()` for this control action.
+
 ## Group Broadcast
 
 Broadcast to all members of a group:
