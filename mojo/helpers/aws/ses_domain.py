@@ -34,7 +34,7 @@ from mojo.helpers.aws.client import get_client, get_session
 from mojo.helpers.aws.ses import EmailSender
 from mojo.helpers.aws.sns import SNSTopic, SNSSubscription
 from mojo.helpers.aws.s3 import S3Bucket
-from mojo.helpers.aws.provider_call import ProviderCallError, safe_error_detail
+from mojo.helpers.aws.provider_call import ProviderCallError, ProviderClient, provider_caller, safe_error_detail
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
 
@@ -231,6 +231,8 @@ def ensure_sns_topics_and_subscriptions(
 
     for key, name in topics.items():
         topic = SNSTopic(name, access_key=access_key, secret_key=secret_key, region=region)
+        if key == "inbound":
+            topic.client = ProviderClient(topic.client, "sns")
         if not topic.exists:
             topic.create(display_name=name)
         topic_arns[key] = topic.arn
@@ -240,7 +242,14 @@ def ensure_sns_topics_and_subscriptions(
         if endpoint:
             sub = SNSSubscription(topic.arn, access_key=access_key, secret_key=secret_key, region=region)
             # idempotent: SNS allows duplicate subscriptions but returns pending conf
-            sub.subscribe(protocol="https", endpoint=endpoint, return_subscription_arn=False)
+            if key == "inbound":
+                sub.client = ProviderClient(sub.client, "sns")
+            subscribed = sub.subscribe(protocol="https", endpoint=endpoint, return_subscription_arn=False)
+            if key == "inbound":
+                subscription_arn = subscribed.get("SubscriptionArn") or ""
+                if not subscription_arn.startswith("arn:"):
+                    raise ReceivingConfigurationError(
+                        "Inbound SNS subscription is not confirmed; verify the webhook and reconcile after confirmation")
 
     return topic_arns
 
@@ -314,189 +323,174 @@ def ensure_dkim_enabled(
     except (ClientError, ProviderCallError) as e:
         logger.error("SES call failed operation=ses.set_identity_dkim_enabled domain=%s", domain)
 
-def ensure_receiving_catch_all(
-    domain: str,
-    s3_bucket: str,
-    s3_prefix: str,
-    inbound_topic_arn: str,
-    region: str,
-    access_key: Optional[str],
-    secret_key: Optional[str],
-    rule_set_name: str = DEFAULT_RULE_SET_NAME,
-) -> Tuple[str, str]:
-    """
-    Ensure a domain-level catch-all SES receipt rule that stores raw emails to S3 and
-    publishes to the inbound SNS topic.
+class ReceivingConfigurationError(ValueError):
+    """A safe, actionable receiving configuration conflict for Admin callers."""
 
-    Returns (rule_set_name, rule_name).
-    """
-    # Sanity: inbound bucket should exist
-    bucket = S3Bucket(s3_bucket)
-    if not bucket._check_exists():
-        # Auto-create inbound bucket for SES receiving
-        created = bucket.create(region=region)
-        if not created:
-            raise ValueError(f"Inbound S3 bucket '{s3_bucket}' does not exist and could not be created")
 
-    ses = _get_ses_client(region, access_key, secret_key)
-
-    # Rule set: create if not present; ensure active if none active.
-    existing_sets = ses.list_receipt_rule_sets().get("RuleSets", [])
-    set_names = {rs.get("Name") for rs in existing_sets}
-    active_set = ses.describe_active_receipt_rule_set().get("Metadata", {}).get("Name")
-
-    if rule_set_name not in set_names:
-        try:
-            ses.create_receipt_rule_set(RuleSetName=rule_set_name)
-            logger.info(f"Created SES receipt rule set: {rule_set_name}")
-        except ClientError as e:
-            # Might already exist due to race; re-fetch
-            logger.warning("SES call failed operation=ses.create_receipt_rule_set")
-
-    # If there is no active set, set ours active
-    if not active_set:
-        try:
-            ses.set_active_receipt_rule_set(RuleSetName=rule_set_name)
-            active_set = rule_set_name
-        except ClientError as e:
-            logger.error("SES call failed operation=ses.set_active_receipt_rule_set")
-    # If active set differs, we still can place rules in our set; SES uses only active one.
-    # In production, you might want to switch or merge rules; we report via audit.
-
-    # Ensure domain-level catch-all rule exists (Recipients can include the domain)
-    rule_name = f"mojo-{domain}-catchall"
-
-    # See if rule exists in our set
-    try:
-        rs = ses.describe_receipt_rule_set(RuleSetName=rule_set_name)
-        existing = [r for r in rs.get("Rules", []) if r.get("Name") == rule_name]
-    except (ClientError, ProviderCallError) as e:
-        logger.error("SES call failed operation=ses.describe_active_receipt_rule_set rule_set=%s", rule_set_name)
-        existing = []
-
-    actions = [
-        {
-            "S3Action": {
-                "BucketName": s3_bucket,
-                "ObjectKeyPrefix": s3_prefix or "",
-            }
-        }
-    ]
-    # Only include SNSAction when we have an inbound topic ARN
-    if inbound_topic_arn:
-        actions.append({
-            "SNSAction": {
-                "TopicArn": inbound_topic_arn,
-                "Encoding": "UTF-8",
-            }
-        })
-
-    rule_def = {
-        "Name": rule_name,
-        "Enabled": True,
-        "TlsPolicy": "Optional",
-        "Recipients": [domain],  # domain-level catch-all
-        "ScanEnabled": True,
-        "Actions": actions,
+def _receiving_rule(domain, bucket, prefix, topic):
+    return {
+        "Name": f"mojo-{domain}-catchall", "Enabled": True,
+        "TlsPolicy": "Optional", "Recipients": [domain], "ScanEnabled": True,
+        "Actions": [{"S3Action": {
+            "BucketName": bucket, "ObjectKeyPrefix": prefix or "", "TopicArn": topic,
+        }}],
     }
 
-    if not existing:
+
+def _merge_receiving_statement(document, statement):
+    # A malformed policy must never turn into an empty policy during repair.
+    if not isinstance(document, dict):
+        raise ReceivingConfigurationError("Receiving policy must be a JSON object")
+    statements = document.get("Statement", [])
+    if isinstance(statements, dict):
+        statements = [statements]
+    if not isinstance(statements, list) or any(not isinstance(s, dict) for s in statements):
+        raise ReceivingConfigurationError("Receiving policy has invalid statements; repair it before reconciling")
+    result = dict(document)
+    result["Statement"] = [s for s in statements if s.get("Sid") != statement["Sid"]]
+    result["Statement"].append(statement)
+    result.setdefault("Version", "2012-10-17")
+    return result
+
+
+def _ensure_receiving_storage(factory, bucket_name, prefix, region, rule_set, rule_name):
+    import hashlib
+
+    identity = factory("sts").get_caller_identity()
+    account = identity.get("Account")
+    if not isinstance(account, str) or len(account) != 12 or not account.isdigit():
+        raise ReceivingConfigurationError("Cannot establish AWS account for receiving permissions")
+    partition = (identity.get("Arn") or "arn:aws:").split(":")[1]
+    source = f"arn:{partition}:ses:{region}:{account}:receipt-rule-set/{rule_set}:receipt-rule/{rule_name}"
+    sid = "MojoSES" + hashlib.sha256(source.encode()).hexdigest()[:24]
+    condition = {"StringEquals": {"AWS:SourceAccount": account, "AWS:SourceArn": source}}
+    statement = {
+        "Sid": sid, "Effect": "Allow", "Principal": {"Service": "ses.amazonaws.com"},
+        "Action": "s3:PutObject", "Resource": f"arn:{partition}:s3:::{bucket_name}/{prefix}*",
+        "Condition": condition,
+    }
+    s3 = factory("s3")
+    try:
+        policy = json.loads(s3.get_bucket_policy(Bucket=bucket_name)["Policy"])
+    except (ClientError, ProviderCallError) as error:
+        if (getattr(error, "provider_code", None) or getattr(error, "response", {}).get("Error", {}).get("Code")) != "NoSuchBucketPolicy":
+            raise
+        policy = {"Version": "2012-10-17", "Statement": []}
+    desired = _merge_receiving_statement(policy, statement)
+    if desired != policy:
+        s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(desired))
+        actual = json.loads(s3.get_bucket_policy(Bucket=bucket_name)["Policy"])
+        if actual != desired:
+            raise ReceivingConfigurationError("S3 receiving policy readback differs; reconcile again after resolving concurrent changes")
+
+    # Bucket SSE-KMS is not SES message encryption (S3Action.KmsKeyArn).
+    # The latter needs a client-side decryptor which the inbox does not have.
+    try:
+        encryption = provider_caller.call(
+            "s3.get_bucket_encryption",
+            lambda: s3.client.get_bucket_encryption(Bucket=bucket_name),
+            "s3:GetEncryptionConfiguration")
+    except (ClientError, ProviderCallError) as error:
+        if (getattr(error, "provider_code", None) or getattr(error, "response", {}).get("Error", {}).get("Code")) == "ServerSideEncryptionConfigurationNotFoundError":
+            return
+        raise
+    for rule in encryption.get("ServerSideEncryptionConfiguration", {}).get("Rules", []):
+        default = rule.get("ApplyServerSideEncryptionByDefault", {})
+        algorithm = default.get("SSEAlgorithm")
+        if algorithm == "AES256":
+            continue
+        if algorithm not in ("aws:kms", "aws:kms:dsse"):
+            raise ReceivingConfigurationError("Unsupported inbound bucket encryption; verify its encryption configuration")
+        key_id = default.get("KMSMasterKeyID")
+        if not key_id:
+            raise ReceivingConfigurationError("Inbound SSE-KMS requires a customer-managed key ARN and SES GenerateDataKey/Decrypt permission")
+        kms = factory("kms")
+        metadata = kms.describe_key(KeyId=key_id)["KeyMetadata"]
+        if metadata.get("KeyManager") != "CUSTOMER" or metadata.get("KeyState") != "Enabled":
+            raise ReceivingConfigurationError("Inbound SSE-KMS requires an enabled customer-managed key with SES GenerateDataKey/Decrypt permission")
+        key_arn = metadata["Arn"]
+        key_policy = json.loads(kms.get_key_policy(KeyId=key_arn, PolicyName="default")["Policy"])
+        key_statement = dict(statement, Action=["kms:GenerateDataKey", "kms:Decrypt"], Resource="*")
+        desired_key_policy = _merge_receiving_statement(key_policy, key_statement)
+        if desired_key_policy != key_policy:
+            kms.put_key_policy(KeyId=key_arn, PolicyName="default", Policy=json.dumps(desired_key_policy))
+            actual = json.loads(kms.get_key_policy(KeyId=key_arn, PolicyName="default")["Policy"])
+            if actual != desired_key_policy:
+                raise ReceivingConfigurationError("KMS receiving permission readback differs; verify key policy before reconciling")
+
+
+def ensure_receiving_catch_all(
+    domain, s3_bucket, s3_prefix, inbound_topic_arn, region,
+    access_key, secret_key, rule_set_name=DEFAULT_RULE_SET_NAME,
+):
+    """Ensure and verify an active receiving rule; provider failures reach the caller."""
+    if not inbound_topic_arn:
+        raise ReceivingConfigurationError("An inbound SNS topic is required for receiving; repair topic creation first")
+    if any(char in (s3_prefix or "") for char in "*?"):
+        raise ReceivingConfigurationError("Inbound S3 prefix cannot contain IAM wildcard characters")
+    access_key = access_key or settings.AWS_KEY
+    secret_key = secret_key or settings.AWS_SECRET
+
+    def factory(service, **kwargs):
+        return ProviderClient(
+            get_client(service, access_key=access_key, secret_key=secret_key,
+                       region=kwargs.get("region") or region), service)
+
+    ses = factory("ses")
+    active = ses.describe_active_receipt_rule_set().get("Metadata", {}).get("Name")
+    if active and active != rule_set_name:
+        raise ReceivingConfigurationError("Another SES receipt rule set is active; resolve the active set before reconciling")
+    try:
+        current_set = ses.describe_receipt_rule_set(RuleSetName=rule_set_name)
+    except (ClientError, ProviderCallError) as error:
+        if (getattr(error, "provider_code", None) or getattr(error, "response", {}).get("Error", {}).get("Code")) != "RuleSetDoesNotExist":
+            raise
         try:
-            ses.create_receipt_rule(
-                RuleSetName=rule_set_name,
-                Rule=rule_def,
-            )
-            logger.info(f"Created SES receipt rule {rule_name} in set {rule_set_name}")
-        except (ClientError, ProviderCallError) as e:
-            # Attempt to auto-fix InvalidS3Configuration by applying SES PutObject bucket policy, then retry
-            err_code = getattr(e, "response", {}).get("Error", {}).get("Code")
-            if err_code == "InvalidS3Configuration":
-                try:
-                    # Discover account ID for aws:Referer condition
-                    sts = boto3.client(
-                        "sts",
-                        aws_access_key_id=access_key or settings.AWS_KEY,
-                        aws_secret_access_key=secret_key or settings.AWS_SECRET,
-                        region_name=region,
-                    )
-                    account_id = sts.get_caller_identity().get("Account")
+            ses.create_receipt_rule_set(RuleSetName=rule_set_name)
+        except (ClientError, ProviderCallError) as create_error:
+            if (getattr(create_error, "provider_code", None) or getattr(create_error, "response", {}).get("Error", {}).get("Code")) != "AlreadyExists":
+                raise
+        current_set = ses.describe_receipt_rule_set(RuleSetName=rule_set_name)
 
-                    # Try to set a minimal bucket policy if none exists
-                    s3c = boto3.client(
-                        "s3",
-                        aws_access_key_id=access_key or settings.AWS_KEY,
-                        aws_secret_access_key=secret_key or settings.AWS_SECRET,
-                        region_name=region,
-                    )
-                    try:
-                        s3c.get_bucket_policy(Bucket=s3_bucket)
-                        has_policy = True
-                    except s3c.exceptions.from_code("NoSuchBucketPolicy"):
-                        has_policy = False
-
-                    if not has_policy:
-                        policy_str = (
-                            "{"
-                            '"Version":"2012-10-17","Statement":[{'
-                            '"Sid":"AllowSESPuts","Effect":"Allow",'
-                            '"Principal":{"Service":"ses.amazonaws.com"},'
-                            '"Action":"s3:PutObject",'
-                            f'"Resource":"arn:aws:s3:::{s3_bucket}/*",'
-                            '"Condition":{"StringEquals":{"aws:Referer":"'
-                            f'{account_id}'
-                            '"}}'
-                            "}]}"
-                        )
-                        s3c.put_bucket_policy(Bucket=s3_bucket, Policy=policy_str)
-                        logger.info(f"Applied SES PutObject policy to bucket {s3_bucket}; retrying rule creation")
-
-                        # Retry rule creation
-                        ses.create_receipt_rule(
-                            RuleSetName=rule_set_name,
-                            Rule=rule_def,
-                        )
-                        logger.info(f"Created SES receipt rule {rule_name} in set {rule_set_name}")
-                    else:
-                        try:
-                            pol = json.loads(s3c.get_bucket_policy(Bucket=s3_bucket)["Policy"])
-                            stmts = pol.get("Statement", [])
-                        except Exception:
-                            pol = {"Version": "2012-10-17", "Statement": []}
-                            stmts = []
-                        # Replace existing AllowSESPuts or append a new one
-                        new_stmts = [s for s in stmts if s.get("Sid") != "AllowSESPuts"]
-                        new_stmts.append({
-                            "Sid": "AllowSESPuts",
-                            "Effect": "Allow",
-                            "Principal": {"Service": "ses.amazonaws.com"},
-                            "Action": "s3:PutObject",
-                            "Resource": f"arn:aws:s3:::{s3_bucket}/*",
-                            "Condition": {"StringEquals": {"aws:Referer": account_id}},
-                        })
-                        pol["Statement"] = new_stmts
-                        s3c.put_bucket_policy(Bucket=s3_bucket, Policy=json.dumps(pol))
-                        logger.info(f"Updated bucket policy for {s3_bucket}; retrying rule creation")
-                        ses.create_receipt_rule(
-                            RuleSetName=rule_set_name,
-                            Rule=rule_def,
-                        )
-                        logger.info(f"Created SES receipt rule {rule_name} in set {rule_set_name}")
-                except Exception as pe:
-                    logger.error("SES setup failed operation=ses.create_receipt_rule rule=%s", rule_name)
-            else:
-                logger.error("SES call failed operation=ses.create_receipt_rule rule=%s", rule_name)
-    else:
-        # Update to desired shape (best effort)
-        try:
-            ses.update_receipt_rule(
-                RuleSetName=rule_set_name,
-                Rule=rule_def,
-            )
-            logger.info(f"Updated SES receipt rule {rule_name} in set {rule_set_name}")
-        except ClientError as e:
-            logger.error("SES call failed operation=ses.update_receipt_rule rule=%s", rule_name)
-
-    return rule_set_name, rule_name
+    desired = _receiving_rule(domain, s3_bucket, s3_prefix, inbound_topic_arn)
+    current = next((r for r in current_set.get("Rules", []) if r.get("Name") == desired["Name"]), None)
+    if current:
+        for action in current.get("Actions", []):
+            old_s3 = action.get("S3Action", {})
+            if old_s3.get("KmsKeyArn"):
+                raise ReceivingConfigurationError("SES message encryption needs a client-side decryptor; use bucket SSE-KMS for inbox ingestion")
+            if old_s3.get("IamRoleArn"):
+                raise ReceivingConfigurationError("Receiving rule uses an explicit IAM role; reconcile its permissions and actions manually")
+    # S3Bucket owns its provider boundary, including missing-bucket/region discovery.
+    bucket = S3Bucket(s3_bucket, client_factory=lambda service, **kw: factory(service, **kw).client,
+                      region=region)
+    if not bucket._check_exists() and not bucket.create(region=region):
+        raise ReceivingConfigurationError("Inbound S3 bucket could not be created")
+    _ensure_receiving_storage(factory, s3_bucket, s3_prefix or "", region,
+                              rule_set_name, desired["Name"])
+    if current != desired:
+        if current:
+            ses.update_receipt_rule(RuleSetName=rule_set_name, Rule=desired)
+        else:
+            try:
+                ses.create_receipt_rule(RuleSetName=rule_set_name, Rule=desired)
+            except (ClientError, ProviderCallError) as error:
+                if (getattr(error, "provider_code", None) or getattr(error, "response", {}).get("Error", {}).get("Code")) != "AlreadyExists":
+                    raise
+                # A racing creator is acceptable only if readback matches.
+    if not active:
+        # Recheck immediately before activation; never intentionally replace another set.
+        active = ses.describe_active_receipt_rule_set().get("Metadata", {}).get("Name")
+        if active and active != rule_set_name:
+            raise ReceivingConfigurationError("SES active rule set changed during receiving setup")
+        if not active:
+            ses.set_active_receipt_rule_set(RuleSetName=rule_set_name)
+    stored = ses.describe_receipt_rule_set(RuleSetName=rule_set_name)
+    actual = next((r for r in stored.get("Rules", []) if r.get("Name") == desired["Name"]), None)
+    active = ses.describe_active_receipt_rule_set().get("Metadata", {}).get("Name")
+    if actual != desired or active != rule_set_name:
+        raise ReceivingConfigurationError("SES receiving rule is not active with the requested configuration after reconciliation")
+    return rule_set_name, desired["Name"]
 
 
 def audit_domain_config(
@@ -727,17 +721,26 @@ def audit_domain_config(
             rules = {r.get("Name"): r for r in rs.get("Rules", [])}
             current_rule = rules.get(rule_name)
             if current_rule:
-                # Pull S3Action and SNSAction
+                # The S3 action notification carries the object location required by ingestion.
                 s3_action = next((a.get("S3Action") for a in current_rule.get("Actions", []) if "S3Action" in a), {}) or {}
-                sns_action = next((a.get("SNSAction") for a in current_rule.get("Actions", []) if "SNSAction" in a), {}) or {}
+                sns_action = s3_action
                 recipients = current_rule.get("Recipients", []) or []
 
-                s3_ok = (want_bucket == s3_action.get("BucketName")) and ((want_prefix or "") == (s3_action.get("ObjectKeyPrefix") or ""))
-                sns_ok = (want_inbound_arn is None) or (want_inbound_arn == sns_action.get("TopicArn"))
-                rec_ok = (domain in recipients)
+                desired_rule = _receiving_rule(domain, want_bucket, want_prefix, want_inbound_arn)
+                desired_s3 = desired_rule["Actions"][0]["S3Action"]
+                s3_ok = (desired_s3["BucketName"] == s3_action.get("BucketName")
+                         and desired_s3["ObjectKeyPrefix"] == (s3_action.get("ObjectKeyPrefix") or "")
+                         and not s3_action.get("KmsKeyArn"))
+                sns_ok = bool(want_inbound_arn) and (want_inbound_arn == s3_action.get("TopicArn"))
+                active_name = ses.describe_active_receipt_rule_set().get("Metadata", {}).get("Name")
+                rec_ok = (recipients == desired_rule["Recipients"]
+                          and current_rule.get("Enabled") == desired_rule["Enabled"]
+                          and active_name == rs_name)
 
                 current_view = {
                     "Recipients": recipients,
+                    "Enabled": current_rule.get("Enabled"),
+                    "ActiveRuleSet": active_name,
                     "BucketName": s3_action.get("BucketName"),
                     "ObjectKeyPrefix": s3_action.get("ObjectKeyPrefix"),
                     "SnsTopicArn": sns_action.get("TopicArn"),
@@ -754,7 +757,7 @@ def audit_domain_config(
                     AuditItem(
                         resource=f"ses.receipt_rule.s3.{rs_name}.{rule_name}",
                         desired={"Recipients": [domain], "BucketName": want_bucket, "ObjectKeyPrefix": want_prefix},
-                        current={"Recipients": recipients, "BucketName": s3_action.get("BucketName"), "ObjectKeyPrefix": s3_action.get("ObjectKeyPrefix")},
+                        current={"Recipients": recipients, "Enabled": current_rule.get("Enabled"), "ActiveRuleSet": active_name, "BucketName": s3_action.get("BucketName"), "ObjectKeyPrefix": s3_action.get("ObjectKeyPrefix")},
                         status="ok" if (s3_ok and rec_ok) else "drifted",
                     )
                 )
@@ -1059,6 +1062,10 @@ def onboard_domain(
         mail_from_subdomain=mail_from_subdomain,
         ttl=ttl,
     )
+    if receiving_enabled:
+        dns_records.append(DnsRecord(
+            type="MX", name=domain,
+            value=f"10 inbound-smtp.{region}.amazonaws.com", ttl=ttl))
 
     # Ensure AWS-side resources (SNS, notifications, receiving)
     recon = reconcile_domain_config(
@@ -1103,21 +1110,40 @@ def apply_dns_records_godaddy(
     except Exception as e:
         raise ImportError("GoDaddy DNSManager not available") from e
 
-    dns = DNSManager(api_key, api_secret)
+    # Each PUT replaces a complete RRset. Group first so repeated names keep
+    # every requested value, and validate MX values before any DNS write.
+    zone_name = domain.rstrip(".").lower()
+    grouped = {}
+    for record in records:
+        name = record.name.rstrip(".")
+        if name.lower() == zone_name or name == "@":
+            name = "@"
+        elif name.lower().endswith(f".{zone_name}"):
+            name = name[:-(len(zone_name) + 1)]
+        else:
+            raise ValueError(f"DNS record '{record.name}' is outside '{domain}'")
+        record_type = record.type.upper()
+        entry = {"data": record.value, "ttl": record.ttl}
+        if record_type == "MX":
+            parts = record.value.split()
+            if len(parts) != 2 or not parts[0].isdigit() or not 0 <= int(parts[0]) <= 65535:
+                raise ValueError(f"MX record '{record.name}' requires a priority and mail server")
+            entry["priority"] = int(parts[0])
+            entry["data"] = parts[1]
+        entries = grouped.setdefault((record_type, name), [])
+        if entry not in entries:
+            entries.append(entry)
+
+    dns = DNSManager(api_key, api_secret, raise_on_error=True)
     if not dns.is_domain_active(domain):
         raise ValueError(f"Domain {domain} is not active in GoDaddy account")
 
-    for r in records:
-        # For GoDaddy, record names are relative to the domain
-        # e.g., "_amazonses" for "_amazonses.example.com"
-        name = r.name.replace(f".{domain}", "")
-        # Some providers want quoted TXT data; GoDaddy accepts raw token for SES
-        dns.add_record(
+    for (record_type, name), entries in grouped.items():
+        dns.put_records(
             domain=domain,
-            record_type=r.type,
+            record_type=record_type,
             name=name,
-            data=r.value,
-            ttl=r.ttl,
+            entries=entries,
         )
     return True
 

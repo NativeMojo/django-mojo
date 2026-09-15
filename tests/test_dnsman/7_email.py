@@ -268,9 +268,9 @@ def test_apply_records_dispatches_a_godaddy_domain_to_godaddy(opts):
     assert manager.call_args.args == (GD_API_KEY, GD_API_SECRET), (
         "Expected the linked DnsCredential to supply the GoDaddy key/secret, got "
         f"{manager.call_args.args}")
-    assert manager_instance.add_record.call_count == 4, (
+    assert manager_instance.put_records.call_count == 4, (
         f"Expected every record to be applied through GoDaddy, got "
-        f"{manager_instance.add_record.call_count}")
+        f"{manager_instance.put_records.call_count}")
     assert result.provider == "godaddy", (
         f"Expected the dispatch to report the godaddy provider, got {result.provider}")
 
