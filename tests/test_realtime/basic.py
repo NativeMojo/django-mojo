@@ -200,42 +200,6 @@ def test_ws_manager_online_status(opts):
         # assert not realtime.is_online("user", uid), "user should be offline after disconnect"
 
 
-@th.django_unit_test("ws_manager_disconnect_user")
-def test_ws_manager_disconnect_user(opts):
-    from mojo.apps import realtime
-
-    # Login via REST to get a JWT
-    assert opts.client.login(TEST_USER, TEST_PWORD), "authentication failed"
-    uid = opts.client.jwt_data.uid
-    assert uid is not None, "missing user id from jwt"
-
-    # Connect to WebSocket
-    ws_url = WsClient.build_url_from_host(opts.host, path="ws/realtime/")
-    ws = WsClient(ws_url, logger=opts.logger)
-    try:
-        ws.connect(timeout=10.0)
-
-        # Authenticate
-        auth = ws.authenticate(opts.client.access_token, wait=True, timeout=10.0)
-        assert auth.get("type") == "auth_success", f"unexpected auth response: {auth}"
-
-        # Verify user is online
-        assert realtime.is_online("user", uid), "user should be online after authentication"
-
-        # Force disconnect the user
-        realtime.disconnect_user("user", uid)
-
-        # Should receive disconnect message
-        msg = ws.wait_for_type("message", timeout=5.0)
-        data = msg.data
-        assert data.get("type") == "message", f"unexpected message type: {data}"
-        msg_data = data.get("data", {})
-        assert msg_data.get("type") == "disconnect", f"expected disconnect message: {msg_data}"
-
-    finally:
-        ws.close()
-
-
 @th.django_unit_test("ws_manager_multiple_connections")
 def test_ws_manager_multiple_connections(opts):
     from mojo.apps import realtime

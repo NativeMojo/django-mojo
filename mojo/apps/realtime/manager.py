@@ -283,11 +283,13 @@ def disconnect_user(user_type, user_id):
         user_id: User's ID
     """
     connections = get_user_connections(user_type, user_id)
+    if not connections:
+        return
+    redis_client = get_redis()
+    # Control commands must reach the handler without the direct_message wrapper.
+    message = json.dumps({"type": "disconnect", "reason": "forced_disconnect"})
     for conn_id in connections:
-        send_to_connection(conn_id, {
-            "type": "disconnect",
-            "reason": "forced_disconnect"
-        })
+        redis_client.publish(messages_channel(conn_id), message)
 
 
 def request(user_type, user_id, data, timeout=30):
