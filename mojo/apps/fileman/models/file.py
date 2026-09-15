@@ -614,6 +614,16 @@ class File(models.Model, MojoModel):
         return None
 
     def get_rendition_by_role(self, role):
+        prefetched = getattr(self, "_prefetched_objects_cache", {}).get("file_renditions")
+        if prefetched is not None:
+            # Filtering a related manager discards its prefetch cache. Match
+            # first()'s ordering here: queryset ordering, or lowest pk when
+            # no ordering was supplied.
+            role = self.file_renditions.model._meta.get_field("role").get_prep_value(role)
+            matches = (rendition for rendition in prefetched if rendition.role == role)
+            if prefetched.ordered:
+                return next(matches, None)
+            return min(matches, key=lambda rendition: rendition.pk, default=None)
         return self.file_renditions.filter(role=role).first()
 
     def get_direct_download_url(self):
