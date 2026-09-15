@@ -5,6 +5,7 @@ from mojo import JsonResponse
 from mojo.errors import MojoException
 from mojo.helpers import logit
 from mojo.helpers.aws.provider_call import safe_error_detail
+from mojo.helpers.aws.ses_domain import ReceivingConfigurationError
 
 # Use the new email_ops service
 from mojo.apps.aws.services.email_ops import (
@@ -145,7 +146,7 @@ def on_email_domain_onboard(request, pk: int):
         })
     except EmailDomainNotFound:
         return JsonResponse({"error": "EmailDomain not found", "code": 404}, status=404)
-    except InvalidConfiguration as e:
+    except (InvalidConfiguration, ReceivingConfigurationError) as e:
         return JsonResponse({"error": str(e)}, status=400)
     except MojoException as e:
         # dnsman speaks MojoException — carry its status through instead of
@@ -224,7 +225,7 @@ def on_email_domain_reconcile(request, pk: int):
       - Ensure SNS topics and notification mappings
       - Ensure receiving catch-all rule (if receiving_enabled)
       - Optionally configure MAIL FROM
-    Does not modify DNS; use onboarding + DNS mode or apply manually.
+    Applies receiving MX through managed DNS; manual mode returns the required record.
     """
     if request.method != "POST":
         return JsonResponse({"error": "Method not allowed"}, status=405)
@@ -263,8 +264,10 @@ def on_email_domain_reconcile(request, pk: int):
         })
     except EmailDomainNotFound:
         return JsonResponse({"error": "EmailDomain not found", "code": 404}, status=404)
-    except InvalidConfiguration as e:
+    except (InvalidConfiguration, ReceivingConfigurationError) as e:
         return JsonResponse({"error": str(e)}, status=400)
+    except MojoException as e:
+        return JsonResponse({"error": e.reason, "code": e.code}, status=e.status)
     except Exception as e:
         failure = safe_error_detail(e, "ses.reconcile")
         logger.error(

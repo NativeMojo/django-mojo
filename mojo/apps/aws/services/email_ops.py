@@ -577,6 +577,26 @@ def reconcile_email_domain(
             mail_from_subdomain=mail_from_subdomain,
         )
 
+        if receiving_enabled:
+            mx_record = DnsRecord(
+                type="MX", name=domain.name,
+                value=f"10 inbound-smtp.{region}.amazonaws.com")
+            dns_domain = None
+            if domain.dns_mode in ("route53", "godaddy"):
+                from mojo.apps.dnsman.services import email as dnsman_email
+
+                dns_domain = dnsman_email.require_domain(domain.name)
+            if dns_domain is not None:
+                if not dns_domain.is_active:
+                    raise InvalidConfiguration(
+                        f"'{domain.name}' is not active in dnsman; receiving MX was not applied")
+                applied = dnsman_email.apply_records(dns_domain, [mx_record])
+                result.notes.append(f"Applied receiving MX via dnsman ({applied.provider})")
+            else:
+                result.notes.append(
+                    f"Apply receiving DNS manually: MX {mx_record.name} "
+                    f"= {mx_record.value} (TTL {mx_record.ttl})")
+
         # Update domain configuration
         updates = {}
         if domain.region != region:
