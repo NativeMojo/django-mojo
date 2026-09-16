@@ -337,7 +337,7 @@
 
     on("btn-passkey", "click", function () {
         var btn = $("btn-passkey"); m.setLoading(btn, true); m.hideMessage();
-        MojoAuth.loginWithPasskeyDiscoverable()
+        MojoAuth.loginWithPasskeyDiscoverable({ group_uuid: cfg.groupUuid })
             .then(m.onAuthSuccess)
             .catch(function (err) {
                 m.setLoading(btn, false);
@@ -396,7 +396,7 @@
                 var code = $("sms-code").value.trim();
                 if (!code) { m.showMessage("Enter the 6-digit code.", "error"); return; }
                 m.setLoading(btn, true); m.hideMessage();
-                MojoAuth.verifySmsLogin(phone, code)
+                MojoAuth.verifySmsLogin(phone, code, { group_uuid: cfg.groupUuid })
                     .then(m.onAuthSuccess)
                     .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Invalid or expired code.", "error"); });
             }

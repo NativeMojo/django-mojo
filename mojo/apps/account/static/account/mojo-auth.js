@@ -558,15 +558,18 @@
          * Uses discoverable credentials — browser shows all passkeys for this domain.
          * Handles the full begin → browser prompt → complete flow.
          * Stores tokens on success.
+         * @param {object} [options] - { group_uuid } for brand login context
          * @returns {Promise<object>}
          */
-        loginWithPasskeyDiscoverable: function () {
+        loginWithPasskeyDiscoverable: function (options) {
             if (!MojoAuth.isPasskeySupported()) {
                 return Promise.reject(new Error('Passkeys are not supported in this browser'));
             }
 
             // Step 1: Begin with no username — server returns empty allowCredentials
-            return post(ep('passkeyLoginBegin'), {})
+            var payload = {};
+            if (options && options.group_uuid) payload.group_uuid = options.group_uuid;
+            return post(ep('passkeyLoginBegin'), payload)
                 .then(function (resp) {
                     var d = resp.data || resp;
                     var challengeId = d.challenge_id;
@@ -584,7 +587,7 @@
                         .then(function (credential) {
                             if (!credential) throw new Error('No credential received from authenticator');
 
-                            return post(ep('passkeyLoginComplete'), _withDevice({
+                            var payload = {
                                 challenge_id: challengeId,
                                 credential: {
                                     id: credential.id,
@@ -599,7 +602,9 @@
                                             : null
                                     }
                                 }
-                            }));
+                            };
+                            if (options && options.group_uuid) payload.group_uuid = options.group_uuid;
+                            return post(ep('passkeyLoginComplete'), _withDevice(payload));
                         });
                 })
                 .then(saveTokens);
@@ -610,15 +615,18 @@
          * Handles the full begin → browser prompt → complete flow.
          * Stores tokens on success.
          * @param {string} username  - username or email
+         * @param {object} [options] - { group_uuid } for brand login context
          * @returns {Promise<object>}
          */
-        loginWithPasskey: function (username) {
+        loginWithPasskey: function (username, options) {
             if (!MojoAuth.isPasskeySupported()) {
                 return Promise.reject(new Error('Passkeys are not supported in this browser'));
             }
 
             // Step 1: Begin
-            return post(ep('passkeyLoginBegin'), { username: username })
+            var payload = { username: username };
+            if (options && options.group_uuid) payload.group_uuid = options.group_uuid;
+            return post(ep('passkeyLoginBegin'), payload)
                 .then(function (resp) {
                     var d = resp.data || resp;
                     var challengeId = d.challenge_id;
@@ -639,7 +647,7 @@
                             if (!credential) throw new Error('No credential received from authenticator');
 
                             // Step 3: Complete
-                            return post(ep('passkeyLoginComplete'), _withDevice({
+                            var payload = {
                                 challenge_id: challengeId,
                                 credential: {
                                     id: credential.id,
@@ -654,7 +662,9 @@
                                             : null
                                     }
                                 }
-                            }));
+                            };
+                            if (options && options.group_uuid) payload.group_uuid = options.group_uuid;
+                            return post(ep('passkeyLoginComplete'), _withDevice(payload));
                         });
                 })
                 .then(saveTokens);
@@ -748,13 +758,13 @@
          * Complete a passwordless SMS-code login. Stores tokens on success.
          * @param {string} identifier - phone number / username used to start
          * @param {string} code       - 6-digit code from the SMS
+         * @param {object} [options] - { group_uuid } for brand login context
          * @returns {Promise<object>}
          */
-        verifySmsLogin: function (identifier, code) {
-            return post(ep('smsVerify'), _withDevice({
-                username: identifier,
-                code: code
-            })).then(saveTokens);
+        verifySmsLogin: function (identifier, code, options) {
+            var payload = { username: identifier, code: code };
+            if (options && options.group_uuid) payload.group_uuid = options.group_uuid;
+            return post(ep('smsVerify'), _withDevice(payload)).then(saveTokens);
         },
 
         // -----------------------------------------------------------------------
