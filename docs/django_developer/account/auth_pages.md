@@ -807,6 +807,11 @@ the updated framework/templates/static asset to a consuming app, verifying
 its handoff path, and checking any downstream login rewards remain separate
 steps; a framework login success alone is not proof of a reward payment.
 
+The client-payload regression in `tests/test_auth/hosted_group_payload.py`
+requires `node` on the test runner's PATH. It executes the shipped JavaScript
+with a synthetic browser/transport and makes no network requests. Missing
+Node.js fails the regression explicitly; it is not silently skipped.
+
 ---
 
 ## Bouncer Gate
