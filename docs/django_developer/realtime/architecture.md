@@ -133,6 +133,29 @@ Messages not matched by a handler are routed to the instance's `on_realtime_mess
 - Authorization: if the model defines `on_realtime_can_subscribe(topic)`, it is called on each subscribe request
 - Topic membership is stored in Redis SETs with automatic TTL
 
+### Group-topic permissions (opt-in)
+
+`REALTIME_GROUP_TOPIC_PERMISSIONS` is a file-static Django setting. Its default is `None`; leaving it unset or setting it to `None` preserves existing group subscriptions and delivery. It is not a database-backed Setting or per-group override.
+
+```python
+# MojoVerify deployment settings only; other deployments remain unset.
+REALTIME_GROUP_TOPIC_PERMISSIONS = [
+    "admin_compliance", "admin_verify", "view_verify", "manage_verification",
+]
+```
+
+Configure a nonempty list or tuple of nonblank permission names. Permissions use **OR** semantics through `Group.user_has_permission`: any configured permission may grant access, including normal global/superuser and inherited membership permissions. Membership resolution uses the first active membership in the group/ancestor chain, matching the shared permission helper; a direct membership does not merge its permissions with a parent membership. An empty collection, wrong type, or invalid entry fails closed for group topics; it does not disable the policy.
+
+While enabled:
+
+- Group topics must be canonical positive decimal IDs, such as `group:7`. Leading zeros, signs, whitespace, extra segments, and other malformed `group:` names are denied.
+- The authenticated identity must be an actual active account `User`. Other bearer identity models cannot access protected group topics, even if their IDs match a User.
+- The group and all its ancestors must be active (`Group.get_active`). Generic membership or `view_groups` / `manage_groups` alone does not bypass the configured permission check.
+- The policy applies to client subscriptions, automatic subscriptions, and subscriptions returned by hooks. A custom subscription hook may further deny access, but cannot grant access past this policy.
+- Each protected subscribe and topic-message delivery reads a fresh active User and current group permissions from the primary database. When access is denied or cannot be checked, delivery drops that message and unsubscribes the connection from the topic. It does not close the socket or change other topics or the message envelope.
+
+Revocation is checked on the next protected delivery; it does not wait for a Redis TTL or use a periodic permission cache. Already-sent messages cannot be recalled. Restoring permission does not replay dropped messages or automatically resubscribe the connection; the client must subscribe again. Redis pub/sub provides no replay guarantee.
+
 ## Activity Timeout
 
 Connections are monitored for activity. If no client message (including `ping`) arrives within 30 seconds, the connection is closed. Clients should send periodic pings to stay alive:

@@ -95,7 +95,11 @@ def on_realtime_message(self, data):
 
 ### on_realtime_can_subscribe(topic)
 
-Called when the client requests a topic subscription. Return `True` to allow, `False` to deny. If not defined, all subscriptions are allowed (the auto-subscription to `<user_type>:<id>` bypasses this check).
+Called when the client requests a topic subscription. Return `True` to allow, `False` to deny. If not defined, subscriptions are allowed subject to the optional group-topic policy below. Auto-subscriptions and hook-returned subscriptions bypass this hook, but still pass that policy.
+
+When `REALTIME_GROUP_TOPIC_PERMISSIONS` is configured, the framework independently checks every `group:<id>` subscription and topic-message delivery. Returning `True` here or returning a topic in `subscriptions` cannot bypass that check. A custom hook can still deny a client subscription. The built-in User hook uses the configured permissions in place of its usual group membership / `view_groups` / `manage_groups` rule.
+
+The policy defaults to disabled (`None` or unset), preserving existing behavior. See [Group-topic permissions](architecture.md#group-topic-permissions-opt-in) for configuration and revocation behavior.
 
 ```python
 def on_realtime_can_subscribe(self, topic):
@@ -119,7 +123,7 @@ All hooks (`on_realtime_connection`, `on_realtime_connected`, `on_realtime_messa
 | Return value | Behavior |
 |---|---|
 | `{"response": {...}}` | Dict is sent directly to the client over the WebSocket |
-| `{"subscriptions": ["topic1", ...]}` | Client is subscribed to each topic |
+| `{"subscriptions": ["topic1", ...]}` | Requests subscriptions; configured group-topic permissions still apply |
 | `{"response": {...}, "subscriptions": [...]}` | Both actions |
 | Plain dict (no `response` key) | Sent directly to client (backward compatibility) |
 | `None` | No action |

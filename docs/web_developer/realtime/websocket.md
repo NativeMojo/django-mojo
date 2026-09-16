@@ -88,10 +88,29 @@ Connection is closed after failure or timeout.
 **Response:**
 
 ```json
-{"type": "subscribed", "topic": "user:42", "group": "user_42"}
+{"type": "subscribed", "topic": "user:42"}
 ```
 
-You can only subscribe to topics in your `available_topics` list.
+Subscription access is decided by the server's authorization policy and subscription hook.
+
+### Protected group topics
+
+A deployment may opt into permissions for `group:<id>` topics. This is disabled by default; existing behavior remains when the server setting is unset or `None`.
+
+When enabled, use a canonical positive numeric topic such as `group:7`. The server requires an active User, an active group with active ancestors, and at least one deployment-configured permission. Membership alone does not suffice. Non-User bearer identities cannot subscribe to protected group topics. Invalid topic names or invalid server permission configuration are denied.
+
+The server rechecks current access before each protected topic message. If access has been revoked or cannot be checked, it drops that message and unsubscribes the connection from that topic. The socket and other topics stay usable. This check occurs on delivery, without waiting for a TTL. Messages already received remain received; dropped messages are not replayed. After access is restored, subscribe again.
+
+Allowed topic messages retain the existing envelope:
+
+```json
+{
+  "type": "message",
+  "topic": "group:7",
+  "data": {"event": "updated"},
+  "timestamp": 1712345678.9
+}
+```
 
 ## Unsubscribing
 

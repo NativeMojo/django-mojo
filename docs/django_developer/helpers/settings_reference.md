@@ -1025,6 +1025,10 @@ registered resource is enabled; until then every endpoint answers 404.
 - `PUBLIC_MESSAGE_NOTIFY_SUBJECT`
 - `PUBLIC_MESSAGE_NOTIFY_TEMPLATE`
 
+### REALTIME
+
+- `REALTIME_GROUP_TOPIC_PERMISSIONS` — **file-only** (`settings.get_static`), default `None` (disabled; existing behavior preserved). A nonempty list/tuple grants access to canonical `group:<positive id>` topics when an active User has any listed permission on an active group. Empty/malformed configuration denies group topics. Every protected delivery rechecks current access and drops/unsubscribes on denial. Configure only in deployments opting in. See [Group-topic permissions](../realtime/architecture.md#group-topic-permissions-opt-in).
+
 ### REDIS
 
 - `REDIS_CONNECT_TIMEOUT`

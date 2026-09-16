@@ -1700,6 +1700,12 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             # Non-group room: check membership exists and is active/muted
             return membership is not None and membership.status in ("active", "muted")
         if topic.startswith("group:"):
+            from mojo.apps.realtime.permissions import (
+                can_access_group_topic, get_group_topic_permissions,
+            )
+            permissions = get_group_topic_permissions(topic)
+            if permissions is not None:
+                return can_access_group_topic(self, topic, permissions)
             from .group import Group
             if self.has_permission(["view_groups", "manage_groups"]):
                 return True

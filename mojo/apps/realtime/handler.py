@@ -21,6 +21,7 @@ from mojo.helpers.request import normalize_ip
 from mojo.helpers.settings import settings
 from .auth import async_validate_bearer_token
 from .channels import broadcast_channel, topic_channel, messages_channel
+from .permissions import can_access_group_topic, get_group_topic_permissions
 
 logger = logit.get_logger("realtime", "realtime.log")
 
@@ -558,7 +559,8 @@ class WebSocketHandler:
                 await self.send_error("Authorization check failed")
                 return
 
-        await self.subscribe_to_topic(topic)
+        if await self.subscribe_to_topic(topic) is False:
+            return
 
         await self.send_message({
             "type": "subscribed",
@@ -716,8 +718,26 @@ class WebSocketHandler:
 
             await self.send_message(response)
 
+    async def _can_access_protected_group_topic(self, topic):
+        try:
+            permissions = get_group_topic_permissions(topic)
+            if permissions is None:
+                return True
+            return await asyncio.get_running_loop().run_in_executor(
+                None, can_access_group_topic, self.user, topic, permissions
+            )
+        except Exception:
+            # Authorization errors must never turn into delivery of the payload.
+            self._log_exception("Protected group topic authorization failed")
+            return False
+
     async def subscribe_to_topic(self, topic):
         """Subscribe connection to a topic"""
+        # Hooks can request subscriptions directly, bypassing handle_subscribe.
+        if not await self._can_access_protected_group_topic(topic):
+            await self.unsubscribe_from_topic(topic)
+            await self.send_error("Access denied to topic")
+            return False
         if topic in self.subscribed_topics:
             return
 
@@ -757,6 +777,12 @@ class WebSocketHandler:
     async def process_redis_message(self, data):
         """Process message from Redis pub/sub"""
         message_type = data.get("type")
+
+        if message_type == "topic_message":
+            topic = data.get("topic")
+            if not await self._can_access_protected_group_topic(topic):
+                await self.unsubscribe_from_topic(topic)
+                return
 
         if message_type in ["broadcast", "topic_message", "direct_message"]:
             # Forward to client wrapped in {"type": "message", "data": ...}
