@@ -35,11 +35,11 @@ def _check(method, branded):
     assert complete["duid"] == "test-device", complete
     assert complete["bouncer_token"] == "test-bouncer", complete
     if method == "sms":
-        assert complete["username"] == "test-user" and complete["code"] == "123456"
+        assert complete["username"] == "test-user" and complete["code"] == "123456", "SMS credentials must remain unchanged"
     else:
-        assert complete["challenge_id"] == "test-challenge"
-        assert complete["credential"]["response"]["signature"] == "AQ"
-        assert ("username" in calls[0]["body"]) == (method == "named")
+        assert complete["challenge_id"] == "test-challenge", "complete must carry the begin challenge"
+        assert complete["credential"]["response"]["signature"] == "AQ", "credential encoding must remain unchanged"
+        assert ("username" in calls[0]["body"]) == (method == "named"), "only named passkey begin must include username"
 
 
 @th.django_unit_test("hosted discoverable passkey carries group on begin and complete")
@@ -66,5 +66,5 @@ def test_hosted_legacy_options(opts):
 @th.django_unit_test("hosted login template supplies resolved group to both completions")
 def test_hosted_template_group(opts):
     template = (ROOT / "mojo/apps/account/templates/account/login.html").read_text()
-    assert "loginWithPasskeyDiscoverable({ group_uuid: cfg.groupUuid })" in template
-    assert "verifySmsLogin(phone, code, { group_uuid: cfg.groupUuid })" in template
+    assert "loginWithPasskeyDiscoverable({ group_uuid: cfg.groupUuid })" in template, "hosted passkey must supply its page group"
+    assert "verifySmsLogin(phone, code, { group_uuid: cfg.groupUuid })" in template, "hosted SMS verification must supply its page group"
