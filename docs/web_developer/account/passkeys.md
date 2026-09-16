@@ -160,6 +160,25 @@ const result = await completeResp.json();
 
 No JWT required — this is how users authenticate without a password.
 
+For a group-branded login, include the same optional `group_uuid` in both the
+begin and complete JSON bodies. Begin uses it for the group's login-method
+gate; complete carries the group context into the successful login request.
+It does not grant group membership. Omitting it retains unscoped login behavior.
+
+The shipped `mojo-auth.js` helpers forward it for both requests:
+
+```javascript
+const options = { group_uuid: 'abc123uuid' };
+// Discoverable credential (no username):
+await MojoAuth.loginWithPasskeyDiscoverable(options);
+// Or a known username:
+await MojoAuth.loginWithPasskey(username, options);
+```
+
+The final `options` argument is optional, so `loginWithPasskeyDiscoverable()`
+and `loginWithPasskey(username)` remain valid. The hosted `/auth` page supplies
+its resolved `cfg.groupUuid` automatically.
+
 ### Step 1 — Begin Login
 
 **POST** `/api/auth/passkeys/login/begin`
@@ -444,12 +463,12 @@ export async function registerPasskey(accessToken, friendlyName) {
   return completeResp.json();
 }
 
-export async function loginWithPasskey(username) {
+export async function loginWithPasskey(username, options = {}) {
   // Step 1: Begin
   const beginResp = await fetch('/api/auth/passkeys/login/begin', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username }),
+    body: JSON.stringify({ username, group_uuid: options.group_uuid }),
   });
   if (!beginResp.ok) throw new Error('Login begin failed');
   const { data } = await beginResp.json();
@@ -470,6 +489,7 @@ export async function loginWithPasskey(username) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       challenge_id,
+      group_uuid: options.group_uuid,
       credential: {
         id: credential.id,
         rawId: bufferToBase64url(credential.rawId),

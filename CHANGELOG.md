@@ -14,6 +14,13 @@
 
 ## Unreleased
 
+### account: Preserve brand context through hosted login (#4622)
+
+Passkey begin/complete and SMS verification accept optional `options.group_uuid`
+in `mojo-auth.js`; the hosted login page supplies its resolved group. Existing
+unscoped helper calls remain compatible. This preserves request context without
+changing membership checks or guaranteeing downstream reward delivery.
+
 **chore (tests)** — **three test-hygiene cleanups; the auth-page `escapejs` audit
 is now codebase-wide.** (1) Deleted the dead `cleanup_email_change` teardown in
 `tests/test_email/email_change.py` — the testit runner collects by function-name

@@ -82,6 +82,29 @@ login/register/passkey and bouncer links as `group_uuid` and `redirect`.
 The split `branded-panel` and `editorial` layouts show hero artwork; `minimal`
 and `compact` intentionally do not.
 
+### Brand context on passkey and SMS login
+
+The hosted login page passes `{ group_uuid: cfg.groupUuid }` to passkey sign-in
+and SMS-code verification. Passkey begin **and** complete carry `group_uuid`;
+SMS start and verify carry it too. This lets the server resolve the active
+group on the request that completes sign-in, not just on the branded page.
+
+Custom pages using `mojo-auth.js` can pass the same optional final argument:
+
+```javascript
+const options = { group_uuid: 'abc123uuid' };
+// Choose one passkey flow:
+await MojoAuth.loginWithPasskeyDiscoverable(options);
+await MojoAuth.loginWithPasskey(username, options);
+// Or complete an SMS login with the same identifier used to start it:
+await MojoAuth.startSmsLogin(phoneNumber, options);
+await MojoAuth.verifySmsLogin(phoneNumber, code, options);
+```
+
+Existing calls without `options` remain supported and send no `group_uuid`.
+Brand context does not grant group membership or permissions. Any rewards or
+other application login effects remain the consuming application's responsibility.
+
 ### After Login
 
 1. Access and refresh tokens are stored in `localStorage`

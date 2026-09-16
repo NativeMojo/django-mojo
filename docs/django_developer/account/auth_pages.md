@@ -783,6 +783,30 @@ handlers in `register.html` and `login.html` include it in the POST payload
 automatically. See [auth_config.md](auth_config.md) for how the config
 resolves down the parent chain.
 
+For passkey sign-in, `login.html` passes `{ group_uuid: cfg.groupUuid }` to
+`MojoAuth.loginWithPasskeyDiscoverable(options)`. Both passkey begin and
+complete include the group; begin needs it for the per-group method gate.
+The username variant, `loginWithPasskey(username, options)`, accepts the same
+optional final argument. SMS start and `verifySmsLogin(identifier, code,
+options)` likewise carry the group. Completion payloads still include the
+usual device fields through `_withDevice`. Calls that omit `options` keep
+the existing unscoped behavior, including the admin portal's username-only
+passkey call.
+
+The HTTP dispatcher resolves only active groups into `request.group`.
+`jwt_login` passes that request to `fire_user_login` / `USER_LOGIN_HANDLER`;
+the handler does **not** receive a membership-checked group argument.
+Consumers must enforce their own membership and permission requirements.
+Separately, `_attributable_login_group` attributes the sign-in activity row
+only to an active direct membership of the credential-verified user. A valid
+non-member login can succeed without brand attribution; an inactive group
+is not resolved. Carrying `group_uuid` supplies context, not authorization.
+
+This change fixes missing context in hosted credential submissions. Deploying
+the updated framework/templates/static asset to a consuming app, verifying
+its handoff path, and checking any downstream login rewards remain separate
+steps; a framework login success alone is not proof of a reward payment.
+
 ---
 
 ## Bouncer Gate

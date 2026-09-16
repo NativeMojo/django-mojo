@@ -231,13 +231,26 @@ the deployment's own icons. The `GET /api/auth/config` response is unchanged;
 
 ```javascript
 // Fetch the resolved auth config
-const cfg = await MojoAuth.getAuthConfig({ groupUuid: 'abc123' });
-// cfg.theme.appTitle, cfg.login.methods, cfg.registration.passsKeyPrompt, …
+const groupUuid = 'abc123';
+const cfg = await MojoAuth.getAuthConfig(groupUuid);
+// cfg.theme.app_title, cfg.login.methods, cfg.registration.passkey_prompt, …
 
 // Register a passkey for the currently authenticated user
 await MojoAuth.registerPasskey();
 
-// SMS login
-const { sessionToken } = await MojoAuth.startSmsLogin(phoneNumber);
-const result = await MojoAuth.verifySmsLogin(sessionToken, code);
+// SMS login — use the same phone number or username for both requests.
+const options = { group_uuid: groupUuid };
+await MojoAuth.startSmsLogin(phoneNumber, options);
+const result = await MojoAuth.verifySmsLogin(phoneNumber, code, options);
 ```
+
+`startSmsLogin` returns generic success, not a session token. Its identifier is
+the phone number or username you must pass to `verifySmsLogin`. Both accept an
+optional final `options` object with `group_uuid`; pass it on verification as
+well as code delivery. Existing calls without it remain supported.
+
+Passkey helpers likewise accept `loginWithPasskeyDiscoverable(options)` and
+`loginWithPasskey(username, options)`, forwarding `group_uuid` on begin and
+complete. The hosted login template supplies `{ group_uuid: cfg.groupUuid }`
+for passkey sign-in and SMS verification automatically. See
+[Auth Pages](auth_pages.md#brand-context-on-passkey-and-sms-login).
