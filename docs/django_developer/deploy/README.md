@@ -506,7 +506,9 @@ Engine proof refreshes on heartbeat (default five
 seconds); configure an interval below 15 seconds. Scheduler proof refreshes on
 its loop. Unreadable/stale proof, duplicate processes or missing supervisor
 remain unconfirmed. Custom supervisors, daemon-mode jobs and custom roots are
-not certified by this fixed standard-node workflow.
+not certified by this fixed standard-node workflow. Custom
+`CONFIG_SYNC_SERVICE` units retain their existing activation behavior; config-sync
+clears standard role evidence rather than claiming health for a custom service.
 
 Request-serving nodes additionally need systemd startup after installation
 and a serving-process response to a signed challenge with the target revision and database/Redis
