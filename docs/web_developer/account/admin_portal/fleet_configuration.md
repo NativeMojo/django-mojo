@@ -118,3 +118,6 @@ a historical successful result is not an ongoing health guarantee.
 The serving-proof route is a signed machine probe, not a browser polling API.
 See [registration, storage and node prerequisites](../../../django_developer/account/admin_portal/fleet_configuration.md)
 for application integration, fixed-operation permissions and deployment setup.
+
+Saved Apply reports include `observed_at`, the evidence observation timestamp
+rather than the time of the browser poll. Queued responses may omit it.

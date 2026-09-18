@@ -86,7 +86,9 @@ setting retains its established behavior.
 - `POST /api/account/admin/fleet`: one of the actions below.
 - `GET /api/account/admin/fleet/operation/<operation_id>`: signed evidence from
   an asynchronous Apply operation. This is historical evidence; refresh fleet
-  state for a current observation.
+  state for a current observation. Saved reports include `observed_at`, the
+  evidence observation time, not the time a browser polls; queued responses
+  may omit it.
 
 Publish only changed fields:
 
