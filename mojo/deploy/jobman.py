@@ -19,6 +19,10 @@ entry. `preflight` then runs the same installed Python module as that account
 and checks the writable launch surface before the current processes retire. The
 next cron tick starts their replacements in a fresh audit session.
 
+Configuration sync uses `request_restart()` instead of the operator `stop`:
+it preflights the same cron launch, sends SIGTERM only, and returns immediately
+so an in-flight Apply job can finish while its engine drains.
+
 WHAT THIS MANAGES, AND WHAT IT DELIBERATELY DOES NOT. There are two job process
 planes on a node and they are disjoint:
 
@@ -116,6 +120,7 @@ COMPONENTS = {"engine": "Engine", "scheduler": "Scheduler"}
 # PID makes the otherwise legitimate launch indistinguishable from conflicting
 # process evidence.
 CRON_SYSTEM_PYTHON = "/usr/bin/python3"
+CRON_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
 def cron_command(root):
@@ -439,6 +444,158 @@ def cmd_preflight(root, runner_path, candidate=None, cron_path=None):
         return 1
     print("Jobman launch surface ready for cron account %s" % user)
     return 0
+
+
+def installed_cron(root="/opt/api", cron_path=None):
+    """Return the exact managed cron account; absent is legacy, unsafe raises.
+
+    This is also the supervision authority used by fleet process reporting.
+    A custom command or schedule cannot prove replacement by our cron tick.
+    """
+    path = cron_path or os.path.join(app_user.DEFAULT_CRON_DIR, app_user.CRON_NAME)
+    parent = descriptor = None
+    try:
+        try:
+            parent = os.open(os.path.dirname(path), os.O_RDONLY | os.O_DIRECTORY
+                             | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            return None
+        details = os.fstat(parent)
+        if details.st_uid != 0 or details.st_mode & 0o022:
+            raise ValueError("jobs cron directory is not root-controlled")
+        try:
+            descriptor = os.open(os.path.basename(path), os.O_RDONLY
+                                 | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        except FileNotFoundError:
+            return None
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != 0
+                or before.st_mode & 0o022 or before.st_nlink != 1
+                or before.st_size > 16384):
+            raise ValueError("jobs cron is not a sealed regular file")
+        body = os.read(descriptor, 16385)
+        after = os.fstat(descriptor)
+        if (len(body) != before.st_size
+                or before.st_mtime_ns != after.st_mtime_ns
+                or before.st_ctime_ns != after.st_ctime_ns):
+            raise ValueError("jobs cron changed while reading")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if parent is not None:
+            os.close(parent)
+    if not body.endswith(b"\n") or b"\r" in body or b"\0" in body:
+        raise ValueError("jobs cron must use complete Unix text lines")
+    entries = []
+    environment = set()
+    for line in body.decode("utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith(("SHELL=", "PATH=")):
+            key, value = line.split("=", 1)
+            if key in environment:
+                raise ValueError("jobs cron has duplicate environment declarations")
+            environment.add(key)
+            if ((key == "SHELL" and value not in ("/bin/bash", "/bin/sh"))
+                    or (key == "PATH" and value != CRON_PATH)):
+                raise ValueError("jobs cron has an unsupported execution environment")
+            continue
+        entries.append(line.split(None, 6))
+    if (len(entries) != 1 or len(entries[0]) != 7
+            or entries[0][:5] != ["*"] * 5
+            or entries[0][6] != cron_command(root)):
+        raise ValueError("jobs cron does not declare the managed launch command")
+    user = _cron_user(root, candidate=entries[0][5], cron_path=path)
+    if not user:
+        raise ValueError("jobs cron account cannot be proved")
+    return user
+
+
+def _verify_restart_pid(pid, root, runner_path, comp):
+    """An exited target is harmless; an unreadable or changed target is not."""
+    if not pid.isdigit() or int(pid) <= 1:
+        raise ValueError("invalid jobs process identifier")
+    if _root_process_matches(pid, root, runner_path, comp):
+        return True
+    try:
+        os.stat("/proc/%s" % pid)
+    except FileNotFoundError:
+        return False
+    raise ValueError("jobs process command cannot be verified")
+
+
+def exact_processes(root, comp, *, run_cmd=None):
+    """Strict foreground inventory: return verified PID strings or raise.
+
+    Unlike the interactive status probe, unavailable process evidence must not
+    look like an empty fleet. Multiple exact matches are returned for retirement;
+    the fleet health reporter decides whether that inventory is healthy.
+    """
+    if comp not in COMPONENTS:
+        raise ValueError("unknown jobs component")
+    run_cmd = run_cmd or subprocess.run
+    runner_path = resolve_runner(root)
+    done = run_cmd(["/usr/bin/pgrep", "-f", "--",
+                    pattern_for(root, runner_path, comp)],
+                   capture_output=True, text=True, timeout=5, check=False)
+    if done.returncode not in (0, 1) or (done.returncode == 1 and done.stdout.strip()):
+        raise ValueError("jobs process scan failed")
+    candidates = done.stdout.split()
+    if (done.returncode == 0 and not candidates) or len(candidates) > 256:
+        raise ValueError("jobs process scan is empty or oversized")
+    return [pid for pid in sorted(set(candidates))
+            if _verify_restart_pid(pid, root, runner_path, comp)]
+
+
+def request_restart(root="/opt/api", *, cron_path=None, run_cmd=None):
+    """Request graceful engine/scheduler retirement; cron alone replaces them.
+
+    There is no wait, escalation, pidfile deletion, or direct runner spawn here.
+    Missing cron preserves legacy config-sync behavior, but does not constitute
+    supervision proof (installed_cron returns None to the fleet reporter).
+    """
+    run_cmd = run_cmd or subprocess.run
+    try:
+        user = installed_cron(root, cron_path)
+        if user is None:
+            log.info("no managed jobs cron installed; skipping jobs restart")
+            return True
+        if os.geteuid() != 0:
+            raise ValueError("automatic jobs restart requires root")
+        active = any(run_cmd([
+            "/usr/bin/systemctl", "is-active", "--quiet", service],
+            capture_output=True, timeout=5, check=False).returncode == 0
+            for service in ("cron.service", "crond.service"))
+        if not active:
+            raise ValueError("jobs cron service is not active")
+        if cmd_repair(root, candidate=user, cron_path=cron_path):
+            raise ValueError("jobs launch ownership repair failed")
+        argv = [sudo_path(), "-n", "-H", "-u", user, "--",
+                CRON_SYSTEM_PYTHON, "-E", "-P", "-m", "mojo.deploy.jobman",
+                "preflight", "--root", root, "--app-user", user]
+        if cron_path:
+            argv += ["--cron-path", cron_path]
+        if run_cmd(argv, capture_output=True, timeout=15,
+                   check=False).returncode != 0:
+            raise ValueError("jobs cron account launch preflight failed")
+        # Validate BOTH planes before retiring either one. Never take signal
+        # targets from writable pidfiles, or silently ignore failed inventory.
+        inventory = {comp: exact_processes(root, comp, run_cmd=run_cmd)
+                     for comp in COMPONENTS}
+        for comp, pids in inventory.items():
+            for pid in pids:
+                if not _verify_restart_pid(pid, root, resolve_runner(root), comp):
+                    continue
+                try:
+                    os.kill(int(pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+        log.info("jobs retirement requested; cron will launch replacements")
+        return True
+    except (OSError, ValueError, subprocess.TimeoutExpired) as err:
+        log.error("jobs restart refused: %s", err)
+        return False
 
 
 # ---------------------------------------------------------------------------

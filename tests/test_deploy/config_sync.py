@@ -544,11 +544,11 @@ def test_default_restart_obeys_sealed_request_service_authority(opts):
 
     th.assert_true(ok,
                    "disabled request service must make config activation a "
-                   "successful no-restart rather than resurrecting ASGI")
+                   "successful jobs activation without resurrecting ASGI")
     th.assert_eq(fake_run.call_count, 0,
                  "config-sync must not restart framework ASGI on a non-request node")
-    th.assert_eq(fake_sleep.call_count, 0,
-                 "a skipped framework restart must not consume its jitter delay")
+    th.assert_eq(fake_sleep.call_count, 1,
+                 "worker configuration activation retains hostname jitter")
 
 
 @th.django_unit_test()

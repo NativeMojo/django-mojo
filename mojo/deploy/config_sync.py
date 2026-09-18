@@ -31,7 +31,7 @@ node django.conf is the thing we are fetching and does not exist yet.
     AWS_CONFIG_PREFIX        required  — e.g. "config/wmx/prod"
     AWS_CONFIG_FILENAME      optional  — object name under the prefix
     AWS_KEY / AWS_SECRET     OPTIONAL  — omit to use the instance role
-    CONFIG_SYNC_RESTART      optional  — restart the app when config changes
+    CONFIG_SYNC_RESTART      optional  — restart services/jobs when config changes
     CONFIG_SYNC_OWNER        optional  — user:group for the installed file
     CONFIG_SYNC_SERVICE      optional  — systemd unit to restart
                                          (default: mojo-asgi.service)
@@ -53,6 +53,9 @@ the separately sealed /etc/mojo/request-service.conf authority. A false or
 unprovable authority cannot be overridden by bootstrap.conf. A missing
 authority preserves managed and pre-feature request-serving behavior. Custom
 CONFIG_SYNC_SERVICE units are application-owned and remain independent.
+Managed foreground engine and scheduler processes retire gracefully on config
+activation, including worker-only nodes. Their existing cron starts replacements;
+this path never escalates to SIGKILL or waits for active jobs to finish.
 
 The path to bootstrap.conf is NOT itself configurable through bootstrap.conf —
 it cannot be. Use --config when it lives somewhere else.
@@ -264,12 +267,13 @@ def install(temp_path, dest_path, owner_spec, *, os_ops=None):
 
 
 def restart_app(config, dry_run, *, run_cmd=None, sleep=None,
-                request_service_loader=None):
+                request_service_loader=None, jobs_restart=None):
     """Restart the app so it picks up the new config.
 
-    run_cmd, sleep, and request_service_loader are test seams (the systemctl
-    runner, jitter delay, and sealed role reader); None means the production
-    implementation.
+    run_cmd, sleep, request_service_loader, and jobs_restart are test seams
+    (the systemctl runner, jitter delay, sealed role reader, and graceful jobs
+    retirement); None means the production implementation. Jobs replacement
+    remains cron-owned and retirement never waits on the invoking Apply job.
 
     JITTERED BY HOSTNAME. Every node polls the same bucket on the same timer, so
     an un-jittered restart takes the whole fleet out simultaneously the moment a
@@ -282,7 +286,11 @@ def restart_app(config, dry_run, *, run_cmd=None, sleep=None,
         run_cmd = subprocess.run
     if sleep is None:
         sleep = time.sleep
+    if jobs_restart is None:
+        from mojo.deploy.jobman import request_restart
+        jobs_restart = request_restart
     service = config.get("CONFIG_SYNC_SERVICE") or DEFAULT_SERVICE
+    selected = True
     if service == DEFAULT_SERVICE:
         if request_service_loader is None:
             request_service_loader = request_service.read
@@ -295,7 +303,6 @@ def restart_app(config, dry_run, *, run_cmd=None, sleep=None,
         if not selected:
             log.info("config changed — framework request service is disabled; "
                      "skipping %s restart", service)
-            return True
     host = socket.gethostname().encode("utf-8", "replace")
     delay = int(hashlib.sha256(host).hexdigest()[:4], 16) % 60
 
@@ -306,6 +313,10 @@ def restart_app(config, dry_run, *, run_cmd=None, sleep=None,
     log.info("config changed — restarting %s in %ds (hostname jitter)",
              service, delay)
     sleep(delay)
+    if not jobs_restart():
+        return False
+    if not selected:
+        return True
     done = run_cmd(
         ["systemctl", "--no-block", "restart", service],
         capture_output=True, check=False)
@@ -378,13 +389,38 @@ def _finish_fleet_install(receipt, digest, target, config, restart):
     requested = (unchanged and receipt.get("restart_requested_at", 0)
                  >= receipt.get("installed_at", float("inf")))
     try:
-        receipt["request_service_supported"] = (
-            (config.get("CONFIG_SYNC_SERVICE") or DEFAULT_SERVICE) == DEFAULT_SERVICE
-            and bool(request_service.read()))
+        standard = (config.get("CONFIG_SYNC_SERVICE") or DEFAULT_SERVICE) == DEFAULT_SERVICE
+        receipt["request_service_required"] = bool(request_service.read()) if standard else None
+        receipt["request_service_supported"] = receipt["request_service_required"] is True
     except (request_service.RequestServiceError, OSError):
+        receipt["request_service_required"] = None
         receipt["request_service_supported"] = False
     receipt.update(installed_revision=receipt["target_revision"],
                    installed_digest=digest, error_code=None)
+    # Role omission is an authority decision, not app-writable progress data.
+    # Only the standard installation participates in fixed fleet proof.
+    if target == node.TARGET:
+        from mojo.deploy import fleet_config_role
+        authority = None
+        if not standard:
+            valid = fleet_config_role.clear()
+        elif receipt["request_service_required"] is None:
+            fleet_config_role.clear()
+            valid = False
+        else:
+            valid = fleet_config_role.write(receipt["target_revision"], digest,
+                                             receipt["request_service_required"])
+            if valid:
+                authority = fleet_config_role.read(receipt["target_revision"], digest)
+                valid = authority is not None
+        if not valid:
+            receipt.update(status="failed", error_code="role_evidence_failed")
+            node.write_receipt(target, receipt)
+            return 1
+        if authority:
+            receipt["installed_at"] = authority["installed_at"]
+            requested = (unchanged and receipt.get("restart_requested_at", 0)
+                         >= authority["installed_at"])
     if requested:
         receipt["status"] = "restart_requested"
         node.write_receipt(target, receipt)

@@ -92,35 +92,50 @@ The response includes `operation_id`, `revision`, `status: "queued"`,
 `healthy_everywhere: false`, and `nodes`. A repeated request joins an existing
 active operation for the same revision and membership; its response may already
 contain progress. A different active operation or stale apply revision returns
-409. Poll the operation route for signed, revision-bound historical evidence.
-The worker observes for up to 120 seconds; timers continue after a timeout.
+409. Poll the operation route for fresh, revision-bound evidence after signed
+dispatch. The dispatch job returns before its own engine drains. A completed
+`job_status` does not mean activation finished: keep polling while operation
+`status` is pending. Observation reports a timeout after 120 seconds from
+dispatch; timers and graceful job draining continue independently.
 
 Current state `fleet` and operation evidence expose `nodes`. Each node has
 `hostname`, `revision`, `published`, `installed`, `restart_requested`,
 `restarted`, `healthy`, `status`, and `error_code`. Node statuses include
-`unknown`, `pending`, `downloaded`, `restart_requested`, `restarted`, `healthy`,
+`unknown`, `pending`, `draining`, `downloaded`, `restart_requested`, `restarted`, `healthy`,
 and `failed`. Display failure codes rather than interpreting an absent reply
 as success. Offline expected nodes remain in the denominator.
 
 Only `healthy_everywhere: true` means every expected node passed the checks.
-Health requires matching installed bytes, a service restart after installation,
-and a fresh serving-process response confirming the desired revision and
-reachable database/Redis. A service-start request alone proves none of these.
-Worker-only nodes report `request_service_unsupported`.
+Health requires matching installed bytes, fresh loaded-revision proof from
+exactly one supervised engine and scheduler, and reachable database/Redis.
+Request-serving nodes additionally require a service restart after installation
+and a fresh serving-process response for that revision. Worker-only nodes can
+pass without an API service when their sealed role disables it. Missing,
+duplicate, stale or draining jobs components never count as healthy. The
+`health_scope` is `request_service_jobs_and_dependencies`.
 
 Operation results can be `queued`, `pending`, `healthy`, `superseded`,
 `timed_out`, `failed`, `canceled`, `expired`, or `unknown`; operation reads also
 include `job_status`. A new publication supersedes observation of the old one.
-Cancellation stops observation but cannot undo an already requested service
-start. Refresh fleet state for current evidence after an operation completes;
-a historical successful result is not an ongoing health guarantee.
+Cancellation before dispatch can prevent queued work. After dispatch the
+completed job cannot be canceled, and stopping browser polling does not undo
+activation. Operation reads after dispatch recheck current convergence; refresh
+fleet state after a timeout for later evidence. Long-running jobs finish before
+their engine exits; this workflow never force-kills them. A healthy observation
+is not an ongoing health guarantee.
 
 The serving-proof route is a signed machine probe, not a browser polling API.
 See [registration, storage and node prerequisites](../../../django_developer/account/admin_portal/fleet_configuration.md)
 for application integration, fixed-operation permissions and deployment setup.
 
-Saved Apply reports include `observed_at`, the evidence observation timestamp
-rather than the time of the browser poll. Queued responses may omit it.
+Fresh observations include `observed_at`. Queued responses may omit it;
+persisted signed dispatch reports include `dispatched_at` separately.
+Job completion is dispatch completion only, never a substitute for node health.
 
 If no coordinator claims Apply within five minutes, its operation read reports
 `expired` with `apply_runner_unavailable`; the browser does not wait indefinitely.
+
+A correlated checked runner rejecting new work during drain reports
+`engine_draining`. A completed dispatch job without valid signed evidence
+reports a terminal `failed` result instead of leaving the browser polling
+forever. Legacy request-service-only health cannot certify jobs activation.

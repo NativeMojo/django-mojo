@@ -24,7 +24,8 @@ TRIGGER_COMMAND = ["sudo", "-n", "/usr/bin/systemctl", "--no-block", "start",
                    "config-sync.service"]
 RECEIPT_FIELDS = {"target_revision", "installed_revision", "installed_digest",
                   "status", "error_code", "updated_at", "installed_at",
-                  "restart_requested_at", "request_service_supported"}
+                  "restart_requested_at", "request_service_supported",
+                  "request_service_required"}
 
 
 def _revision(data):
@@ -63,11 +64,12 @@ def read_receipt(target=TARGET):
             return {}
         if value.get("status") not in {"downloaded", "restart_requested", "failed", "healthy"}:
             return {}
-        if value.get("request_service_supported") not in (None, True, False):
-            return {}
+        for key in ("request_service_supported", "request_service_required"):
+            if value.get(key) is not None and type(value[key]) is not bool:
+                return {}
         if value.get("error_code") not in {None, "sync_failed", "restart_failed",
                 "integrity_failed", "download_failed", "override_invalid",
-                "document_too_large", "empty_config"}:
+                "document_too_large", "empty_config", "role_evidence_failed"}:
             return {}
         for key in ("updated_at", "installed_at", "restart_requested_at"):
             if key in value and (type(value[key]) not in (int, float)
@@ -110,20 +112,20 @@ def write_receipt(target, receipt):
 
 
 def _supported():
-    # The sealed authority is root-only. Root config-sync publishes its result;
-    # before the first receipt, a masked/absent API unit is unsupported.
-    receipt = read_receipt()
-    if receipt.get("request_service_supported") is False:
-        return False
+    # Apply works on worker-only nodes too. Jobman cron owns replacement;
+    # accepting a trigger is not evidence that any replacement has started.
+    from mojo.deploy import jobman
     try:
+        if not jobman.installed_cron("/opt/api"):
+            return False
         result = subprocess.run([
-            "/usr/bin/systemctl", "show", "mojo-asgi.service",
+            "/usr/bin/systemctl", "show", "config-sync.service",
             "--property=LoadState,UnitFileState"], capture_output=True,
             text=True, timeout=3, check=False)
         fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
         return (result.returncode == 0 and fields.get("LoadState") == "loaded"
                 and fields.get("UnitFileState") != "masked")
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return False
 
 
@@ -151,7 +153,7 @@ def trigger(data):
         return {"revision": revision, "status": "failed", "error_code": "apply_authorization_invalid"}
     if not _supported():
         return {"revision": revision, "status": "unsupported",
-                "error_code": "request_service_unsupported"}
+                "error_code": "jobs_supervision_unsupported"}
     try:
         result = subprocess.run(TRIGGER_COMMAND, capture_output=True,
                                 check=False, timeout=10)
@@ -286,14 +288,57 @@ def _service_state():
         return {}
 
 
+def _jobs_proof(revision, installed_at):
+    """Require both current supervised processes, not merely one Redis runner."""
+    from mojo.apps.jobs import fleet_state
+    from mojo.apps.jobs.execution_context import current_runner_incarnation
+    from mojo.deploy import jobman
+    from mojo.helpers.settings import settings
+
+    result = {"restarted": False, "healthy": False, "error_code": None}
+    incarnation = current_runner_incarnation()
+    if (not incarnation or settings.get_static("MOJO_FLEET_CONFIG_REVISION", None) != revision):
+        return dict(result, error_code="engine_revision_pending")
+    try:
+        for component in ("engine", "scheduler"):
+            pids = jobman.exact_processes("/opt/api", component)
+            if len(pids) != 1:
+                return dict(result, error_code=component + ("_missing" if not pids else "_ambiguous"))
+            pid = int(pids[0])
+            if component == "engine" and pid != os.getpid():
+                return dict(result, error_code="engine_identity_mismatch")
+            proof = fleet_state.read(component, pid)
+            if not proof:
+                return dict(result, error_code=component + "_proof_unavailable")
+            if proof.get("draining"):
+                return dict(result, error_code=component + "_draining")
+            if (proof.get("loaded_revision") != revision or not installed_at
+                    or proof.get("started_at", 0) < installed_at):
+                return dict(result, error_code=component + "_revision_pending")
+            if proof.get("ready") is not True:
+                return dict(result, error_code=component + "_not_ready")
+        result["restarted"] = True
+        from mojo.apps.account.services import admin_platform
+        result["healthy"] = bool(admin_platform._database()["reachable"]
+                                 and admin_platform._redis()["reachable"])
+        if not result["healthy"]:
+            result["error_code"] = "jobs_dependency_health_failed"
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        result["error_code"] = "jobs_process_inventory_unavailable"
+    except Exception:
+        result["error_code"] = "jobs_proof_unavailable"
+    return result
+
+
 def report(data):
-    """Report installation separately from a freshly proven serving revision."""
+    """Prove every local configuration consumer before declaring convergence."""
     revision = _revision(data)
     result = {"revision": revision, "node": socket.gethostname().lower(),
               "installed": False, "restart_requested": False, "restarted": False,
-              "healthy": False, "status": "pending", "error_code": None}
+              "healthy": False, "jobs_verified": False,
+              "status": "pending", "error_code": None}
     if not _supported():
-        result.update(status="unsupported", error_code="request_service_unsupported")
+        result.update(status="unsupported", error_code="jobs_supervision_unsupported")
         return result
     receipt = read_receipt()
     result["installed_revision"] = receipt.get("installed_revision")
@@ -306,28 +351,40 @@ def report(data):
     result["installed"] = installed
     if receipt.get("target_revision") in (None, revision) and receipt.get("status") == "failed":
         result.update(status="failed", error_code=receipt.get("error_code") or "sync_failed")
-    if not installed:
+    if not installed or result["status"] == "failed":
         return result
     result["restart_requested"] = receipt.get("status") in {"restart_requested", "healthy"}
     if result["status"] != "failed":
         result["status"] = "restart_requested" if result["restart_requested"] else "downloaded"
-    state = _service_state()
-    if not state:
-        result["error_code"] = "service_state_unavailable"
+    # Only an explicit root-recorded disabled role can omit the API proof.
+    from mojo.deploy import fleet_config_role
+    authority = fleet_config_role.read(revision, digest)
+    if authority is None:
+        result["error_code"] = "request_service_role_unknown"
         return result
-    if not state.get("active") or not state.get("pid"):
-        result["error_code"] = "service_not_active"
-        return result
-    if (not receipt.get("installed_at")
-            or state.get("started_at", 0) < receipt["installed_at"]):
-        result["error_code"] = "service_restart_pending"
-        return result
-    proof = _serving_proof(revision)
-    if not proof or proof.get("error_code"):
-        result["error_code"] = proof.get("error_code") if proof else "proof_unavailable"
-        return result
-    result["restarted"] = True
-    result["healthy"] = proof.get("healthy") is True
-    result["status"] = "healthy" if result["healthy"] else "restarted"
-    result["error_code"] = None if result["healthy"] else "dependency_health_failed"
+    installed_at = authority["installed_at"]
+    if authority["request_service_required"]:
+        state = _service_state()
+        if not state:
+            result["error_code"] = "service_state_unavailable"
+            return result
+        if not state.get("active") or not state.get("pid"):
+            result["error_code"] = "service_not_active"
+            return result
+        if state.get("started_at", 0) < installed_at:
+            result["error_code"] = "service_restart_pending"
+            return result
+        proof = _serving_proof(revision)
+        if not proof or proof.get("error_code"):
+            result["error_code"] = proof.get("error_code") if proof else "proof_unavailable"
+            return result
+        if proof.get("healthy") is not True:
+            result["error_code"] = "dependency_health_failed"
+            return result
+    jobs = _jobs_proof(revision, installed_at)
+    result["restarted"] = jobs.get("restarted") is True
+    result["healthy"] = jobs.get("healthy") is True and result["restarted"]
+    result["jobs_verified"] = result["healthy"]
+    result["error_code"] = jobs.get("error_code")
+    result["status"] = "healthy" if result["healthy"] else ("restarted" if result["restarted"] else result["status"])
     return result

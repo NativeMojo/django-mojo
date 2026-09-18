@@ -141,6 +141,12 @@ class JobEngine:
         self.running = False
         self.is_initialized = False
         self.stop_event = threading.Event()
+        self.shutdown_requested = threading.Event()
+        self._control_stop = threading.Event()
+        self._stop_lock = Lock()
+        self._claim_lock = Lock()
+        self._fleet_state = None
+        self._fleet_ready = False
 
         # Heartbeat thread
         self.heartbeat_thread = None
@@ -189,6 +195,8 @@ class JobEngine:
         self.running = True
         self.start_time = dates.utcnow()
         self.stop_event.clear()
+        self.shutdown_requested.clear()
+        self._control_stop.clear()
 
         # A runner must be discoverable before initialization succeeds and
         # before startup hooks or job consumption can begin.
@@ -220,11 +228,17 @@ class JobEngine:
             return
 
         self.initialize()
-        self.capability_cache.start()
-        self._run_startup_hooks()
+        from . import fleet_state
+        self._fleet_state = fleet_state.begin("engine")
 
         # Main processing loop
         try:
+            self.capability_cache.start()
+            self._run_startup_hooks()
+            # Hooks intentionally run asynchronously. Ready means this
+            # process completed startup and can now enter queue consumption.
+            self._fleet_ready = True
+            fleet_state.publish(self._fleet_state)
             self._main_loop()
         except KeyboardInterrupt:
             logger.info("JobEngine interrupted by user")
@@ -266,33 +280,51 @@ class JobEngine:
         except Exception as e:
             logger.error(f"startup hook {func_path} failed: {e}")
 
-    def stop(self, timeout: float = 30.0):
-        """
-        Stop the job engine gracefully.
+    def request_shutdown(self):
+        """Stop accepting work; the main loop owns draining and teardown."""
+        self.shutdown_requested.set()
 
-        Args:
-            timeout: Maximum time to wait for clean shutdown
+    def stop(self, timeout=30.0):
+        """Drain claimed work, then stop. ``timeout`` remains API-compatible.
+
+        Active jobs and startup hooks are never abandoned on timeout. Their
+        heartbeat and visibility leases remain live until all work finishes.
+        Signals and control callbacks must use request_shutdown instead.
         """
+        self.request_shutdown()
+        with self._stop_lock:
+            self._finish_stop()
+
+    def _finish_stop(self):
         if self.running:
-            logger.info(f"Stopping JobEngine {self.runner_id}...")
+            logger.info(f"Draining JobEngine {self.runner_id}...")
+            from . import fleet_state
+            if self._fleet_ready:
+                fleet_state.publish(self._fleet_state, draining=True)
+            # A public stop() caller can race the main loop between BRPOP
+            # and executor submission. Let that already-admitted claim finish
+            # registration before closing the executor to submissions.
+            with self._claim_lock:
+                pass
+            self.executor.shutdown(wait=True)
+            # A checked/broadcast callback already executing on the control
+            # thread owns work too. Finish it before retiring this process.
+            self._control_stop.set()
+            if (self.control_thread and self.control_thread.is_alive()
+                    and self.control_thread is not threading.current_thread()):
+                self.control_thread.join()
             self.running = False
             self.stop_event.set()
-            # Wait for active jobs
-            with self.active_lock:
-                active = list(self.active_jobs.values())
-            if active:
-                logger.info(f"Waiting for {len(active)} active jobs...")
-                futures = [j['future'] for j in active]
-                concurrent.futures.wait(futures, timeout=timeout/2)
-            # Shutdown executor
-            self.executor.shutdown(wait=True)
+            self._fleet_ready = False
 
         # Stop heartbeat
-        if self.heartbeat_thread and self.heartbeat_thread.is_alive():
+        if (self.heartbeat_thread and self.heartbeat_thread.is_alive()
+                and self.heartbeat_thread is not threading.current_thread()):
             self.heartbeat_thread.join(timeout=5.0)
 
         # Stop control listener
-        if self.control_thread and self.control_thread.is_alive():
+        if (self.control_thread and self.control_thread.is_alive()
+                and self.control_thread is not threading.current_thread()):
             self.control_thread.join(timeout=5.0)
 
         # Clean up Redis keys
@@ -306,6 +338,9 @@ class JobEngine:
             self.redis.delete(self.keys.runner_hb(self.runner_id))
         except Exception as e:
             logger.warning(f"Failed to clean up runner keys: {e}")
+
+        from . import fleet_state
+        fleet_state.remove(self._fleet_state)
 
         logger.info(f"JobEngine {self.runner_id} stopped. "
                   f"Processed: {self.jobs_processed}, Failed: {self.jobs_failed}")
@@ -375,8 +410,7 @@ class JobEngine:
         """Register signal handlers for graceful shutdown."""
         def handle_signal(signum, frame):
             logger.info(f"Received signal {signum}, initiating graceful shutdown")
-            self.stop()
-            sys.exit(0)
+            self.request_shutdown()
 
         signal.signal(signal.SIGTERM, handle_signal)
         signal.signal(signal.SIGINT, handle_signal)
@@ -417,6 +451,11 @@ class JobEngine:
                 except Exception as te:
                     logger.debug(f"Heartbeat touch failed: {te}")
 
+                from . import fleet_state
+                if self._fleet_ready:
+                    fleet_state.publish(self._fleet_state,
+                                        draining=self.shutdown_requested.is_set())
+
             except Exception as e:
                 logger.warning(f"Heartbeat update failed: {e}")
 
@@ -447,6 +486,7 @@ class JobEngine:
             'jobs_failed': self.jobs_failed,
             'started': self.start_time.isoformat(),
             'last_heartbeat': dates.utcnow().isoformat(),
+            'draining': self.shutdown_requested.is_set(),
             'capabilities': {'execute_checked': CHECKED_EXECUTE_PROTOCOL,
                              **self.capability_cache.snapshot()},
         }), ex=self.heartbeat_interval * 3)  # TTL = 3x interval
@@ -485,7 +525,8 @@ class JobEngine:
         pubsub.subscribe(control_key, broadcast_key)
 
         try:
-            while self.running and not self.stop_event.is_set():
+            while (self.running and not self.stop_event.is_set()
+                   and not self._control_stop.is_set()):
                 # Short timeout so stop_event is observed promptly (maestro
                 # #2789): at 5.0 every stop() waited a uniform 0-5s for this
                 # thread to fall out of get_message.
@@ -508,6 +549,8 @@ class JobEngine:
                 func_path = message.get('func')
                 if func_path:
                     try:
+                        if self.shutdown_requested.is_set():
+                            raise RuntimeError("runner_draining")
                         logger.info(f"Executing broadcast function {func_path}")
                         func = load_job_function(func_path)
                         # Execute with immutable provenance context. A broadcast
@@ -596,7 +639,7 @@ class JobEngine:
 
             elif command == 'shutdown':
                 logger.info("Received shutdown command from control channel/broadcast")
-                self.stop()
+                self.request_shutdown()
 
             else:
                 logger.warning(f"Unknown control command: {command}")
@@ -658,25 +701,28 @@ class JobEngine:
             "started": runner_started,
             "func": func_path,
         }
-        try:
-            func = load_job_function(func_path)
-        except (ImportError, AttributeError, ValueError):
-            reply.update(status="error", error="function_unavailable")
+        if self.shutdown_requested.is_set():
+            reply.update(status="error", error="runner_draining")
         else:
             try:
-                with execution(
-                        correlation_id, func_path, 1,
-                        message["channel"], self.runner_id, broadcast=True,
-                        runner_started=runner_started):
-                    result = func(message.get("data", {}))
-                if not isinstance(result, dict):
-                    raise TypeError("checked result must be an object")
-                reply.update(status="success", result=result)
-            except TypeError:
-                reply.update(status="error", error="result_unserializable")
-            except Exception:
-                logger.exception("Checked execution failed for %s", func_path)
-                reply.update(status="error", error="execution_failed")
+                func = load_job_function(func_path)
+            except (ImportError, AttributeError, ValueError):
+                reply.update(status="error", error="function_unavailable")
+            else:
+                try:
+                    with execution(
+                            correlation_id, func_path, 1,
+                            message["channel"], self.runner_id, broadcast=True,
+                            runner_started=runner_started):
+                        result = func(message.get("data", {}))
+                    if not isinstance(result, dict):
+                        raise TypeError("checked result must be an object")
+                    reply.update(status="success", result=result)
+                except TypeError:
+                    reply.update(status="error", error="result_unserializable")
+                except Exception:
+                    logger.exception("Checked execution failed for %s", func_path)
+                    reply.update(status="error", error="execution_failed")
         try:
             encoded = json.dumps(
                 reply, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -698,7 +744,8 @@ class JobEngine:
         """Main processing loop - claims jobs from List queues based on capacity."""
         logger.info(f"JobEngine {self.runner_id} entering main loop (Plan B)")
 
-        while self.running and not self.stop_event.is_set():
+        while (self.running and not self.stop_event.is_set()
+               and not self.shutdown_requested.is_set()):
             try:
                 # Check available capacity
                 with self.active_lock:
@@ -720,31 +767,36 @@ class JobEngine:
                     continue
 
                 queue_key, job_id = popped
-                # Determine channel from key
-                channel = queue_key.split(':')[-1]
+                with self._claim_lock:
+                    if self.shutdown_requested.is_set():
+                        # BRPOP may have been waiting when TERM arrived. This
+                        # item was never claimed; restore its original queue
+                        # end before exiting, retrying transient Redis errors.
+                        while True:
+                            try:
+                                self.redis.rpush(queue_key, job_id)
+                                break
+                            except Exception:
+                                logger.warning("Waiting to restore unclaimed job during drain")
+                                time.sleep(0.5)
+                        break
+                    channel = queue_key.split(':')[-1]
 
-                # Track in-flight (visibility)
-                try:
-                    if JOBS_DEBUG:
-                        logger.info(f"Claiming job {job_id} from channel {channel}")
-                    self.redis.zadd(self.keys.processing(channel), {job_id: int(time.time() * 1000)})
-                except Exception as e:
-                    logger.warning(f"Failed to add job {job_id} to processing ZSET: {e}")
+                    try:
+                        if JOBS_DEBUG:
+                            logger.info(f"Claiming job {job_id} from channel {channel}")
+                        self.redis.zadd(self.keys.processing(channel), {job_id: int(time.time() * 1000)})
+                    except Exception as e:
+                        logger.warning(f"Failed to add job {job_id} to processing ZSET: {e}")
 
-                # Submit to thread pool
-                future = self.executor.submit(
-                    self.execute_job,
-                    channel, job_id
-                )
-
-                with self.active_lock:
-                    self.active_jobs[job_id] = {
-                        'future': future,
-                        'started': dates.utcnow(),
-                        'channel': channel
-                    }
-
-                future.add_done_callback(lambda f, jid=job_id: self._job_completed(jid))
+                    future = self.executor.submit(self.execute_job, channel, job_id)
+                    with self.active_lock:
+                        self.active_jobs[job_id] = {
+                            'future': future,
+                            'started': dates.utcnow(),
+                            'channel': channel
+                        }
+                    future.add_done_callback(lambda f, jid=job_id: self._job_completed(jid))
 
             except Exception as e:
                 logger.error(f"Error in main loop: {e}")

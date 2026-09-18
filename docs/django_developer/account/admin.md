@@ -17,16 +17,16 @@ Compiled assets use a relative base; Portal API requests always use same-origin
 ## Pinned identity and offline replacement
 
 The current artifact is portal-mojo **0.2.4**, source revision
-`432afa37fc24a69b9f3758fbd483f85f22738025`, built clean with Node
+`75121e16691bae71cdead021acf434328ba9f31e`, built clean with Node
 **24.21.0** / npm **11.19.0** and lockfile SHA-256
 `6323902f528efcccd2a8fb636ae67d928e21ad8b812b166175cd13335c40ca01`.
 Its 118-file inventory includes the Vite manifest and lazy chunks.
 The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 
-`9339b74dcafa0af6b5f4be24c3477903a787b42c739a419a96e6721b68308894`
+`d0ec59a77eafe4ae4b986c233bb24484295ae1c77e1e9345612b90a7f8d2ac69`
 
 This pin comes from the clean local canonical build for item #4769, source
-revision `432afa37fc24a69b9f3758fbd483f85f22738025`. It adds Fleet Configuration.
+revision `75121e16691bae71cdead021acf434328ba9f31e`. It includes Fleet Configuration and independent activation polling after job dispatch.
 The complete artifact includes hidden `.vite` content; verify the manifest
 digest before vendoring it. This build has not been released to npm or deployed.
 
@@ -35,7 +35,7 @@ Stop processes serving/importing the checkout before replacing the artifact:
 ```bash
 uv run python scripts/vendor_admin_portal.py \
   --source /absolute/path/to/verified/dist/admin \
-  --expected-manifest-sha256 9339b74dcafa0af6b5f4be24c3477903a787b42c739a419a96e6721b68308894
+  --expected-manifest-sha256 d0ec59a77eafe4ae4b986c233bb24484295ae1c77e1e9345612b90a7f8d2ac69
 uv run python scripts/vendor_admin_portal.py --check
 ```
 

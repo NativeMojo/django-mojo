@@ -448,8 +448,9 @@ retains `0644`; ordinary mutable files retain the usual node-setup policy.
 Config-sync writes a non-secret atomic receipt beside its target:
 `/opt/api/var/django.conf.fleet-config.json`. It records the target and installed
 revisions, installed digest, installation time, restart request, and a fixed
-failure code. `restart_requested` means systemd accepted the request; it does
-not prove the service restarted. An unsuccessful restart is retried on the next
+failure code and an informational copy of the request-service role. `restart_requested` means
+job retirement and any request-service restart were requested; it does not
+prove replacements started. An unsuccessful restart is retried on the next
 sync even when the installed bytes already match. Successful requests are not
 repeated merely because another timer fires. A first receipt for matching bytes
 requests one restart to establish fresh process evidence.
@@ -465,7 +466,8 @@ activation. Custom node-setup destination paths do
 not install a host sudo grant. Existing nodes need the updated node setup before
 **Apply now** works; their timers continue to operate independently.
 
-Fleet health is verified against the standard API unit and its Unix socket,
+For request-serving nodes, fleet health additionally checks the standard API
+unit and its Unix socket,
 `/opt/api/var/asgi.sock`. The jobs account must have access to that socket and
 its parent directories. The shipped unit creates it as the web account/group
 (default `www:www`) with `UMask=007`; account group enrollment is deployment-owned.
@@ -482,15 +484,45 @@ same route. HTTP rejection reports `proof_http_rejected`; no redirect or remote
 network destination is followed. The endpoint returns only revision/process/node
 metadata and dependency health, not configuration values.
 
-A node is healthy only when the current bounded, no-follow configuration digest
-matches the receipt, systemd proves the API service started after installation,
-and the serving-process response to a signed challenge confirms the loaded revision plus
-successful database and Redis checks. File drift reports `installed_config_drift`;
-dependency failures report `dependency_health_failed`. Probe/socket/restart errors
-remain observable and are checked again on subsequent polling. Worker-only,
-content-only, and disabled request-service nodes do not qualify as healthy API
-nodes; support for their distinct activation checks requires a separate contract.
-The supported configuration file size for this health proof is at most 4 MiB.
+A node is healthy only when its bounded, no-follow configuration digest matches
+the receipt and both supervised job processes prove the installed revision.
+Config activation preflights the root-controlled `/etc/cron.d/3_mojo_jobs`
+with its exact every-minute Jobman command, active cron service, and launch
+permissions as the declared jobs account. It sends only SIGTERM to verified
+foreground engine/scheduler processes. The existing cron starts replacements
+after old processes exit; this path never force-kills active jobs. Deploy this
+framework release and restart existing job processes through the normal release
+workflow before using configuration activation; already-running older engines
+do not acquire new drain behavior merely because the package changed on disk. Ordinary
+operator/deploy `jobman stop` retains its existing TERM/KILL policy.
+
+Each daemon publishes non-secret, per-PID proof under
+`/opt/api/var/job_processes/`: startup-loaded revision, kernel start ticks,
+readiness/draining and observation times. The jobs account must be able to
+write that directory. Reports require exactly one live foreground process per
+component, matching PID/start identity, proof no older than 15 seconds, and
+kernel process birth after installation (not just proof-file creation time).
+Engine proof refreshes on heartbeat (default five
+seconds); configure an interval below 15 seconds. Scheduler proof refreshes on
+its loop. Unreadable/stale proof, duplicate processes or missing supervisor
+remain unconfirmed. Custom supervisors, daemon-mode jobs and custom roots are
+not certified by this fixed standard-node workflow.
+
+Request-serving nodes additionally need systemd startup after installation
+and a serving-process response to a signed challenge with the target revision and database/Redis
+health. Worker-only nodes skip only those API checks, based on config-sync's
+explicit disabled role in root-controlled `/etc/mojo/fleet-config-role.json`,
+bound to the installed revision, digest and root-recorded installation time. The app-writable progress receipt
+cannot exempt a node from API checks; absent/unknown authority fails closed. Their jobs
+processes and database/Redis must still pass. Content-only nodes without jobs
+remain unsupported. The supported config file size is at most 4 MiB.
+
+Long-running work retains its visibility lease throughout drain. It may exceed
+the Apply observation timeout; that never authorizes forced termination. Once
+it finishes, cron replacement and later observations can establish convergence.
+`CONFIG_SYNC_RESTART=false` installs without requesting retirement. Successful
+restart requests are not repeated on every timer tick; a failed request is
+retried, and a new publication intentionally starts another activation.
 
 ### `check_setup`
 

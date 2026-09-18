@@ -21,7 +21,7 @@ def _job():
 
 def _reply(revision=REVISION, **flags):
     result = dict(revision=revision, node="node-a", installed=True,
-                  restarted=True, healthy=True, error_code=None)
+                  restarted=True, healthy=True, jobs_verified=True, error_code=None)
     result.update(flags)
     return {"status": "verified", "anomalies": [], "results": [
         {"host": "node-a", "status": "success", "result": result}]}
@@ -57,10 +57,12 @@ def test_apply_result_authority(opts):
     from mojo.apps.account.services import fleet_apply, provider_setup
 
     job, intent = _job()
-    healthy = dict(status="healthy", healthy_everywhere=True, nodes=[])
+    healthy = dict(status="healthy", healthy_everywhere=True, nodes=[], health_scope=fleet_apply.HEALTH_SCOPE)
     with mock.patch.object(provider_setup, "_superuser"), \
             mock.patch.object(Job.objects, "filter") as lookup:
         lookup.return_value.first.return_value = job
+        empty = fleet_apply.operation(object(), OPERATION)
+        assert empty["status"] == "failed", "Completed job without signed evidence must stop polling"
         job.metadata["fleet_config"] = healthy
         result = fleet_apply.operation(object(), OPERATION)
         assert result["healthy_everywhere"] is False, 'Fleet configuration contract failed: result["healthy_everywhere"] is False'
@@ -173,6 +175,9 @@ def test_apply_real_job_lifecycle(opts):
             executed = th.run_pending_jobs(func=fleet_apply.JOB_FUNCTION,
                                             payload={"intent": stored.payload["intent"]})
             assert executed == 1, "The real job runner must execute exactly the authorized operation"
+            with mock.patch.object(fleet_apply, "observe", side_effect=AssertionError("network observation under install lock")):
+                duplicate = fleet_apply.apply(actor, {"expected_revision": REVISION})
+                assert duplicate["operation_id"] == operation_id, "Completed dispatch must deduplicate without observing under locks"
             report = fleet_apply.operation(actor, operation_id)
             assert report["operation_id"] == operation_id, "Completion must retain the returned operation id"
             assert report["healthy_everywhere"] is True, "Correlated node proof must complete authorized Apply"
@@ -180,7 +185,7 @@ def test_apply_real_job_lifecycle(opts):
             assert stored.status == "completed", "The actual asynchronous Job must finish successfully"
             signed = signing.loads(stored.metadata["fleet_config"], salt="mojo.fleet.apply.result")
             assert signed["intent"] == intent, "The persisted result must bind the original signed authorization"
-            assert signed["report"]["healthy_everywhere"] is True, "Persisted signed evidence must prove completion"
+            assert signed["report"]["status"] == "dispatched", "Persisted signed evidence records dispatch, not its own replacement"
             calls = manager.broadcast_execute_checked.call_args_list
             assert any(call.args[0] == fleet_apply.TRIGGER_FUNCTION for call in calls), \
                 "The asynchronous worker must request the fixed configuration-sync operation"
@@ -192,3 +197,73 @@ def test_apply_real_job_lifecycle(opts):
             get_adapter().get_client().lrem(JobKeys().queue("default"), 0, operation_id)
             Job.objects.filter(pk=operation_id).delete()
         User.objects.filter(pk=actor.pk).delete()
+
+
+@th.django_unit_test("apply dispatch completes before its own engine must retire")
+def test_apply_does_not_wait_for_its_own_engine(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import fleet_apply, fleet_config
+    from mojo.apps.jobs import manager as jobs_manager
+
+    job, intent = _job()
+    job.cancel_requested = False
+    job.save = mock.Mock()
+    job.refresh_from_db = mock.Mock()
+    manager = mock.Mock()
+    manager.get_runners_bounded.return_value = [{"hostname": "node-a"}]
+    manager.broadcast_execute_checked.return_value = _reply()
+    with mock.patch.object(User.objects, "get", return_value=object()), \
+            mock.patch.object(fleet_config, "state", return_value={"revision": REVISION}), \
+            mock.patch.object(jobs_manager, "get_manager", return_value=manager), \
+            mock.patch.object(fleet_apply, "observe", return_value={"healthy_everywhere": True, "nodes": []}) as observe:
+        fleet_apply.run(job)
+    observe.assert_not_called()
+    saved = signing.loads(job.metadata["fleet_config"], salt="mojo.fleet.apply.result")
+    assert saved["report"]["status"] == "dispatched", "Coordinator must return after signed dispatch"
+    assert saved["report"]["healthy_everywhere"] is False, "Dispatch success is not activation evidence"
+
+
+@th.django_unit_test("completed dispatch jobs continue live observation without a waiting coordinator")
+def test_completed_dispatch_observation(opts):
+    import time
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.account.services import fleet_apply, fleet_config, provider_setup
+    job, intent = _job()
+    dispatch = {"status": "dispatched", "healthy_everywhere": False,
+                "dispatched_at": time.time(), "nodes": fleet_apply._nodes(REVISION, intent["nodes"], _reply())}
+    job.metadata["fleet_config"] = signing.dumps({"intent": intent, "report": dispatch}, salt="mojo.fleet.apply.result")
+    pending = {"status": "pending", "healthy_everywhere": False, "nodes": fleet_apply._nodes(REVISION, intent["nodes"])}
+    with mock.patch.object(provider_setup, "_superuser"), mock.patch.object(Job.objects, "filter") as lookup, \
+            mock.patch.object(fleet_config, "state", return_value={"revision": REVISION}) as state, \
+            mock.patch.object(fleet_apply, "observe", return_value=pending) as observe:
+        lookup.return_value.first.return_value = job
+        result = fleet_apply.operation(object(), OPERATION)
+        assert result["job_status"] == "completed" and result["status"] == "pending", "Completed dispatcher must leave pending activation visible"
+        assert observe.call_count == 1, "Operation read must freshly observe all expected nodes"
+        observe.return_value = {"status": "healthy", "healthy_everywhere": True, "nodes": []}
+        assert fleet_apply.operation(object(), OPERATION)["healthy_everywhere"], "Replacement proof must complete the original operation"
+        state.return_value = {"revision": "d" * 32}
+        assert fleet_apply.operation(object(), OPERATION)["status"] == "superseded", "Publication change must supersede stale activation"
+        state.return_value = {"revision": REVISION}
+        observe.return_value = pending
+        dispatch["dispatched_at"] = time.time() - 121
+        job.metadata["fleet_config"] = signing.dumps({"intent": intent, "report": dispatch}, salt="mojo.fleet.apply.result")
+        assert fleet_apply.operation(object(), OPERATION)["status"] == "timed_out", "Long drain must become explicit timeout without force-stopping work"
+
+
+@th.django_unit_test("draining checked runners are visible without weakening identity checks")
+def test_draining_reply_reports_pending_activation(opts):
+    import json
+    from mojo.apps.jobs.manager import JobManager
+    from mojo.apps.account.services import fleet_apply
+    from mojo.apps.jobs.job_engine import CHECKED_EXECUTE_PROTOCOL
+    raw = {"schema": "mojo.jobs.execute-checked-reply", "version": CHECKED_EXECUTE_PROTOCOL,
+           "correlation_id": OPERATION, "func": fleet_apply.REPORT_FUNCTION,
+           "hostname": "node-a", "runner_id": "node-a-engine", "started": "now",
+           "status": "error", "error": "runner_draining"}
+    selected = {"node-a": {"runner_id": "node-a-engine", "started": "now"}}
+    row, error = JobManager._parse_checked_reply(json.dumps(raw), OPERATION, fleet_apply.REPORT_FUNCTION, selected)
+    assert error is None and row["error"] == "runner_draining", "A correlated draining response is a known operational state"
+    result = fleet_apply._nodes(REVISION, ["node-a"], {"status": "partial", "anomalies": [],
+        "results": [{"host": "node-a", "status": "error", "error": "runner_draining"}]})[0]
+    assert result["status"] == "draining" and not result["healthy"], "Draining must be visible and never healthy"

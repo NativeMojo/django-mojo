@@ -81,6 +81,7 @@ class Scheduler:
         self.running = False
         self.stop_event = threading.Event()
         self.has_lock = False
+        self._fleet_state = None
 
         # Stats
         self.jobs_scheduled = 0
@@ -187,6 +188,9 @@ class Scheduler:
 
         # Register signal handlers
         self._setup_signal_handlers()
+        from . import fleet_state
+        self._fleet_state = fleet_state.begin("scheduler")
+        fleet_state.publish(self._fleet_state)
 
         # Main loop with lock management
         try:
@@ -212,6 +216,9 @@ class Scheduler:
         if self.has_lock:
             self._release_lock()
 
+        from . import fleet_state
+        fleet_state.remove(self._fleet_state)
+
         logger.info(f"Scheduler {self.scheduler_id} stopped. "
                   f"Scheduled: {self.jobs_scheduled}, Expired: {self.jobs_expired}")
 
@@ -219,8 +226,9 @@ class Scheduler:
         """Register signal handlers for graceful shutdown."""
         def handle_signal(signum, frame):
             logger.info(f"Scheduler received signal {signum}, shutting down")
-            self.stop()
-            sys.exit(0)
+            # Let a popped batch finish/reinsert its entries before the main
+            # loop's finally releases leadership. Repeated TERM is harmless.
+            self.stop_event.set()
 
         signal.signal(signal.SIGTERM, handle_signal)
         signal.signal(signal.SIGINT, handle_signal)
@@ -314,11 +322,13 @@ class Scheduler:
 
         while self.running and not self.stop_event.is_set():
             try:
+                from . import fleet_state
+                fleet_state.publish(self._fleet_state)
                 # Try to acquire lock if we don't have it
                 if not self.has_lock:
                     if not self._acquire_lock():
                         # Failed to acquire, sleep and retry
-                        time.sleep(2)
+                        self.stop_event.wait(2)
                         continue
 
                 # Renew lock if needed
@@ -334,11 +344,11 @@ class Scheduler:
 
                 # Sleep with jitter
                 sleep_ms = random.randint(self.base_sleep_ms, self.max_sleep_ms)
-                time.sleep(sleep_ms / 1000.0)
+                self.stop_event.wait(sleep_ms / 1000.0)
 
             except Exception as e:
                 logger.error(f"Error in scheduler main loop: {e}")
-                time.sleep(1)
+                self.stop_event.wait(1)
 
     def _process_scheduled_jobs(self):
         """Process scheduled jobs for all channels."""
@@ -352,6 +362,8 @@ class Scheduler:
         close_old_connections()
 
         for channel in self.channels:
+            if self.stop_event.is_set():
+                break
             try:
                 self._process_channel(channel, now, now_ms)
             except Exception as e:
@@ -374,7 +386,7 @@ class Scheduler:
             pass
         # Process non-broadcast delayed jobs (Plan B: enqueue to List queue)
         sched_key = self.keys.sched(channel)
-        while True:
+        while not self.stop_event.is_set():
             results = self.redis.zpopmin(sched_key, count=10)
             if not results:
                 break
@@ -421,7 +433,7 @@ class Scheduler:
 
         # Process broadcast delayed jobs (Plan B: if broadcast retained, enqueue to same queue or a special one)
         sched_b_key = self.keys.sched_broadcast(channel)
-        while True:
+        while not self.stop_event.is_set():
             results = self.redis.zpopmin(sched_b_key, count=10)
             if not results:
                 break

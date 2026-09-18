@@ -66,7 +66,7 @@ a pre-existing database row can still shadow a dynamic read. Migrate those
 callers/rows deliberately when moving an existing key into fleet ownership.
 
 `restart_required` describes the application's consumption contract. The shared
-config-sync activation still follows its configured request-service restart
+config-sync activation still follows its configured service restart
 policy; declaring a field restart-free does not introduce hot reloading.
 
 ## REST contract
@@ -84,11 +84,10 @@ setting retains its established behavior.
 - `GET /api/account/admin/fleet/history`: up to 50 version metadata records for
   the exact configured object; `truncated` identifies a partial history.
 - `POST /api/account/admin/fleet`: one of the actions below.
-- `GET /api/account/admin/fleet/operation/<operation_id>`: signed evidence from
-  an asynchronous Apply operation. This is historical evidence; refresh fleet
-  state for a current observation. Saved reports include `observed_at`, the
-  evidence observation time, not the time a browser polls; queued responses
-  may omit it.
+- `GET /api/account/admin/fleet/operation/<operation_id>`: validates signed
+  dispatch evidence, then freshly observes that revision. The dispatch job may
+  already be completed while activation is pending. `observed_at` identifies
+  the observation time; queued responses may omit it.
 
 Publish only changed fields:
 
@@ -120,27 +119,34 @@ through a new structured publication instead.
 ```
 
 Apply returns `operation_id` immediately. A job invokes only the fixed node
-config-sync operation and observes convergence for up to 120 seconds. Repeated
-clicks join an active operation. A changed publication supersedes the old
-operation. Cancellation stops observation; it cannot undo a service start that
-has already been requested. Timers continue independently after timeout.
+config-sync operation and returns after saving signed dispatch evidence. This
+lets its own engine finish draining. Operation reads observe convergence for
+up to 120 seconds from dispatch before reporting a timeout. Repeated clicks
+join an active operation. A changed publication supersedes the old
+operation. Cancellation before dispatch can prevent the queued work; once
+dispatch completes, activation cannot be canceled through that completed job.
+The browser may stop polling, but service activation continues. Timers continue independently after timeout.
 Apply intents and results are signed and bound to the operation, actor,
 revision, and expected node list; ordinary job editing cannot invent authority
 or a successful result.
 
 Expected membership comes from `ADMIN_FLEET_CONFIG_EXPECTED_NODES`, or the
 protected `EDGE_EXPECTED_TOPOLOGY.nodes` fallback. Configure actual hostnames
-for configuration-consuming request nodes, including those currently offline.
-Membership is bounded at 128; a live-only runner list is never used as the
-completion denominator. Worker-only nodes report unsupported rather than
-healthy. The apply coordinator runs on the existing `default` jobs channel;
+for all configuration-consuming nodes, including workers and those currently
+offline. Membership is bounded at 128; a live-only runner list is never used
+as the completion denominator. Worker-only nodes omit API checks only when
+config-sync publishes independent root-controlled evidence of an explicitly
+disabled request-service role and the installation time. The apply coordinator runs on the existing `default` jobs channel;
 target runners use `ADMIN_FLEET_CONFIG_CHANNEL` (default `edge`).
 
 Each node reports publication, downloaded/installed, restart requested,
 restarted, healthy, or a fixed failure code. Healthy requires the desired file
-digest, a service start after installation, and a fresh response from the
-serving process showing that revision with database and Redis reachability.
-A successful systemctl enqueue alone proves none of that. The serving probe
+digest, exactly one supervised engine and scheduler with fresh startup-loaded
+revision proof, and database/Redis reachability. Each proof matches the live
+PID and kernel start identity; duplicate, old, missing or draining processes
+cannot pass. Request-serving nodes additionally need a service start after
+installation and the serving process's revision/health response to a signed challenge.
+A successful systemctl enqueue or completed dispatch job proves none of that. The serving probe
 uses a short-lived signed challenge, and exposes no configuration values.
 
 ## Storage and deployment prerequisites
@@ -171,3 +177,13 @@ for schema loading, fixed service permissions, socket access, and receipts.
 
 If no coordinator claims Apply within five minutes, its operation read reports
 `expired` with `apply_runner_unavailable`; the browser does not wait indefinitely.
+
+Automatic activation sends SIGTERM to the managed engine and scheduler after
+checking their installed cron supervisor and launch permissions. The engine
+stops claiming new jobs, retains heartbeat/visibility protection while active
+jobs and startup hooks finish, then exits. The scheduler finishes its current
+popped batch before releasing leadership. The existing every-minute cron
+starts replacements; configuration activation never escalates to SIGKILL.
+A long job or unavailable replacement keeps activation unconfirmed, including
+after the observation timeout. Refresh fleet state for a later observation.
+`CONFIG_SYNC_RESTART=false` installs files without retiring processes.

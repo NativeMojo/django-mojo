@@ -905,7 +905,7 @@ class JobManager:
         else:
             if row.get("error") not in (
                     "invalid_request", "function_unavailable",
-                    "execution_failed", "result_unserializable"):
+                    "execution_failed", "result_unserializable", "runner_draining"):
                 return None, f"error_code_invalid:{hostname}"
         row["hostname"] = hostname
         return row, None

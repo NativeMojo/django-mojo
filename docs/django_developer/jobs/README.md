@@ -249,6 +249,13 @@ sysinfo = jobs.get_sysinfo()
 
 ## Running the engine on a node
 
+`JobEngine.stop(timeout=30.0)` synchronously drains claimed jobs, startup hooks,
+and active control callbacks while heartbeats and visibility leases remain
+active. The timeout argument remains accepted for compatibility; it does not
+force active work to stop. Signal handlers and callbacks use
+`request_shutdown()` so the main loop owns cleanup. This differs from the
+external operator/deploy `jobman stop`, which retains its TERM/KILL escalation.
+
 There are two ways to run the engine, they manage **different** processes, and
 picking the wrong one produces a status report about processes nobody is
 looking at.

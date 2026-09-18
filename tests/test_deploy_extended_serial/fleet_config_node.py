@@ -61,7 +61,7 @@ def test_fleet_sync_retries_failed_restart_once(opts):
 
 @th.django_unit_test()
 def test_fleet_receipt_rejects_symlinks_and_oversize(opts):
-    from mojo.deploy import fleet_config_node as node
+    from mojo.deploy import fleet_config_node as node, fleet_config_role
 
     with tempfile.TemporaryDirectory() as root:
         target = str(Path(root) / "django.conf")
@@ -79,7 +79,7 @@ def test_fleet_receipt_rejects_symlinks_and_oversize(opts):
 
 @th.django_unit_test()
 def test_fleet_trigger_uses_fixed_command(opts):
-    from mojo.deploy import fleet_config_node as node
+    from mojo.deploy import fleet_config_node as node, fleet_config_role
     from django.core import signing
     import socket
 
@@ -88,6 +88,7 @@ def test_fleet_trigger_uses_fixed_command(opts):
                                  salt="mojo.fleet.apply.intent")
 
     with mock.patch.object(node, "_supported", return_value=True), mock.patch.object(
+            fleet_config_role, "read", return_value={"request_service_required": True, "installed_at": 100}), mock.patch.object(
             node.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
         result = node.trigger({"revision": "a" * 32, "authorization": authorization})
         th.assert_eq(result["status"], "requested", "Verify result['status']")
@@ -103,17 +104,19 @@ def test_fleet_trigger_uses_fixed_command(opts):
 
 @th.django_unit_test()
 def test_fleet_report_requires_new_serving_proof(opts):
-    from mojo.deploy import fleet_config_node as node
+    from mojo.deploy import fleet_config_node as node, fleet_config_role
 
     revision = "a" * 32
     receipt = {"installed_revision": revision, "status": "restart_requested",
                "installed_at": 100, "target_revision": revision, "installed_digest": "b" * 64}
     with mock.patch.object(node, "_supported", return_value=True), mock.patch.object(
+            fleet_config_role, "read", return_value={"request_service_required": True, "installed_at": 100}), mock.patch.object(
             node, "read_receipt", return_value=receipt), mock.patch.object(
             node, "current_digest", return_value="b" * 64), mock.patch.object(
             node, "_service_state", return_value={"active": True, "pid": 45,
                                                    "started_at": 101}), mock.patch.object(
-            node, "_serving_proof", return_value={}) as proof:
+            node, "_serving_proof", return_value={}) as proof, mock.patch.object(
+            node, "_jobs_proof", return_value={"restarted": True, "healthy": True, "error_code": None}):
         result = node.report({"revision": revision})
         th.assert_true(result["installed"], "Verify result['installed']")
         th.assert_true(not result["healthy"] and not result["restarted"], "Verify not result['healthy'] and (not result['restarted'])")
@@ -145,12 +148,13 @@ def test_fleet_sudoers_validation_preserves_previous(opts):
 
 @th.django_unit_test()
 def test_fleet_report_detects_same_revision_file_drift(opts):
-    from mojo.deploy import fleet_config_node as node
+    from mojo.deploy import fleet_config_node as node, fleet_config_role
 
     revision = "a" * 32
     receipt = {"installed_revision": revision, "installed_digest": "b" * 64,
                "status": "restart_requested", "installed_at": 100}
     with mock.patch.object(node, "_supported", return_value=True), mock.patch.object(
+            fleet_config_role, "read", return_value={"request_service_required": True, "installed_at": 100}), mock.patch.object(
             node, "read_receipt", return_value=receipt), mock.patch.object(
             node, "current_digest", return_value="c" * 64):
         result = node.report({"revision": revision})
@@ -160,7 +164,7 @@ def test_fleet_report_detects_same_revision_file_drift(opts):
 
 @th.django_unit_test()
 def test_fleet_digest_is_bounded_and_no_follow(opts):
-    from mojo.deploy import fleet_config_node as node
+    from mojo.deploy import fleet_config_node as node, fleet_config_role
 
     with tempfile.TemporaryDirectory() as root:
         target = Path(root) / "config"
@@ -175,7 +179,7 @@ def test_fleet_digest_is_bounded_and_no_follow(opts):
 
 @th.django_unit_test()
 def test_fleet_socket_permission_error_is_actionable(opts):
-    from mojo.deploy import fleet_config_node as node
+    from mojo.deploy import fleet_config_node as node, fleet_config_role
 
     with mock.patch.object(node, "_proof_destination", return_value=("/api/account/admin/fleet/proof", {})), mock.patch.object(
             node._UnixHTTPConnection, "request", side_effect=PermissionError()):
@@ -184,7 +188,7 @@ def test_fleet_socket_permission_error_is_actionable(opts):
 
 @th.django_unit_test()
 def test_fleet_proof_uses_configured_origin_and_prefix(opts):
-    from mojo.deploy import fleet_config_node as node
+    from mojo.deploy import fleet_config_node as node, fleet_config_role
     from mojo.apps.account.services import system_settings
     from mojo.helpers import request
 
@@ -198,7 +202,7 @@ def test_fleet_proof_uses_configured_origin_and_prefix(opts):
 
 @th.django_unit_test()
 def test_fleet_trigger_rejects_unsigned_or_wrong_node_intent(opts):
-    from mojo.deploy import fleet_config_node as node
+    from mojo.deploy import fleet_config_node as node, fleet_config_role
     from django.core import signing
 
     with mock.patch.object(node.subprocess, "run") as run:

@@ -13,6 +13,7 @@ JOB_FUNCTION = "mojo.apps.account.services.fleet_apply.run"
 TRIGGER_FUNCTION = "mojo.deploy.fleet_config_node.trigger"
 REPORT_FUNCTION = "mojo.deploy.fleet_config_node.report"
 MAX_NODES = 128
+HEALTH_SCOPE = "request_service_jobs_and_dependencies"
 HOST_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,252}$")
 
 
@@ -40,6 +41,9 @@ def _channel():
 def _nodes(revision, expected, reply=None, error=None):
     responses = {row.get("host"): row for row in (reply or {}).get("results", [])
                  if isinstance(row, dict) and row.get("status") == "success"}
+    draining = {row.get("host") for row in (reply or {}).get("results", [])
+                if isinstance(row, dict) and row.get("status") == "error"
+                and row.get("error") == "runner_draining"}
     anomalies = bool((reply or {}).get("anomalies"))
     nodes = []
     for hostname in expected:
@@ -54,12 +58,15 @@ def _nodes(revision, expected, reply=None, error=None):
             "restarted": False, "healthy": False,
             "status": "unknown", "error_code": error or "node_did_not_reply",
         }
+        if hostname in draining and not anomalies:
+            node.update(status="draining", error_code="engine_draining")
         if matches:
             for flag in ("installed", "restart_requested", "restarted", "healthy"):
                 node[flag] = result.get(flag) is True
             # Never accept health on a predecessor or an unactivated file.
             node["healthy"] = (
                 node["healthy"] and node["installed"] and node["restarted"]
+                and result.get("jobs_verified") is True
                 and not anomalies and (reply or {}).get("status") in ("verified", "partial"))
             node["status"] = next((status for flag, status in (
                 ("healthy", "healthy"), ("restarted", "restarted"),
@@ -80,12 +87,12 @@ def _nodes(revision, expected, reply=None, error=None):
 
 def observe(revision, expected=None, *, manager=None):
     if not revision:
-        return {"status": "unpublished", "nodes": [], "healthy_everywhere": False}
+        return {"status": "unpublished", "nodes": [], "healthy_everywhere": False, "health_scope": HEALTH_SCOPE}
     try:
         expected = expected or expected_nodes()
     except merrors.ValueException:
         return {"status": "unconfigured", "nodes": [], "healthy_everywhere": False,
-                "error_code": "expected_nodes_unconfigured"}
+                "error_code": "expected_nodes_unconfigured", "health_scope": HEALTH_SCOPE}
     if manager is None:
         from mojo.apps.jobs.manager import get_manager
         manager = get_manager()
@@ -102,7 +109,7 @@ def observe(revision, expected=None, *, manager=None):
     healthy = bool(nodes) and all(node["healthy"] for node in nodes)
     return {"status": "healthy" if healthy else "pending", "nodes": nodes,
             "healthy_everywhere": healthy, "observed_at": timezone.now().isoformat(),
-            "health_scope": "request_service_and_dependencies"}
+            "health_scope": HEALTH_SCOPE}
 
 
 def apply(actor, payload):
@@ -125,16 +132,26 @@ def apply(actor, payload):
         # The installation lock serializes duplicate clicks; failed or finished
         # operations can still be retried through the same activation path.
         active_jobs = Job.objects.filter(
-            func=JOB_FUNCTION, status__in=["pending", "running"],
+            func=JOB_FUNCTION, status__in=["pending", "running", "completed"],
             expires_at__gt=timezone.now()).order_by("-created")[:MAX_NODES]
         for active in active_jobs:
             try:
                 active_intent = _intent(active, max_age=300)
             except merrors.PermissionDeniedException:
                 continue
+            report = _saved_report(active, active_intent)
+            if active.status == "completed" and (
+                    report.get("status") != "dispatched"
+                    or time.time() >= report.get("dispatched_at", 0) + 120):
+                continue
             if active_intent["revision"] != revision or active_intent["nodes"] != nodes:
                 raise merrors.ValueException("A fleet apply is in progress; wait for its result", code=409, status=409)
-            return operation(actor, active.pk)
+            # Do not perform network observation while holding installation
+            # locks. The operation GET independently obtains current evidence.
+            return {"operation_id": active.pk, "revision": revision,
+                    "status": "pending" if report.get("status") == "dispatched" else "queued",
+                    "job_status": active.status, "healthy_everywhere": False, "health_scope": HEALTH_SCOPE,
+                    "nodes": _nodes(revision, nodes)}
         operation_id = jobs.publish(
             JOB_FUNCTION, {"revision": revision, "nodes": nodes, "actor_id": actor.pk},
             channel="default", max_retries=0, max_exec_seconds=180, expires_in=300)
@@ -146,7 +163,7 @@ def apply(actor, payload):
             "intent": signing.dumps(intent, salt="mojo.fleet.apply.intent")})
         fleet_config._audit(actor, "apply_requested", revision, [])
     return {"operation_id": operation_id, "revision": revision, "status": "queued",
-            "healthy_everywhere": False, "nodes": _nodes(revision, nodes)}
+            "healthy_everywhere": False, "health_scope": HEALTH_SCOPE, "nodes": _nodes(revision, nodes)}
 
 
 def _intent(job, max_age=None):
@@ -160,6 +177,20 @@ def _intent(job, max_age=None):
         raise merrors.PermissionDeniedException("Invalid configuration operation authority") from None
 
 
+def _saved_report(job, intent):
+    report = {"status": "queued", "healthy_everywhere": False, "health_scope": HEALTH_SCOPE,
+              "nodes": _nodes(intent["revision"], intent["nodes"])}
+    if job.metadata.get("fleet_config"):
+        try:
+            signed = signing.loads(job.metadata["fleet_config"], salt="mojo.fleet.apply.result")
+            if signed["intent"] != intent or not isinstance(signed["report"], dict):
+                raise ValueError()
+            report = signed["report"]
+        except (signing.BadSignature, ValueError, TypeError, KeyError, AttributeError):
+            report.update(status="unknown", error_code="operation_evidence_invalid")
+    return report
+
+
 def operation(actor, operation_id):
     from mojo.apps.account.services.provider_setup import _superuser
     from mojo.apps.jobs.models import Job
@@ -170,16 +201,30 @@ def operation(actor, operation_id):
     if job is None:
         raise merrors.ValueException("Configuration operation not found", code=404, status=404)
     intent = _intent(job)
-    report = {"status": "queued", "healthy_everywhere": False,
-              "nodes": _nodes(intent["revision"], intent["nodes"])}
-    if job.metadata.get("fleet_config"):
-        try:
-            signed = signing.loads(job.metadata["fleet_config"], salt="mojo.fleet.apply.result")
-            if signed["intent"] != intent:
-                raise ValueError()
-            report = signed["report"]
-        except (signing.BadSignature, ValueError, TypeError, KeyError, AttributeError):
-            report.update(status="unknown", error_code="operation_evidence_invalid")
+    report = _saved_report(job, intent)
+    if report.get("healthy_everywhere") and report.get("health_scope") != HEALTH_SCOPE:
+        report = dict(report, status="unknown", healthy_everywhere=False,
+                      nodes=_nodes(intent["revision"], intent["nodes"]),
+                      error_code="jobs_activation_evidence_required")
+    if job.status == "completed" and report.get("status") in {"queued", "unknown"}:
+        report = dict(report, status="failed", healthy_everywhere=False,
+                      error_code=report.get("error_code") or "operation_evidence_unavailable")
+    if (report.get("status") == "dispatched"
+            and job.status not in ("failed", "expired", "canceled")):
+        # The dispatching engine may now drain. Poll from the request process;
+        # requiring that engine to wait for its own replacement deadlocks.
+        from mojo.apps.account.services import fleet_config
+        if fleet_config.state(actor).get("revision") != intent["revision"]:
+            report = dict(report, status="superseded", healthy_everywhere=False,
+                          error_code="publication_superseded")
+        else:
+            dispatch = report
+            report = observe(intent["revision"], intent["nodes"])
+            for node, triggered in zip(report["nodes"], dispatch["nodes"]):
+                if not node["healthy"] and triggered.get("error_code"):
+                    node.update(status="failed", error_code=triggered["error_code"])
+            if not report["healthy_everywhere"] and time.time() >= dispatch["dispatched_at"] + 120:
+                report["status"] = "timed_out"
     if job.status in ("failed", "expired", "canceled"):
         report = dict(report, status=job.status, healthy_everywhere=False)
     elif (job.status == "pending" and getattr(job, "expires_at", None)
@@ -198,11 +243,16 @@ def run(job):
     revision, expected = intent["revision"], intent["nodes"]
 
     def save(report):
+        report.setdefault("health_scope", HEALTH_SCOPE)
         report.setdefault("observed_at", timezone.now().isoformat())
         job.metadata["fleet_config"] = signing.dumps({"intent": intent, "report": report}, salt="mojo.fleet.apply.result")
         job.save(update_fields=["metadata", "modified"])
 
     try:
+        if getattr(job, "cancel_requested", False):
+            save({"status": "canceled", "healthy_everywhere": False,
+                  "nodes": _nodes(revision, expected, error="operation_canceled")})
+            return
         actor = User.objects.get(pk=intent["actor_id"])
         current = fleet_config.state(actor)
         if current.get("revision") != revision:
@@ -215,31 +265,12 @@ def run(job):
         roster = [row for row in roster if str(row.get("hostname", "")).lower() in expected]
         trigger_reply = manager.broadcast_execute_checked(
             TRIGGER_FUNCTION, {"revision": revision, "authorization": job.payload["intent"]}, timeout=5.0, channel=channel, roster=roster)
-        trigger_nodes = _nodes(revision, expected, trigger_reply)
-        deadline = time.monotonic() + 120
-        while True:
-            job.refresh_from_db(fields=["cancel_requested"])
-            if job.cancel_requested:
-                save({"status": "canceled", "healthy_everywhere": False,
-                      "nodes": _nodes(revision, expected, error="operation_canceled")})
-                return
-            if fleet_config.state(actor).get("revision") != revision:
-                save({"status": "superseded", "healthy_everywhere": False,
-                      "nodes": _nodes(revision, expected, error="publication_superseded")})
-                return
-            report = observe(revision, expected, manager=manager)
-            for node, triggered in zip(report["nodes"], trigger_nodes):
-                if not node["healthy"] and triggered["error_code"]:
-                    node.update(status="failed", error_code=triggered["error_code"])
-            if report["healthy_everywhere"]:
-                save(report)
-                return
-            if time.monotonic() >= deadline:
-                report["status"] = "timed_out"
-                save(report)
-                return
-            save(report)
-            time.sleep(2)
+        # Persist dispatch only, then let this job finish so its own engine can
+        # drain. Completion is observed independently through operation GET.
+        save({"status": "dispatched", "healthy_everywhere": False,
+              "dispatched_at": time.time(),
+              "nodes": _nodes(revision, expected, trigger_reply)})
+
     except Exception:
         save({"status": "failed", "healthy_everywhere": False,
               "nodes": _nodes(revision, expected, error="apply_operation_failed")})

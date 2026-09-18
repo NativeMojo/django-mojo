@@ -306,7 +306,9 @@ Registration happens in every Django process and is inert; hooks fire only
 from `JobEngine.start()`, the entry point unique to a real engine — never a
 shell, a management command, or the test runner. Each hook runs on the
 engine's worker pool: a hook that raises is logged and never stops the
-engine, and a slow one never delays job consumption.
+engine, and a slow one never delays job consumption. A hook that needs to
+request shutdown must call `engine.request_shutdown()`, not blocking `stop()`;
+the engine drains hooks along with active jobs before exiting.
 
 The canonical use is reconcile-on-boot (edge's `on_engine_start` converges
 the node's nginx generation): work addressed to "every runner" resolves the
