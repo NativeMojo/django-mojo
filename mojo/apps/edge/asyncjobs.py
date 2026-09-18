@@ -209,15 +209,28 @@ def deploy_orchestrate(job):
 
     target = deploy.get_target()
     status = deploy.get_status()
-    if (not target or target.get("deployment") != deployment_id or not status
+    if not target or not status:
+        # Nothing took the plane — the coordination keys simply expired (or
+        # Redis was flushed) while this job waited for a worker. Calling that
+        # "superseded" hides a stall behind a word that means a newer deploy
+        # exists; say what happened and let the operator retry.
+        diagnosis = _lease_expired(sha, deployment_id, waiting_on=None)
+        return _deploy_terminal(
+            sha, me, framework=None, released=False,
+            deployment_id=deployment_id, reason="coordination_lease_expired",
+            diagnosis=diagnosis)
+    if (target.get("deployment") != deployment_id
             or status.get("deployment") != deployment_id):
         platform_deploy.transition(
             deployment_id, "superseded", {"reason": "target_moved_before_start"})
-        if target and target.get("deployment") != deployment_id:
+        if target.get("deployment") != deployment_id:
             return _deploy_terminal(
                 sha, me, framework=None, released=False,
                 deployment_id=deployment_id)
         return "superseded"
+    # The lease was armed when the push arrived; every second this job spent
+    # queued has already been taken off it. Start the canary window fresh.
+    deploy.touch_status(deployment_id)
 
     if not runners:
         event = reporter.report_event(
@@ -298,20 +311,29 @@ def deploy_orchestrate(job):
             api_cohort=True)
         logit.info(f"edge deploy {sha}: sole API canary queued locally")
         return f"single-api:{sha}"
-    _publish_deploy_node(
+    canary_job = _publish_deploy_node(
         canary, sha, framework, migrate=True, deployment_id=deployment_id,
         api_cohort=True)
     logit.info(f"edge deploy {sha}: canary {canary} told to migrate")
 
     deadline = _time.time() + deploy.canary_timeout()
     outcome = None
+    lease_lost = False
     while _time.time() < deadline:
         status = deploy.get_status()
-        if not status or status.get("deployment") != deployment_id:
-            # The lease is gone or belongs to someone else: this deploy has
-            # been superseded and is no longer the one driving the fleet.
-            # Waiting out the canary timeout to then declare the canary
-            # "silent" would file a false incident and, worse, chain a fresh
+        if not status:
+            # The lease expired (or was flushed) and NOBODY holds it: there is
+            # no newer deploy, so this is a stall to report, not a
+            # supersession to stand down from. Before #4857 this branch was
+            # folded into the one below and a 15-minute queue wait ended as
+            # "superseded" with no incident, no failure and no successor.
+            lease_lost = True
+            break
+        if status.get("deployment") != deployment_id:
+            # The lease belongs to someone else: this deploy has been
+            # superseded and is no longer the one driving the fleet. Waiting
+            # out the canary timeout to then declare the canary "silent"
+            # would file a false incident and, worse, chain a fresh
             # orchestrate on top of the deploy that took the lease. Leave
             # quietly instead — no incident, no chain, no self-update.
             platform_deploy.transition(
@@ -323,9 +345,14 @@ def deploy_orchestrate(job):
                 and status.get("state") in deploy.TERMINAL_STATES):
             outcome = status
             break
+        # Still ours and still running: keep the lease alive for as long as
+        # this orchestrator is alive to drive it.
+        deploy.touch_status(deployment_id)
         _time.sleep(DEPLOY_POLL_INTERVAL)
 
     released = bool(outcome and outcome.get("state") == deploy.STATUS_DEPLOYING)
+    reason = "canary_not_proven"
+    diagnosis = None
     if released:
         platform_deploy.transition(
             deployment_id, "fleet", {"canary": canary, "proven": True})
@@ -340,10 +367,20 @@ def deploy_orchestrate(job):
                 deployment_id=deployment_id,
                 api_cohort=runner_id in set(api_runners))
         logit.info(f"edge deploy {sha}: released to {len(runners) - 2} fleet node(s)")
+    elif lease_lost:
+        reason = "coordination_lease_expired"
+        diagnosis = _lease_expired(sha, deployment_id, waiting_on=canary)
     else:
-        detail = deploy.failure_phase((outcome or {}).get("detail")) if outcome else (
-            "canary reported failure" if outcome else
-            f"canary did not report within {deploy.canary_timeout()}s")
+        if outcome:
+            detail = deploy.failure_phase(outcome.get("detail"))
+        else:
+            # A silent canary is one of two very different things: a node
+            # that ran the script and died, or a job that never got a worker.
+            # The Job row tells them apart, and the operator needs to know
+            # which before deciding whether to retry or to free the engine.
+            diagnosis = _canary_job_diagnosis(canary_job, canary)
+            detail = (f"canary did not report within "
+                      f"{deploy.canary_timeout()}s ({diagnosis['summary']})")
         event = reporter.report_event(
             f"deploy {sha}: canary {canary} did not prove the release: {detail}",
             title="Edge deploy canary failed",
@@ -352,12 +389,69 @@ def deploy_orchestrate(job):
 
     return _deploy_terminal(
         sha, me, framework=framework, released=released,
-        deployment_id=deployment_id)
+        deployment_id=deployment_id, reason=reason, diagnosis=diagnosis)
 
 
-def _deploy_terminal(sha, me, framework, released, deployment_id):
+def _canary_job_diagnosis(job_id, canary):
+    """Why a canary never reported, from its own Job row.
+
+    ``never_started`` is the queue-starvation signature (item #4857): the
+    job sat pending on the canary's box-direct channel until it expired,
+    because every worker there was busy. ``started`` means the node took
+    the job and the update script is what went quiet.
+    """
+    from mojo.apps.jobs.models import Job
+
+    row = Job.objects.filter(pk=str(job_id or "")).first()
+    if row is None:
+        return {"canary_job": str(job_id or ""), "state": "unknown",
+                "summary": "canary job record not found"}
+    if row.started_at is None:
+        return {
+            "canary_job": row.pk, "state": "never_started",
+            "job_status": row.status,
+            "summary": (f"canary job never started on {canary} — job status "
+                        f"{row.status}; its engine had no free worker")}
+    return {
+        "canary_job": row.pk, "state": "started", "job_status": row.status,
+        "summary": (f"canary job started on {canary} at "
+                    f"{row.started_at.isoformat()} but reported no result "
+                    f"(job status {row.status})")}
+
+
+def _lease_expired(sha, deployment_id, waiting_on=None):
+    """Report a coordination lease that expired with no successor.
+
+    An actionable incident, not a silent stand-down: the fleet is still on
+    the previous release, nothing will retry on its own, and the cure is an
+    Admin **Retry same SHA** once the reason for the stall is known.
+    """
+    from mojo.apps.edge.services import deploy
+    from mojo.apps.edge.services import platform_deploy
+    from mojo.apps.incident import reporter
+
+    stage = (f"while waiting for canary {waiting_on}" if waiting_on
+             else "before the orchestrator got a worker")
+    event = reporter.report_event(
+        f"deploy {sha}: coordination lease expired {stage} and no newer "
+        f"deploy took over — the fleet is still on the previous release; "
+        f"retry the deployment once the job queue is clear",
+        title="Edge deploy lost its coordination lease",
+        category="edge_deploy", level=7)
+    platform_deploy.add_link(deployment_id, "incident_events", event.pk)
+    logit.warn(f"edge deploy {sha}: coordination lease expired {stage}")
+    return {"state": "lease_expired", "waiting_on": waiting_on or "",
+            "status_ttl": deploy.status_ttl(),
+            "summary": f"coordination lease expired {stage}"}
+
+
+def _deploy_terminal(sha, me, framework, released, deployment_id,
+                     reason="canary_not_proven", diagnosis=None):
     """The orchestrator's terminal, in D4's order: chain check, clear status,
-    then — on a released deploy only — update self, fire-and-forget."""
+    then — on a released deploy only — update self, fire-and-forget.
+
+    ``reason``/``diagnosis`` name why an unreleased deploy failed; the durable
+    row carries them so the Admin shows a lease expiry as what it was."""
     from mojo.apps import jobs
     from mojo.apps.edge.services import deploy
     from mojo.apps.edge.services import platform_deploy
@@ -412,8 +506,10 @@ def _deploy_terminal(sha, me, framework, released, deployment_id):
                 deployment_id=deployment_id,
                 api_cohort=me in set(api_roster))
         return f"released:{sha}"
-    platform_deploy.transition(
-        deployment_id, "failed", {"reason": "canary_not_proven"})
+    detail = {"reason": reason}
+    if diagnosis:
+        detail["diagnosis"] = diagnosis
+    platform_deploy.transition(deployment_id, "failed", detail)
     return f"failed:{sha}"
 
 

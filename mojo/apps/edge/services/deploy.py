@@ -24,7 +24,12 @@ buys nothing and costs every push in that window.
 The TTL is load-bearing: a canary that dies hard would otherwise leave
 ``migrating`` set forever and wedge every future deploy. The multi-node
 orchestrator clears the status at its terminal; the TTL is the backstop for
-every crash before terminal intent. A single-runner replacement engine
+every crash before terminal intent. It is NOT a deadline on a deploy that is
+being driven: the orchestrator renews the lease (``touch_status``) while it
+waits on the canary, so time the orchestrate job spent queued behind other
+work never counts against the canary window. A lease that vanishes anyway is
+an expiry with no successor, which the orchestrator reports as a failure with
+an incident — never as a supersession (item #4857). A single-runner replacement engine
 finalizes its exact UUID lease from durable evidence and atomic local proof,
 then resumes one queued target. A target whose deploy never started is not
 left to the TTL backstop either — ``resume_stranded_target`` republishes it.
@@ -106,7 +111,13 @@ _NODE_FAILURE_PHASES = {
     "exec_failed", "script_timeout", "preflight_failed", "unconfigured",
 }
 
-DEPLOY_CHANNEL = "default"
+# The orchestrator rides the `priority` channel, and every node update is
+# addressed to that node's box-direct channel. Both are RESERVED channels in
+# the job engine (JOBS_ENGINE_RESERVED_WORKERS): a fleet whose ordinary
+# workers are all busy with renditions still has a slot to start a deploy.
+# On 2026-09-18 a push sat 9 minutes behind ten file renditions per node,
+# the canary never got a worker, and the lease expired mid-canary (item #4857).
+DEPLOY_CHANNEL = "priority"
 DEPLOY_ORCHESTRATE_JOB = "mojo.apps.edge.asyncjobs.deploy_orchestrate"
 DEPLOY_NODE_JOB = "mojo.apps.edge.asyncjobs.deploy_node"
 
@@ -170,6 +181,21 @@ if raw then
   if ok and type(cur) == 'table' and cur['state'] ~= ARGV[3] then return 0 end
 end
 redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+return 1
+"""
+
+# Renewing the lease is owner-gated like everything else: only the deploy the
+# lease names may push its expiry out. The orchestrator calls this while it
+# waits on the canary, so a lease armed at webhook time cannot expire under a
+# deploy that is still being driven — the TTL then only ever fires for an
+# orchestrator that stopped touching it, which is exactly the crash it backstops.
+_TOUCH_STATUS_LUA = """
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local ok, cur = pcall(cjson.decode, raw)
+if not ok or type(cur) ~= 'table' then return 0 end
+if (cur['deployment'] or '') ~= ARGV[1] then return 0 end
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
 return 1
 """
 
@@ -353,6 +379,18 @@ def set_status(state, sha, detail=None, deployment_id=None):
     result = get_client().eval(
         _CAS_STATUS_LUA, 1, STATUS_KEY, sha, deployment_id, payload, status_ttl())
     return bool(result)
+
+
+def touch_status(deployment_id=None):
+    """Renew the lease TTL for the deploy that owns it.
+
+    Returns True when the lease still belongs to ``deployment_id`` and its
+    expiry was pushed out by a full ``status_ttl()``; False when the lease is
+    gone (expired, flushed) or names another deploy. Never creates a lease.
+    """
+    deployment_id = str(deployment_id) if deployment_id else ""
+    return bool(get_client().eval(
+        _TOUCH_STATUS_LUA, 1, STATUS_KEY, deployment_id, status_ttl()))
 
 
 def clear_status(deployment_id=None):
