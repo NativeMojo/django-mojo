@@ -182,6 +182,11 @@ def operation(actor, operation_id):
             report.update(status="unknown", error_code="operation_evidence_invalid")
     if job.status in ("failed", "expired", "canceled"):
         report = dict(report, status=job.status, healthy_everywhere=False)
+    elif (job.status == "pending" and getattr(job, "expires_at", None)
+          and job.expires_at <= timezone.now()):
+        report = dict(report, status="expired", healthy_everywhere=False,
+                      observed_at=job.expires_at.isoformat(),
+                      error_code="apply_runner_unavailable")
     return dict(report, operation_id=job.pk, revision=intent["revision"], job_status=job.status)
 
 

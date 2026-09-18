@@ -168,3 +168,6 @@ revision, and changed key names, never values.
 
 See [node deployment tooling](../../deploy/README.md#admin-fleet-overrides)
 for schema loading, fixed service permissions, socket access, and receipts.
+
+If no coordinator claims Apply within five minutes, its operation read reports
+`expired` with `apply_runner_unavailable`; the browser does not wait indefinitely.

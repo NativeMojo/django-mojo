@@ -74,6 +74,14 @@ def test_apply_result_authority(opts):
         assert fleet_apply.operation(object(), OPERATION)["healthy_everywhere"] is True, 'Fleet configuration contract failed: fleet_apply.operation(object(), OPERATION)["healthy_everywhere"] is True'
         job.status = "canceled"
         assert fleet_apply.operation(object(), OPERATION)["healthy_everywhere"] is False, 'Fleet configuration contract failed: fleet_apply.operation(object(), OPERATION)["healthy_everywhere"] is False'
+        from django.utils import timezone
+        from datetime import timedelta
+        job.status = "pending"
+        job.expires_at = timezone.now() - timedelta(seconds=1)
+        result = fleet_apply.operation(object(), OPERATION)
+        assert result["status"] == "expired", "A missing coordinator must not leave Apply queued forever"
+        assert result["error_code"] == "apply_runner_unavailable", "Timeout must identify the missing apply runner"
+        assert result["healthy_everywhere"] is False, "An expired queue entry cannot prove fleet health"
 
 
 @th.django_unit_test("fleet completion retains offline nodes and rejects stale ambiguous evidence")

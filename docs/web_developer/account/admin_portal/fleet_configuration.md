@@ -121,3 +121,6 @@ for application integration, fixed-operation permissions and deployment setup.
 
 Saved Apply reports include `observed_at`, the evidence observation timestamp
 rather than the time of the browser poll. Queued responses may omit it.
+
+If no coordinator claims Apply within five minutes, its operation read reports
+`expired` with `apply_runner_unavailable`; the browser does not wait indefinitely.
