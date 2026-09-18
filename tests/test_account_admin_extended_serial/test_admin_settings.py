@@ -340,6 +340,7 @@ def test_provider_setup_publisher_contract(opts):
     actor.is_superuser = True
     actor.save(update_fields=["is_superuser"])
     s3 = mock.Mock()
+    s3.get_bucket_versioning.return_value = {"Status": "Enabled"}
     static = _fleet_static(provider_setup)
     payload = _geoip_payload(provider_setup)
 
@@ -396,6 +397,7 @@ def test_provider_setup_concurrency_and_noop(opts):
     current = {"document": {"settings": values, "revision": "c" * 32},
                "etag": '"etag-current"', "version_id": "version-current"}
     s3 = mock.Mock()
+    s3.get_bucket_versioning.return_value = {"Status": "Enabled"}
     verified = ({"geoip": {"success": True}}, False)
 
     with mock.patch.object(provider_setup, "_static", side_effect=lambda key, default=None: static.get(key, default)), \
@@ -545,6 +547,7 @@ def test_provider_setup_topic_isolation(opts):
     actor.save(update_fields=["is_superuser"])
     static = _fleet_static(provider_setup)
     s3 = mock.Mock()
+    s3.get_bucket_versioning.return_value = {"Status": "Enabled"}
 
     def credentials(topic, section):
         if topic == "geoip":

@@ -8,7 +8,8 @@ Three idempotent actions, each safe to re-run on every deploy:
 
     var dirs   create var/{logs,pids,keys}, chown --owner, 2775 on directories
                (INCLUDING var/ itself — the setgid bit there is the point) and
-               0664 on files; symlinks are rejected and never followed
+               0664 on ordinary files, 0640 on django.conf, 0644 on its
+               non-secret fleet receipt; symlinks are rejected and never followed
     systemd    copy *.service AND *.timer whose bytes differ, daemon-reload only
                when something changed, then `enable --now` the TIMERS
     cron       write /etc/cron.d/3_mojo_jobs, whose user field is --cron-user
@@ -54,6 +55,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 
 from mojo.deploy.jobman import cron_command
 
@@ -149,8 +151,9 @@ def _mutate_descriptor(descriptor, info, wanted_mode, uid, gid, dry_run):
     return int(wrong_mode), int(wrong_owner)
 
 
-def _walk_pinned(directory_fd, display_path, uid, gid, dry_run):
+def _walk_pinned(directory_fd, display_path, uid, gid, dry_run, protected_modes=None):
     """Mutate only fstat-verified, no-follow descriptors beneath one root."""
+    protected_modes = protected_modes or {}
     mode_count = owner_count = rejected = 0
     info = os.fstat(directory_fd)
     moved_mode, moved_owner = _mutate_descriptor(
@@ -176,7 +179,7 @@ def _walk_pinned(directory_fd, display_path, uid, gid, dry_run):
                 wanted = DIR_MODE
             elif stat.S_ISREG(before.st_mode):
                 flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-                wanted = FILE_MODE
+                wanted = protected_modes.get(os.path.abspath(child_path), FILE_MODE)
             else:
                 log.warning("refusing non-file under var: %s", child_path)
                 rejected += 1
@@ -195,7 +198,7 @@ def _walk_pinned(directory_fd, display_path, uid, gid, dry_run):
                     continue
                 if stat.S_ISDIR(opened.st_mode):
                     child_mode, child_owner, child_rejected = _walk_pinned(
-                        child_fd, child_path, uid, gid, dry_run)
+                        child_fd, child_path, uid, gid, dry_run, protected_modes)
                     mode_count += child_mode
                     owner_count += child_owner
                     rejected += child_rejected
@@ -251,13 +254,20 @@ def sync_var_dirs(var_root, owner, dry_run):
                 raise RuntimeError("required var subdirectory is unsafe: %s" % name)
 
         uid, gid = resolve_owner(owner)
+        # Config-sync's private installation mode must survive later deploy
+        # sweeps. Only these exact root paths differ from ordinary writable data.
+        from mojo.deploy.config_sync import FILE_MODE as CONFIG_MODE
+        from mojo.deploy.fleet_config_node import RECEIPT_SUFFIX
+        config_path = os.path.join(os.path.abspath(var_root), "django.conf")
+        protected_modes = {config_path: CONFIG_MODE,
+                           config_path + RECEIPT_SUFFIX: 0o644}
         wrong_mode, wrong_owner, rejected = _walk_pinned(
-            root_fd, var_root, uid, gid, dry_run)
+            root_fd, var_root, uid, gid, dry_run, protected_modes)
     finally:
         os.close(root_fd)
 
     if wrong_mode:
-        changes.append("chmod %d path(s) under %s (2775 dirs, 0664 files)"
+        changes.append("chmod %d path(s) under %s (2775 dirs, 0664 ordinary files; protected config modes)"
                        % (wrong_mode, var_root))
     if wrong_owner:
         changes.append("chown standard ownership on %d path(s) under %s"
@@ -401,6 +411,55 @@ def plan(root, owner, cron_user, units_dir, systemd_dir, cron_path, dry_run):
         "node-setup-" + identity, "rendered-node-config", paths, mutate)
 
 
+FLEET_SUDOERS = "/etc/sudoers.d/72-mojo-config-sync"
+
+
+def install_fleet_trigger(user, path=FLEET_SUDOERS, dry_run=False, validator=None):
+    """Grant precisely one service start, validating before atomic installation."""
+    from mojo.deploy.app_user import valid_app_user_name
+
+    if not valid_app_user_name(user):
+        raise ValueError("invalid fleet trigger account")
+    content = (f"{user} ALL=(root) NOPASSWD: /usr/bin/systemctl "
+               "--no-block start config-sync.service\n")
+    parent = os.path.dirname(path)
+    expected_uid = 0 if path == FLEET_SUDOERS else os.geteuid()
+    info = os.lstat(parent)
+    if (not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022
+            or info.st_uid != expected_uid):
+        raise ValueError("unsafe sudoers directory")
+    try:
+        metadata = os.lstat(path)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != expected_uid:
+            raise ValueError("unsafe fleet sudoers file")
+        with open(path) as handle:
+            if handle.read() == content and stat.S_IMODE(metadata.st_mode) == 0o440:
+                return []
+    except FileNotFoundError:
+        pass
+    if dry_run:
+        return ["install fixed config-sync trigger permission"]
+    fd, temporary = tempfile.mkstemp(prefix=".mojo-config-sync-", dir=parent)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            os.fchmod(handle.fileno(), 0o440)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if validator is None:
+            def validator(candidate):
+                result = subprocess.run(["/usr/sbin/visudo", "-c", "-f", candidate],
+                                        capture_output=True, timeout=10, check=False)
+                return result.returncode == 0
+        if not validator(temporary):
+            raise ValueError("fleet sudoers validation failed")
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return ["install fixed config-sync trigger permission"]
+
+
 def main(argv):
     # prog is set explicitly: under `-m` argparse derives it from sys.argv[0]
     # and prints "node_setup.py", which is not an invocation an operator can copy.
@@ -448,6 +507,18 @@ def main(argv):
 
     changes = plan(root, args.owner, args.cron_user, units_dir,
                    args.systemd_dir, args.cron_file, args.dry_run)
+
+    # Alternate paths are test/custom installation surfaces and must not grant
+    # privileges on the host. Only the standard managed-node CLI owns this rule.
+    if (args.systemd_dir == SYSTEMD_DIR and args.cron_file == CRON_PATH
+            and os.path.isdir(os.path.dirname(FLEET_SUDOERS))):
+        if args.dry_run or not os.path.exists("/etc/mojosec/config.json"):
+            changes += install_fleet_trigger(args.cron_user, dry_run=args.dry_run)
+        else:
+            from mojo.deploy.mojosec_changes import run_trusted_change
+            changes += run_trusted_change(
+                "node-setup-fleet-trigger", "rendered-node-config", [FLEET_SUDOERS],
+                lambda: install_fleet_trigger(args.cron_user))
 
     prefix = "would " if args.dry_run else ""
     for change in changes:

@@ -179,6 +179,8 @@ def sensitive_body_label(request):
         return "admin_password"
     if path == f"{API_ROOT}/account/admin/apikey/action":
         return "admin_api_key"
+    if path.startswith(f"{API_ROOT}/account/admin/fleet"):
+        return "fleet_configuration"
     if path == f"{API_ROOT}/account/admin/settings":
         return "admin_settings"
     # The Assistant setup writer carries an Anthropic API key in its body on

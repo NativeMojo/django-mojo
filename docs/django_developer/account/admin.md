@@ -2,6 +2,8 @@
 
 The default configured Admin route (normally `/admin/`) remains legacy Admin.
 Its **Open Portal** sidebar destination opens `/admin/v2/` in the same tab.
+Superusers also have a **Fleet Configuration** link directly to the packaged
+page at `/admin/v2/#/fleet-configuration`.
 With `MOJO_ADMIN_PATH = "operations"`, these become `/operations/` and
 `/operations/v2/`. The backend validates this configuration as one
 letter/digit/underscore/hyphen segment. No credentials are included in the link.
@@ -15,25 +17,25 @@ Compiled assets use a relative base; Portal API requests always use same-origin
 ## Pinned identity and offline replacement
 
 The current artifact is portal-mojo **0.2.4**, source revision
-`b039433111194fae8beaaa1a80615b11237e5645`, built clean with Node
+`432afa37fc24a69b9f3758fbd483f85f22738025`, built clean with Node
 **24.21.0** / npm **11.19.0** and lockfile SHA-256
-`2eaae471bdd0f0dfa0c363585853e18429731ebbfa7c31a1132393b40e53cd5f`.
-Its 117-file inventory includes the Vite manifest and lazy chunks.
+`6323902f528efcccd2a8fb636ae67d928e21ad8b812b166175cd13335c40ca01`.
+Its 118-file inventory includes the Vite manifest and lazy chunks.
 The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 
-`886ac48352cb99430075a9c0f2152b331a968f6938837cc394861cd39746b10d`
+`9339b74dcafa0af6b5f4be24c3477903a787b42c739a419a96e6721b68308894`
 
-This pin comes from the successful [portal-mojo 0.2.4 release build](https://github.com/NativeMojo/portal-mojo/actions/runs/34629692460),
-artifact `portal-mojo-admin-0.2.4-b039433111194fae8beaaa1a80615b11237e5645`
-(GitHub artifact ID `10275931681`). The complete artifact includes hidden
-`.vite` content; verify the manifest digest before vendoring it.
+This pin comes from the clean local canonical build for item #4769, source
+revision `432afa37fc24a69b9f3758fbd483f85f22738025`. It adds Fleet Configuration.
+The complete artifact includes hidden `.vite` content; verify the manifest
+digest before vendoring it. This build has not been released to npm or deployed.
 
 Stop processes serving/importing the checkout before replacing the artifact:
 
 ```bash
 uv run python scripts/vendor_admin_portal.py \
   --source /absolute/path/to/verified/dist/admin \
-  --expected-manifest-sha256 886ac48352cb99430075a9c0f2152b331a968f6938837cc394861cd39746b10d
+  --expected-manifest-sha256 9339b74dcafa0af6b5f4be24c3477903a787b42c739a419a96e6721b68308894
 uv run python scripts/vendor_admin_portal.py --check
 ```
 

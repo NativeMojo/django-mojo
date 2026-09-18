@@ -42,6 +42,10 @@ Catalog entries omit paths, environment names, raw ignored values, exceptions,
 and secret material. The superuser-only provider status described below names
 its configured S3 object key, but never returns either API key.
 
+Application-defined S3 settings, version restore, and per-node activation are
+documented in [Fleet Configuration](fleet_configuration.md). This extends the
+GeoIP publisher without changing its topic-specific form.
+
 ## Writers and ownership
 
 | Storage owner | Admin behavior | Runtime behavior |

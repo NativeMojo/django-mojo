@@ -370,7 +370,61 @@ def sweep_stale_staging(directory):
         shutil.rmtree(path, ignore_errors=True)
 
 
+def _finish_fleet_install(receipt, digest, target, config, restart):
+    from mojo.deploy import fleet_config_node as node
+
+    unchanged = (receipt.get("installed_revision") == receipt["target_revision"]
+                 and receipt.get("installed_digest") == digest)
+    requested = (unchanged and receipt.get("restart_requested_at", 0)
+                 >= receipt.get("installed_at", float("inf")))
+    try:
+        receipt["request_service_supported"] = (
+            (config.get("CONFIG_SYNC_SERVICE") or DEFAULT_SERVICE) == DEFAULT_SERVICE
+            and bool(request_service.read()))
+    except (request_service.RequestServiceError, OSError):
+        receipt["request_service_supported"] = False
+    receipt.update(installed_revision=receipt["target_revision"],
+                   installed_digest=digest, error_code=None)
+    if requested:
+        receipt["status"] = "restart_requested"
+        node.write_receipt(target, receipt)
+        return 0
+    receipt.setdefault("installed_at", time.time())
+    receipt["status"] = "downloaded"
+    node.write_receipt(target, receipt)
+    if not as_bool(config.get("CONFIG_SYNC_RESTART")):
+        return 0
+    if not restart(config, False):
+        receipt.update(status="failed", error_code="restart_failed")
+        node.write_receipt(target, receipt)
+        return 1
+    receipt.update(status="restart_requested", restart_requested_at=time.time())
+    node.write_receipt(target, receipt)
+    return 0
+
+
 def sync(s3, config, target, remote_name, dry_run, *, restart=None):
+    """Keep a non-secret installation receipt, including recoverable failures."""
+    from mojo.deploy import fleet_config_node as node
+
+    receipt = node.read_receipt(target)
+    receipt["target_revision"] = None
+    receipt["error_code"] = None
+    try:
+        result = _sync(s3, config, target, remote_name, dry_run, receipt,
+                       restart=restart)
+    except Exception:
+        if not dry_run:
+            receipt.update(status="failed", error_code="sync_failed")
+            node.write_receipt(target, receipt)
+        raise
+    if result and not dry_run:
+        receipt.update(status="failed", error_code=receipt.get("error_code") or "sync_failed")
+        node.write_receipt(target, receipt)
+    return result
+
+
+def _sync(s3, config, target, remote_name, dry_run, receipt, *, restart=None):
     from botocore.exceptions import ClientError
     from mojo.deploy import config_override
 
@@ -401,6 +455,7 @@ def sync(s3, config, target, remote_name, dry_run, *, restart=None):
     else:
         sweep_stale_staging(target_dir)
 
+    config_override.load_schema_modules(config.get("CONFIG_SYNC_SCHEMA_MODULES", ""))
     allowed = config_override.normalize_allowed(
         config.get("CONFIG_SYNC_OVERRIDE_ALLOWED_KEYS", ""))
     override_key = None
@@ -412,10 +467,12 @@ def sync(s3, config, target, remote_name, dry_run, *, restart=None):
         override_etag, override_sha, override_size = remote_details(
             s3, bucket, override_key, missing_ok=True)
         if override_etag is not None and not override_sha:
+            receipt["error_code"] = "integrity_failed"
             log.error("fleet override carries no sha256 metadata — refusing it")
             return 1
         if (override_size is not None and
                 override_size > config_override.MAX_DOCUMENT_BYTES):
+            receipt["error_code"] = "document_too_large"
             log.error("fleet override exceeds the maximum document size — refusing it")
             return 1
 
@@ -431,6 +488,7 @@ def sync(s3, config, target, remote_name, dry_run, *, restart=None):
         # what a hand-run `aws s3 cp` produces. The integrity check below then
         # silently no-ops, so say so out loud.
         if as_bool(config.get("CONFIG_SYNC_REQUIRE_SHA")):
+            receipt["error_code"] = "integrity_failed"
             log.error("published object carries no sha256 metadata and "
                       "CONFIG_SYNC_REQUIRE_SHA is set — refusing to install")
             return 1
@@ -446,15 +504,18 @@ def sync(s3, config, target, remote_name, dry_run, *, restart=None):
             # THE important failure. Leaving the existing config alone is always
             # better than replacing it with nothing: a node with stale config
             # serves, a node with no config does not start.
+            receipt["error_code"] = "download_failed"
             log.error("download of s3://%s/%s failed (%s) — keeping current config",
                       bucket, key, err.response.get("Error", {}).get("Code", "?"))
             return 1
 
         downloaded_sha = file_sha256(temp_path)
         if not os.path.getsize(temp_path):
+            receipt["error_code"] = "empty_config"
             log.error("published config is empty — refusing to install")
             return 1
         if published_sha and downloaded_sha != published_sha:
+            receipt["error_code"] = "integrity_failed"
             log.error("downloaded config does not match its published sha256 "
                       "— refusing to install")
             return 1
@@ -464,10 +525,12 @@ def sync(s3, config, target, remote_name, dry_run, *, restart=None):
                     Bucket=bucket, Key=override_key,
                     IfMatch=f'"{override_etag}"')
             except ClientError as err:
+                receipt["error_code"] = "download_failed"
                 log.error("download of fleet override failed (%s) — keeping current config",
                           err.response.get("Error", {}).get("Code", "?"))
                 return 1
             if response.get("ContentLength", 0) > config_override.MAX_DOCUMENT_BYTES:
+                receipt["error_code"] = "document_too_large"
                 log.error("fleet override exceeds the maximum document size — refusing it")
                 return 1
             body = response["Body"]
@@ -478,17 +541,21 @@ def sync(s3, config, target, remote_name, dry_run, *, restart=None):
                 if close:
                     close()
             if len(override_payload) > config_override.MAX_DOCUMENT_BYTES:
+                receipt["error_code"] = "document_too_large"
                 log.error("fleet override exceeds the maximum document size — refusing it")
                 return 1
             if config_override.sha256(override_payload) != override_sha:
+                receipt["error_code"] = "integrity_failed"
                 log.error("fleet override does not match its published sha256 — refusing it")
                 return 1
             try:
                 document = config_override.decode_document(override_payload, allowed)
+                receipt["target_revision"] = document["revision"]
                 with open(temp_path, "rb") as handle:
                     base_payload = handle.read()
                 combined = config_override.compose(base_payload, document)
             except ValueError as err:
+                receipt["error_code"] = "override_invalid"
                 log.error("fleet override is invalid (%s) — keeping current config", err)
                 return 1
             with open(temp_path, "wb") as handle:
@@ -498,6 +565,8 @@ def sync(s3, config, target, remote_name, dry_run, *, restart=None):
             # Reachable when the publisher did not set the sha256 metadata, so
             # the cheap head_object comparison above could not short-circuit.
             log.debug("downloaded config is identical to the local one")
+            if receipt.get("target_revision") and not dry_run:
+                return _finish_fleet_install(receipt, downloaded_sha, target, config, restart)
             return 0
 
         if dry_run:
@@ -506,11 +575,17 @@ def sync(s3, config, target, remote_name, dry_run, *, restart=None):
             return 0
 
         install(temp_path, target, config.get("CONFIG_SYNC_OWNER"))
+        if receipt.get("target_revision"):
+            receipt["installed_at"] = time.time()
+            receipt.pop("restart_requested_at", None)
+            receipt["status"] = "downloaded"
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
     log.info("config updated from s3://%s/%s", bucket, key)
 
+    if receipt.get("target_revision"):
+        return _finish_fleet_install(receipt, downloaded_sha, target, config, restart)
     if as_bool(config.get("CONFIG_SYNC_RESTART")):
         return 0 if restart(config, dry_run) else 1
     log.info("CONFIG_SYNC_RESTART not set — the app is still running the old "

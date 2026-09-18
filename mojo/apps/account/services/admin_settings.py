@@ -6,7 +6,7 @@ model classes, and optional applications register their own rows from
 only database-backed store.
 """
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import json
 import ipaddress
 import re
@@ -120,18 +120,35 @@ def register_descriptor(descriptor):
 
 
 def descriptors():
-    return tuple(sorted(_REGISTRY.values(), key=lambda row: (row.section, row.label)))
+    from mojo.deploy import config_override
+    rows = dict(_REGISTRY)
+    for definition in config_override.definitions():
+        key = definition["key"]
+        if key in rows and definition["sensitive"]:
+            rows[key] = replace(rows[key], sensitivity="configured_only", default=None)
+        if key not in rows:
+            rows[key] = Descriptor(
+                key, definition["label"], definition["section"],
+                definition["description"], definition["value_type"],
+                default=definition.get("default"),
+                sensitivity="configured_only" if definition["sensitive"] else "public",
+                writable="fleet_config", owner="Fleet Configuration",
+                change_behavior="restart" if definition["restart_required"] else "immediate",
+                storage="fleet_config")
+    return tuple(sorted(rows.values(), key=lambda row: (row.section, row.label)))
 
 
 def _section_names(descriptor_rows):
     present = {row.section for row in descriptor_rows}
-    return [section for section in SECTION_ORDER if section in present]
+    return ([section for section in SECTION_ORDER if section in present] +
+            sorted(present - set(SECTION_ORDER)))
 
 
 def is_catalog_protected(key):
     """Return whether alternate *global* writers must refuse this key."""
+    from mojo.deploy import config_override
     return (key in MUTABLE_KEYS or key in FLEET_PROVIDER_KEYS or
-            key in ASSISTANT_KEYS)
+            key in ASSISTANT_KEYS or config_override.get_definition(key) is not None)
 
 
 def _bounded(value):

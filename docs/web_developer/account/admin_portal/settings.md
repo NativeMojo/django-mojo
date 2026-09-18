@@ -3,6 +3,10 @@
 The built-in Admin exposes a curated, capability-gated Settings catalog over
 django-mojo's existing database-backed settings system.
 
+Application-defined S3 settings and fleet activation use the separate
+[Fleet Configuration API](fleet_configuration.md). The existing GeoIP publisher
+retains its topic-specific payload and now requires S3 versioning to be Enabled.
+
 | Method | Route | Authority |
 |---|---|---|
 | `GET` | `/api/account/admin/settings` | exact global `manage_settings`, `view_advanced_settings`, `manage_advanced`, or `admin`; literal superuser also passes |

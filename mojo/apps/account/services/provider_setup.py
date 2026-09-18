@@ -30,14 +30,10 @@ def _static(name, default=None):
 
 
 def _allowed_keys():
-    from mojo.apps.account.services import admin_settings
-    registered = {
-        row.key for row in admin_settings.descriptors()
-        if row.storage == "fleet_config" and row.writable == "fleet_config"
-    }
+    config_override.load_schema_modules(_static("ADMIN_FLEET_CONFIG_SCHEMA_MODULES", []))
+    registered = {row["key"] for row in config_override.definitions()}
     configured = _static("ADMIN_FLEET_CONFIG_ALLOWED_KEYS", [])
-    return (config_override.normalize_allowed(configured) &
-            frozenset(config_override.VALIDATORS) & registered)
+    return config_override.normalize_allowed(configured) & registered
 
 
 def _location():
@@ -85,15 +81,18 @@ def _loaded_values():
     }
 
 
-def _published(s3, bucket, key, allowed):
+def _published(s3, bucket, key, allowed, version_id=None):
     if not bucket or not key:
         return None
     from botocore.exceptions import ClientError
     try:
-        response = s3.get_object(Bucket=bucket, Key=key)
+        arguments = {"Bucket": bucket, "Key": key}
+        if version_id is not None:
+            arguments["VersionId"] = version_id
+        response = s3.get_object(**arguments)
     except ClientError as error:
         code = error.response.get("Error", {}).get("Code", "")
-        if code in ("404", "NoSuchKey", "NotFound"):
+        if version_id is None and code in ("404", "NoSuchKey", "NotFound"):
             return None
         raise
     if response.get("ContentLength", 0) > config_override.MAX_DOCUMENT_BYTES:
@@ -113,6 +112,27 @@ def _published(s3, bucket, key, allowed):
         "etag": response.get("ETag"),
         "version_id": response.get("VersionId"),
     }
+
+
+def _write_document(s3, bucket, key, kms_key, allowed, current, values, revision):
+    """The one exact-object conditional writer shared by both Admin surfaces."""
+    if not bucket or not key or not kms_key:
+        raise merrors.ValueException("Fleet publishing requires an exact object and KMS key")
+    if current and not current.get("etag"):
+        raise merrors.ValueException("Published fleet configuration has no concurrency token")
+    if s3.get_bucket_versioning(Bucket=bucket).get("Status") != "Enabled":
+        raise merrors.ValueException("Fleet publishing requires S3 versioning enabled")
+    body = config_override.encode_document(
+        values, revision, timezone.now().isoformat(), allowed)
+    arguments = dict(
+        Bucket=bucket, Key=key, Body=body, ContentType="application/json",
+        ServerSideEncryption="aws:kms", SSEKMSKeyId=kms_key,
+        Metadata={"sha256": config_override.sha256(body), "revision": revision})
+    if current:
+        arguments["IfMatch"] = current["etag"]
+    else:
+        arguments["IfNoneMatch"] = "*"
+    return s3.put_object(**arguments)
 
 
 def key_hint(value):
@@ -175,7 +195,9 @@ def state(include_remote=True):
             }
     desired_geoip = dict(_loaded_values())
     if published:
-        desired_geoip.update(published["document"]["settings"])
+        desired_geoip.update({key: value for key, value in
+                              published["document"]["settings"].items()
+                              if key in FLEET_KEYS})
     published_revision = (published["document"].get("revision")
                           if published else None)
     configuration_revision = _configuration_token(
@@ -764,7 +786,10 @@ def apply(actor, topic, payload):
             if expected_revision != old_revision:
                 raise merrors.ValueException(
                     "Provider configuration changed; reload before publishing")
-            static_values = (section["static_values"] if topic == "geoip" else None)
+            static_values = None
+            if topic == "geoip":
+                static_values = dict(current["document"]["settings"]) if current else {}
+                static_values.update(section["static_values"])
             static_changed = bool(topic == "geoip" and (
                 not current or current["document"]["settings"] != static_values))
             if static_changed and current and not current.get("etag"):
@@ -781,20 +806,8 @@ def apply(actor, topic, payload):
                 version_id = current.get("version_id") if current else None
                 revision = _configuration_token(revision, published_revision)
             else:
-                body = config_override.encode_document(
-                    static_values, revision, timezone.now().isoformat(), allowed)
-                put_args = dict(
-                    Bucket=bucket, Key=key, Body=body,
-                    ContentType="application/json",
-                    ServerSideEncryption="aws:kms", SSEKMSKeyId=kms_key,
-                    Metadata={"sha256": config_override.sha256(body),
-                              "revision": revision},
-                )
-                if current:
-                    put_args["IfMatch"] = current["etag"]
-                else:
-                    put_args["IfNoneMatch"] = "*"
-                response = s3.put_object(**put_args)
+                response = _write_document(
+                    s3, bucket, key, kms_key, allowed, current, static_values, revision)
                 version_id = response.get("VersionId")
                 published_revision = revision
             # The candidate this call verified is now the stored one, so its

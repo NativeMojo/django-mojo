@@ -434,6 +434,64 @@ working `django.conf` untouched. The Admin publisher is separately bounded by
 `ADMIN_FLEET_CONFIG_ALLOWED_KEYS`; the effective writable set is the
 intersection of both allowlists and framework support.
 
+Applications register their typed settings in importable, Django-independent
+schema modules. Set `CONFIG_SYNC_SCHEMA_MODULES` in each node's trusted
+`bootstrap.conf` to the comma-separated module names; configure the same modules
+in the Admin application. Module names never come from REST or S3. Deploy schema
+support to every node before publishing a new key. The independent bootstrap
+allowlist still limits what an application registration may override.
+
+Config-sync installs `django.conf` with mode `0640` before atomic replacement;
+subsequent node-setup ownership sweeps preserve that mode. Its non-secret receipt
+retains `0644`; ordinary mutable files retain the usual node-setup policy.
+
+Config-sync writes a non-secret atomic receipt beside its target:
+`/opt/api/var/django.conf.fleet-config.json`. It records the target and installed
+revisions, installed digest, installation time, restart request, and a fixed
+failure code. `restart_requested` means systemd accepted the request; it does
+not prove the service restarted. An unsuccessful restart is retried on the next
+sync even when the installed bytes already match. Successful requests are not
+repeated merely because another timer fires. A first receipt for matching bytes
+requests one restart to establish fresh process evidence.
+
+The standard managed `node_setup` command installs a validated, atomic sudoers
+rule for the deployed jobs account. It permits exactly
+`/usr/bin/systemctl --no-block start config-sync.service`. The asynchronous
+Fleet Configuration action calls this fixed operation; REST cannot choose a
+command, unit, filename, or executable. Each trigger also requires a signed,
+five-minute Apply authorization binding the operation, actor, revision, and
+expected node list; generic job execution does not authorize publication or
+activation. Custom node-setup destination paths do
+not install a host sudo grant. Existing nodes need the updated node setup before
+**Apply now** works; their timers continue to operate independently.
+
+Fleet health is verified against the standard API unit and its Unix socket,
+`/opt/api/var/asgi.sock`. The jobs account must have access to that socket and
+its parent directories. The shipped unit creates it as the web account/group
+(default `www:www`) with `UMask=007`; account group enrollment is deployment-owned.
+If needed, enroll the deployed jobs account (normally `ec2-user`) in the socket's
+web group and restart the jobs engine so its supplementary groups refresh. An
+inaccessible socket reports `proof_socket_permission_denied`, never success.
+
+The probe sends a short-lived signed challenge directly over the local socket,
+using the configured `BASE_URL` host and `MOJO_PREFIX` API path. For HTTPS it
+supplies the original scheme through the shipped ASGI unit's trusted proxy
+header; a configured Django `SECURE_PROXY_SSL_HEADER` is also honored. Custom
+ASGI/proxy setups must preserve this local HTTPS scheme handling and expose the
+same route. HTTP rejection reports `proof_http_rejected`; no redirect or remote
+network destination is followed. The endpoint returns only revision/process/node
+metadata and dependency health, not configuration values.
+
+A node is healthy only when the current bounded, no-follow configuration digest
+matches the receipt, systemd proves the API service started after installation,
+and the serving-process response to a signed challenge confirms the loaded revision plus
+successful database and Redis checks. File drift reports `installed_config_drift`;
+dependency failures report `dependency_health_failed`. Probe/socket/restart errors
+remain observable and are checked again on subsequent polling. Worker-only,
+content-only, and disabled request-service nodes do not qualify as healthy API
+nodes; support for their distinct activation checks requires a separate contract.
+The supported configuration file size for this health proof is at most 4 MiB.
+
 ### `check_setup`
 
 `python3 -m mojo.deploy.check_setup` is a read-only AWS account audit. It runs

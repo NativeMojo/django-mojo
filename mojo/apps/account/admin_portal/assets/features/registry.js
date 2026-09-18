@@ -35,6 +35,9 @@ export function navigationFor(ctx) {
     .flatMap((feature) => feature.navigation(ctx))
     .sort((left, right) => (left.order || 0) - (right.order || 0));
   if (/^\/(?:[A-Za-z0-9_-]+\/)+$/.test(ctx.admin_path || '')) {
+    if (ctx.user?.is_superuser === true) {
+      entries.push({label: 'Fleet Configuration', href: `${ctx.admin_path}v2/#/fleet-configuration`, icon: 'settings', section: 'Portal'});
+    }
     entries.push({label: 'Open Portal', href: `${ctx.admin_path}v2/`, icon: 'globe', section: 'Portal'});
   }
   return entries;

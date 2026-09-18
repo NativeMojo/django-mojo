@@ -11,6 +11,9 @@ class AppConfig(BaseAppConfig):
         from mojo.apps.account.services import admin_settings
         admin_settings.register_core_descriptors()
         from mojo.helpers.settings import settings
+        from mojo.deploy import config_override
+        config_override.load_schema_modules(
+            settings.get_static("ADMIN_FLEET_CONFIG_SCHEMA_MODULES", []))
         if settings.is_app_installed("django.contrib.admin"):
             self.unregister_apps()
         self._warn_dev_bypass()
