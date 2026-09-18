@@ -10,6 +10,7 @@ credentials, or ``sts:AssumeRole`` when ``assume_role_arn`` is configured.
 No test here touches AWS — the session factories are patched.
 """
 from unittest import mock
+from uuid import uuid4
 
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
@@ -59,7 +60,10 @@ def setup_s3_credential_modes(opts):
 def _backend(fm_id):
     """A fresh backend every time — FileManager memoizes the one it built."""
     from mojo.apps.fileman.models import FileManager
-    return FileManager.objects.get(pk=fm_id).backend
+    backend = FileManager.objects.get(pk=fm_id).backend
+    # Each mocked provider must own a distinct connection-cache entry.
+    backend.endpoint_url = f"https://{uuid4().hex}.example.test"
+    return backend
 
 
 def _fake_session(s3_client=None):

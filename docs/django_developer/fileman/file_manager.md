@@ -135,7 +135,21 @@ AWS_REGION = "us-east-1"
 #### Credential resolution
 
 All S3 calls a manager makes — uploads, downloads, CORS, the public-access
-audit — run through **one** session built by the backend. See
+audit — use the same credential session. S3 backends reuse up to 128
+session/client pairs per worker, including across separately loaded ORM instances
+of a manager. The cache distinguishes manager/database, bucket, credentials,
+endpoint, region, signing/addressing options and AssumeRole settings. A newly
+loaded manager with changed credentials gets a new entry; existing backend
+instances retain their configuration snapshot.
+
+Client construction is serialized across threads; requests use the shared client.
+Resources remain local to each backend. Forked workers discard inherited clients,
+and eviction does not close clients still used by live backends. Applications
+must not close cached clients or mutate their event handlers/configuration.
+
+IAM/STS refreshable credentials continue refreshing through botocore. Changes to
+ambient environment variables or AWS profile files require a worker restart;
+they are not manager-setting changes. See
 [../aws/credentials.md](../aws/credentials.md) for the underlying factories.
 
 | Setting | Meaning |

@@ -9,11 +9,29 @@ from urllib.parse import quote, urlparse
 import json
 import fnmatch
 import requests
+from collections import OrderedDict
+from threading import RLock
 
 from mojo.helpers.aws.client import get_session, get_assumed_session
 from mojo.helpers.aws.provider_call import safe_error_detail
 
 from .base import StorageBackend
+
+
+_S3_CLIENT_CACHE_SIZE = 128
+_S3_CLIENT_CACHE = OrderedDict()
+_S3_CLIENT_LOCK = RLock()
+
+
+def _reset_client_cache_after_fork():
+    # Never inherit sockets or a lock held by a vanished parent thread.
+    global _S3_CLIENT_CACHE, _S3_CLIENT_LOCK
+    _S3_CLIENT_CACHE = OrderedDict()
+    _S3_CLIENT_LOCK = RLock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_client_cache_after_fork)
 
 
 class S3StorageBackend(StorageBackend):
@@ -67,9 +85,10 @@ class S3StorageBackend(StorageBackend):
         self._session = None
         self._client = None
         self._resource = None
+        self._process_id = os.getpid()
 
-    def _build_session(self):
-        """One session per backend, shared by every client it hands out."""
+    def _new_session(self):
+        """Construct the session on a cache miss, retaining refreshable credentials."""
         if self._session is None:
             if self.assume_role_arn:
                 self._session = get_assumed_session(
@@ -87,6 +106,32 @@ class S3StorageBackend(StorageBackend):
                     secret_key=self.secret_access_key,
                     region=self.region_name,
                 )
+        return self._session
+
+    def _check_process(self):
+        pid = os.getpid()
+        if getattr(self, "_process_id", pid) != pid:
+            self._session = self._client = self._resource = None
+            self._process_id = pid
+
+    def _client_cache_key(self):
+        manager = self.file_manager
+        role = self.assume_role_arn
+        # Bucket separates adaptive retry throttling. Prefixes do not affect
+        # the connection. Include the owner even when credentials are equal.
+        return (
+            type(self), getattr(getattr(manager, "_state", None), "db", None),
+            manager.pk, self.bucket_name, self.region_name, self.endpoint_url,
+            self.access_key_id, self.secret_access_key,
+            self.signature_version, self.addressing_style, role,
+            self.external_id if role else None,
+            (self.role_session_name or f"django-mojo-fileman-{manager.pk}") if role else None,
+            self.assume_role_duration if role else None,
+        )
+
+    def _build_session(self):
+        """Use the signing client's session for expiry checks and account audits."""
+        self.client
         return self._session
 
     def _credential_seconds_remaining(self):
@@ -119,41 +164,44 @@ class S3StorageBackend(StorageBackend):
     @property
     def client(self):
         """Lazy initialization of S3 client"""
+        self._check_process()
         if self._client is None:
-            session = self._build_session()
-
-            config = Config(
-                signature_version=self.signature_version,
-                connect_timeout=3,
-                read_timeout=3,
-                s3={
-                    'addressing_style': self.addressing_style
-                },
-                retries={
-                    'max_attempts': 3,
-                    'mode': 'adaptive'
-                }
-            )
-
-            self._client = session.client(
-                's3',
-                endpoint_url=self.endpoint_url,
-                config=config
-            )
-
+            # boto3 sessions are not thread safe; serialize construction, not
+            # requests. Cache misses must build once even under concurrent load.
+            with _S3_CLIENT_LOCK:
+                key = self._client_cache_key()
+                pair = _S3_CLIENT_CACHE.get(key)
+                if pair is None:
+                    session = self._new_session()
+                    config = Config(
+                        signature_version=self.signature_version,
+                        connect_timeout=3,
+                        read_timeout=3,
+                        s3={'addressing_style': self.addressing_style},
+                        retries={'max_attempts': 3, 'mode': 'adaptive'},
+                    )
+                    client = session.client(
+                        's3', endpoint_url=self.endpoint_url, config=config)
+                    pair = (session, client)
+                    _S3_CLIENT_CACHE[key] = pair
+                    if len(_S3_CLIENT_CACHE) > _S3_CLIENT_CACHE_SIZE:
+                        # A live backend may still own this client; don't close it.
+                        _S3_CLIENT_CACHE.popitem(last=False)
+                _S3_CLIENT_CACHE.move_to_end(key)
+                self._session, self._client = pair
         return self._client
 
     @property
     def resource(self):
         """Lazy initialization of S3 resource"""
+        self._check_process()
         if self._resource is None:
-            session = self._build_session()
-
-            self._resource = session.resource(
-                's3',
-                endpoint_url=self.endpoint_url
-            )
-
+            with _S3_CLIENT_LOCK:
+                if self._resource is None:
+                    session = self._build_session()
+                    # Resource state belongs to this backend, not the cache.
+                    self._resource = session.resource(
+                        's3', endpoint_url=self.endpoint_url)
         return self._resource
 
     def save(self, file_obj, file_path: str, content_type: Optional[str] = None, metadata: Optional[dict] = None) -> str:
@@ -603,8 +651,11 @@ class S3StorageBackend(StorageBackend):
         # separate session would audit a different account than the one the
         # bucket calls actually run against.
         session = self._build_session()
-        account_id = session.client("sts").get_caller_identity()["Account"]
-        response = session.client("s3control").get_public_access_block(AccountId=account_id)
+        with _S3_CLIENT_LOCK:
+            sts = session.client("sts")
+            s3control = session.client("s3control")
+        account_id = sts.get_caller_identity()["Account"]
+        response = s3control.get_public_access_block(AccountId=account_id)
         return response.get("PublicAccessBlockConfiguration") or {}
 
     def _audit_existing_object(self, file_path):
