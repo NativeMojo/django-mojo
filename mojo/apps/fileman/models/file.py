@@ -685,7 +685,7 @@ class File(models.Model, MojoModel):
 
 
     def publish_renditions(self):
-        """Enqueue an async job to build all default renditions for this file.
+        """Enqueue an async job to build all automatic renditions for this file.
 
         Uses transaction.on_commit so the worker never reads pre-commit state,
         and an idempotency key so repeat publishes for the same file collapse.

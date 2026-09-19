@@ -77,6 +77,7 @@ def regenerate_renditions(job):
                     created.append(r)
             except Exception as e:
                 logger.exception("regenerate_renditions: role=%s failed: %s", role, str(e))
+        rndr.raise_for_failures()
     else:
         # Wipe all existing renditions and recreate defaults.
         rndr.cleanup_renditions()

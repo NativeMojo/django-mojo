@@ -654,6 +654,10 @@ reasoning: [edge README](../edge/README.md#settings),
 - `FILEMAN_EXPORT_EXPIRES_DAYS` — days until assistant `export_data` files
   expire and are deleted by the cleanup job (default `14`). See
   [assistant settings](../assistant/README.md#settings).
+- `FILEMAN_RENDER_TIMEOUT` — maximum wall-clock seconds for each ffmpeg,
+  ffprobe, LibreOffice, poppler, or Ghostscript rendition process (default
+  `1500`). On expiry, fileman kills the converter's process group and records
+  the rendition as failed. See [fileman renditions](../fileman/renditions.md).
 - `FILEMAN_SVG_MAX_BYTES` — first of five independent caps bounding SVG-to-PNG
   rasterization for renditions (default `2097152`, 2 MB). Defaults and the
   bomb each one stops:

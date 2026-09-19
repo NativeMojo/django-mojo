@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Tuple, Any, Union
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
 from mojo.apps.fileman.models import File, FileRendition
+from mojo.apps.fileman.renderer.process import MAX_ERROR_LENGTH
 
 logger = logit.get_logger(__name__, "fileman.log")
 
@@ -41,6 +42,10 @@ class RenditionRole:
     AUDIO_MP3 = 'audio_mp3'
 
 
+class RenditionBatchError(RuntimeError):
+    """One or more requested renditions failed in a diagnosable way."""
+
+
 class BaseRenderer(ABC):
     """
     Base class for file renderers
@@ -56,6 +61,10 @@ class BaseRenderer(ABC):
     # Default rendition definitions: 
     # mapping of role -> (width, height, options)
     default_renditions = {}
+
+    # None means every declared rendition is automatic. Renderers with
+    # expensive opt-in roles may provide an explicit tuple.
+    automatic_rendition_roles = None
     
     def __init__(self, file: File):
         """
@@ -66,12 +75,26 @@ class BaseRenderer(ABC):
         """
         self.file = file
         self.renditions = {}
+        self.failures = {}
         self._load_existing_renditions()
     
     def _load_existing_renditions(self):
         """Load existing renditions for this file"""
-        for rendition in FileRendition.objects.filter(original_file=self.file):
+        for rendition in FileRendition.objects.filter(
+                original_file=self.file).order_by("created"):
             self.renditions[rendition.role] = rendition
+
+    @classmethod
+    def get_automatic_rendition_roles(cls):
+        if cls.automatic_rendition_roles is None:
+            return tuple(cls.default_renditions.keys())
+        return tuple(cls.automatic_rendition_roles)
+
+    @classmethod
+    def get_rendition_options(cls, role):
+        if role not in cls.default_renditions:
+            raise ValueError("unsupported rendition role: %s" % role)
+        return dict(cls.default_renditions[role])
     
     @classmethod
     def supports_file(cls, file: File) -> bool:
@@ -111,11 +134,12 @@ class BaseRenderer(ABC):
         Returns:
             FileRendition: The rendition, or None if not found and not created
         """
-        if role in self.renditions:
-            return self.renditions[role]
+        existing = self.renditions.get(role)
+        if existing and existing.upload_status == FileRendition.COMPLETED:
+            return existing
         
         if create_if_missing:
-            options = self.default_renditions.get(role, {})
+            options = self.get_rendition_options(role)
             rendition = self.create_rendition(role, options)
             if rendition:
                 self.renditions[role] = rendition
@@ -131,11 +155,47 @@ class BaseRenderer(ABC):
             List[FileRendition]: List of created renditions
         """
         results = []
-        for role, options in self.default_renditions.items():
+        for role in self.get_automatic_rendition_roles():
             rendition = self.get_rendition(role)
             if rendition:
                 results.append(rendition)
+        self.raise_for_failures()
         return results
+
+    def record_failure(self, role, error):
+        """Persist a safe failed rendition result and remember it for the job."""
+        message = str(error).strip()[:MAX_ERROR_LENGTH] or "rendition failed"
+        self.failures[role] = message
+
+        rendition = FileRendition.objects.filter(
+            original_file=self.file,
+            role=role,
+        ).order_by("-created").first()
+        if rendition is None:
+            name, _ = os.path.splitext(self.file.filename)
+            rendition = FileRendition(
+                original_file=self.file,
+                role=role,
+                filename="%s_%s.failed" % (name, role),
+                storage_path="",
+                content_type="application/octet-stream",
+                category=self.file.category or "unknown",
+            )
+        rendition.upload_status = FileRendition.FAILED
+        rendition.error_message = message
+        rendition.file_size = None
+        rendition.save()
+        self.renditions[role] = rendition
+        return rendition
+
+    def raise_for_failures(self):
+        if not self.failures:
+            return
+        detail = "; ".join(
+            "%s: %s" % (role, message)
+            for role, message in sorted(self.failures.items())
+        )[:500]
+        raise RenditionBatchError("rendition processing failed: %s" % detail)
     
     def cleanup_renditions(self):
         """
@@ -160,6 +220,11 @@ class BaseRenderer(ABC):
         Returns:
             FileRendition: The created rendition object
         """
+        FileRendition.objects.filter(
+            original_file=self.file,
+            role=role,
+            upload_status=FileRendition.FAILED,
+        ).delete()
         rendition = FileRendition(
             original_file=self.file,
             role=role,
@@ -168,7 +233,8 @@ class BaseRenderer(ABC):
             content_type=content_type,
             category=category,
             file_size=file_size,
-            upload_status=FileRendition.COMPLETED
+            upload_status=FileRendition.COMPLETED,
+            error_message="",
         )
         rendition.save()
         return rendition

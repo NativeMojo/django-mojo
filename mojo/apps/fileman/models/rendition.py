@@ -26,6 +26,11 @@ class FileRendition(models.Model, MojoModel):
         POST_SAVE_ACTIONS = ["share"]
         VIEW_PERMS = ["view_fileman", "manage_files", "files"]
         SAVE_PERMS = ["manage_files", "files"]
+        NO_SAVE_FIELDS = [
+            "original_file", "filename", "storage_path", "download_url",
+            "file_size", "content_type", "category", "role",
+            "upload_status", "error_message", "shortlink_code",
+        ]
         # Rendition has no direct group FK — scope list queries to the
         # request.group via the parent File. Without this, the list endpoint
         # would expose all renditions across all groups to any caller holding
@@ -112,6 +117,12 @@ class FileRendition(models.Model, MojoModel):
         help_text="Current status of rendering"
     )
 
+    error_message = models.TextField(
+        blank=True,
+        default="",
+        help_text="Bounded diagnostic for a failed rendition"
+    )
+
     shortlink_code = models.CharField(
         max_length=10,
         null=True,
@@ -132,12 +143,16 @@ class FileRendition(models.Model, MojoModel):
 
     @property
     def url(self):
+        if self.upload_status != self.COMPLETED or not self.storage_path:
+            return None
         return self.generate_download_url()
 
     def get_direct_download_url(self):
         """Return the raw backend URL, bypassing any shortlink wrapping.
         Used by the shortlink resolver and as the fallback when shortlinks are disabled.
         """
+        if self.upload_status != self.COMPLETED or not self.storage_path:
+            return None
         effective_public = self.file_manager.ensure_public_access_audited(
             file_path=self.storage_path,
         )
@@ -157,6 +172,8 @@ class FileRendition(models.Model, MojoModel):
         manager has `use_shortlinks` enabled. Falls back to the raw backend
         URL in all other cases.
         """
+        if self.upload_status != self.COMPLETED or not self.storage_path:
+            return None
         from mojo.apps.fileman.models.file import (
             _shortlinks_enabled,
             _get_or_create_shortlink_url,
@@ -170,6 +187,8 @@ class FileRendition(models.Model, MojoModel):
 
         Triggered by {"share": true | {"expire_days": N, "track_clicks": bool, "note": "..."}}.
         """
+        if self.upload_status != self.COMPLETED or not self.storage_path:
+            raise ValueError("Only completed renditions can be shared")
         from mojo.apps.fileman.models.file import _mint_share_link
         return _mint_share_link(self, value)
 

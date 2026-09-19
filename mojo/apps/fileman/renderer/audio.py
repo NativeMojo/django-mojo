@@ -9,6 +9,7 @@ from PIL import Image
 
 from mojo.apps.fileman.models import File, FileRendition
 from mojo.apps.fileman.renderer.base import BaseRenderer, RenditionRole
+from mojo.apps.fileman.renderer.process import RendererProcessError, run as run_process
 from mojo.apps.fileman.renderer.utils import get_audio_duration
 from mojo.helpers import logit
 
@@ -57,11 +58,11 @@ class AudioRenderer(BaseRenderer):
     def _check_ffmpeg(self):
         """Check if ffmpeg is available in the system"""
         try:
-            subprocess.run(["ffmpeg", "-version"], 
+            run_process(["ffmpeg", "-version"],
                            stdout=subprocess.PIPE, 
                            stderr=subprocess.PIPE, 
                            check=True)
-        except (subprocess.SubprocessError, FileNotFoundError):
+        except (RendererProcessError, subprocess.SubprocessError, FileNotFoundError):
             logger.warning("ffmpeg is not available. Audio rendering may not work properly.")
     
     def _download_original(self) -> Union[str, None]:
@@ -115,7 +116,7 @@ class AudioRenderer(BaseRenderer):
             ]
             
             # Run command, but don't fail if artwork doesn't exist
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            result = run_process(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
             # Check if the output file exists and has content
             if os.path.exists(temp_output) and os.path.getsize(temp_output) > 0:
@@ -136,6 +137,8 @@ class AudioRenderer(BaseRenderer):
                 # If no artwork, create a default audio thumbnail
                 return self._create_default_audio_thumbnail(width, height, output_format)
             
+        except RendererProcessError:
+            raise
         except Exception as e:
             logger.error(f"Failed to extract audio cover: {str(e)}")
             return self._create_default_audio_thumbnail(width, height, output_format)
@@ -229,7 +232,7 @@ class AudioRenderer(BaseRenderer):
                 temp_output  # Output file
             ]
             
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            run_process(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
             # Get file size
             file_size = os.path.getsize(temp_output)
@@ -289,7 +292,7 @@ class AudioRenderer(BaseRenderer):
             # Add output file
             cmd.append(temp_output)
             
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            run_process(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
             # Get file size
             file_size = os.path.getsize(temp_output)
@@ -318,7 +321,7 @@ class AudioRenderer(BaseRenderer):
         """
         try:
             # Get rendition settings
-            settings = self.default_renditions.get(role, {})
+            settings = dict(self.default_renditions.get(role, {}))
             if options:
                 settings.update(options)
             
@@ -397,6 +400,10 @@ class AudioRenderer(BaseRenderer):
                 if temp_output and os.path.exists(temp_output):
                     os.unlink(temp_output)
                     
+        except RendererProcessError as e:
+            self.record_failure(role, e)
+            logger.error(f"Failed to create audio rendition '{role}': {str(e)}")
+            return None
         except Exception as e:
             logger.error(f"Failed to create audio rendition '{role}': {str(e)}")
             return None

@@ -224,6 +224,7 @@ def get_video_duration(video_path: str) -> Optional[float]:
     """
     try:
         import subprocess
+        from mojo.apps.fileman.renderer.process import run as run_process
         
         # Use ffprobe to get video duration
         cmd = [
@@ -234,7 +235,7 @@ def get_video_duration(video_path: str) -> Optional[float]:
             video_path
         ]
         
-        result = subprocess.run(cmd, 
+        result = run_process(cmd,
                                stdout=subprocess.PIPE, 
                                stderr=subprocess.PIPE, 
                                text=True, 

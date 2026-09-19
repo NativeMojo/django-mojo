@@ -48,7 +48,11 @@ Payload: `{"file_id": <int>}`
 
 - No-op if file does not exist (already deleted).
 - No-op if file is not in `completed` status.
-- Calls `renderer.create_all_renditions(file)` which iterates the matching renderer's `default_renditions` and skips roles that already exist.
+- Calls `renderer.create_all_renditions(file)` which iterates the matching
+  renderer's automatic roles and skips completed roles that already exist.
+  Video uploads automatically create their two thumbnails and 10-second
+  preview. The full MP4 and WebM transcodes remain declared roles, but must be
+  requested explicitly.
 
 ### `regenerate_renditions(job)`
 
@@ -64,7 +68,15 @@ POST /api/fileman/file/123
 {"regenerate_renditions": ["thumbnail"]}
 ```
 
-Regenerate all default roles:
+Request a full video transcode explicitly when an application needs one:
+
+```json
+POST /api/fileman/file/123
+{"regenerate_renditions": ["video_mp4"]}
+```
+
+Regenerate all automatic roles. For video files this still excludes MP4 and
+WebM; request either role explicitly as shown above:
 
 ```json
 POST /api/fileman/file/123
@@ -77,11 +89,29 @@ POST /api/fileman/file/123
 
 - `image.py` — Pillow-based thumbnails and resizes.
 - `vector.py` — SVG rasterized to PNG, then handed to the image path. See [SVG rasterization](#svg-rasterization) below.
-- `video.py` — ffmpeg-based thumbnails and transcodes. Warns on missing ffmpeg; per-role exceptions are isolated.
+- `video.py` — ffmpeg-based thumbnails and transcodes. Full MP4 and WebM
+  transcodes are opt-in roles.
 - `audio.py` — ffmpeg-based waveform/transcode.
 - `document.py` — PDF page previews via poppler/ImageMagick.
 
 Dispatch: `renderer.get_renderer_for_file(file)` returns the first renderer that claims the file. Most renderers claim on `supported_categories` containing `file.category`; `VectorRenderer` overrides `supports_file` to match on **content type** instead and is registered first, so SVG is routed before `ImageRenderer` can pick it up on `category == "image"`.
+
+### Process deadline and failures
+
+Every external video, audio, and document converter runs with
+`FILEMAN_RENDER_TIMEOUT`, which defaults to 1500 seconds. Each converter starts
+in a dedicated process group. A timeout kills and reaps the whole group; on
+POSIX systems the same group is also killed if the job-engine process exits.
+This prevents converter children from outliving a retired worker.
+
+A timeout, unavailable converter, or non-zero converter exit that prevents a
+requested rendition creates or updates that role's `FileRendition` row with
+`upload_status="failed"`, a bounded `error_message`, and `url: null`. The job
+then fails so the jobs system reports the rendition failure instead of
+completion. Optional probes, such as ffprobe metadata and missing embedded
+audio artwork, may fall back without failing the requested rendition.
+Diagnostics name the converter and outcome but do not include media paths or
+converter output.
 
 ## SVG rasterization
 
@@ -187,13 +217,14 @@ Existing files can be backfilled via the `regenerate_renditions` action (per-fil
 
 | Scenario | Behavior |
 |---|---|
-| ffmpeg missing on worker | `VideoRenderer._check_ffmpeg` logs a warning. Video rendition attempts raise and are caught per-role; other renderers continue. |
+| ffmpeg missing on worker | The dependency check logs a warning. Each attempted ffmpeg role is recorded as failed and the rendition job fails. |
 | `resvg-py` missing on worker | SVG renditions are skipped with a warning naming `django-mojo[svg]`. The job still completes; other files are unaffected. |
 | Malicious or malformed SVG | Refused by one of the five caps. No rendition row, no exception out of the job — identical to a file with no renderer. |
 | File deleted before job runs | Handler catches `DoesNotExist`, returns `"completed:skipped=file-missing"`. |
 | Client reads file before renditions ready | `renditions` map is empty `{}`. Client should poll or re-fetch. |
 | Same file completed twice quickly | Idempotency key collapses to one job; even if executed, renderer skips existing roles. |
-| Storage backend unavailable during rendition | Renderer logs error for the failed role; other roles proceed. Rerun via `regenerate_renditions`. |
+| Converter times out or exits unsuccessfully | The failed role is recorded with a bounded diagnostic, remaining roles continue, and the job fails after the batch. Rerun via `regenerate_renditions`. |
+| Storage backend unavailable during rendition | Renderer logs the failed role. Rerun via `regenerate_renditions`. |
 
 ## Developer utilities
 

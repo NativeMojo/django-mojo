@@ -8,6 +8,7 @@ import shutil
 
 from mojo.apps.fileman.models import File, FileRendition
 from mojo.apps.fileman.renderer.base import BaseRenderer, RenditionRole
+from mojo.apps.fileman.renderer.process import RendererProcessError, run as run_process
 from mojo.helpers import logit
 
 logger = logit.get_logger(__name__, "fileman.log")
@@ -77,20 +78,20 @@ class DocumentRenderer(BaseRenderer):
         """Check if required tools are available in the system"""
         # Check for pdftoppm (for PDF thumbnails)
         try:
-            subprocess.run(["pdftoppm", "-v"], 
+            run_process(["pdftoppm", "-v"],
                            stdout=subprocess.PIPE, 
                            stderr=subprocess.PIPE, 
                            check=True)
-        except (subprocess.SubprocessError, FileNotFoundError):
+        except (RendererProcessError, subprocess.SubprocessError, FileNotFoundError):
             logger.warning("pdftoppm is not available. PDF thumbnail generation may not work properly.")
         
         # Check for LibreOffice (for document conversion)
         try:
-            subprocess.run(["libreoffice", "--version"], 
+            run_process(["libreoffice", "--version"],
                            stdout=subprocess.PIPE, 
                            stderr=subprocess.PIPE, 
                            check=True)
-        except (subprocess.SubprocessError, FileNotFoundError):
+        except (RendererProcessError, subprocess.SubprocessError, FileNotFoundError):
             logger.warning("LibreOffice is not available. Document conversion may not work properly.")
     
     def _download_original(self) -> Union[str, None]:
@@ -153,7 +154,7 @@ class DocumentRenderer(BaseRenderer):
                 temp_input
             ]
             
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            run_process(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
             # Find the output PDF
             base_name = os.path.splitext(os.path.basename(source_path))[0]
@@ -213,7 +214,7 @@ class DocumentRenderer(BaseRenderer):
             # Add input and output paths
             cmd.extend([pdf_path, temp_prefix])
             
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            run_process(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
             # pdftoppm adds the format as suffix
             output_file = f"{temp_prefix}.{output_format}"
@@ -269,7 +270,7 @@ class DocumentRenderer(BaseRenderer):
                 pdf_path
             ]
             
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            run_process(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
             if not os.path.exists(output_path):
                 logger.error("PDF optimization failed - output file not found")
@@ -297,7 +298,7 @@ class DocumentRenderer(BaseRenderer):
         """
         try:
             # Get rendition settings
-            settings = self.default_renditions.get(role, {})
+            settings = dict(self.default_renditions.get(role, {}))
             if options:
                 settings.update(options)
             
@@ -398,6 +399,10 @@ class DocumentRenderer(BaseRenderer):
                         except:
                             pass
                     
+        except RendererProcessError as e:
+            self.record_failure(role, e)
+            logger.error(f"Failed to create document rendition '{role}': {str(e)}")
+            return None
         except Exception as e:
             logger.error(f"Failed to create document rendition '{role}': {str(e)}")
             return None

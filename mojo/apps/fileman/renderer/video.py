@@ -8,6 +8,7 @@ from typing import Dict, Optional, Tuple, Union, BinaryIO, List
 
 from mojo.apps.fileman.models import File, FileRendition
 from mojo.apps.fileman.renderer.base import BaseRenderer, RenditionRole
+from mojo.apps.fileman.renderer.process import RendererProcessError, run as run_process
 from mojo.helpers import logit
 
 logger = logit.get_logger(__name__, "fileman.log")
@@ -59,6 +60,12 @@ class VideoRenderer(BaseRenderer):
             'audio': True,
         },
     }
+
+    automatic_rendition_roles = (
+        RenditionRole.VIDEO_THUMBNAIL,
+        RenditionRole.THUMBNAIL,
+        RenditionRole.VIDEO_PREVIEW,
+    )
     
     def __init__(self, file: File):
         super().__init__(file)
@@ -68,11 +75,11 @@ class VideoRenderer(BaseRenderer):
     def _check_ffmpeg(self):
         """Check if ffmpeg is available in the system"""
         try:
-            subprocess.run(["ffmpeg", "-version"], 
-                           stdout=subprocess.PIPE, 
-                           stderr=subprocess.PIPE, 
-                           check=True)
-        except (subprocess.SubprocessError, FileNotFoundError):
+            run_process(["ffmpeg", "-version"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        check=True)
+        except RendererProcessError:
             logger.warning("ffmpeg is not available. Video rendering may not work properly.")
     
     def _download_original(self) -> Union[str, None]:
@@ -128,7 +135,7 @@ class VideoRenderer(BaseRenderer):
                 temp_output  # Output file
             ]
             
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            run_process(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
             # Get file size
             file_size = os.path.getsize(temp_output)
@@ -195,7 +202,7 @@ class VideoRenderer(BaseRenderer):
             # Add output file
             cmd.append(temp_output)
             
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            run_process(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
             # Get file size
             file_size = os.path.getsize(temp_output)
@@ -224,7 +231,7 @@ class VideoRenderer(BaseRenderer):
         """
         try:
             # Get rendition settings
-            settings = self.default_renditions.get(role, {})
+            settings = dict(self.default_renditions.get(role, {}))
             if options:
                 settings.update(options)
             
@@ -298,6 +305,10 @@ class VideoRenderer(BaseRenderer):
                 if temp_output and os.path.exists(temp_output):
                     os.unlink(temp_output)
                     
+        except RendererProcessError as e:
+            self.record_failure(role, e)
+            logger.error("Video rendition '%s' failed: %s", role, str(e))
+            return None
         except Exception as e:
             logger.error(f"Failed to create video rendition '{role}': {str(e)}")
             return None
