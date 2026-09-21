@@ -526,6 +526,59 @@ it finishes, cron replacement and later observations can establish convergence.
 restart requests are not repeated on every timer tick; a failed request is
 retried, and a new publication intentionally starts another activation.
 
+### `fleet` — operate the fleet from an operator's machine
+
+`python3 -m mojo.deploy.fleet` is the operator-side complement of `check_setup`
+(audits the account) and `check_node` (audits a node): it **operates**. One
+command each for the things an incident needs — edit the canonical `django.conf`
+in S3 without re-rendering it, roll the change out one node at a time behind a
+health gate, and read node/database health.
+
+```bash
+python3 -m mojo.deploy.fleet config keys --env prod            # keys, no values
+python3 -m mojo.deploy.fleet config get DATABASES.default --env prod   # secrets redacted
+python3 -m mojo.deploy.fleet config set DATABASES.default.CONN_MAX_AGE=0 \
+                                        DATABASES.readonly.CONN_MAX_AGE=0 --env prod
+python3 -m mojo.deploy.fleet config versions --env prod
+python3 -m mojo.deploy.fleet config rollback --version-id <id> --env prod
+python3 -m mojo.deploy.fleet sync --env prod                   # rolling, health-gated
+python3 -m mojo.deploy.fleet nodes status --env prod
+python3 -m mojo.deploy.fleet db connections --env prod --minutes 60
+python3 -m mojo.deploy.fleet db instance --env prod
+python3 -m mojo.deploy.fleet errors --env prod --since 30m
+```
+
+Project wiring is two files. `aws/fleet.json` (committed, non-secret) names each
+environment: `region`, `config_bucket`, `config_key`, `config_kms_key_arn`,
+`bucket_owner`, `nodes` (ssh aliases, in rollout order), `app_root`, `api_host`,
+optional `db_instance` and service/log overrides. `var/django.conf` (never
+committed) may carry `AWS_KEY`/`AWS_SECRET`; when both are present they are the
+credential — only a super-admin's checkout has them — otherwise `--profile` or
+the ambient boto3 chain applies. Credential values are never printed. A project
+usually adds a `bin/fleet` shim that bootstraps its venv and passes `--project`.
+
+Mutating commands are exactly `config set`, `config rollback` and `sync`;
+everything else is read-only and safe mid-incident.
+
+`config set` is surgical: download, verify the body against its sha256
+metadata, change only the named dotted paths, re-render only those top-level
+lines (`KEY = repr(value)` — the renderer's own format), prove every other key
+is byte-identical, print a redacted diff, keep a mode-0600 rollback copy under
+`var/fleet/<env>/`, publish with the sha256 metadata `config_sync` requires.
+It refuses to add keys, refuses a body that fails its own integrity metadata,
+and `--dry-run` does everything but the put. It never re-renders the whole file
+from the project's template: a live object may be older than the renderer, and
+an incident is not the time to ship that drift.
+
+`sync` never lets two nodes restart together. It holds every node's
+`config-sync.timer`, then per node forces one `config-sync.service` run, checks
+the node's file carries the canonical sha, waits `--settle` seconds for the
+jittered restart, polls the ASGI unit and the loopback health path until both
+answer, restores that node's timer, and only then moves on. A failed gate stops
+the roll with the remaining timers still held and says so. (The framework's
+hostname jitter is not a rollout strategy: two hostnames can hash 2 seconds
+apart — WMWX's did.)
+
 ### `check_setup`
 
 `python3 -m mojo.deploy.check_setup` is a read-only AWS account audit. It runs
