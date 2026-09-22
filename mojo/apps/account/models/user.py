@@ -1306,26 +1306,27 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         except Exception:
             pass
 
+        from mojo.apps.account.models.pkey import Passkey
+        from mojo.apps.account.models.push.device import RegisteredDevice
+        from mojo.apps.account.models.totp import UserTOTP
+
         # ── 4. Delete passkeys ────────────────────────────────────────────────
         try:
-            from mojo.apps.account.models.passkey import PassKey
-            n, _ = PassKey.objects.filter(user=self).delete()
+            n, _ = Passkey.objects.filter(user=self).delete()
             summary["deleted_passkeys"] = n
         except Exception:
             summary["deleted_passkeys"] = 0
 
         # ── 5. Delete push/notification devices ───────────────────────────────
         try:
-            from mojo.apps.account.models.push.device import Device
-            n, _ = Device.objects.filter(user=self).delete()
+            n, _ = RegisteredDevice.objects.filter(user=self).delete()
             summary["deleted_devices"] = n
         except Exception:
             summary["deleted_devices"] = 0
 
         # ── 6. Delete TOTP devices ────────────────────────────────────────────
         try:
-            from mojo.apps.account.models.totp import TOTPDevice
-            n, _ = TOTPDevice.objects.filter(user=self).delete()
+            n, _ = UserTOTP.objects.filter(user=self).delete()
             summary["deleted_totp"] = n
         except Exception:
             summary["deleted_totp"] = 0

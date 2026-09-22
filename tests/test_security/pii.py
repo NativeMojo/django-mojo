@@ -3,12 +3,38 @@ from testit.helpers import assert_true, assert_eq
 
 TEST_USER = "pii_test_user"
 TEST_PWORD = "pii##mojo99"
+PASSKEY_USER = "pii_passkey_user"
+PASSKEY_ORIGIN = "https://pii.test"
+FIXTURE_CREDENTIAL_PREFIX = "pii-test-cred-"
+FIXTURE_DEVICE_PREFIX = "pii-test-device-"
 
 
 @th.django_unit_setup()
 def setup_pii(opts):
-    from mojo.apps.account.models import User, Group
+    from mojo.apps.account.models import User, Group, Passkey
     from mojo.apps.account.models.notification import Notification
+    from mojo.apps.account.models.push.device import RegisteredDevice
+    from mojo.apps.account.models.totp import UserTOTP
+    from mojo.decorators.limits import clear_rate_limits
+
+    clear_rate_limits(ip="127.0.0.1")
+
+    # This database is long-lived. Find fixture users through the two tagged
+    # credential rows, then remove every credential type before recreating
+    # them. This also heals rows left by a fail-before run of pii_anonymize().
+    stale_user_ids = set(Passkey.objects.filter(
+        credential_id__startswith=FIXTURE_CREDENTIAL_PREFIX,
+    ).values_list("user_id", flat=True))
+    stale_user_ids.update(RegisteredDevice.objects.filter(
+        device_id__startswith=FIXTURE_DEVICE_PREFIX,
+    ).values_list("user_id", flat=True))
+    Passkey.objects.filter(
+        credential_id__startswith=FIXTURE_CREDENTIAL_PREFIX,
+    ).delete()
+    RegisteredDevice.objects.filter(
+        device_id__startswith=FIXTURE_DEVICE_PREFIX,
+    ).delete()
+    UserTOTP.objects.filter(user_id__in=stale_user_ids).delete()
 
     user = User.objects.filter(username=TEST_USER).last()
     if user is None:
@@ -31,6 +57,26 @@ def setup_pii(opts):
     user.save_password(TEST_PWORD)
     user.save()
     opts.user_id = user.pk
+
+    passkey_user = User.objects.filter(username=PASSKEY_USER).last()
+    if passkey_user is None:
+        passkey_user = User(
+            username=PASSKEY_USER,
+            email=f"{PASSKEY_USER}@example.com",
+        )
+        passkey_user.save()
+    passkey_user.is_active = True
+    passkey_user.save_password(TEST_PWORD)
+    passkey_user.save()
+    opts.passkey_user_id = passkey_user.pk
+    opts.passkey_credential_id = f"{FIXTURE_CREDENTIAL_PREFIX}{passkey_user.pk}"
+    Passkey.objects.create(
+        user=passkey_user,
+        token="pii-test-login-token",
+        credential_id=opts.passkey_credential_id,
+        rp_id="pii.test",
+        is_enabled=True,
+    )
 
     group, _ = Group.objects.get_or_create(name="pii_test_group", defaults={"kind": "organization"})
     group.add_member(user)
@@ -83,6 +129,102 @@ def test_pii_auth_key_rotated(opts):
     user.pii_anonymize()
     user.refresh_from_db()
     assert_true(user.auth_key != old_key, "auth_key should be rotated to revoke sessions")
+
+
+@th.django_unit_test("pii_anonymize: passkeys deleted")
+def test_pii_passkeys_deleted(opts):
+    from mojo.apps.account.models import User, Passkey
+
+    user = User.objects.get(pk=opts.user_id)
+    Passkey.objects.create(
+        user=user,
+        token="pii-test-token",
+        credential_id=f"{FIXTURE_CREDENTIAL_PREFIX}{user.pk}",
+        rp_id="pii.test",
+        is_enabled=True,
+    )
+    summary = user.pii_anonymize()
+
+    assert_eq(Passkey.objects.filter(user_id=opts.user_id).count(), 0,
+              "all passkeys should be deleted after anonymization")
+    assert_eq(summary["deleted_passkeys"], 1,
+              f"summary should report one deleted passkey, got {summary}")
+
+
+@th.django_unit_test("pii_anonymize: push devices deleted")
+def test_pii_push_devices_deleted(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.push.device import RegisteredDevice
+
+    user = User.objects.get(pk=opts.user_id)
+    RegisteredDevice.objects.create(
+        user=user,
+        device_token=f"pii-test-push-token-{user.pk}",
+        device_id=f"{FIXTURE_DEVICE_PREFIX}{user.pk}",
+        platform="ios",
+    )
+    summary = user.pii_anonymize()
+
+    assert_eq(RegisteredDevice.objects.filter(user_id=opts.user_id).count(), 0,
+              "all registered push devices should be deleted after anonymization")
+    assert_eq(summary["deleted_devices"], 1,
+              f"summary should report one deleted push device, got {summary}")
+
+
+@th.django_unit_test("pii_anonymize: TOTP secrets deleted")
+def test_pii_totp_deleted(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.totp import UserTOTP
+
+    user = User.objects.get(pk=opts.user_id)
+    UserTOTP.objects.create(user=user)
+    summary = user.pii_anonymize()
+
+    assert_eq(UserTOTP.objects.filter(user_id=opts.user_id).count(), 0,
+              "the TOTP secret should be deleted after anonymization")
+    assert_eq(summary["deleted_totp"], 1,
+              f"summary should report one deleted TOTP secret, got {summary}")
+
+
+@th.django_unit_test("passkey login: inactive user matches unknown credential")
+def test_inactive_passkey_login_is_generic(opts):
+    from mojo.apps.account.models import User
+
+    opts.client.logout()
+
+    def complete(credential_id):
+        return opts.client.post(
+            "/api/auth/passkeys/login/complete",
+            {
+                "challenge_id": "pii-test-bogus-challenge",
+                "credential": {"id": credential_id},
+            },
+            headers={"Origin": PASSKEY_ORIGIN},
+        )
+
+    active = complete(opts.passkey_credential_id)
+    passkey_user = User.objects.get(pk=opts.passkey_user_id)
+    passkey_user.is_active = False
+    passkey_user.save(update_fields=["is_active", "modified"])
+    inactive = complete(opts.passkey_credential_id)
+    unknown = complete("pii-test-unknown-credential")
+
+    active_error = active.response.error
+    inactive_error = inactive.response.error
+    unknown_error = unknown.response.error
+    assert_eq(active.status_code, 403,
+              f"active positive control should reach the passkey service, got {active.response}")
+    assert_eq(inactive.status_code, unknown.status_code,
+              "inactive and unknown passkeys should return the same status")
+    assert_eq(inactive_error, unknown_error,
+              "inactive and unknown passkeys should return the same generic error")
+    assert_true(active_error != inactive_error,
+                "active credential should get past lookup and fail on its bogus challenge")
+    for label, response in (
+        ("active", active), ("inactive", inactive), ("unknown", unknown),
+    ):
+        assert_true("token" not in response.response,
+                    f"{label} failed passkey response must not contain a token")
 
 
 @th.django_unit_test("pii_anonymize: notifications deleted")

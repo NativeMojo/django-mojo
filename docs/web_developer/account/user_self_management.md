@@ -1233,7 +1233,9 @@ log in:
 Self-service account deactivation via a two-step email confirmation flow. By
 default, confirmation calls `pii_anonymize()` directly, which anonymises all
 PII (username, email, phone, display name, DOB, metadata), rotates `auth_key`
-(invalidating all JWTs), and sets `is_active = False`. A deployment that
+(invalidating all JWTs), deletes passkeys, registered push devices and TOTP
+secrets, and sets `is_active = False`. After closure, passkey login fails with
+the same generic error as an unknown passkey. A deployment that
 configures `ACCOUNT_CLOSURE_HANDLER` runs its own cleanup first and calls
 `pii_anonymize()` itself as the last step — either way the end state is the
 same. The user row is preserved for FK integrity and audit trail — this is not

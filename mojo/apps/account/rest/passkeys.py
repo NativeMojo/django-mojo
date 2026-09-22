@@ -233,6 +233,7 @@ def on_passkeys_login_complete(request):
             credential_id=credential_id,
             rp_id=rp_id,
             is_enabled=True,
+            user__is_active=True,
         )
     except Passkey.DoesNotExist:
         raise merrors.PermissionDeniedException("Invalid passkey")
