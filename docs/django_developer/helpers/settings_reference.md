@@ -59,6 +59,10 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 ### ACCOUNT
 
+- `ACCOUNT_CLOSE_REAUTH_WINDOW` — integer seconds, default `600`. Maximum age
+  of the `auth_time` claim accepted when a passwordless user calls
+  `POST /api/account/close`. The endpoint enforces this window directly, so it
+  remains active when `FRESH_AUTH_ENFORCE=False`.
 - `ACCOUNT_CLOSURE_HANDLER` — **file-only** (read with `settings.get_static`).
   Dotted path to a product callable `handler(user)` that owns permanent account
   closure, called by the `account/deactivate/confirm` endpoint in place of a

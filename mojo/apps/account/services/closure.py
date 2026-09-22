@@ -59,9 +59,12 @@ def run_account_closure(user):
     # it that way would let anyone holding manage_settings turn a config write
     # into arbitrary code execution. Deployment plumbing belongs in the settings
     # file. Same reasoning as AUTH_PHONE_VERIFY_DEV_BYPASS_CODE (item 50).
+    tokens = collect_social_tokens(user)
     handler_path = settings.get_static("ACCOUNT_CLOSURE_HANDLER", None)
     if not handler_path:
         user.pii_anonymize()
+        if _closure_landed(user):
+            revoke_social_tokens(user, tokens)
         return
 
     # import_module runs the target module's top-level code, which can raise
@@ -84,6 +87,44 @@ def run_account_closure(user):
     if not _closure_landed(user):
         _report_failure(user, handler_path, "incomplete")
         raise merrors.ValueException(CLOSURE_FAILED_MESSAGE) from None
+    revoke_social_tokens(user, tokens)
+
+
+def collect_social_tokens(user):
+    """Read revocable social tokens before anonymization deletes their rows."""
+    from mojo.apps.account.models.oauth import OAuthConnection
+
+    tokens = []
+    connections = OAuthConnection.objects.filter(
+        user=user, provider="apple", is_active=True)
+    for connection in connections:
+        refresh_token = connection.get_secret("refresh_token")
+        if refresh_token:
+            tokens.append((connection.pk, connection.provider, refresh_token))
+    return tokens
+
+
+def revoke_social_tokens(user, tokens):
+    """Best-effort remote revocation after local closure has landed."""
+    from mojo.apps.account.services.oauth.apple import AppleOAuthProvider
+
+    provider = AppleOAuthProvider()
+    for _connection_id, provider_name, refresh_token in tokens:
+        if provider_name != "apple":
+            continue
+        try:
+            revoked = provider.revoke(refresh_token)
+        except Exception as err:
+            logit.exception("Apple token revocation failed", err)
+            revoked = False
+        if not revoked:
+            try:
+                user.report_incident(
+                    "apple token revocation failed",
+                    "account:apple_revoke_failed",
+                    uid=user.pk)
+            except Exception as err:
+                logit.exception("Apple revocation incident report failed", err)
 
 
 def _closure_landed(user):

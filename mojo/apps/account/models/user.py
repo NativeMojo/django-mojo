@@ -1309,6 +1309,11 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         from mojo.apps.account.models.pkey import Passkey
         from mojo.apps.account.models.push.device import RegisteredDevice
         from mojo.apps.account.models.totp import UserTOTP
+        from mojo.apps.account.models.api_key import ApiKey
+        from mojo.apps.account.models.oauth import OAuthConnection
+        from mojo.apps.account.models.oauth_code import OAuthCode
+        from mojo.apps.account.models.oauth_grant import OAuthGrant
+        from mojo.apps.account.models.user_api_key import UserAPIKey
 
         # ── 4. Delete passkeys ────────────────────────────────────────────────
         try:
@@ -1331,7 +1336,45 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         except Exception:
             summary["deleted_totp"] = 0
 
-        # ── 7. Delete inbox notifications (may contain PII in title/body) ─────
+        # ── 7. Delete OAuth connections ──────────────────────────────────────
+        try:
+            n, _ = OAuthConnection.objects.filter(user=self).delete()
+            summary["deleted_oauth_connections"] = n
+        except Exception:
+            summary["deleted_oauth_connections"] = 0
+
+        # ── 8. Delete per-user API keys ──────────────────────────────────────
+        try:
+            n, _ = UserAPIKey.objects.filter(user=self).delete()
+            summary["deleted_user_api_keys"] = n
+        except Exception:
+            summary["deleted_user_api_keys"] = 0
+
+        # ── 9. Delete OAuth grants and codes ─────────────────────────────────
+        try:
+            n, _ = OAuthGrant.objects.filter(user=self).delete()
+            summary["deleted_oauth_grants"] = n
+        except Exception:
+            summary["deleted_oauth_grants"] = 0
+        try:
+            n, _ = OAuthCode.objects.filter(user=self).delete()
+            summary["deleted_oauth_codes"] = n
+        except Exception:
+            summary["deleted_oauth_codes"] = 0
+
+        # ── 10. Detach linked group API keys ─────────────────────────────────
+        try:
+            summary["deactivated_api_keys"] = ApiKey.objects.filter(
+                user=self, override_user=True).update(is_active=False, user=None)
+        except Exception:
+            summary["deactivated_api_keys"] = 0
+        try:
+            summary["detached_api_keys"] = ApiKey.objects.filter(
+                user=self, override_user=False).update(user=None)
+        except Exception:
+            summary["detached_api_keys"] = 0
+
+        # ── 11. Delete inbox notifications (may contain PII in title/body) ────
         try:
             from mojo.apps.account.models.notification import Notification
             n, _ = Notification.objects.filter(user=self).delete()
@@ -1339,7 +1382,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         except Exception:
             summary["deleted_notifications"] = 0
 
-        # ── 8. Remove group memberships ───────────────────────────────────────
+        # ── 12. Remove group memberships ──────────────────────────────────────
         try:
             from mojo.apps.account.models.member import GroupMember
             n, _ = GroupMember.objects.filter(user=self).delete()

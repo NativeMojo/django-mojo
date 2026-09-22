@@ -13,10 +13,12 @@ from mojo.apps.account.services import closure as account_closure
 from mojo.apps.account.services import email_delivery
 from mojo.apps.account.services import sms_delivery
 from mojo.apps.account.services import token_landing
+from mojo.apps.account.services import fresh_auth
 from mojo.apps.account.utils import tokens
 from mojo.apps.account.utils.webapp_url import build_token_url
 from mojo.apps.shortlink import maybe_shorten_url
 from mojo.helpers import dates, crypto, logit
+from mojo.helpers import request as request_helpers
 from mojo import errors as merrors
 from mojo.helpers.settings import settings
 
@@ -2353,6 +2355,51 @@ def on_sessions_revoke(request):
 # -----------------------------------------------------------------
 # Account deactivation
 # -----------------------------------------------------------------
+
+@md.POST("account/close")
+@md.requires_auth()
+@md.strict_rate_limit("account_close", ip_limit=5, ip_window=300)
+def on_account_close(request):
+    """Permanently close an account from a recently authenticated session."""
+    from mojo.decorators.limits import check_account_attempt, clear_rate_limits
+
+    if request_helpers.credential_kind(request) != "user":
+        raise merrors.PermissionDeniedException()
+    if not settings.get("ALLOW_SELF_DEACTIVATION", True, kind="bool"):
+        raise merrors.PermissionDeniedException("Account deactivation is not allowed")
+
+    user = request.user
+    if user.has_usable_password():
+        limit = settings.get("LOGIN_USERNAME_LIMIT", 10, kind="int")
+        window = settings.get("LOGIN_USERNAME_WINDOW", 900, kind="int")
+        _, blocked = check_account_attempt(
+            "login", user.pk, limit, window, request=request)
+        if blocked is not None:
+            return blocked
+        password = request.DATA.get("current_password")
+        if not password or not user.check_password(password):
+            user.report_incident(
+                f"{user.username} enter an invalid password",
+                "invalid_password",
+                level=5)
+            raise merrors.ValueException("Incorrect password")
+        clear_rate_limits(key="login", account_id=user.pk)
+    else:
+        auth_time = fresh_auth.token_auth_time(request)
+        reauth_window = settings.get(
+            "ACCOUNT_CLOSE_REAUTH_WINDOW", 600, kind="int")
+        if auth_time is None or int(time.time()) - auth_time > reauth_window:
+            raise merrors.ValueException("Sign in again to delete your account")
+
+    user.report_incident(
+        f"{user.username} account deactivated",
+        "account:deactivated",
+        uid=user.pk)
+    account_closure.run_account_closure(user)
+    return JsonResponse({
+        "status": True,
+        "message": "Your account has been deleted.",
+    })
 
 @md.POST("account/deactivate")
 @md.requires_auth()

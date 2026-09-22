@@ -200,10 +200,20 @@ above this section is **disable** — reversible, `is_active=False`, data intact
 This section is **closure** — `pii_anonymize()`, irreversible. `services/disable.py`
 plays no part in it beyond the `record_anonymize` call noted above.
 
-The framework owns the closure entry point (`POST account/deactivate/confirm`)
+The framework owns the closure entry points (`POST account/deactivate/confirm`
+and `POST account/close`)
 but cannot know everywhere a product stores personal data. So the framework does
 not try to enumerate it: the product runs its own closure, in the order it
 decides, and calls `pii_anonymize()` as the last step.
+
+Before either entry point invokes the product handler, the framework collects
+refresh tokens from active Apple OAuth connections while those rows still
+exist. Closure then runs under the existing handler contract. Only after
+`_closure_landed()` confirms that the user is inactive or deleted does the
+framework revoke the collected tokens through Apple's revocation endpoint.
+Remote failure reports `account:apple_revoke_failed` and does not turn a landed
+local erasure into a failure. A raising or incomplete handler never triggers
+remote revocation.
 
 ### The human confirmation page (`GET account/deactivate/confirm`)
 
@@ -258,7 +268,7 @@ need it.
 
 | Rule | Why |
 |---|---|
-| Called as `handler(user)`, account still active, `GroupMember` rows intact | `pii_anonymize()` step 8 deletes memberships; anything the product reaches *through* them must be purged first or it is orphaned |
+| Called as `handler(user)`, account still active, `GroupMember` rows intact | `pii_anonymize()` deletes memberships last; anything the product reaches *through* them must be purged first or it is orphaned |
 | The handler owns the final `user.pii_anonymize()` | The framework does **not** call it after a handler runs |
 | Returning without closing the account is a **failure**, not a success | Otherwise a no-op handler earns "your account has been deactivated" for a fully intact account. The framework re-reads the row afterwards and requires the closure to have landed — it does not do the anonymizing, it insists that it happened |
 | Must not deactivate the account or revoke credentials before that final anonymize | A partial purge that breaks re-authentication strands the closure permanently: the token is already spent, and an inactive account can neither re-initiate nor be re-run (confirm short-circuits on `is_active`) |

@@ -169,7 +169,7 @@ def sensitive_body_label(request):
     if method == "POST" and path in (
             f"{API_ROOT}/login", f"{API_ROOT}/account/jwt/login",
             f"{API_ROOT}/refresh_token", f"{API_ROOT}/token/refresh",
-            f"{API_ROOT}/account/jwt/refresh"):
+            f"{API_ROOT}/account/jwt/refresh", f"{API_ROOT}/account/close"):
         return "account_auth"
     if path.startswith(f"{API_ROOT}/group/apikey"):
         return "group_api_key"

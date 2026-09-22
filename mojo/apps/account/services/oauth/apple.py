@@ -30,6 +30,7 @@ from .base import OAuthProvider
 
 APPLE_AUTH_URL  = "https://appleid.apple.com/auth/authorize"
 APPLE_TOKEN_URL = "https://appleid.apple.com/auth/token"
+APPLE_REVOKE_URL = "https://appleid.apple.com/auth/revoke"
 APPLE_AUDIENCE  = "https://appleid.apple.com"
 
 
@@ -96,6 +97,24 @@ class AppleOAuthProvider(OAuthProvider):
             raise ValueError("Failed to exchange authorization code with Apple")
 
         return resp.json()
+
+    def revoke(self, refresh_token):
+        """Revoke one Apple refresh token without exposing failure details."""
+        try:
+            resp = requests.post(APPLE_REVOKE_URL, data={
+                "client_id": settings.get("APPLE_CLIENT_ID"),
+                "client_secret": self._build_client_secret(),
+                "token": refresh_token,
+                "token_type_hint": "refresh_token",
+            }, timeout=10)
+            if not resp.ok:
+                logit.error(
+                    "oauth.apple",
+                    f"Token revocation failed: {resp.status_code} {resp.text}")
+            return resp.ok
+        except Exception as err:
+            logit.error("oauth.apple", f"Token revocation failed: {err}")
+            return False
 
     def get_profile(self, tokens):
         id_token = tokens.get("id_token")

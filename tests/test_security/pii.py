@@ -186,6 +186,21 @@ def test_pii_totp_deleted(opts):
               f"summary should report one deleted TOTP secret, got {summary}")
 
 
+@th.django_unit_test("pii_anonymize: absent OAuth and API credentials report zero counts")
+def test_pii_linked_credentials_empty_summary(opts):
+    from mojo.apps.account.models import User
+
+    user = User.objects.get(pk=opts.user_id)
+    summary = user.pii_anonymize()
+    keys = (
+        "deleted_oauth_connections", "deleted_user_api_keys",
+        "deleted_oauth_grants", "deleted_oauth_codes",
+        "deactivated_api_keys", "detached_api_keys",
+    )
+    assert_eq({key: summary.get(key) for key in keys}, {key: 0 for key in keys},
+              f"empty linked-credential cleanup should report six zero counts, got {summary}")
+
+
 @th.django_unit_test("passkey login: inactive user matches unknown credential")
 def test_inactive_passkey_login_is_generic(opts):
     from mojo.apps.account.models import User

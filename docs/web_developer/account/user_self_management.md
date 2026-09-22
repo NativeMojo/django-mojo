@@ -1228,13 +1228,16 @@ log in:
 
 ---
 
-## 14. Account Deactivation
+## 14. Account Deactivation and Closure
 
 Self-service account deactivation via a two-step email confirmation flow. By
 default, confirmation calls `pii_anonymize()` directly, which anonymises all
 PII (username, email, phone, display name, DOB, metadata), rotates `auth_key`
-(invalidating all JWTs), deletes passkeys, registered push devices and TOTP
-secrets, and sets `is_active = False`. After closure, passkey login fails with
+(invalidating all JWTs), deletes passkeys, registered push devices, TOTP
+secrets, OAuth connections, per-user API keys, OAuth grants and authorization
+codes, detaches reference-mode group API keys, disables and detaches
+identity-override group API keys, and sets `is_active = False`. After closure,
+passkey login fails with
 the same generic error as an unknown passkey. A deployment that
 configures `ACCOUNT_CLOSURE_HANDLER` runs its own cleanup first and calls
 `pii_anonymize()` itself as the last step — either way the end state is the
@@ -1243,6 +1246,46 @@ a hard delete.
 
 OAuth-only users (no password set) are fully supported — the email confirmation
 link is sufficient proof of ownership.
+
+### Immediate in-app closure
+
+Use this endpoint after the person confirms the destructive action in the app:
+
+```http
+POST /api/account/close
+Authorization: Bearer <interactive_session_token>
+Content-Type: application/json
+```
+
+Password accounts send their current password:
+
+```json
+{ "current_password": "current password" }
+```
+
+Passwordless accounts send `{}`. Their session must carry an `auth_time` from
+the last 10 minutes by default. This check is always applied to immediate
+closure and is independent of `FRESH_AUTH_ENFORCE`. User API keys, group API
+keys, group tokens and OAuth grant tokens are rejected; only an interactive
+user session can close its account.
+
+Success returns:
+
+```json
+{ "status": true, "message": "Your account has been deleted." }
+```
+
+An incorrect or missing password returns 400 `Incorrect password`. A stale or
+legacy passwordless session returns 400 `Sign in again to delete your account`.
+The endpoint uses the same closure service, `account:deactivated` incident,
+five-per-five-minute IP limit and `ALLOW_SELF_DEACTIVATION` switch as the email
+flow. A wrong password also consumes the normal per-account login attempt
+budget.
+
+Before local OAuth rows are removed, the closure service collects refresh
+tokens from active Sign in with Apple connections. After closure has landed it
+asks Apple to revoke each token. Apple failure is recorded but does not undo a
+completed local erasure.
 
 ### Step 1 — Request deactivation
 
@@ -1335,6 +1378,7 @@ not "your account is in a broken state".
 | `DEACTIVATE_TOKEN_TTL` | `900` | Seconds until confirmation token expires |
 | `ALLOW_SELF_DEACTIVATION` | `True` | Feature flag — set `False` to disable entirely |
 | `ACCOUNT_CLOSURE_HANDLER` | `None` | Backend-only. Dotted path to a product callable that owns closure; unset, the framework anonymises directly |
+| `ACCOUNT_CLOSE_REAUTH_WINDOW` | `600` | Maximum age in seconds of a passwordless session's `auth_time` for immediate closure |
 
 **Email template:** Django-MOJO ships `account_deactivate_confirm`. Its context
 variables are `token_url` (the resolved frontend link) and `user`. Override the
@@ -1808,6 +1852,7 @@ Refresh the user profile to pick up the updated `is_email_verified` or
 | Unlink OAuth connection | DELETE | `/api/account/oauth_connection/<id>` | Required |
 | Request account deactivation | POST | `/api/account/deactivate` | Required |
 | Confirm account deactivation | POST | `/api/account/deactivate/confirm` | Public |
+| Close account immediately | POST | `/api/account/close` | Interactive user session |
 | View security events | GET | `/api/account/security-events` | Required |
 | Record a browser sign-out (audit only) | POST | `/api/account/security-events/logout` | Required |
 | List own files | GET | `/api/fileman/file` | Required |
