@@ -65,6 +65,26 @@ def test_user_me_returns_password_capability(opts):
 
 
 @th.django_unit_test()
+def test_user_me_reports_passwordless_capability(opts):
+    from mojo.apps.account.models import User
+
+    user = User.objects.get(pk=opts.passwordless_user_id)
+    package = user.generate_jwt()
+    opts.client.logout()
+    opts.client.access_token = package.access_token
+    opts.client.is_authenticated = True
+    response = opts.client.get("/api/user/me")
+    opts.client.logout()
+
+    assert response.status_code == 200, \
+        f"passwordless GET /api/user/me should succeed, got {response.status_code}: {response.text}"
+    assert "has_password" in response.response.data, \
+        f"passwordless GET /api/user/me must return has_password, got {response.response.data}"
+    assert response.response.data.has_password is False, \
+        f"passwordless user should read has_password=false, got {response.response.data.has_password!r}"
+
+
+@th.django_unit_test()
 def test_password_capability_is_ignored_on_user_updates(opts):
     from mojo.apps.account.models import User
 
