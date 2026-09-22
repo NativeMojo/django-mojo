@@ -72,12 +72,20 @@ class RestMeta:
                                "last_activity", "permissions", "metadata", "is_active",
                                "is_superuser", "is_email_verified", "is_phone_verified",
                                "is_dob_verified", "dob", "requires_mfa",
-                               "requires_password_change", "has_passkey"]},
-        "full": {}
+                               "requires_password_change", "has_passkey",
+                               "has_password"]},
+        "full": {"extra": ["full_name", "has_passkey", "has_password"]}
     }
 ```
 
 ## Name Helpers
+
+### Credential capability properties
+
+`has_password` is a read-only property that reports
+`has_usable_password()`. It is included with `has_passkey` in the default and
+full REST graphs so clients can choose the correct re-authentication flow.
+Neither computed property is a model field or writable through REST.
 
 ### `full_name` property
 

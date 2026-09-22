@@ -50,6 +50,21 @@ def test_default_user_graph_reports_unusable_password(opts):
 
 
 @th.django_unit_test()
+def test_user_me_returns_password_capability(opts):
+    assert opts.client.login(USERNAME, PASSWORD), \
+        "password user must authenticate before reading /api/user/me"
+    response = opts.client.get("/api/user/me")
+    opts.client.logout()
+
+    assert response.status_code == 200, \
+        f"GET /api/user/me should succeed, got {response.status_code}: {response.text}"
+    assert "has_password" in response.response.data, \
+        f"GET /api/user/me must return has_password, got {response.response.data}"
+    assert response.response.data.has_password is True, \
+        f"password user should read has_password=true, got {response.response.data.has_password!r}"
+
+
+@th.django_unit_test()
 def test_password_capability_is_ignored_on_user_updates(opts):
     from mojo.apps.account.models import User
 
@@ -69,18 +84,3 @@ def test_password_capability_is_ignored_on_user_updates(opts):
         assert user.check_password(PASSWORD) is True, \
             f"{method.__name__.upper()} must not replace the stored password"
     opts.client.logout()
-
-
-@th.django_unit_test()
-def test_user_me_returns_password_capability(opts):
-    assert opts.client.login(USERNAME, PASSWORD), \
-        "password user must authenticate before reading /api/user/me"
-    response = opts.client.get("/api/user/me")
-    opts.client.logout()
-
-    assert response.status_code == 200, \
-        f"GET /api/user/me should succeed, got {response.status_code}: {response.text}"
-    assert "has_password" in response.response.data, \
-        f"GET /api/user/me must return has_password, got {response.response.data}"
-    assert response.response.data.has_password is True, \
-        f"password user should read has_password=true, got {response.response.data.has_password!r}"

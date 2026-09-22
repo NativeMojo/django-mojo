@@ -255,7 +255,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                     "dob",
                     "requires_mfa",
                     "requires_password_change",
-                    "has_passkey"
+                    "has_passkey",
+                    "has_password"
                 ],
                 "graphs": {
                     "avatar": "basic",
@@ -264,7 +265,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             },
             "full": {
                 "extra": [
-                    "full_name", "has_passkey"
+                    "full_name", "has_passkey", "has_password"
                 ],
                 "graphs": {
                     "avatar": "basic"
@@ -317,6 +318,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     @property
     def has_passkey(self):
         return self.passkeys.filter(is_enabled=True).count() > 0
+
+    @property
+    def has_password(self):
+        return self.has_usable_password()
 
     @property
     def is_online(self):
