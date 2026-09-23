@@ -1257,6 +1257,11 @@ Authorization: Bearer <interactive_session_token>
 Content-Type: application/json
 ```
 
+Read `has_password` from `GET /api/user/me` to choose the re-authentication
+flow. When it is `true`, require and send `current_password`. When it is
+`false`, omit `current_password`; the interactive session must instead have a
+successful sign-in within the configured fresh-auth window.
+
 Password accounts send their current password:
 
 ```json

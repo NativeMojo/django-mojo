@@ -56,6 +56,7 @@ curl -H "Authorization: Bearer <token>" https://api.example.com/api/user/me
     "is_phone_verified": false,
     "requires_mfa": false,
     "has_passkey": false,
+    "has_password": true,
     "permissions": {"manage_reports": true},
     "metadata": {},
     "is_active": true,
@@ -74,6 +75,13 @@ A read-only computed field. Returns the best available name in priority order:
 1. `first_name` + `last_name` (if either is set)
 2. `display_name`
 3. A name derived via priority chain: email local-part → friendly random placeholder (e.g. `Brave Tiger`) → username. Phone numbers are intentionally NEVER used here to avoid PII leakage.
+
+### `has_password`
+
+A read-only boolean that is `true` when the account has a usable password.
+Passwordless Apple, Google, and passkey-only accounts read `false`. Clients use
+this value to choose between password re-authentication and the recent-login
+path; sending it in a user update is ignored.
 
 ---
 
@@ -180,7 +188,7 @@ GET /api/user?search=alice&is_active=true&sort=-created&start=0&size=20
 | Graph | Fields |
 |---|---|
 | `basic` | id, uuid, display_name, username, last_login, last_activity, is_active, is_email_verified, is_phone_verified, is_dob_verified, requires_password_change, avatar |
-| `default` | id, uuid, first_name, last_name, display_name, username, email, phone_number, last_login, last_activity, permissions, metadata, is_active, is_superuser, is_email_verified, is_phone_verified, is_dob_verified, dob, requires_mfa, requires_password_change, has_passkey, avatar, org |
+| `default` | id, uuid, first_name, last_name, display_name, username, email, phone_number, last_login, last_activity, permissions, metadata, is_active, is_superuser, is_email_verified, is_phone_verified, is_dob_verified, dob, requires_mfa, requires_password_change, has_passkey, has_password, avatar, org |
 | `full` | All fields |
 
 ```
