@@ -29,7 +29,7 @@ Project wiring — two files, both in the project tree:
   checkout has them. Otherwise ``--profile`` or the ambient boto3 chain is
   used. Credential values are never printed, logged, or written anywhere.
 
-Mutating commands are exactly ``config set``, ``config rollback`` and
+Mutating commands are exactly ``config set``, ``config unset``, ``config rollback`` and
 ``sync``. Everything else is read-only and safe mid-incident.
 
 ``config set`` is surgical: it downloads the live object, verifies it against
@@ -65,6 +65,7 @@ CONF_FILE = os.path.join("var", "django.conf")
 ROLLBACK_DIR = os.path.join("var", "fleet")
 SECRET_KEY_RE = re.compile(r"(PASSWORD|SECRET|TOKEN|CREDENTIAL|PRIVATE|AUTH|_KEY$|^KEY$)", re.I)
 REDACTED = "<redacted>"
+MISSING = object()
 
 FLEET_SCHEMA = {
     "region": "AWS region of the environment",
@@ -231,52 +232,117 @@ def parse_assignment(text):
     if "=" not in text:
         raise FleetError(f"{text!r}: expected KEY[.path]=<python literal>")
     path, literal = text.split("=", 1)
+    path = path.strip()
+    split_path(path)
+    if literal.startswith("@"):
+        try:
+            with open(literal[1:], encoding="utf-8", newline="") as handle:
+                return path, handle.read()
+        except (OSError, UnicodeError):
+            raise FleetError(f"{path}: cannot read value file as UTF-8") from None
     try:
         value = ast.literal_eval(literal)
-    except (ValueError, SyntaxError) as err:
-        raise FleetError(f"{path}: {literal!r} is not a Python literal ({err})")
-    return path.strip(), value
+    except (ValueError, SyntaxError):
+        raise FleetError(f"{path}: value is not a Python literal") from None
+    return path, value
 
 
-def apply_changes(text, assignments):
+def redact_path(path, value):
+    if any(SECRET_KEY_RE.search(part) for part in path.split(".")):
+        return REDACTED
+    return redact(path, value)
+
+
+def _render_changes(text, new_values, removed=()):
+    """Render only touched lines, then prove the key set and untouched bytes."""
+    lines, keys = parse_conf(text)
+    # Keep line terminators (including CRLF), comments and final blank lines.
+    chunks = [line + "\n" for line in lines[:-1]] + [lines[-1]]
+    touched = set(new_values) | set(removed)
+    by_index = {index: key for key, (index, _) in keys.items()}
+    result = []
+    for index, chunk in enumerate(chunks):
+        key = by_index.get(index)
+        if key in removed:
+            continue
+        if key in new_values:
+            ending = "\r\n" if chunk.endswith("\r\n") else "\n" if chunk.endswith("\n") else ""
+            chunk = f"{key} = {new_values[key]!r}{ending}"
+        result.append(chunk)
+    new_text = "".join(result)
+    additions = [key for key in new_values if key not in keys]
+    newline = "\r\n" if "\r\n" in text else "\n"
+    separator = newline if additions and new_text and not new_text.endswith("\n") else ""
+    new_text += separator
+    for key in additions:
+        new_text += f"{key} = {new_values[key]!r}{newline}"
+
+    after_lines, after = parse_conf(new_text)
+    if set(after) != (set(keys) | set(new_values)) - set(removed):
+        raise FleetError("patch changed unexpected keys; refusing")
+    for key, value in new_values.items():
+        if after[key][1] != value:
+            raise FleetError(f"{key} did not round-trip through repr; refusing")
+    before_indexes = {keys[key][0] for key in touched if key in keys}
+    after_indexes = {after[key][0] for key in touched if key in after}
+    before_untouched = "".join(chunk for i, chunk in enumerate(chunks) if i not in before_indexes)
+    # Appending to an unterminated final line needs one separator; its content
+    # still stays byte-identical. No other untouched bytes may change.
+    if separator and len(chunks) - 1 not in before_indexes:
+        before_untouched += separator
+    after_chunks = [line + "\n" for line in after_lines[:-1]] + [after_lines[-1]]
+    after_untouched = "".join(chunk for i, chunk in enumerate(after_chunks) if i not in after_indexes)
+    if before_untouched != after_untouched:
+        raise FleetError("patch changed untouched lines; refusing")
+    return new_text
+
+
+def apply_changes(text, assignments, *, add=False):
     """Apply ``KEY[.path]=<literal>`` assignments to a canonical file.
 
     Returns (new_text, [(path, old, new)]). Only the top-level lines of the
     touched keys are re-rendered (``KEY = repr(value)``, the renderer's own
     format); every other line is proven byte-identical afterwards."""
-    lines, keys = parse_conf(text)
+    _, keys = parse_conf(text)
     changes = []
     new_values = {}
     for assignment in assignments:
         path, new = parse_assignment(assignment)
         key, parts = split_path(path)
-        if key not in keys:
-            raise FleetError(f"{key} is not present in the canonical file; refusing to add keys")
-        current = new_values.get(key, keys[key][1])
+        if key not in keys and key not in new_values:
+            if not add:
+                raise FleetError(f"{key} is not present in the canonical file; refusing to add keys without --add")
+            if parts:
+                raise FleetError("--add only creates top-level keys; supply the whole value")
+            new_values[key] = new
+            changes.append((path, MISSING, new))
+            continue
+        current = new_values[key] if key in new_values else keys[key][1]
         old = get_path(current, parts)
         if old == new and type(old) is type(new):
-            print(f"note: {path} already {new!r}", file=sys.stderr)
+            print(f"note: {path} already {redact_path(path, new)!r}", file=sys.stderr)
             continue
         new_values[key] = set_path(current, parts, new)
         changes.append((path, old, new))
     if not changes:
         raise FleetError("nothing to change")
-    new_lines = list(lines)
-    for key, value in new_values.items():
-        new_lines[keys[key][0]] = f"{key} = {value!r}"
-    new_text = "\n".join(new_lines)
-    # Prove the patch: same keys, same values everywhere except the touched keys,
-    # and each touched key changed only along its stated paths.
-    _, after = parse_conf(new_text)
-    if after.keys() != keys.keys():
-        raise FleetError("patch changed the key set; refusing")
-    for key, (_, before_value) in keys.items():
-        if key in new_values:
-            if after[key][1] != new_values[key]:
-                raise FleetError(f"{key} did not round-trip through repr; refusing")
-        elif after[key][1] != before_value:
-            raise FleetError(f"{key} changed unexpectedly; refusing")
-    return new_text, changes
+    return _render_changes(text, new_values), changes
+
+
+def apply_unsets(text, names):
+    """Remove explicit top-level keys, never implicitly remove nested paths."""
+    _, keys = parse_conf(text)
+    removed = {}
+    for name in names:
+        key, parts = split_path(name)
+        if parts:
+            raise FleetError("config unset accepts top-level keys only")
+        if key not in keys:
+            raise FleetError(f"{key} is not present in the canonical file")
+        removed[key] = keys[key][1]
+    if not removed:
+        raise FleetError("nothing to change")
+    return _render_changes(text, {}, removed), [(key, value, MISSING) for key, value in removed.items()]
 
 
 def sha256_text(text):
@@ -444,11 +510,25 @@ def cmd_config_get(args, project, spec, session):
 def cmd_config_set(args, project, spec, session):
     s3 = session.client("s3")
     text, version, _ = fetch_canonical(s3, spec)
-    new_text, changes = apply_changes(text, args.assignments)
+    new_text, changes = apply_changes(text, args.assignments, add=args.add)
+    return publish_config_edit(args, project, spec, s3, text, version, new_text, changes)
+
+
+def cmd_config_unset(args, project, spec, session):
+    s3 = session.client("s3")
+    text, version, _ = fetch_canonical(s3, spec)
+    new_text, changes = apply_unsets(text, args.keys)
+    return publish_config_edit(args, project, spec, s3, text, version, new_text, changes)
+
+
+def publish_config_edit(args, project, spec, s3, text, version, new_text, changes):
     for path, old, new in changes:
-        leaf = path.split(".")[-1]
-        old_show, new_show = redact(leaf, old), redact(leaf, new)
-        print(f"{path}: {old_show!r} -> {new_show!r}")
+        if old is MISSING:
+            print(f"+ {path} = {redact_path(path, new)!r}")
+        elif new is MISSING:
+            print(f"- {path} = {redact_path(path, old)!r}")
+        else:
+            print(f"{path}: {redact_path(path, old)!r} -> {redact_path(path, new)!r}")
     rollback = save_rollback(project, spec, text, version)
     print(f"rollback copy: {rollback} (prior version {version})")
     if args.dry_run:
@@ -704,8 +784,13 @@ def build_parser():
     get.set_defaults(func=cmd_config_get)
     setp = leaf(config, "set", help="KEY[.path]=<literal> ... (surgical, publishes)")
     setp.add_argument("assignments", nargs="+")
+    setp.add_argument("--add", action="store_true", help="allow new top-level keys; values may use @file")
     setp.add_argument("--dry-run", action="store_true")
     setp.set_defaults(func=cmd_config_set)
+    unset = leaf(config, "unset", help="remove named top-level settings (publishes)")
+    unset.add_argument("keys", nargs="+")
+    unset.add_argument("--dry-run", action="store_true")
+    unset.set_defaults(func=cmd_config_unset)
     versions = leaf(config, "versions", help="list object versions")
     versions.add_argument("--limit", type=int, default=15)
     versions.set_defaults(func=cmd_config_versions)

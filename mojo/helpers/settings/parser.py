@@ -125,8 +125,13 @@ class DjangoConfigLoader:
             return self._parse_numeric_or_string(item)
 
     def _parse_quoted_string(self, value):
-        """Parse a quoted string by removing the quotes."""
-        return value[1:-1]
+        """Decode repr() escapes, retaining legacy non-literal quoted values."""
+        import ast
+        try:
+            parsed = ast.literal_eval(value)
+            return parsed if isinstance(parsed, str) else value[1:-1]
+        except (ValueError, SyntaxError):
+            return value[1:-1]
 
     def _parse_boolean(self, value):
         """Parse a boolean string."""

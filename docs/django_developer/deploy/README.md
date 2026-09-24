@@ -557,7 +557,7 @@ credential — only a super-admin's checkout has them — otherwise `--profile` 
 the ambient boto3 chain applies. Credential values are never printed. A project
 usually adds a `bin/fleet` shim that bootstraps its venv and passes `--project`.
 
-Mutating commands are exactly `config set`, `config rollback` and `sync`;
+Mutating commands are exactly `config set`, `config unset`, `config rollback` and `sync`;
 everything else is read-only and safe mid-incident.
 
 `config set` is surgical: download, verify the body against its sha256
@@ -565,10 +565,43 @@ metadata, change only the named dotted paths, re-render only those top-level
 lines (`KEY = repr(value)` — the renderer's own format), prove every other key
 is byte-identical, print a redacted diff, keep a mode-0600 rollback copy under
 `var/fleet/<env>/`, publish with the sha256 metadata `config_sync` requires.
-It refuses to add keys, refuses a body that fails its own integrity metadata,
-and `--dry-run` does everything but the put. It never re-renders the whole file
+New top-level keys require `--add`; without it, unknown keys are refused with
+a hint to use the flag. Nested paths must still exist, even with `--add`.
+It refuses a body that fails its own integrity metadata, and `--dry-run` does
+everything but the put. It never re-renders the whole file
 from the project's template: a live object may be older than the renderer, and
 an incident is not the time to ship that drift.
+
+For example, add Sign in with Apple settings in one command (the outer shell
+quotes preserve the inner Python string quotes):
+
+```bash
+python3 -m mojo.deploy.fleet config set --env prod --add --dry-run \
+  "APPLE_CLIENT_ID='com.example.web'" "APPLE_TEAM_ID='TEAM123456'" \
+  "APPLE_KEY_ID='KEY1234567'" APPLE_PRIVATE_KEY=@/secure/AuthKey.p8
+# Review the redacted diff, then repeat without --dry-run to publish.
+python3 -m mojo.deploy.fleet sync --env prod
+```
+
+`KEY=@path` reads a UTF-8 file as the complete string value, preserving newlines,
+CRLF, trailing whitespace and the final newline. Relative paths resolve from
+the operator's current directory. The value is stored as a single `repr()`
+literal line; the settings loader decodes its escapes when the node restarts.
+This works for existing settings too. To store a literal string beginning
+with `@`, quote it as a Python literal: `"LABEL='@literal'"`.
+
+New keys are appended and shown as `+ KEY = value`; secret-looking keys are
+redacted. Existing lines, including comments and blank lines, remain untouched
+except those explicitly edited. An unterminated last line receives a newline
+separator before additions.
+
+To undo an addition without rolling back other changes, use
+`python3 -m mojo.deploy.fleet config unset APPLE_PRIVATE_KEY --env prod`.
+It accepts one or more existing top-level keys, marks removals with `-`, and
+uses the same redaction, rollback copy, integrity checks, sha256 metadata and
+`--dry-run` behavior as `config set`. Dotted paths and unknown keys are refused.
+Both commands publish to S3; nodes load the change on their next config-sync
+tick, or use `sync` for the usual health-gated rollout.
 
 `sync` never lets two nodes restart together. It holds every node's
 `config-sync.timer`, then per node forces one `config-sync.service` run, checks

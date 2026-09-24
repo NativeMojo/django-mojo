@@ -63,6 +63,16 @@ Then access via:
 settings.get("MY_APP_API_KEY", "")
 ```
 
+## Quoted strings in `django.conf`
+
+Quoted string values decode Python literal escapes, matching `repr(value)`:
+`PRIVATE_KEY = 'first line\nsecond line\n'` loads with real newlines, and
+`LOCAL_PATH = 'C:\\new\\file'` loads with literal backslashes. Escape literal
+backslashes as `\\`; quotes and Unicode also round-trip. Legacy quoted values
+that are not valid Python literals retain the old surrounding-quote stripping.
+For multiline secrets, the [fleet CLI](../deploy/README.md#fleet--operate-the-fleet-from-an-operators-machine)
+accepts `KEY=@file` and handles the serialization.
+
 ## `kind=` Coercion
 
 `settings.get(name, default, kind=...)` coerces the resolved value (`"int"`,
