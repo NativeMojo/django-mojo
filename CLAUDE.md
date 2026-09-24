@@ -23,6 +23,11 @@ Django-mojo is a Django backend framework providing models, REST, auth, jobs, me
    `/scope` → `/build`; see "Local Fallback Workflow" under Planning). Never
    fall back silently.
 5. Read `docs/django_developer/README.md` before building — do not reinvent existing features.
+6. **Push the work to GitHub.** Push task commits to their branch promptly;
+   after verification and review, merge and push `main` before marking done.
+   If delivering through a PR, push the branch, open the PR, and report its link
+   with merge pending. The user has given standing authorization: do not ask
+   again or stop at a local commit. See `.claude/rules/git.md` for the exact rule.
 
 ## How to Work Here
 
@@ -70,7 +75,7 @@ filing, scoping or building. Three things it says that bite if you miss them:
   "Accepted", but Inbox backs it with `scoped` and Security with `accepted`.
   A cross-board move of an item at `scoped` silently lands it at `inbox`.
 - **Parallel builds require isolated worktrees.** Every code item gets its own
-  branch/worktree; verified work merges into local `main`, then its worktree
+  branch/worktree; verified work merges and pushes to `main`, then its worktree
   and merged branch are removed and pruned.
 
 An item's bug/feature/chore *kind* is still carried by its workspec, not by

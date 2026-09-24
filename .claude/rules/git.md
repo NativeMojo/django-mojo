@@ -1,17 +1,39 @@
 # Git Rules
 
+## Publish Every Task to GitHub
+
+**Standing user authorization, 2026-09-24: always push this repo's work to
+GitHub. Do not ask again.** This supersedes older no-push/opt-in instructions
+in repo docs, skills, and workspace conventions. A later explicit user request
+to keep a particular task local is the exception.
+
+- Push each task commit to its own remote branch promptly (`git push -u origin
+  HEAD`) so interrupted work is backed up. Stage only the task's intended files;
+  never include secrets, generated local state, or another session's work.
+- When verification and review are complete, merge into `main` and run
+  `git push origin main` **before marking the task done or deleting its worktree**.
+- Fetch and verify that the completed commit is reachable from `origin/main`;
+  report the pushed commit in the final response. A local commit or merge alone
+  is not completion.
+- If a PR is the appropriate delivery route (including branch protection), push
+  the task branch and open a PR, then report its URL and that merge is pending.
+  Never leave completed work only in a working tree or local branch.
+- If pushing fails, retain the branch/worktree, report the exact blocker, and
+  keep the task open. On a non-fast-forward rejection, fetch and integrate the
+  remote changes without discarding anyone's commits, verify affected work, and
+  retry. Never force-push `main`.
+
 ## Branches & Worktrees
 - Every code build uses a dedicated `codex/<item>` branch in its own Git
   worktree. Never edit from the primary `main` checkout or share a checkout
   between concurrent builds.
 - Keep the primary checkout on `main` for integration. After scoped
-  verification is green, merge the completed branch into local `main`.
-- Cleanup is part of done: verify the branch is merged, remove that exact
+  verification is green, merge the completed branch into `main` and push it.
+- Cleanup is part of done: verify the branch is merged and published, remove that exact
   worktree, delete that exact merged local branch, run
   `uv run python testit/testenv.py prune` and `git worktree prune`, then
   confirm neither remains. Never bulk-delete worktrees or branches owned by
   other sessions.
-- Pushing remains opt-in. A local merge into `main` does not authorize a push.
 
 ## Parallel checkouts — what is and is not safe now
 
@@ -39,15 +61,13 @@ What still holds:
 
 ## Commits
 - **Commit when you finish a request.** Commit verified work on its item branch,
-  then merge it into local `main` and perform the mandatory cleanup above.
+  push it, then merge and push `main` and perform the mandatory cleanup above.
   Stage specific files by name — never `git add -A` / `.`.
 - **Commit by explicit pathspec — never bare `git commit`.** Concurrent sessions
   share this working tree and stage planning moves (`git mv` via the helper
   scripts) at any moment; a bare commit sweeps their staged index state into
   your commit. Always `git add <exact files> && git commit -m "..." -- <same files>`,
   and never pass a directory as the pathspec.
-- **Pushing is still opt-in.** Never `git push` unless the user explicitly asks —
-  pushing is outward-facing and hard to reverse.
 - End commit messages with a trailer naming the model that actually authored the
   commit — for delegate/fanout builds that's the **builder's** model, not the
   orchestrator's:

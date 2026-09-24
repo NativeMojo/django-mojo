@@ -36,7 +36,12 @@ their legacy path. Read the applicable files before editing:
   respectively.
 
 Follow their security, testing, documentation, WIP, explicit-pathspec commit,
-and no-push requirements. One exception is provider identity: never use a
+and mandatory-push requirements. **Always publish task commits to GitHub; when
+the task is complete, merge and push `main` before marking it done.** A pushed
+branch with an open PR is an acceptable handoff when a PR is needed; report
+the link and pending merge. Never leave the result local-only. The user's
+standing authorization is recorded in `.claude/rules/git.md`; do not ask again.
+One exception is provider identity: never use a
 Claude co-author trailer for work authored by ChatGPT or Codex. Use
 `Co-Authored-By: OpenAI Codex <noreply@openai.com>` instead.
 

@@ -3,6 +3,13 @@
 This project uses Claude Code with structured skills, rules, agents, and helper
 scripts for AI-assisted development.
 
+**GitHub delivery is required for every workflow below.** Push task commits to
+their remote branch promptly. At completion, merge and push `main`, then verify
+the completed commit is on `origin/main` before marking done or cleaning up.
+A pushed branch with an open PR is an acceptable handoff when needed; report
+the PR URL and pending merge. This is standing user authorization, not a new
+approval gate. See `.claude/rules/git.md` for the authoritative rule.
+
 There is **one kind of work item**. Bugs, features, and chores differ only by a
 `type` field — not by folder, template, counter, or mode. The folder an item
 lives in *is* its stage, and items advance only via the helper scripts.
@@ -57,11 +64,11 @@ Claude Code's built-in plan mode.
 ```
 Pre-flight refuses an `UNPLANNED` item (one still carrying the `PLAN PENDING`
 marker — run `/scope` first) and `scripts/ready.sh` gates on `depends_on`. It works
-**in place** (no branch/worktree — see below). It first **claims** the item with
+on a dedicated task branch in its own worktree. It first **claims** the item with
 `scripts/start.sh` (`confirmed/ → in_progress/`, WIP = 1, resume-safe), then
-implements (a failing regression test first, for bugs), runs tests, commits (no
-push), spawns three agents in parallel — tests (scoped, see `.claude/rules/build-baseline.md`), docs, security review —
-and runs `scripts/close.sh`, which stamps the Resolution block (closed/branch/files
+implements (a failing regression test first, for bugs), runs tests, commits and
+pushes the task branch, spawns three agents in parallel — tests (scoped, see `.claude/rules/build-baseline.md`), docs, security review —
+then merges and pushes `main` before running `scripts/close.sh`, which stamps the Resolution block (closed/branch/files
 changed) and moves the file `in_progress/ → done/`.
 
 Routing: `/scope` may stamp optional `build_strategy` (`inline` | `delegate` |
@@ -101,6 +108,7 @@ new work
   |    - test-runner: runs the scoped suite, fixes trivial errors, reports complex ones
   |    - docs-updater: reads git diff, updates django_developer/ and web_developer/ docs
   |    - security-review: checks diff for permission gaps, injection, auth bypasses
+  |  merge and push main; verify origin/main contains the completed commit
   |  scripts/close.sh: stamp Resolution + in_progress/ -> done/
   v
 Done.
@@ -173,7 +181,7 @@ Rules in `.claude/rules/` are loaded automatically. You do not invoke them — C
 | Rule | Scope | What It Covers |
 |---|---|---|
 | `core.md` | Always | request.DATA, no type hints, no migrations, KISS, security |
-| `git.md` | Always | No branches/worktrees without permission (tests share a port + Postgres DB → no parallel runs); commit format |
+| `git.md` | Always | Isolated task branches/worktrees, explicit-pathspec commits, mandatory GitHub pushes and verified publication before completion |
 | `models.md` | `mojo/**/models/` | MojoModel inheritance, created/modified, RestMeta, one-per-file |
 | `rest.md` | `mojo/**/rest/` | URL patterns, CRUD handlers, POST_SAVE_ACTIONS |
 | `testing.md` | `tests/` | testit framework, server process isolation, assert messages |

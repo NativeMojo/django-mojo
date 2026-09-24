@@ -41,9 +41,10 @@ Read `CLAUDE.md` for conventions. Read the item file in `planning/confirmed/`.
   step 1) BEFORE any test run — the WIP lock doubles as the test-suite lock
   against concurrent builder sessions; a run outside the claim can collide with
   another session's suite.
-- Work **in place** on the current branch. Do **not** create a branch or git
-  worktree unless the user explicitly asked — the suite uses a dedicated port and a
-  shared PostgreSQL DB, so parallel checkouts collide (see `.claude/rules/git.md`).
+- Work on a dedicated task branch in its own worktree, per
+  `.claude/rules/git.md`. Keep the primary `main` checkout for integration and
+  publication after verification/review. Each checkout has its own test
+  environment; only one runner may test inside that checkout at a time.
 
 ## Execution Strategy (from `build_strategy` / `build_model` frontmatter)
 
@@ -61,9 +62,10 @@ and `git commit`.
   commit → post-build agents → close. Its prompt must point it at this file,
   `CLAUDE.md`, `.claude/rules/`, and the item file, and state explicitly: the
   item's `## Plan` is user-approved (skip the interactive confirmation gate);
-  work in place on main (never branch/worktree); it is the ONLY test runner; the
+  work in the task's isolated branch/worktree; it is the ONLY test runner; the
   commit trailer names **its own** model; commits go by explicit pathspec (see
-  `.claude/rules/git.md`); never push; if the item is `full` and its baseline
+  `.claude/rules/git.md`); push task commits to GitHub and merge/push `main`
+  after verification and review, before close-out; if the item is `full` and its baseline
   comes back red, STOP and report back instead of building. While it runs, the orchestrator stays
   hands-off the working tree — no edits, no test runs. On completion, verify
   (item Resolution, `testproject/var/test_failures.json`, `git log -p` spot-check) and relay.
@@ -72,7 +74,7 @@ and `git commit`.
 - **fanout** — L/XL items ONLY, and only when the plan defines **disjoint file
   partitions** (refuse otherwise). Orchestrator: claim, and — only if the item is
   `full` — record the baseline, BEFORE spawning; spawn one builder per partition (all share this one working
-  tree — worktrees are forbidden), each implements code + tests for its partition
+  isolated item checkout), each implements code + tests for its partition
   and **NEVER runs `bin/run_tests`** (state this in every builder prompt);
   integrate their reports, then run targeted tests and the default suite
   yourself; loop failures back to the owning builder; make the single commit;
@@ -97,13 +99,19 @@ and `git commit`.
      for diagnostics. Fix failures in your code, not the tests.
    - For a bug, confirm the regression test now passes and others still do.
 6. Update relevant docs (`docs/django_developer/`, `docs/web_developer/`).
-7. Git commit (NO push). Stage specific files by name — never `git add -A`.
+7. Git commit and push the task branch to GitHub per `.claude/rules/git.md`.
+   Stage specific files by name — never `git add -A`.
 8. Spawn the post-build agents in parallel and report their results:
    - **test-runner** — runs the item's tier (whole suite only at `full` — see
      `.claude/rules/build-baseline.md`), beyond your targeted tests
    - **docs-updater** — read the diff, update both doc tracks
    - **security-review** — review the diff for permission/injection/auth issues
-9. Fill `tests added:` in the item's Resolution block, then run
+9. Merge and push the verified, reviewed task to `main`; fetch and verify the
+   completed commit is on `origin/main` before marking done or cleaning up.
+   If a PR is needed, push the branch, open the PR, and report its URL with
+   merge pending instead of closing the item. A failed push leaves the task
+   open and its branch/worktree intact. No new push approval is needed.
+   Fill `tests added:` in the item's Resolution block, then run
    `scripts/close.sh planning/in_progress/<file>.md` (stamps closed/branch/files
    changed and moves it `in_progress/ → done/`).
 10. Update `memory.md` if any decision was made.
@@ -123,11 +131,12 @@ and `git commit`.
   `PLAN PENDING` marker (unplanned), or that `scripts/ready.sh` reports BLOCKED
 - Starting a new item while another sits in `in_progress/` (WIP = 1; finish or
   close it first)
-- Creating a branch or git worktree (work in place) unless the user explicitly asked
+- Building on the primary `main` checkout or sharing a checkout with another build
 - Expanding scope beyond the current item
 - Writing code before confirming the plan
 - Skipping tests ("I'll add them later")
 - For a bug: writing the fix before the failing regression test, or refactoring
   while fixing (open a separate `chore` item instead)
 - Touching files not in the plan without flagging it first
-- Pushing to remote, or staging with `git add -A` / `git add .`
+- Leaving task commits local-only or marking done before publishing to GitHub
+- Staging with `git add -A` / `git add .`
