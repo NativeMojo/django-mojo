@@ -117,3 +117,47 @@ def test_non_chat_delivery_keeps_existing_behavior(opts):
     assert handler.delivered[0]["topic"] == "user:123", "Topic envelopes must be preserved"
     assert all(message["type"] == "message" for message in handler.delivered), "Messages retain their wrapper"
     assert not handler.removed and not handler.errors, "Non-chat delivery must not invoke chat authorization"
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.chat")
+def test_open_socket_rechecks_current_account_state(opts):
+    from mojo.apps.account.models import Group, User
+    from mojo.apps.chat.models import ChatRoom, ChatMembership
+
+    username = "test-realtime-chat-stale-user"
+    room_name = "test-realtime-chat-stale-user-room"
+    group_name = "test-realtime-chat-stale-user-group"
+    ChatRoom.objects.filter(name=room_name).delete()
+    Group.objects.filter(name=group_name).delete()
+    User.objects.filter(username=username).delete()
+    user = User.objects.create(username=username)
+    group = Group.objects.create(name=group_name)
+    room = ChatRoom.objects.create(name=room_name, kind="group", group=group, user=None)
+    try:
+        ChatMembership.objects.create(room=room, user=user, role="member", status="active")
+        user.add_permission("manage_chat")
+        topic = f"chat:{room.pk}"
+        # The socket keeps the User loaded at connect; later changes land on
+        # other copies of the row, exactly as an admin edit would.
+        handler = _handler(User.objects.get(pk=user.pk), topic)
+        _deliver(handler, topic)
+        assert len(handler.delivered) == 1, "A permitted staff user must receive group-room chat"
+
+        User.objects.get(pk=user.pk).remove_permission("manage_chat")
+        _deliver(handler, topic)
+        assert len(handler.delivered) == 1, "Removing the staff permission must stop delivery on an open socket"
+        assert handler.removed == [topic], "Permission removal must unsubscribe the room"
+
+        User.objects.get(pk=user.pk).add_permission("manage_chat")
+        handler = _handler(User.objects.get(pk=user.pk), topic)
+        _deliver(handler, topic)
+        assert len(handler.delivered) == 1, "A re-granted staff user must receive chat"
+        User.objects.filter(pk=user.pk).update(is_active=False)
+        _deliver(handler, topic)
+        assert len(handler.delivered) == 1, "A disabled account must stop receiving chat on an open socket"
+        assert handler.removed == [topic], "Account deactivation must unsubscribe the room"
+    finally:
+        room.delete()
+        group.delete()
+        user.delete()

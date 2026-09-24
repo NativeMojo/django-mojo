@@ -731,6 +731,19 @@ class WebSocketHandler:
             self._log_exception("Protected group topic authorization failed")
             return False
 
+    def _can_receive_chat(self, topic):
+        """Check chat access against the current account row, not the socket's
+        User loaded at connect: permission removal and deactivation must stop
+        delivery on an already-open socket."""
+        from mojo.apps.account.models import User
+        from mojo.db import use_primary
+
+        if not isinstance(self.user, User) or self.user.pk is None:
+            return self.user.on_realtime_can_subscribe(topic)
+        with use_primary():
+            user = User.objects.filter(pk=self.user.pk, is_active=True).first()
+            return user is not None and user.on_realtime_can_subscribe(topic)
+
     async def subscribe_to_topic(self, topic):
         """Subscribe connection to a topic"""
         # Hooks can request subscriptions directly, bypassing handle_subscribe.
@@ -794,7 +807,7 @@ class WebSocketHandler:
             try:
                 if self.authenticated and callable(getattr(self.user, "on_realtime_can_subscribe", None)):
                     allowed = await asyncio.get_event_loop().run_in_executor(
-                        None, self.user.on_realtime_can_subscribe, topic)
+                        None, self._can_receive_chat, topic)
             except Exception:
                 self._log_exception("Chat delivery authorization failed")
             if not allowed:
