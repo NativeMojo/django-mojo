@@ -1,5 +1,7 @@
 # OAuth / Social Login — Django Developer Reference
 
+> **Configure in the Admin:** provider credentials and on/off can be set on the Admin Sign-in page instead of `django.conf` — see [Sign-in Setup](signin_setup.md). A value saved there overrides the deployment file with no restart.
+
 ## Overview
 
 OAuth2 social login is built into the framework. The full flow — CSRF state management, provider token exchange, user resolution, and JWT issuance — is handled by the framework. Your project only needs to configure credentials and (optionally) register additional providers.

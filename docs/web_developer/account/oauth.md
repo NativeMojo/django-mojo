@@ -1,5 +1,7 @@
 # OAuth / Social Login — REST API Reference
 
+> **Configure in the Admin:** provider credentials and on/off can be set on the Admin Sign-in page instead of `django.conf` — see [Sign-in Setup](signin_setup.md). A value saved there overrides the deployment file with no restart.
+
 OAuth allows users to log in with a third-party provider (Google, etc.) without a password. The server handles the token exchange — your frontend only needs to redirect the user and handle the callback.
 
 **Supported providers:** `google`, `apple`, `github`

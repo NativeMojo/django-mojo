@@ -19,6 +19,7 @@
 - [Auth Pages](auth_pages.md) — Hosted `/auth`, `/register`, and `/passkey` pages; bouncer integration, OAuth, SMS login, multi-tenant group forwarding
 - [Auth Config](auth_config.md) — Per-group auth-page configuration (theme / login / registration); resolution order, schema, validation, migration from flat `AUTH_*` settings
 - [OAuth / Social Login](oauth.md) — Provider setup, auto-link logic, email verification, MFA behaviour, adding new providers
+- [Sign-in Setup (Admin)](signin_setup.md) — One Admin page for the system login look and feel and Google/Apple/GitHub credentials; where values live, callback URLs, authority
 - [OAuth 2.1 Authorization Server](oauth_server.md) — Issuing resource-confined credentials to third-party apps: the resource registry, PKCE + consent, the `token_type="mcp"` branch of `validate_jwt`, `WWW-Authenticate`, rotation and revocation
 - [Email Change](email_change.md) — Self-service email address change flow
 - [API Keys](api_keys.md) — Group-scoped programmatic access, permissions, token lifecycle
