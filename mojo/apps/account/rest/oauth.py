@@ -605,9 +605,34 @@ def on_oauth_callback(request, provider):
     preserved = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
                  if k not in redirect_params]
     query = urlencode(preserved + list(redirect_params.items()), quote_via=quote)
-    return _bounce_to_frontend(
-        urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment)),
-        state_data)
+    location = urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+    # Apple returns with a cross-site form POST (response_mode=form_post). A 302
+    # answering that POST lands on the frontend WITHOUT its SameSite=Lax
+    # cookies, so a Bouncer-gated /auth sees a stranger and challenges — and
+    # the challenge drops code/state. Navigating from a page on our own origin
+    # makes the landing same-site, so the cookies ride along. GET returns
+    # (Google, GitHub) and custom-scheme deep links keep the plain 302.
+    if (request.method == "POST" and
+            redirect_allowlist.matchable_scheme(location) in ("http", "https")):
+        return _same_site_bounce(location)
+    return _bounce_to_frontend(location, state_data)
+
+
+def _same_site_bounce(location):
+    """A no-script page on our origin that forwards to `location`."""
+    from django.http import HttpResponse
+    from django.utils.html import escape
+    target = escape(location)
+    response = HttpResponse(
+        "<!doctype html><html><head><meta charset=\"utf-8\">"
+        f"<meta http-equiv=\"refresh\" content=\"0;url={target}\">"
+        "<title>Signing in…</title></head><body>"
+        f"<p>Signing in… <a href=\"{target}\">Continue</a></p></body></html>",
+        content_type="text/html; charset=utf-8")
+    response["Cache-Control"] = "no-store"
+    response["Referrer-Policy"] = "no-referrer"
+    response["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+    return response
 
 
 # -----------------------------------------------------------------
