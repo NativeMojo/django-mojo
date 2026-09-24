@@ -89,10 +89,45 @@ def descriptor(request, purpose, group=None, *, action='check', form=False, redi
             redis.close()
 
 
+def has_pass(request):
+    """True when this request carries a valid returning Bouncer pass."""
+    from mojo.apps.account.rest.bouncer.assess import verify_pass_cookie
+    muid = identity(request, returning=True)
+    pass_muid = verify_pass_cookie(request.COOKIES.get('mbp', ''), request.ip,
+                                   host=request.get_host(), session_key=request.COOKIES.get('mbs', ''))
+    return bool(muid and pass_muid == muid)
+
+
+def ip_prefix(ip):
+    return '.'.join((ip or '').split('.')[:3])
+
+
+def oauth_return_passed(request):
+    """An OAuth provider is returning a visitor who passed Bouncer at /begin.
+
+    Apple returns with a cross-site form POST, and browsers do not carry the
+    SameSite=Lax pass across that hop, so the pass is recorded in the OAuth
+    state when the visitor's own page calls /begin (a same-origin request that
+    does carry it) and honoured here. A state minted without a pass, from
+    another network, expired, or already consumed never admits.
+    """
+    state = request.DATA.get('state') if hasattr(request, 'DATA') else None
+    if not state or not request.DATA.get('code') or not isinstance(state, str):
+        return False
+    try:
+        from mojo.apps.account.services.oauth.base import _STATE_PREFIX
+        from mojo.helpers.redis import get_connection
+        import json
+        raw = get_connection().get(f"{_STATE_PREFIX}{state}")
+        data = json.loads(raw) if raw else {}
+    except Exception:
+        return False
+    passed = data.get('bouncer_pass') if isinstance(data, dict) else None
+    return bool(passed) and passed == ip_prefix(request.ip)
+
+
 def page_check(request, purpose, group=None):
     """Return (action, descriptor); a returning pass still honors current restrictions."""
-    from mojo.apps.account.rest.bouncer.assess import verify_pass_cookie
-
     request.group = group
     redis = None
     try:
@@ -101,10 +136,7 @@ def page_check(request, purpose, group=None):
         if action in ('decoy', 'recovery'):
             return 'recovery', {'next_action': 'recovery', 'reason': 'operator',
                                 **_diagnostic(request, purpose, 'recovery', result.metadata['restriction']['reason'], result, device)}
-        muid = identity(request, returning=True)
-        pass_muid = verify_pass_cookie(request.COOKIES.get('mbp', ''), request.ip,
-                                       host=request.get_host(), session_key=request.COOKIES.get('mbs', ''))
-        if muid and pass_muid == muid:
+        if has_pass(request) or oauth_return_passed(request):
             return 'allow', descriptor(request, purpose, group, form=True, redis=redis)
         config = descriptor(request, purpose, group, action=action, redis=redis)
         return action, {**config, **_diagnostic(request, purpose, action, config.get('reason', 'check'), result, device)}

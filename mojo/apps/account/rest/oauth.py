@@ -467,6 +467,12 @@ def on_oauth_begin(request, provider):
         "redirect_uri": callback_uri,
         "frontend_uri": frontend_uri,
     }
+    # Record that this visitor already passed Bouncer. The provider's return
+    # (Apple's cross-site form POST) arrives without the SameSite=Lax pass, so
+    # the gated login page admits the return on this record instead.
+    from mojo.apps.account.services.bouncer import hosted_gate
+    if hosted_gate.has_pass(request):
+        state_extra["bouncer_pass"] = hosted_gate.ip_prefix(request.ip)
     # Stamp the vetted deep-link scheme only when there is one, so the http(s)
     # state shape is byte-identical to before this change.
     if frontend_scheme:
