@@ -17,18 +17,16 @@ Compiled assets use a relative base; Portal API requests always use same-origin
 ## Pinned identity and offline replacement
 
 The current artifact is portal-mojo **0.2.4**, source revision
-`6376bfbf451371e5fbdff347e2d7966814e62422`, built clean with Node
+`75121e16691bae71cdead021acf434328ba9f31e`, built clean with Node
 **24.21.0** / npm **11.19.0** and lockfile SHA-256
 `6323902f528efcccd2a8fb636ae67d928e21ad8b812b166175cd13335c40ca01`.
 Its 118-file inventory includes the Vite manifest and lazy chunks.
 The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 
-`b5e25552747f05eb269841a1e8c3c291404f0946372c352fae8a988fc8a6a147`
+`d0ec59a77eafe4ae4b986c233bb24484295ae1c77e1e9345612b90a7f8d2ac69`
 
-This pin comes from the clean local canonical build for item #5547, source
-revision `6376bfbf451371e5fbdff347e2d7966814e62422`. It adds the Sign-in page
-(Identity & Access → Sign-in): the system login look and feel and the
-Google, Apple and GitHub providers, backed by `/api/account/admin/signin`.
+This pin comes from the clean local canonical build for item #4769, source
+revision `75121e16691bae71cdead021acf434328ba9f31e`. It includes Fleet Configuration and independent activation polling after job dispatch.
 The complete artifact includes hidden `.vite` content; verify the manifest
 digest before vendoring it. This build has not been released to npm or deployed.
 
@@ -37,7 +35,7 @@ Stop processes serving/importing the checkout before replacing the artifact:
 ```bash
 uv run python scripts/vendor_admin_portal.py \
   --source /absolute/path/to/verified/dist/admin \
-  --expected-manifest-sha256 b5e25552747f05eb269841a1e8c3c291404f0946372c352fae8a988fc8a6a147
+  --expected-manifest-sha256 d0ec59a77eafe4ae4b986c233bb24484295ae1c77e1e9345612b90a7f8d2ac69
 uv run python scripts/vendor_admin_portal.py --check
 ```
 

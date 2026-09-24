@@ -1,6 +1,6 @@
 # Packaged Admin Security client
 
-The packaged Portal is **portal-mojo 0.2.4** (build `6376bfb`). Identity & Access → **Sign-in** configures the platform login page and its Google, Apple and GitHub sign-in — see [Sign-in Setup API](signin_setup.md). Toast notifications remain visible
+The packaged Portal is **portal-mojo 0.2.4**. Toast notifications remain visible
 and interactive above modal backdrops, including nested dialogs. Phone Hub
 connection tests read the provider's `success` verdict, retain the result in
 Overview and Connection, and distinguish test mode from verified connectivity.
