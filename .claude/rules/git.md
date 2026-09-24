@@ -10,6 +10,8 @@ to keep a particular task local is the exception.
 - Push each task commit to its own remote branch promptly (`git push -u origin
   HEAD`) so interrupted work is backed up. Stage only the task's intended files;
   never include secrets, generated local state, or another session's work.
+- If unsure whether work is ready for `main`, push the task branch immediately
+  anyway. Uncertainty about merging is never a reason to leave commits local.
 - When verification and review are complete, merge into `main` and run
   `git push origin main` **before marking the task done or deleting its worktree**.
 - Fetch and verify that the completed commit is reachable from `origin/main`;
