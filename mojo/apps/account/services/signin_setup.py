@@ -106,7 +106,8 @@ def _field_state(key, label, secret, multiline):
         "configured": configured,
         "source": source,
         "value": None if (secret or not configured) else str(value),
-        "hint": _hint(value) if (secret and configured) else None,
+        # A PEM's last characters are its END line, which identifies nothing.
+        "hint": _hint(value) if (secret and configured and not multiline) else None,
     }
 
 
