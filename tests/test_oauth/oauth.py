@@ -116,6 +116,43 @@ def test_oauth_callback_redirects(opts):
     )
 
 
+@th.django_unit_test("oauth: a form_post callback lands on the frontend from our own origin")
+def test_oauth_form_post_callback_same_site_bounce(opts):
+    """
+    Regression: Apple returns with a cross-site form POST. A 302 answering that
+    POST reaches the frontend without its SameSite=Lax cookies, so a
+    Bouncer-gated /auth challenged the visitor and dropped code/state — Sign in
+    with Apple looped back to the login page. The POST callback must answer
+    with a same-origin page that forwards to the frontend carrying code+state.
+    """
+    from html import unescape
+    from mojo.apps.account.services.oauth import get_provider
+    svc = get_provider("apple")
+    frontend_uri = "https://example.com/auth?redirect=%2Fapp%2F"
+    state = svc.create_state(extra={
+        "redirect_uri": "https://example.com/api/auth/oauth/apple/callback",
+        "frontend_uri": frontend_uri,
+    })
+    resp = opts.client.post(
+        "/api/auth/oauth/apple/callback", json=None,
+        data={"code": "applecode123", "state": state},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        allow_redirects=False,
+    )
+    assert resp.status_code == 200, (
+        f"a form_post callback must answer with a same-origin page, got "
+        f"{resp.status_code}: {resp.response!r}")
+    body = unescape(resp.text or "")
+    expected = f"https://example.com/auth?redirect=%2Fapp%2F&code=applecode123&state={state}"
+    assert f'http-equiv="refresh" content="0;url={expected}"' in body, (
+        f"the page must forward to the frontend with code and state: {body!r}")
+    headers = {k.lower(): v for k, v in opts.client.last_response.headers.items()}
+    assert "no-store" in headers.get("cache-control", ""), (
+        f"the bounce carries an auth code and must not be cached: {headers!r}")
+    assert headers.get("referrer-policy") == "no-referrer", (
+        f"the bounce must not leak its URL as a referrer: {headers!r}")
+
+
 @th.django_unit_test("oauth: begin stores a query-carrying frontend_uri verbatim")
 def test_oauth_begin_preserves_query_in_frontend_uri(opts):
     """

@@ -264,6 +264,17 @@ the OS decides which installed app receives that scheme.
 
 #### The callback bounce
 
+**A form_post return (Apple) is bounced from our own origin, not 302'd.** Apple
+comes back with a cross-site form POST. A 302 answering that POST lands on the
+frontend without its `SameSite=Lax` cookies (Lax rides cross-site GETs, not
+POSTs), so a Bouncer-gated `/auth` treated the visitor as new, challenged, and
+dropped `code`/`state`. A POST `/callback` whose landing is `http(s)` therefore
+returns a tiny no-script page (`meta refresh`, `no-store`, `no-referrer`,
+`default-src 'none'`) that forwards to the same URL — a same-site navigation,
+so the cookies ride along. GET returns (Google, GitHub) and custom-scheme deep
+links keep the plain 302 below.
+
+
 Admitting a deep link at `/begin` is only half the flow — the browser still has
 to *land* on it. After the provider redirects to `/callback`, the server 302s the
 browser to the `frontend_uri` with `code`/`state` appended, and that redirect

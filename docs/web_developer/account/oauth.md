@@ -33,6 +33,8 @@ pages render a button for each enabled provider. See
 5. POST /api/auth/oauth/apple/complete     → exchange code, get JWT
 ```
 
+For Apple's POST return, the callback answers with a small same-origin page that forwards the browser to your frontend URL (instead of a 302), so your site's cookies — including Bouncer's pass — arrive with it. Your frontend sees the same `?code=…&state=…` landing either way.
+
 Steps 3–4 are invisible to your JS — your page still receives `?code=` and `?state=` in the URL, identical to Google. **No changes needed to your completion code.**
 
 ---
