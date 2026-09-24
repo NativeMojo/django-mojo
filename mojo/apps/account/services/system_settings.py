@@ -214,7 +214,11 @@ def set_value(actor, key, value):
     if key in (INSTALLATION_UUID, INSTALLATION_SLUG):
         raise merrors.PermissionDeniedException(
             "Installation identity can only be created by its initializer")
-    normalized = _normalize_value(key, value)
+    return _store(key, _normalize_value(key, value))
+
+
+def _store(key, normalized):
+    """Write one protected global row. Callers own the authorization check."""
     from mojo.apps.account.models import Setting
 
     with transaction.atomic():
@@ -343,8 +347,13 @@ AUTH_SAFE_PATHS = {
 
 
 def set_auth_safe_fields(actor, patch):
-    """Merge allowlisted presentation fields without replacing AUTH_CONFIG."""
-    require_system_admin(actor)
+    """Merge allowlisted presentation fields without replacing AUTH_CONFIG.
+
+    The system login page is ordinary admin configuration, like a group's:
+    global manage_settings or admin (or a superuser) may edit it.
+    """
+    from mojo.apps.account.services.admin_settings import require_catalog_writer
+    require_catalog_writer(actor)
     if not isinstance(patch, dict) or not patch:
         raise merrors.ValueException("settings patch must be a non-empty object")
     unknown = set(patch) - AUTH_SAFE_PATHS
@@ -379,7 +388,7 @@ def set_auth_safe_fields(actor, patch):
     if registration_enabled and not registration_methods:
         raise merrors.ValueException(
             "AUTH_CONFIG must retain a registration method while registration is enabled")
-    return set_value(actor, AUTH_CONFIG, candidate)
+    return _store(AUTH_CONFIG, _normalize_value(AUTH_CONFIG, candidate))
 
 
 def _validate_identity_pair(current_uuid, current_slug):

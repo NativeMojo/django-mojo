@@ -27,5 +27,6 @@ from .admin_platform import *
 from .admin_settings import *
 from .admin_sms import *
 from .admin_assistant import *
+from .admin_signin import *
 
 from .admin_fleet import *
