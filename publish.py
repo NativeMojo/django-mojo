@@ -235,7 +235,9 @@ def _split_connector_url(url):
     if CONNECTOR_MARKER in url:
         base, _, key = url.partition(CONNECTOR_MARKER)
         return base.rstrip("/"), (key.strip("/") or None)
-    base = url.rstrip("/")
+    # A connector address may carry a query (e.g. `/mcp?tools=full`); the REST
+    # base is the origin path in front of /mcp either way.
+    base = urllib.parse.urlsplit(url)._replace(query="", fragment="").geturl().rstrip("/")
     if base.endswith("/mcp"):
         base = base[:-len("/mcp")]
     return base.rstrip("/"), None
