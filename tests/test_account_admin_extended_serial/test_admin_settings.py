@@ -832,14 +832,20 @@ def test_owner_edit_matches_writer_authority(opts):
         with th.assert_raises(me.ValueException):
             system_settings.set_auth_safe_fields(root, {})
 
+        # owner_edit advertises the superuser owner tier (fleet topology,
+        # framework pin). The system login writer is wider on purpose (#5547):
+        # manage_settings and admin may use it through the Sign-in page, while
+        # manage_advanced alone may not.
         for username, permission in (
                 ("owner-edit-advanced", "manage_advanced"),
                 ("owner-edit-admin", "admin"),
                 ("owner-edit-settings", "manage_settings")):
             actor = _owner_principal(username, permissions={permission: True})
             assert views._capabilities(actor)["owner_edit"] is False, \
-                f"{permission} was advertised an owner editor the writer refuses"
-            with th.assert_raises(me.PermissionDeniedException):
+                f"{permission} was advertised the superuser owner tier"
+            expected = (me.PermissionDeniedException if permission == "manage_advanced"
+                        else me.ValueException)
+            with th.assert_raises(expected):
                 system_settings.set_auth_safe_fields(actor, {})
     finally:
         User.objects.filter(username__in=names).delete()
