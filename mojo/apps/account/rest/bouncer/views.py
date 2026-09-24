@@ -395,6 +395,11 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None, h
     back_val = request_data.get('back') or ''
     if back_val:
         fwd_params['back'] = back_val
+    # An OAuth return that still lands on the challenge keeps its code/state,
+    # so passing the check completes the sign-in instead of restarting it.
+    if request_data.get('code') and request_data.get('state'):
+        fwd_params['code'] = request_data.get('code')
+        fwd_params['state'] = request_data.get('state')
     requested_layout = request_data.get('auth_theme') or ''
     requested_appearance = request_data.get('auth_appearance') or ''
     if auth_config.normalize_layout(requested_layout, ''):

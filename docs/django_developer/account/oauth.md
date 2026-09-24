@@ -266,6 +266,16 @@ the OS decides which installed app receives that scheme.
 
 #### The callback bounce
 
+**Bouncer admits the provider's return on the OAuth state.** Browsers drop the
+`SameSite=Lax` Bouncer pass across Apple's cross-site POST even when the last hop
+starts from our own page, so `/begin` — called by the visitor's own login page,
+a same-origin request that carries the pass — records `bouncer_pass` (the
+caller's /24 IP prefix) in the OAuth state. The gated `/auth?code=…&state=…`
+landing is admitted when that live, unconsumed state carries a pass from the
+same network (`hosted_gate.oauth_return_passed`); a state minted without a pass
+is challenged as before, and the challenge keeps `code`/`state` so passing it
+still completes the sign-in. Bouncer restrictions (blocked/recovery) still apply.
+
 **A form_post return (Apple) is bounced from our own origin, not 302'd.** Apple
 comes back with a cross-site form POST. A 302 answering that POST lands on the
 frontend without its `SameSite=Lax` cookies (Lax rides cross-site GETs, not
