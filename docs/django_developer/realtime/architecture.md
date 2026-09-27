@@ -111,7 +111,9 @@ every later login on that process (#5736).
 
 With `CONN_MAX_AGE = 0` (the default) each such call that queries the database
 opens a connection. Configure `DATABASE_POOL_OPTIONS` to reuse pooled
-connections instead.
+connections instead. In pool mode, recovery relies on `CONN_HEALTH_CHECKS`,
+which is on by default (`DATABASE_CONN_HEALTH_CHECKS`), to drop a dead pooled
+connection before it is used.
 
 ### WebSocket Limits (DM-042)
 

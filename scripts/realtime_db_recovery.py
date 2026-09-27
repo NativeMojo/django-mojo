@@ -77,11 +77,24 @@ def server_backends():
 
 
 OWN_PIDS = set()
+TEST_DATABASE_PREFIX = "mojo_test"
+
+
+def require_test_database():
+    """Refuse to run against any database not named like a test database."""
+    from django.db import connection
+
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT current_database()")
+        name = cursor.fetchone()[0]
+    if not name.startswith(TEST_DATABASE_PREFIX):
+        raise SystemExit(f"refusing: database {name!r} does not start with {TEST_DATABASE_PREFIX!r}")
 
 
 def kill_server_backends():
     from django.db import connection
 
+    require_test_database()
     pids = server_backends()
     with connection.cursor() as cursor:
         for pid in pids:
@@ -178,6 +191,7 @@ def main():
     args = parser.parse_args()
 
     original_conf = CONF.read_text()
+    users = []
     if args.mode == "pool":
         CONF.write_text(original_conf.rstrip("\n") + "\n" + POOL_LINE + "\n")
     try:
@@ -188,6 +202,7 @@ def main():
         from django.db import connection
         from mojo.apps import realtime
 
+        require_test_database()
         url = server_url()
         log_offset = LOG.stat().st_size if LOG.exists() else 0
         users = make_users()
@@ -260,12 +275,16 @@ def main():
         summary["checks"] = checks
         summary["passed"] = all(checks.values())
         print(json.dumps(summary, indent=1))
-        for user, _ in users:
-            user.delete()
-        connection.close()
         return 0 if summary["passed"] else 1
     finally:
         CONF.write_text(original_conf)
+        if users:
+            from django.db import connection
+
+            connection.close()  # a failed run may have left it unusable
+            for user, _ in users:
+                user.delete()
+            connection.close()
         if args.mode == "pool":
             server("restart")
 
