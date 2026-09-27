@@ -16,6 +16,7 @@ import json
 import time
 import uuid
 from mojo.helpers import logit
+from mojo.helpers.async_db import database_thread_target
 from mojo.helpers.redis.client import get_connection
 from mojo.helpers.request import normalize_ip
 from mojo.helpers.settings import settings
@@ -97,7 +98,7 @@ async def check_connect_rate(scope):
     tasks + 30s of connection state."""
     ip = resolve_scope_ip(scope)
     return await asyncio.get_event_loop().run_in_executor(
-        None, _connect_rate_check_sync, ip
+        None, database_thread_target(_connect_rate_check_sync), ip
     )
 
 
@@ -511,14 +512,16 @@ class WebSocketHandler:
             }
             def call_hook():
                 return self.user.on_realtime_connection(connection_data)
-            result = await asyncio.get_event_loop().run_in_executor(None, call_hook)
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, database_thread_target(call_hook))
             # Process hook response
             if result:
                 await self._process_hook_response(result)
         elif hasattr(self.user, 'on_realtime_connected'):
             def call_hook():
                 return self.user.on_realtime_connected()
-            result = await asyncio.get_event_loop().run_in_executor(None, call_hook)
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, database_thread_target(call_hook))
 
             # Process hook response
             if result:
@@ -548,7 +551,7 @@ class WebSocketHandler:
 
             try:
                 can_subscribe = await asyncio.get_event_loop().run_in_executor(
-                    None, check_permission
+                    None, database_thread_target(check_permission)
                 )
                 if not can_subscribe:
                     await self.report_incident(f"access denied for topic {topic}", "permission_denied", 4)
@@ -680,7 +683,7 @@ class WebSocketHandler:
 
             try:
                 response = await asyncio.get_event_loop().run_in_executor(
-                    None, call_hook
+                    None, database_thread_target(call_hook)
                 )
 
                 if response:
@@ -724,7 +727,8 @@ class WebSocketHandler:
             if permissions is None:
                 return True
             return await asyncio.get_running_loop().run_in_executor(
-                None, can_access_group_topic, self.user, topic, permissions
+                None, database_thread_target(can_access_group_topic),
+                self.user, topic, permissions
             )
         except Exception:
             # Authorization errors must never turn into delivery of the payload.
@@ -807,7 +811,7 @@ class WebSocketHandler:
             try:
                 if self.authenticated and callable(getattr(self.user, "on_realtime_can_subscribe", None)):
                     allowed = await asyncio.get_event_loop().run_in_executor(
-                        None, self._can_receive_chat, topic)
+                        None, database_thread_target(self._can_receive_chat), topic)
             except Exception:
                 self._log_exception("Chat delivery authorization failed")
             if not allowed:
@@ -904,7 +908,7 @@ class WebSocketHandler:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None,
-                lambda: incident.report_event(
+                database_thread_target(lambda: incident.report_event(
                     details,
                     title=details[:80],
                     category=event_type,
@@ -912,7 +916,7 @@ class WebSocketHandler:
                     request=None,   # no HTTP request in websocket context
                     scope=scope,
                     **payload
-                )
+                ))
             )
         except Exception as e:
             self._log_exception("failed to report incident")
@@ -966,7 +970,8 @@ class WebSocketHandler:
             def call_hook():
                 self.user.on_realtime_disconnected()
             try:
-                await asyncio.get_event_loop().run_in_executor(None, call_hook)
+                await asyncio.get_event_loop().run_in_executor(
+                    None, database_thread_target(call_hook))
             except Exception as e:
                 self._log_exception("user disconnect hook failed")
 

@@ -22,6 +22,7 @@ from mojo.middleware.auth import (
 )
 from mojo.helpers import modules
 from mojo.helpers import logit
+from mojo.helpers.async_db import database_thread_target
 
 logger = logit.get_logger(__name__, "realtime.log")
 
@@ -121,8 +122,13 @@ async def async_validate_bearer_token(
 ):
     """
     Async wrapper for validate_bearer_token suitable for use in async consumers.
+
+    The database boundary drops a connection the server has closed before the
+    handler runs and returns the connection after it; without it the one
+    long-lived sync thread reuses a dead connection forever (#5736).
     """
-    return await sync_to_async(validate_bearer_token)(prefix, token, request)
+    return await sync_to_async(database_thread_target(validate_bearer_token))(
+        prefix, token, request)
 
 
 def attach_identity_to_scope(
