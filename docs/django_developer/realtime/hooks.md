@@ -116,6 +116,11 @@ def on_realtime_can_subscribe(self, topic):
     return topic in allowed
 ```
 
+Hooks run on executor threads, not on the event loop, and may use the ORM.
+The framework closes or returns each hook's database connection when it
+finishes, so a hook needs no connection handling of its own. See
+[Database connections](architecture.md#database-connections).
+
 ## Hook Response Contract
 
 All hooks (`on_realtime_connection`, `on_realtime_connected`, `on_realtime_message`) share the same response processing via `_process_hook_response`:

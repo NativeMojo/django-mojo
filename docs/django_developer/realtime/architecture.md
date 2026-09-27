@@ -97,6 +97,22 @@ If no `authenticate` message arrives within `WS_UNAUTH_TIMEOUT` seconds
 Once authenticated, the normal activity/idle timeout (30s of inactivity)
 applies instead.
 
+### Database connections
+
+Bearer validation and every hook or permission check that can reach the
+database (`on_realtime_connection`, `on_realtime_connected`,
+`on_realtime_message`, `on_realtime_can_subscribe`,
+`on_realtime_disconnected`, group-topic and chat checks, incident reports) run
+inside [`database_connection_boundary`](../helpers/async_db.md). Each call
+drops a dead or expired connection before it runs and closes or returns its
+connection afterwards, the way an HTTP request does. A database restart,
+failover or killed backend therefore fails at most the call in flight, not
+every later login on that process (#5736).
+
+With `CONN_MAX_AGE = 0` (the default) each such call that queries the database
+opens a connection. Configure `DATABASE_POOL_OPTIONS` to reuse pooled
+connections instead.
+
 ### WebSocket Limits (DM-042)
 
 | Setting | Default | Meaning |

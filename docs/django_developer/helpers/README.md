@@ -15,4 +15,5 @@ Helpers live in `mojo/helpers/`. Import directly — no registration required.
 - [llm](llm.md) — Provider-neutral LLM facade and mandatory safety policy
 - [location](location.md) — USPS-preferred address validation with one-way Google fallback, plus autocomplete and place details
 - [redis](redis.md) — Redis client and caching
+- [async_db](async_db.md) — Connection boundary for ORM work on threads and executors outside the request cycle
 - [other](other.md) — stats, qrcode, filetypes, domain, geoip, sysinfo, urls
