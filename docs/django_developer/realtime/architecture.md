@@ -243,8 +243,9 @@ The resolved IP is stored in:
 - Redis pub/sub ensures messages reach the correct worker
 - Each connection subscribes to its own Redis channel plus topic channels,
   on its own async pub/sub connection — one Redis connection per logged-in
-  socket, capped per process by `REDIS_PUBSUB_MAX_CONN` (default
-  `REDIS_MAX_CONN`, 500). Idle sockets hold no executor thread.
+  socket. `REDIS_PUBSUB_MAX_CONN` (default `REDIS_MAX_CONN`, 500) caps them
+  per event loop, which is one per ASGI worker process on uvicorn, daphne and
+  gunicorn with uvicorn workers. Idle sockets hold no executor thread.
 - If a socket's pub/sub connection drops, that socket stops receiving and the
   error is logged; other sockets are unaffected. The WebSocket itself stays
   open (unchanged by #5750), so delivery resumes only when the client

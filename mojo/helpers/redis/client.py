@@ -17,7 +17,9 @@ Settings used (all optional; follows your existing naming):
     REDIS_READER_URL       # standalone read-only/replica URL
     REDIS_READER_SERVER    # reader endpoint; other reader parts inherit primary
     REDIS_MAX_CONN         # per-process pool size (default 500)
-    REDIS_PUBSUB_MAX_CONN  # per-process cap on async pub/sub connections
+    REDIS_PUBSUB_MAX_CONN  # cap on async pub/sub connections per event loop,
+                           # which is one per ASGI worker process on uvicorn,
+                           # daphne and gunicorn with uvicorn workers
                            # (default REDIS_MAX_CONN)
     REDIS_READ_FROM_REPLICAS  # '1'/'0' (cluster only; default '1')
 
@@ -262,7 +264,9 @@ def get_async_connection():
     For pub/sub only: waiting on a message costs no thread. Keyed commands
     stay on get_connection(). Built from the same settings as the primary
     client (URL or parts, scheme/TLS, username, password, db, timeouts).
-    REDIS_PUBSUB_MAX_CONN (default REDIS_MAX_CONN) caps its connections.
+    REDIS_PUBSUB_MAX_CONN (default REDIS_MAX_CONN) caps its connections
+    per event loop, which is one per ASGI worker process on uvicorn, daphne
+    and gunicorn with uvicorn workers.
 
     In cluster mode (REDIS_CLUSTER=True) this is still a plain client on the
     configured endpoint: redis-py 7 has no async cluster pub/sub, and
