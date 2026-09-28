@@ -60,8 +60,8 @@ def test_advisory_adapters_preserve_classifier(opts):
         ("http://one.example http://two.example", "warn", 50, ["spam_link"]),
         (LINKS, "masked", 75, ["spam_link"]),
         ("bastard bitch", "masked", 75, ["deny_hit", "repeated_profanity"]),
-        ("fuck", "warn", 50, ["high_severity"]),
-        ("fuck bastard", "masked", 95, ["high_severity", "deny_hit", "repeated_profanity"]),
+        ("fuck", "warn", 50, ["strong_profanity"]),
+        ("fuck bastard", "masked", 95, ["strong_profanity", "deny_hit", "repeated_profanity"]),
     ]
     for body, decision, score, reasons in cases:
         raw = content_guard.check_text(body, surface="chat")
@@ -72,6 +72,28 @@ def test_advisory_adapters_preserve_classifier(opts):
         th.assert_eq(actual[1], list(raw.reasons), "adapter must retain exact reason order")
         th.assert_eq(set(actual[1]), set(reasons), f"reason categories for {body!r}")
         th.assert_eq(check_moderation(body), actual[:2], "legacy API must remain a two-tuple")
+
+
+@th.django_unit_test()
+def test_adapters_accept_group_and_always_mask_slurs(opts):
+    from mojo.apps.account.models import Group
+    from mojo.apps.chat.rules import check_moderation, check_moderation_scored
+
+    Group.objects.filter(name=PREFIX + "group").delete()
+    group = Group.objects.create(name=PREFIX + "group")
+    for body in ("hello there", "bastard bitch", "fuck"):
+        expected = check_moderation_scored(body)
+        th.assert_eq(check_moderation_scored(body, group=None), expected,
+                     "group=None is the no-group call")
+        th.assert_eq(check_moderation_scored(body, group=group), expected,
+                     "a group with no settings rows resolves like no group")
+        th.assert_eq(check_moderation(body, group=group), expected[:2],
+                     "legacy adapter accepts the group too")
+    for body in ("You are a faggot", "n1gger"):
+        decision, reasons, score = check_moderation_scored(body, group=group)
+        th.assert_eq(decision, "masked", f"{body!r} is a slur and is always masked")
+        th.assert_true("high_severity" in reasons, f"{body!r} carries high_severity: {reasons}")
+    group.delete()
 
 
 @th.django_unit_test()

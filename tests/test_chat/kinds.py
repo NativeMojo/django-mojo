@@ -571,7 +571,7 @@ def test_server_authored_file_still_moderates_caption(opts):
     assert_eq(severe.body, "fuck", "expected severe caption body preserved")
     assert_eq(severe.moderation_decision, "warn", "a single severe hit stays warn")
     assert_eq(severe.moderation_score, 50, "expected raw severe caption score")
-    assert_eq(severe.moderation_reasons, ["high_severity"], "expected severe reason code")
+    assert_eq(severe.moderation_reasons, ["strong_profanity"], "ordinary strong swearing carries strong_profanity (#5774)")
     assert_eq(ChatMessage.objects.filter(room=room).count(), 2, "both captions must be stored")
 
     # And the room's own rules still apply to a server-authored caption.

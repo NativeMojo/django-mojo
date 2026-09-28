@@ -323,7 +323,7 @@ def send_message(room, user, body, kind="text", metadata=None, *,
         # 7. Moderation -- `body` is the moderated surface. The classifier is
         # deliberately NOT run over payloads: ids and slugs produce false
         # positives with no recourse.
-        decision, reasons, score = check_moderation_scored(body)
+        decision, reasons, score = check_moderation_scored(body, group=room.group)
 
     # 8. Persist
     with transaction.atomic():
