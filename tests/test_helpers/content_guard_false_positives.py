@@ -260,6 +260,50 @@ def test_bare_address_host(opts):
             f"got {result.score} {result.reasons}")
 
 
+# Rick's whole-address table (#5774 comment 53028): (text, score with
+# maestromojo.com and .ai allowed, score without an allowlist, as on main)
+HOST_CASES = [
+    ("maestromojo.com@evil.dev", 25, 25),
+    ("https://maestromojo.com@evil.dev", 25, 25),
+    ("evil.dev/path/maestromojo.ai/fuck", 50, 50),
+    ("https://evil.dev/path/maestromojo.ai/fuck", 75, 75),
+    ("evil.com/path/maestromojo.com/x", 25, 25),
+    ("see maestromojo.com and evil.com", 25, 50),
+    ("maestromojo.com:8000/fuck", 0, 75),
+    ("maestromojo.ai/app/fuck", 0, 50),
+    ("[a.com](https://b.xyz)", 25, 25),
+    ("[maestromojo.com](https://evil.xyz)", 25, 25),
+    ("[evil.xyz](https://maestromojo.com)", 0, 25),
+    ("maestromojo.com.evil.dev", 25, 25),
+    ("maestromojo.com.au", 25, 25),
+]
+
+
+@th.django_unit_test("links: the host is parsed from the whole address; only a fully allowed host is exempt")
+def test_whole_address_host(opts):
+    from mojo.helpers.content_guard import check_text
+    from mojo.helpers.content_guard.core import _DEFAULT_RULES, _allow_domains, _find_links
+
+    domains = _allow_domains(ALLOW_TWO["link_allow_domains"])
+    for text, allowed, plain in HOST_CASES:
+        result = check_text(text, policy=ALLOW_TWO)
+        assert result.score == allowed, (
+            f"{text!r} with maestromojo.com and .ai allowed must score {allowed}, "
+            f"got {result.score} {result.reasons}")
+        result = check_text(text)
+        assert result.score == plain, (
+            f"{text!r} without an allowlist must score {plain}, got {result.score} {result.reasons}")
+        links = _find_links(text, _DEFAULT_RULES, domains)
+        if not any(link.allowed for link in links):
+            assert allowed == plain, (
+                f"{text!r} holds no allowed host {[link.host for link in links]}, so the "
+                f"allowlist must not change its score ({allowed} vs {plain})")
+    links = _find_links("maestromojo.com@evil.dev evil.dev/p/maestromojo.ai/x",
+                        _DEFAULT_RULES, domains)
+    assert [link.host for link in links] == ["evil.dev"], (
+        f"hosts come from whole addresses, never a user name or path segment: {links}")
+
+
 @th.django_unit_test("decoded terms count only where decoding is enabled, never in links")
 def test_decoded_terms_policy(opts):
     from mojo.helpers.content_guard import check_text
