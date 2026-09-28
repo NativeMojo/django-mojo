@@ -7,7 +7,7 @@ for efficient matching.
 import os
 import re
 
-from .normalize import consonant_skeleton
+from .normalize import consonant_skeleton, decode_base, decode_key, dedup_chars
 
 
 # path to bundled data files
@@ -30,11 +30,32 @@ def _load_wordlist(filepath):
 class Rules:
     """Holds loaded word lists, precompiled patterns, and deny skeletons."""
 
-    def __init__(self, deny=None, high_severity=None, safe=None, reserved=None):
+    def __init__(self, deny=None, high_severity=None, safe=None, reserved=None,
+                 forms=None, slurs=None, stopwords=None):
         self.deny = deny or set()
         self.high_severity = high_severity or set()
         self.safe = safe or set()
         self.reserved = reserved or set()
+        self.forms = forms or set()
+        self.slurs = slurs or set()
+        self.stopwords = stopwords or set()
+
+        # whole-word text matching: a listed word (term or form) is profane and
+        # scores every deny term it contains -- the same terms the old
+        # substring matcher found in it. Terms found only once the word is
+        # decoded are kept apart: they count only where decoding is enabled.
+        self.listed = self.deny | self.forms
+        self.listed_terms = {}
+        self.listed_terms_decoded = {}
+        for word in self.listed:
+            decoded = dedup_chars(decode_base(word), max_run=1)
+            self.listed_terms[word] = sorted(term for term in self.deny if term in word)
+            self.listed_terms_decoded[word] = sorted(
+                term for term in self.deny if term in decoded and term not in word)
+        # decoded (leet/phonetic/dedup) key -> listed word
+        self.listed_decoded = {}
+        for word in sorted(self.listed):
+            self.listed_decoded.setdefault(decode_key(word), word)
 
         # pre-compute consonant skeletons for deny terms (skeleton -> original term)
         self.deny_skeletons = {}
@@ -48,10 +69,14 @@ class Rules:
             r"https?://\S+|www\.\S+|\S+\.(?:com|net|org|io|co|info|biz|xyz)\b",
             re.IGNORECASE,
         )
+        # alphanumeric boundaries: a digit run inside a hash or word is not a phone
         self.phone_re = re.compile(
+            r"(?<![0-9A-Za-z])"
             r"(?:\+?\d{1,3}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}"
+            r"(?![0-9A-Za-z])"
         )
-        self.repeated_char_re = re.compile(r"(.)\1{4,}")
+        # \S: blanked link spans (runs of spaces) are not repetition
+        self.repeated_char_re = re.compile(r"(\S)\1{4,}")
 
 
 def load_rules(
@@ -62,6 +87,12 @@ def load_rules(
     extra_deny=None,
     extra_safe=None,
     extra_reserved=None,
+    forms_path=None,
+    slurs_path=None,
+    stopwords_path=None,
+    extra_forms=None,
+    extra_slurs=None,
+    extra_stopwords=None,
 ):
     """
     Load moderation rules from word list files.
@@ -75,6 +106,9 @@ def load_rules(
     high_sev = _load_wordlist(high_severity_path or os.path.join(_DATA_DIR, "high_severity.txt"))
     safe = _load_wordlist(safe_path or os.path.join(_DATA_DIR, "safe.txt"))
     reserved = _load_wordlist(reserved_path or os.path.join(_DATA_DIR, "reserved.txt"))
+    forms = _load_wordlist(forms_path or os.path.join(_DATA_DIR, "forms.txt"))
+    slurs = _load_wordlist(slurs_path or os.path.join(_DATA_DIR, "slurs.txt"))
+    stopwords = _load_wordlist(stopwords_path or os.path.join(_DATA_DIR, "stopwords.txt"))
 
     if extra_deny:
         deny |= set(w.lower() for w in extra_deny)
@@ -82,10 +116,19 @@ def load_rules(
         safe |= set(w.lower() for w in extra_safe)
     if extra_reserved:
         reserved |= set(w.lower() for w in extra_reserved)
+    if extra_forms:
+        forms |= set(w.lower() for w in extra_forms)
+    if extra_slurs:
+        slurs |= set(w.lower() for w in extra_slurs)
+    if extra_stopwords:
+        stopwords |= set(w.lower() for w in extra_stopwords)
 
     return Rules(
         deny=deny,
         high_severity=high_sev,
         safe=safe,
         reserved=reserved,
+        forms=forms,
+        slurs=slurs,
+        stopwords=stopwords,
     )

@@ -4,8 +4,9 @@ content_guard matches profanity as naive substrings, so legitimate names that
 merely CONTAIN a high-severity substring — Matsushita ("shit"), Scunthorpe
 ("cunt"), common South-Asian names like Harshita ("shit") — used to fail
 registration with "Invalid display name: contains inappropriate content".
-`User.validate_name_fields` now logs/flags such names and ALLOWS them;
-content_guard's own scoring is unchanged.
+`User.validate_name_fields` now logs/flags such names and ALLOWS them.
+Since #5774 content_guard matches whole words, so these names no longer
+score at all.
 """
 from testit import helpers as th
 
@@ -44,12 +45,19 @@ def test_name_fields_allow_clean_name(opts):
         assert False, f"a clean name must pass validation, but it raised: {exc}"
 
 
-@th.django_unit_test("content_guard still scores these names as block (guard unchanged; only the caller's response changed)")
-def test_content_guard_scoring_unchanged(opts):
+@th.django_unit_test("content_guard matches whole words: these names score allow, a listed form still blocks")
+def test_content_guard_whole_word_names(opts):
     from mojo.helpers import content_guard
 
+    for name in _FALSE_POSITIVE_NAMES:
+        result = content_guard.check_text(
+            name, surface="name", policy={"text_block_threshold": 50})
+        assert result.decision == "allow", (
+            "deny terms match whole words only (#5774), so a name that merely "
+            f"contains one must score allow. {name!r} got {result.decision} {result.reasons}")
+
     result = content_guard.check_text(
-        "Matsushita", surface="name", policy={"text_block_threshold": 50})
+        "Shithead", surface="name", policy={"text_block_threshold": 50})
     assert result.decision == "block", (
-        "content_guard's scoring must be UNCHANGED — only validate_name_fields' "
-        f"response changed. Expected 'Matsushita' to still score block, got {result.decision}")
+        "a listed profane form must still be flagged by name moderation, "
+        f"got {result.decision} {result.reasons}")

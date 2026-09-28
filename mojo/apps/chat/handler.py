@@ -232,7 +232,7 @@ def _handle_edit(user, data, *, publisher=None):
     if not body:
         return {"type": "error", "error": "body is required"}
 
-    msg = ChatMessage.objects.filter(pk=message_id).select_related("room").first()
+    msg = ChatMessage.objects.filter(pk=message_id).select_related("room", "room__group").first()
     if not msg:
         return {"type": "error", "error": "Message not found"}
 
@@ -249,7 +249,7 @@ def _handle_edit(user, data, *, publisher=None):
         return {"type": "error", "error": rule_errors[0]}
 
     # Content moderation
-    decision, reasons, score = check_moderation_scored(body)
+    decision, reasons, score = check_moderation_scored(body, group=msg.room.group)
 
     # Update
     msg.body = body

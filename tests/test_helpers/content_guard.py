@@ -223,7 +223,7 @@ def test_text_deny_hit(opts):
     from mojo.helpers.content_guard import check_text
     result = check_text("What the fuck is going on")
     assert result.decision in ("warn", "block"), f"Expected warn/block for profanity, got {result.decision}"
-    assert "deny_hit" in result.reasons or "high_severity" in result.reasons, f"Expected deny reason, got {result.reasons}"
+    assert "strong_profanity" in result.reasons, f"Expected 'strong_profanity' for 'fuck', got {result.reasons}"
     assert result.score > 0, f"Expected score > 0 for profanity, got {result.score}"
 
 
@@ -530,7 +530,7 @@ def test_text_leet_sh1t(opts):
     from mojo.helpers.content_guard import check_text
     result = check_text("That is total sh1t")
     assert result.decision in ("warn", "block"), f"Expected warn/block for 'sh1t' text, got {result.decision}"
-    assert any(r in result.reasons for r in ("deny_hit", "high_severity")), f"Expected deny reason for 'sh1t', got {result.reasons}"
+    assert "strong_profanity" in result.reasons, f"Expected 'strong_profanity' for 'sh1t', got {result.reasons}"
 
 
 @th.django_unit_test()
@@ -548,7 +548,7 @@ def test_text_decoded_disabled(opts):
     # with decoded matching off, 'sh1t' should not be caught
     result = check_text("That is total sh1t", policy={"enable_text_decoded_match": False})
     # 'sh1t' won't match 'shit' in searchable form since 1 is stripped as non-alnum
-    deny_matches = [m for m in result.matches if m.type in ("deny_substring", "deny_high_sev")]
+    deny_matches = [m for m in result.matches if m.type in ("deny_word", "deny_high_sev")]
     assert len(deny_matches) == 0, f"Expected no deny matches with decoded off, got {len(deny_matches)} matches"
 
 

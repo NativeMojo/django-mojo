@@ -4,6 +4,7 @@ Room rules enforcement for chat messages.
 Checks per-room content policies (URLs, phone numbers, media, length)
 and provides advisory content_guard moderation adapters.
 """
+import re
 import time
 from mojo.helpers.redis.client import get_connection
 
@@ -102,25 +103,64 @@ def check_payload_rules(room, metadata):
     return errors
 
 
-def check_moderation_scored(body):
+HIDE_LEVEL_KEY = "CHAT_MODERATION_HIDE_LEVEL"
+ALLOWED_DOMAINS_KEY = "CHAT_MODERATION_ALLOWED_DOMAINS"
+DEFAULT_HIDE_LEVEL = 70
+HIDE_LEVEL_NEVER = 101  # only slurs are hidden
+MAX_ALLOWED_DOMAINS = 200
+_DOMAIN_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+
+
+def validate_hide_level(key, parsed):
+    """Setting validator: a JSON integer 1..101 (101 hides only slurs)."""
+    if isinstance(parsed, bool) or not isinstance(parsed, int) or not 1 <= parsed <= HIDE_LEVEL_NEVER:
+        raise ValueError(f"{key} must be a JSON integer from 1 to {HIDE_LEVEL_NEVER}")
+
+
+def validate_allowed_domains(key, parsed):
+    """Setting validator: a JSON list of lowercase hostnames (no scheme, path, port or wildcard)."""
+    if not isinstance(parsed, list) or len(parsed) > MAX_ALLOWED_DOMAINS:
+        raise ValueError(f"{key} must be a JSON list of at most {MAX_ALLOWED_DOMAINS} hostnames")
+    for domain in parsed:
+        if not isinstance(domain, str) or not _DOMAIN_RE.match(domain):
+            raise ValueError(
+                f"{key} entries must be lowercase hostnames such as example.com, got {domain!r}")
+
+
+def check_moderation_scored(body, *, group=None):
     """Return advisory (decision, reasons, score) for a chat body.
 
-    Preserve classifier scores/reasons, including high_severity. Only block
-    becomes masked: consumers decide what to hide, and may reveal the body.
+    Preserve classifier scores/reasons, including high_severity. The decision
+    is "masked" when the score reaches the hide level or a slur matched
+    (reason high_severity), else "warn" at the classifier's warn threshold,
+    else "allow". The hide level (CHAT_MODERATION_HIDE_LEVEL) and link
+    allowlist (CHAT_MODERATION_ALLOWED_DOMAINS) are live settings resolved
+    for `group` (its row, then its parents', then the global row); with no
+    group the global values apply. Consumers decide what to hide, and may
+    reveal the body.
     """
     from mojo.helpers.settings import settings
     if not settings.get("CHAT_MODERATION_ENABLED", True, kind="bool"):
         return "allow", [], None
 
+    hide_level = settings.get(HIDE_LEVEL_KEY, DEFAULT_HIDE_LEVEL, group=group, kind="int")
+    domains = settings.get(ALLOWED_DOMAINS_KEY, [], group=group, kind="list")
+
     from mojo.helpers import content_guard
-    result = content_guard.check_text(body, surface="chat")
-    decision = "masked" if result.decision == "block" else result.decision
+    result = content_guard.check_text(
+        body, surface="chat", policy={"link_allow_domains": domains})
+    if "high_severity" in result.reasons or result.score >= hide_level:
+        decision = "masked"
+    elif result.score >= content_guard.DEFAULT_POLICY["text_warn_threshold"]:
+        decision = "warn"
+    else:
+        decision = "allow"
     return decision, list(result.reasons), result.score
 
 
-def check_moderation(body):
+def check_moderation(body, *, group=None):
     """Compatibility two-tuple: advisory (decision, reasons)."""
-    decision, reasons, score = check_moderation_scored(body)
+    decision, reasons, score = check_moderation_scored(body, group=group)
     return decision, reasons
 
 

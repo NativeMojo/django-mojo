@@ -4,6 +4,7 @@ Core public API for content_guard.
 Provides check_username, check_text, and suggest_username functions.
 """
 import re
+from urllib.parse import urlsplit
 
 from objict import objict
 
@@ -14,6 +15,9 @@ from .normalize import (
     dedup_chars,
     apply_leet,
     collapse_separators,
+    decode_base,
+    searchable_words,
+    split_tokens,
 )
 from .rules import load_rules as _load_rules
 
@@ -66,6 +70,8 @@ DEFAULT_POLICY = {
     "deny_weight": 30,
     "high_sev_weight": 50,
     "repeat_deny_weight": 15,
+    # links to these hosts (or their subdomains) score nothing and are not read
+    "link_allow_domains": (),
     # debug
     "include_debug_normalized": False,
 }
@@ -257,11 +263,211 @@ def check_username(username, rules=None, policy=None):
 
 # ── Text checking ────────────────────────────────────────────────────────────
 
+# ── Links ────────────────────────────────────────────────────────────────────
+
+# [label](address "optional title") -- only an optional quoted title may follow
+_MD_LINK_RE = re.compile(
+    r"""\[([^\]\n]{0,500})\]\(\s*<?([^)\s>]+)>?(?:\s+("[^"]*"|'[^']*'))?\s*\)""")
+_SCHEME_RE = re.compile(r"https?://", re.IGNORECASE)
+_HAS_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+# a bare address is a whole unbroken run of non-space characters
+_RUN_RE = re.compile(r"\S+")
+_ADDRESS_TRAIL = ".,;:!?)]}>'\"*_"
+_ADDRESS_LEAD = "([{<*_`'\""
+# what may stand before a scheme inside one run: an unclosed markdown opener or punctuation
+# a whole dotted name inside an address's path, query or fragment; it is a host
+# when any label is a suffix rules.link_re knows ("evil.co.uk", "a.com.evil.dev")
+_DOTTED_RE = re.compile(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+_KNOWN_SUFFIX_RE = re.compile(r"\.(?:com|net|org|io|co|info|biz|xyz)(?=\.|$)", re.IGNORECASE)
+_AFTER_HOST_RE = re.compile(r"[/?#]")
+_SCHEME_OPENER_RE = re.compile(r"[([{<*_`'\"]*(?:\[[^\[\]]*\]\(<?)?")
+
+
+def _allow_domains(value):
+    """Normalize a domain allowlist given as a list or a comma-separated string."""
+    if not value:
+        return ()
+    if isinstance(value, str):
+        value = value.split(",")
+    domains = []
+    for domain in value:
+        domain = str(domain).strip().lower()
+        if domain.startswith("*."):
+            domain = domain[2:]
+        domain = domain.lstrip(".")
+        if domain:
+            domains.append(domain)
+    return tuple(domains)
+
+
+def _link_host(address):
+    """
+    Return (host, has_user) for a link address; host is None when it cannot
+    be parsed safely.
+    """
+    address = address.replace("\\", "/")
+    if not _HAS_SCHEME_RE.match(address):
+        address = "http://" + address
+    try:
+        parts = urlsplit(address)
+        host = parts.hostname
+    except ValueError:
+        return None, False
+    if host and host.endswith("."):
+        host = host[:-1]
+    if not host or not host.isascii():
+        return None, False
+    return host, parts.username is not None
+
+
+def _host_allowed(host, domains):
+    return bool(host) and any(host == d or host.endswith("." + d) for d in domains)
+
+
+def _nested(address, domains):
+    """
+    True when address holds a second address: "://" after its own start, or
+    a host that is not allowed after its own host ("a.com/?next=https://b.com",
+    "a.com/b.xyz"). The address's own host is never scanned, and an inner host
+    is compared whole, never a prefix of it.
+    """
+    address = address.replace("\\", "/")
+    own = _HAS_SCHEME_RE.match(address)
+    rest = address[own.end() if own else 0:]
+    if "://" in rest:
+        return True
+    cut = _AFTER_HOST_RE.search(rest)
+    rest = rest[cut.start():] if cut else ""
+    for m in _DOTTED_RE.finditer(rest):
+        name = m.group().lower()
+        # a host by its suffix, or one that names an allowed domain ("a.ai.evil.dev")
+        is_host = _KNOWN_SUFFIX_RE.search(name) or any(
+            ("." + d + ".") in ("." + name + ".") for d in domains)
+        if is_host and not _host_allowed(name, domains):
+            return True
+    return False
+
+
+def _link(start, end, address, domains):
+    # the site is unclear -- a user name before the host ("evil.dev@a.com") or
+    # a second address inside it -- so it is never allowed
+    host, has_user = _link_host(address)
+    allowed = (not has_user and _host_allowed(host, domains)
+               and not _nested(address, domains))
+    return objict(span=(start, end), address=address, host=host, allowed=allowed)
+
+
+def _allowed_address_re(domains):
+    """Bare addresses on an allowed domain, whatever its suffix (e.g. ".ai")."""
+    if not domains:
+        return None
+    names = "|".join(re.escape(d) for d in sorted(domains, key=len, reverse=True))
+    return re.compile(
+        r"(?<![A-Za-z0-9.-])(?:[A-Za-z0-9-]+\.)*(?:%s)(?![A-Za-z0-9-])" % names,
+        re.IGNORECASE)
+
+
+def _find_links(display, rules, domains):
+    """
+    Return every link in display as objict(span, address, host, allowed).
+
+    Markdown links come first and count once: only their address is a link.
+    The label and title stay readable as words but are never searched for
+    links; text outside the markdown link is.
+    A bare address is the whole unbroken run of non-space characters holding
+    a rules.link_re match -- every match in the run is that one address -- so
+    the host parsed from it is the address's own ("a.com@evil.dev" is
+    evil.dev). A run holding only an allowed domain whose suffix
+    rules.link_re does not know (".ai") is a link only when its whole host is
+    allowed; otherwise it stays words, as without an allowlist.
+    """
+    md_matches = list(_MD_LINK_RE.finditer(display))
+    links = [_link(m.start(2), m.end(2), m.group(2), domains) for m in md_matches]
+    md_spans = [m.span() for m in md_matches]
+    rest = _blank_spans(display, md_spans)
+    allowed_re = _allowed_address_re(domains)
+    for run in _RUN_RE.finditer(rest):
+        start, end = run.span()
+        address = run.group()
+        by_suffix = rules.link_re.search(address) is not None
+        if not by_suffix and not (allowed_re and allowed_re.search(address)):
+            continue
+        # "[see](https://x" -- start at the scheme only after an unclosed markdown
+        # opener or punctuation; any other prefix is part of the address
+        scheme = _SCHEME_RE.search(address)
+        if scheme and scheme.start() > 0 and _SCHEME_OPENER_RE.fullmatch(address[:scheme.start()]):
+            start += scheme.start()
+            address = address[scheme.start():]
+        link = _link(start, end, address.lstrip(_ADDRESS_LEAD).rstrip(_ADDRESS_TRAIL) or address,
+                     domains)
+        if by_suffix or link.allowed:
+            links.append(link)
+    links.sort(key=lambda link: link.span)
+    return links
+
+
+def _blank_spans(display, spans):
+    """Replace each span with the same number of spaces, keeping offsets aligned."""
+    if not spans:
+        return display
+    chars = list(display)
+    for start, end in spans:
+        for i in range(start, end):
+            chars[i] = " "
+    return "".join(chars)
+
+
+def _listed(word, table):
+    """Return the listed word `word` matches (itself, or itself minus a plural s)."""
+    if word in table:
+        return table[word] if isinstance(table, dict) else word
+    if len(word) > 1 and word.endswith("s") and word[:-1] in table:
+        return table[word[:-1]] if isinstance(table, dict) else word[:-1]
+    return None
+
+
+def _profane_word(word, rules, use_decoded):
+    """
+    Return (listed_word, variant) when `word` is profane, else (None, None).
+
+    A word is profane when it equals a deny term or a form, or either plus "s".
+    Terms are never matched inside a word that is not itself listed.
+    """
+    hit = _listed(word, rules.listed)
+    if hit:
+        return hit, "searchable"
+    if not use_decoded or not any(ch.isalpha() for ch in word):
+        return None, None
+    base = decode_base(word)
+    if dedup_chars(base, max_run=1) == word:
+        return None, None
+    for key in (dedup_chars(base, max_run=1), dedup_chars(base, max_run=2)):
+        hit = _listed(key, rules.listed_decoded)
+        if hit:
+            return hit, "decoded"
+    return None, None
+
+
+def _term_reason(term, rules):
+    """Reason code for a counted term: slurs are always hidden."""
+    if term in rules.slurs:
+        return "high_severity"
+    if term in rules.high_severity:
+        return "strong_profanity"
+    return "deny_hit"
+
+
 def check_text(text, rules=None, surface="comment", policy=None):
     """
     Check block text (comments, profile descriptions) for moderation issues.
 
     surface: "comment", "profile_text", etc. (for future per-surface tuning)
+
+    Deny terms match whole words only: a word scores when it is a listed term
+    or form (rules.forms), and then scores every term it contains. Link text
+    is blanked before any word, phone, repetition or caps check; a link whose
+    host is in policy["link_allow_domains"] (or a subdomain) scores nothing,
+    and any other link scores link_weight plus the listed words in its address.
 
     Returns a Result with decision "allow", "warn", or "block",
     a score 0..100, and detailed matches.
@@ -276,71 +482,66 @@ def check_text(text, rules=None, surface="comment", policy=None):
         return _result(decision="allow", reasons=[], matches=[], score=0)
 
     display, searchable, decoded = normalize_text(text)
-    lower_text = display.lower()
     debug_norm = {"display": display, "searchable": searchable, "decoded": decoded} if p["include_debug_normalized"] else None
 
     use_decoded = p["enable_text_decoded_match"]
 
-    # ── deny term hits ───────────────────────────────────────────────────
-    deny_hit_count = 0
-    for term in rules.deny:
-        # check in both searchable and decoded forms
-        found_in = None
-        if term in searchable:
-            found_in = "searchable"
-        elif use_decoded and term in decoded:
-            found_in = "decoded"
+    # ── links: found first, then blanked so nothing reads inside them ────
+    links = _find_links(display, rules, _allow_domains(p["link_allow_domains"]))
+    masked = _blank_spans(display, [link.span for link in links])
+    counted_links = [link for link in links if not link.allowed]
 
-        if found_in is None:
+    # ── deny term hits (whole words) ─────────────────────────────────────
+    words = searchable_words(masked)
+    candidates = words + split_tokens(masked)
+    # a link that is not allowed is read too: whole words of its address only
+    for link in counted_links:
+        candidates += [(word, link.span) for word, _span in split_tokens(link.address)]
+    link_spans = set(link.span for link in counted_links)
+    counted = set()
+    for word, span in candidates:
+        if span in link_spans:
+            listed_word, variant = _listed(word, rules.listed), "link"
+        else:
+            listed_word, variant = _profane_word(word, rules, use_decoded)
+        if not listed_word:
             continue
-
-        # check safelist against the form that matched
-        search_form = searchable if found_in == "searchable" else decoded
-        safelisted = False
-        for safe_word in rules.safe:
-            if term in safe_word and safe_word in search_form:
-                safelisted = True
-                break
-        if safelisted:
-            continue
-
-        is_high = term in rules.high_severity
-        weight = p["high_sev_weight"] if is_high else p["deny_weight"]
-
-        # find span in lower_text
-        idx = lower_text.find(term)
-        span = (idx, idx + len(term)) if idx >= 0 else None
-
-        score += weight
-        deny_hit_count += 1
-        reasons.append("high_severity" if is_high else "deny_hit")
-        matches.append(_match(
-            type="deny_high_sev" if is_high else "deny_substring",
-            value=term,
-            span=span,
-            variant=found_in,
-        ))
+        terms = rules.listed_terms.get(listed_word, ())
+        # link words are matched as written: no decoded terms there
+        if use_decoded and variant != "link":
+            terms = list(terms) + rules.listed_terms_decoded.get(listed_word, [])
+        for term in terms:
+            if term in counted:
+                continue
+            counted.add(term)
+            is_high = term in rules.high_severity or term in rules.slurs
+            score += p["high_sev_weight"] if is_high else p["deny_weight"]
+            reasons.append(_term_reason(term, rules))
+            matches.append(_match(
+                type="deny_high_sev" if is_high else "deny_word",
+                value=term,
+                span=span,
+                variant=variant,
+            ))
 
     # repeated profanity bonus
-    if deny_hit_count > 1:
-        score += p["repeat_deny_weight"] * (deny_hit_count - 1)
+    if len(counted) > 1:
+        score += p["repeat_deny_weight"] * (len(counted) - 1)
         reasons.append("repeated_profanity")
 
     # ── spam: links ──────────────────────────────────────────────────────
-    link_matches = rules.link_re.findall(display)
-    if link_matches:
-        score += p["link_weight"] * len(link_matches)
+    if counted_links:
+        score += p["link_weight"] * len(counted_links)
         reasons.append("spam_link")
-        for lm in link_matches:
-            idx = display.find(lm)
+        for link in counted_links:
             matches.append(_match(
                 type="spam_link",
-                value=lm,
-                span=(idx, idx + len(lm)) if idx >= 0 else None,
+                value=link.address,
+                span=link.span,
             ))
 
     # ── spam: phone numbers ──────────────────────────────────────────────
-    phone_hits = list(rules.phone_re.finditer(display))
+    phone_hits = list(rules.phone_re.finditer(masked))
     if phone_hits:
         score += p["phone_weight"] * len(phone_hits)
         reasons.append("spam_phone")
@@ -352,7 +553,7 @@ def check_text(text, rules=None, surface="comment", policy=None):
             ))
 
     # ── spam: excessive repetition ───────────────────────────────────────
-    rep_hits = list(rules.repeated_char_re.finditer(display))
+    rep_hits = list(rules.repeated_char_re.finditer(masked))
     if rep_hits:
         score += p["repetition_weight"]
         reasons.append("excessive_repetition")
@@ -363,21 +564,21 @@ def check_text(text, rules=None, surface="comment", policy=None):
                 span=(rh.start(), rh.end()),
             ))
 
-    # repeated words (same word 4+ times)
-    words = searchable.split()
-    if words:
-        word_counts = {}
-        for w in words:
-            word_counts[w] = word_counts.get(w, 0) + 1
-        for w, count in word_counts.items():
-            if count >= 4:
-                score += p["repetition_weight"]
-                reasons.append("repeated_words")
-                matches.append(_match(type="repeated_words", value=w))
-                break
+    # repeated words (same word 4+ times), ignoring stopwords
+    word_counts = {}
+    for w, _span in words:
+        if w in rules.stopwords:
+            continue
+        word_counts[w] = word_counts.get(w, 0) + 1
+    for w, count in word_counts.items():
+        if count >= 4:
+            score += p["repetition_weight"]
+            reasons.append("repeated_words")
+            matches.append(_match(type="repeated_words", value=w))
+            break
 
     # ── spam: excessive caps ─────────────────────────────────────────────
-    alpha_chars = [ch for ch in display if ch.isalpha()]
+    alpha_chars = [ch for ch in masked if ch.isalpha()]
     if len(alpha_chars) > 10:
         caps_ratio = sum(1 for ch in alpha_chars if ch.isupper()) / len(alpha_chars)
         if caps_ratio > 0.7:
@@ -467,6 +668,9 @@ _BOOL_KEYS = {
     "enable_text_decoded_match", "include_debug_normalized",
 }
 
+# policy keys that are lists (a list, or a comma-separated string)
+_LIST_KEYS = {"link_allow_domains"}
+
 _BOOL_TRUE = {"true", "1", "yes"}
 
 
@@ -478,6 +682,10 @@ def _coerce_policy_value(key, value):
         return str(value).lower().strip() in _BOOL_TRUE
     if key in _INT_KEYS:
         return int(value)
+    if key in _LIST_KEYS:
+        if isinstance(value, (list, tuple)):
+            return [str(v) for v in value]
+        return [v.strip() for v in str(value).split(",") if v.strip()]
     return value
 
 
