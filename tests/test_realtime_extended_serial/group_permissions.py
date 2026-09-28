@@ -81,7 +81,8 @@ class _RecordingRedis:
     def expire(self, *args):
         self.calls.append(("expire", args))
 
-    def subscribe(self, *args):
+    async def subscribe(self, *args):
+        # pub/sub is async on the event loop (#5750)
         self.calls.append(("subscribe", args))
 
 
