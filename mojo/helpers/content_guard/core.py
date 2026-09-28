@@ -275,10 +275,11 @@ _RUN_RE = re.compile(r"\S+")
 _ADDRESS_TRAIL = ".,;:!?)]}>'\"*_"
 _ADDRESS_LEAD = "([{<*_`'\""
 # what may stand before a scheme inside one run: an unclosed markdown opener or punctuation
-# a host inside an address, with the suffixes rules.link_re knows
-_INNER_HOST_RE = re.compile(
-    r"(?<![A-Za-z0-9-])(?:[A-Za-z0-9-]+\.)+(?:com|net|org|io|co|info|biz|xyz)(?![A-Za-z0-9-])",
-    re.IGNORECASE)
+# a whole dotted name inside an address's path, query or fragment; it is a host
+# when any label is a suffix rules.link_re knows ("evil.co.uk", "a.com.evil.dev")
+_DOTTED_RE = re.compile(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+_KNOWN_SUFFIX_RE = re.compile(r"\.(?:com|net|org|io|co|info|biz|xyz)(?=\.|$)", re.IGNORECASE)
+_AFTER_HOST_RE = re.compile(r"[/?#]")
 _SCHEME_OPENER_RE = re.compile(r"[([{<*_`'\"]*(?:\[[^\[\]]*\]\(<?)?")
 
 
@@ -326,13 +327,25 @@ def _host_allowed(host, domains):
 def _nested(address, domains):
     """
     True when address holds a second address: "://" after its own start, or
-    a host that is not allowed ("a.com/?next=https://b.com", "a.com/b.xyz").
+    a host that is not allowed after its own host ("a.com/?next=https://b.com",
+    "a.com/b.xyz"). The address's own host is never scanned, and an inner host
+    is compared whole, never a prefix of it.
     """
+    address = address.replace("\\", "/")
     own = _HAS_SCHEME_RE.match(address)
-    if "://" in address[own.end() if own else 0:]:
+    rest = address[own.end() if own else 0:]
+    if "://" in rest:
         return True
-    return any(not _host_allowed(m.group().lower(), domains)
-               for m in _INNER_HOST_RE.finditer(address))
+    cut = _AFTER_HOST_RE.search(rest)
+    rest = rest[cut.start():] if cut else ""
+    for m in _DOTTED_RE.finditer(rest):
+        name = m.group().lower()
+        # a host by its suffix, or one that names an allowed domain ("a.ai.evil.dev")
+        is_host = _KNOWN_SUFFIX_RE.search(name) or any(
+            ("." + d + ".") in ("." + name + ".") for d in domains)
+        if is_host and not _host_allowed(name, domains):
+            return True
+    return False
 
 
 def _link(start, end, address, domains):

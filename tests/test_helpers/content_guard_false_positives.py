@@ -321,6 +321,22 @@ SCHEME_CASES = [
     ("maestromojo.com/go/evil.xyz/fuck", 75, 75),
     ("maestromojo.com/docs/maestromojo.ai/x", 0, 25),
 ]
+# Brenda's round-5 finding (#5774 comment 53122): hosts are compared whole,
+# never by a prefix. (text, allowlist, score with it, score without)
+WHOLE_HOST_CASES = [
+    ("https://example.co.uk/docs", ["example.co.uk"], 0, 25),
+    ("https://shop.example.com.au/docs", ["example.com.au"], 0, 25),
+    ("https://docs.com.maestromojo.ai/app", ["maestromojo.ai"], 0, 25),
+    ("example.co.uk/docs/example.co.uk/x", ["example.co.uk"], 0, 25),
+    ("https://example.co.uk/docs", ["example.co"], 25, 25),
+    ("https://maestromojo.com/go/maestromojo.com.evil.dev/fuck",
+     ["maestromojo.com", "maestromojo.ai"], 75, 75),
+    ("maestromojo.com/go/maestromojo.ai.evil.dev/x",
+     ["maestromojo.com", "maestromojo.ai"], 25, 25),
+    ("maestromojo.com/go/example.co.uk.evil.dev/x",
+     ["maestromojo.com", "example.co.uk"], 25, 25),
+    ("maestromojo.com/app/report.pdf", ["maestromojo.com"], 0, 25),
+]
 EMBED_JOINS = ["/", "/path/", "?u=", "=", "#", "@", ":"]
 
 
@@ -349,6 +365,20 @@ def test_embedded_scheme_host(opts):
                     f"{text!r} joins an allowed site to one that is not, so it must score as "
                     f"with no allowlist: {allowed.score} {allowed.reasons} vs "
                     f"{plain.score} {plain.reasons}")
+
+
+@th.django_unit_test("links: an allowed host and an inner host are compared whole, never by a prefix")
+def test_whole_host_compare(opts):
+    from mojo.helpers.content_guard import check_text
+
+    for text, domains, allowed, plain in WHOLE_HOST_CASES:
+        result = check_text(text, policy={"link_allow_domains": domains})
+        assert result.score == allowed, (
+            f"{text!r} with {domains} allowed must score {allowed}, "
+            f"got {result.score} {result.reasons}")
+        result = check_text(text)
+        assert result.score == plain, (
+            f"{text!r} without an allowlist must score {plain}, got {result.score} {result.reasons}")
 
 
 @th.django_unit_test("decoded terms count only where decoding is enabled, never in links")
