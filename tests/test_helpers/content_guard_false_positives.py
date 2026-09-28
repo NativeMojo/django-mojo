@@ -198,7 +198,9 @@ LINK_CASES = [
     ("https://MaestroMojo.COM./x", 25, 0),
     ("(maestromojo.com)", 25, 0),
     ("**maestromojo.com**", 25, 0),
-    ("[maestromojo.com](https://evil.xyz)", None, 25),
+    ("[maestromojo.com](https://evil.xyz)", 25, 25),
+    ("[a.com](https://b.xyz)", 25, 25),
+    ("[evil.xyz](https://maestromojo.com)", 25, 0),
     ("[see](https://maestromojo.com https://evil.xyz)", 50, 25),
     ("https://maestromojo.com@evil.xyz", 25, 25),
     ("https://evil.xyz\\@maestromojo.com", 25, 25),
@@ -287,6 +289,10 @@ def test_markdown_links(opts):
         f"a tail that is not an address is read as words, got {result.reasons}")
     result = check_text("[see](https://maestromojo.com) and fuck", policy=ALLOW)
     assert result.score == 50, f"text around an allowed link is still read, got {result.score}"
+    result = check_text("[a.com](https://b.xyz) and c.com")
+    links = [m.value for m in result.matches if m.type == "spam_link"]
+    assert links == ["https://b.xyz", "c.com"], (
+        f"a markdown link counts once; text outside it is searched for links, got {links}")
 
 
 @th.django_unit_test("link counts are unchanged without an allowlist")

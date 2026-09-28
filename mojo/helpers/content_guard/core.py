@@ -334,16 +334,18 @@ def _find_links(display, rules, domains):
     """
     Return every link in display as objict(span, address, host, allowed).
 
-    Markdown links come first and only their address is a link: the label,
-    title and surrounding text stay readable (and are searched for bare links).
+    Markdown links come first and count once: only their address is a link.
+    The label and title stay readable as words but are never searched for
+    links; text outside the markdown link is.
     Bare links use rules.link_re, extended over the rest of the address (more
     host labels, a port, a path or query) so the host is the address's own.
     A bare address on an allowed domain is a link too when rules.link_re does
     not know its suffix, but only when its whole host is allowed.
     """
-    links = [_link(m.start(2), m.end(2), m.group(2), domains)
-             for m in _MD_LINK_RE.finditer(display)]
-    rest = _blank_spans(display, [link.span for link in links])
+    md_matches = list(_MD_LINK_RE.finditer(display))
+    links = [_link(m.start(2), m.end(2), m.group(2), domains) for m in md_matches]
+    md_spans = [m.span() for m in md_matches]
+    rest = _blank_spans(display, md_spans)
     for m in rules.link_re.finditer(rest):
         start, end = m.span()
         end = _ADDRESS_TAIL_RE.match(rest, end).end()
@@ -357,7 +359,7 @@ def _find_links(display, rules, domains):
         links.append(_link(start, end, address or rest[start:end], domains))
     allowed_re = _allowed_address_re(domains)
     if allowed_re:
-        rest = _blank_spans(display, [link.span for link in links])
+        rest = _blank_spans(display, md_spans + [link.span for link in links])
         for m in allowed_re.finditer(rest):
             start = m.start()
             end = _ADDRESS_TAIL_RE.match(rest, m.end()).end()
