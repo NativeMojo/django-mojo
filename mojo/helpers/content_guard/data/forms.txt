@@ -1,0 +1,70 @@
+# profane word forms — words that are not deny terms themselves but contain one
+# one word per line, lowercase; lines starting with # are comments
+#
+# check_text matches deny terms only as whole words. A word on this list is
+# profane too, and scores every deny term it contains (at that term's weight),
+# so "motherfucking" scores fuck + fucking exactly as a term would. A form
+# carries no weight of its own. A word also matches with a trailing "s".
+#
+# A swear word glued into a longer word that is not listed here is NOT caught
+# ("fuckwit"); add it here when that matters.
+#
+# Generated for #5774 by running the django-mojo 1.30.1 substring matcher over
+# /usr/share/dict/american-english (73,604 words, 802 flagged) and keeping the
+# real profanity among the flagged words, plus common compounds.
+
+# ── ass ──────────────────────────────────────────────────────────────────────
+asshat
+asswipe
+dumbass
+jackasses
+smartass
+
+# ── bitch ────────────────────────────────────────────────────────────────────
+bitched
+bitches
+bitchier
+bitchiest
+bitching
+bitchy
+
+# ── cock / dick / douche ─────────────────────────────────────────────────────
+cocksucker
+dickhead
+douchebag
+
+# ── crap / damn ──────────────────────────────────────────────────────────────
+crapped
+crapping
+damned
+goddamn
+goddamned
+
+# ── fuck ─────────────────────────────────────────────────────────────────────
+fucked
+fuckface
+fuckers
+fuckhead
+motherfucking
+
+# ── nigga ────────────────────────────────────────────────────────────────────
+niggaz
+
+# ── piss ─────────────────────────────────────────────────────────────────────
+pissed
+pisses
+pissing
+
+# ── shit ─────────────────────────────────────────────────────────────────────
+bullshit
+bullshitted
+bullshitting
+shithead
+shittier
+shittiest
+shitting
+shitty
+
+# ── slut / whore ─────────────────────────────────────────────────────────────
+slutty
+whorehouse

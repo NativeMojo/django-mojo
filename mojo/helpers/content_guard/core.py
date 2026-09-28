@@ -14,6 +14,9 @@ from .normalize import (
     dedup_chars,
     apply_leet,
     collapse_separators,
+    decode_base,
+    searchable_words,
+    split_tokens,
 )
 from .rules import load_rules as _load_rules
 
@@ -257,11 +260,66 @@ def check_username(username, rules=None, policy=None):
 
 # ── Text checking ────────────────────────────────────────────────────────────
 
+def _blank_spans(display, spans):
+    """Replace each span with the same number of spaces, keeping offsets aligned."""
+    if not spans:
+        return display
+    chars = list(display)
+    for start, end in spans:
+        for i in range(start, end):
+            chars[i] = " "
+    return "".join(chars)
+
+
+def _listed(word, table):
+    """Return the listed word `word` matches (itself, or itself minus a plural s)."""
+    if word in table:
+        return table[word] if isinstance(table, dict) else word
+    if len(word) > 1 and word.endswith("s") and word[:-1] in table:
+        return table[word[:-1]] if isinstance(table, dict) else word[:-1]
+    return None
+
+
+def _profane_word(word, rules, use_decoded):
+    """
+    Return (listed_word, variant) when `word` is profane, else (None, None).
+
+    A word is profane when it equals a deny term or a form, or either plus "s".
+    Terms are never matched inside a word that is not itself listed.
+    """
+    hit = _listed(word, rules.listed)
+    if hit:
+        return hit, "searchable"
+    if not use_decoded or not any(ch.isalpha() for ch in word):
+        return None, None
+    base = decode_base(word)
+    if dedup_chars(base, max_run=1) == word:
+        return None, None
+    for key in (dedup_chars(base, max_run=1), dedup_chars(base, max_run=2)):
+        hit = _listed(key, rules.listed_decoded)
+        if hit:
+            return hit, "decoded"
+    return None, None
+
+
+def _term_reason(term, rules):
+    """Reason code for a counted term: slurs are always hidden."""
+    if term in rules.slurs:
+        return "high_severity"
+    if term in rules.high_severity:
+        return "strong_profanity"
+    return "deny_hit"
+
+
 def check_text(text, rules=None, surface="comment", policy=None):
     """
     Check block text (comments, profile descriptions) for moderation issues.
 
     surface: "comment", "profile_text", etc. (for future per-surface tuning)
+
+    Deny terms match whole words only: a word scores when it is a listed term
+    or form (rules.forms), and then scores every term it contains. Link text
+    is blanked before any word, phone, repetition or caps check.
 
     Returns a Result with decision "allow", "warn", or "block",
     a score 0..100, and detailed matches.
@@ -276,71 +334,54 @@ def check_text(text, rules=None, surface="comment", policy=None):
         return _result(decision="allow", reasons=[], matches=[], score=0)
 
     display, searchable, decoded = normalize_text(text)
-    lower_text = display.lower()
     debug_norm = {"display": display, "searchable": searchable, "decoded": decoded} if p["include_debug_normalized"] else None
 
     use_decoded = p["enable_text_decoded_match"]
 
-    # ── deny term hits ───────────────────────────────────────────────────
-    deny_hit_count = 0
-    for term in rules.deny:
-        # check in both searchable and decoded forms
-        found_in = None
-        if term in searchable:
-            found_in = "searchable"
-        elif use_decoded and term in decoded:
-            found_in = "decoded"
+    # ── links: found first, then blanked so nothing reads inside them ────
+    link_hits = list(rules.link_re.finditer(display))
+    masked = _blank_spans(display, [lm.span() for lm in link_hits])
 
-        if found_in is None:
+    # ── deny term hits (whole words) ─────────────────────────────────────
+    words = searchable_words(masked)
+    candidates = words + split_tokens(masked)
+    counted = set()
+    for word, span in candidates:
+        listed_word, variant = _profane_word(word, rules, use_decoded)
+        if not listed_word:
             continue
-
-        # check safelist against the form that matched
-        search_form = searchable if found_in == "searchable" else decoded
-        safelisted = False
-        for safe_word in rules.safe:
-            if term in safe_word and safe_word in search_form:
-                safelisted = True
-                break
-        if safelisted:
-            continue
-
-        is_high = term in rules.high_severity
-        weight = p["high_sev_weight"] if is_high else p["deny_weight"]
-
-        # find span in lower_text
-        idx = lower_text.find(term)
-        span = (idx, idx + len(term)) if idx >= 0 else None
-
-        score += weight
-        deny_hit_count += 1
-        reasons.append("high_severity" if is_high else "deny_hit")
-        matches.append(_match(
-            type="deny_high_sev" if is_high else "deny_substring",
-            value=term,
-            span=span,
-            variant=found_in,
-        ))
+        for term in rules.listed_terms.get(listed_word, ()):
+            if term in counted:
+                continue
+            counted.add(term)
+            is_high = term in rules.high_severity or term in rules.slurs
+            score += p["high_sev_weight"] if is_high else p["deny_weight"]
+            reasons.append(_term_reason(term, rules))
+            matches.append(_match(
+                type="deny_high_sev" if is_high else "deny_word",
+                value=term,
+                span=span,
+                variant=variant,
+            ))
 
     # repeated profanity bonus
-    if deny_hit_count > 1:
-        score += p["repeat_deny_weight"] * (deny_hit_count - 1)
+    if len(counted) > 1:
+        score += p["repeat_deny_weight"] * (len(counted) - 1)
         reasons.append("repeated_profanity")
 
     # ── spam: links ──────────────────────────────────────────────────────
-    link_matches = rules.link_re.findall(display)
-    if link_matches:
-        score += p["link_weight"] * len(link_matches)
+    if link_hits:
+        score += p["link_weight"] * len(link_hits)
         reasons.append("spam_link")
-        for lm in link_matches:
-            idx = display.find(lm)
+        for lm in link_hits:
             matches.append(_match(
                 type="spam_link",
-                value=lm,
-                span=(idx, idx + len(lm)) if idx >= 0 else None,
+                value=lm.group(),
+                span=lm.span(),
             ))
 
     # ── spam: phone numbers ──────────────────────────────────────────────
-    phone_hits = list(rules.phone_re.finditer(display))
+    phone_hits = list(rules.phone_re.finditer(masked))
     if phone_hits:
         score += p["phone_weight"] * len(phone_hits)
         reasons.append("spam_phone")
@@ -352,7 +393,7 @@ def check_text(text, rules=None, surface="comment", policy=None):
             ))
 
     # ── spam: excessive repetition ───────────────────────────────────────
-    rep_hits = list(rules.repeated_char_re.finditer(display))
+    rep_hits = list(rules.repeated_char_re.finditer(masked))
     if rep_hits:
         score += p["repetition_weight"]
         reasons.append("excessive_repetition")
@@ -363,21 +404,21 @@ def check_text(text, rules=None, surface="comment", policy=None):
                 span=(rh.start(), rh.end()),
             ))
 
-    # repeated words (same word 4+ times)
-    words = searchable.split()
-    if words:
-        word_counts = {}
-        for w in words:
-            word_counts[w] = word_counts.get(w, 0) + 1
-        for w, count in word_counts.items():
-            if count >= 4:
-                score += p["repetition_weight"]
-                reasons.append("repeated_words")
-                matches.append(_match(type="repeated_words", value=w))
-                break
+    # repeated words (same word 4+ times), ignoring stopwords
+    word_counts = {}
+    for w, _span in words:
+        if w in rules.stopwords:
+            continue
+        word_counts[w] = word_counts.get(w, 0) + 1
+    for w, count in word_counts.items():
+        if count >= 4:
+            score += p["repetition_weight"]
+            reasons.append("repeated_words")
+            matches.append(_match(type="repeated_words", value=w))
+            break
 
     # ── spam: excessive caps ─────────────────────────────────────────────
-    alpha_chars = [ch for ch in display if ch.isalpha()]
+    alpha_chars = [ch for ch in masked if ch.isalpha()]
     if len(alpha_chars) > 10:
         caps_ratio = sum(1 for ch in alpha_chars if ch.isupper()) / len(alpha_chars)
         if caps_ratio > 0.7:

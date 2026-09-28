@@ -1,0 +1,12 @@
+# slurs — always hidden in chat, whatever the hide level
+# one term per line, lowercase; lines starting with # are comments
+#
+# Every term here must also be in deny.txt (that is what scores it). A counted
+# slur gives check_text the reason "high_severity", which means "always hidden";
+# every other high_severity.txt term gives "strong_profanity" at the same weight.
+# Kept to unambiguous terms only (Ian, #5774 decision 3): several other listed
+# words have everyday meanings ("chink in the armor", "Dick Van Dyke").
+nigger
+nigga
+faggot
+kike

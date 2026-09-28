@@ -201,19 +201,13 @@ def username_variants(username, allow_dot=False):
     }
 
 
-def normalize_text(text):
+def text_forms(display):
     """
-    Normalize block text for moderation matching.
+    Return (searchable_text, decoded_text) for already-cleaned display text.
 
-    Returns (display_text, searchable_text, decoded_text):
-        display_text: cleaned but readable (for span mapping)
         searchable_text: lowercase, no punctuation (for matching)
         decoded_text: leet/phonetic decoded (catches evasions in text)
     """
-    # strip invisible chars, normalize whitespace
-    display = strip_zero_width(text)
-    display = normalize_whitespace(display)
-
     # searchable: lowercase, strip accents, homoglyphs, remove punctuation
     searchable = display.lower()
     searchable = strip_accents(searchable)
@@ -226,4 +220,88 @@ def normalize_text(text):
     decoded = apply_phonetic(decoded)
     decoded = dedup_chars(decoded, max_run=1)
 
+    return searchable, decoded
+
+
+def normalize_text(text):
+    """
+    Normalize block text for moderation matching.
+
+    Returns (display_text, searchable_text, decoded_text):
+        display_text: cleaned but readable (for span mapping)
+        searchable_text: lowercase, no punctuation (for matching)
+        decoded_text: leet/phonetic decoded (catches evasions in text)
+    """
+    # strip invisible chars, normalize whitespace
+    display = strip_zero_width(text)
+    display = normalize_whitespace(display)
+    searchable, decoded = text_forms(display)
     return display, searchable, decoded
+
+
+# ── Word tokens (whole-word matching) ────────────────────────────────────────
+
+def _tokens(display, split_on_punctuation):
+    """
+    Split display text into normalized words with their spans in display.
+
+    Each character is lowercased, homoglyph-mapped and accent-stripped the
+    same way as the searchable form. Whitespace always ends a word; other
+    non-alphanumeric characters end one only when split_on_punctuation is
+    set, and are otherwise dropped (as the searchable form drops them).
+    """
+    tokens = []
+    buf = []
+    start = None
+    end = None
+    for i, ch in enumerate(display):
+        if ch.isspace():
+            norm = " "
+        else:
+            norm = strip_accents(apply_homoglyphs(ch.lower()))
+        kept = "".join(c for c in norm if ("a" <= c <= "z") or ("0" <= c <= "9"))
+        if kept:
+            if start is None:
+                start = i
+            buf.append(kept)
+            end = i + 1
+        elif norm and (ch.isspace() or split_on_punctuation):
+            if buf:
+                tokens.append(("".join(buf), (start, end)))
+            buf = []
+            start = None
+    if buf:
+        tokens.append(("".join(buf), (start, end)))
+    return tokens
+
+
+def searchable_words(display):
+    """Return [(word, (start, end))]: the searchable form's words with spans."""
+    return _tokens(display, split_on_punctuation=False)
+
+
+def split_tokens(display):
+    """
+    Return [(token, (start, end))]: lowercased, accent-stripped,
+    homoglyph-mapped tokens split on every non-alphanumeric character,
+    so "you-ass" gives "you" and "ass".
+    """
+    return _tokens(display, split_on_punctuation=True)
+
+
+def decode_base(word):
+    """Leet and phonetic decoding of one word, before any dedup."""
+    return apply_phonetic(apply_leet(word))
+
+
+def decode_key(term):
+    """
+    Decoded comparison key for a listed word.
+
+    A word with a double letter keeps runs of two ("ass"), any other word runs
+    of one ("fuck"), so "a55" and "asss" decode to "ass" while "45" and "a5"
+    decode to "as" and match nothing.
+    """
+    base = decode_base(term)
+    has_double = any(base[i] == base[i + 1] for i in range(len(base) - 1))
+    return dedup_chars(base, max_run=2 if has_double else 1)
