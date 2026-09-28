@@ -41,14 +41,17 @@ class Rules:
         self.stopwords = stopwords or set()
 
         # whole-word text matching: a listed word (term or form) is profane and
-        # scores every deny term it contains, as written or decoded -- the
-        # same terms the old substring matcher found in it
+        # scores every deny term it contains -- the same terms the old
+        # substring matcher found in it. Terms found only once the word is
+        # decoded are kept apart: they count only where decoding is enabled.
         self.listed = self.deny | self.forms
         self.listed_terms = {}
+        self.listed_terms_decoded = {}
         for word in self.listed:
             decoded = dedup_chars(decode_base(word), max_run=1)
-            self.listed_terms[word] = sorted(
-                term for term in self.deny if term in word or term in decoded)
+            self.listed_terms[word] = sorted(term for term in self.deny if term in word)
+            self.listed_terms_decoded[word] = sorted(
+                term for term in self.deny if term in decoded and term not in word)
         # decoded (leet/phonetic/dedup) key -> listed word
         self.listed_decoded = {}
         for word in sorted(self.listed):

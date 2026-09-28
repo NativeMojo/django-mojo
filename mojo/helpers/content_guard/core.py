@@ -270,7 +270,9 @@ _MD_LINK_RE = re.compile(
     r"""\[([^\]\n]{0,500})\]\(\s*<?([^)\s>]+)>?(?:\s+("[^"]*"|'[^']*'))?\s*\)""")
 _SCHEME_RE = re.compile(r"https?://", re.IGNORECASE)
 _HAS_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
-_PATH_TAIL_RE = re.compile(r"/\S*")
+# the rest of a bare address after the matched suffix: more host labels,
+# a port, then a path, query or fragment
+_ADDRESS_TAIL_RE = re.compile(r"[A-Za-z0-9.-]*(?::\d+)?(?:[/?#]\S*)?")
 _ADDRESS_TRAIL = ".,;:!?)]}>'\"*_"
 _ADDRESS_LEAD = "([{<*_`'\""
 
@@ -318,22 +320,33 @@ def _link(start, end, address, domains):
                   allowed=_host_allowed(host, domains))
 
 
+def _allowed_address_re(domains):
+    """Bare addresses on an allowed domain, whatever its suffix (e.g. ".ai")."""
+    if not domains:
+        return None
+    names = "|".join(re.escape(d) for d in sorted(domains, key=len, reverse=True))
+    return re.compile(
+        r"(?<![A-Za-z0-9.-])(?:[A-Za-z0-9-]+\.)*(?:%s)(?![A-Za-z0-9-])" % names,
+        re.IGNORECASE)
+
+
 def _find_links(display, rules, domains):
     """
     Return every link in display as objict(span, address, host, allowed).
 
     Markdown links come first and only their address is a link: the label,
     title and surrounding text stay readable (and are searched for bare links).
-    Bare links use rules.link_re, extended over a directly following path.
+    Bare links use rules.link_re, extended over the rest of the address (more
+    host labels, a port, a path or query) so the host is the address's own.
+    A bare address on an allowed domain is a link too when rules.link_re does
+    not know its suffix, but only when its whole host is allowed.
     """
     links = [_link(m.start(2), m.end(2), m.group(2), domains)
              for m in _MD_LINK_RE.finditer(display)]
     rest = _blank_spans(display, [link.span for link in links])
     for m in rules.link_re.finditer(rest):
         start, end = m.span()
-        tail = _PATH_TAIL_RE.match(rest, end)
-        if tail:
-            end = tail.end()
+        end = _ADDRESS_TAIL_RE.match(rest, end).end()
         address = rest[start:end]
         # "[see](https://x" -- start at the scheme when nothing before it is a link
         scheme = _SCHEME_RE.search(address)
@@ -342,6 +355,15 @@ def _find_links(display, rules, domains):
             address = address[scheme.start():]
         address = address.lstrip(_ADDRESS_LEAD).rstrip(_ADDRESS_TRAIL)
         links.append(_link(start, end, address or rest[start:end], domains))
+    allowed_re = _allowed_address_re(domains)
+    if allowed_re:
+        rest = _blank_spans(display, [link.span for link in links])
+        for m in allowed_re.finditer(rest):
+            start = m.start()
+            end = _ADDRESS_TAIL_RE.match(rest, m.end()).end()
+            link = _link(start, end, rest[start:end].rstrip(_ADDRESS_TRAIL), domains)
+            if link.allowed:
+                links.append(link)
     links.sort(key=lambda link: link.span)
     return links
 
@@ -446,7 +468,11 @@ def check_text(text, rules=None, surface="comment", policy=None):
             listed_word, variant = _profane_word(word, rules, use_decoded)
         if not listed_word:
             continue
-        for term in rules.listed_terms.get(listed_word, ()):
+        terms = rules.listed_terms.get(listed_word, ())
+        # link words are matched as written: no decoded terms there
+        if use_decoded and variant != "link":
+            terms = list(terms) + rules.listed_terms_decoded.get(listed_word, [])
+        for term in terms:
             if term in counted:
                 continue
             counted.add(term)

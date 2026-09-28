@@ -227,6 +227,54 @@ def test_link_allowlist(opts):
                 f"an allowed link adds no match: {result.matches}")
 
 
+# (text, score without an allowlist, score with maestromojo.com and .ai allowed):
+# the host is the whole address, whatever its suffix, port or query
+ALLOW_TWO = {"link_allow_domains": ["maestromojo.com", "maestromojo.ai"]}
+BARE_ADDRESS_CASES = [
+    ("maestromojo.com.evil.dev", 25, 25),
+    ("maestromojo.com.au", 25, 25),
+    ("maestromojo.ai/app/fuck", 50, 0),
+    ("maestromojo.ai/5551234567", 20, 0),
+    ("app.maestromojo.ai#fuck", 50, 0),
+    ("maestromojo.com:8000/fuck", 75, 0),
+    ("maestromojo.com?x=fuck", 75, 0),
+    ("maestromojo.com, fuck", 75, 50),
+    ("maestromojo.ai.evil.dev/fuck", 50, 50),
+    ("notmaestromojo.ai/fuck", 50, 50),
+]
+
+
+@th.django_unit_test("links: a bare address is read whole before its host is compared")
+def test_bare_address_host(opts):
+    from mojo.helpers.content_guard import check_text
+
+    for text, plain, allowed in BARE_ADDRESS_CASES:
+        result = check_text(text)
+        assert result.score == plain, (
+            f"{text!r} without an allowlist must score {plain}, got {result.score} {result.reasons}")
+        result = check_text(text, policy=ALLOW_TWO)
+        assert result.score == allowed, (
+            f"{text!r} with maestromojo.com and .ai allowed must score {allowed}, "
+            f"got {result.score} {result.reasons}")
+
+
+@th.django_unit_test("decoded terms count only where decoding is enabled, never in links")
+def test_decoded_terms_policy(opts):
+    from mojo.helpers.content_guard import check_text
+
+    off = {"enable_text_decoded_match": False}
+    for text, default, disabled in [("puttana", 75, 30), ("sh1t", 50, 0), ("fuck", 50, 50)]:
+        result = check_text(text)
+        assert result.score == default, f"{text!r} must score {default}, got {result.score}"
+        result = check_text(text, policy=off)
+        assert result.score == disabled, (
+            f"{text!r} with decoding disabled must score {disabled}, got {result.score} {result.matches}")
+    for policy in (None, off):
+        result = check_text("https://evil.xyz/puttana", policy=policy)
+        assert result.score == 55, (
+            f"a link word is matched as written (link 25 + puttana 30), got {result.score} {result.matches}")
+
+
 @th.django_unit_test("markdown: only the address is a link, the rest is read")
 def test_markdown_links(opts):
     from mojo.helpers.content_guard import check_text
