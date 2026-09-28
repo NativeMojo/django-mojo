@@ -40,6 +40,7 @@ SCORES_1_30_1 = {
     "wtf": 30,
 }
 CHANGED = {"dumbass": 30}
+ALLOW = {"link_allow_domains": ["maestromojo.com"]}
 
 INNOCENT_WORDS = [
     "mass", "as", "class", "pass", "passed", "password", "assign", "assignment",
@@ -166,6 +167,8 @@ def test_message_16909(opts):
             "and the rollout starts at the top of the hour, the usual window.")
     result = check_text(text)
     assert result.score < 35, f"16909 must score under 35, got {result.score} {result.reasons}"
+    result = check_text(text, policy=ALLOW)
+    assert result.score == 0, f"16909 with maestromojo.com allowed must score 0, got {result.reasons}"
 
 
 @th.django_unit_test("Rules and load_rules stay backward compatible")
@@ -181,3 +184,80 @@ def test_rules_backward_compatible(opts):
     rules = load_rules(extra_forms=["darnit"], extra_slurs=["darn"], extra_deny=["darn"])
     result = check_text("darnit", rules=rules)
     assert "high_severity" in result.reasons, f"extra_forms and extra_slurs must load, got {result.reasons}"
+
+
+# ── Links and the domain allowlist ───────────────────────────────────────────
+
+# (text, score without an allowlist or None, score with maestromojo.com allowed)
+LINK_CASES = [
+    ("https://evil.xyz/fuck", 75, 75),
+    ("https://evil.xyz/5551234567", 25, 25),
+    ("https://app.maestromojo.com/fuck-assert/5551234567", 75, 0),
+    ("maestromojo.com/app/fuck", 75, 0),
+    ("maestromojo.com/app/fuck-assert", 75, 0),
+    ("https://MaestroMojo.COM./x", 25, 0),
+    ("(maestromojo.com)", 25, 0),
+    ("**maestromojo.com**", 25, 0),
+    ("[maestromojo.com](https://evil.xyz)", None, 25),
+    ("[see](https://maestromojo.com https://evil.xyz)", 50, 25),
+    ("https://maestromojo.com@evil.xyz", 25, 25),
+    ("https://evil.xyz\\@maestromojo.com", 25, 25),
+    ("https://maestromojo.com.evil.xyz", 25, 25),
+    ("https://evilmaestromojo.com", 25, 25),
+    ("https://ma\u0435stromojo.com", 25, 25),
+    ("evil.com/?u=https://maestromojo.com", 25, 25),
+    ("https://[evil", 25, 25),
+]
+
+
+@th.django_unit_test("links: allowed hosts score nothing, the host comes from the address")
+def test_link_allowlist(opts):
+    from mojo.helpers.content_guard import check_text
+
+    for text, plain, allowed in LINK_CASES:
+        if plain is not None:
+            result = check_text(text)
+            assert result.score == plain, (
+                f"{text!r} without an allowlist must score {plain}, got {result.score} {result.reasons}")
+        result = check_text(text, policy=ALLOW)
+        assert result.score == allowed, (
+            f"{text!r} with maestromojo.com allowed must score {allowed}, got {result.score} {result.reasons}")
+        if allowed == 0:
+            assert not [m for m in result.matches if m.type == "spam_link"], (
+                f"an allowed link adds no match: {result.matches}")
+
+
+@th.django_unit_test("markdown: only the address is a link, the rest is read")
+def test_markdown_links(opts):
+    from mojo.helpers.content_guard import check_text
+
+    result = check_text("[maestromojo.com](https://evil.xyz)", policy=ALLOW)
+    links = [m.value for m in result.matches if m.type == "spam_link"]
+    assert links == ["https://evil.xyz"], f"the markdown address is the link, got {links}"
+    result = check_text("[x](a you are a faggot)")
+    assert "high_severity" in result.reasons, (
+        f"a tail that is not an address is read as words, got {result.reasons}")
+    result = check_text("[see](https://maestromojo.com) and fuck", policy=ALLOW)
+    assert result.score == 50, f"text around an allowed link is still read, got {result.score}"
+
+
+@th.django_unit_test("link counts are unchanged without an allowlist")
+def test_link_counts_unchanged(opts):
+    from mojo.helpers.content_guard import check_text
+
+    result = check_text("http://one.example http://two.example http://three.example")
+    assert result.score == 75, f"three links score 75, got {result.score}"
+    result = check_text("Check out https://spam-site.com for deals!")
+    assert result.score == 25, f"one link scores 25, got {result.score}"
+
+
+@th.django_unit_test("the REST check tool accepts link_allow_domains as a list or a string")
+def test_rest_allow_domains(opts):
+    from objict import objict
+    from mojo.helpers.content_guard import on_rest_request
+
+    for value in (["maestromojo.com", "github.com"], "maestromojo.com, github.com"):
+        request = objict(DATA={"text": "see https://maestromojo.com/x and https://github.com/y",
+                               "link_allow_domains": value})
+        response = on_rest_request(request)
+        assert response["text"]["score"] == 0, f"{value!r} must allow both hosts, got {response}"

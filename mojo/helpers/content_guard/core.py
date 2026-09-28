@@ -4,6 +4,7 @@ Core public API for content_guard.
 Provides check_username, check_text, and suggest_username functions.
 """
 import re
+from urllib.parse import urlsplit
 
 from objict import objict
 
@@ -69,6 +70,8 @@ DEFAULT_POLICY = {
     "deny_weight": 30,
     "high_sev_weight": 50,
     "repeat_deny_weight": 15,
+    # links to these hosts (or their subdomains) score nothing and are not read
+    "link_allow_domains": (),
     # debug
     "include_debug_normalized": False,
 }
@@ -260,6 +263,89 @@ def check_username(username, rules=None, policy=None):
 
 # ── Text checking ────────────────────────────────────────────────────────────
 
+# ── Links ────────────────────────────────────────────────────────────────────
+
+# [label](address "optional title") -- only an optional quoted title may follow
+_MD_LINK_RE = re.compile(
+    r"""\[([^\]\n]{0,500})\]\(\s*<?([^)\s>]+)>?(?:\s+("[^"]*"|'[^']*'))?\s*\)""")
+_SCHEME_RE = re.compile(r"https?://", re.IGNORECASE)
+_HAS_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+_PATH_TAIL_RE = re.compile(r"/\S*")
+_ADDRESS_TRAIL = ".,;:!?)]}>'\"*_"
+_ADDRESS_LEAD = "([{<*_`'\""
+
+
+def _allow_domains(value):
+    """Normalize a domain allowlist given as a list or a comma-separated string."""
+    if not value:
+        return ()
+    if isinstance(value, str):
+        value = value.split(",")
+    domains = []
+    for domain in value:
+        domain = str(domain).strip().lower()
+        if domain.startswith("*."):
+            domain = domain[2:]
+        domain = domain.lstrip(".")
+        if domain:
+            domains.append(domain)
+    return tuple(domains)
+
+
+def _link_host(address):
+    """Host of a link address, or None when it cannot be parsed safely."""
+    address = address.replace("\\", "/")
+    if not _HAS_SCHEME_RE.match(address):
+        address = "http://" + address
+    try:
+        host = urlsplit(address).hostname
+    except ValueError:
+        return None
+    if host and host.endswith("."):
+        host = host[:-1]
+    if not host or not host.isascii():
+        return None
+    return host
+
+
+def _host_allowed(host, domains):
+    return bool(host) and any(host == d or host.endswith("." + d) for d in domains)
+
+
+def _link(start, end, address, domains):
+    host = _link_host(address)
+    return objict(span=(start, end), address=address, host=host,
+                  allowed=_host_allowed(host, domains))
+
+
+def _find_links(display, rules, domains):
+    """
+    Return every link in display as objict(span, address, host, allowed).
+
+    Markdown links come first and only their address is a link: the label,
+    title and surrounding text stay readable (and are searched for bare links).
+    Bare links use rules.link_re, extended over a directly following path.
+    """
+    links = [_link(m.start(2), m.end(2), m.group(2), domains)
+             for m in _MD_LINK_RE.finditer(display)]
+    rest = _blank_spans(display, [link.span for link in links])
+    for m in rules.link_re.finditer(rest):
+        start, end = m.span()
+        tail = _PATH_TAIL_RE.match(rest, end)
+        if tail:
+            end = tail.end()
+        address = rest[start:end]
+        # "[see](https://x" -- start at the scheme when nothing before it is a link
+        scheme = _SCHEME_RE.search(address)
+        if scheme and scheme.start() > 0 and not rules.link_re.search(address[:scheme.start()]):
+            start += scheme.start()
+            address = address[scheme.start():]
+        address = address.lstrip(_ADDRESS_LEAD).rstrip(_ADDRESS_TRAIL)
+        links.append(_link(start, end, address or rest[start:end], domains))
+    links.sort(key=lambda link: link.span)
+    return links
+
+
 def _blank_spans(display, spans):
     """Replace each span with the same number of spaces, keeping offsets aligned."""
     if not spans:
@@ -319,7 +405,9 @@ def check_text(text, rules=None, surface="comment", policy=None):
 
     Deny terms match whole words only: a word scores when it is a listed term
     or form (rules.forms), and then scores every term it contains. Link text
-    is blanked before any word, phone, repetition or caps check.
+    is blanked before any word, phone, repetition or caps check; a link whose
+    host is in policy["link_allow_domains"] (or a subdomain) scores nothing,
+    and any other link scores link_weight plus the listed words in its address.
 
     Returns a Result with decision "allow", "warn", or "block",
     a score 0..100, and detailed matches.
@@ -339,15 +427,23 @@ def check_text(text, rules=None, surface="comment", policy=None):
     use_decoded = p["enable_text_decoded_match"]
 
     # ── links: found first, then blanked so nothing reads inside them ────
-    link_hits = list(rules.link_re.finditer(display))
-    masked = _blank_spans(display, [lm.span() for lm in link_hits])
+    links = _find_links(display, rules, _allow_domains(p["link_allow_domains"]))
+    masked = _blank_spans(display, [link.span for link in links])
+    counted_links = [link for link in links if not link.allowed]
 
     # ── deny term hits (whole words) ─────────────────────────────────────
     words = searchable_words(masked)
     candidates = words + split_tokens(masked)
+    # a link that is not allowed is read too: whole words of its address only
+    for link in counted_links:
+        candidates += [(word, link.span) for word, _span in split_tokens(link.address)]
+    link_spans = set(link.span for link in counted_links)
     counted = set()
     for word, span in candidates:
-        listed_word, variant = _profane_word(word, rules, use_decoded)
+        if span in link_spans:
+            listed_word, variant = _listed(word, rules.listed), "link"
+        else:
+            listed_word, variant = _profane_word(word, rules, use_decoded)
         if not listed_word:
             continue
         for term in rules.listed_terms.get(listed_word, ()):
@@ -370,14 +466,14 @@ def check_text(text, rules=None, surface="comment", policy=None):
         reasons.append("repeated_profanity")
 
     # ── spam: links ──────────────────────────────────────────────────────
-    if link_hits:
-        score += p["link_weight"] * len(link_hits)
+    if counted_links:
+        score += p["link_weight"] * len(counted_links)
         reasons.append("spam_link")
-        for lm in link_hits:
+        for link in counted_links:
             matches.append(_match(
                 type="spam_link",
-                value=lm.group(),
-                span=lm.span(),
+                value=link.address,
+                span=link.span,
             ))
 
     # ── spam: phone numbers ──────────────────────────────────────────────
@@ -508,6 +604,9 @@ _BOOL_KEYS = {
     "enable_text_decoded_match", "include_debug_normalized",
 }
 
+# policy keys that are lists (a list, or a comma-separated string)
+_LIST_KEYS = {"link_allow_domains"}
+
 _BOOL_TRUE = {"true", "1", "yes"}
 
 
@@ -519,6 +618,10 @@ def _coerce_policy_value(key, value):
         return str(value).lower().strip() in _BOOL_TRUE
     if key in _INT_KEYS:
         return int(value)
+    if key in _LIST_KEYS:
+        if isinstance(value, (list, tuple)):
+            return [str(v) for v in value]
+        return [v.strip() for v in str(value).split(",") if v.strip()]
     return value
 
 
