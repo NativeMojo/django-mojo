@@ -256,13 +256,13 @@ class _Socket:
 
 
 class _PubSub:
-    def subscribe(self, *args):
+    async def subscribe(self, *args):
         pass
 
-    def unsubscribe(self, *args):
+    async def unsubscribe(self, *args):
         pass
 
-    def close(self):
+    async def aclose(self):
         pass
 
 
@@ -380,9 +380,6 @@ REDIS_ONLY_EXECUTOR_CALLS = {
     ("register_connection", "lambda"),
     ("update_connection_auth", "lambda"),
     ("register_user_online", "get_and_update"),
-    ("start_redis_messages", "create_pubsub"),
-    ("handle_redis_messages", "get_message"),
-    ("handle_redis_messages", "self.pubsub.close"),
     ("handle_authenticate", "count_connections"),
     ("handle_authenticate", "report_once"),
     ("handle_response", "push_response"),
@@ -391,7 +388,6 @@ REDIS_ONLY_EXECUTOR_CALLS = {
     ("unsubscribe_from_topic", "unsubscribe"),
     ("refresh_presence", "do_refresh"),
     ("cleanup_connection", "cleanup"),
-    ("cleanup_connection", "self.pubsub.close"),
 }
 
 # Callables that can reach the database, by enclosing function and callable.

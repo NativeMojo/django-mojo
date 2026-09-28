@@ -17,7 +17,7 @@ import time
 import uuid
 from mojo.helpers import logit
 from mojo.helpers.async_db import database_thread_target
-from mojo.helpers.redis.client import get_connection
+from mojo.helpers.redis.client import get_async_connection, get_connection
 from mojo.helpers.request import normalize_ip
 from mojo.helpers.settings import settings
 from .auth import async_validate_bearer_token
@@ -119,7 +119,9 @@ class WebSocketHandler:
         self.remote_ip = self.resolve_remote_ip()
         self.user_agent = self.resolve_user_agent()
 
-        # Redis clients - separate for pub/sub.
+        # Redis clients - separate for pub/sub. Keyed commands use the sync
+        # client in the executor; pub/sub is async on the event loop (#5750),
+        # so a socket waiting for messages holds no executor thread.
         # pubsub stays None until authentication succeeds (DM-042): an
         # unauthenticated socket must not hold a dedicated Redis pub/sub
         # connection — that's exactly the cost a reconnect storm multiplies.
@@ -364,21 +366,20 @@ class WebSocketHandler:
 
         Called from handle_authenticate AFTER a successful auth (and before
         any topic subscription — subscribe_to_topic needs self.pubsub). The
-        pub/sub connection is created synchronously here so there is no race
-        between auth completing and the first topic subscribe."""
+        pub/sub connection is subscribed before this returns so there is no
+        race between auth completing and the first topic subscribe."""
         if self.pubsub is not None:
             return
 
-        def create_pubsub():
-            pubsub = self.redis_client.pubsub()
+        pubsub = get_async_connection().pubsub()
+        try:
             # Subscribe to connection-specific channel
-            pubsub.subscribe(messages_channel(self.connection_id))
-            pubsub.subscribe(broadcast_channel())
-            return pubsub
-
-        self.pubsub = await asyncio.get_event_loop().run_in_executor(
-            None, create_pubsub
-        )
+            await pubsub.subscribe(messages_channel(self.connection_id))
+            await pubsub.subscribe(broadcast_channel())
+        except BaseException:
+            await pubsub.aclose()
+            raise
+        self.pubsub = pubsub
         self._redis_task = asyncio.create_task(self.handle_redis_messages())
 
     async def handle_redis_messages(self):
@@ -386,12 +387,7 @@ class WebSocketHandler:
         try:
             # Listen for messages
             while self.running:
-                def get_message():
-                    return self.pubsub.get_message(timeout=1.0)
-
-                message = await asyncio.get_event_loop().run_in_executor(
-                    None, get_message
-                )
+                message = await self.pubsub.get_message(timeout=1.0)
 
                 if message and message['type'] == 'message':
                     try:
@@ -404,9 +400,10 @@ class WebSocketHandler:
             self._log_exception(f"Error in Redis message handler: {e}")
         finally:
             if self.pubsub:
-                await asyncio.get_event_loop().run_in_executor(
-                    None, self.pubsub.close
-                )
+                try:
+                    await self.pubsub.aclose()
+                except Exception as e:
+                    self._log(f"Failed to close pubsub: {e}")
 
 
 
@@ -763,14 +760,17 @@ class WebSocketHandler:
                 # Add to topic subscribers (storage key — no isolation prefix)
                 self.redis_client.sadd(f"realtime:topic:{topic}", self.connection_id)
                 self.redis_client.expire(f"realtime:topic:{topic}", TOPIC_TTL_SECONDS)
-
-                # Subscribe to Redis channel
-                self.pubsub.subscribe(topic_channel(topic))
             except Exception as e:
                 self._log(f"Failed to subscribe to topic {topic}: {e}")
                 raise
 
         await asyncio.get_event_loop().run_in_executor(None, subscribe)
+        try:
+            # Subscribe to Redis channel
+            await self.pubsub.subscribe(topic_channel(topic))
+        except Exception as e:
+            self._log(f"Failed to subscribe to topic {topic}: {e}")
+            raise
         self.subscribed_topics.add(topic)
 
     async def unsubscribe_from_topic(self, topic):
@@ -782,13 +782,15 @@ class WebSocketHandler:
             try:
                 # Remove from topic subscribers (storage key — no isolation prefix)
                 self.redis_client.srem(f"realtime:topic:{topic}", self.connection_id)
-
-                # Unsubscribe from Redis channel
-                self.pubsub.unsubscribe(topic_channel(topic))
             except Exception as e:
                 self._log(f"Failed to unsubscribe from topic {topic}: {e}")
 
         await asyncio.get_event_loop().run_in_executor(None, unsubscribe)
+        try:
+            # Unsubscribe from Redis channel
+            await self.pubsub.unsubscribe(topic_channel(topic))
+        except Exception as e:
+            self._log(f"Failed to unsubscribe from topic {topic}: {e}")
         self.subscribed_topics.discard(topic)
 
     async def process_redis_message(self, data):
@@ -978,6 +980,6 @@ class WebSocketHandler:
         # Close pubsub
         if self.pubsub:
             try:
-                await asyncio.get_event_loop().run_in_executor(None, self.pubsub.close)
+                await self.pubsub.aclose()
             except Exception as e:
                 self._log(f"Failed to close pubsub: {e}")

@@ -1044,6 +1044,12 @@ registered resource is enabled; until then every endpoint answers 404.
 - `REDIS_MAX_CONN`
 - `REDIS_PASSWORD`
 - `REDIS_PORT`
+- `REDIS_PUBSUB_MAX_CONN` — **file-only** (`settings.get_static`), default
+  `REDIS_MAX_CONN`. Caps the async pub/sub pool (`get_async_connection`)
+  per event loop, which is one per ASGI worker process on uvicorn, daphne and
+  gunicorn with uvicorn workers; realtime holds one connection per logged-in
+  socket. Redis's total pub/sub connection count is this per-loop cap times
+  the number of worker processes.
 - `REDIS_PUBSUB_PREFIX` — **file-only** (`settings.get_static`) opt-in prefix
   for every framework Pub/Sub channel name (jobs runner ctl/broadcast/replies/
   ping; realtime broadcast/topic/messages), default `""`. Cooperative

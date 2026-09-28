@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""End-to-end realtime database recovery and latency check (#5736, T5 and T6).
+"""End-to-end realtime database recovery and latency check (#5736 T5/T6, #5750 T3).
 
 Runs against this checkout's local test server (``bin/asgi_local``), which it
 restarts. It never touches another database or server.
@@ -13,21 +13,26 @@ What it does:
 2. Opens ``--sockets`` sockets across several users, ``--concurrency`` at a
    time. Each logs in, subscribes to its user topic and pings. Login and
    subscribe latency are recorded.
-3. Terminates every database backend the server holds, as a failover does
+3. With those sockets open, times one more login on its own, and the delivery
+   of one topic message to every open socket (publish to receipt).
+4. Terminates every database backend the server holds, as a failover does
    (skipped with ``--no-kill``, the latency control).
-4. Checks that the open sockets still receive a published message, and that a
+5. Checks that the open sockets still receive a published message, and that a
    second batch of sockets logs in and subscribes.
-5. Closes everything. Checks that the disconnect hook saved for every user,
+6. Closes everything. Checks that the disconnect hook saved for every user,
    that the server log gained no "the connection is closed" errors, and that
    the server's database connections return to the baseline (default mode) or
    stay within the pool size (pool mode).
 
-Each authenticated socket polls pub/sub on a default-executor thread for up
-to a second at a time, so login latency grows with open sockets on any build;
+Before #5750 each authenticated socket polled pub/sub on a default-executor
+thread for up to a second at a time, so login latency grew with open sockets;
 compare builds at the same ``--sockets`` and ``--concurrency``.
 
-Prints one JSON summary and exits non-zero when a recovery check fails.
-Latency figures are for comparison between two builds on one machine only.
+Prints one JSON summary and exits non-zero when a recovery check fails. The
+summary's ``latency_targets`` compares against #5750's release bar (login p95
+under 1 s, subscribe p95 under 100 ms, delivery p95 under 250 ms, a lone login
+under 100 ms) but does not change the exit code. Latency figures are for
+comparison between two builds on one machine only.
 """
 
 import argparse
@@ -163,13 +168,45 @@ def open_socket(url, user, token):
 def open_batch(url, users, count, concurrency):
     results, errors = [], []
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        owners = [users[i % len(users)][0] for i in range(count)]
         futures = [pool.submit(open_socket, url, *users[i % len(users)]) for i in range(count)]
-        for future in futures:
+        for owner, future in zip(owners, futures):
             try:
-                results.append(future.result())
+                results.append(future.result() + (owner,))
             except Exception as exc:
                 errors.append(str(exc)[:200])
     return results, errors
+
+
+def measure_delivery(first, users):
+    """Publish one message per user topic; time publish-to-receipt per socket."""
+    from mojo.apps import realtime
+
+    marker = uuid.uuid4().hex
+    published = {}
+
+    def wait(entry):
+        ws, _auth, _login, _sub, user = entry
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            msg = ws.wait_for_type("message", timeout=max(0.1, deadline - time.monotonic()))
+            if msg.data.get("data", {}).get("delivery") == marker:
+                return time.perf_counter() - published[user.id]
+        raise TimeoutError("delivery probe not received")
+
+    with ThreadPoolExecutor(max_workers=max(1, len(first))) as pool:
+        futures = [pool.submit(wait, entry) for entry in first]
+        time.sleep(0.5)  # every waiter is listening before the first publish
+        for user, _ in users:
+            published[user.id] = time.perf_counter()
+            realtime.publish_topic(f"user:{user.id}", {"delivery": marker})
+        delays, missed = [], 0
+        for future in futures:
+            try:
+                delays.append(future.result())
+            except Exception:
+                missed += 1
+    return delays, missed
 
 
 def pct(values, q):
@@ -212,6 +249,11 @@ def main():
         sampler.start()
 
         first, first_errors = open_batch(url, users, args.sockets, args.concurrency)
+        # One login on its own while the first batch sits open.
+        lone, lone_errors = open_batch(url, users[-1:], 1, 1)
+        for ws, *_ in lone:  # free its slot: WS_MAX_CONNECTIONS is per identity
+            ws.close(wait=0.5)
+        delays, missed = measure_delivery(first, users)
         killed = [] if args.no_kill else kill_server_backends()
         time.sleep(0.5)
 
@@ -262,6 +304,9 @@ def main():
             "login_ms_before_kill": {"p50": pct(logins, 0.5), "p95": pct(logins, 0.95)},
             "login_ms_after_kill": {"p50": pct(logins_after, 0.5), "p95": pct(logins_after, 0.95)},
             "subscribe_ms_before_kill": {"p50": pct(subs, 0.5), "p95": pct(subs, 0.95)},
+            "lone_login_ms": pct([r[2] for r in lone], 0.5), "lone_login_errors": lone_errors[:1],
+            "delivery_ms": {"p50": pct(delays, 0.5), "p95": pct(delays, 0.95),
+                            "received": f"{len(delays)}/{len(first)}", "missed": missed},
             "db_connections": {"baseline": baseline, "peak": sampler.peak, "after_close": after,
                                "allowed_after_close": limit},
         }
@@ -273,6 +318,16 @@ def main():
             "connections_back_to_baseline": after <= limit,
         }
         summary["checks"] = checks
+
+        def under(value, limit_ms):
+            return value is not None and value < limit_ms
+
+        summary["latency_targets"] = {
+            "login_p95_under_1000ms": under(pct(logins, 0.95), 1000),
+            "subscribe_p95_under_100ms": under(pct(subs, 0.95), 100),
+            "delivery_p95_under_250ms": under(pct(delays, 0.95), 250) and missed == 0,
+            "lone_login_under_100ms": under(summary["lone_login_ms"], 100),
+        }
         summary["passed"] = all(checks.values())
         print(json.dumps(summary, indent=1))
         return 0 if summary["passed"] else 1

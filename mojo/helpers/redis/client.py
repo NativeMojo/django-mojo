@@ -17,16 +17,27 @@ Settings used (all optional; follows your existing naming):
     REDIS_READER_URL       # standalone read-only/replica URL
     REDIS_READER_SERVER    # reader endpoint; other reader parts inherit primary
     REDIS_MAX_CONN         # per-process pool size (default 500)
+    REDIS_PUBSUB_MAX_CONN  # cap on async pub/sub connections per event loop,
+                           # which is one per ASGI worker process on uvicorn,
+                           # daphne and gunicorn with uvicorn workers
+                           # (default REDIS_MAX_CONN)
     REDIS_READ_FROM_REPLICAS  # '1'/'0' (cluster only; default '1')
 
 Notes:
 - Local single-node dev: URL usually looks like    redis://localhost:6379/0
 - Cluster/Serverless prod: set REDIS_CLUSTER and use a rediss:// URL.
 - Replication-group readers are opt-in per call with get_connection(reader=True).
+- get_async_connection() is a redis.asyncio client for pub/sub on the event
+  loop (realtime sockets). It is a plain client even in cluster mode:
+  ordinary SUBSCRIBE on any cluster node receives PUBLISH from every node.
 """
 
 from urllib.parse import quote, unquote, urlparse
+import asyncio
+import weakref
+
 import redis
+import redis.asyncio
 from redis.cluster import RedisCluster  # redis-py provides cluster client
 
 from mojo.helpers.settings import settings
@@ -34,6 +45,9 @@ from mojo.helpers.settings import settings
 _CLIENT = None  # per-process singleton (thread-safe client; uses a connection pool underneath)
 _READER_CLIENT = None
 _READER_URL = -1  # resolved once; None means no configured standalone reader
+# redis.asyncio connections belong to the event loop that opened them, so the
+# async client is one per process per running loop.
+_ASYNC_CLIENTS = weakref.WeakKeyDictionary()
 
 
 def _primary_parts(get):
@@ -230,3 +244,47 @@ def get_bounded_connection(timeout=1.0, max_connections=8,
         socket_connect_timeout=timeout, socket_timeout=timeout,
         max_connections=max_connections)
     return redis.Redis(connection_pool=pool)
+
+
+def _create_async_client(url, max_conn, connect_timeout, socket_timeout):
+    pool = redis.asyncio.ConnectionPool.from_url(
+        url,
+        decode_responses=True,
+        socket_connect_timeout=connect_timeout,
+        socket_timeout=socket_timeout,
+        max_connections=max_conn,
+    )
+    return redis.asyncio.Redis(connection_pool=pool)
+
+
+def get_async_connection():
+    """
+    Return the process's redis.asyncio client for the running event loop.
+
+    For pub/sub only: waiting on a message costs no thread. Keyed commands
+    stay on get_connection(). Built from the same settings as the primary
+    client (URL or parts, scheme/TLS, username, password, db, timeouts).
+    REDIS_PUBSUB_MAX_CONN (default REDIS_MAX_CONN) caps its connections
+    per event loop, which is one per ASGI worker process on uvicorn, daphne
+    and gunicorn with uvicorn workers.
+
+    In cluster mode (REDIS_CLUSTER=True) this is still a plain client on the
+    configured endpoint: redis-py 7 has no async cluster pub/sub, and
+    ordinary (non-sharded) SUBSCRIBE on any node receives every PUBLISH.
+    """
+    loop = asyncio.get_running_loop()
+    client = _ASYNC_CLIENTS.get(loop)
+    if client is None:
+        client = _build_async_client()
+        _ASYNC_CLIENTS[loop] = client
+    return client
+
+
+def _build_async_client(get=None):
+    """Build the async pub/sub client from settings (injectable for tests)."""
+    get = get or settings.get_static
+    max_conn = int(get("REDIS_PUBSUB_MAX_CONN", get("REDIS_MAX_CONN", 500)))
+    connect_timeout = float(get("REDIS_CONNECT_TIMEOUT", 2))
+    socket_timeout = float(get("REDIS_SOCKET_TIMEOUT", 60))
+    return _create_async_client(
+        _build_url(get=get), max_conn, connect_timeout, socket_timeout)
