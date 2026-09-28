@@ -323,15 +323,26 @@ carry these server-owned fields:
 |---|---|
 | `moderation_score` | Integer 0–100 when classified. **0** means clean; **null** means legacy/unscored. |
 | `moderation_reasons` | List of category codes, empty when none; never matched phrases. |
-| `moderation_decision` | `allow`, `warn`, `masked`, or legacy `block`. Only classifier `block` becomes `masked`. |
+| `moderation_decision` | `allow`, `warn`, `masked`, or legacy `block`. `masked` means the score reached the room's live hide level (default 70), or a slur matched. |
 
-For example, a single severe hit scores 50 and stays `warn`; a three-link
-message scores 75 and stores as `masked`. Low-score allows may still have
-reasons. Reasons are `high_severity`, `deny_hit`, `repeated_profanity`,
-`spam_link`, `spam_phone`, `excessive_repetition`, `repeated_words`,
-`excessive_caps`. The server's existing classifier and wordlists are unchanged.
-Backend integrations use `check_moderation_scored(body)` returning
-`(decision, reasons, score)`; `check_moderation(body)` remains a two-tuple.
+For example, a single strong swear word scores 50 and stays `warn` at the
+default level; a three-link message scores 75 and stores as `masked`. Low-score
+allows may still have reasons. Reasons are `high_severity` (a slur: always
+`masked`, whatever the level), `strong_profanity` (other strong swearing, same
+score, follows the level), `deny_hit`, `repeated_profanity`, `spam_link`,
+`spam_phone`, `excessive_repetition`, `repeated_words`, `excessive_caps`.
+Profanity matches whole words only, so work words such as "passed", "mass" and
+commit hashes score nothing. Links to a room's allowed domains score nothing.
+
+The hide level (`CHAT_MODERATION_HIDE_LEVEL`, 1–101, default 70) and allowed
+domains (`CHAT_MODERATION_ALLOWED_DOMAINS`, a list of hostnames) are settings
+an administrator can change globally or per group through the settings API,
+without a release; a group member with `manage_settings` for that group may
+set that group's values. They apply to new sends and edits; stored messages
+keep their decision. Backend integrations use
+`check_moderation_scored(body, group=room.group)` returning
+`(decision, reasons, score)`; `check_moderation(body, group=...)` remains a
+two-tuple, and both still work without a group (global values).
 
 The application can disable classification with `CHAT_MODERATION_ENABLED=False`.
 Its framework default is `True`; a global runtime DB Setting overrides the file
@@ -344,13 +355,15 @@ choice. Authorization and explicit room rules still apply, including URL/phone
 rules. This requires a framework release containing the switch on every writer;
 older application/file-caption fallbacks must also honor the disabled setting.
 
-**Use numeric score for presentation.** Maestro hides messages at score **>=35**,
-the current warning threshold, and gives each viewer a local **Show** action.
-A valid numeric score is authoritative even if a legacy decision disagrees.
-When the score is absent, null or invalid, fall back to legacy
-`warn`/`masked`/`block`. Do not coerce null to 0. Existing rows are not rescored;
-old rows get null/[] and trusted-server bypass messages get allow/[]/null.
-The framework leaves the display threshold to each consumer.
+**Hide on the stored decision.** Hide a message when
+`moderation_decision == "masked"` and give each viewer a local **Show** action;
+the decision already follows the live hide level and the always-hidden slur
+list, and the framework does not expose the level for clients to compare
+scores against. Only for rows with no decision, fall back to the score. Do not
+coerce null to 0. Existing rows are not rescored; old rows get null/[] and
+trusted-server bypass messages get allow/[]/null. A client that hides by its
+own score threshold (Maestro hid at **>=35**) sees no change from the hide
+level until it hides on `masked`.
 
 Authorized responses and events contain the **real body**. Hiding is viewer
 presentation, not access control. Preserve ordinary history/unread behavior;

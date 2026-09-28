@@ -106,10 +106,25 @@ Check block text for moderation issues.
 Returns a result with `decision` of `"allow"`, `"warn"`, or `"block"`, a `score` from 0-100, and detailed `matches`.
 
 Scoring components:
-- Deny term hits (weighted by severity)
-- Decoded text matching (catches leet/phonetic evasions like `sh1t`, `phuck`)
-- Spam detection: links, phone numbers
-- Excessive repetition, caps, repeated words
+- Deny term hits, **whole words only** (weighted by severity) — see [Whole-word matching](#whole-word-matching-text)
+- Decoded text matching (catches leet/phonetic evasions like `sh1t`, `phuck`, `a55`)
+- Spam detection: links (minus allowlisted hosts), phone numbers
+- Excessive repetition, caps, repeated words (stopwords ignored)
+
+#### Whole-word matching (text)
+
+`check_text` never matches a deny term inside a word that is not itself listed. A word is **profane** when it equals a deny term, a *form* (`data/forms.txt`), or either plus a trailing `s`. A profane word scores **every** deny term it contains, once per text, at that term's weight — so listed profanity keeps its pre-1.31 score (`fucking` 95, `asshole` 75, `motherfucker` 100), while `mass`, `passed`, `password`, `assign`, `bypass`, `suspicious`, `Scunthorpe` and `Matsushita` score 0.
+
+- **Words** are read two ways: split on whitespace with punctuation removed (`f.u.c.k` → `fuck`) and split on every non-alphanumeric character (`you-ass` → `you`, `ass`).
+- **Decoding** applies only to a word that contains a letter and whose decoded form differs from it. A term with a double letter compares at runs of two, any other at runs of one: `a55` and `asss` decode to `ass`, `n1gger` to `nigger`, while `45`, `a5`, `4s` and `F5` match nothing.
+- **Forms** are profane words that are not terms themselves (`bullshit`, `shithead`, `motherfucking`). The trade-off: a swear word glued into a longer word that is not listed (`fuckwit`) is not caught until it is added to `forms.txt`.
+- **Links are blanked** before word, phone, repetition and caps checks, so nothing inside an address is read as words — except the whole words of a link that is *not* allowlisted (`https://evil.xyz/fuck` scores 25 + 50).
+- **Phone numbers** need alphanumeric boundaries: a digit run inside a commit hash or a word (`call5551234567`) is not a phone number.
+- `safe.txt` is not used by `check_text` any more (it still serves `check_username`).
+
+#### Link allowlist
+
+Pass `policy={"link_allow_domains": ["example.com"]}`. A link whose host is a listed domain or a subdomain of it (`app.example.com`) adds no score, no match and no reason, and its path is never read. The host comes from the link's own address — in `[example.com](https://evil.xyz)` the host is `evil.xyz`; `https://example.com@evil.xyz`, `https://example.com.evil.xyz` and `https://evilexample.com` are not allowed; a non-ASCII or unparsable host is never allowed. Markdown links count only their address as the link; the label and title are read as words and searched for bare links.
 
 ### `suggest_username(username, rules=None, policy=None)`
 
@@ -143,6 +158,10 @@ Parameters:
 - `extra_deny` — Set of additional deny terms to merge
 - `extra_safe` — Set of additional safe terms to merge
 - `extra_reserved` — Set of additional reserved names to merge
+- `forms_path`, `slurs_path`, `stopwords_path` — Custom forms, slurs and stopwords file paths
+- `extra_forms`, `extra_slurs`, `extra_stopwords` — Sets merged into those lists
+
+`Rules(deny, high_severity, safe, reserved, forms=None, slurs=None, stopwords=None)` keeps its positional signature; the three new sets default to empty.
 
 File format: one term per line, `#` for comments.
 
@@ -171,7 +190,7 @@ result = content_guard.check_text("text", policy={"text_block_threshold": 50})
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `deny_substring_min_len` | 3 | Min deny term length for substring matching |
+| `deny_substring_min_len` | 3 | Min deny term length for substring matching (usernames only) |
 | `enable_ed1_high_sev` | True | Edit-distance-1 matching for high-severity terms |
 | `ed1_max_len` | 6 | Max term length for ED1 matching |
 | `enable_skeleton_match` | True | Consonant skeleton matching |
@@ -187,7 +206,8 @@ result = content_guard.check_text("text", policy={"text_block_threshold": 50})
 | `deny_weight` | 30 | Score per normal deny hit |
 | `high_sev_weight` | 50 | Score per high-severity hit |
 | `repeat_deny_weight` | 15 | Extra score per additional deny hit |
-| `link_weight` | 25 | Score per link detected |
+| `link_weight` | 25 | Score per link detected (allowlisted links score nothing) |
+| `link_allow_domains` | `()` | Hosts whose links (and subdomains' links) score nothing; the REST tool also accepts a comma-separated string |
 | `phone_weight` | 20 | Score per phone number |
 | `repetition_weight` | 15 | Score for excessive repetition |
 | `caps_weight` | 10 | Score for excessive caps |
@@ -204,6 +224,8 @@ Results and matches are `objict` instances with attribute access:
 
 - **Result**: `decision`, `reasons` (list), `matches` (list), `score` (0-100), `normalized` (dict or None)
 - **Match**: `type`, `value`, `span` (tuple or None), `variant` (which normalization matched)
+
+Text match types: `deny_word` (formerly `deny_substring`) and `deny_high_sev` for deny hits — their `span` is the whole word that matched and `variant` is `searchable`, `decoded` or `link`; `spam_link` (value is the link address), `spam_phone`, `repetition`, `repeated_words`.
 
 ## Reason Codes
 
@@ -230,12 +252,13 @@ Results and matches are `objict` instances with attribute access:
 | Code | Meaning |
 |------|---------|
 | `deny_hit` | Contains a deny term |
-| `high_severity` | Contains a high-severity term |
+| `high_severity` | Contains a slur from `slurs.txt` — means **always hidden** in chat |
+| `strong_profanity` | Contains any other `high_severity.txt` term (same weight, 50) |
 | `repeated_profanity` | Multiple deny hits in same text |
 | `spam_link` | Contains URL/link |
 | `spam_phone` | Contains phone number |
 | `excessive_repetition` | Character repeated 5+ times |
-| `repeated_words` | Same word repeated 4+ times |
+| `repeated_words` | Same word repeated 4+ times (stopwords ignored) |
 | `excessive_caps` | Over 70% uppercase |
 
 ## Evasion Detection
@@ -243,8 +266,8 @@ Results and matches are `objict` instances with attribute access:
 The library catches a wide range of evasion techniques:
 
 - **Leet speak**: `a55hole` -> `asshole`, `sh1t` -> `shit` (15 character substitutions)
-- **Separator insertion**: `f_u_c_k` -> `fuck` (underscores, dots, hyphens, dashes, tildes)
-- **Character repetition**: `fucckkk` -> `fuck` (collapsed to single chars)
+- **Separator insertion**: `f_u_c_k` -> `fuck` (underscores, dots, hyphens, dashes, tildes); in text the whole separated word must be listed
+- **Character repetition**: `fucckkk` -> `fuck`, `asss` -> `ass` (collapsed; terms with a double letter keep runs of two)
 - **Phonetic substitution**: `phuck` -> `fuck` (`ph->f`, `kn->n`, `wr->r`)
 - **Consonant skeleton**: `DuckFick` -> skeleton `dckfck` contains `fck` (skeleton of `fuck`)
 - **Reversed text**: `reggin` -> reversed = `nigger` (high-severity terms only)
@@ -260,8 +283,11 @@ Bundled in `mojo/helpers/content_guard/data/`:
 | File | Contents |
 |------|----------|
 | `deny.txt` | ~100 terms: English profanity, slurs, abbreviations, Spanish, French, German, Portuguese, Italian, Russian |
-| `high_severity.txt` | ~17 terms: slurs and extreme language (get higher weight + ED1 matching) |
-| `safe.txt` | ~60 terms: false positive prevention (assistant, cocktail, reputation, computer, etc.) |
+| `high_severity.txt` | ~19 terms: slurs and extreme language (get higher weight + ED1 matching) |
+| `slurs.txt` | 4 terms: the always-hidden subset of high-severity (`high_severity` reason) |
+| `forms.txt` | ~50 words: profane words that contain a term but are not terms (`bullshit`, `shithead`) |
+| `stopwords.txt` | ~120 words: function words ignored by `repeated_words` |
+| `safe.txt` | ~60 terms: false positive prevention for usernames (assistant, cocktail, reputation, computer, etc.) |
 | `reserved.txt` | ~29 names: admin, support, root, moderator, etc. |
 
 ## Integration Examples
@@ -270,9 +296,9 @@ Bundled in `mojo/helpers/content_guard/data/`:
 
 content_guard returns `decision="block"` deterministically based on its rules. **What the caller does with that decision is the caller's choice.** Username, comment and contact-form callers reject blocked content; display names and chat use advisory handling.
 
-`User.validate_name_fields` treats a name "block" as **advisory**: it logs the flagged name and allows the save instead of raising an error. This is intentional — content_guard's substring matching over-blocks legitimate real names that merely contain a high-severity substring (e.g. Matsushita, Harshita, Scunthorpe). The scoring logic inside content_guard is unchanged.
+`User.validate_name_fields` treats a name "block" as **advisory**: it logs the flagged name and allows the save instead of raising an error. This was introduced when content_guard's substring matching over-blocked legitimate real names that merely contain a high-severity substring (e.g. Matsushita, Harshita, Scunthorpe). Since whole-word text matching (#5774) those names score 0; the advisory handling stays.
 
-Comment and contact-form moderation continue to hard-block on `decision="block"`. [Chat moderation](../chat/rules.md) maps `block` to advisory `masked`, preserving the real body, reasons and score at every severity; consumers choose what to hide.
+Comment and contact-form moderation continue to hard-block on `decision="block"`. [Chat moderation](../chat/rules.md) decides `masked` from its own live hide level (and always for slurs), preserving the real body, reasons and score at every severity; consumers choose what to hide.
 
 ---
 
@@ -340,7 +366,10 @@ mojo/helpers/content_guard/
     data/
         deny.txt         # deny terms
         high_severity.txt # high-severity terms
-        safe.txt         # safelist (false positive prevention)
+        slurs.txt        # always-hidden subset of high-severity
+        forms.txt        # profane words containing a term
+        stopwords.txt    # ignored by repeated_words
+        safe.txt         # safelist (usernames)
         reserved.txt     # reserved usernames
     README.md            # package-level docs
 ```

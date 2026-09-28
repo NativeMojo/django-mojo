@@ -40,6 +40,8 @@ Check block text. Returns `Result` with `decision` of `"allow"`, `"warn"`, or `"
 
 Scoring components: deny term hits (weighted by severity), decoded text matching (catches leet/phonetic evasions like `sh1t`, `phuck`), spam links, phone numbers, excessive repetition, excessive caps. Score is 0-100, mapped to decisions via thresholds.
 
+Deny terms match **whole words only**: a word is profane when it is a deny term, a form (`data/forms.txt`), or either plus `s`, and then scores every term it contains — so `mass`, `passed` and `Scunthorpe` score 0 while `fucking` keeps 95. A swear word glued into an unlisted longer word (`fuckwit`) is not caught until it is added to `forms.txt`. Link addresses are blanked before any word, phone, repetition or caps check; hosts in `policy["link_allow_domains"]` (and their subdomains) score nothing, other links score `link_weight` plus the listed words in their address. Phone numbers need alphanumeric boundaries, so digits inside a commit hash never read as one. Stopwords (`data/stopwords.txt`) never count as repeated words.
+
 ### `suggest_username(username, rules=None, policy=None)`
 
 Returns a cleaned username string or `None` if unsalvageable.
@@ -73,7 +75,7 @@ result = content_guard.check_text("text", policy={"text_block_threshold": 50})
 | `forbid_trailing_sep` | True | Block trailing `_` or `.` |
 | `forbid_double_sep` | True | Block `__` or `..` |
 | `forbid_all_digits` | True | Block all-digit usernames |
-| `deny_substring_min_len` | 3 | Min deny term length for substring matching |
+| `deny_substring_min_len` | 3 | Min deny term length for substring matching (usernames only) |
 | `enable_ed1_high_sev` | True | Edit-distance-1 matching for short high-severity terms |
 | `ed1_max_len` | 6 | Max term length for ed1 matching |
 | `enable_skeleton_match` | True | Consonant skeleton matching (catches DuckFick → fck) |
@@ -81,7 +83,8 @@ result = content_guard.check_text("text", policy={"text_block_threshold": 50})
 | `enable_text_decoded_match` | True | Leet/phonetic decoded matching in text (catches sh1t, phuck) |
 | `text_warn_threshold` | 35 | Score threshold for "warn" decision |
 | `text_block_threshold` | 70 | Score threshold for "block" decision |
-| `link_weight` | 25 | Score added per link detected |
+| `link_weight` | 25 | Score added per link detected (allowlisted links add nothing) |
+| `link_allow_domains` | `()` | Hosts whose links, and subdomains' links, score nothing and are not read |
 | `phone_weight` | 20 | Score added per phone number |
 | `repetition_weight` | 15 | Score added for excessive repetition |
 | `caps_weight` | 10 | Score added for excessive caps |
@@ -107,18 +110,22 @@ Or provide your own files:
 rules = load_rules(deny_path="/app/data/my_deny.txt")
 ```
 
+`load_rules` also takes `forms_path`, `slurs_path`, `stopwords_path` and `extra_forms`, `extra_slurs`, `extra_stopwords`.
+
 File format: one term per line, `#` for comments.
+
+Bundled lists in `data/`: `deny.txt` (terms), `high_severity.txt` (weight 50, username ED1 matching), `slurs.txt` (always-hidden subset: reason `high_severity`), `forms.txt` (profane words containing a term), `stopwords.txt` (ignored by `repeated_words`), `safe.txt` (username safelist; not used by `check_text`), `reserved.txt`.
 
 ## Data Types
 
 - **Result**: `decision`, `reasons` (list of stable codes), `matches` (list of Match), `score` (0-100), `normalized` (optional debug dict)
-- **Match**: `type`, `value`, `span` (tuple or None), `variant` (which normalization hit)
+- **Match**: `type`, `value`, `span` (tuple or None), `variant` (which normalization hit). Text deny matches are `deny_word` or `deny_high_sev`, spanning the whole matched word.
 
 ## Reason Codes
 
 Usernames: `too_short`, `too_long`, `invalid_chars`, `leading_separator`, `trailing_separator`, `double_separator`, `all_digits`, `reserved`, `deny_exact`, `deny_substring`, `deny_skeleton`, `deny_reversed`, `deny_ed1`
 
-Text: `deny_hit`, `high_severity`, `repeated_profanity`, `spam_link`, `spam_phone`, `excessive_repetition`, `repeated_words`, `excessive_caps`
+Text: `deny_hit`, `high_severity` (a slur from `slurs.txt`: always hidden), `strong_profanity` (any other high-severity term, same weight), `repeated_profanity`, `spam_link`, `spam_phone`, `excessive_repetition`, `repeated_words`, `excessive_caps`
 
 ## Evasion Detection
 
@@ -126,7 +133,7 @@ The library catches a wide range of evasion techniques:
 
 - **Leet speak**: `a55hole` → `asshole`, `sh1t` → `shit` (15 character substitutions)
 - **Separator insertion**: `f_u_c_k` → `fuck` (underscores, dots, hyphens, dashes, tildes)
-- **Character repetition**: `fucckkk` → `fuck` (collapsed to single chars)
+- **Character repetition**: `fucckkk` → `fuck`, `asss` → `ass` (collapsed; terms with a double letter keep runs of two)
 - **Phonetic substitution**: `phuck` → `fuck` (`ph→f`, `kn→n`, `wr→r`)
 - **Consonant skeleton**: `DuckFick` → skeleton `dckfck` contains `fck` (skeleton of `fuck`)
 - **Reversed text**: `reggin` → reversed = `nigger` (high-severity terms only)

@@ -138,7 +138,9 @@ production callers omit it and the realtime publisher is used.
 ```
 
 - Author or room admin can edit
-- Re-runs room rules and `check_moderation_scored` on the new body
+- Re-runs room rules and `check_moderation_scored(body, group=msg.room.group)`
+  on the new body, so the room group's live hide level and allowed domains
+  apply (the message is loaded with `select_related("room", "room__group")`)
 - Saves the real body, `edited_at` and decision/reasons/score together
 - Publishes `chat_message_edited` and returns `chat_edit_ack`; both include all
   three moderation fields, including explicit `allow`/`[]`/`0` on clean edits
