@@ -274,6 +274,12 @@ _HAS_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _RUN_RE = re.compile(r"\S+")
 _ADDRESS_TRAIL = ".,;:!?)]}>'\"*_"
 _ADDRESS_LEAD = "([{<*_`'\""
+# what may stand before a scheme inside one run: an unclosed markdown opener or punctuation
+# a host inside an address, with the suffixes rules.link_re knows
+_INNER_HOST_RE = re.compile(
+    r"(?<![A-Za-z0-9-])(?:[A-Za-z0-9-]+\.)+(?:com|net|org|io|co|info|biz|xyz)(?![A-Za-z0-9-])",
+    re.IGNORECASE)
+_SCHEME_OPENER_RE = re.compile(r"[([{<*_`'\"]*(?:\[[^\[\]]*\]\(<?)?")
 
 
 def _allow_domains(value):
@@ -294,29 +300,48 @@ def _allow_domains(value):
 
 
 def _link_host(address):
-    """Host of a link address, or None when it cannot be parsed safely."""
+    """
+    Return (host, has_user) for a link address; host is None when it cannot
+    be parsed safely.
+    """
     address = address.replace("\\", "/")
     if not _HAS_SCHEME_RE.match(address):
         address = "http://" + address
     try:
-        host = urlsplit(address).hostname
+        parts = urlsplit(address)
+        host = parts.hostname
     except ValueError:
-        return None
+        return None, False
     if host and host.endswith("."):
         host = host[:-1]
     if not host or not host.isascii():
-        return None
-    return host
+        return None, False
+    return host, parts.username is not None
 
 
 def _host_allowed(host, domains):
     return bool(host) and any(host == d or host.endswith("." + d) for d in domains)
 
 
+def _nested(address, domains):
+    """
+    True when address holds a second address: "://" after its own start, or
+    a host that is not allowed ("a.com/?next=https://b.com", "a.com/b.xyz").
+    """
+    own = _HAS_SCHEME_RE.match(address)
+    if "://" in address[own.end() if own else 0:]:
+        return True
+    return any(not _host_allowed(m.group().lower(), domains)
+               for m in _INNER_HOST_RE.finditer(address))
+
+
 def _link(start, end, address, domains):
-    host = _link_host(address)
-    return objict(span=(start, end), address=address, host=host,
-                  allowed=_host_allowed(host, domains))
+    # the site is unclear -- a user name before the host ("evil.dev@a.com") or
+    # a second address inside it -- so it is never allowed
+    host, has_user = _link_host(address)
+    allowed = (not has_user and _host_allowed(host, domains)
+               and not _nested(address, domains))
+    return objict(span=(start, end), address=address, host=host, allowed=allowed)
 
 
 def _allowed_address_re(domains):
@@ -354,9 +379,10 @@ def _find_links(display, rules, domains):
         by_suffix = rules.link_re.search(address) is not None
         if not by_suffix and not (allowed_re and allowed_re.search(address)):
             continue
-        # "[see](https://x" -- start at the scheme when nothing before it is a link
+        # "[see](https://x" -- start at the scheme only after an unclosed markdown
+        # opener or punctuation; any other prefix is part of the address
         scheme = _SCHEME_RE.search(address)
-        if scheme and scheme.start() > 0 and not rules.link_re.search(address[:scheme.start()]):
+        if scheme and scheme.start() > 0 and _SCHEME_OPENER_RE.fullmatch(address[:scheme.start()]):
             start += scheme.start()
             address = address[scheme.start():]
         link = _link(start, end, address.lstrip(_ADDRESS_LEAD).rstrip(_ADDRESS_TRAIL) or address,

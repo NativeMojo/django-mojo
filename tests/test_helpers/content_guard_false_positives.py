@@ -304,6 +304,53 @@ def test_whole_address_host(opts):
         f"hosts come from whole addresses, never a user name or path segment: {links}")
 
 
+# Brenda's round-3 finding (#5774 comment 53085) and Rick's decision: a scheme
+# inside one run starts the address only after an unclosed markdown opener or
+# punctuation. (text, score with maestromojo.com and .ai allowed, without)
+SCHEME_CASES = [
+    ("evil.dev/path/https://maestromojo.com/fuck", 75, 75),
+    ("[see](https://maestromojo.com https://evil.xyz)", 25, 50),
+    ("(https://maestromojo.com/x)", 0, 25),
+    ("**https://maestromojo.com**", 0, 25),
+    ("evil.com/?u=https://maestromojo.com", 25, 25),
+    ("x=https://maestromojo.com/fuck", 75, 75),
+    # Rick's nested-address rule (comment 53104): a second address fails closed
+    ("evil.dev/?next=https://maestromojo.com/fuck", 75, 75),
+    ("maestromojo.ai/path/https://evil.dev/fuck", 75, 75),
+    ("https://maestromojo.com/login?next=https://maestromojo.com/app", 25, 25),
+    ("maestromojo.com/go/evil.xyz/fuck", 75, 75),
+    ("maestromojo.com/docs/maestromojo.ai/x", 0, 25),
+]
+EMBED_JOINS = ["/", "/path/", "?u=", "=", "#", "@", ":"]
+
+
+@th.django_unit_test("links: a scheme inside an address never replaces its host")
+def test_embedded_scheme_host(opts):
+    from mojo.helpers.content_guard import check_text
+
+    for text, allowed, plain in SCHEME_CASES:
+        result = check_text(text, policy=ALLOW_TWO)
+        assert result.score == allowed, (
+            f"{text!r} with maestromojo.com and .ai allowed must score {allowed}, "
+            f"got {result.score} {result.reasons}")
+        result = check_text(text)
+        assert result.score == plain, (
+            f"{text!r} without an allowlist must score {plain}, got {result.score} {result.reasons}")
+    # when it is unclear which site an address points to, it scores as with no
+    # allowlist -- in both directions, the allowed site first or last
+    for join in EMBED_JOINS:
+        for tail in ("https://maestromojo.com/fuck", "http://maestromojo.ai/fuck",
+                     "maestromojo.com/fuck", "maestromojo.ai/fuck"):
+            for text in (f"evil.dev{join}{tail}",
+                         f"{tail.replace('/fuck', '')}{join}https://evil.dev/fuck"):
+                allowed = check_text(text, policy=ALLOW_TWO)
+                plain = check_text(text)
+                assert allowed.score == plain.score, (
+                    f"{text!r} joins an allowed site to one that is not, so it must score as "
+                    f"with no allowlist: {allowed.score} {allowed.reasons} vs "
+                    f"{plain.score} {plain.reasons}")
+
+
 @th.django_unit_test("decoded terms count only where decoding is enabled, never in links")
 def test_decoded_terms_policy(opts):
     from mojo.helpers.content_guard import check_text
