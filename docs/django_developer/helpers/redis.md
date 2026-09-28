@@ -16,6 +16,8 @@ value = r.get("mykey")  # "hello"
 
 `get_client()` is an alias for `get_connection()`.
 
+`get_async_connection()` (in `mojo.helpers.redis.client`) returns a `redis.asyncio` client for pub/sub on the event loop — realtime sockets use it so waiting for a message holds no thread. It is built from the same settings as `get_connection()`, is one client per process per running event loop, and is capped by `REDIS_PUBSUB_MAX_CONN`. Use it only for pub/sub; keyed commands stay on `get_connection()`. With `REDIS_CLUSTER=True` it is still a plain client on the configured endpoint: redis-py 7 has no async cluster pub/sub, and ordinary (non-sharded) `SUBSCRIBE` on any cluster node receives every `PUBLISH`.
+
 ---
 
 ## Settings
@@ -40,6 +42,7 @@ All settings are optional. Configure in `settings.py` or via environment variabl
 | `REDIS_READER_PASSWORD` | Primary value | Reader ACL password |
 | `REDIS_READER_SCHEME` | Primary value | Reader `"redis"` or `"rediss"` scheme |
 | `REDIS_MAX_CONN` | `500` | Connection pool size per process |
+| `REDIS_PUBSUB_MAX_CONN` | `REDIS_MAX_CONN` | Cap on the async pub/sub pool per process (`get_async_connection`); realtime holds one connection per logged-in socket |
 | `REDIS_CONNECT_TIMEOUT` | `2` | Connection timeout in seconds |
 | `REDIS_SOCKET_TIMEOUT` | `60` | Socket timeout in seconds |
 | `REDIS_CLUSTER` | `False` | Set `True` to use a `RedisCluster` client |

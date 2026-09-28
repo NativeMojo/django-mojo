@@ -87,6 +87,11 @@ uvicorn project.asgi:application --host 0.0.0.0 --port 8000
    here, **after** successful authentication — an unauthenticated socket
    never holds a pub/sub connection or its delivery task (DM-042; see
    [Abuse Hardening](../security/abuse_hardening.md#4-websocket-connection-limits)).
+   Pub/sub runs on the event loop through `get_async_connection()` (#5750):
+   waiting for a message holds no executor thread, so logins, hooks and
+   permission checks never queue behind other sockets' polls. Keyed Redis
+   commands (connection records, topic sets, presence) stay on the sync client
+   in the executor.
 8. Auto-subscribes to `<user_type>:<id>` topic
 9. Calls `on_realtime_connection(connection_data)` hook (if defined)
 10. Processes hook response (sends response, subscribes to topics)
@@ -236,5 +241,12 @@ The resolved IP is stored in:
 
 - Workers are stateless — add more processes behind a load balancer
 - Redis pub/sub ensures messages reach the correct worker
-- Each connection subscribes to its own Redis channel plus topic channels
+- Each connection subscribes to its own Redis channel plus topic channels,
+  on its own async pub/sub connection — one Redis connection per logged-in
+  socket, capped per process by `REDIS_PUBSUB_MAX_CONN` (default
+  `REDIS_MAX_CONN`, 500). Idle sockets hold no executor thread.
+- If a socket's pub/sub connection drops, that socket stops receiving and the
+  error is logged; other sockets are unaffected. The WebSocket itself stays
+  open (unchanged by #5750), so delivery resumes only when the client
+  reconnects.
 - Online status uses Redis SETs supporting multiple connections per user
