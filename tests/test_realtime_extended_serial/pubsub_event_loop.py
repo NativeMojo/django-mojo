@@ -222,36 +222,116 @@ def test_async_client_settings(opts):
 # T7: cluster mode — a plain async subscriber hears PUBLISH from another node
 # ---------------------------------------------------------------------------
 
+# Redis cluster nodes also listen on a bus port, client port + 10000, so a
+# client port above 55535 makes redis-server refuse to start.
+CLUSTER_BUS_OFFSET = 10000
+MAX_CLUSTER_PORT = 65535 - CLUSTER_BUS_OFFSET
+
+
+def _port_free(port):
+    import socket
+
+    with socket.socket() as s:
+        try:
+            s.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def _cluster_ports(count, candidates):
+    """Return `count` client ports whose client and bus ports are all valid, distinct and free."""
+    chosen, taken = [], set()
+    for port in candidates:
+        bus = port + CLUSTER_BUS_OFFSET
+        if not 1024 <= port <= MAX_CLUSTER_PORT or port in taken or bus in taken:
+            continue
+        if _port_free(port) and _port_free(bus):
+            chosen.append(port)
+            taken.update((port, bus))
+            if len(chosen) == count:
+                return chosen
+    raise RuntimeError(f"no {count} free cluster ports (client and client+{CLUSTER_BUS_OFFSET})")
+
+
+@th.django_unit_test("cluster: test ports leave room for the cluster bus port (#5750)")
+def test_cluster_port_allocation(opts):
+    ports = _cluster_ports(3, [59163, 55536, 65535, *range(30000, 30200)])
+    assert len(ports) == 3 and len(set(ports)) == 3, ports
+    for port in ports:
+        assert port <= MAX_CLUSTER_PORT, (
+            f"client port {port} leaves no valid bus port ({port + CLUSTER_BUS_OFFSET})")
+    taken = set(ports) | {p + CLUSTER_BUS_OFFSET for p in ports}
+    assert len(taken) == 6, f"client and bus ports must not collide: {sorted(taken)}"
+    try:
+        _cluster_ports(1, [59163, 55536])
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("ports above 55535 must never be chosen")
+
+
 @th.django_unit_test("cluster: an async subscriber receives a publish sent to another node (#5750)")
 @th.requires_extra("redis_cluster")
 def test_cluster_pubsub_across_nodes(opts):
     """Needs redis-server on PATH; starts and removes a local 3-node cluster."""
+    import os
+    import random
     import shutil
-    import socket
     import subprocess
     import tempfile
+    import redis
     import redis.asyncio
     from redis.cluster import RedisCluster
 
-    def free_port():
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            return s.getsockname()[1]
-
     workdir = tempfile.mkdtemp(prefix="rt5750-cluster-")
-    ports = [free_port() for _ in range(3)]
+    ports = _cluster_ports(3, random.sample(range(20000, MAX_CLUSTER_PORT + 1), 500))
     procs = []
+
+    def node_log(port):
+        path = os.path.join(workdir, f"redis-{port}.log")
+        return open(path).read()[-2000:] if os.path.exists(path) else "(no log)"
+
+    def wait_until(ready, what, seconds=10):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            for port, proc in zip(ports, procs):
+                assert proc.poll() is None, (
+                    f"redis-server on {port} exited ({proc.returncode}) {what}:\n{node_log(port)}")
+            if ready():
+                return
+            time.sleep(0.2)
+        raise AssertionError(f"timed out {what}:\n" + "\n".join(
+            f"--- {port}\n{node_log(port)}" for port in ports))
+
+    def all_ping():
+        for port in ports:
+            try:
+                redis.Redis(host="127.0.0.1", port=port, socket_timeout=1).ping()
+            except redis.RedisError:
+                return False
+        return True
+
+    def cluster_ok():
+        info = redis.Redis(host="127.0.0.1", port=ports[0], decode_responses=True).execute_command(
+            "CLUSTER", "INFO")
+        return "cluster_state:ok" in str(info)
+
     try:
         for port in ports:
             procs.append(subprocess.Popen(
-                ["redis-server", "--port", str(port), "--cluster-enabled", "yes",
+                ["redis-server", "--port", str(port),
+                 "--cluster-port", str(port + CLUSTER_BUS_OFFSET), "--cluster-enabled", "yes",
                  "--cluster-config-file", f"nodes-{port}.conf", "--save", "",
-                 "--appendonly", "no", "--dir", workdir],
+                 "--appendonly", "no", "--dir", workdir, "--logfile", f"redis-{port}.log"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
-        time.sleep(0.5)
-        subprocess.run(
+        wait_until(all_ping, "waiting for the nodes to answer PING")
+        created = subprocess.run(
             ["redis-cli", "--cluster", "create", *[f"127.0.0.1:{p}" for p in ports],
-             "--cluster-yes"], check=True, capture_output=True, timeout=30)
+             "--cluster-yes"], capture_output=True, text=True, timeout=30)
+        assert created.returncode == 0, (
+            f"redis-cli --cluster create failed:\n{created.stdout}\n{created.stderr}")
+        wait_until(cluster_ok, "waiting for cluster_state:ok")
         cluster = RedisCluster(host="127.0.0.1", port=ports[0], decode_responses=True)
         channel = "rt5750:cluster:probe"
         publisher_node = next(n for n in cluster.get_primaries() if n.port != ports[0])
@@ -283,5 +363,8 @@ def test_cluster_pubsub_across_nodes(opts):
         for proc in procs:
             proc.terminate()
         for proc in procs:
-            proc.wait(timeout=10)
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
         shutil.rmtree(workdir, ignore_errors=True)
