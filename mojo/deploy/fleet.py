@@ -406,14 +406,22 @@ def fetch_override(s3, spec):
                 "for a missing key) and decrypt on its KMS key — or set "
                 "config_override_name to null in fleet.json")
         raise
-    payload = response["Body"].read()
+    body = response["Body"]
+    try:
+        if response.get("ContentLength", 0) > config_override.MAX_DOCUMENT_BYTES:
+            raise FleetError("fleet override object exceeds the maximum document size; refusing")
+        payload = body.read(config_override.MAX_DOCUMENT_BYTES + 1)
+    finally:
+        close = getattr(body, "close", None)
+        if close:
+            close()
+    if len(payload) > config_override.MAX_DOCUMENT_BYTES:
+        raise FleetError("fleet override object exceeds the maximum document size; refusing")
     metadata_sha = (response.get("Metadata") or {}).get("sha256")
     if not metadata_sha:
         raise FleetError("fleet override object carries no sha256 metadata; refusing")
     if metadata_sha != hashlib.sha256(payload).hexdigest():
         raise FleetError("fleet override object does not match its sha256 metadata; refusing")
-    if len(payload) > config_override.MAX_DOCUMENT_BYTES:
-        raise FleetError("fleet override object exceeds the maximum document size; refusing")
     return payload
 
 
@@ -759,17 +767,19 @@ def cmd_sync(args, project, spec, session):
 
 def report_held_timers(run, held, timer):
     """Ask each node the roll left held for its timer's live state. Decided on
-    stdout: `systemctl is-active` exits 3 for inactive. Never raises."""
+    exit code and stdout together: `systemctl is-active` exits 0 for active
+    and 3 for inactive; anything else (ssh's 255, a timeout, empty output) is
+    unknown, whatever partial output came back. Never raises."""
     still, running, unknown = [], [], []
     for node in held:
         try:
-            _, out, _ = run(node, f"systemctl is-active {shlex.quote(timer)}")
+            code, out, _ = run(node, f"systemctl is-active {shlex.quote(timer)}")
             state = out.strip().splitlines()[-1] if out.strip() else ""
         except Exception:  # noqa: BLE001 — must not mask the roll's own error
-            state = ""
-        if state in ("inactive", "failed"):
+            code, state = None, ""
+        if code == 3 and state in ("inactive", "failed"):
             still.append(node)
-        elif state == "active":
+        elif code == 0 and state == "active":
             running.append(node)
         else:
             unknown.append(node)

@@ -638,7 +638,8 @@ node; `nodes status` warns and skips the drift check. Set
 When a roll stops, the closing warning asks each held node for its timer's
 live state: `still held` (restore it by hand once the fleet is verified),
 `running again` (usually a deploy: `post_deploy.sh` and `node_setup` run
-`enable --now` on every timer), or `state unknown`.
+`enable --now` on every timer), or `state unknown` (the query failed, timed out
+or printed nothing — an ssh error is never read as a timer state).
 
 ### `check_setup`
 

@@ -50,12 +50,14 @@ def _project(fleet=None, conf=None):
 
 
 def _s3(text, override=None, override_error="NoSuchKey", override_metadata=True,
-        canonical_sha=None):
+        canonical_sha=None, override_length=None):
     """A mock S3 client recording put_object calls. The canonical key serves
     `text` with its true sha256 in metadata; the fleet override key serves
     `override` bytes when given, otherwise raises a ClientError with
     `override_error` (a missing override by default). `canonical_sha`
-    replaces the canonical object's metadata digest."""
+    replaces the canonical object's metadata digest; `override_length`
+    replaces the override's ContentLength. Every body served is kept on
+    `s3.bodies` as (key, body)."""
     from botocore.exceptions import ClientError
 
     def get_object(**kwargs):
@@ -66,15 +68,20 @@ def _s3(text, override=None, override_error="NoSuchKey", override_metadata=True,
         else:
             payload = text.encode("utf-8")
         body = mock.Mock()
-        body.read.return_value = payload
+        body.read.side_effect = lambda amount=None: payload if amount is None else payload[:amount]
+        s3.bodies.append((kwargs["Key"], body))
         metadata = {"sha256": hashlib.sha256(payload).hexdigest()}
+        length = len(payload)
         if not override_metadata and payload is override:
             metadata = {}
+        if override_length is not None and payload is override:
+            length = override_length
         if canonical_sha and payload is not override:
             metadata = {"sha256": canonical_sha}
-        return {"Body": body, "VersionId": "v1", "Metadata": metadata}
+        return {"Body": body, "VersionId": "v1", "Metadata": metadata, "ContentLength": length}
 
     s3 = mock.Mock()
+    s3.bodies = []
     s3.get_object.side_effect = get_object
     s3.put_object.return_value = {"VersionId": "v2"}
     return s3
@@ -608,5 +615,79 @@ def test_held_timer_warning_reports_each_timers_live_state(opts):
         th.assert_true(len(held) == 1 and "n1" in held[0] and "n2" in held[0]
                        and "running again" not in err,
                        f"both inactive timers are named as still held: {err}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_held_timer_is_unknown_when_ssh_fails_whatever_it_printed(opts):
+    import contextlib
+    import io
+    import subprocess
+    from mojo.deploy import fleet
+
+    root = _project(fleet=_two_node_fleet())
+    try:
+        for n1, n2 in (((255, "inactive\n", "connection lost"), (255, "active\n", "connection lost")),
+                       ((0, "", ""), (1, "inactive\n", "sudo: a password is required"))):
+            code, _, err = _sync(root, _s3(CANONICAL), {"n1": "wrong", "n2": "wrong"},
+                                 timer_state={"n1": n1, "n2": n2})
+            th.assert_eq(code, 2, f"the gate failure must still stop the roll: {err}")
+            th.assert_true("node conf sha does not match" in err,
+                           f"the roll's own error must survive the timer check: {err}")
+            unknown = [line for line in err.splitlines() if "state unknown on" in line]
+            th.assert_true(len(unknown) == 1 and "n1" in unknown[0] and "n2" in unknown[0]
+                           and "still held on" not in err and "running again on" not in err,
+                           f"a failed or empty timer query must read unknown for {n1}, {n2}: {err}")
+
+        def timeout(*_args, **_kwargs):
+            raise subprocess.TimeoutExpired("ssh", 90)
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            fleet.report_held_timers(timeout, ["n1"], "config-sync.timer")
+        th.assert_true("state unknown on n1" in err.getvalue(),
+                       f"a timed-out query must read unknown: {err.getvalue()}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_override_fetch_bounds_its_read_and_closes_the_body(opts):
+    from mojo.deploy import config_override, fleet
+
+    cap = config_override.MAX_DOCUMENT_BYTES
+    root = _project(fleet=_two_node_fleet())
+    try:
+        spec = fleet.load_fleet(root, None)
+        # an honest ContentLength over the cap is refused before any read
+        s3 = _s3(CANONICAL, b"x" * (cap + 10))
+        try:
+            fleet.fetch_override(s3, spec)
+            th.assert_true(False, "an oversized override must be refused")
+        except fleet.FleetError as err:
+            th.assert_true("maximum document size" in str(err), str(err))
+        body = s3.bodies[-1][1]
+        th.assert_eq(body.read.call_count, 0, "no byte may be read past an oversized ContentLength")
+        th.assert_true(body.close.called, "the refused body must still be closed")
+
+        # a ContentLength that understates the body: the read is bounded
+        s3 = _s3(CANONICAL, b"x" * (cap * 64), override_length=10)
+        try:
+            fleet.fetch_override(s3, spec)
+            th.assert_true(False, "an oversized override must be refused")
+        except fleet.FleetError as err:
+            th.assert_true("maximum document size" in str(err), str(err))
+        body = s3.bodies[-1][1]
+        body.read.assert_called_once_with(cap + 1)
+        th.assert_true(body.close.called, "the refused body must be closed")
+
+        # a good override is read with the same bound and closed
+        override = _override()
+        s3 = _s3(CANONICAL, override)
+        th.assert_eq(fleet.fetch_override(s3, spec), override, "a good override is returned whole")
+        body = s3.bodies[-1][1]
+        body.read.assert_called_once_with(cap + 1)
+        th.assert_true(body.close.called, "the body must be closed after a good read")
     finally:
         shutil.rmtree(root, ignore_errors=True)
