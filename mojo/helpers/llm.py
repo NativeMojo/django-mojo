@@ -71,7 +71,7 @@ def host_features(value=_UNSET):
         raise ImproperlyConfigured("LLM_HOST_FEATURES must be a list of feature names")
     names = set()
     for name in value:
-        if not isinstance(name, str) or not HOST_FEATURE_PATTERN.match(name):
+        if not isinstance(name, str) or not HOST_FEATURE_PATTERN.fullmatch(name):
             raise ImproperlyConfigured(
                 f"LLM_HOST_FEATURES entry {name!r} must be a lowercase slug of at most "
                 "32 characters: a letter, then letters, digits or underscores")

@@ -154,5 +154,13 @@ def test_bad_host_feature_setting_stops_startup(opts):
         except ImproperlyConfigured as err:
             assert "assistant" in str(err), \
                 f"the startup error must name the offending entry, got {err}"
+    for value in (["support_test\n"], ["a" * 32 + "\n"]):
+        with _override_setting("LLM_HOST_FEATURES", value):
+            try:
+                apps.get_app_config("account").ready()
+                assert False, f"a name ending in a newline must stop startup: {value!r}"
+            except ImproperlyConfigured as err:
+                assert "LLM_HOST_FEATURES" in str(err), \
+                    f"the startup error must name the setting, got {err}"
     with _override_setting("LLM_HOST_FEATURES", ["support_test"]):
         apps.get_app_config("account").ready()

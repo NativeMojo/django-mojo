@@ -112,7 +112,7 @@ Each slug is a lowercase letter followed by up to 31 lowercase letters, digits
 or underscores (32 characters is the ledger's `feature` column). A slug may not
 repeat, copy a framework feature (`assistant`, `unattributed`, ...) or use a
 name the guard keeps for itself: `shared`, `breaker` or `unknown`. Any bad
-entry, or a value that is not a list, stops startup with
+entry, or a value that is not a list or tuple, stops startup with
 `ImproperlyConfigured`; `llm.call` re-checks the setting on every call.
 
 A listed slug works exactly like a framework feature. It needs its own route

@@ -252,6 +252,8 @@ def test_host_feature_names_are_validated(opts):
         "a leading digit": ["1support"],
         "an empty name": [""],
         "33 characters": ["a" * 33],
+        "a trailing newline": ["support_test\n"],
+        "32 characters and a trailing newline": ["a" * 32 + "\n"],
         "a duplicate": ["support_test", "support_test"],
         "a non-string entry": [7],
         "a bare string": "support_test",
