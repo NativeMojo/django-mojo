@@ -656,6 +656,7 @@ reasoning: [edge README](../edge/README.md#settings),
 ### EVENTS
 
 - `EVENTS_ON_ERRORS`
+- `MOJO_SENSITIVE_BODY_PATHS` — see [MOJO](#mojo).
 
 ### FILEMAN
 
@@ -979,6 +980,7 @@ restart. See
 - `MOJO_CUSTOM_SERIALIZERS`
 - `MOJO_DEFAULT_SERIALIZER`
 - `MOJO_REST_LIST_PERM_DENY`
+- `MOJO_SENSITIVE_BODY_PATHS` — default `[]`. Opt-in list of full `request.path` prefixes (for example `["/api/payments/webhooks"]`, matched by whole segment; `/` means every path). A failed REST request under a listed path stores no request body, query string or exception message in its error Event, Incident, Ticket or LLM triage payload, and its request/response logs write the `sensitive_body` marker. **File-only** (`settings.get_static`); a bad value stops startup with `ImproperlyConfigured`. Bodies stay stored by default because they are needed for debugging. See [Sensitive request bodies](../security/README.md#sensitive-request-bodies).
 - `MOJO_SERIALIZER_CACHE`
 - `MOJO_TEMP_DIR`
 

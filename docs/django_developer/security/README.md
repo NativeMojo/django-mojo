@@ -139,6 +139,63 @@ reporter.report_event(
 | `hostname` | str | Server hostname that generated the event |
 | `metadata` | dict | Arbitrary key-value pairs for rule matching |
 
+### Sensitive request bodies
+
+When a REST request fails (400, 403, 404, 408, `ValueError`, or any re-raised
+exception), the error handler files an Event with the request body
+(`request_data`), the query string (`http_query_string`), the exception text
+(`details`) and the stack trace. A level ≥ 7 Event copies its metadata into the
+Incident, a rule's ticket handler copies it into the Ticket, and LLM triage
+sends event metadata and the first 500 characters of `details` to the
+configured provider. The only default filter is the key-name scrubber in
+`mojo.helpers.logit.sanitize_dict` (`password`, `token`, …).
+
+**Why this is opt-in.** Error incidents keep the request body by default,
+because the only reason to open a failed webhook's body is to debug it.
+Masking by default would make that impossible. Stored bodies are visible only
+to superusers and people with the `view_security` / `security` permission
+(Admin → Incidents, Events and Security tickets, and `/api/incident/event`,
+`/api/incident/incident`, `/api/incident/ticket`). Listing a path is a
+deliberate trade: its bodies and error messages are no longer available for
+debugging. Use the provider's delivery log (most payment and webhook providers
+keep every payload and let you resend it), reproduce the failure on staging,
+or log the fields you need from your own code.
+
+A host app lists its sensitive paths in the static setting
+`MOJO_SENSITIVE_BODY_PATHS`:
+
+```python
+MOJO_SENSITIVE_BODY_PATHS = ["/api/payments/webhooks"]
+```
+
+- Entries are full `request.path` prefixes, including `MOJO_PREFIX` (`/api`)
+  and any mount prefix, matched by whole segment: `/api/pay` does not match
+  `/api/payments`. A trailing `/` is ignored. The literal `/` means every path.
+- For a failed request under a listed path, the Event (and any Incident,
+  Ticket or LLM triage payload built from it) stores
+  `request_data = {"sensitive_body": "host_sensitive"}`, an empty
+  `http_query_string`, and a `sensitive_body: "host_sensitive"` metadata key.
+  `details`, the stack trace and the error log carry the exception **type**
+  and stack frames, never its message. Path, method, IP and user stay.
+- The request/response logs already write the `{"sensitive_body": ...}`
+  marker for a listed path, like the framework's own credential paths.
+- Only the `request_data` argument is replaced. App code that passes the body
+  to `report_incident` under another name, or puts input values in its own
+  `MojoException` reason, is not covered.
+- Framework paths are unchanged. The framework labels its own credential
+  paths (login, OAuth tokens, API keys) for the request logs; this setting
+  does not change what those paths store in incidents.
+- Exceptions outside the REST dispatcher (the logging middleware's 500) write
+  to `error.log` and a Log row, not an Event, and are not covered.
+- The setting is **file-only** (`settings.get_static`), so a database
+  `Setting` row cannot turn it off. A bad value (not a list of strings, no
+  leading `/`, empty, `.` or `..` segments, `*`, `?`, `#`, whitespace or
+  control characters, over 256 characters) raises `ImproperlyConfigured` at
+  startup. If a process somehow runs with a bad value, every path is treated
+  as listed and one error is logged.
+
+With no paths listed, nothing changes.
+
 ### GeoIP Enrichment
 
 When an event has a `source_ip`, the system automatically looks up or creates a `GeoLocatedIP` record. This enriches the event with country, city, ISP, threat indicators (Tor, VPN, proxy, known attacker), and block status.
