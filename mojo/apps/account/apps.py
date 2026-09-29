@@ -5,6 +5,9 @@ class AppConfig(BaseAppConfig):
     name = 'mojo.apps.account'
 
     def ready(self):
+        # A bad MOJO_SENSITIVE_BODY_PATHS stops startup rather than the first
+        # request (which would otherwise fail closed and mask every path).
+        self._check_sensitive_body_paths()
         # Import the protected-setting registry at startup so downstream apps
         # can extend one stable boundary from their own AppConfig.ready().
         from mojo.apps.account.services import system_settings  # noqa: F401
@@ -20,6 +23,10 @@ class AppConfig(BaseAppConfig):
         if settings.is_app_installed("django.contrib.admin"):
             self.unregister_apps()
         self._warn_dev_bypass()
+
+    def _check_sensitive_body_paths(self):
+        from mojo.helpers import request
+        request.host_sensitive_paths()
 
     def unregister_apps(self):
         from django.contrib import admin

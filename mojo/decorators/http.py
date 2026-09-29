@@ -3,7 +3,7 @@ import traceback
 from mojo.helpers.settings import settings
 from mojo.helpers import modules as jm
 from mojo.helpers import logit
-from mojo.helpers.request import restricted_identity
+from mojo.helpers.request import restricted_identity, is_host_sensitive
 from mojo.helpers import error_pages
 import mojo.errors
 from django.urls import path, re_path
@@ -39,6 +39,19 @@ def _api_metrics_granularity():
 
 def _events_on_errors():
     return settings.get("EVENTS_ON_ERRORS", True)
+
+
+# MOJO_SENSITIVE_BODY_PATHS: on a host app's listed paths the exception message
+# can echo the request body (Python and the database put input values in it),
+# so incidents and logs record the exception type and stack frames only.
+def _error_text(err, host_sensitive):
+    return type(err).__name__ if host_sensitive else err
+
+
+def _stack_trace(err, host_sensitive):
+    if not host_sensitive:
+        return traceback.format_exc()
+    return "".join(traceback.format_tb(err.__traceback__)) + type(err).__name__
 
 
 def _status_200_on_error():
@@ -201,7 +214,7 @@ def dispatch_error_handler(func):
                         level=5,
                         request_path=getattr(request, "path", None),
                         error_code=err.code,
-                        stack_trace=traceback.format_exc(),
+                        stack_trace=_stack_trace(err, is_host_sensitive(request)),
                     )
             wire_status = 200 if _status_200_on_error() else err.status
             # page_status is err.status, NOT wire_status: the 200-on-error shim
@@ -219,7 +232,7 @@ def dispatch_error_handler(func):
                 metrics.record("api_denied", category="mojo_api", min_granularity=_api_metrics_granularity())
             if _events_on_errors():
                 rest.MojoModel.class_report_incident_for_user(
-                    details=f"Permission Denied: {err}",
+                    details=f"Permission Denied: {_error_text(err, is_host_sensitive(request))}",
                     event_type="api_denied",
                     request_data=request.DATA,
                     request=request,
@@ -231,16 +244,20 @@ def dispatch_error_handler(func):
         except ValueError as err:
             if _api_metrics_enabled():
                 metrics.record("api_errors", category="mojo_api", min_granularity=_api_metrics_granularity())
-            logger.exception(f"ValueErrror: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
+            host_sensitive = is_host_sensitive(request)
+            if host_sensitive:
+                logger.error(f"ValueErrror: {type(err).__name__}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
+            else:
+                logger.exception(f"ValueErrror: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
             if _events_on_errors():
                 rest.MojoModel.class_report_incident_for_user(
-                    details=f"Rest Value Error: {err}",
+                    details=f"Rest Value Error: {_error_text(err, host_sensitive)}",
                     event_type="rest_value_error",
                     request_data=request.DATA,
                     request=request,
                     level=4,
                     request_path=getattr(request, "path", None),
-                    stack_trace=traceback.format_exc()
+                    stack_trace=_stack_trace(err, host_sensitive)
                 )
             return error_pages.error_response(
                 request, {"error": str(err), "code": 400, "status": False  }, 400)
@@ -248,16 +265,20 @@ def dispatch_error_handler(func):
             if _api_metrics_enabled():
                 metrics.record("api_errors", category="mojo_api", min_granularity=_api_metrics_granularity())
             # logger.exception(f"Unhandled REST Exception: {request.path}")
-            logger.exception(f"Error: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
+            host_sensitive = is_host_sensitive(request)
+            if host_sensitive:
+                logger.error(f"Error: {type(err).__name__}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
+            else:
+                logger.exception(f"Error: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
             event = None
             if _events_on_errors():
                 event = rest.MojoModel.class_report_incident_for_user(
-                    details=f"Rest Exception: {err}",
+                    details=f"Rest Exception: {_error_text(err, host_sensitive)}",
                     event_type="rest_error",
                     request_data=request.DATA,
                     request=request,
                     level=12,
-                    stack_trace=traceback.format_exc(),
+                    stack_trace=_stack_trace(err, host_sensitive),
                     request_path=getattr(request, "path", None),
                 )
             # Honor LOGIT_RETURN_REAL_ERROR like the middleware does — this
