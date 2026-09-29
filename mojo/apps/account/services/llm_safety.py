@@ -151,9 +151,10 @@ def parse_policy(raw=None):
            for value in breaker.values()):
         _deny("policy_invalid")
     _validate_limits(raw["shared"], "shared")
-    from mojo.helpers.llm import FEATURES
+    from mojo.helpers.llm import feature_names
+    names = feature_names()
     for feature, route in routes.items():
-        if feature not in FEATURES or not isinstance(route, dict) \
+        if feature not in names or not isinstance(route, dict) \
                 or set(route) != ROUTE_KEYS:
             _deny("policy_invalid")
         if route["provider"] != "anthropic":
@@ -169,7 +170,7 @@ def parse_policy(raw=None):
                        for item in capabilities):
             _deny("policy_invalid")
     for feature, limits in features.items():
-        if feature not in FEATURES:
+        if feature not in names:
             _deny("policy_invalid")
         _validate_limits(limits, feature)
     if set(routes) != set(features):

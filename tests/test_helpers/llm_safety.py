@@ -205,3 +205,63 @@ def test_candidate_permits_are_single_flight_across_fingerprints(opts):
 # The Anthropic constructor-patch test lives in
 # tests/test_helpers_extended_serial/llm_safety.py. The SDK constructor is a
 # process-global symbol shared by every LLM test module.
+
+
+@th.django_unit_test()
+def test_unlisted_host_feature_is_refused(opts):
+    from mojo.apps.account.services import llm_safety
+    from mojo.helpers import llm
+
+    try:
+        llm.call(
+            [{"role": "user", "content": "hello"}], model="claude-test",
+            feature="support_test")
+        assert False, "a host feature missing from LLM_HOST_FEATURES must be refused"
+    except ValueError as err:
+        assert str(err) == "Unknown LLM feature", \
+            f"an unlisted host feature must get the stable error, got {err}"
+    policy = _policy()
+    policy["routes"] = {"support_test": policy["routes"]["unattributed"]}
+    policy["features"] = {"support_test": _limits()}
+    try:
+        llm_safety.parse_policy(policy)
+        assert False, "a route for an unlisted host feature must be refused"
+    except llm_safety.LLMSafetyError as err:
+        assert err.code == "policy_invalid", \
+            f"an unlisted host route must use policy_invalid, got {err.code}"
+
+
+@th.django_unit_test()
+def test_host_feature_names_are_validated(opts):
+    from django.core.exceptions import ImproperlyConfigured
+    from mojo.helpers import llm
+
+    assert llm.host_features(["support_test", "support_eval"]) == \
+        frozenset({"support_test", "support_eval"}), \
+        "valid host slugs must come back as a frozenset"
+    assert llm.host_features([]) == frozenset(), "an empty list must add no names"
+    assert llm.host_features(("a" * 32,)) == frozenset({"a" * 32}), \
+        "a 32-character slug fits LLMRequest.feature and must be accepted"
+    bad_values = {
+        "a core name": ["assistant"],
+        "reserved shared": ["shared"],
+        "reserved breaker": ["breaker"],
+        "reserved unknown": ["unknown"],
+        "upper case": ["Support"],
+        "a hyphen": ["support-test"],
+        "a leading digit": ["1support"],
+        "an empty name": [""],
+        "33 characters": ["a" * 33],
+        "a duplicate": ["support_test", "support_test"],
+        "a non-string entry": [7],
+        "a bare string": "support_test",
+        "a dict": {"support_test": True},
+        "None": None,
+    }
+    for label, value in bad_values.items():
+        try:
+            llm.host_features(value)
+            assert False, f"LLM_HOST_FEATURES with {label} must be refused"
+        except ImproperlyConfigured as err:
+            assert "LLM_HOST_FEATURES" in str(err), \
+                f"the error for {label} must name the setting, got {err}"
