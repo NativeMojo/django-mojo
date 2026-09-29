@@ -97,6 +97,8 @@ SDK/provider text does not cross the adapter. Multi-call loops must reuse one
 unguessable `operation_id`; the guard increments it atomically. Omitted
 `feature` temporarily becomes separately budgeted `unattributed`; unknown
 explicit features are refused.
+A host app adds its own feature names with `LLM_HOST_FEATURES`; see
+[Host features](../security/llm_safety.md#host-features).
 
 ## `model_choices()` — picker suggestions
 
