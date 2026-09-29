@@ -831,10 +831,13 @@ def test_held_timer_report_prints_a_restore_loop(opts):
         shutil.rmtree(root, ignore_errors=True)
 
 
-def _run_probe_shell(jobs_rc=0, jobs_out=""):
-    """Run the generated probe in real bash with `systemctl`, `ps`, `stat` and
-    `date` stubbed on PATH: an active app 30s old, a conf 600s old, health 200.
-    `list-jobs` prints `jobs_out` and exits `jobs_rc`. Returns (current, reason)."""
+def _run_probe_shell(jobs_rc=0, jobs_out="", asgi="mojo-asgi.service",
+                     unit_id="mojo-asgi.service", parsed=False):
+    """Run the generated probe for `asgi` in real bash with `systemctl`, `ps`,
+    `stat` and `date` stubbed on PATH: an active app 30s old, a conf 600s old,
+    health 200. `show --property=Id` answers `unit_id` (systemd's resolved
+    name); `list-jobs` prints `jobs_out` and exits `jobs_rc`. Returns
+    (current, reason), or the parsed probe when `parsed`."""
     import stat as stat_mod
     import subprocess
     from mojo.deploy import fleet
@@ -842,8 +845,11 @@ def _run_probe_shell(jobs_rc=0, jobs_out=""):
     bin_dir = tempfile.mkdtemp(prefix="testit_probe.")
     stubs = {
         "systemctl": ("case \"$1\" in\n"
-                      "  show) case \"$3\" in *ActiveState*) echo ActiveState=active;; esac;"
-                      " echo MainPID=4242;;\n"
+                      "  show) case \"$3\" in\n"
+                      "    --property=Id) echo \"Id=$FAKE_ID\";;\n"
+                      "    *ActiveState*) echo ActiveState=active; echo MainPID=4242;;\n"
+                      "    *) echo MainPID=4242;;\n"
+                      "  esac;;\n"
                       "  list-jobs) printf '%s' \"$FAKE_JOBS_OUT\"; exit \"$FAKE_JOBS_RC\";;\n"
                       "esac\n"),
         "ps": "echo '   30'\n",
@@ -856,13 +862,14 @@ def _run_probe_shell(jobs_rc=0, jobs_out=""):
             with open(path, "w") as handle:
                 handle.write("#!/bin/bash\n" + body)
             os.chmod(path, stat_mod.S_IRWXU)
-        script = fleet._app_probe("mojo-asgi.service", "/opt/api/var/django.conf", "echo 200")
+        script = fleet._app_probe(asgi, "/opt/api/var/django.conf", "echo 200")
         env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}",
-                   FAKE_JOBS_RC=str(jobs_rc), FAKE_JOBS_OUT=jobs_out)
+                   FAKE_JOBS_RC=str(jobs_rc), FAKE_JOBS_OUT=jobs_out, FAKE_ID=unit_id)
         done = subprocess.run(["bash", "-s"], input=script, capture_output=True, text=True,
                               env=env, timeout=30)
         th.assert_eq(done.returncode, 0, f"probe script failed: {done.stderr}")
-        return fleet._app_verdict(fleet._parse_key_values(done.stdout), "mojo-asgi.service")
+        probe = fleet._parse_key_values(done.stdout)
+        return probe if parsed else fleet._app_verdict(probe, asgi)
     finally:
         shutil.rmtree(bin_dir, ignore_errors=True)
 
@@ -901,3 +908,18 @@ def test_sync_keeps_a_node_held_when_its_timer_restore_fails(opts):
                        f"the report names node 1 with the restore loop: {err}")
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_probe_shell_matches_jobs_on_the_units_resolved_id(opts):
+    queued = "8 mojo-asgi.service restart waiting\n"
+    for asgi, jobs_out, expected in (
+            ("mojo-asgi", queued, "1"),
+            ("mojo-asgi.service", queued, "1"),
+            ("mojo-asgi", "7 other-mojo-asgi.service start running\n", "0")):
+        probe = _run_probe_shell(asgi=asgi, jobs_out=jobs_out, parsed=True)
+        th.assert_eq(probe.get("jobs"), expected, f"{asgi} with {jobs_out!r}")
+    probe = _run_probe_shell(asgi="mojo-asgi", unit_id="", jobs_out=queued, parsed=True)
+    th.assert_eq(probe.get("jobs"), "", "an empty Id must print jobs= (never a count)")
+    th.assert_eq(_run_probe_shell(asgi="mojo-asgi", jobs_out=queued),
+                 (False, "restart still pending"), "the shorthand name's queued restart is pending")

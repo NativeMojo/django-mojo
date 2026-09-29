@@ -706,9 +706,11 @@ def _app_probe(asgi, conf, health):
     unit, path = shlex.quote(asgi), shlex.quote(conf)
     return "\n".join([
         f"systemctl show {unit} --property=ActiveState,MainPID",
-        # count rows whose UNIT column is exactly the unit; a failed query prints `jobs=`
-        "if jobs=$(systemctl list-jobs --no-legend 2>/dev/null); then "
-        f"echo \"jobs=$(printf '%s\\n' \"$jobs\" | awk -v u={unit} '$2 == u' | wc -l)\"; "
+        # count rows whose UNIT column is exactly the unit's resolved Id (`mojo-asgi`
+        # resolves to `mojo-asgi.service`); an empty Id or a failed query prints `jobs=`
+        f"id=$(systemctl show {unit} --property=Id | cut -d= -f2)",
+        "if [ -n \"$id\" ] && jobs=$(systemctl list-jobs --no-legend 2>/dev/null); then "
+        "echo \"jobs=$(printf '%s\\n' \"$jobs\" | awk -v u=\"$id\" '$2 == u' | wc -l)\"; "
         "else echo \"jobs=\"; fi",
         f"pid=$(systemctl show {unit} --property=MainPID | cut -d= -f2)",
         "echo \"app_age=$(ps -o etimes= -p \"$pid\" 2>/dev/null | tr -d ' ')\"",
