@@ -247,3 +247,24 @@ def test_get_utc_operating_day_24_hour_span(opts):
         duration = end_utc - start_utc
         assert duration.total_seconds() == 86400, \
             f"Expected 24 hours (86400 seconds), got {duration.total_seconds()} for hour {hour}"
+
+
+@th.django_unit_test()
+def test_get_start_and_end_of_month(opts):
+    """Test month boundary helpers, including the December year rollover"""
+    from mojo.helpers import dates
+
+    when = datetime(2024, 2, 15, 12, 30, 45, tzinfo=pytz.UTC)
+    start = dates.get_start_of_month(when)
+    end = dates.get_end_of_month(when)
+    assert start == datetime(2024, 2, 1, 0, 0, 0, tzinfo=pytz.UTC), f"Unexpected start: {start}"
+    assert end.year == 2024 and end.month == 2 and end.day == 29, f"Unexpected end (leap year): {end}"
+    assert end.hour == 23 and end.minute == 59 and end.second == 59, f"End is not last instant: {end}"
+    assert start < when < end, "when should fall inside its own month"
+
+    december = datetime(2024, 12, 31, 23, 0, 0, tzinfo=pytz.UTC)
+    end = dates.get_end_of_month(december)
+    assert end.year == 2024 and end.month == 12 and end.day == 31, f"Unexpected December end: {end}"
+
+    # Defaults to now (UTC-aware)
+    assert dates.get_start_of_month() <= dates.utcnow() <= dates.get_end_of_month()

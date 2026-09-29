@@ -247,3 +247,20 @@ def is_today(when, timezone=None):
 
     # Compare dates
     return when_local.date() == now_local.date()
+
+
+def get_start_of_month(when=None):
+    """First instant of the month containing ``when`` (default: now, UTC)."""
+    if when is None:
+        when = utcnow()
+    return when.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def get_end_of_month(when=None):
+    """Last instant of the month containing ``when`` (default: now, UTC)."""
+    start = get_start_of_month(when)
+    if start.month == 12:
+        next_month = start.replace(year=start.year + 1, month=1)
+    else:
+        next_month = start.replace(month=start.month + 1)
+    return next_month - timedelta(microseconds=1)
