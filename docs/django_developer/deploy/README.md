@@ -619,8 +619,8 @@ roll with the remaining timers still held and names the cause: the sync
 service's exit code (`see journalctl -u config-sync.service`), `app started
 before the conf on disk` (`CONFIG_SYNC_RESTART` off, or an earlier restart
 failed — restart the ASGI unit by hand), the unit not active, a restart still
-pending, `health <code>`, or an unreadable start time, which is never treated
-as fresh. (The framework's hostname jitter is not a rollout strategy: two
+pending, `health <code>`, or an unreadable start time or job queue, neither
+of which is ever treated as fresh. (The framework's hostname jitter is not a rollout strategy: two
 hostnames can hash 2 seconds apart — WMWX's did.)
 
 `sync` is for request-serving nodes whose `CONFIG_SYNC_RESTART` is on, and the

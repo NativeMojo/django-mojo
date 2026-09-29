@@ -706,7 +706,10 @@ def _app_probe(asgi, conf, health):
     unit, path = shlex.quote(asgi), shlex.quote(conf)
     return "\n".join([
         f"systemctl show {unit} --property=ActiveState,MainPID",
-        f"echo \"jobs=$(systemctl list-jobs --no-legend 2>/dev/null | grep -cF {unit})\"",
+        # count rows whose UNIT column is exactly the unit; a failed query prints `jobs=`
+        f"if jobs=$(systemctl list-jobs --no-legend {unit} 2>/dev/null); then "
+        f"echo \"jobs=$(printf '%s\\n' \"$jobs\" | awk -v u={unit} '$2 == u' | wc -l)\"; "
+        "else echo \"jobs=\"; fi",
         f"pid=$(systemctl show {unit} --property=MainPID | cut -d= -f2)",
         "echo \"app_age=$(ps -o etimes= -p \"$pid\" 2>/dev/null | tr -d ' ')\"",
         f"mtime=$(stat -c %Y {path} 2>/dev/null) && echo \"conf_age=$(( $(date +%s) - mtime ))\"",
@@ -723,7 +726,10 @@ def _app_verdict(probe, asgi):
     state = probe.get("ActiveState", "")
     if state != "active":
         return False, f"{asgi} not active ({state or 'unknown'})"
-    if probe.get("jobs") != "0":
+    jobs = probe.get("jobs", "").strip()
+    if not jobs.isdigit():
+        return False, f"cannot read the job queue for {asgi}"
+    if jobs != "0":
         return False, "restart still pending"
     pid, app_age = probe.get("MainPID", ""), probe.get("app_age", "")
     if not pid.isdigit() or pid == "0" or not app_age.isdigit():

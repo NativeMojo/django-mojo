@@ -825,3 +825,55 @@ def test_held_timer_report_prints_a_restore_loop(opts):
                        in err, f"a copyable loop over the held and unknown nodes: {err}")
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def _run_probe_shell(jobs_rc=0, jobs_out=""):
+    """Run the generated probe in real bash with `systemctl`, `ps`, `stat` and
+    `date` stubbed on PATH: an active app 30s old, a conf 600s old, health 200.
+    `list-jobs` prints `jobs_out` and exits `jobs_rc`. Returns (current, reason)."""
+    import stat as stat_mod
+    import subprocess
+    from mojo.deploy import fleet
+
+    bin_dir = tempfile.mkdtemp(prefix="testit_probe.")
+    stubs = {
+        "systemctl": ("case \"$1\" in\n"
+                      "  show) case \"$3\" in *ActiveState*) echo ActiveState=active;; esac;"
+                      " echo MainPID=4242;;\n"
+                      "  list-jobs) printf '%s' \"$FAKE_JOBS_OUT\"; exit \"$FAKE_JOBS_RC\";;\n"
+                      "esac\n"),
+        "ps": "echo '   30'\n",
+        "stat": "echo 1000\n",
+        "date": "echo 1600\n",
+    }
+    try:
+        for name, body in stubs.items():
+            path = os.path.join(bin_dir, name)
+            with open(path, "w") as handle:
+                handle.write("#!/bin/bash\n" + body)
+            os.chmod(path, stat_mod.S_IRWXU)
+        script = fleet._app_probe("mojo-asgi.service", "/opt/api/var/django.conf", "echo 200")
+        env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}",
+                   FAKE_JOBS_RC=str(jobs_rc), FAKE_JOBS_OUT=jobs_out)
+        done = subprocess.run(["bash", "-s"], input=script, capture_output=True, text=True,
+                              env=env, timeout=30)
+        th.assert_eq(done.returncode, 0, f"probe script failed: {done.stderr}")
+        return fleet._app_verdict(fleet._parse_key_values(done.stdout), "mojo-asgi.service")
+    finally:
+        shutil.rmtree(bin_dir, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_probe_shell_counts_only_the_asgi_units_own_jobs(opts):
+    th.assert_eq(_run_probe_shell(), (True, ""), "no jobs: a current app passes")
+    th.assert_eq(_run_probe_shell(jobs_out="7 other-mojo-asgi.service start running\n"),
+                 (True, ""), "a job for a unit whose name contains ours is not ours")
+    th.assert_eq(_run_probe_shell(jobs_out="8 mojo-asgi.service restart waiting\n"),
+                 (False, "restart still pending"), "the unit's own queued restart is pending")
+
+
+@th.django_unit_test()
+def test_probe_shell_never_reads_a_failed_job_query_as_no_jobs(opts):
+    current, reason = _run_probe_shell(jobs_rc=1)
+    th.assert_true(not current and reason == "cannot read the job queue for mojo-asgi.service",
+                   f"a failed list-jobs must not pass the gate: {current}, {reason}")
