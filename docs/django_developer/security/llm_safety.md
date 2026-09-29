@@ -98,6 +98,38 @@ caps remain the final cross-installation backstop. Central billing, dynamic
 provider-credit changes, price tables, a second provider, automatic failover,
 and production-data cleanup are non-goals.
 
+## Host features
+
+A host app registers its own feature names in the static, file-only setting
+`LLM_HOST_FEATURES`, a list of slugs. The default is empty, which leaves the
+framework's feature set unchanged.
+
+```python
+LLM_HOST_FEATURES = ["support_responder", "support_staff"]
+```
+
+Each slug is a lowercase letter followed by up to 31 lowercase letters, digits
+or underscores (32 characters is the ledger's `feature` column). A slug may not
+repeat, copy a framework feature (`assistant`, `unattributed`, ...) or use a
+name the guard keeps for itself: `shared`, `breaker` or `unknown`. Any bad
+entry, or a value that is not a list or tuple, stops startup with
+`ImproperlyConfigured`; `llm.call` re-checks the setting on every call.
+
+A listed slug works exactly like a framework feature. It needs its own route
+in `routes` and its own envelope in `features`; a listed slug with no route
+fails with `route_missing`, and a route for a slug that is not listed fails
+with `policy_invalid`. Its calls write ledger rows and metrics under the slug
+and obey the shared envelope, the emergency stop and the per-credential
+breaker, which host features share with the framework's own features: a burst
+of failing host calls can open the breaker for every feature on that
+credential.
+
+Listing a slug alone does not change the policy hash. Adding its route and
+envelope does, so activate the deployed policy again (step 3 below) after the
+deploy. The allowed `context` keys are `job_id`, `incident_id`,
+`conversation_id`, `file_id` and `operation_id`; `conversation_id` must be an
+integer.
+
 ## Policy agreement and rollout
 
 Calls require the static policy hash to equal the single authoritative primary

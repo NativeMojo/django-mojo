@@ -47,6 +47,10 @@ These are read while URL/module bootstrap happens, so changes require a process 
 
 - `LLM_SAFETY_POLICY` — required file-only exact-schema provider routes,
   installation/per-feature envelopes, and breaker thresholds.
+- `LLM_HOST_FEATURES` — static, file-only list of the host app's own LLM
+  feature slugs, default empty. Each needs a route and an envelope in
+  `LLM_SAFETY_POLICY`; a bad entry stops startup. See
+  [Host features](../security/llm_safety.md#host-features).
 - `LLM_SAFETY_POLICY_EXPECTED_HASH` — protected primary-database policy
   agreement written only by the fresh-auth owner activation action.
 - `LLM_EMERGENCY_STOP` — monotonic deployment OR protected database stop.

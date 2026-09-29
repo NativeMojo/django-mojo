@@ -28,6 +28,7 @@ Settings used:
 """
 
 import json
+import re
 import time
 import warnings
 
@@ -50,6 +51,46 @@ FEATURES = frozenset({
     "model_discovery", "unattributed",
 })
 
+# Names the safety guard uses for its own keys and metrics. A host feature
+# called "shared" would share the shared envelope's Redis keys and be charged
+# twice; "breaker" and "unknown" are metric categories.
+RESERVED_FEATURE_NAMES = frozenset({"shared", "breaker", "unknown"})
+
+# 32 characters is LLMRequest.feature's max_length.
+HOST_FEATURE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+
+_UNSET = object()
+
+
+def host_features(value=_UNSET):
+    """Validated LLM_HOST_FEATURES: the host app's own feature names."""
+    from django.core.exceptions import ImproperlyConfigured
+    if value is _UNSET:
+        value = settings.get_static("LLM_HOST_FEATURES", [])
+    if not isinstance(value, (list, tuple)):
+        raise ImproperlyConfigured("LLM_HOST_FEATURES must be a list of feature names")
+    names = set()
+    for name in value:
+        if not isinstance(name, str) or not HOST_FEATURE_PATTERN.fullmatch(name):
+            raise ImproperlyConfigured(
+                f"LLM_HOST_FEATURES entry {name!r} must be a lowercase slug of at most "
+                "32 characters: a letter, then letters, digits or underscores")
+        if name in FEATURES:
+            raise ImproperlyConfigured(
+                f"LLM_HOST_FEATURES entry {name!r} is a framework feature name")
+        if name in RESERVED_FEATURE_NAMES:
+            raise ImproperlyConfigured(
+                f"LLM_HOST_FEATURES entry {name!r} is reserved by the LLM safety guard")
+        if name in names:
+            raise ImproperlyConfigured(f"LLM_HOST_FEATURES entry {name!r} is repeated")
+        names.add(name)
+    return frozenset(names)
+
+
+def feature_names():
+    """Every feature llm.call accepts: the framework's plus LLM_HOST_FEATURES."""
+    return FEATURES | host_features()
+
 
 def normalize_feature(feature):
     """Return one fixed feature name; omission is transitional, not anonymous."""
@@ -61,7 +102,7 @@ def normalize_feature(feature):
                 "LLM calls without feature= are deprecated; attributed calls are required",
                 DeprecationWarning, stacklevel=3)
         return "unattributed"
-    if feature not in FEATURES:
+    if feature not in feature_names():
         raise ValueError("Unknown LLM feature")
     return feature
 

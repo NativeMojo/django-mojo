@@ -14,6 +14,9 @@ class AppConfig(BaseAppConfig):
         from mojo.deploy import config_override
         config_override.load_schema_modules(
             settings.get_static("ADMIN_FLEET_CONFIG_SCHEMA_MODULES", []))
+        # A bad LLM_HOST_FEATURES stops startup rather than the first call.
+        from mojo.helpers import llm
+        llm.feature_names()
         if settings.is_app_installed("django.contrib.admin"):
             self.unregister_apps()
         self._warn_dev_bypass()
