@@ -269,6 +269,37 @@ def decode_document(payload, allowed):
     return document
 
 
+def compose_published(base_payload, override_payload):
+    """The file a node that accepts the published overrides composes.
+
+    For the operator's fleet tool: the same shape checks as decode_document
+    and the one value normalisation validate_settings applies, but no
+    delegation or typed-registry check. Those are node-local, and a node
+    that refuses keeps its old file, which the tool then reports as drift.
+    """
+    if not isinstance(override_payload, bytes) or len(override_payload) > MAX_DOCUMENT_BYTES:
+        raise ValueError("fleet settings document is invalid")
+    try:
+        document = json.loads(override_payload.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError("fleet settings document is not valid JSON") from None
+    if not isinstance(document, dict) or set(document) != {
+            "schema_version", "revision", "published_at", "settings"}:
+        raise ValueError("fleet settings document has an invalid shape")
+    if document["schema_version"] != SCHEMA_VERSION:
+        raise ValueError("fleet settings document version is unsupported")
+    revision = document["revision"]
+    if not isinstance(revision, str) or not REVISION_RE.fullmatch(revision):
+        raise ValueError("fleet settings revision is invalid")
+    if not isinstance(document["settings"], dict):
+        raise ValueError("fleet settings must be a bounded object")
+    document["settings"] = {
+        key: (value.rstrip("/")
+              if key == "GEOIP_MOJO_PROVIDER_URL" and isinstance(value, str) else value)
+        for key, value in document["settings"].items()}
+    return compose(base_payload, document)
+
+
 def compose(base_payload, document):
     if not isinstance(base_payload, bytes) or not base_payload.strip():
         raise ValueError("canonical django.conf is empty")

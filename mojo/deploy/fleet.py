@@ -42,7 +42,10 @@ the project's renderer, and an incident is not the time to ship that drift.
 
 ``sync`` never lets two nodes restart together: it holds every node's
 config-sync timer, then per node forces one sync, waits for the new sha to
-land and the ASGI service to answer, and only then moves on. (The framework's
+land and the ASGI service to answer, and only then moves on. The sha it
+waits for is the file the node should hold: the canonical object, plus the
+managed override block (``config_override.compose``) when the Admin plane has
+published fleet overrides (``config_override_name`` in fleet.json). (The framework's
 hostname jitter is not a rollout strategy: two hostnames can hash 2 seconds
 apart.)
 """
@@ -53,6 +56,7 @@ import datetime
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shlex
 import subprocess
@@ -87,6 +91,9 @@ FLEET_OPTIONAL = {
     "access_log": "var/edge/log/access.log",
     "error_log": "var/logs/error.log",
     "node_conf": "var/django.conf",
+    # The Admin plane's published fleet overrides, beside config_key. null
+    # turns the lookup off: compare against the canonical object alone.
+    "config_override_name": "django.override.json",
 }
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
 
@@ -369,6 +376,55 @@ def fetch_canonical(s3, spec, version_id=None):
     return text, response.get("VersionId"), metadata_sha
 
 
+def override_key(spec):
+    """The node's rule: the override object sits beside the canonical one."""
+    return posixpath.join(posixpath.dirname(spec["config_key"]),
+                          spec["config_override_name"])
+
+
+def fetch_override(s3, spec):
+    """Bytes of the published fleet overrides, or None when there are none.
+
+    Refuses what a node refuses (no sha256 metadata, a body that does not
+    match it, an oversized document), so the tool never expects a file no
+    node would write."""
+    from botocore.exceptions import ClientError
+    from mojo.deploy import config_override
+
+    key = override_key(spec)
+    try:
+        response = s3.get_object(Bucket=spec["config_bucket"], Key=key,
+                                 ExpectedBucketOwner=spec["bucket_owner"])
+    except ClientError as err:
+        code = err.response.get("Error", {}).get("Code", "")
+        if code in ("NoSuchKey", "404", "NotFound"):
+            return None
+        if code in ("AccessDenied", "403"):
+            raise FleetError(
+                f"access denied reading s3://{spec['config_bucket']}/{key}: the operator needs "
+                "s3:GetObject on it, s3:ListBucket on its prefix (without it S3 answers 403 "
+                "for a missing key) and decrypt on its KMS key — or set "
+                "config_override_name to null in fleet.json")
+        raise
+    body = response["Body"]
+    try:
+        if response.get("ContentLength", 0) > config_override.MAX_DOCUMENT_BYTES:
+            raise FleetError("fleet override object exceeds the maximum document size; refusing")
+        payload = body.read(config_override.MAX_DOCUMENT_BYTES + 1)
+    finally:
+        close = getattr(body, "close", None)
+        if close:
+            close()
+    if len(payload) > config_override.MAX_DOCUMENT_BYTES:
+        raise FleetError("fleet override object exceeds the maximum document size; refusing")
+    metadata_sha = (response.get("Metadata") or {}).get("sha256")
+    if not metadata_sha:
+        raise FleetError("fleet override object carries no sha256 metadata; refusing")
+    if metadata_sha != hashlib.sha256(payload).hexdigest():
+        raise FleetError("fleet override object does not match its sha256 metadata; refusing")
+    return payload
+
+
 def publish_canonical(s3, spec, text):
     digest = sha256_text(text)
     response = s3.put_object(
@@ -449,10 +505,16 @@ def human_uptime(seconds):
     return f"{seconds // 60}m{seconds % 60}s"
 
 
-def render_node_status(node, status, canonical_sha, minutes):
+def render_node_status(node, status, expected_sha, minutes, canonical_sha=None):
     drift = ""
-    if canonical_sha:
-        drift = "in sync" if status.get("conf_sha") == canonical_sha else "DRIFT vs S3"
+    if expected_sha:
+        if status.get("conf_sha") == expected_sha:
+            drift = "in sync"
+        elif canonical_sha and canonical_sha != expected_sha \
+                and status.get("conf_sha") == canonical_sha:
+            drift = "DRIFT vs S3 (fleet overrides not applied)"
+        else:
+            drift = "DRIFT vs S3"
     print(f"== {node} ({status.get('host', '?')}) {status.get('now', '')} UTC")
     print(f"   {status.get('asgi', '?')}  sync-timer={status.get('timer', '?')}  "
           f"conf {status.get('conf_mtime', '?')} {drift}")
@@ -575,18 +637,40 @@ def cmd_config_rollback(args, project, spec, session):
     return 0
 
 
-def canonical_sha(session, spec):
+def expected_node_digest(session, spec):
+    """(expected, canonical): the sha256 of the file a node should hold, and
+    of the canonical object alone. With published fleet overrides the node
+    writes the canonical object plus a managed block (config_override.compose),
+    so expected is the digest of that composition; otherwise the two match."""
+    from mojo.deploy import config_override
+
+    s3 = session.client("s3")
+    text, _, _ = fetch_canonical(s3, spec)
+    canonical = sha256_text(text)
+    override = fetch_override(s3, spec) if spec.get("config_override_name") else None
+    if override is None:
+        return canonical, canonical
     try:
-        text, _, _ = fetch_canonical(session.client("s3"), spec)
+        composed = config_override.compose_published(text.encode("utf-8"), override)
+    except ValueError as err:
+        raise FleetError(f"fleet override object is invalid: {err}")
+    return hashlib.sha256(composed).hexdigest(), canonical
+
+
+def status_digests(session, spec):
+    try:
+        return expected_node_digest(session, spec)
+    except FleetError as err:
+        print(f"warning: {err}; drift check skipped", file=sys.stderr)
+        return None, None
     except Exception as err:  # noqa: BLE001 — status must still render without S3 access
-        print(f"warning: cannot read canonical object ({err.__class__.__name__}); "
-              "drift check skipped", file=sys.stderr)
-        return None
-    return sha256_text(text)
+        print(f"warning: cannot read the canonical object or fleet overrides "
+              f"({err.__class__.__name__}); drift check skipped", file=sys.stderr)
+        return None, None
 
 
 def cmd_nodes_status(args, project, spec, session):
-    expected = canonical_sha(session, spec) if not args.no_s3 else None
+    expected, canonical = status_digests(session, spec) if not args.no_s3 else (None, None)
     script = node_status_script(spec, args.minutes)
     failed = 0
     for node in spec["nodes"]:
@@ -595,7 +679,7 @@ def cmd_nodes_status(args, project, spec, session):
             failed += 1
             print(f"== {node}: ssh failed ({code}): {err.strip()[:200]}")
             continue
-        render_node_status(node, parse_node_status(out), expected, args.minutes)
+        render_node_status(node, parse_node_status(out), expected, args.minutes, canonical)
     return 1 if failed else 0
 
 
@@ -612,12 +696,19 @@ def _wait_for(description, probe, timeout, sleep, interval=5):
 
 def cmd_sync(args, project, spec, session):
     """Rolling: hold every node's timer, then per node force one sync, wait for
-    the canonical sha to land and the ASGI service to answer, restore its
-    timer, move on. A failed gate stops the roll with the remaining timers
-    still held, so the fleet cannot restart itself behind your back."""
-    expected = canonical_sha(session, spec)
-    if not expected:
-        raise FleetError("cannot read the canonical object; refusing to roll")
+    the expected sha to land and the ASGI service to answer, restore its
+    timer, move on. The expected sha is the canonical object's, or, when fleet
+    overrides are published, that of the canonical object plus the managed
+    override block the node composes. A failed gate stops the roll with the
+    remaining timers still held, so the fleet cannot restart itself behind
+    your back; the closing warning reports each held timer's live state."""
+    try:
+        expected, canonical = expected_node_digest(session, spec)
+    except FleetError:
+        raise
+    except Exception as err:  # noqa: BLE001
+        raise FleetError(f"cannot read the canonical object or fleet overrides "
+                         f"({err.__class__.__name__}); refusing to roll")
     nodes = args.nodes or spec["nodes"]
     conf = os.path.join(spec["app_root"], spec["node_conf"])
     timer, service, asgi = spec["sync_timer"], spec["sync_service"], spec["asgi_service"]
@@ -638,8 +729,16 @@ def cmd_sync(args, project, spec, session):
                                        f"sudo sha256sum {shlex.quote(conf)} | cut -c1-64")
             if code != 0:
                 raise FleetError(f"{node}: {service} failed: {err.strip()[:160]}")
-            if out.strip().splitlines()[-1] != expected:
-                raise FleetError(f"{node}: node conf sha does not match the canonical object after sync")
+            landed = out.strip().splitlines()[-1] if out.strip() else ""
+            if landed != expected:
+                if canonical != expected and landed == canonical:
+                    raise FleetError(f"{node}: node applied the canonical object but not the "
+                                     "published fleet overrides")
+                if canonical == expected:
+                    raise FleetError(f"{node}: node conf sha does not match the canonical "
+                                     "object after sync")
+                raise FleetError(f"{node}: node conf does not match the canonical object plus "
+                                 "the published fleet overrides after sync")
             print(f"   conf in sync ({expected[:12]}…); waiting for {asgi} restart + health")
             sleep(args.settle)
 
@@ -662,9 +761,38 @@ def cmd_sync(args, project, spec, session):
             print(f"   {timer} restored")
     finally:
         if held:
-            print(f"WARNING: {timer} still held on {', '.join(held)} — restore by hand once "
-                  "the fleet is verified: sudo systemctl start " + timer, file=sys.stderr)
+            report_held_timers(run, held, timer)
     return 0
+
+
+def report_held_timers(run, held, timer):
+    """Ask each node the roll left held for its timer's live state. Decided on
+    exit code and stdout together: `systemctl is-active` exits 0 for active
+    and 3 for inactive; anything else (ssh's 255, a timeout, empty output) is
+    unknown, whatever partial output came back. Never raises."""
+    still, running, unknown = [], [], []
+    for node in held:
+        try:
+            code, out, _ = run(node, f"systemctl is-active {shlex.quote(timer)}")
+            state = out.strip().splitlines()[-1] if out.strip() else ""
+        except Exception:  # noqa: BLE001 — must not mask the roll's own error
+            code, state = None, ""
+        if code == 3 and state in ("inactive", "failed"):
+            still.append(node)
+        elif code == 0 and state == "active":
+            running.append(node)
+        else:
+            unknown.append(node)
+    if still:
+        print(f"WARNING: {timer} still held on {', '.join(still)} — restore by hand once "
+              "the fleet is verified: sudo systemctl start " + timer, file=sys.stderr)
+    if running:
+        print(f"WARNING: {timer} is running again on {', '.join(running)} although the roll "
+              "held it (a deploy's post_deploy.sh or node_setup runs `enable --now` on every "
+              "timer)", file=sys.stderr)
+    if unknown:
+        print(f"WARNING: {timer} state unknown on {', '.join(unknown)} — check by hand: "
+              f"systemctl is-active {timer}", file=sys.stderr)
 
 
 def cmd_db_connections(args, project, spec, session):
