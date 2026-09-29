@@ -432,7 +432,9 @@ An optional `django.override.json` object may set only keys present in
 registry. Its digest is required. Invalid or concurrent updates leave the last
 working `django.conf` untouched. The Admin publisher is separately bounded by
 `ADMIN_FLEET_CONFIG_ALLOWED_KEYS`; the effective writable set is the
-intersection of both allowlists and framework support.
+intersection of both allowlists and framework support. The operator's
+`fleet sync` and `fleet nodes status` expect this block on every node; see
+`sync` under `fleet` below.
 
 Applications register their typed settings in importable, Django-independent
 schema modules. Set `CONFIG_SYNC_SCHEMA_MODULES` in each node's trusted
@@ -605,12 +607,38 @@ tick, or use `sync` for the usual health-gated rollout.
 
 `sync` never lets two nodes restart together. It holds every node's
 `config-sync.timer`, then per node forces one `config-sync.service` run, checks
-the node's file carries the canonical sha, waits `--settle` seconds for the
+the node's file carries the expected sha, waits `--settle` seconds for the
 jittered restart, polls the ASGI unit and the loopback health path until both
 answer, restores that node's timer, and only then moves on. A failed gate stops
-the roll with the remaining timers still held and says so. (The framework's
-hostname jitter is not a rollout strategy: two hostnames can hash 2 seconds
-apart — WMWX's did.)
+the roll with the remaining timers still held. (The framework's hostname jitter
+is not a rollout strategy: two hostnames can hash 2 seconds apart — WMWX's did.)
+
+The expected sha is that of the file the node should hold. Without published
+Admin fleet overrides that is the canonical object. When the override object
+exists (`config_override_name` in the fleet.json environment, default
+`django.override.json`, beside `config_key`), a node writes the canonical
+object followed by a managed block, and the tool composes the same file with
+the node's own `config_override.compose`: a blank line,
+`# django-mojo managed fleet overrides`, one `KEY = <value>` line per override
+setting in sorted order, and `MOJO_FLEET_CONFIG_REVISION = '<revision>'`. Those
+lines are the only node-added lines; every byte is compared. `nodes status`
+reports `in sync`, `DRIFT vs S3 (fleet overrides not applied)` when the node
+holds only the canonical object, or `DRIFT vs S3`, and `sync` stops with the
+matching message.
+
+On a fleet with an override object, every node must delegate its keys
+(`CONFIG_SYNC_OVERRIDE_ALLOWED_KEYS`), or `sync` stops at that node. The
+operator needs `s3:GetObject` on the override object, `s3:ListBucket` on its
+prefix (without it S3 answers 403 for a missing object) and decrypt on its KMS
+key. An override without sha256 metadata, with a body that does not match it,
+over the size limit, or unreadable, makes `sync` refuse before touching any
+node; `nodes status` warns and skips the drift check. Set
+`"config_override_name": null` to compare against the canonical object alone.
+
+When a roll stops, the closing warning asks each held node for its timer's
+live state: `still held` (restore it by hand once the fleet is verified),
+`running again` (usually a deploy: `post_deploy.sh` and `node_setup` run
+`enable --now` on every timer), or `state unknown`.
 
 ### `check_setup`
 
