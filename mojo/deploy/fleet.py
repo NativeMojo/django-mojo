@@ -707,7 +707,7 @@ def _app_probe(asgi, conf, health):
     return "\n".join([
         f"systemctl show {unit} --property=ActiveState,MainPID",
         # count rows whose UNIT column is exactly the unit; a failed query prints `jobs=`
-        f"if jobs=$(systemctl list-jobs --no-legend {unit} 2>/dev/null); then "
+        "if jobs=$(systemctl list-jobs --no-legend 2>/dev/null); then "
         f"echo \"jobs=$(printf '%s\\n' \"$jobs\" | awk -v u={unit} '$2 == u' | wc -l)\"; "
         "else echo \"jobs=\"; fi",
         f"pid=$(systemctl show {unit} --property=MainPID | cut -d= -f2)",
@@ -833,7 +833,9 @@ def cmd_sync(args, project, spec, session):
                     raise FleetError(f"{err}: {last['reason']}") from None
                 print(f"   {asgi} active, uptime {result['app_age']}s, "
                       f"{spec['health_path']} -> {result['http']}")
-            run(node, f"sudo systemctl start {shlex.quote(timer)}")
+            code, _, err = run(node, f"sudo systemctl start {shlex.quote(timer)}")
+            if code != 0:
+                raise FleetError(f"{node}: cannot restore {timer}: {err.strip()[:160]}")
             held.remove(node)
             print(f"   {timer} restored")
     finally:

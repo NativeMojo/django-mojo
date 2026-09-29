@@ -614,7 +614,8 @@ path answers 200. Both ages are read on the node's clock. A node already
 running the current conf passes at once (`running the current config … no
 restart needed`); otherwise the tool waits `--settle` seconds for the jittered
 restart and polls until the gate passes or `--timeout` runs out. It then
-restores that node's timer and only then moves on. A failed gate stops the
+restores that node's timer and only then moves on; a restore that fails stops the
+roll with that node still held (`cannot restore config-sync.timer`). A failed gate stops the
 roll with the remaining timers still held and names the cause: the sync
 service's exit code (`see journalctl -u config-sync.service`), `app started
 before the conf on disk` (`CONFIG_SYNC_RESTART` off, or an earlier restart

@@ -457,12 +457,14 @@ def _two_node_fleet(**extra):
     return {"default_env": "prod", "environments": {"prod": env}}
 
 
-def _sync(root, s3, landed, timer_state=None, probes=None, rc=None, timeout="5", record=None):
+def _sync(root, s3, landed, timer_state=None, probes=None, rc=None, timeout="5", record=None,
+          restore_fails=()):
     """Run `fleet sync`; each node reports `landed[node]` as its conf sha,
     exits `rc[node]` from the sync (0 by default) and answers the app probe
     with `probes[node]` in turn, its last answer repeating (a current app by
-    default). Returns (code, calls, stderr); `record` collects stdout and the
-    sleep calls."""
+    default); restoring the timer fails on the nodes in `restore_fails`.
+    Returns (code, calls, stderr); `record` collects stdout and the sleep
+    calls."""
     import contextlib
     import io
     from mojo.deploy import fleet
@@ -476,6 +478,8 @@ def _sync(root, s3, landed, timer_state=None, probes=None, rc=None, timeout="5",
             return 0, "", ""
         if "systemctl start config-sync.service" in script:
             return 0, f"rc={(rc or {}).get(node, 0)}\n{landed[node]}\n", ""
+        if "systemctl start config-sync.timer" in script and node in restore_fails:
+            return 1, "", "Failed to start config-sync.timer: Unit is masked."
         if script.startswith("systemctl is-active config-sync.timer"):
             return (timer_state or {}).get(node, (3, "inactive\n", ""))
         if "systemctl show" in script:
@@ -877,3 +881,23 @@ def test_probe_shell_never_reads_a_failed_job_query_as_no_jobs(opts):
     current, reason = _run_probe_shell(jobs_rc=1)
     th.assert_true(not current and reason == "cannot read the job queue for mojo-asgi.service",
                    f"a failed list-jobs must not pass the gate: {current}, {reason}")
+
+
+@th.django_unit_test()
+def test_sync_keeps_a_node_held_when_its_timer_restore_fails(opts):
+    canonical = hashlib.sha256(CANONICAL.encode()).hexdigest()
+    root = _project(fleet=_two_node_fleet())
+    try:
+        record = {}
+        code, calls, err = _sync(root, _s3(CANONICAL), {"n1": canonical, "n2": canonical},
+                                 restore_fails=("n1",), record=record)
+        th.assert_eq(code, 2, f"a failed timer restore must stop the roll: {err}")
+        th.assert_true("n1: cannot restore config-sync.timer: Failed to start" in err, err)
+        th.assert_true("config-sync.timer restored" not in record["stdout"],
+                       f"a failed restore must never be reported as restored: {record['stdout']}")
+        synced = [n for n, s in calls if "systemctl start config-sync.service" in s]
+        th.assert_eq(synced, ["n1"], "node 2 must never be synced")
+        th.assert_true("still held on n1, n2" in err and "for n in n1 n2;" in err,
+                       f"the report names node 1 with the restore loop: {err}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
