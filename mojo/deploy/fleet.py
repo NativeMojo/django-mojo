@@ -694,14 +694,72 @@ def _wait_for(description, probe, timeout, sleep, interval=5):
         sleep(interval)
 
 
+def _sync_command(service, conf):
+    """Force one sync, then report its exit code and the conf sha that landed."""
+    return (f"sudo systemctl start {shlex.quote(service)}; echo \"rc=$?\"; "
+            f"sudo sha256sum {shlex.quote(conf)} | cut -c1-64")
+
+
+def _app_probe(asgi, conf, health):
+    """One ssh call, no sudo, `key=value` lines. Both ages are measured on the
+    node's clock. `--property=` (not `--value`) works on systemd 219 (AL2)."""
+    unit, path = shlex.quote(asgi), shlex.quote(conf)
+    return "\n".join([
+        f"systemctl show {unit} --property=ActiveState,MainPID",
+        f"echo \"jobs=$(systemctl list-jobs --no-legend 2>/dev/null | grep -cF {unit})\"",
+        f"pid=$(systemctl show {unit} --property=MainPID | cut -d= -f2)",
+        "echo \"app_age=$(ps -o etimes= -p \"$pid\" 2>/dev/null | tr -d ' ')\"",
+        f"mtime=$(stat -c %Y {path} 2>/dev/null) && echo \"conf_age=$(( $(date +%s) - mtime ))\"",
+        f"echo \"http=$({health})\"",
+    ])
+
+
+def _app_verdict(probe, asgi):
+    """(current, reason) for a parsed probe: the ASGI app is active, no job is
+    queued for it, it started at or after the conf on disk was written, and
+    health answers 200. An unreadable start time is never fresh."""
+    if probe is None:
+        return False, "probe failed"
+    state = probe.get("ActiveState", "")
+    if state != "active":
+        return False, f"{asgi} not active ({state or 'unknown'})"
+    if probe.get("jobs") != "0":
+        return False, "restart still pending"
+    pid, app_age = probe.get("MainPID", ""), probe.get("app_age", "")
+    if not pid.isdigit() or pid == "0" or not app_age.isdigit():
+        return False, f"cannot read {asgi} start time"
+    conf_age = probe.get("conf_age", "")
+    if not conf_age.lstrip("-").isdigit():
+        return False, "cannot read the conf file's age"
+    if int(app_age) > int(conf_age):
+        return False, ("app started before the conf on disk (CONFIG_SYNC_RESTART off, or an "
+                       f"earlier restart failed): restart {asgi} by hand")
+    if probe.get("http") != "200":
+        return False, f"health {probe.get('http') or 'no answer'}"
+    return True, ""
+
+
+def _parse_key_values(out):
+    values = {}
+    for line in out.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            values[key.strip()] = value.strip()
+    return values
+
+
 def cmd_sync(args, project, spec, session):
-    """Rolling: hold every node's timer, then per node force one sync, wait for
-    the expected sha to land and the ASGI service to answer, restore its
-    timer, move on. The expected sha is the canonical object's, or, when fleet
-    overrides are published, that of the canonical object plus the managed
-    override block the node composes. A failed gate stops the roll with the
-    remaining timers still held, so the fleet cannot restart itself behind
-    your back; the closing warning reports each held timer's live state."""
+    """Rolling: hold every node's timer, then per node force one sync, check
+    its exit code and that the expected sha landed, and gate on the ASGI app:
+    active, healthy, no restart queued and started after the conf on disk was
+    written. A node already running the current conf passes at once ("no
+    restart needed"); one whose sync queued a restart waits for it. The
+    expected sha is the canonical object's, or, when fleet overrides are
+    published, that of the canonical object plus the managed override block
+    the node composes. A failed gate stops the roll with the remaining timers
+    still held, so the fleet cannot restart itself behind your back; the
+    closing warning reports each held timer's live state and prints a loop
+    that restores them."""
     try:
         expected, canonical = expected_node_digest(session, spec)
     except FleetError:
@@ -714,6 +772,7 @@ def cmd_sync(args, project, spec, session):
     timer, service, asgi = spec["sync_timer"], spec["sync_service"], spec["asgi_service"]
     health = (f"curl -sk -o /dev/null -w '%{{http_code}}' -H 'Host: {spec['api_host']}' "
               f"https://127.0.0.1{spec['health_path']}")
+    probe_script = _app_probe(asgi, conf, health)
     run, sleep = args.ssh, args.sleep
     held = []
     try:
@@ -725,11 +784,16 @@ def cmd_sync(args, project, spec, session):
         print(f"held {timer} on {', '.join(held)}")
         for node in nodes:
             print(f"== {node}: syncing")
-            code, out, err = run(node, f"sudo systemctl start {shlex.quote(service)}; "
-                                       f"sudo sha256sum {shlex.quote(conf)} | cut -c1-64")
+            code, out, err = run(node, _sync_command(service, conf))
             if code != 0:
                 raise FleetError(f"{node}: {service} failed: {err.strip()[:160]}")
-            landed = out.strip().splitlines()[-1] if out.strip() else ""
+            lines = out.strip().splitlines()
+            rc = next((line[3:] for line in lines if line.startswith("rc=")), "")
+            if rc != "0":
+                raise FleetError(f"{node}: {service} exited {rc or 'with an unreadable status'}"
+                                 f" — see journalctl -u {service}")
+            shas = [line for line in lines if not line.startswith("rc=")]
+            landed = shas[-1] if shas else ""
             if landed != expected:
                 if canonical != expected and landed == canonical:
                     raise FleetError(f"{node}: node applied the canonical object but not the "
@@ -739,23 +803,30 @@ def cmd_sync(args, project, spec, session):
                                      "object after sync")
                 raise FleetError(f"{node}: node conf does not match the canonical object plus "
                                  "the published fleet overrides after sync")
-            print(f"   conf in sync ({expected[:12]}…); waiting for {asgi} restart + health")
-            sleep(args.settle)
+
+            last = {"reason": ""}
 
             def probe(node=node):
-                code, out, _ = run(node, f"systemctl is-active {shlex.quote(asgi)}; "
-                                         f"ps -o etimes= -C uvicorn | sort -n | head -1; {health}")
-                parts = out.split()
-                if len(parts) < 3 or parts[0] != "active":
-                    return None
-                try:
-                    uptime = int(parts[1])
-                except ValueError:
-                    return None
-                return parts if parts[2] == "200" and uptime < args.settle + args.timeout else None
+                code, out, _ = run(node, probe_script)
+                status = _parse_key_values(out) if code == 0 else None
+                current, last["reason"] = _app_verdict(status, asgi)
+                return status if current else None
 
-            result = _wait_for(f"{node} healthy after restart", probe, args.timeout, sleep)
-            print(f"   {asgi} active, uptime {result[1]}s, {spec['health_path']} -> {result[2]}")
+            result = probe()
+            if result:
+                print(f"   conf in sync ({expected[:12]}…); running the current config "
+                      f"(app {result['app_age']}s, conf {result['conf_age']}s old); "
+                      "no restart needed")
+            else:
+                print(f"   conf in sync ({expected[:12]}…); waiting for {asgi} restart + health")
+                sleep(args.settle)
+                try:
+                    result = _wait_for(f"{node} healthy after restart", probe,
+                                       args.timeout, sleep)
+                except FleetError as err:
+                    raise FleetError(f"{err}: {last['reason']}") from None
+                print(f"   {asgi} active, uptime {result['app_age']}s, "
+                      f"{spec['health_path']} -> {result['http']}")
             run(node, f"sudo systemctl start {shlex.quote(timer)}")
             held.remove(node)
             print(f"   {timer} restored")
@@ -769,7 +840,8 @@ def report_held_timers(run, held, timer):
     """Ask each node the roll left held for its timer's live state. Decided on
     exit code and stdout together: `systemctl is-active` exits 0 for active
     and 3 for inactive; anything else (ssh's 255, a timeout, empty output) is
-    unknown, whatever partial output came back. Never raises."""
+    unknown, whatever partial output came back. Prints a loop restoring the
+    still-held and unknown timers. Never raises."""
     still, running, unknown = [], [], []
     for node in held:
         try:
@@ -793,6 +865,10 @@ def report_held_timers(run, held, timer):
     if unknown:
         print(f"WARNING: {timer} state unknown on {', '.join(unknown)} — check by hand: "
               f"systemctl is-active {timer}", file=sys.stderr)
+    if still or unknown:
+        targets = " ".join(shlex.quote(node) for node in still + unknown)
+        print(f"   to restore: for n in {targets}; do ssh \"$n\" sudo systemctl start "
+              f"{shlex.quote(timer)}; done", file=sys.stderr)
 
 
 def cmd_db_connections(args, project, spec, session):
