@@ -15,7 +15,6 @@ def test_valid_entries(opts):
     from mojo.helpers.request import host_sensitive_paths
 
     assert_eq(host_sensitive_paths([]), (), "an empty list means no host paths")
-    assert_eq(host_sensitive_paths(None), (), "None means no host paths")
     assert_eq(host_sensitive_paths(["/api/payments/webhooks/", "/hooks.v1/a_b~c-d"]),
               ("/api/payments/webhooks", "/hooks.v1/a_b~c-d"),
               "valid entries are returned with the trailing slash stripped")
@@ -28,6 +27,7 @@ def test_rejected_entries(opts):
     from mojo.helpers.request import host_sensitive_paths
 
     bad_values = [
+        None,                       # explicit null must not switch masking off
         "/api/payments",            # bare string, not a list
         [42],                       # non-string entry
         ["api/payments"],           # no leading slash

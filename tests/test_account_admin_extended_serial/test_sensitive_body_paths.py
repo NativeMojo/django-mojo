@@ -67,15 +67,16 @@ def test_bad_setting_stops_startup_and_fails_closed(opts):
     from django.core.exceptions import ImproperlyConfigured
     from mojo.helpers.request import sensitive_body_label, is_host_sensitive
 
-    with _override_setting("MOJO_SENSITIVE_BODY_PATHS", ["no-slash"]):
-        try:
-            apps.get_app_config("account")._check_sensitive_body_paths()
-        except ImproperlyConfigured as err:
-            assert_true("MOJO_SENSITIVE_BODY_PATHS" in str(err),
-                        f"the startup error must name the setting, got {err}")
-        else:
-            raise AssertionError("a bad MOJO_SENSITIVE_BODY_PATHS must stop startup")
-        assert_eq(sensitive_body_label(_request("/api/test_not_listed")), "host_sensitive",
-                  "at call time a bad setting must mask every path, not raise")
-        assert_true(is_host_sensitive(_request("/api/test_not_listed")) is True,
-                    "at call time a bad setting must make every request host-sensitive")
+    for bad_value in (["no-slash"], None):
+        with _override_setting("MOJO_SENSITIVE_BODY_PATHS", bad_value):
+            try:
+                apps.get_app_config("account")._check_sensitive_body_paths()
+            except ImproperlyConfigured as err:
+                assert_true("MOJO_SENSITIVE_BODY_PATHS" in str(err),
+                            f"the startup error for {bad_value!r} must name the setting, got {err}")
+            else:
+                raise AssertionError(f"MOJO_SENSITIVE_BODY_PATHS={bad_value!r} must stop startup")
+            assert_eq(sensitive_body_label(_request("/api/test_not_listed")), "host_sensitive",
+                      f"at call time {bad_value!r} must mask every path, not raise")
+            assert_true(is_host_sensitive(_request("/api/test_not_listed")) is True,
+                        f"at call time {bad_value!r} must make every request host-sensitive")

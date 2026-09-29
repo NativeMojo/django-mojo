@@ -188,8 +188,8 @@ MOJO_SENSITIVE_BODY_PATHS = ["/api/payments/webhooks"]
 - Exceptions outside the REST dispatcher (the logging middleware's 500) write
   to `error.log` and a Log row, not an Event, and are not covered.
 - The setting is **file-only** (`settings.get_static`), so a database
-  `Setting` row cannot turn it off. A bad value (not a list of strings, no
-  leading `/`, empty, `.` or `..` segments, `*`, `?`, `#`, whitespace or
+  `Setting` row cannot turn it off. A bad value (`None`, not a list of
+  strings, no leading `/`, empty, `.` or `..` segments, `*`, `?`, `#`, whitespace or
   control characters, over 256 characters) raises `ImproperlyConfigured` at
   startup. If a process somehow runs with a bad value, every path is treated
   as listed and one error is logged.

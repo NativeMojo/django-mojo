@@ -266,8 +266,6 @@ def _validate_host_paths(value):
         return ImproperlyConfigured(
             f"{_HOST_PATHS_SETTING} entry {entry!r} is invalid: {why}")
 
-    if value is None:
-        return ()
     if not isinstance(value, (list, tuple)):
         raise ImproperlyConfigured(
             f"{_HOST_PATHS_SETTING} must be a list or tuple of path strings, "
