@@ -338,6 +338,16 @@ def test_parse_node_status_maps_processes_sockets_and_http_window(opts):
     th.assert_eq(fleet.human_uptime(90061), "1d1h", 'fleet.human_uptime(90061)')
 
 
+def _probe_out(state="active", pid="4242", jobs="0", app_age="30", conf_age="600", http="200"):
+    """What the sync gate's probe prints on a node: `key=value` lines. The
+    defaults are an app that started after its conf was written, healthy."""
+    lines = [f"ActiveState={state}", f"MainPID={pid}", f"jobs={jobs}", f"app_age={app_age}"]
+    if conf_age is not None:
+        lines.append(f"conf_age={conf_age}")
+    lines.append(f"http={http}")
+    return "\n".join(lines) + "\n"
+
+
 @th.django_unit_test()
 def test_sync_holds_all_timers_then_rolls_nodes_one_at_a_time(opts):
     from mojo.deploy import fleet
@@ -356,9 +366,9 @@ def test_sync_holds_all_timers_then_rolls_nodes_one_at_a_time(opts):
             if "systemctl stop" in script:
                 return 0, "", ""
             if "systemctl start config-sync.service" in script:
-                return 0, expected + "\n", ""
-            if "is-active" in script:
-                return 0, "active\n2\n200\n", ""
+                return 0, "rc=0\n" + expected + "\n", ""
+            if "systemctl show" in script:
+                return 0, _probe_out(), ""
             return 0, "", ""
 
         s3 = _s3(CANONICAL)
@@ -397,7 +407,7 @@ def test_sync_stops_the_roll_when_a_node_fails_its_gate(opts):
         def fake_ssh(node, script, timeout=90, runner=None):
             calls.append((node, script))
             if "systemctl start config-sync.service" in script:
-                return 0, "not-the-canonical-sha\n", ""
+                return 0, "rc=0\nnot-the-canonical-sha\n", ""
             return 0, "", ""
 
         s3 = _s3(CANONICAL)
@@ -447,34 +457,45 @@ def _two_node_fleet(**extra):
     return {"default_env": "prod", "environments": {"prod": env}}
 
 
-def _sync(root, s3, landed, timer_state=None):
-    """Run `fleet sync`; each node reports `landed[node]` as its conf sha.
-    Returns (code, calls, stderr)."""
+def _sync(root, s3, landed, timer_state=None, probes=None, rc=None, timeout="5", record=None,
+          restore_fails=()):
+    """Run `fleet sync`; each node reports `landed[node]` as its conf sha,
+    exits `rc[node]` from the sync (0 by default) and answers the app probe
+    with `probes[node]` in turn, its last answer repeating (a current app by
+    default); restoring the timer fails on the nodes in `restore_fails`.
+    Returns (code, calls, stderr); `record` collects stdout and the sleep
+    calls."""
     import contextlib
     import io
     from mojo.deploy import fleet
 
-    calls = []
+    calls, sleeps = [], []
+    answers = {node: list(seq) for node, seq in (probes or {}).items()}
 
     def fake_ssh(node, script, timeout=90, runner=None):
         calls.append((node, script))
         if "systemctl stop" in script:
             return 0, "", ""
         if "systemctl start config-sync.service" in script:
-            return 0, landed[node] + "\n", ""
+            return 0, f"rc={(rc or {}).get(node, 0)}\n{landed[node]}\n", ""
+        if "systemctl start config-sync.timer" in script and node in restore_fails:
+            return 1, "", "Failed to start config-sync.timer: Unit is masked."
         if script.startswith("systemctl is-active config-sync.timer"):
             return (timer_state or {}).get(node, (3, "inactive\n", ""))
-        if "is-active" in script:
-            return 0, "active\n2\n200\n", ""
+        if "systemctl show" in script:
+            seq = answers.get(node) or [_probe_out()]
+            return 0, seq.pop(0) if len(seq) > 1 else seq[0], ""
         return 0, "", ""
 
     session = mock.Mock()
     session.client.return_value = s3
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        code = fleet.main(["sync", "--settle", "0", "--timeout", "5", "--project", root],
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+        code = fleet.main(["sync", "--settle", "70", "--timeout", timeout, "--project", root],
                           session_factory=lambda *a, **k: session, ssh_runner=fake_ssh,
-                          sleep=lambda *_: None)
+                          sleep=sleeps.append)
+    if record is not None:
+        record.update(stdout=out.getvalue(), sleeps=sleeps)
     return code, calls, err.getvalue()
 
 
@@ -691,3 +712,214 @@ def test_override_fetch_bounds_its_read_and_closes_the_body(opts):
         th.assert_true(body.close.called, "the body must be closed after a good read")
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# the app gate: running the current conf, not "restarted during this roll" (#5967)
+# ---------------------------------------------------------------------------
+
+def _timer_restores(calls):
+    return [n for n, s in calls if "systemctl start config-sync.timer" in s]
+
+
+@th.django_unit_test()
+def test_sync_passes_an_already_current_node_without_waiting(opts):
+    canonical = hashlib.sha256(CANONICAL.encode()).hexdigest()
+    root = _project(fleet=_two_node_fleet())
+    try:
+        record = {}
+        code, calls, err = _sync(root, _s3(CANONICAL), {"n1": canonical, "n2": canonical},
+                                 probes={"n1": [_probe_out(app_age="86400", conf_age="90000")],
+                                         "n2": [_probe_out(app_age="86400", conf_age="90000")]},
+                                 timeout="0", record=record)
+        th.assert_eq(code, 0, f"an already-current node must pass: {err}")
+        th.assert_eq(record["sleeps"], [], "no --settle sleep and no polling for a current node")
+        th.assert_eq(record["stdout"].count("no restart needed"), 2, record["stdout"])
+        th.assert_eq(_timer_restores(calls), ["n1", "n2"], "each timer is restored")
+        th.assert_true("still held" not in err and "to restore" not in err,
+                       f"nothing is left held: {err}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_sync_waits_for_a_restart_the_sync_queued(opts):
+    canonical = hashlib.sha256(CANONICAL.encode()).hexdigest()
+    root = _project(fleet=_two_node_fleet())
+    try:
+        record = {}
+        pending = _probe_out(jobs="1", app_age="86400", conf_age="3")
+        restarted = _probe_out(app_age="2", conf_age="80")
+        code, calls, err = _sync(root, _s3(CANONICAL), {"n1": canonical, "n2": canonical},
+                                 probes={"n1": [pending, restarted], "n2": [pending, restarted]},
+                                 record=record)
+        th.assert_eq(code, 0, f"a restarted, healthy node must pass: {err}")
+        th.assert_eq(record["sleeps"], [70, 70], "each node waits --settle for its restart")
+        th.assert_true("waiting for mojo-asgi.service restart" in record["stdout"]
+                       and "no restart needed" not in record["stdout"], record["stdout"])
+        th.assert_eq(_timer_restores(calls), ["n1", "n2"], "each timer is restored")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_sync_stops_on_an_app_older_than_its_conf(opts):
+    canonical = hashlib.sha256(CANONICAL.encode()).hexdigest()
+    root = _project(fleet=_two_node_fleet())
+    try:
+        code, calls, err = _sync(root, _s3(CANONICAL), {"n1": canonical, "n2": canonical},
+                                 probes={"n1": [_probe_out(app_age="9000", conf_age="600")]},
+                                 timeout="0")
+        th.assert_eq(code, 2, "a node still running the old conf must stop the roll")
+        th.assert_true("app started before the conf on disk" in err, err)
+        synced = [n for n, s in calls if "systemctl start config-sync.service" in s]
+        th.assert_eq(synced, ["n1"], "node 2 must never be synced")
+        th.assert_eq(_timer_restores(calls), [], "the timers stay held")
+        th.assert_true("still held on n1, n2" in err, f"both held timers are named: {err}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_sync_stops_when_the_sync_service_fails(opts):
+    canonical = hashlib.sha256(CANONICAL.encode()).hexdigest()
+    root = _project(fleet=_two_node_fleet())
+    try:
+        code, calls, err = _sync(root, _s3(CANONICAL), {"n1": canonical, "n2": canonical},
+                                 rc={"n1": 1})
+        th.assert_eq(code, 2, "a failed sync service must stop the roll")
+        th.assert_true("config-sync.service exited 1 — see journalctl -u config-sync.service"
+                       in err, err)
+        synced = [n for n, s in calls if "systemctl start config-sync.service" in s]
+        th.assert_eq(synced, ["n1"], "node 2 must never be synced")
+        th.assert_true(not any("systemctl show" in s for _, s in calls),
+                       "no app probe after a failed sync")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_sync_never_treats_an_unreadable_start_time_as_fresh(opts):
+    canonical = hashlib.sha256(CANONICAL.encode()).hexdigest()
+    root = _project(fleet=_two_node_fleet())
+    try:
+        for probe in (_probe_out(pid="", app_age=""), _probe_out(pid="0", app_age="")):
+            code, calls, err = _sync(root, _s3(CANONICAL), {"n1": canonical, "n2": canonical},
+                                     probes={"n1": [probe]}, timeout="0")
+            th.assert_eq(code, 2, f"an unreadable start time must not pass: {err}")
+            th.assert_true("timed out" in err
+                           and "cannot read mojo-asgi.service start time" in err, err)
+            th.assert_eq(_timer_restores(calls), [], "the timers stay held")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_held_timer_report_prints_a_restore_loop(opts):
+    canonical = hashlib.sha256(CANONICAL.encode()).hexdigest()
+    root = _project(fleet=_two_node_fleet())
+    try:
+        code, _, err = _sync(root, _s3(CANONICAL), {"n1": canonical, "n2": canonical},
+                             probes={"n1": [_probe_out(http="502")]}, timeout="0",
+                             timer_state={"n1": (3, "inactive\n", ""),
+                                          "n2": (255, "", "connection lost")})
+        th.assert_eq(code, 2, "an unhealthy node must stop the roll")
+        th.assert_true("health 502" in err, err)
+        th.assert_true("for n in n1 n2; do ssh \"$n\" sudo systemctl start config-sync.timer; done"
+                       in err, f"a copyable loop over the held and unknown nodes: {err}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _run_probe_shell(jobs_rc=0, jobs_out="", asgi="mojo-asgi.service",
+                     unit_id="mojo-asgi.service", parsed=False):
+    """Run the generated probe for `asgi` in real bash with `systemctl`, `ps`,
+    `stat` and `date` stubbed on PATH: an active app 30s old, a conf 600s old,
+    health 200. `show --property=Id` answers `unit_id` (systemd's resolved
+    name); `list-jobs` prints `jobs_out` and exits `jobs_rc`. Returns
+    (current, reason), or the parsed probe when `parsed`."""
+    import stat as stat_mod
+    import subprocess
+    from mojo.deploy import fleet
+
+    bin_dir = tempfile.mkdtemp(prefix="testit_probe.")
+    stubs = {
+        "systemctl": ("case \"$1\" in\n"
+                      "  show) case \"$3\" in\n"
+                      "    --property=Id) echo \"Id=$FAKE_ID\";;\n"
+                      "    *ActiveState*) echo ActiveState=active; echo MainPID=4242;;\n"
+                      "    *) echo MainPID=4242;;\n"
+                      "  esac;;\n"
+                      "  list-jobs) printf '%s' \"$FAKE_JOBS_OUT\"; exit \"$FAKE_JOBS_RC\";;\n"
+                      "esac\n"),
+        "ps": "echo '   30'\n",
+        "stat": "echo 1000\n",
+        "date": "echo 1600\n",
+    }
+    try:
+        for name, body in stubs.items():
+            path = os.path.join(bin_dir, name)
+            with open(path, "w") as handle:
+                handle.write("#!/bin/bash\n" + body)
+            os.chmod(path, stat_mod.S_IRWXU)
+        script = fleet._app_probe(asgi, "/opt/api/var/django.conf", "echo 200")
+        env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}",
+                   FAKE_JOBS_RC=str(jobs_rc), FAKE_JOBS_OUT=jobs_out, FAKE_ID=unit_id)
+        done = subprocess.run(["bash", "-s"], input=script, capture_output=True, text=True,
+                              env=env, timeout=30)
+        th.assert_eq(done.returncode, 0, f"probe script failed: {done.stderr}")
+        probe = fleet._parse_key_values(done.stdout)
+        return probe if parsed else fleet._app_verdict(probe, asgi)
+    finally:
+        shutil.rmtree(bin_dir, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_probe_shell_counts_only_the_asgi_units_own_jobs(opts):
+    th.assert_eq(_run_probe_shell(), (True, ""), "no jobs: a current app passes")
+    th.assert_eq(_run_probe_shell(jobs_out="7 other-mojo-asgi.service start running\n"),
+                 (True, ""), "a job for a unit whose name contains ours is not ours")
+    th.assert_eq(_run_probe_shell(jobs_out="8 mojo-asgi.service restart waiting\n"),
+                 (False, "restart still pending"), "the unit's own queued restart is pending")
+
+
+@th.django_unit_test()
+def test_probe_shell_never_reads_a_failed_job_query_as_no_jobs(opts):
+    current, reason = _run_probe_shell(jobs_rc=1)
+    th.assert_true(not current and reason == "cannot read the job queue for mojo-asgi.service",
+                   f"a failed list-jobs must not pass the gate: {current}, {reason}")
+
+
+@th.django_unit_test()
+def test_sync_keeps_a_node_held_when_its_timer_restore_fails(opts):
+    canonical = hashlib.sha256(CANONICAL.encode()).hexdigest()
+    root = _project(fleet=_two_node_fleet())
+    try:
+        record = {}
+        code, calls, err = _sync(root, _s3(CANONICAL), {"n1": canonical, "n2": canonical},
+                                 restore_fails=("n1",), record=record)
+        th.assert_eq(code, 2, f"a failed timer restore must stop the roll: {err}")
+        th.assert_true("n1: cannot restore config-sync.timer: Failed to start" in err, err)
+        th.assert_true("config-sync.timer restored" not in record["stdout"],
+                       f"a failed restore must never be reported as restored: {record['stdout']}")
+        synced = [n for n, s in calls if "systemctl start config-sync.service" in s]
+        th.assert_eq(synced, ["n1"], "node 2 must never be synced")
+        th.assert_true("still held on n1, n2" in err and "for n in n1 n2;" in err,
+                       f"the report names node 1 with the restore loop: {err}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_probe_shell_matches_jobs_on_the_units_resolved_id(opts):
+    queued = "8 mojo-asgi.service restart waiting\n"
+    for asgi, jobs_out, expected in (
+            ("mojo-asgi", queued, "1"),
+            ("mojo-asgi.service", queued, "1"),
+            ("mojo-asgi", "7 other-mojo-asgi.service start running\n", "0")):
+        probe = _run_probe_shell(asgi=asgi, jobs_out=jobs_out, parsed=True)
+        th.assert_eq(probe.get("jobs"), expected, f"{asgi} with {jobs_out!r}")
+    probe = _run_probe_shell(asgi="mojo-asgi", unit_id="", jobs_out=queued, parsed=True)
+    th.assert_eq(probe.get("jobs"), "", "an empty Id must print jobs= (never a count)")
+    th.assert_eq(_run_probe_shell(asgi="mojo-asgi", jobs_out=queued),
+                 (False, "restart still pending"), "the shorthand name's queued restart is pending")

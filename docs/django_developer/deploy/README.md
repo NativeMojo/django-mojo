@@ -607,11 +607,26 @@ tick, or use `sync` for the usual health-gated rollout.
 
 `sync` never lets two nodes restart together. It holds every node's
 `config-sync.timer`, then per node forces one `config-sync.service` run, checks
-the node's file carries the expected sha, waits `--settle` seconds for the
-jittered restart, polls the ASGI unit and the loopback health path until both
-answer, restores that node's timer, and only then moves on. A failed gate stops
-the roll with the remaining timers still held. (The framework's hostname jitter
-is not a rollout strategy: two hostnames can hash 2 seconds apart — WMWX's did.)
+that it exited 0 and that the node's file carries the expected sha, and gates
+on the ASGI app: the unit is active, no job is queued for it, its main process
+started at or after the conf file on disk was written, and the loopback health
+path answers 200. Both ages are read on the node's clock. A node already
+running the current conf passes at once (`running the current config … no
+restart needed`); otherwise the tool waits `--settle` seconds for the jittered
+restart and polls until the gate passes or `--timeout` runs out. It then
+restores that node's timer and only then moves on; a restore that fails stops the
+roll with that node still held (`cannot restore config-sync.timer`). A failed gate stops the
+roll with the remaining timers still held and names the cause: the sync
+service's exit code (`see journalctl -u config-sync.service`), `app started
+before the conf on disk` (`CONFIG_SYNC_RESTART` off, or an earlier restart
+failed — restart the ASGI unit by hand), the unit not active, a restart still
+pending, `health <code>`, or an unreadable start time or job queue, neither
+of which is ever treated as fresh. (The framework's hostname jitter is not a rollout strategy: two
+hostnames can hash 2 seconds apart — WMWX's did.)
+
+`sync` is for request-serving nodes whose `CONFIG_SYNC_RESTART` is on, and the
+environment's `asgi_service` must be the unit the node's `CONFIG_SYNC_SERVICE`
+restarts. Worker-only nodes have no ASGI app to gate on and fail the gate.
 
 The expected sha is that of the file the node should hold. Without published
 Admin fleet overrides that is the canonical object. When the override object
@@ -639,7 +654,9 @@ When a roll stops, the closing warning asks each held node for its timer's
 live state: `still held` (restore it by hand once the fleet is verified),
 `running again` (usually a deploy: `post_deploy.sh` and `node_setup` run
 `enable --now` on every timer), or `state unknown` (the query failed, timed out
-or printed nothing — an ssh error is never read as a timer state).
+or printed nothing — an ssh error is never read as a timer state). For the
+still-held and unknown nodes it prints a loop to paste once the fleet is
+verified: `for n in <nodes>; do ssh "$n" sudo systemctl start config-sync.timer; done`.
 
 ### `check_setup`
 
