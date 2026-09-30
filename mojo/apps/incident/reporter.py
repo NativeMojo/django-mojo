@@ -268,6 +268,14 @@ def _create_event_dict(details, title=None, category="api_error", level=1, reque
                 event_metadata["bearer"] = mask_token(request.bearer)
             event_metadata["user_name"] = request.user.display_name
             event_metadata["user_email"] = request.user.email
+        # MOJO_SENSITIVE_BODY_PATHS: a host app's listed paths keep no body or
+        # query string in any incident, event, ticket or LLM triage payload.
+        from mojo.helpers.request import is_host_sensitive, HOST_SENSITIVE_MARKER
+        if is_host_sensitive(request):
+            if "request_data" in kwargs:
+                kwargs["request_data"] = dict(HOST_SENSITIVE_MARKER)
+            event_metadata["http_query_string"] = ""
+            event_metadata.update(HOST_SENSITIVE_MARKER)
 
     if group is not None:
         event_metadata["group_id"] = getattr(group, "id", None)

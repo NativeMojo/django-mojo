@@ -1,4 +1,5 @@
 import ipaddress
+import re
 
 from objict import objict, nobjict
 from .request_parser import RequestDataParser
@@ -219,7 +220,120 @@ def sensitive_body_label(request):
         return "certificate_material"
     if path.startswith(f"{API_ROOT}/edge/material/"):
         return "certificate_material"
+    # Host paths come last, so a host prefix never renames a framework label.
+    return _host_label_or_closed(path)
+
+
+# MOJO_SENSITIVE_BODY_PATHS: opt-in path prefixes a host app lists so error
+# incidents on them keep no request body, query string or exception message.
+# Static (get_static) so a database Setting cannot weaken it. Only the listed
+# host paths are masked in incidents; framework labels keep today's behaviour.
+# See docs/django_developer/security/README.md "Sensitive request bodies".
+HOST_SENSITIVE_LABEL = "host_sensitive"
+HOST_SENSITIVE_MARKER = {"sensitive_body": HOST_SENSITIVE_LABEL}
+_HOST_PATHS_SETTING = "MOJO_SENSITIVE_BODY_PATHS"
+_HOST_PATH_MAX = 256
+_HOST_SEGMENT_RE = re.compile(r"[A-Za-z0-9._~-]+")
+_UNSET = object()
+_host_paths_cache = [_UNSET, ()]
+_host_paths_error_logged = [False]
+
+
+def host_sensitive_paths(value=_UNSET):
+    """Return the validated MOJO_SENSITIVE_BODY_PATHS prefixes as a tuple.
+
+    Each entry is the literal "/" (every path, returned as "") or
+    "/"-separated segments of [A-Za-z0-9._~-]; a trailing "/" is stripped.
+    Raises ImproperlyConfigured naming the setting and the bad entry.
+    """
+    from_setting = value is _UNSET
+    if from_setting:
+        value = settings.get_static(_HOST_PATHS_SETTING, [])
+        cached_raw, cached = _host_paths_cache
+        if cached_raw is not _UNSET and cached_raw == value and type(cached_raw) is type(value):
+            return cached
+    result = _validate_host_paths(value)
+    if from_setting:
+        _host_paths_cache[0] = list(value) if isinstance(value, list) else value
+        _host_paths_cache[1] = result
+    return result
+
+
+def _validate_host_paths(value):
+    from django.core.exceptions import ImproperlyConfigured
+
+    def bad(entry, why):
+        return ImproperlyConfigured(
+            f"{_HOST_PATHS_SETTING} entry {entry!r} is invalid: {why}")
+
+    if not isinstance(value, (list, tuple)):
+        raise ImproperlyConfigured(
+            f"{_HOST_PATHS_SETTING} must be a list or tuple of path strings, "
+            f"not {type(value).__name__}")
+    prefixes = []
+    for entry in value:
+        if not isinstance(entry, str):
+            raise bad(entry, "must be a string")
+        if len(entry) > _HOST_PATH_MAX:
+            raise bad(entry, f"longer than {_HOST_PATH_MAX} characters")
+        if entry == "/":
+            prefixes.append("")
+            continue
+        if not entry.startswith("/"):
+            raise bad(entry, "must start with '/'")
+        body = entry[1:]
+        if body.endswith("/"):
+            body = body[:-1]
+        for segment in body.split("/"):
+            if segment in ("", ".", "..") or not _HOST_SEGMENT_RE.fullmatch(segment):
+                raise bad(entry, "segments must be non-empty [A-Za-z0-9._~-] and not '.' or '..'")
+        prefixes.append("/" + body)
+    return tuple(prefixes)
+
+
+def host_label(path, prefixes):
+    """Return "host_sensitive" when `path` is under one of `prefixes`.
+
+    Matching is by whole segment: "/api/pay" does not match "/api/payments".
+    An "" prefix (from "/") matches every path.
+    """
+    for prefix in prefixes:
+        if prefix == "" or path == prefix or path.startswith(prefix + "/"):
+            return HOST_SENSITIVE_LABEL
     return None
+
+
+def _host_label_or_closed(path):
+    # Every request passes through here, so a bad setting must never raise:
+    # treat every path as listed (fail closed) and log once per process.
+    try:
+        prefixes = host_sensitive_paths()
+    except Exception as err:
+        if not _host_paths_error_logged[0]:
+            _host_paths_error_logged[0] = True
+            from mojo.helpers import logit
+            logit.error(f"{_HOST_PATHS_SETTING} is invalid; masking every path: {err}")
+        return HOST_SENSITIVE_LABEL
+    return host_label(path, prefixes)
+
+
+def is_host_sensitive(request):
+    """True when the request is under a MOJO_SENSITIVE_BODY_PATHS prefix.
+
+    Checked on its own, not through sensitive_body_label(), so a listed host
+    prefix under a framework-labelled path is still masked and a framework
+    label alone never is. Cached on request._host_sensitive; fails closed.
+    """
+    cached = getattr(request, "_host_sensitive", None)
+    if cached is not None:
+        return cached
+    path = str(getattr(request, "path", "") or "").rstrip("/")
+    result = _host_label_or_closed(path) is not None
+    try:
+        request._host_sensitive = result
+    except AttributeError:
+        pass
+    return result
 
 
 def is_override_user_session(request):
