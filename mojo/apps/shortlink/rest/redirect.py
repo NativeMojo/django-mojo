@@ -54,7 +54,13 @@ def _render_unavailable(request):
 
 
 def _render_og_html(link, destination_url):
-    """Render a minimal HTML page with OG meta tags for bot previews."""
+    """Render a minimal HTML page with OG meta tags for bot previews.
+
+    Every value printed is escaped: the preview data and the destination both
+    come from whoever made the link, and this page is served on our origin.
+    """
+    from django.utils.html import escape
+
     og = link.get_og_metadata()
     if not og:
         # No metadata at all — just redirect the bot too
@@ -64,8 +70,8 @@ def _render_og_html(link, destination_url):
     for key, value in og.items():
         if key.startswith("_"):
             continue
-        safe_key = str(key).replace('"', '&quot;')
-        safe_val = str(value).replace('"', '&quot;')
+        safe_key = escape(str(key))
+        safe_val = escape(str(value))
         if key.startswith("twitter:"):
             meta_tags.append(f'<meta name="{safe_key}" content="{safe_val}">')
         else:
@@ -74,8 +80,8 @@ def _render_og_html(link, destination_url):
     if not meta_tags:
         return None
 
-    title = og.get("og:title", "")
-    safe_dest = destination_url.replace('"', '&quot;').replace("'", "&#39;")
+    title = escape(str(og.get("og:title", "")))
+    safe_dest = escape(destination_url)
     html = f"""<!DOCTYPE html>
 <html>
 <head>

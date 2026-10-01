@@ -15,7 +15,7 @@ from mojo.apps.account.services import sms_delivery
 from mojo.apps.account.services import token_landing
 from mojo.apps.account.services import fresh_auth
 from mojo.apps.account.utils import tokens
-from mojo.apps.account.utils.webapp_url import build_token_url
+from mojo.apps.account.utils.webapp_url import build_token_url, clean_webapp_origin
 from mojo.apps.shortlink import maybe_shorten_url
 from mojo.helpers import dates, crypto, logit
 from mojo.helpers import request as request_helpers
@@ -947,7 +947,10 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
         access_token_expiry=access_token_expiry,
         refresh_token_expiry=refresh_token_expiry).create(**keys)
     # track webapp origin for multi-tenant URL resolution
-    webapp_url = request.DATA.get("webapp_base_url") or request.META.get("HTTP_ORIGIN")
+    # Shape-checked only: whether a token link may use it is decided at read,
+    # by get_webapp_base_url.
+    webapp_url = (clean_webapp_origin(request.DATA.get("webapp_base_url"))
+                  or clean_webapp_origin(request.META.get("HTTP_ORIGIN")))
     if webapp_url:
         if not user.get_protected_metadata("orig_webapp_url"):
             user.set_protected_metadata("orig_webapp_url", webapp_url)

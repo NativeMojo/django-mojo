@@ -531,6 +531,65 @@ def test_rest_bot_passthrough(opts):
     assert_eq(resp.status_code, 302, f"bot_passthrough should always 302, got {resp.status_code}")
 
 
+def _bot_preview(opts, link):
+    resp = opts.client.get(f"/s/{link.code}", allow_redirects=False,
+                           headers={"User-Agent": "Slackbot-LinkExpanding 1.0"})
+    assert_eq(resp.status_code, 200, f"bot user-agent should receive OG HTML, got {resp.status_code}")
+    return resp.response if isinstance(resp.response, str) else str(resp.response)
+
+
+@th.django_unit_test("REST: /s/<code> escapes the preview title, keys and values (item 6225)")
+def test_rest_bot_og_escapes_metadata(opts):
+    import html
+    from mojo.apps.shortlink.models import ShortLink
+
+    title = '</title><script>alert("t")</script>'
+    description = '"><img src=x onerror=alert(1)> & \'more\''
+    key = 'og:x"><script>alert("k")</script>'
+    twitter_key = 'twitter:x"><b>'
+    link = ShortLink.create(
+        url=REAL_URL_A,
+        source="test",
+        metadata={"og:title": title, "og:description": description,
+                  key: "key value", twitter_key: "<i>tw</i>"},
+    )
+    body = _bot_preview(opts, link)
+    for raw in ("<script", "<img", "<b>", "<i>"):
+        assert_true(raw not in body.lower(),
+                    f"the preview page must not print {raw!r} from preview data as markup")
+    assert_true(f"<title>{html.escape(title)}</title>" in body,
+                "the title must be printed escaped")
+    assert_true(f'<meta property="og:description" content="{html.escape(description)}">' in body,
+                "a preview value must be printed escaped")
+    assert_true(f'<meta property="{html.escape(key)}" content="key value">' in body,
+                "a preview key must be printed escaped")
+    assert_true(f'<meta name="{html.escape(twitter_key)}" content="{html.escape("<i>tw</i>")}">' in body,
+                "a twitter preview key and value must be printed escaped")
+
+
+@th.django_unit_test("REST: /s/<code> escapes the destination and keeps it exact (item 6225)")
+def test_rest_bot_og_escapes_destination(opts):
+    import html
+    import re
+    from mojo.apps.shortlink.models import ShortLink
+
+    destination = "https://example.invalid/<script>alert(1)</script>?a=1&b='2'&c=\"3\""
+    link = ShortLink.create(url=destination, source="test",
+                            metadata={"og:title": "Plain title"})
+    body = _bot_preview(opts, link)
+    assert_true("<script" not in body.lower(),
+                "the preview page must not print the destination as markup")
+    hrefs = re.findall(r'<a href="([^"]*)">([^<]*)</a>', body)
+    assert_eq(len(hrefs), 1, f"the preview page must hold one link, got {hrefs}")
+    assert_eq(html.unescape(hrefs[0][0]), destination,
+              "the link target, once unescaped, must be the exact destination")
+    assert_eq(html.unescape(hrefs[0][1]), destination,
+              "the link text, once unescaped, must be the exact destination")
+    refresh = re.findall(r'<meta http-equiv="refresh" content="([^"]*)">', body)
+    assert_eq([html.unescape(val) for val in refresh], [f"0;url={destination}"],
+              "the refresh target, once unescaped, must be the exact destination")
+
+
 # ---------------------------------------------------------------------------
 # REST: dead-link page
 #

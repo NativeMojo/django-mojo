@@ -27,11 +27,17 @@ Usage:
     url = shorten("https://example.com/docs", expire_days=0, expire_hours=0)
 """
 
+# The preview title every token short link carries. The redirect handler only
+# holds a preview bot back when a link has preview data, and token links are
+# never scraped for any. A constant, never a setting or a request value: the
+# preview page prints it unescaped in <title>.
+TOKEN_LINK_PREVIEW_TITLE = "Secure link"
+
 
 def shorten(url="", file=None, rendition=None, source="", expire_days=3, expire_hours=0,
             metadata=None, track_clicks=False, resolve_file=True,
             bot_passthrough=False, is_protected=False,
-            user=None, group=None, base_url=None):
+            user=None, group=None, base_url=None, scrape=True):
     """
     Create a shortened URL and return the full short URL string.
 
@@ -48,6 +54,9 @@ def shorten(url="", file=None, rendition=None, source="", expire_days=3, expire_
         user: User who created the link.
         group: Group scope.
         base_url: Override base URL (default: SHORTLINK_BASE_URL or BASE_URL).
+        scrape: False = never fetch the destination for OG preview metadata.
+            Required when the URL carries a secret: the scrape job requests
+            the full URL, token included.
 
     Returns:
         Full short URL string, e.g. "https://itf.io/s/Xk9mR2p"
@@ -91,7 +100,7 @@ def shorten(url="", file=None, rendition=None, source="", expire_days=3, expire_
         pass
 
     # Fire async scrape job if no custom OG data and not bot_passthrough
-    if not bot_passthrough and not any(k.startswith("og:") for k in (metadata or {})):
+    if scrape and not bot_passthrough and not any(k.startswith("og:") for k in (metadata or {})):
         if url:
             target = url
         elif rendition:
@@ -128,6 +137,10 @@ def maybe_shorten_url(url, source, user=None, expire_days=0, expire_hours=0):
     Intended for transactional token links (invite, magic login, password reset,
     email verify). Always uses bot_passthrough=False so link-preview bots hit
     the OG interstitial page instead of consuming the single-use token.
+    Always uses scrape=False: the destination is never fetched, because the
+    scrape job would hand the token in the URL to whatever host it names.
+    Always stores TOKEN_LINK_PREVIEW_TITLE: with no preview data the redirect
+    handler sends a bot straight to the destination.
 
     Args:
         url: Destination URL to shorten.
@@ -152,6 +165,8 @@ def maybe_shorten_url(url, source, user=None, expire_days=0, expire_hours=0):
             expire_days=expire_days,
             expire_hours=expire_hours,
             bot_passthrough=False,
+            scrape=False,
+            metadata={"og:title": TOKEN_LINK_PREVIEW_TITLE},
         )
     except Exception:
         return url
