@@ -23,6 +23,11 @@ EVIL = "https://evil.example"
 TOKEN_URL = "https://tlh-frontend.invalid/auth?flow=magic_login&token=ml:tlh"
 PREVIEW_BOTS = ["Slackbot-LinkExpanding 1.0", "WhatsApp/2.23", "facebookexternalhit/1.1"]
 BROWSER = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15"
+# A tenant chooses its frontend address, and a path may hold markup. The
+# preview page prints the address, on the short-link origin.
+EMAIL_MARKUP = "tlh_markup@test.com"
+GROUP_MARKUP = "tlh-markup"
+MARKUP_BASE = "https://tlh-frontend.invalid/<script>alert(6225)</script>/a&b"
 SCRAPE_JOB = "mojo.apps.shortlink.services.scraper.scrape_og_metadata"
 UNIFORM = {
     "auth/magic/send": "If account is in our system a login link was sent.",
@@ -39,8 +44,9 @@ def setup_token_link_host(opts):
     clear_rate_limits(ip="127.0.0.1")
     ShortLink.objects.filter(user__email=EMAIL).delete()
     ShortLink.objects.filter(source="tlh_magic_login").delete()
-    User.objects.filter(email=EMAIL).delete()
-    Group.objects.filter(name__in=[GROUP_HOME, GROUP_FOREIGN]).delete()
+    ShortLink.objects.filter(source="tlh_markup").delete()
+    User.objects.filter(email__in=[EMAIL, EMAIL_MARKUP]).delete()
+    Group.objects.filter(name__in=[GROUP_HOME, GROUP_FOREIGN, GROUP_MARKUP]).delete()
 
     home = Group.objects.create(
         name=GROUP_HOME, is_active=True, metadata={"webapp_base_url": HOME_BASE})
@@ -50,6 +56,10 @@ def setup_token_link_host(opts):
     user = User.objects.create(username=EMAIL, email=EMAIL, is_active=True, org=home)
     opts.user_id = user.pk
     opts.foreign_id = foreign.pk
+    markup = Group.objects.create(
+        name=GROUP_MARKUP, is_active=True, metadata={"webapp_base_url": MARKUP_BASE})
+    User.objects.create(
+        username=EMAIL_MARKUP, email=EMAIL_MARKUP, is_active=True, org=markup)
 
 
 def _send_and_read_link(opts, path, payload, source, params=None):
@@ -132,3 +142,33 @@ def test_preview_bot_is_not_redirected_to_token_link(opts):
 
     assert_eq(Job.objects.filter(func=SCRAPE_JOB, payload__shortlink_id=link.pk).count(), 0,
               "nothing may queue a fetch of the token link")
+
+
+@th.django_unit_test("the preview page escapes a token link whose tenant address holds markup")
+def test_preview_page_escapes_tenant_address(opts):
+    import html
+    import re
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils.webapp_url import build_token_url
+    from mojo.apps.shortlink import maybe_shorten_url
+
+    user = User.objects.get(email=EMAIL_MARKUP)
+    url = build_token_url("magic_login", "ml:tlh", user=user)
+    assert_eq(url, f"{MARKUP_BASE}/auth?flow=magic_login&token=ml:tlh",
+              "the link is built on the account's own tenant address")
+    short = maybe_shorten_url(url, source="tlh_markup", expire_hours=1)
+    assert_true(short != url, "the token link must have been shortened")
+
+    resp = opts.client.get(f"/s/{short.rsplit('/', 1)[-1]}", allow_redirects=False,
+                           headers={"User-Agent": PREVIEW_BOTS[1]})
+    assert_eq(resp.status_code, 200, f"a preview bot must get the preview page, got {resp.status_code}")
+    body = resp.response if isinstance(resp.response, str) else str(resp.response)
+    assert_true("<script" not in body.lower(),
+                "the preview page must not print the tenant address as markup")
+    hrefs = re.findall(r'<a href="([^"]*)">', body)
+    assert_eq(len(hrefs), 1, f"the preview page must hold one link, got {hrefs}")
+    assert_eq(html.unescape(hrefs[0]), url,
+              "the link target, once unescaped, must be the exact token link")
+    refresh = re.findall(r'<meta http-equiv="refresh" content="([^"]*)">', body)
+    assert_eq([html.unescape(val) for val in refresh], [f"0;url={url}"],
+              "the refresh target, once unescaped, must be the exact token link")
