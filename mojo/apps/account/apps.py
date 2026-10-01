@@ -8,6 +8,9 @@ class AppConfig(BaseAppConfig):
         # A bad MOJO_SENSITIVE_BODY_PATHS stops startup rather than the first
         # request (which would otherwise fail closed and mask every path).
         self._check_sensitive_body_paths()
+        # A bad WEBAPP_ALLOWED_ORIGINS stops startup: it decides where token
+        # links may point.
+        self._check_webapp_allowed_origins()
         # Import the protected-setting registry at startup so downstream apps
         # can extend one stable boundary from their own AppConfig.ready().
         from mojo.apps.account.services import system_settings  # noqa: F401
@@ -27,6 +30,10 @@ class AppConfig(BaseAppConfig):
     def _check_sensitive_body_paths(self):
         from mojo.helpers import request
         request.host_sensitive_paths()
+
+    def _check_webapp_allowed_origins(self):
+        from mojo.apps.account.utils import webapp_url
+        webapp_url.allowed_origins()
 
     def unregister_apps(self):
         from django.contrib import admin
