@@ -1208,9 +1208,10 @@ registered resource is enabled; until then every endpoint answers 404.
 - `WEBAPP_ALLOWED_ORIGINS` — **file-only** (`settings.get_static`). List,
   default `[]`. Extra frontend origins, beyond `WEBAPP_BASE_URL` and `BASE_URL`,
   that an emailed or texted token link (`invite`, `magic_login`,
-  `password_reset`) may point at. Entries are `http(s)` origins
+  `password_reset`) may point at. Entries are `http(s)` origins with no path
   (`https://admin.example.com`); `https://*.example.com` is accepted for
-  per-tenant subdomains. A request's `webapp_base_url`, a caller-named
+  per-tenant subdomains and matches `example.com` and exactly one label under
+  it. A request's `webapp_base_url`, a caller-named
   `?group=` and the `Origin` header can **select** a listed origin and cannot
   add one. Listing an origin makes it selectable for **any** account, so list
   only frontends you trust with any user's session; a tenant's own frontend

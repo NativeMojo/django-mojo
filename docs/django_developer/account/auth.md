@@ -47,7 +47,8 @@ On every `jwt_login` call the framework captures the frontend origin from `reque
 - `user.metadata["protected"]["orig_webapp_url"]` — set once at first login, never overwritten
 - `user.metadata["protected"]["last_webapp_url"]` — updated on every subsequent login
 
-Only a well-formed `http(s)` origin is stored — never `null` or a non-string.
+Only a well-formed `http(s)` URL is stored — never `null`, a non-string or a
+value with credentials, a query or a fragment.
 Both values are **caller-supplied**, so
 they are a record of where the user logged in from, not a trusted frontend.
 
@@ -1254,14 +1255,20 @@ What the resolver guarantees:
   `Origin: null`, `javascript:` and `//host` are ignored without an error.
   Custom-scheme (mobile deep-link) bases are not accepted.
 - **Matching is exact on scheme, host and port** (the same matcher as the
-  redirect allowlists). `app.example.com.evil.tld` does not match
-  `app.example.com`.
+  redirect allowlists), and the request's path must be at or under the
+  configured value's path. `app.example.com.evil.tld` does not match
+  `app.example.com`. A wildcard entry `https://*.example.com` matches
+  `example.com` and exactly one label under it (`a.example.com`, not
+  `a.b.example.com`); a wildcard match yields the request's bare
+  `scheme://host[:port]`.
 - **An untrusted value is ignored, not refused.** The request still succeeds and
   the link goes to the next source in the order. `POST /api/auth/magic/send` and
   `POST /api/auth/forgot` keep their uniform response.
 - **Each ignored value files one `auth:webapp_base_url_refused` incident**
-  naming the source and the host, at most once per host per hour. That incident
-  is how you find a frontend you forgot to list.
+  naming the source and the host, at most once per host per hour and for at
+  most 50 distinct hosts an hour (the send endpoints are public, so a caller
+  cannot mint one incident per made-up host). That incident is how you find a
+  frontend you forgot to list.
 - **The composed link is re-checked.** After the base and auth path are joined,
   the URL is parsed again and its scheme, host and port must equal the chosen
   base's.
@@ -1269,7 +1276,8 @@ What the resolver guarantees:
 **Auth path.** `group.metadata["webapp_auth_path"]` is used only for a
 home-tenant group; otherwise `WEBAPP_AUTH_PATH` (default `"/auth"`). Every
 value must start with a single `/` and contain no `//`, `@`, `\`, `?`, `#`,
-whitespace or control character. A value that fails falls back to `/auth`.
+whitespace or control character. A group value that fails is skipped in favour
+of `WEBAPP_AUTH_PATH`; a `WEBAPP_AUTH_PATH` that fails falls back to `/auth`.
 
 Configure per tenant without a deploy — this applies to accounts whose
 `user.org` is in this group's tenant tree:
@@ -1287,7 +1295,7 @@ List an operator frontend (file-only, so a database row cannot widen it):
 WEBAPP_BASE_URL = "https://app.example.com"
 WEBAPP_ALLOWED_ORIGINS = [
     "https://admin.example.com",
-    "https://*.tenants.example.com",   # per-tenant subdomains
+    "https://*.tenants.example.com",   # tenants.example.com and one label under it
 ]
 ```
 
