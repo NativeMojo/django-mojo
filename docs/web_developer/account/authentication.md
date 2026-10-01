@@ -511,6 +511,15 @@ Returns a JWT on success (automatically logs the user in).
 
 A reset link with a signed token is emailed.
 
+The link lands on a frontend the deployment's operator configured, or on the
+frontend of the tenant that owns the account. An optional `webapp_base_url`
+(an origin such as `https://app.example.com`), a `group` / `group_uuid`
+parameter and the browser's `Origin` header can **select** one of those
+frontends; they cannot add a new one (1.31.4). A value that is not configured
+is ignored — the response is the same and the link goes to the default
+frontend. The same rule applies to magic login links and invites; see
+[Magic Login Links](magic_login.md).
+
 **Step 2: Submit token and new password**
 
 **POST** `/api/auth/password/reset/token`
