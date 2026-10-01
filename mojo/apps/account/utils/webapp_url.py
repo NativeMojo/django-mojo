@@ -187,12 +187,13 @@ def _select_trusted(candidate, operator, home_values):
     return None
 
 
-def _report_refused(source, value, request=None):
+def _report_refused(source, value, request=None, malformed=False):
     """File one suppressed incident for an untrusted base. Never raises.
 
     Keyed by host, at most once an hour, budgeted and fail-closed: the callers
     are public endpoints, so a raw log line or event would be free
     amplification (see redirect_allowlist.report_refused_redirect_uri).
+    `malformed` is for a tenant's own value that fails the shape rule.
     """
     try:
         from mojo.apps import incident
@@ -204,13 +205,22 @@ def _report_refused(source, value, request=None):
                 host = parsed_host
         except (ValueError, TypeError, AttributeError):
             pass
+        if malformed:
+            why = (
+                f"it is not a plain http(s) URL or a plain relative path: no "
+                f"other scheme, credentials, query, fragment, backslash or "
+                f"whitespace is accepted. The link went to the next configured "
+                f"frontend instead. Correct the tenant's webapp_base_url.")
+        else:
+            why = (
+                f"it is not WEBAPP_BASE_URL, not on {ALLOWED_ORIGINS_SETTING}, "
+                f"and not the frontend of the tenant that created the account. "
+                f"The link went to the configured frontend instead. If this "
+                f"host is one of your frontends, add it to "
+                f"{ALLOWED_ORIGINS_SETTING}; otherwise it is a probe.")
         incident.report_event_suppressed(
             f"A token link (magic login, password reset or invite) was not sent "
-            f"to {value!r:.200}, taken from {source}: it is not WEBAPP_BASE_URL, "
-            f"not on {ALLOWED_ORIGINS_SETTING}, and not the frontend of the tenant "
-            f"that created the account. The link went to the configured frontend "
-            f"instead. If this host is one of your frontends, add it to "
-            f"{ALLOWED_ORIGINS_SETTING}; otherwise it is a probe.",
+            f"to {value!r:.200}, taken from {source}: {why}",
             key=host,
             title=f"Refused token link host: {host}",
             category=CATEGORY_BASE_REFUSED,
@@ -247,14 +257,21 @@ def _iter_webapp_bases(request, user, group, operator_origins):
             if chosen is not None:
                 yield chosen
     if group_val:
-        if home_group:
-            yield group_val.rstrip("/")
-        else:
+        if not home_group:
             chosen = select("a group outside the account's tenant", group_val)
             if chosen is not None:
                 yield chosen
+        elif _valid_tenant_base(group_val):
+            yield group_val.rstrip("/")
+        else:
+            _report_refused("the account's tenant group", group_val,
+                            request=request, malformed=True)
     if org_val:
-        yield org_val.rstrip("/")
+        if _valid_tenant_base(org_val):
+            yield org_val.rstrip("/")
+        else:
+            _report_refused("the account's org", org_val, request=request,
+                            malformed=True)
     val = settings.get("WEBAPP_BASE_URL") or ""
     if val:
         yield val.rstrip("/")
@@ -295,11 +312,14 @@ def get_webapp_base_url(request=None, user=None, group=None, *,
     * a home-tenant value — the `webapp_base_url` metadata of `user.org`, or of
       `group` when it is in the tenant tree that created the account.
 
-    Steps 3, 4 and 7 are configured values and are used as they are. Steps 1,
-    5 and 6, and step 2 for a group outside the account's tenant, can only
-    SELECT a trusted value: the configured value that matched is returned,
-    never the caller's string. Anything else is ignored and reported once per
-    host per hour as `auth:webapp_base_url_refused`.
+    Steps 4 and 7 are the operator's own settings and are used as they are. A
+    home-tenant value (step 3, and step 2 for a home group) is used only when
+    it is a plain http(s) URL or a plain relative path such as `/portal`; any
+    other shape is skipped for the next step. Steps 1, 5 and 6, and step 2 for
+    a group outside the account's tenant, can only SELECT a trusted value: the
+    configured value that matched is returned, never the caller's string.
+    Anything refused or skipped is reported once per host per hour as
+    `auth:webapp_base_url_refused`.
 
     `operator_origins` is a keyword-only test seam: the operator origins to
     match against, in place of the ones read from settings.
@@ -317,7 +337,13 @@ def _valid_auth_path(val):
                    for ch in val)
 
 
-def get_webapp_auth_path(group=None, user=None):
+def _valid_tenant_base(val):
+    """A tenant's `webapp_base_url` is trusted for WHO set it, not for its
+    shape: it must still be a plain http(s) URL or a plain relative path."""
+    return _parse(val) is not None or _valid_auth_path(val)
+
+
+def get_webapp_auth_path(group=None, user=None, *, auth_path=_FROM_SETTINGS):
     """
     Resolve the frontend auth path (e.g. "/auth" or "/login").
 
@@ -329,13 +355,19 @@ def get_webapp_auth_path(group=None, user=None):
     3. "/auth"                                       — built-in default
 
     A value that is not a plain path (one leading "/", no "//", "@", "\\", "?",
-    "#", whitespace or control character) is skipped.
+    "#", whitespace or control character) is skipped. The setting may also be
+    "": the link then has no path after the base.
+
+    `auth_path` is a keyword-only test seam: the value to use in place of
+    settings.WEBAPP_AUTH_PATH.
     """
     if group is not None and _is_home_group(group, user):
         val = _metadata_str(group, "webapp_auth_path")
         if val and _valid_auth_path(val):
             return val.rstrip("/")
-    val = settings.get("WEBAPP_AUTH_PATH", DEFAULT_AUTH_PATH)
+    val = auth_path
+    if val is _FROM_SETTINGS:
+        val = settings.get("WEBAPP_AUTH_PATH", DEFAULT_AUTH_PATH)
     if val == "" or _valid_auth_path(val):
         return val
     return DEFAULT_AUTH_PATH
@@ -364,7 +396,7 @@ def get_api_base_url(request=None):
 
 
 def build_token_url(flow, token, request=None, user=None, group=None, *,
-                    operator_origins=_FROM_SETTINGS):
+                    operator_origins=_FROM_SETTINGS, auth_path=_FROM_SETTINGS):
     """
     Build the full URL an emailed token link should point at.
 
@@ -378,7 +410,8 @@ def build_token_url(flow, token, request=None, user=None, group=None, *,
     framework somewhere other than /api gets working links automatically.
 
     The frontend base is resolved by `get_webapp_base_url`, which only trusts a
-    configured frontend; `operator_origins` is its test seam.
+    configured frontend; `operator_origins` is its test seam, and `auth_path`
+    is the one of `get_webapp_auth_path`.
 
     The token is percent-encoded on the landing branch (the colon is kept, it
     is legal and readable): a signature can contain `+`, which a query string
@@ -388,7 +421,7 @@ def build_token_url(flow, token, request=None, user=None, group=None, *,
     if prefix:
         api_base = get_api_base_url(request=request)
         return f"{api_base}{token_landing.landing_path(prefix)}?token={quote(str(token), safe=':')}"
-    auth_path = get_webapp_auth_path(group=group, user=user)
+    auth_path = get_webapp_auth_path(group=group, user=user, auth_path=auth_path)
     for base_url in _iter_webapp_bases(request, user, group, operator_origins):
         url = f"{base_url}{auth_path}?flow={flow}&token={token}"
         # Re-read the finished URL: the base and path are both checked, and

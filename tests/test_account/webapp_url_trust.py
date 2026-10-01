@@ -19,7 +19,9 @@ EMAIL_PLAIN = "wut_plain@test.com"
 EMAIL_HOME = "wut_home@test.com"
 EMAIL_INVITE_FOREIGN = "wut_invite_foreign@test.com"
 EMAIL_INVITE_OWN = "wut_invite_own@test.com"
-EMAILS = [EMAIL_SCRAPE, EMAIL_PLAIN, EMAIL_HOME, EMAIL_INVITE_FOREIGN, EMAIL_INVITE_OWN]
+EMAIL_SHAPE = "wut_shape@test.com"
+EMAILS = [EMAIL_SCRAPE, EMAIL_PLAIN, EMAIL_HOME, EMAIL_INVITE_FOREIGN, EMAIL_INVITE_OWN,
+          EMAIL_SHAPE]
 
 # `.invalid` never resolves, so the control job below can fetch nothing even
 # where a jobs runner picks it up.
@@ -38,7 +40,23 @@ GROUP_FOREIGN = "wut-foreign"
 GROUP_PATHS = "wut-home-paths"
 HOME_BASE = "https://home.wut-tenant.example"
 CHILD_BASE = "https://child.wut-tenant.example"
-GROUPS = [GROUP_HOME, GROUP_HOME_CHILD, GROUP_FOREIGN, GROUP_PATHS]
+GROUP_SHAPE = "wut-shape-org"
+GROUPS = [GROUP_HOME, GROUP_HOME_CHILD, GROUP_FOREIGN, GROUP_PATHS, GROUP_SHAPE]
+
+# A tenant's own webapp_base_url that is not a plain http(s) URL or a plain
+# relative path: each would put the auth path and token somewhere else.
+BAD_TENANT_BASES = [
+    HOME_BASE + "#x",
+    HOME_BASE + "?x=1",
+    "myapp://callback",
+    "//home.wut-tenant.example",
+    "https://u:p@home.wut-tenant.example",
+    HOME_BASE + "\\x",
+]
+GOOD_TENANT_BASES = [
+    ("/portal", "/portal/auth?flow=magic_login&token=tok"),
+    (HOME_BASE + "/portal", HOME_BASE + "/portal/auth?flow=magic_login&token=tok"),
+]
 
 
 def _request(webapp_base_url=None, origin=None):
@@ -99,6 +117,9 @@ def setup_webapp_url_trust(opts):
         username=EMAIL_PLAIN, email=EMAIL_PLAIN, is_active=True)
     opts.home_user = User.objects.create(
         username=EMAIL_HOME, email=EMAIL_HOME, is_active=True, org=opts.home)
+    opts.shape_org = Group.objects.create(name=GROUP_SHAPE, is_active=True, metadata={})
+    opts.shape_user = User.objects.create(
+        username=EMAIL_SHAPE, email=EMAIL_SHAPE, is_active=True, org=opts.shape_org)
 
 
 @th.django_unit_test("a foreign webapp_base_url cannot move a magic or reset link off the operator origin")
@@ -250,6 +271,67 @@ def test_auth_path_cannot_move_host(opts):
         group.save()
 
 
+@th.django_unit_test("an org's webapp_base_url is used only as a plain URL or relative path")
+def test_org_value_shape(opts):
+    from mojo.apps.account.models import User
+
+    org = opts.shape_org
+    try:
+        for value in BAD_TENANT_BASES:
+            org.metadata = {"webapp_base_url": value}
+            org.save()
+            user = User.objects.get(email=EMAIL_SHAPE)
+            assert_eq(_link(user=user), "/auth?flow=magic_login&token=tok",
+                      f"the org value {value!r} must be skipped for the next source")
+        for value, expected in GOOD_TENANT_BASES:
+            org.metadata = {"webapp_base_url": value}
+            org.save()
+            user = User.objects.get(email=EMAIL_SHAPE)
+            assert_eq(_link(user=user), expected,
+                      f"the org value {value!r} is plain and must still be used")
+    finally:
+        org.metadata = {}
+        org.save()
+
+
+@th.django_unit_test("a home group's webapp_base_url is used only as a plain URL or relative path")
+def test_home_group_value_shape(opts):
+    from mojo.apps.account.models import Group
+
+    user = opts.home_user
+    try:
+        for value in BAD_TENANT_BASES:
+            opts.home_paths.metadata = {"webapp_base_url": value}
+            opts.home_paths.save()
+            group = Group.objects.get(pk=opts.home_paths.pk)
+            assert_eq(_link(user=user, group=group),
+                      f"{HOME_BASE}/auth?flow=magic_login&token=tok",
+                      f"the home group value {value!r} must be skipped for the org's value")
+        for value, expected in GOOD_TENANT_BASES:
+            opts.home_paths.metadata = {"webapp_base_url": value}
+            opts.home_paths.save()
+            group = Group.objects.get(pk=opts.home_paths.pk)
+            assert_eq(_link(user=user, group=group), expected,
+                      f"the home group value {value!r} is plain and must still be used")
+    finally:
+        opts.home_paths.metadata = {}
+        opts.home_paths.save()
+
+
+@th.django_unit_test("an empty WEBAPP_AUTH_PATH gives a link with no path")
+def test_empty_auth_path(opts):
+    user = opts.home_user
+    assert_eq(_link(user=user, auth_path=""), f"{HOME_BASE}?flow=magic_login&token=tok",
+              "an empty WEBAPP_AUTH_PATH must put the query straight after the base")
+    assert_eq(_link(user=user, auth_path="/sign-in"),
+              f"{HOME_BASE}/sign-in?flow=magic_login&token=tok",
+              "a plain WEBAPP_AUTH_PATH is used")
+    for value in ("@evil.example/a", "//evil.example", None, 7):
+        assert_eq(_link(user=user, auth_path=value),
+                  f"{HOME_BASE}/auth?flow=magic_login&token=tok",
+                  f"the WEBAPP_AUTH_PATH {value!r} must fall back to /auth")
+
+
 @th.django_unit_test("an Origin header selects a trusted frontend and can never add one")
 def test_origin_header(opts):
     user = opts.plain_user
@@ -311,6 +393,9 @@ def test_token_shortlink_queues_no_scrape(opts):
     assert_eq(link.url, TOKEN_URL, "the short link must keep the token URL as its destination")
     assert_true(link.bot_passthrough is False,
                 "token links must keep bot_passthrough=False so preview bots can't use the token")
+    assert_true(link.get_og_metadata().get("og:title"),
+                "a token link must carry a preview title: without preview data "
+                "the redirect handler sends a bot on to the token URL")
     assert_eq(jobs.count(), 0,
               "maybe_shorten_url must not queue a scrape job: it would fetch the token URL")
 

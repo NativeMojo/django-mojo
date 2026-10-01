@@ -27,6 +27,12 @@ Usage:
     url = shorten("https://example.com/docs", expire_days=0, expire_hours=0)
 """
 
+# The preview title every token short link carries. The redirect handler only
+# holds a preview bot back when a link has preview data, and token links are
+# never scraped for any. A constant, never a setting or a request value: the
+# preview page prints it unescaped in <title>.
+TOKEN_LINK_PREVIEW_TITLE = "Secure link"
+
 
 def shorten(url="", file=None, rendition=None, source="", expire_days=3, expire_hours=0,
             metadata=None, track_clicks=False, resolve_file=True,
@@ -133,6 +139,8 @@ def maybe_shorten_url(url, source, user=None, expire_days=0, expire_hours=0):
     the OG interstitial page instead of consuming the single-use token.
     Always uses scrape=False: the destination is never fetched, because the
     scrape job would hand the token in the URL to whatever host it names.
+    Always stores TOKEN_LINK_PREVIEW_TITLE: with no preview data the redirect
+    handler sends a bot straight to the destination.
 
     Args:
         url: Destination URL to shorten.
@@ -158,6 +166,7 @@ def maybe_shorten_url(url, source, user=None, expire_days=0, expire_hours=0):
             expire_hours=expire_hours,
             bot_passthrough=False,
             scrape=False,
+            metadata={"og:title": TOKEN_LINK_PREVIEW_TITLE},
         )
     except Exception:
         return url

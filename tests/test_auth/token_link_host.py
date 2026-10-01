@@ -19,6 +19,11 @@ GROUP_HOME = "tlh-home"
 GROUP_FOREIGN = "tlh-foreign"
 HOME_BASE = "https://home.tlh-tenant.example"
 EVIL = "https://evil.example"
+# `.invalid` never resolves: nothing can follow the link these tests read back.
+TOKEN_URL = "https://tlh-frontend.invalid/auth?flow=magic_login&token=ml:tlh"
+PREVIEW_BOTS = ["Slackbot-LinkExpanding 1.0", "WhatsApp/2.23", "facebookexternalhit/1.1"]
+BROWSER = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15"
+SCRAPE_JOB = "mojo.apps.shortlink.services.scraper.scrape_og_metadata"
 UNIFORM = {
     "auth/magic/send": "If account is in our system a login link was sent.",
     "auth/forgot": "If the account is in our system a reset code was sent.",
@@ -33,6 +38,7 @@ def setup_token_link_host(opts):
 
     clear_rate_limits(ip="127.0.0.1")
     ShortLink.objects.filter(user__email=EMAIL).delete()
+    ShortLink.objects.filter(source="tlh_magic_login").delete()
     User.objects.filter(email=EMAIL).delete()
     Group.objects.filter(name__in=[GROUP_HOME, GROUP_FOREIGN]).delete()
 
@@ -87,3 +93,42 @@ def test_magic_send_ignores_foreign_group(opts):
         opts, "auth/magic/send", {"email": EMAIL}, "magic_login",
         params={"group": opts.foreign_id})
     _assert_on_home(url, "ml", "magic_login")
+
+
+@th.django_unit_test("a preview bot gets the preview page for a token short link, never the redirect")
+def test_preview_bot_is_not_redirected_to_token_link(opts):
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.shortlink import maybe_shorten_url
+    from mojo.apps.shortlink.models import ShortLink
+
+    short = maybe_shorten_url(TOKEN_URL, source="tlh_magic_login", expire_hours=1)
+    assert_true(short != TOKEN_URL, "the token link must have been shortened")
+    code = short.rsplit("/", 1)[-1]
+    link = ShortLink.objects.get(code=code)
+
+    for user_agent in PREVIEW_BOTS:
+        resp = opts.client.get(f"/s/{code}", allow_redirects=False,
+                               headers={"User-Agent": user_agent})
+        headers = {k.lower(): v for k, v in opts.client.last_response.headers.items()}
+        assert_eq(resp.status_code, 200,
+                  f"{user_agent} must get the preview page, not a redirect to the "
+                  f"token link, got {resp.status_code}")
+        assert_true("location" not in headers,
+                    f"{user_agent} must not be given a Location header, got "
+                    f"{headers.get('location')}")
+        assert_true(headers.get("content-type", "").startswith("text/html"),
+                    f"{user_agent} must get HTML, got {headers.get('content-type')}")
+        from mojo.apps.shortlink import TOKEN_LINK_PREVIEW_TITLE
+        body = resp.response if isinstance(resp.response, str) else str(resp.response)
+        assert_true(f"<title>{TOKEN_LINK_PREVIEW_TITLE}</title>" in body,
+                    f"{user_agent} must get the fixed preview title")
+
+    resp = opts.client.get(f"/s/{code}", allow_redirects=False,
+                           headers={"User-Agent": BROWSER})
+    headers = {k.lower(): v for k, v in opts.client.last_response.headers.items()}
+    assert_eq(resp.status_code, 302, f"a browser must be redirected, got {resp.status_code}")
+    assert_eq(headers.get("location"), TOKEN_URL,
+              "a browser must be redirected to the token link")
+
+    assert_eq(Job.objects.filter(func=SCRAPE_JOB, payload__shortlink_id=link.pk).count(), 0,
+              "nothing may queue a fetch of the token link")
