@@ -1238,7 +1238,7 @@ can **select** one of those frontends. It can never introduce a new one.
 
 1. `request.DATA["webapp_base_url"]` — selects among trusted values only
 2. `group.metadata["webapp_base_url"]` — tenant config, traverses parent chain. Used only for a home-tenant group, or when its value matches an operator origin
-3. `user.org.metadata["webapp_base_url"]` — the account's home tenant. A relative value such as `/portal` is allowed here and from settings, never from the request
+3. `user.org.metadata["webapp_base_url"]` — the account's home tenant. A relative value such as `/portal` is allowed here, from a home-tenant group and from settings, never from the request
 4. `WEBAPP_BASE_URL` setting
 5. `user.metadata["protected"]["orig_webapp_url"]` — URL recorded at the user's first login; used only if trusted by the same rule
 6. `HTTP_ORIGIN` header — selects among trusted values only
@@ -1250,10 +1250,22 @@ What the resolver guarantees:
   request for `https://app.example.com/some/path` that matches the operator
   origin `https://app.example.com` yields `https://app.example.com`. A caller
   cannot choose a path on a trusted host.
-- **A candidate must be a plain `http(s)` origin** — a string with a host and no
+- **A candidate must be a plain `http(s)` URL** — a string with a host and no
   userinfo, query, fragment, backslash or whitespace. A list, a number,
   `Origin: null`, `javascript:` and `//host` are ignored without an error.
-  Custom-scheme (mobile deep-link) bases are not accepted.
+  Custom-scheme (mobile deep-link) bases are not accepted. This holds for the
+  request value, the `Origin` header, the stored `orig_webapp_url` and a
+  tenant's `webapp_base_url` metadata alike.
+- **A tenant value has one extra allowed form: a plain relative path** such as
+  `/portal` — one leading `/` and no `//`, `@`, `\`, `?`, `#`, whitespace or
+  control character. A home-tenant `webapp_base_url` that is neither that nor a
+  plain `http(s)` URL (`https://app.acme.com#x`, `https://app.acme.com?x=1`,
+  `myapp://callback`, `//app.acme.com`) is skipped like any other untrusted
+  value: the incident is filed and the next source is used. Being the home
+  tenant decides **whether** a value is trusted, never what shape it may have.
+- **`WEBAPP_BASE_URL` and `BASE_URL` are the operator's own settings and are
+  used as written.** Only the operator can set them, and they are the trust
+  root every other value is measured against.
 - **Matching is exact on scheme, host and port** (the same matcher as the
   redirect allowlists), and the request's path must be at or under the
   configured value's path. `app.example.com.evil.tld` does not match
@@ -1278,6 +1290,12 @@ home-tenant group; otherwise `WEBAPP_AUTH_PATH` (default `"/auth"`). Every
 value must start with a single `/` and contain no `//`, `@`, `\`, `?`, `#`,
 whitespace or control character. A group value that fails is skipped in favour
 of `WEBAPP_AUTH_PATH`; a `WEBAPP_AUTH_PATH` that fails falls back to `/auth`.
+
+One exception, kept from earlier releases: `WEBAPP_AUTH_PATH = ""` is accepted
+and means **no path** — the link is `{base}?flow=...&token=...`, for a frontend
+whose base URL is already the auth page. It does not fall back to `/auth`. An
+empty group `webapp_auth_path` is not that: it counts as unset, and
+`WEBAPP_AUTH_PATH` is used.
 
 Configure per tenant without a deploy — this applies to accounts whose
 `user.org` is in this group's tenant tree:
@@ -1306,8 +1324,12 @@ frontends you trust with any user's session. A bad entry stops startup with
 **Token links are never fetched by the framework.** `maybe_shorten_url` creates
 the short link with `scrape=False`, so the link-preview scraper does not request
 a URL that carries a token. These short links therefore have no scraped preview
-title or image. They keep `bot_passthrough=False`, so a preview bot still cannot
-consume the token.
+title or image; they carry one fixed, neutral preview title instead. They keep
+`bot_passthrough=False`, and because the title is always present, a recognised
+link-preview bot (Slack, iMessage, WhatsApp and the rest of the short-link bot
+list) gets the preview page with HTTP 200 and is **not** redirected to the token
+URL. A browser is redirected as before. The preview page forwards with a meta
+refresh, so a person whose in-app browser is taken for a bot still arrives.
 
 **Upgrading to 1.31.4.** Nothing changes when links already go to
 `WEBAPP_BASE_URL` or to the account's own tenant frontend. In every other case
@@ -1320,7 +1342,8 @@ the link goes to the default frontend instead and an incident names the host:
 | An invite from a second tenant to an account that has never logged in | Link lands on the account's home frontend | Same as above, or set `user.org` to the inviting tenant when it creates the account |
 | No `WEBAPP_BASE_URL`; links relied on the first-login origin or the `Origin` header | Links go to `BASE_URL` | Set `WEBAPP_BASE_URL` (readiness already reports it unset) |
 | A request `webapp_base_url` with a path | The path is dropped | Use `WEBAPP_AUTH_PATH` or the tenant's `webapp_auth_path` |
-| A custom-scheme (deep-link) base | Not accepted | Use an `https` frontend origin |
+| A custom-scheme (deep-link) base in a request or in tenant metadata | Not accepted | Use an `https` frontend origin |
+| A tenant `webapp_base_url` with a query, a fragment, credentials or no scheme (`//host`) | Skipped; the link goes to the next source | Store a plain `https://host[/path]` or a relative path such as `/portal` |
 
 ## Failed Login Protection
 

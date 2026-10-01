@@ -125,8 +125,9 @@ Rules:
   command prints a warning and the raw token rather than something that looks
   like a link and is not. (`build_token_url` resolves the base from the user's
   org metadata, `WEBAPP_BASE_URL`, then `BASE_URL`. A relative org or settings
-  value such as `/portal` is still accepted here; only request-supplied values
-  are restricted — see [Token URLs](auth.md#token-urls).)
+  value such as `/portal` is still accepted here. An org value must be that or
+  a plain `http(s)` URL — one with a query, a fragment, credentials or another
+  scheme is skipped — see [Token URLs](auth.md#token-urls).)
 
 `python3 -m mojo.deploy.provision admin` is this command run for you over SSH
 against node 0 of a freshly provisioned environment — see

@@ -1222,7 +1222,8 @@ registered resource is enabled; until then every endpoint answers 404.
 - `WEBAPP_AUTH_PATH` — path of the frontend auth page token links land on,
   default `"/auth"`. Must start with a single `/` and contain no `//`, `@`,
   `\`, `?`, `#`, whitespace or control character; a value that fails falls back
-  to `/auth`.
+  to `/auth`. The one exception is the empty string: `""` is accepted and means
+  no path, so the link is `{base}?flow=...&token=...`.
 - `WEBAPP_BASE_URL` — dynamic public origin. Admin Settings can manage one
   canonical public-HTTPS global override; existing group-scoped rows remain
   available through the generic Setting API and group inheritance. It is the
