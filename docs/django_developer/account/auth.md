@@ -47,7 +47,16 @@ On every `jwt_login` call the framework captures the frontend origin from `reque
 - `user.metadata["protected"]["orig_webapp_url"]` — set once at first login, never overwritten
 - `user.metadata["protected"]["last_webapp_url"]` — updated on every subsequent login
 
-These are used as a fallback in the `build_token_url` lookup chain (see [Token URLs](#token-urls)).
+Only a well-formed `http(s)` URL is stored — never `null`, a non-string or a
+value with credentials, a query or a fragment.
+Both values are **caller-supplied**, so
+they are a record of where the user logged in from, not a trusted frontend.
+
+`orig_webapp_url` is a fallback in the `build_token_url` lookup chain (see
+[Token URLs](#token-urls)), and it is checked there like any other
+request-derived value: it is used only when it is a frontend the operator
+configured or the account's own tenant set. A value stored before 1.31.4 gets
+the same check at read time, so a poisoned one is ignored.
 
 ### Geofence enforcement
 
@@ -1038,7 +1047,7 @@ user.save()
 user.send_invite()  # builds token URL, sends invite email
 ```
 
-`send_invite()` accepts an optional `request` kwarg for multi-tenant URL resolution (see [Token URLs](#token-urls) below).
+`send_invite()` accepts optional `request` and `group` kwargs for multi-tenant URL resolution (see [Token URLs](#token-urls) below). They can only *select* a frontend: the invite link lands on the inviting group's `webapp_base_url` when that group is in the tenant tree that owns the account (`user.org`), or when the operator listed that origin. Otherwise it lands on the account's home frontend or `WEBAPP_BASE_URL`. Set `user.org` before `send_invite()` if the invite must land on a tenant's own frontend.
 
 User clicks the link → `POST /api/auth/invite/accept` with the token → JWT issued, email verified.
 
@@ -1165,7 +1174,7 @@ REQUIRE_GROUP_ON_REGISTRATION = True   # default False
 |---|---|
 | Enable built-in registration | `ALLOW_USER_REGISTRATION = True` |
 | Create a user | `User(...).save()` + `user.save_password()` |
-| Send invite link | `user.send_invite(request=request)` |
+| Send invite link | `user.send_invite(request=request)` — the request selects among configured frontends, it cannot add one (see [Token URLs](#token-urls)) |
 | Accept invite + set password | `POST /api/auth/invite/accept` |
 | Send email verify link | `POST /api/auth/email/verify/send` |
 | Confirm email verify | `POST /api/auth/email/verify` |
@@ -1206,25 +1215,135 @@ its own SPA to own these overrides the email templates. Links already in inboxes
 using the old `/auth?flow=…` shape are redirected server-side by
 `on_login_page`, keyed on the token prefix.
 
-**Resolution order** (first non-empty wins):
+### Which frontends a link may point at
 
-1. `request.DATA["webapp_base_url"]` — per-request override (useful for multi-tenant admin portals)
-2. `group.metadata["webapp_base_url"]` — tenant config, traverses parent chain
-3. `user.org.metadata["webapp_base_url"]` — user's primary org
+A frontend link carries a live sign-in token, so it only ever points at a
+frontend that is **trusted for that account** (1.31.4, #6225). There are two
+kinds:
+
+- **Operator origins** — `WEBAPP_BASE_URL`, `BASE_URL` (when absolute) and the
+  file-only list `WEBAPP_ALLOWED_ORIGINS`. Trusted for every account.
+- **Home-tenant values** — the `webapp_base_url` metadata of `user.org`, and of
+  a group only when that group is in the same tenant tree as `user.org` (same
+  `top_most_parent`). Trusted for the accounts that tenant created, and for no
+  one else. Membership is **not** enough: `add_member` creates an active
+  membership without the user's consent, so a group cannot earn trust over an
+  account by adding it.
+
+A value that comes from the request — `request.DATA["webapp_base_url"]`, a
+`?group=` the caller named, the `Origin` header, the stored `orig_webapp_url` —
+can **select** one of those frontends. It can never introduce a new one.
+
+**Resolution order** (first usable value wins):
+
+1. `request.DATA["webapp_base_url"]` — selects among trusted values only
+2. `group.metadata["webapp_base_url"]` — tenant config, traverses parent chain. Used only for a home-tenant group, or when its value matches an operator origin
+3. `user.org.metadata["webapp_base_url"]` — the account's home tenant. A relative value such as `/portal` is allowed here, from a home-tenant group and from settings, never from the request
 4. `WEBAPP_BASE_URL` setting
-5. `user.metadata["protected"]["orig_webapp_url"]` — URL recorded at the user's first login
-6. `HTTP_ORIGIN` header
+5. `user.metadata["protected"]["orig_webapp_url"]` — URL recorded at the user's first login; used only if trusted by the same rule
+6. `HTTP_ORIGIN` header — selects among trusted values only
 7. `BASE_URL` setting (legacy fallback)
 
-Auth path follows the same precedence with `group.metadata["webapp_auth_path"]` and `WEBAPP_AUTH_PATH` (default `"/auth"`).
+What the resolver guarantees:
 
-Configure per tenant without a deploy:
+- **It returns the configured value that matched, never the request's text.** A
+  request for `https://app.example.com/some/path` that matches the operator
+  origin `https://app.example.com` yields `https://app.example.com`. A caller
+  cannot choose a path on a trusted host.
+- **A candidate must be a plain `http(s)` URL** — a string with a host and no
+  userinfo, query, fragment, backslash or whitespace. A list, a number,
+  `Origin: null`, `javascript:` and `//host` are ignored without an error.
+  Custom-scheme (mobile deep-link) bases are not accepted. This holds for the
+  request value, the `Origin` header, the stored `orig_webapp_url` and a
+  tenant's `webapp_base_url` metadata alike.
+- **A tenant value has one extra allowed form: a plain relative path** such as
+  `/portal` — one leading `/` and no `//`, `@`, `\`, `?`, `#`, whitespace or
+  control character. A home-tenant `webapp_base_url` that is neither that nor a
+  plain `http(s)` URL (`https://app.acme.com#x`, `https://app.acme.com?x=1`,
+  `myapp://callback`, `//app.acme.com`) is skipped like any other untrusted
+  value: the incident is filed and the next source is used. Being the home
+  tenant decides **whether** a value is trusted, never what shape it may have.
+- **`WEBAPP_BASE_URL` and `BASE_URL` are the operator's own settings and are
+  used as written.** Only the operator can set them, and they are the trust
+  root every other value is measured against.
+- **Matching is exact on scheme, host and port** (the same matcher as the
+  redirect allowlists), and the request's path must be at or under the
+  configured value's path. `app.example.com.evil.tld` does not match
+  `app.example.com`. A wildcard entry `https://*.example.com` matches
+  `example.com` and exactly one label under it (`a.example.com`, not
+  `a.b.example.com`); a wildcard match yields the request's bare
+  `scheme://host[:port]`.
+- **An untrusted value is ignored, not refused.** The request still succeeds and
+  the link goes to the next source in the order. `POST /api/auth/magic/send` and
+  `POST /api/auth/forgot` keep their uniform response.
+- **Each ignored value files one `auth:webapp_base_url_refused` incident**
+  naming the source and the host, at most once per host per hour and for at
+  most 50 distinct hosts an hour (the send endpoints are public, so a caller
+  cannot mint one incident per made-up host). That incident is how you find a
+  frontend you forgot to list.
+- **The composed link is re-checked.** After the base and auth path are joined,
+  the URL is parsed again and its scheme, host and port must equal the chosen
+  base's.
+
+**Auth path.** `group.metadata["webapp_auth_path"]` is used only for a
+home-tenant group; otherwise `WEBAPP_AUTH_PATH` (default `"/auth"`). Every
+value must start with a single `/` and contain no `//`, `@`, `\`, `?`, `#`,
+whitespace or control character. A group value that fails is skipped in favour
+of `WEBAPP_AUTH_PATH`; a `WEBAPP_AUTH_PATH` that fails falls back to `/auth`.
+
+One exception, kept from earlier releases: `WEBAPP_AUTH_PATH = ""` is accepted
+and means **no path** — the link is `{base}?flow=...&token=...`, for a frontend
+whose base URL is already the auth page. It does not fall back to `/auth`. An
+empty group `webapp_auth_path` is not that: it counts as unset, and
+`WEBAPP_AUTH_PATH` is used.
+
+Configure per tenant without a deploy — this applies to accounts whose
+`user.org` is in this group's tenant tree:
 
 ```python
 group.metadata["webapp_base_url"] = "https://app.acme.com"
 group.metadata["webapp_auth_path"] = "/login"  # optional, default /auth
 group.save()
 ```
+
+List an operator frontend (file-only, so a database row cannot widen it):
+
+```python
+# settings.py
+WEBAPP_BASE_URL = "https://app.example.com"
+WEBAPP_ALLOWED_ORIGINS = [
+    "https://admin.example.com",
+    "https://*.tenants.example.com",   # tenants.example.com and one label under it
+]
+```
+
+Listing an origin makes it selectable for **any** account, so list only
+frontends you trust with any user's session. A bad entry stops startup with
+`ImproperlyConfigured`.
+
+**Token links are never fetched by the framework.** `maybe_shorten_url` creates
+the short link with `scrape=False`, so the link-preview scraper does not request
+a URL that carries a token. These short links therefore have no scraped preview
+title or image; they carry one fixed, neutral preview title instead. They keep
+`bot_passthrough=False`, and because the title is always present, a recognised
+link-preview bot (Slack, iMessage, WhatsApp and the rest of the short-link bot
+list) gets the preview page with HTTP 200 and is **not** redirected to the token
+URL. A browser is redirected as before. The preview page forwards with a meta
+refresh, so a person whose in-app browser is taken for a bot still arrives.
+
+**Upgrading to 1.31.4.** Nothing changes when links already go to
+`WEBAPP_BASE_URL` or to the account's own tenant frontend. In every other case
+the link goes to the default frontend instead and an incident names the host:
+
+| Before 1.31.4 | Now | What to do |
+|---|---|---|
+| A frontend sends `webapp_base_url` for an origin configured nowhere | Link goes to the default frontend | Add the origin to `WEBAPP_ALLOWED_ORIGINS` |
+| A white-label login page (`?group=`) is used by an account that tenant did not create | Link goes to the account's home frontend or the default | List that tenant's origin in `WEBAPP_ALLOWED_ORIGINS`, if you trust it with any user's session |
+| An invite from a second tenant to an account that has never logged in | Link lands on the account's home frontend | Same as above, or set `user.org` to the inviting tenant when it creates the account |
+| No `WEBAPP_BASE_URL`; links relied on the first-login origin or the `Origin` header | Links go to `BASE_URL` | Set `WEBAPP_BASE_URL` (readiness already reports it unset) |
+| A request `webapp_base_url` with a path | The path is dropped | Use `WEBAPP_AUTH_PATH` or the tenant's `webapp_auth_path` |
+| A custom-scheme (deep-link) base in a request or in tenant metadata | Not accepted | Use an `https` frontend origin |
+| A tenant `webapp_base_url` with a query, a fragment, credentials or no scheme (`//host`) | Skipped; the link goes to the next source | Store a plain `https://host[/path]` or a relative path such as `/portal` |
 
 ## Failed Login Protection
 

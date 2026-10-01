@@ -124,7 +124,10 @@ Rules:
 - **An empty or relative `BASE_URL`** means no absolute link can be built. The
   command prints a warning and the raw token rather than something that looks
   like a link and is not. (`build_token_url` resolves the base from the user's
-  org metadata, `WEBAPP_BASE_URL`, then `BASE_URL`.)
+  org metadata, `WEBAPP_BASE_URL`, then `BASE_URL`. A relative org or settings
+  value such as `/portal` is still accepted here. An org value must be that or
+  a plain `http(s)` URL — one with a query, a fragment, credentials or another
+  scheme is skipped — see [Token URLs](auth.md#token-urls).)
 
 `python3 -m mojo.deploy.provision admin` is this command run for you over SSH
 against node 0 of a freshly provisioned environment — see
@@ -166,7 +169,8 @@ non-superuser admin scoped to just those sections.
 - **`--login-link` printed a raw `pr:` token instead of a URL** — `BASE_URL`
   (or `WEBAPP_BASE_URL`, or the org's `webapp_base_url` metadata) is unset or
   relative, so no absolute link could be built. Set it and re-issue, or paste
-  the token into the reset form by hand.
+  the token into the reset form by hand. The command has no request, so the
+  link's host comes only from those configured values.
 - **`--login-link` refused with "cannot be combined"** — drop `--password` /
   `--password-env`; the flag sets its own throwaway password by design.
 - **The account already exists and you want another link** — `create_user`

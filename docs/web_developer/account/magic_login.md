@@ -16,6 +16,17 @@ This is distinct from password reset links (`pr:` tokens), which require a new p
 |-----------|----------|-------------|
 | `email` or `username` or `phone_number` | Yes | Used to look up the account |
 | `method` | No | `"email"` (default) or `"sms"` |
+| `webapp_base_url` | No | Which of the deployment's **configured** frontends the link should land on. See below |
+
+**Where the link lands.** The link in the email or text goes to a frontend the
+deployment's operator configured, or to the frontend of the tenant that owns
+the account. `webapp_base_url`, a `group` / `group_uuid` parameter and the
+browser's `Origin` header can **select** one of those frontends; they cannot
+add a new one (1.31.4). A value that is not configured is ignored: the request
+still returns the same success body and the link goes to the default frontend.
+Send an origin only (`https://app.example.com`) — a path in `webapp_base_url`
+is dropped. If your frontend's links land on the wrong site, ask the operator
+to add your origin to `WEBAPP_ALLOWED_ORIGINS`.
 
 **Email (default):**
 

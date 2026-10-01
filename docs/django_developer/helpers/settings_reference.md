@@ -1205,10 +1205,29 @@ registered resource is enabled; until then every endpoint answers 404.
 
 ### WEBAPP
 
-- `WEBAPP_AUTH_PATH`
+- `WEBAPP_ALLOWED_ORIGINS` — **file-only** (`settings.get_static`). List,
+  default `[]`. Extra frontend origins, beyond `WEBAPP_BASE_URL` and `BASE_URL`,
+  that an emailed or texted token link (`invite`, `magic_login`,
+  `password_reset`) may point at. Entries are `http(s)` origins with no path
+  (`https://admin.example.com`); `https://*.example.com` is accepted for
+  per-tenant subdomains and matches `example.com` and exactly one label under
+  it. A request's `webapp_base_url`, a caller-named
+  `?group=` and the `Origin` header can **select** a listed origin and cannot
+  add one. Listing an origin makes it selectable for **any** account, so list
+  only frontends you trust with any user's session; a tenant's own frontend
+  needs no entry for the accounts that tenant created. File-only so a database
+  row cannot widen it. A malformed entry raises `ImproperlyConfigured` at
+  startup. An ignored value files an `auth:webapp_base_url_refused` incident
+  naming the host to add. See [Token URLs](../account/auth.md#token-urls).
+- `WEBAPP_AUTH_PATH` — path of the frontend auth page token links land on,
+  default `"/auth"`. Must start with a single `/` and contain no `//`, `@`,
+  `\`, `?`, `#`, whitespace or control character; a value that fails falls back
+  to `/auth`. The one exception is the empty string: `""` is accepted and means
+  no path, so the link is `{base}?flow=...&token=...`.
 - `WEBAPP_BASE_URL` — dynamic public origin. Admin Settings can manage one
   canonical public-HTTPS global override; existing group-scoped rows remain
-  available through the generic Setting API and group inheritance.
+  available through the generic Setting API and group inheritance. It is the
+  default frontend for token links and is always a trusted origin for them.
 
 ### WEBHOOK
 
