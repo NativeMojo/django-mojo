@@ -388,13 +388,24 @@ def current_branch():
     return branch
 
 
-def build(dry_run=False):
+def build(version, dry_run=False):
+    """Build, verify, and leave only a checked wheel in dist/.
+
+    `uv publish` uploads whatever dist/ holds. The source archive is needed by
+    the packaging check and is then removed: it packs every file `.gitignore`
+    does not name, including each agent worktree, and the index refusing it
+    for size AFTER the wheel was up is how 1.31.4 went out half-uploaded
+    (maestro #6348). The last step also refuses a wheel holding anything git
+    does not track.
+    """
     run([sys.executable, "scripts/vendor_admin_portal.py", "--check"],
         dry_run=dry_run, capture=False)
     run(["rm", "-rf", "dist"], dry_run=dry_run, capture=False)
     run(["uv", "build"], dry_run=dry_run, capture=False)
     run([sys.executable, "scripts/verify_admin_portal_package.py", "--dist", "dist",
          "--build-smoke"], dry_run=dry_run, capture=False)
+    run([sys.executable, "scripts/release_wheel_only.py", "--dist", "dist",
+         "--version", version], dry_run=dry_run, capture=False)
 
 
 def push_source(branch, dry_run=False):
@@ -563,7 +574,7 @@ def main():
 
         branch = current_branch()
 
-        build(dry_run=args.dry_run)
+        build(version, dry_run=args.dry_run)
         push_source(branch, dry_run=args.dry_run)
 
         visible = True
