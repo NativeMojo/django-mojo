@@ -394,7 +394,7 @@
                     .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Could not send code.", "error"); });
             } else {
                 var code = $("sms-code").value.trim();
-                if (!code) { m.showMessage("Enter the {{ sms_code_length|default:6 }}-digit code.", "error"); return; }
+                if (!code) { m.showMessage("Enter the {{ sms_code_length|default:6|escapejs }}-digit code.", "error"); return; }
                 m.setLoading(btn, true); m.hideMessage();
                 MojoAuth.verifySmsLogin(phone, code, { group_uuid: cfg.groupUuid })
                     .then(m.onAuthSuccess)

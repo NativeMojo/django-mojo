@@ -33,12 +33,12 @@ TESTIT_TIER = "framework"
 
 PWORD = "scl##mojo99Length"
 USERS = {
-    "scl_default": "+15550006241",
-    "scl_long": "+15550006242",
-    "scl_live": "+15550006243",
-    "scl_floor": "+15550006244",
+    "scl_default": "+15550006751",
+    "scl_long": "+15550006752",
+    "scl_live": "+15550006753",
+    "scl_floor": "+15550006754",
 }
-REGISTER_PHONE = "+15550006245"
+REGISTER_PHONE = "+15550006755"
 
 
 def _fresh(pk):

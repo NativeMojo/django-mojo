@@ -331,7 +331,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
         return MojoAuth.startPhoneRegister(phone)
             .then(function (data) {
                 $("reg-phone-session-token").value = data.session_token;
-                $("reg-step2-help").textContent = "We sent {% if sms_code_length == 8 %}an{% else %}a{% endif %} {{ sms_code_length|default:6 }}-digit code to " + phone + ".";
+                $("reg-step2-help").textContent = "We sent {% if sms_code_length == 8 %}an{% else %}a{% endif %} {{ sms_code_length|default:6|escapejs }}-digit code to " + phone + ".";
                 m.setLoading(btn, false);
                 showStep(2);
                 startResendCooldown();
@@ -354,7 +354,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
                 var sessionToken = $("reg-phone-session-token").value;
                 var code = ($("reg-phone-code").value || "").trim();
                 if (!sessionToken) { m.showMessage("Session expired. Please go back and try again.", "error"); return; }
-                if (!code) { m.showMessage("Enter the {{ sms_code_length|default:6 }}-digit code.", "error"); return; }
+                if (!code) { m.showMessage("Enter the {{ sms_code_length|default:6|escapejs }}-digit code.", "error"); return; }
                 m.setLoading(verifyBtn, true); m.hideMessage();
                 MojoAuth.verifyPhoneRegister(sessionToken, code)
                     .then(function (data) {
