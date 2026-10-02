@@ -1110,11 +1110,30 @@ def group_token_login(request, user, group):
     })
 
 
+def _reset_code_for(user):
+    """The user's live reset code, or a new one stored on the user.
+
+    A repeat request inside a code's life re-sends that code and does not
+    extend its life. Minting a new one each time let anyone who knew a
+    username replace the code its owner was typing.
+    """
+    code = user.get_secret("password_reset_code")
+    code_ts = int(user.get_secret("password_reset_code_ts") or 0)
+    code_ttl = settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int")
+    if code and int(dates.utcnow().timestamp()) - code_ts <= code_ttl:
+        return code
+    code = crypto.random_string(6, True, False, False)
+    user.set_secret("password_reset_code", code)
+    user.set_secret("password_reset_code_ts", int(dates.utcnow().timestamp()))
+    user.save()
+    return code
+
+
 @md.POST("auth/forgot")
 @md.strict_rate_limit("auth_forgot", ip_limit=5, ip_window=300)
 @md.public_endpoint()
 @md.requires_geofence(scope="auth")
-def on_user_forgot(request):
+def on_user_forgot(request, *, send_sms=None, send_email=None):
     """
     Start a password-reset flow. Accepts an identifier via either the
     `email` or `phone` body field (`username` is also accepted and routed
@@ -1125,8 +1144,15 @@ def on_user_forgot(request):
       method=code  (default)                            → email the 6-digit code
       method=link / email                               → email a reset link
                                                           (link mode is email-only)
+
+    Code mode sends at most five codes per account in 15 minutes, and none
+    while the account's reset-code entry is locked. A repeat request inside a
+    code's life re-sends the same code. The answer is the same in every case.
+
+    `send_sms` and `send_email` are test seams, not part of the wire contract.
     """
     from mojo.apps import phonehub
+    from mojo.decorators.limits import allow_code_send
 
     user = User.lookup_from_request(request, phone_as_username=True)
     method = (request.DATA.get("method") or "code").lower().strip()
@@ -1146,10 +1172,16 @@ def on_user_forgot(request):
             method == "code"
             and (channel == "sms" or (not user.email and bool(user.phone_number)))
         )
-        if wants_sms:
-            # Always perform the DB writes regardless of phone presence so the
-            # response timing for "user has phone" vs "user has no phone" is
-            # dominated by the same set_secret + save work — closes a
+        if method == "code" and not allow_code_send(
+                "reset", user.pk, request,
+                ttl=settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int")):
+            # Over the send cap, or reset-code entry is locked: nothing is
+            # minted or sent, and the answer below is the usual one.
+            pass
+        elif wants_sms:
+            # The code is minted the same way whether or not there is a phone
+            # on file, so the response timing for "user has phone" vs "user
+            # has no phone" is dominated by the same work — closes a
             # latency-based attribute-enumeration side channel.
             #
             # Residual gap: phonehub.send_sms is a network call only made when
@@ -1157,13 +1189,11 @@ def on_user_forgot(request):
             # response latency could still distinguish has-phone from
             # no-phone in the tail. Move the SMS dispatch onto the jobs
             # channel to fully close this; tracked separately.
-            code = crypto.random_string(6, True, False, False)
-            user.set_secret("password_reset_code", code)
-            user.set_secret("password_reset_code_ts", int(dates.utcnow().timestamp()))
-            user.save()
+            code = _reset_code_for(user)
             if user.phone_number:
                 try:
-                    phonehub.send_sms(
+                    sender = send_sms if send_sms is not None else phonehub.send_sms
+                    sender(
                         user.phone_number,
                         f"Your password reset code is: {code}")
                 except Exception as exc:
@@ -1175,11 +1205,9 @@ def on_user_forgot(request):
                     f"{user.username} requested SMS reset but has no phone on file",
                     "password_reset:no_phone", level=4)
         elif method == "code":
-            code = crypto.random_string(6, True, False, False)
-            user.set_secret("password_reset_code", code)
-            user.set_secret("password_reset_code_ts", int(dates.utcnow().timestamp()))
-            user.save()
-            user.send_template_email("password_reset_code", dict(code=code))
+            code = _reset_code_for(user)
+            sender = send_email if send_email is not None else user.send_template_email
+            sender("password_reset_code", dict(code=code))
         elif method in ("link", "email"):
             token = tokens.generate_password_reset_token(user)
             token_url = build_token_url("password_reset", token, request=request, user=user, group=getattr(request, "group", None))

@@ -23,7 +23,7 @@ from mojo.apps.account.services import auth_config
 from mojo.apps.account.services import sms_delivery
 from mojo.apps import phonehub
 from mojo.apps.phonehub.services.phonenumbers import normalize as normalize_phone
-from mojo.decorators.limits import check_code_attempt, clear_code_attempts
+from mojo.decorators.limits import allow_code_send, check_code_attempt, clear_code_attempts
 from mojo.helpers import crypto, dates, logit
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
@@ -39,8 +39,22 @@ def _otp_sms_body(code, request=None):
     return f"Your verification code is: {code}"
 
 
+def _live_otp(user):
+    """The stored code while it is still inside its lifetime, else None."""
+    code = user.get_secret("sms_otp_code")
+    stored_ts = int(user.get_secret("sms_otp_ts") or 0)
+    if not code or int(dates.utcnow().timestamp()) - stored_ts > int(settings.get("SMS_OTP_TTL", 600)):
+        return None
+    return code
+
+
 def _send_otp(user, request=None, *, send=None):
-    """Generate a 6-digit code, store it on the user, and send via SMS.
+    """Send the user's SMS code: the live one if there is one, else a new
+    6-digit code stored on the user.
+
+    A repeat request inside a code's life re-sends that code and does not
+    extend its life. Minting a new one each time let anyone who knew a
+    username replace the code its owner was typing.
 
     Acceptance is classified by `sms_delivery.was_accepted()`, not by
     `sms.status == "failed"`: a `None` result (the transport returned nothing)
@@ -54,10 +68,12 @@ def _send_otp(user, request=None, *, send=None):
     if not user.phone_number:
         raise merrors.ValueException("No phone number on file for this account")
 
-    code = crypto.random_string(6, allow_digits=True, allow_chars=False, allow_special=False)
-    user.set_secret("sms_otp_code", code)
-    user.set_secret("sms_otp_ts", int(dates.utcnow().timestamp()))
-    user.save()
+    code = _live_otp(user)
+    if code is None:
+        code = crypto.random_string(6, allow_digits=True, allow_chars=False, allow_special=False)
+        user.set_secret("sms_otp_code", code)
+        user.set_secret("sms_otp_ts", int(dates.utcnow().timestamp()))
+        user.save()
 
     sender = send if send is not None else phonehub.send_sms
     try:
@@ -220,7 +236,11 @@ def on_sms_login(request, *, send=None):
             "sms:login_no_phone", level=6, request=request)
         return JsonResponse({"status": True, "message": "If the account exists, a code was sent."})
 
-    _send_otp(user, request, send=send)
+    # At most five texts per account in 15 minutes, and none while the
+    # account's code entry is locked. Either way the caller gets the same
+    # answer: anyone who knows a username can reach this endpoint.
+    if allow_code_send("sms", user.pk, request, ttl=settings.get("SMS_OTP_TTL", 600)):
+        _send_otp(user, request, send=send)
     return JsonResponse({"status": True, "message": "If the account exists, a code was sent."})
 
 
@@ -263,6 +283,15 @@ def on_phone_register_start(request, *, send=None):
     # above, the same way `/auth/sms/login` is.
 
     session_token, code, ttl = phone_register.start(phone, ip=getattr(request, "ip", None))
+
+    # At most five texts per phone number in 15 minutes, and none while that
+    # number's code entry is locked. The answer is the usual one: the session
+    # exists, its code was simply never sent.
+    if not allow_code_send("phone_register", phone, request, ttl=ttl):
+        return JsonResponse({
+            "status": True,
+            "data": {"session_token": session_token, "expires_in": ttl},
+        })
 
     sender = send if send is not None else phonehub.send_sms
     try:

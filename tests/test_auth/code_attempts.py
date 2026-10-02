@@ -36,8 +36,13 @@ LIMIT = 5
 WINDOW = 900
 
 ADMIN = "ca_admin"
+SEND_LIMIT = 5
+SEND_IP = "127.0.62.26"   # this module's own address for the in-process send calls
+SEND_PHONE = "+15550006229"
+GENERIC_SMS = "If the account exists, a code was sent."
 USERS = {
     "ca_admin": None,
+    "ca_send": "+15550006230",
     "ca_sms": "+15550006227",
     "ca_reset": None,
     "ca_verify": "+15550006228",
@@ -63,6 +68,7 @@ def _clear(account_id, kinds=KINDS):
     from mojo.decorators import limits
     for kind in kinds:
         limits.clear_code_attempts(kind, account_id)
+    limits.clear_account_limits(account_id)
 
 
 def _spend(kind, account_id, tries=LIMIT):
@@ -123,6 +129,8 @@ def setup_code_attempts(opts):
         _clear(user.pk)
         limits.clear_rate_limits(key="login", account_id=user.pk)
     limits.clear_code_attempts("phone_register", REGISTER_PHONE)
+    limits.clear_code_sends("phone_register", SEND_PHONE)
+    limits.clear_code_attempts("phone_register", SEND_PHONE)
 
     for name in ("ca_totp", "ca_manage"):
         totp = UserTOTP(user=_fresh(getattr(opts, f"{name}_id")))
@@ -684,6 +692,236 @@ def test_phone_register_code_limit(opts):
     resp = _post_register_verify(opts, session, code)
     _assert_refused(opts, resp, "phone register verify")
     limits.clear_code_attempts("phone_register", REGISTER_PHONE)
+
+
+# -----------------------------------------------------------------
+# Sends: a stranger can't replace the code being typed, or text an account
+# without limit. Driven in-process through the endpoints' `send` seams, since
+# a send can't be seen from the other side of HTTP.
+# -----------------------------------------------------------------
+
+class _Sender:
+    """Stand-in for the SMS or email transport, injected through a seam."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return _accepted_sms()
+
+
+def _accepted_sms():
+    from mojo.apps.phonehub.models import SMS
+    return SMS(direction="outbound", from_number="+15550000000", to_number=SEND_PHONE,
+               body="code", status="sent")
+
+
+def _request(path, data):
+    """A RequestFactory POST carrying the attributes mojo middleware stamps."""
+    from django.test import RequestFactory
+    from objict import objict
+    from mojo.middleware.mojo import ANONYMOUS_USER
+
+    request = RequestFactory(REMOTE_ADDR=SEND_IP).post(path, {})
+    request.DATA = objict(data)
+    request.ip = SEND_IP
+    request.user = ANONYMOUS_USER
+    request.bearer = None
+    request.group = None
+    request.duid = None
+    request.muid = None
+    request.user_agent = "testit"
+    return request
+
+
+def _body(response):
+    return json.loads(response.content)
+
+
+def _sms_login(sender):
+    from mojo.apps.account.rest import sms as sms_rest
+    from mojo.decorators.limits import clear_rate_limits
+
+    clear_rate_limits(ip=SEND_IP, key="sms_login")
+    response = sms_rest.on_sms_login(_request("/api/auth/sms/login", {"username": "ca_send"}), send=sender)
+    assert_eq(response.status_code, 200, f"sms login must answer 200, got {response.status_code}")
+    assert_eq(_body(response).get("message"), GENERIC_SMS, "sms login must give its one uniform answer")
+
+
+def _reset_sends(pk):
+    from mojo.decorators import limits
+    _clear(pk)
+    for kind in ("sms", "reset"):
+        limits.clear_code_sends(kind, pk)
+    _seed(pk, sms_otp_code=None, sms_otp_ts=None, password_reset_code=None, password_reset_code_ts=None)
+
+
+@th.django_unit_test("sms login send: a repeat request re-sends the live code, it does not replace it")
+def test_sms_login_resends_the_live_code(opts):
+    pk = opts.ca_send_id
+    _reset_sends(pk)
+    sender = _Sender()
+
+    _sms_login(sender)
+    first = _fresh(pk).get_secret("sms_otp_code")
+    first_ts = _fresh(pk).get_secret("sms_otp_ts")
+    assert_true(first, "the first request must store a code")
+    _sms_login(sender)
+    assert_eq(len(sender.calls), 2, "both requests inside the limit must send")
+    assert_eq(_fresh(pk).get_secret("sms_otp_code"), first,
+              "a second request must not replace the code a user may be typing")
+    assert_eq(_fresh(pk).get_secret("sms_otp_ts"), first_ts,
+              "a re-send must not extend the code's life")
+    assert_eq(sender.calls[0][0][1], sender.calls[1][0][1], "the second text must carry the same code")
+
+    # An expired code is replaced.
+    _seed(pk, sms_otp_ts=int(time.time()) - 3600)
+    _sms_login(sender)
+    assert_true(int(_fresh(pk).get_secret("sms_otp_ts")) > int(time.time()) - 60,
+                "an expired code must be replaced by one with a fresh time")
+    _reset_sends(pk)
+
+
+@th.django_unit_test("sms login send: the sixth send in 15 minutes sends nothing and answers the same")
+def test_sms_login_send_cap(opts):
+    pk = opts.ca_send_id
+    _reset_sends(pk)
+    sender = _Sender()
+    for _ in range(SEND_LIMIT):
+        _sms_login(sender)
+    assert_eq(len(sender.calls), SEND_LIMIT, "five sends must go out")
+    _sms_login(sender)
+    _sms_login(sender)
+    assert_eq(len(sender.calls), SEND_LIMIT, "a send beyond the cap must send nothing")
+    _reset_sends(pk)
+
+
+@th.django_unit_test("sms login send: nothing is sent while the account's code entry is locked")
+def test_sms_login_sends_nothing_while_locked(opts):
+    pk = opts.ca_send_id
+    _reset_sends(pk)
+    _spend("sms", pk)
+    sender = _Sender()
+    _sms_login(sender)
+    assert_eq(len(sender.calls), 0, "a code sent while entry is locked could expire before the lock ends")
+    assert_eq(_fresh(pk).get_secret("sms_otp_code"), None, "no code must be minted while locked")
+    _reset_sends(pk)
+
+
+def _forgot(sms_sender, email_sender, channel=None):
+    from mojo.apps.account.rest import user as user_rest
+    from mojo.decorators.limits import clear_rate_limits
+
+    clear_rate_limits(ip=SEND_IP, key="auth_forgot")
+    data = {"username": "ca_send", "method": "code"}
+    if channel:
+        data["channel"] = channel
+    response = user_rest.on_user_forgot(_request("/api/auth/forgot", data),
+                                        send_sms=sms_sender, send_email=email_sender)
+    assert_eq(response.status_code, 200, f"forgot must answer 200, got {response.status_code}")
+    assert_eq(_body(response).get("status"), True, "forgot must give its one uniform answer")
+
+
+@th.django_unit_test("forgot (code): re-sends the live code, caps sends, and sends nothing while locked")
+def test_forgot_code_sends(opts):
+    pk = opts.ca_send_id
+    _reset_sends(pk)
+    sms, email = _Sender(), _Sender()
+
+    _forgot(sms, email)
+    first = _fresh(pk).get_secret("password_reset_code")
+    assert_true(first, "the first request must store a reset code")
+    assert_eq((len(sms.calls), len(email.calls)), (0, 1), "the code goes by email by default")
+    _forgot(sms, email, channel="sms")
+    assert_eq(_fresh(pk).get_secret("password_reset_code"), first,
+              "a second request must not replace the reset code, whatever the channel")
+    assert_eq((len(sms.calls), len(email.calls)), (1, 1), "the second request must send by SMS")
+    assert_true(first in sms.calls[0][0][1], "the text must carry the same code")
+
+    for _ in range(SEND_LIMIT - 2):
+        _forgot(sms, email)
+    assert_eq(len(sms.calls) + len(email.calls), SEND_LIMIT, "five sends must go out")
+    _forgot(sms, email)
+    _forgot(sms, email, channel="sms")
+    assert_eq(len(sms.calls) + len(email.calls), SEND_LIMIT, "a send beyond the cap must send nothing")
+
+    _reset_sends(pk)
+    _spend("reset", pk)
+    sms, email = _Sender(), _Sender()
+    _forgot(sms, email)
+    assert_eq(len(sms.calls) + len(email.calls), 0, "nothing must be sent while reset-code entry is locked")
+    assert_eq(_fresh(pk).get_secret("password_reset_code"), None, "no code must be minted while locked")
+    _reset_sends(pk)
+
+
+@th.django_unit_test("forgot (code) over HTTP: a second request keeps the code")
+def test_forgot_code_over_http_keeps_the_code(opts):
+    pk = opts.ca_send_id
+    _reset_sends(pk)
+    opts.client.logout()
+    codes = []
+    for _ in range(2):
+        _clear_ip("auth_forgot")
+        resp = opts.client.post("/api/auth/forgot", {"username": "ca_send", "method": "code"})
+        assert_eq(resp.status_code, 200, f"forgot must answer 200, got {resp.status_code}: "
+                                         f"{opts.client.last_response.body}")
+        codes.append(_fresh(pk).get_secret("password_reset_code"))
+    assert_true(codes[0], "the first request must store a reset code")
+    assert_eq(codes[1], codes[0], "a second request must not replace the reset code")
+    _reset_sends(pk)
+
+
+def _register_start(sender):
+    from mojo.apps.account.rest import sms as sms_rest
+    from mojo.decorators.limits import clear_rate_limits
+
+    clear_rate_limits(ip=SEND_IP, key="phone_register_start")
+    response = sms_rest.on_phone_register_start(
+        _request("/api/auth/phone/register/start", {"phone": SEND_PHONE}), send=sender)
+    assert_eq(response.status_code, 200, f"register start must answer 200, got {response.status_code}")
+    data = _body(response)["data"]
+    assert_true(len(data.get("session_token", "")) == 32 and data.get("expires_in", 0) > 0,
+                f"register start must give its usual answer, got {data}")
+
+
+@th.django_unit_test("phone sign-up send: capped per phone number, and nothing is sent while locked")
+def test_phone_register_send_cap(opts):
+    from mojo.decorators import limits
+
+    limits.clear_code_sends("phone_register", SEND_PHONE)
+    limits.clear_code_attempts("phone_register", SEND_PHONE)
+    sender = _Sender()
+    for _ in range(SEND_LIMIT):
+        _register_start(sender)
+    assert_eq(len(sender.calls), SEND_LIMIT, "five sends must go out")
+    _register_start(sender)
+    assert_eq(len(sender.calls), SEND_LIMIT, "a sixth text to one number in 15 minutes must not be sent")
+
+    limits.clear_code_sends("phone_register", SEND_PHONE)
+    _spend("phone_register", SEND_PHONE)
+    sender = _Sender()
+    _register_start(sender)
+    assert_eq(len(sender.calls), 0, "nothing must be sent while that number's code entry is locked")
+    limits.clear_code_sends("phone_register", SEND_PHONE)
+    limits.clear_code_attempts("phone_register", SEND_PHONE)
+
+
+@th.django_unit_test("admin release: clears the send counters too")
+def test_admin_release_clears_send_counters(opts):
+    pk = opts.ca_send_id
+    _reset_sends(pk)
+    sender = _Sender()
+    for _ in range(SEND_LIMIT + 1):
+        _sms_login(sender)
+    assert_eq(len(sender.calls), SEND_LIMIT, "setup: the cap must be reached")
+
+    admin = _admin_client(opts)
+    resp = admin.post("/api/auth/manage/clear_rate_limit", {"key": "login", "username": "ca_send"})
+    assert_eq(resp.status_code, 200, f"the admin release must succeed, got {resp.status_code}: {resp.response}")
+    _sms_login(sender)
+    assert_eq(len(sender.calls), SEND_LIMIT + 1, "after the release a code must be sent again")
+    _reset_sends(pk)
 
 
 # -----------------------------------------------------------------

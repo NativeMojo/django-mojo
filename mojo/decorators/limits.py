@@ -15,7 +15,8 @@ logger = logit.get_logger("error", "error.log")
 __all__ = ["rate_limit", "strict_rate_limit", "endpoint_metrics", "clear_rate_limits",
            "check_account_attempt", "read_account_attempt", "check_api_throttle",
            "check_code_attempt", "clear_code_attempts", "unknown_account_id",
-           "clear_account_limits", "account_bucket_numbers"]
+           "clear_account_limits", "account_bucket_numbers",
+           "allow_code_send", "clear_code_sends"]
 
 
 def _hash_key(value):
@@ -629,9 +630,14 @@ TOTP_DAILY_WINDOW = 86400
 # Every counter keyed on a user account: what an admin release clears and the
 # throttle read reports. The phone sign-up counter is not here — it is keyed on
 # a phone number, no account exists yet, and it ends on its own.
+# Kinds of code a caller who is not signed in can ask to be sent. Each has a
+# send counter `code_send:<kind>` beside its try counter.
+CODE_SEND_KINDS = ("sms", "reset", "phone_register")
+
 ACCOUNT_BUCKETS = (("login",)
                    + tuple(f"code:{kind}" for kind in CODE_KINDS if kind != "phone_register")
-                   + (TOTP_DAILY_BUCKET,))
+                   + (TOTP_DAILY_BUCKET,)
+                   + tuple(f"code_send:{kind}" for kind in CODE_SEND_KINDS if kind != "phone_register"))
 
 # The setting holding each code's lifetime, for reporting a counter's window.
 # The check itself is handed the lifetime by its caller.
@@ -741,6 +747,64 @@ def check_code_attempt(kind, account_id, request=None, ttl=None, *, limit=None,
         raise merrors.RateLimitException(wait)
 
 
+def allow_code_send(kind, account_id, request=None, ttl=None, *, limit=None,
+                    window=None, now=None):
+    """
+    Decide whether a one-time code may be sent now, and count the send.
+
+    False means send nothing and answer exactly as if it had been sent — the
+    endpoints that call this answer the same for every caller. It is False:
+      - while the account's code entry is locked: a code sent then could
+        expire before the lock ends;
+      - when the account (or, for sign-up, the phone number) has already been
+        sent CODE_SEND_LIMIT (5) codes in CODE_SEND_WINDOW (900 s).
+    A refused send is not counted.
+
+    Fail-open on Redis errors, like the try counter.
+
+    Args:
+        kind:        One of CODE_SEND_KINDS.
+        account_id:  The account, or for sign-up the phone number.
+        request:     Request, for the once-a-minute metric and incident when
+                     the cap refuses a send. Optional.
+        ttl:         The code's lifetime, as handed to check_code_attempt, so
+                     the lock is judged over the same window.
+        limit, window, now: test seams.
+    """
+    if limit is None:
+        limit = settings.get("CODE_SEND_LIMIT", 5, kind="int")
+    if window is None:
+        window = settings.get("CODE_SEND_WINDOW", 900, kind="int")
+    if now is None:
+        now = time.time()
+    key = f"code_send:{kind}"
+    try:
+        r = get_connection()
+        try_limit = max(1, settings.get("CODE_ATTEMPT_LIMIT", 5, kind="int"))
+        try_window = max(1, settings.get("CODE_ATTEMPT_WINDOW", 900, kind="int"), int(ttl or 0))
+        tries = r.zcount(_account_key(f"code:{kind}", account_id), now - try_window, "+inf")
+        if tries >= try_limit:
+            return False
+        wait = _take_attempt(r, key, account_id, max(1, int(limit)), max(1, int(window)),
+                             now, _attempt_member(now))
+    except Exception as err:
+        logger.error(f"allow_code_send: Redis error for key '{key}' account '{account_id}': {err}")
+        return True
+    if wait:
+        if request is not None:
+            _note_block(key, request, "hours")
+        return False
+    return True
+
+
+def clear_code_sends(kind, account_id):
+    """Clear an account's (or phone number's) send counter for one kind of code."""
+    try:
+        get_connection().delete(_account_key(f"code_send:{kind}", account_id))
+    except Exception as err:
+        logger.error(f"clear_code_sends: Redis error for kind '{kind}' account '{account_id}': {err}")
+
+
 def account_bucket_numbers(key):
     """(limit, window) for one of ACCOUNT_BUCKETS, or None for any other key."""
     if key not in ACCOUNT_BUCKETS:
@@ -751,6 +815,9 @@ def account_bucket_numbers(key):
     if key == TOTP_DAILY_BUCKET:
         return (max(1, settings.get("TOTP_ATTEMPT_DAILY_LIMIT", 20, kind="int")),
                 TOTP_DAILY_WINDOW)
+    if key.startswith("code_send:"):
+        return (max(1, settings.get("CODE_SEND_LIMIT", 5, kind="int")),
+                max(1, settings.get("CODE_SEND_WINDOW", 900, kind="int")))
     limit = max(1, settings.get("CODE_ATTEMPT_LIMIT", 5, kind="int"))
     window = max(1, settings.get("CODE_ATTEMPT_WINDOW", 900, kind="int"))
     ttl_setting = _CODE_TTL_SETTINGS.get(key.split(":", 1)[1])
