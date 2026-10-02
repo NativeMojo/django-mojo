@@ -47,7 +47,11 @@ class UserAPIKey(MojoSecrets, MojoModel):
         SAVE_PERMS = ["owner", "manage_users", "users"]
         OWNER_FIELD = "user"
         NO_SHOW_FIELDS = ["mojo_secrets"]
-        NO_SAVE_FIELDS = ["jti", "expires", "user", "last_used"]
+        # `secrets` / `mojo_secrets` hold the key's JWT signing secret. The REST
+        # save would hand a posted `secrets` to MojoSecrets.set_secrets, and
+        # whoever sets the signing secret can mint this key's tokens.
+        NO_SAVE_FIELDS = ["jti", "expires", "user", "last_used",
+                          "secrets", "mojo_secrets", "secret"]
         POST_SAVE_ACTIONS = ["revoke"]
         GRAPHS = {
             "default": {

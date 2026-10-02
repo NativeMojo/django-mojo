@@ -249,12 +249,17 @@ def test_ws_manager_multiple_connections(opts):
         ws2.close()
 
 
-@th.unit_test("ws_instance_set_meta")
-def test_ws_instance_set_meta(opts):
-    # Login via REST to get a JWT
+@th.unit_test("ws_set_meta_writes_nothing")
+def test_ws_set_meta_writes_nothing(opts):
+    # Maestro #6226: `set_meta` used to write any metadata key from any
+    # authenticated socket, including the `protected` subtree REST reserves
+    # for a superuser. The message is no longer handled.
+    from mojo.apps.account.models import User
+
     assert opts.client.login(TEST_USER, TEST_PWORD), "authentication failed"
     uid = opts.client.jwt_data.uid
     assert uid is not None, "missing user id from jwt"
+    User.objects.get(pk=uid).set_protected_metadata("rt_guard", "kept")
 
     ws_url = WsClient.build_url_from_host(opts.host, path="ws/realtime/")
     ws = WsClient(ws_url, logger=opts.logger)
@@ -263,17 +268,15 @@ def test_ws_instance_set_meta(opts):
         auth = ws.authenticate(opts.client.access_token, wait=True, timeout=10.0)
         assert auth.get("type") == "auth_success", f"unexpected auth response: {auth}"
 
-        # Set metadata key via instance hook
-        key = "rt_test"
-        value = "ok"
-        ws.send_json({"message_type": "set_meta", "key": key, "value": value})
-        ack = ws.wait_for_type("ack", timeout=5.0)
-        assert ack.data.get("type") == "ack", f"unexpected ack: {ack.data}"
+        for key, value in (("rt_test", "ok"), ("protected", {"rt_guard": "cleared"})):
+            ws.send_json({"message_type": "set_meta", "key": key, "value": value})
+            ack = ws.wait_for_type("ack", timeout=5.0)
+            assert "key" not in ack.data and "value" not in ack.data, (
+                f"set_meta must not acknowledge a write: {ack.data}")
 
-        # Verify via REST
-        resp = opts.client.get(f"/api/user/{uid}")
-        assert resp.status_code == 200, f"Expected 200 got {resp.status_code}"
-        meta = resp.response.data.metadata
-        assert meta.get(key) == value, f"metadata {key} mismatch: {meta.get(key)} vs {value}"
+        meta = User.objects.get(pk=uid).metadata or {}
+        assert "rt_test" not in meta, f"set_meta wrote a metadata key: {meta!r}"
+        assert (meta.get("protected") or {}).get("rt_guard") == "kept", (
+            f"set_meta replaced the protected metadata subtree: {meta!r}")
     finally:
         ws.close()

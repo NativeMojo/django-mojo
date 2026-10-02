@@ -38,7 +38,9 @@ class OAuthConnection(MojoSecrets, MojoModel):
         OWNER_FIELD = "user"
         # OAuth connection ties an external identity to a local user — never
         # body-settable. Framework auto-stamps user from request.
-        NO_SAVE_FIELDS = ["user"]
+        # `secrets` / `mojo_secrets` hold the provider tokens; the REST save
+        # would otherwise hand a posted `secrets` to MojoSecrets.set_secrets.
+        NO_SAVE_FIELDS = ["user", "secrets", "mojo_secrets", "secret"]
         NO_SHOW_FIELDS = ["mojo_secrets"]
         GRAPHS = {
             "default": {

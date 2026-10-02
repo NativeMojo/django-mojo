@@ -138,6 +138,11 @@ class ApiKey(MojoSecrets, MojoModel):
         # the CREATING ADMIN into it on every REST create, silently linking
         # every new key to whoever made it.
         CREATED_BY_OWNER_FIELD = None
+        # The framework default, plus the encrypted store that holds the raw
+        # token: the REST save would otherwise hand a posted `secrets` to
+        # MojoSecrets.set_secrets. A declared list REPLACES the default.
+        NO_SAVE_FIELDS = ["id", "pk", "created", "uuid",
+                          "secrets", "mojo_secrets", "secret"]
         SENSITIVE_FIELDS = ["token_hash"]
         # This table holds live credentials. The assistant's query_model takes a
         # caller-supplied graph and does not filter sensitive values out of

@@ -175,8 +175,17 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         # attack vector. last_activity is a server-managed audit timestamp.
         # Superusers who need to rotate auth_key or correct last_activity should
         # do so via direct DB access or a dedicated management command.
+        #
+        # The REST save hands a posted key to any `set_<key>` method, field or
+        # not. The second line lists the setters that are Python API only:
+        # `secrets` / `mojo_secrets` hold every one-time code, so a writable
+        # one lets its owner (or an admin, on another account) plant a code;
+        # `permanent_password` sets a password without the current one.
         NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified",
-                          "requires_password_change"]
+                          "requires_password_change",
+                          "secrets", "mojo_secrets", "secret",
+                          "permanent_password", "protected_metadata",
+                          "unusable_password"]
         # org is guarded by MANAGE_USERS_ONLY_FIELDS in on_rest_pre_save;
         # skip the Group VIEW_PERMS gate so manage_users admins (who may not
         # have view_groups) can still assign an org to a user.
@@ -1663,10 +1672,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         self.save(update_fields=["metadata"])
 
     def on_realtime_message(self, data):
-        # Simple test handler logic for unit tests
-        # Supports:
-        # - echo: returns payload back
-        # - set_meta: sets a metadata key/value and returns ack
+        # Every authenticated socket reaches this, so nothing here may write
+        # the account. `echo` returns its payload, for tests and health checks.
         mtype = None
         if isinstance(data, dict):
             mtype = data.get("message_type") or data.get("type")
@@ -1678,22 +1685,6 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 "user_id": self.id,
                 "payload": payload
             }}
-
-        if mtype == "set_meta" and isinstance(data, dict):
-            key = data.get("key")
-            value = data.get("value")
-            if key:
-                # same stale-instance hazard as the connect/disconnect hooks
-                try:
-                    self.refresh_from_db()
-                except Exception:
-                    pass
-                meta = self.metadata or {}
-                meta[str(key)] = value
-                self.metadata = meta
-                self.save(update_fields=["metadata"])
-                return {"response": {"type": "ack", "key": key, "value": value}}
-
 
         # Chat message routing
         if mtype and mtype.startswith("chat_"):

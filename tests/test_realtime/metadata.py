@@ -2,7 +2,7 @@
 TESTIT_TIER = "bug"
 from testit import helpers as th
 
-# Regression tests for maestro item 74: the realtime connect/disconnect/set_meta
+# Regression tests for maestro item 74: the realtime connect/disconnect
 # handlers write User.metadata from the websocket server's LONG-LIVED user
 # instance. A whole-field save of that stale snapshot silently reverts any
 # metadata written (e.g. via REST) while the socket was open. These tests
@@ -73,21 +73,22 @@ def test_connect_preserves_concurrent_metadata(opts):
         f"connect flag not written: {meta!r}")
 
 
-@th.django_unit_test("realtime_set_meta_preserves_concurrent_metadata")
-def test_set_meta_preserves_concurrent_metadata(opts):
+@th.django_unit_test("realtime_set_meta_leaves_metadata_alone")
+def test_set_meta_leaves_metadata_alone(opts):
+    # The set_meta message was removed (maestro #6226): any socket could write
+    # any metadata key with it. A stale socket instance that receives one must
+    # write nothing at all, so a concurrent write survives untouched.
     from mojo.apps.account.models import User
     ws_user = User.objects.get(pk=opts.meta_user_id)
     _concurrent_portal_write(opts.meta_user_id, [4321])
-    # a set_meta message arrives on the long-lived socket
     result = ws_user.on_realtime_message(
         {"type": "set_meta", "key": "theme", "value": "dark"})
-    assert result and result.get("response", {}).get("type") == "ack", (
-        f"set_meta did not ack: {result!r}")
+    response = (result or {}).get("response") or {}
+    assert "key" not in response, f"set_meta acknowledged a write: {result!r}"
 
     fresh = User.objects.get(pk=opts.meta_user_id)
     meta = fresh.metadata or {}
     assert meta.get("portal", {}).get("fav_workspaces") == [4321], (
-        f"set_meta clobbered a concurrent metadata write: "
+        f"a set_meta message clobbered a concurrent metadata write: "
         f"expected portal.fav_workspaces == [4321], got {meta!r}")
-    assert meta.get("theme") == "dark", (
-        f"set_meta did not write its own key: {meta!r}")
+    assert "theme" not in meta, f"set_meta wrote a metadata key: {meta!r}"
