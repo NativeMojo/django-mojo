@@ -58,6 +58,76 @@ def _is_sensitive_field(name):
     return any(s in name_lower for s in SENSITIVE_SUBSTRINGS)
 
 
+def _fk_spellings(model, path):
+    """``path`` spelled twice: each foreign-key segment by its relation name,
+    and by its column name.
+
+    ``user`` and ``user_id`` are one column, and a model's SENSITIVE_FIELDS
+    names only one of them. The shared helper compares a segment as written,
+    so it is asked about both spellings. This walk only respells; it decides
+    nothing about sensitivity.
+    """
+    by_name, by_column = [], []
+    current = model
+    for part in path.split("__"):
+        field = None
+        if current is not None:
+            try:
+                field = current._meta.get_field(part)
+            except Exception:
+                field = None
+        if field is None:
+            by_name.append(part)
+            by_column.append(part)
+            current = None
+            continue
+        by_name.append(field.name)
+        by_column.append(getattr(field, "attname", None) or field.name)
+        current = field.related_model if field.is_relation else None
+    return "__".join(by_name), "__".join(by_column)
+
+
+def _is_sensitive_input(model, path, lookup=True):
+    """The one rule for what a caller may ask the model tools BY.
+
+    The name heuristic above, unioned with the model's own declaration:
+    ``mojo.models.rest.is_sensitive_filter_path`` walks relations, so a path
+    is judged by the model each segment lands on, and it carries the
+    ``mojo_secrets`` baseline and refuses JSON columns. Row OUTPUT is not
+    decided here — that is the server-selected graph's.
+
+    ``lookup=False`` is for export ``fields``: those are output names, not ORM
+    lookups, so only a name the model declares counts and the JSON rule does
+    not apply.
+    """
+    from mojo.models.rest import is_sensitive_filter_path, _model_sensitive_fields
+
+    if any(_is_sensitive_field(segment) for segment in path.split("__")):
+        return True
+    spellings = {path, *_fk_spellings(model, path)}
+    if not lookup:
+        return not _model_sensitive_fields(model).isdisjoint(spellings)
+    return any(is_sensitive_filter_path(model, spelling) for spelling in spellings)
+
+
+def _deny_sensitive_input(model_label, path, surface, user, message):
+    """Report one refused probe and return its error dict.
+
+    The event names the model, the path and the surface. It never carries the
+    value the caller tried: that value is the guess being tested.
+    """
+    details = f"Sensitive field {surface} attempt: {path} on {model_label} by user {user.id}"
+    logger.warning(details)
+    _report_security_event(
+        "assistant_sensitive_field",
+        7,
+        details,
+        user,
+        model_name=model_label,
+    )
+    return {"error": message}
+
+
 def _resolve_model(app_name, model_name):
     """Resolve and validate a model. Returns (model_class, error_dict)."""
     from mojo.models import MojoModel
@@ -238,12 +308,16 @@ def _build_request(user, filters=None, method="GET", path="/assistant/query_mode
 
 
 def _get_field_info(model):
-    """Extract field metadata from a model, excluding sensitive fields."""
+    """Extract field metadata from a model: the fields it may be asked by.
+
+    A field the input rule refuses is left out, so nothing is advertised as
+    queryable that a query would then be refused for.
+    """
     fields = []
     for field in model._meta.get_fields():
         if not hasattr(field, "name"):
             continue
-        if _is_sensitive_field(field.name):
+        if _is_sensitive_input(model, field.name):
             continue
 
         internal_type = getattr(field, "get_internal_type", lambda: "unknown")()
@@ -311,7 +385,7 @@ def _resolve_group_by_field(model, name):
     return field.name
 
 
-def _validate_filter_keys(filters, valid_fields, user, model_label):
+def _validate_filter_keys(model, filters, valid_fields, user, model_label):
     """Validate filter keys against model fields. Returns error dict or None."""
     # ORM lookup suffixes that are not field names
     ORM_SUFFIXES = {"in", "not", "not_in", "isnull", "gte", "gt", "lte", "lt",
@@ -324,21 +398,14 @@ def _validate_filter_keys(filters, valid_fields, user, model_label):
         parts = key.split("__")
         base = parts[0]
 
-        # Check every segment for sensitive content (blocks relational traversal)
-        for segment in parts:
-            if segment in ORM_SUFFIXES:
-                continue
-            if _is_sensitive_field(segment):
-                details = f"Sensitive field filter attempt: {key} on {model_label} by user {user.id}"
-                logger.warning(details)
-                _report_security_event(
-                    "assistant_sensitive_field",
-                    7,
-                    details,
-                    user,
-                    model_name=model_label,
-                )
-                return {"error": f"Filtering on '{segment}' is not allowed"}
+        # The whole path, relations included: a segment is judged by the
+        # model it lands on, not only by its name.
+        if _is_sensitive_input(model, key):
+            named = next((s for s in parts
+                          if s not in ORM_SUFFIXES and _is_sensitive_field(s)), key)
+            return _deny_sensitive_input(
+                model_label, key, "filter", user,
+                f"Filtering on '{named}' is not allowed")
 
         if base not in valid_fields:
             return {"error": f"Unknown field '{base}' on {model_label}"}
@@ -624,7 +691,7 @@ def _tool_query_model(params, user):
 
     # Validate filter keys
     valid_fields = _get_valid_field_names(model)
-    filter_err = _validate_filter_keys(filters, valid_fields, user, model_label)
+    filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label)
     if filter_err:
         return filter_err
 
@@ -634,8 +701,10 @@ def _tool_query_model(params, user):
         order_field = ordering.lstrip("-")
         if "__" in order_field:
             return {"error": f"Relational ordering is not supported"}
-        if _is_sensitive_field(order_field):
-            return {"error": f"Ordering on '{order_field}' is not allowed"}
+        if _is_sensitive_input(model, order_field):
+            return _deny_sensitive_input(
+                model_label, order_field, "ordering", user,
+                f"Ordering on '{order_field}' is not allowed")
         if order_field not in valid_fields:
             return {"error": f"Unknown ordering field '{order_field}' on {model_label}"}
 
@@ -1155,7 +1224,7 @@ def _tool_aggregate_model(params, user):
     # Validate filters
     valid_fields = _get_valid_field_names(model)
     if filters:
-        filter_err = _validate_filter_keys(filters, valid_fields, user, model_label)
+        filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label)
         if filter_err:
             return filter_err
 
@@ -1188,8 +1257,10 @@ def _tool_aggregate_model(params, user):
         if not _ALIAS_RE.match(alias):
             return {"error": f"Invalid alias '{alias}' — use letters, digits, underscores only"}
 
-        if _is_sensitive_field(field):
-            return {"error": f"Aggregation on '{field}' is not allowed"}
+        if _is_sensitive_input(model, field):
+            return _deny_sensitive_input(
+                model_label, field, "aggregation", user,
+                f"Aggregation on '{field}' is not allowed")
 
         if field not in valid_fields:
             return {"error": f"Unknown field '{field}' on {model_label}"}
@@ -1207,8 +1278,10 @@ def _tool_aggregate_model(params, user):
     group_by = params.get("group_by") or []
     resolved_group_by = []
     for gb_field in group_by:
-        if _is_sensitive_field(gb_field):
-            return {"error": f"Cannot group by sensitive field '{gb_field}'"}
+        if _is_sensitive_input(model, gb_field):
+            return _deny_sensitive_input(
+                model_label, gb_field, "group_by", user,
+                f"Cannot group by sensitive field '{gb_field}'")
         resolved = _resolve_group_by_field(model, gb_field)
         if resolved is None:
             return {"error": f"Unknown group_by field '{gb_field}' on {model_label}"}
@@ -1247,8 +1320,16 @@ def _tool_aggregate_model(params, user):
             order_field = ordering.lstrip("-")
             if "__" in order_field:
                 return {"error": "Relational ordering is not supported"}
-            if _is_sensitive_field(order_field):
-                return {"error": f"Ordering on '{order_field}' is not allowed"}
+            # An alias is an output name, not a model path: only the name
+            # heuristic applies to it. A group_by column is a model path.
+            if order_field in aggs:
+                sensitive = _is_sensitive_field(order_field)
+            else:
+                sensitive = _is_sensitive_input(model, order_field)
+            if sensitive:
+                return _deny_sensitive_input(
+                    model_label, order_field, "ordering", user,
+                    f"Ordering on '{order_field}' is not allowed")
             if order_field not in valid_order_fields:
                 return {"error": (
                     f"Ordering field '{order_field}' must match a group_by "
@@ -1319,11 +1400,13 @@ DEFAULT_EXPORT_LIMIT = 5000
 MAX_EXPORT_LIMIT = 50000
 
 
-def _validate_export_fields(fields, columns, model_label):
+def _validate_export_fields(model, fields, columns, user, model_label):
     """Validate export_data's optional ``fields``. Returns error dict or None.
 
     ``fields`` narrows the selected graph's output and reorders it; it never
-    widens it. An empty list is refused rather than read as "everything".
+    widens it. An empty list is refused rather than read as "everything". A
+    name the model declares sensitive is refused even where the graph shows
+    it: the graph decides the row, not what a caller may single out.
     """
     if not isinstance(fields, (list, tuple)) or not fields:
         return {"error": "'fields' must be a non-empty list of column names"}
@@ -1331,8 +1414,10 @@ def _validate_export_fields(fields, columns, model_label):
     for name in fields:
         if not isinstance(name, str):
             return {"error": "'fields' must be a non-empty list of column names"}
-        if _is_sensitive_field(name):
-            return {"error": f"Field '{name}' is not allowed in exports"}
+        if _is_sensitive_input(model, name, lookup=False):
+            return _deny_sensitive_input(
+                model_label, name, "export field", user,
+                f"Field '{name}' is not allowed in exports")
         if name not in columns:
             return {"error": (
                 f"Field '{name}' is not exported for {model_label}. "
@@ -1467,7 +1552,7 @@ def _tool_export_data(params, user):
     # Validate filters
     valid_fields = _get_valid_field_names(model)
     if filters:
-        filter_err = _validate_filter_keys(filters, valid_fields, user, model_label)
+        filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label)
         if filter_err:
             return filter_err
 
@@ -1477,8 +1562,10 @@ def _tool_export_data(params, user):
         order_field = ordering.lstrip("-")
         if "__" in order_field:
             return {"error": "Relational ordering is not supported"}
-        if _is_sensitive_field(order_field):
-            return {"error": f"Ordering on '{order_field}' is not allowed"}
+        if _is_sensitive_input(model, order_field):
+            return _deny_sensitive_input(
+                model_label, order_field, "ordering", user,
+                f"Ordering on '{order_field}' is not allowed")
         if order_field not in valid_fields:
             return {"error": f"Unknown ordering field '{order_field}' on {model_label}"}
 
@@ -1520,7 +1607,7 @@ def _tool_export_data(params, user):
         return err
     columns = model_serialization.output_fields(model, graph)
     if params.get("fields") is not None:
-        err = _validate_export_fields(params["fields"], columns, model_label)
+        err = _validate_export_fields(model, params["fields"], columns, user, model_label)
         if err:
             return err
         columns = list(params["fields"])
