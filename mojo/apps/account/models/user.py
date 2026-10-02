@@ -613,7 +613,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             self.atomic_save()
         return self.auth_key
 
-    def end_sessions(self, reason, request=None, actor=None, key_rotated=False, drop_sockets=None):
+    def end_sessions(self, reason, request=None, actor=None, key_rotated=False,
+                     drop_sockets=None, revoke_grants=None):
         """Sign this account out everywhere. The one place that does it, for
         every flow that must: revoke_sessions, a password reset and a password
         change (maestro #6226).
@@ -635,7 +636,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
         `reason` is recorded on the revoked grants. `key_rotated` is for a
         caller that already wrote a new auth_key in the same save as the
-        change that calls for this. `drop_sockets` is a test seam.
+        change that calls for this. `drop_sockets` and `revoke_grants` are
+        test seams.
         """
         from django.db import transaction
         from mojo.apps.account.services import oauth_server
@@ -650,7 +652,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             for key in INVITE_CACHE_SECRETS:
                 locked.set_secret(key, None)
             locked.save(update_fields=fields)
-            oauth_server.revoke_all_grants(actor=actor, user=locked, reason=reason)
+            (revoke_grants or oauth_server.revoke_all_grants)(actor=actor, user=locked, reason=reason)
         self.refresh_from_db(fields=["auth_key", "mojo_secrets", "modified"])
 
         drop = drop_sockets or disconnect_realtime
@@ -1133,12 +1135,24 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if removed_phone:
             self._removed_verified_phone = None
             self.notify_phone_removed(removed_phone)
-        if getattr(self, "_password_changed_in_save", False):
-            self._password_changed_in_save = False
+
+    def atomic_save(self):
+        """The account save. A changed password and the end of every other
+        session are one transaction: the row carries the new password and the
+        new key, and the grants are revoked with it, or none of it is stored.
+        A password that changed while a connected app's refresh token stayed
+        good would be the half that matters missing (maestro #6226). The
+        websockets go once it is committed."""
+        if not getattr(self, "_password_changed_in_save", False):
+            return super().atomic_save()
+        from django.db import transaction
+        self._password_changed_in_save = False
+        with transaction.atomic():
+            self.save()
             self.end_sessions(
                 "password_changed", request=self.active_request,
                 actor=self.active_user, key_rotated=True)
-            self._sessions_ended_in_save = True
+        self._sessions_ended_in_save = True
 
     def on_rest_pre_save(self, changed_fields, created):
         for _field in SUPERUSER_ONLY_FIELDS:
@@ -1227,9 +1241,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             self.debug("CHANGING PASSWORD")
             self.log("****", kind="password:changed")
             # A changed password ends every other session. The new key goes
-            # out in the same write as the password, so there is no moment
-            # with the new password and the old sessions; the rest follows
-            # once the save has gone through (maestro #6226).
+            # out in the same write as the password, and atomic_save revokes
+            # the grants in that write's transaction (maestro #6226).
             self.auth_key = uuid.uuid4().hex
             self._password_changed_in_save = True
         if "email" in changed_fields:

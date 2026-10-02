@@ -164,18 +164,19 @@ The stored state is read and written under a lock on the account's row, and the 
 | An admin's temporary password, and the forced change that completes it | These already replaced the key. They now revoke the grants and clear the invite cache too. |
 | `revoke_sessions` action and `POST /api/auth/sessions/revoke` | As before, and they now revoke the OAuth-server grants. `auth/sessions/revoke` now drops live websockets as well. |
 
-For a reset and for a password change the new key is written in the same transaction, or the same row write, as the new password. There is no moment with the new password and the old sessions.
+For a reset and for a password change, the new password, the new key, the grant revocation and the cleared invite are one transaction. There is no moment with the new password and the old sessions, and if any of it fails none of it is stored: the request answers with an error and the old password still stands. Only the websocket drop is outside it, after the commit.
 
 **What survives:** per-user API keys and passkeys. They are separate credentials with their own revocation.
 
 **What it costs the user:** other devices sign in again. Any unopened emailed link for that account stops working. The websocket of the device that changed the password drops and reconnects. A password-reset link opened a second time now answers `Invalid token signature` where it used to answer `Token already used`, because the first use replaced the key.
 
-**From your own code:** when a custom flow sets a password or must sign an account out, call the helper after your save. Do not set `user.auth_key` by hand, which leaves the grants and the invite cache behind.
+**From your own code:** when a custom flow sets a password or must sign an account out, call the helper after your save, in the same transaction. Do not set `user.auth_key` by hand, which leaves the grants and the invite cache behind.
 
 ```python
-user.set_permanent_password(new_password)
-user.save()
-user.end_sessions("password_reset", request=request)
+with transaction.atomic():
+    user.set_permanent_password(new_password)
+    user.save()
+    user.end_sessions("password_reset", request=request)
 return jwt_login(request, user, source="password_reset")   # signed with the new key
 ```
 

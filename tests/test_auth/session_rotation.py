@@ -164,6 +164,36 @@ def _assert_signed_in(opts, data, what):
                 f"{what}: the new refresh token must work")
 
 
+def _own_save(pk, data, **seams):
+    """The account's own save, run in this process: a fault can't be put into
+    the server's. `seams` are end_sessions' test seams, handed on through this
+    one instance. Returns what the save raised, or None."""
+    from django.test import RequestFactory
+    from objict import objict
+    from mojo.models.rest import ACTIVE_REQUEST
+
+    user = _fresh(pk)
+    end_sessions = user.end_sessions
+    user.end_sessions = lambda reason, **kwargs: end_sessions(reason, **dict(kwargs, **seams))
+    request = RequestFactory().post("/api/user/me", {})
+    request.DATA = objict(data)
+    request.ip = _new_ip()
+    request.user = user
+    request.bearer = "bearer"
+    request.group = None
+    request.duid = None
+    request.muid = None
+    request.user_agent = "testit"
+    active = ACTIVE_REQUEST.set(request)
+    try:
+        user.on_rest_save(request, request.DATA)
+    except Exception as err:
+        return err
+    finally:
+        ACTIVE_REQUEST.reset(active)
+    return None
+
+
 @th.django_unit_setup()
 def setup_session_rotation(opts):
     from mojo.apps.account.models import OAuthClient, User
@@ -472,6 +502,53 @@ def test_admin_own_password_change_returns_tokens(opts):
                 "the admin's other devices must be signed out like anyone else's")
     _assert_signed_in(opts, resp.response.tokens, "admin's own password change")
     _reset_account(pk)
+
+
+@th.django_unit_test("password change: when the grants can't be revoked, the password doesn't change either")
+def test_password_change_is_all_or_nothing(opts):
+    pk = opts.sr_change_id
+    user = _reset_account(pk)
+    old_key = user.get_auth_key()
+    _other, before = _sign_in(opts, "sr_change")
+    grant, oauth_client, pair = _oauth_pair(pk)
+    dropped = []
+
+    def unreachable(*args, **kwargs):
+        raise RuntimeError("the grants can't be revoked")
+
+    raised = _own_save(
+        pk, {"current_password": PWORD, "new_password": NEW_PWORD}, revoke_grants=unreachable,
+        drop_sockets=lambda account, request=None: dropped.append(account.pk))
+
+    assert_true(isinstance(raised, RuntimeError), f"the save must fail loudly, got {raised!r}")
+    stored = _fresh(pk)
+    assert_true(stored.check_password(PWORD) and not stored.check_password(NEW_PWORD),
+                "the new password must not be stored: with it stored and the grants alive, "
+                "a connected app's old refresh token outlives the password change")
+    assert_eq(stored.auth_key, old_key, "the signing key must not be replaced by a change that failed")
+    assert_true(_grant_active(grant), "nothing was revoked, and nothing else may have changed")
+    assert_true(_refresh_works(opts, before.refresh_token),
+                "a change that failed must sign nobody out")
+    assert_eq(dropped, [], "no websocket is dropped for a change that was rolled back")
+
+
+@th.django_unit_test("password change: websockets are dropped only once the change is committed")
+def test_password_change_drops_sockets_after_commit(opts):
+    from django.db import connection
+
+    pk = opts.sr_change_id
+    _reset_account(pk)
+    grant, _oauth_client, _pair = _oauth_pair(pk)
+    seen = []
+
+    def drop(account, request=None):
+        seen.append((connection.in_atomic_block, _grant_active(grant), _fresh(pk).check_password(NEW_PWORD)))
+
+    raised = _own_save(pk, {"current_password": PWORD, "new_password": NEW_PWORD}, drop_sockets=drop)
+
+    assert_eq(raised, None, f"the change must succeed, got {raised!r}")
+    assert_eq(seen, [(False, False, True)],
+              "one drop, outside the transaction, with the password stored and the grants revoked")
 
 
 # -----------------------------------------------------------------

@@ -356,7 +356,7 @@ POST /api/user/<own_id>
 
 `current_password` is required for self-service changes.
 
-A changed password ends every other session of the account (`User.end_sessions`, see [Authentication — Sessions End When the Password Changes](auth.md#sessions-end-when-the-password-changes)). The new `auth_key` is written in the same row write as the password. So that the device making the change stays signed in, the response carries a `tokens` object **beside** `data`, signed with the new key:
+A changed password ends every other session of the account (`User.end_sessions`, see [Authentication — Sessions End When the Password Changes](auth.md#sessions-end-when-the-password-changes)). The new `auth_key` is written in the same row write as the password, and the grants are revoked in that write's transaction (`User.atomic_save`): if the revocation fails, the password is not changed. So that the device making the change stays signed in, the response carries a `tokens` object **beside** `data`, signed with the new key:
 
 ```json
 {
