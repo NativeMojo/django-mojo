@@ -87,6 +87,11 @@ ADMIN_ONLY_FIELDS = frozenset((
 # "any-admin-tier" was collapsed; everything in the old set is now in
 # ADMIN_ONLY_FIELDS.
 MANAGE_USERS_ONLY_FIELDS = ADMIN_ONLY_FIELDS
+
+# What a cached invite leaves in the account's secrets (utils/tokens.py). All
+# three go when the signing key is replaced: the cached token is dead, and
+# get_or_generate_invite_token must mint a new one.
+INVITE_CACHE_SECRETS = ("invite_token", "invite_jti", "invite_ts")
 METRICS_TIMEZONE = settings.get_static("METRICS_TIMEZONE", "America/Los_Angeles")
 METRICS_TRACK_USER_ACTIVITY = settings.get_static("METRICS_TRACK_USER_ACTIVITY", False)
 
@@ -608,6 +613,123 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             self.atomic_save()
         return self.auth_key
 
+    def end_sessions(self, reason, request=None, actor=None, key_rotated=False, drop_sockets=None):
+        """Sign this account out everywhere. The one place that does it, for
+        every flow that must: revoke_sessions, a password reset and a password
+        change (maestro #6226).
+
+          - A new auth_key: every session token, every OAuth-server access
+            token and every unopened emailed link signed with the old one
+            stops verifying.
+          - The OAuth-server grants are revoked. Their refresh tokens are not
+            signed with the key and would otherwise keep minting.
+          - The cached invite token is cleared. It was signed with the old
+            key, and the next invite must mint one that works.
+          - Live websockets are dropped, best effort, once the change is
+            committed. The key is the guarantee; a failed drop undoes nothing.
+
+        The stored state is read and written under a lock on the account's
+        row, and the caller's own copy is refreshed, so a later save on it
+        can't write the old key or the old secrets back. The caller issues
+        new tokens to the device that asked, if any.
+
+        `reason` is recorded on the revoked grants. `key_rotated` is for a
+        caller that already wrote a new auth_key in the same save as the
+        change that calls for this. `drop_sockets` is a test seam.
+        """
+        from django.db import transaction
+        from mojo.apps.account.services import oauth_server
+        from mojo.apps.account.services.disable import disconnect_realtime
+
+        with transaction.atomic():
+            locked = User.objects.select_for_update().get(pk=self.pk)
+            fields = ["mojo_secrets", "modified"]
+            if not key_rotated:
+                locked.auth_key = uuid.uuid4().hex
+                fields.append("auth_key")
+            for key in INVITE_CACHE_SECRETS:
+                locked.set_secret(key, None)
+            locked.save(update_fields=fields)
+            oauth_server.revoke_all_grants(actor=actor, user=locked, reason=reason)
+        self.refresh_from_db(fields=["auth_key", "mojo_secrets", "modified"])
+
+        drop = drop_sockets or disconnect_realtime
+
+        def _drop():
+            try:
+                drop(self, request=request)
+            except Exception as err:
+                logit.error("sessions", f"socket drop failed for user {self.pk}: {err}")
+
+        transaction.on_commit(_drop)
+
+    @classmethod
+    def session_token_expiries(cls, user):
+        """(access, refresh) lifetimes in seconds for a session token pair:
+        the settings, or the account's organisation where it sets its own."""
+        access = settings.get("JWT_TOKEN_EXPIRY", 21600, kind="int")
+        refresh = settings.get("JWT_REFRESH_TOKEN_EXPIRY", 604800, kind="int")
+        if user.org:
+            access = user.org.metadata.get("access_token_expiry", access)
+            refresh = user.org.metadata.get("refresh_token_expiry", refresh)
+        return access, refresh
+
+    def _own_session_tokens(self, request):
+        """A token pair for the session that just changed its own password,
+        signed with the new key. None for anyone else: an admin changing
+        another person's password is never handed that person's tokens, and a
+        key-backed caller holds no session to replace.
+
+        A password change is not a new sign-in, so the claims of the token
+        that made the request are carried over, auth_time among them: the
+        step-up freshness gate must not be renewed by a password change.
+        """
+        from mojo.helpers import request as request_helpers
+
+        actor = getattr(request, "user", None)
+        if actor is None or getattr(actor, "pk", None) != self.pk:
+            return None
+        if request_helpers.credential_kind(request) != "user":
+            return None
+        auth_token = getattr(request, "auth_token", None)
+        try:
+            prior = dict(JWToken().decode(auth_token.token, validate=False))
+        except Exception:
+            prior = {}
+        # Everything the old token carried rides over, a restriction such as
+        # allowed_ips included; only what the mint itself stamps is dropped.
+        claims = {key: value for key, value in prior.items()
+                  if key not in ("exp", "iat", "jti", "token_type")}
+        claims["uid"] = self.pk
+        access, refresh = User.session_token_expiries(self)
+        package = JWToken(
+            self.get_auth_key(),
+            access_token_expiry=access,
+            refresh_token_expiry=refresh).create(**claims)
+        return dict(access_token=package.access_token, refresh_token=package.refresh_token)
+
+    def on_rest_save_and_respond(self, request):
+        """The account save, answering with the account as always. When the
+        save changed the caller's own password, every other session was just
+        ended, and the answer carries a `tokens` object beside the data so
+        this device stays signed in."""
+        self._sessions_ended_in_save = False
+        resp = self.on_rest_save(request, request.DATA)
+        tokens = self._own_session_tokens(request) if self._sessions_ended_in_save else None
+        self._sessions_ended_in_save = False
+        if resp is None:
+            if tokens is None:
+                return self.on_rest_get(request)
+            from mojo.serializers import get_serializer_manager
+            graph = self.rest_resolve_request_graph(request, "default", instance=self)
+            serializer = get_serializer_manager().get_serializer(self, graph=graph)
+            return serializer.to_response(request, tokens=tokens)
+        if tokens is not None:
+            resp = dict(resp)
+            resp["tokens"] = tokens
+        from mojo.helpers.response import JsonResponse
+        return JsonResponse(resp)
+
     def set_password(self, raw_password):
         """Hash a password without changing forced-password state."""
         super().set_password(raw_password)
@@ -1011,6 +1133,12 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if removed_phone:
             self._removed_verified_phone = None
             self.notify_phone_removed(removed_phone)
+        if getattr(self, "_password_changed_in_save", False):
+            self._password_changed_in_save = False
+            self.end_sessions(
+                "password_changed", request=self.active_request,
+                actor=self.active_user, key_rotated=True)
+            self._sessions_ended_in_save = True
 
     def on_rest_pre_save(self, changed_fields, created):
         for _field in SUPERUSER_ONLY_FIELDS:
@@ -1098,6 +1226,12 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 raise merrors.PermissionDeniedException("You are not allowed to change password")
             self.debug("CHANGING PASSWORD")
             self.log("****", kind="password:changed")
+            # A changed password ends every other session. The new key goes
+            # out in the same write as the password, so there is no moment
+            # with the new password and the old sessions; the rest follows
+            # once the save has gone through (maestro #6226).
+            self.auth_key = uuid.uuid4().hex
+            self._password_changed_in_save = True
         if "email" in changed_fields:
             self.log(kind="email:changed", log=f"{changed_fields['email']} to {self.email}")
         if "username" in changed_fields:
@@ -1276,10 +1410,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if not isinstance(value, dict):
             value = {}
         self._require_fresh_auth()
-        self.auth_key = uuid.uuid4().hex
-        self.save(update_fields=["auth_key", "modified"])
-        from mojo.apps.account.services.disable import disconnect_realtime
-        disconnect_realtime(self, request=self.active_request)
+        self.end_sessions(
+            "sessions_revoked", request=self.active_request, actor=self.active_user)
         self.report_incident(f"{self.username} revoked all sessions by {self.active_user.username}", "sessions:revoked")
         return {
             "status": True,

@@ -450,7 +450,7 @@ def count_grants(user=None, include_inactive=False, resource_path=None):
                if _has_path(resource, paths))
 
 
-def _log_bulk_revocation(owners, actor):
+def _log_bulk_revocation(owners, actor, reason="admin"):
     """One audit line per affected USER, carrying that user's count.
 
     Bounded by operators rather than by connections: a sweep of a thousand
@@ -462,15 +462,18 @@ def _log_bulk_revocation(owners, actor):
     for owner in User.objects.filter(pk__in=list(owners.keys())):
         try:
             owner.log(
-                f"{owners[owner.pk]} OAuth grant(s) revoked (admin){by}",
+                f"{owners[owner.pk]} OAuth grant(s) revoked ({reason}){by}",
                 "oauth:grant_revoked")
         except Exception:
             logit.exception(
                 "oauth: could not write the bulk grant_revoked audit line")
 
 
-def revoke_all_grants(actor=None, user=None, resource_path=None):
+def revoke_all_grants(actor=None, user=None, resource_path=None, reason="admin"):
     """Revoke every live grant (optionally one user's, or given resource paths).
+
+    `reason` is what the row and the audit line record: "admin" for an
+    operator's sweep, or the flow that ended the owner's sessions.
 
     ONE bulk UPDATE rather than a per-row ``revoke_grant`` loop: deactivating
     the row is what every credential check actually reads — ``validate_access``
@@ -496,9 +499,10 @@ def revoke_all_grants(actor=None, user=None, resource_path=None):
         owners[user_id] = owners.get(user_id, 0) + 1
     if not targets:
         return 0
+    reason = str(reason or "admin")[:32]
     updated = OAuthGrant.objects.filter(pk__in=targets, is_active=True).update(
-        is_active=False, revoked_reason="admin", modified=dates.utcnow())
-    _log_bulk_revocation(owners, actor)
+        is_active=False, revoked_reason=reason, modified=dates.utcnow())
+    _log_bulk_revocation(owners, actor, reason)
     return updated
 
 

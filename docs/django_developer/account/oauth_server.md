@@ -184,8 +184,9 @@ runs, in order:
    the last place a full-reach grant without full-reach consent can be stopped.
    `scopes` must be a list — `"api" in "apix"` is true for a string.
 8. **Signature, expiry and audience** are verified together against the
-   **user's** `auth_key` — a disable, a closure or a `revoke_sessions` rotates
-   that key and therefore kills every live token on the next request — then
+   **user's** `auth_key` — a disable, a closure, a `revoke_sessions`, a
+   password reset or a password change rotates that key and therefore kills
+   every live token on the next request — then
    **`request.oauth_grant` is stamped** and the grant's `last_used` updated.
 
 Every refusal returns the generic `"Invalid token"`. Only expiry says

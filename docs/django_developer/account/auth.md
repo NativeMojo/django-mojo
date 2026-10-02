@@ -131,13 +131,55 @@ Two flows supported:
 1. `POST /api/auth/forgot` with `email` + `method=code`
 2. 6-digit code emailed, stored encrypted in user secrets
 3. `POST /api/auth/password/reset/code` with `email`, `code`, `new_password`
-4. Returns new JWT on success
+4. Returns new JWT on success, and ends every other session (see below)
 
 ### Link-based
 1. `POST /api/auth/forgot` with `email` + `method=link`
 2. Signed token emailed
 3. `POST /api/auth/password/reset/token` with `token`, `new_password`
-4. Returns new JWT on success
+4. Returns new JWT on success, and ends every other session (see below)
+
+## Sessions End When the Password Changes
+
+A new password signs the account out everywhere else. Without that, a stolen refresh token keeps renewing after the owner has "fixed" the account.
+
+One method does it for every flow, `User.end_sessions(reason, request=None, actor=None)`:
+
+| What it does | Why |
+|---|---|
+| Replaces `auth_key` | Every session JWT, every group token, every OAuth-server access token and every unopened emailed link (reset, magic login, email verify, invite) is signed with it and stops verifying. |
+| Revokes the account's OAuth-server grants (`revoked_reason` = the `reason` passed) | Their refresh tokens are opaque and not signed with the key, so they would keep minting. |
+| Clears the cached invite token | It was signed with the old key. The next invite mints one that works. |
+| Drops the account's live websockets | Websocket auth happens once, at connect. Best effort, after commit; a failed drop undoes nothing. |
+
+The stored state is read and written under a lock on the account's row, and the caller's own copy is refreshed, so a later `save()` on it can't write the old key or the old secrets back.
+
+**Which flows call it**
+
+| Flow | The device that asked |
+|---|---|
+| `POST /api/auth/password/reset/code` and `POST /api/auth/password/reset/token` | Stays signed in: the reset answers with a new token pair, as before. |
+| Password change on the account save (`new_password`), by the account's owner | Stays signed in: the save answers with a `tokens` object beside the account data. See [User — Password Change](user.md#password-change). |
+| Password change on the account save, by an admin for someone else | The admin's own session is untouched. No tokens for the other person are returned. |
+| An admin's temporary password, and the forced change that completes it | These already replaced the key. They now revoke the grants and clear the invite cache too. |
+| `revoke_sessions` action and `POST /api/auth/sessions/revoke` | As before, and they now revoke the OAuth-server grants. `auth/sessions/revoke` now drops live websockets as well. |
+
+For a reset and for a password change the new key is written in the same transaction, or the same row write, as the new password. There is no moment with the new password and the old sessions.
+
+**What survives:** per-user API keys and passkeys. They are separate credentials with their own revocation.
+
+**What it costs the user:** other devices sign in again. Any unopened emailed link for that account stops working. The websocket of the device that changed the password drops and reconnects. A password-reset link opened a second time now answers `Invalid token signature` where it used to answer `Token already used`, because the first use replaced the key.
+
+**From your own code:** when a custom flow sets a password or must sign an account out, call the helper after your save. Do not set `user.auth_key` by hand, which leaves the grants and the invite cache behind.
+
+```python
+user.set_permanent_password(new_password)
+user.save()
+user.end_sessions("password_reset", request=request)
+return jwt_login(request, user, source="password_reset")   # signed with the new key
+```
+
+Not routed through the helper: the email-change confirm, and disabling or closing an account. Each replaces the key itself. A disabled account's grants are refused because the account is inactive.
 
 ## Magic Login
 
@@ -783,7 +825,7 @@ of the parent gets no token for a child group).
 | Lever | Scope | How |
 |---|---|---|
 | Epoch bump | every token for one group | `group.bump_group_token_epoch()`, or `POST /api/group/<pk>` with `{"revoke_group_tokens": true}` |
-| `auth_key` rotation | every token for one user | `POST /api/user/me {"revoke_sessions": true}`, or set `user.auth_key` |
+| `auth_key` rotation | every token for one user | `POST /api/user/me {"revoke_sessions": true}`, a password reset or change, or `user.end_sessions(reason)` |
 | Membership removal | that user in that group | delete the `GroupMember` row |
 | Group (or ancestor) deactivation | every token for the subtree | `group.is_active = False` |
 | User deactivation | every token for that user | `user.is_active = False` |
