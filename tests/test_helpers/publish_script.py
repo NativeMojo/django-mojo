@@ -2,8 +2,10 @@
 
 publish.py is loaded as this test's own module instance. On that instance
 `run` records commands instead of running them, `say` records the lines the
-script would print, and the checks that reach git, the package index, maestro
-or the process environment are stubs. Nothing is built, pushed or uploaded.
+script would print, and the checks that reach git, the package index or
+maestro are stubs. The environment is a mapping the test owns, filled from a
+.env file the test owns, so the token check, the settings and the wait after
+the upload are the script's own. Nothing is built, pushed or uploaded.
 """
 import importlib.util
 from pathlib import Path
@@ -15,6 +17,9 @@ from testit.helpers import assert_true, assert_eq
 TESTIT_TIER = "framework"
 ROOT = Path(__file__).resolve().parents[2]
 PROJECT = 42
+TOKEN = {"UV_PUBLISH_TOKEN": "a-test-token"}
+TIMEOUT = "PUBLISH_VISIBLE_TIMEOUT"
+INTERVAL = "PUBLISH_VISIBLE_INTERVAL"
 WHEEL_CHECK = "scripts/release_wheel_only.py"
 CLEAN_TREE = "<clean-tree check>"
 
@@ -22,7 +27,8 @@ CLEAN_TREE = "<clean-tree check>"
 class Harness:
     """One loaded publish.py, with what it ran and what it said."""
 
-    def __init__(self, fail_on=None, dirty_after_build=False):
+    def __init__(self, fail_on=None, dirty_after_build=False, environ=None,
+                 env_file=None, visible=True):
         spec = importlib.util.spec_from_file_location(
             "publish_script_under_test", ROOT / "publish.py")
         module = importlib.util.module_from_spec(spec)
@@ -33,19 +39,21 @@ class Harness:
         self.fail_on = fail_on
         self.dirty_after_build = dirty_after_build
         self.requests = []
+        self.environ = dict(TOKEN if environ is None else environ)
+        self.visible = visible
+        self.polls = 0
+        self.env_file = env_file
 
         module.PYPROJECT_FILE = ROOT / "pyproject.toml"
         module.INIT_FILE = ROOT / "mojo/__init__.py"
         module.LOCK_FILE = ROOT / "uv.lock"
         module.run = self.run
         module.say = self.say
-        module.load_env = lambda path, environ: None
-        module.validate_environment = lambda args: None
         module.require_clean_tree = self.require_clean_tree
         module.require_unreleased = lambda version: None
         module.maestro_credentials = lambda: (None, None, None, PROJECT)
         module.maestro_request = self.maestro_request
-        module.wait_for_pypi_visibility = lambda version: True
+        module._url_ok = self.url_ok
 
     def run(self, argv, dry_run=False, capture=True):
         self.calls.append((list(argv), dry_run))
@@ -69,12 +77,27 @@ class Harness:
         self.requests.append(args)
         raise self.module.PublishError("the test allows no maestro request")
 
+    def url_ok(self, url):
+        """The package index, as the wait sees it. An index that never shows
+        the version is polled once: a second poll means the wait is running
+        on the default ten minutes, and the test must not sit through them."""
+        self.polls += 1
+        if self.visible:
+            return True, f"django_mojo-{self.version()}-py3-none-any.whl"
+        assert_eq(self.polls, 1, "the wait polled again after a timeout of zero seconds")
+        return False, ""
+
     def main(self, *argv):
         """Exit code, or None when the script ran to its end."""
-        try:
-            self.module.main(list(argv))
-        except SystemExit as stop:
-            return stop.code
+        with tempfile.TemporaryDirectory() as folder:
+            # The test's own .env, or none: never the checkout's.
+            self.module.ENV_FILE = Path(folder) / ".env"
+            if self.env_file is not None:
+                self.module.ENV_FILE.write_text(self.env_file)
+            try:
+                self.module.main(list(argv), environ=self.environ)
+            except SystemExit as stop:
+                return stop.code
         return None
 
     def position(self, *prefix, dry_run=False):
@@ -235,6 +258,68 @@ def test_note_is_required_by_default(opts):
     assert_eq(harness.main(), 1, "a release with no reachable note must be refused")
     assert_eq(len(harness.requests), 1, "the default path must ask maestro for the note")
     assert_true(not harness.executed("uv", "build"), "the note gate must come before the build")
+
+
+@th.unit_test("publish: a wait setting that is not a usable number stops a release and a dry run alike, before the build")
+def test_bad_wait_setting_stops_before_build(opts):
+    for name in (TIMEOUT, INTERVAL):
+        for flags in (("--note-by-agent",), ("--dry-run", "--note-by-agent"),
+                      ("--skip-notes", "--nopypi")):
+            for where in ("environment", ".env"):
+                case = f"{name}=not-a-number in the {where}, {flags}"
+                if where == "environment":
+                    harness = Harness(environ=dict(TOKEN, **{name: "not-a-number"}))
+                else:
+                    harness = Harness(env_file=f"{name}=not-a-number\n")
+                assert_eq(harness.main(*flags), 1, f"the run must be refused: {case}")
+                assert_true(not harness.executed("uv", "build"),
+                            f"the refusal must come before the build: {case}")
+                _nothing_left_the_machine(harness, f"with {case}")
+
+
+@th.unit_test("publish: wait settings in .env reach the wait after the upload")
+def test_wait_settings_from_env_file(opts):
+    harness = Harness(env_file=f"{TIMEOUT}=0\n{INTERVAL}=0\n", visible=False)
+    assert_eq(harness.main("--skip-notes"), None,
+              "a release the index is slow to show has still shipped")
+    assert_eq(harness.polls, 1, "a timeout of zero seconds must poll the index once")
+    assert_true(harness.executed("git", "tag", "-a"),
+                "a release that is not yet visible is still tagged")
+    assert_true("NOT yet resolvable" in harness.lines[-1],
+                f"the last line must say the release is not yet visible, got {harness.lines[-1]}")
+
+
+@th.unit_test("publish: visibility_settings gives the defaults, and the numbers it is given")
+def test_visibility_settings(opts):
+    module = Harness().module
+    assert_eq(module.visibility_settings({}), (600.0, 5.0),
+              "with nothing set the wait is ten minutes, polled every five seconds")
+    assert_eq(module.visibility_settings({TIMEOUT: "12", INTERVAL: "0.5"}), (12.0, 0.5),
+              "both settings must be read as seconds")
+    assert_eq(module.visibility_settings({TIMEOUT: "0", INTERVAL: "0"}), (0.0, 0.0),
+              "zero is allowed: poll once, do not wait")
+    for name in (TIMEOUT, INTERVAL):
+        for value in ("soon", "", "nan", "inf", "-1"):
+            try:
+                module.visibility_settings({name: value})
+            except module.PublishError as err:
+                assert_true(name in str(err) and repr(value) in str(err),
+                            f"the refusal must name the setting and the value, got: {err}")
+            else:
+                assert_true(False, f"{name}={value!r} must be refused")
+
+
+@th.unit_test("publish: an upload with no token is refused before the build, and a dry run needs none")
+def test_upload_needs_the_token(opts):
+    harness = Harness(environ={})
+    assert_eq(harness.main("--skip-notes"), 1, "a release with no upload token must be refused")
+    assert_true(not harness.executed("uv", "build"), "the token check must come before the build")
+    _nothing_left_the_machine(harness, "with no upload token")
+    for flags in (("--dry-run", "--skip-notes"), ("--skip-notes", "--nopypi")):
+        harness = Harness(environ={})
+        assert_eq(harness.main(*flags), None, f"{flags} must not need the upload token")
+    harness = Harness(environ={}, env_file="UV_PUBLISH_TOKEN=from-the-file\n")
+    assert_eq(harness.main("--skip-notes"), None, "a token in .env must be enough to release")
 
 
 @th.unit_test("publish: load_env fills a mapping from a file and keeps what is already set")

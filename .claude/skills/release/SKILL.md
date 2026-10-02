@@ -119,6 +119,11 @@ Delegate to `/maestro-release-note` for the mechanics — it owns the
 version you decided **and the house format below**, which overrides that
 skill's generic voice.
 
+**From an agent session** (see 5a), write the note and get the yes here, but
+**do not file it yet**: tell `/maestro-release-note` to stop before its
+`create_release` call. The draft is filed once, in 5a, when the release commit
+exists to anchor it.
+
 #### House format — this is a CHANGELOG, not a "what's new"
 
 These notes replaced `CHANGELOG.md`. The audience is a developer who pins this
@@ -173,7 +178,8 @@ git add pyproject.toml mojo/__init__.py uv.lock
 git commit -m "Release <version>" -- pyproject.toml mojo/__init__.py uv.lock
 ```
 
-Then rehearse, and hand off:
+Then rehearse, and hand off. From an agent session, stop here and run the
+commands in 5a instead of these two:
 
 ```bash
 python publish.py --dry-run
@@ -201,8 +207,9 @@ step because nothing will catch it.
 
 1. **File the draft once, after the release commit:**
    `create_release(project, version, title, tldr, body, commit_ref=<the release
-   commit>)`. `create_release` needs the whole note every time, so do not
-   re-send it to add the commit later — file it once, here.
+   commit>)`, with the note the user approved in step 4. That step did not file
+   it. `create_release` needs the whole note every time, so do not re-send it
+   to add the commit later — file it once, here.
 2. **Confirm it:** `get_release(project, version)` returns the draft you filed.
 3. **Rehearse, then release:**
 
@@ -223,10 +230,26 @@ step because nothing will catch it.
 
 **If the real run fails after the upload** it prints no `NEXT` line, and a
 rerun is refused because the version is already on PyPI. Do not bump the
-version to get past that. Confirm the index has the version, make and push the
-tag by hand (`git tag -a v<version> -m "Release v<version>"`, then
-`git push origin v<version>`), then publish the note. This is what happened for
-1.31.4.
+version to get past that. Finish by hand, doing only what is missing. The
+script makes the tag locally and then pushes it, so either half may already be
+done. This is what happened for 1.31.4.
+
+1. Confirm the index has the version. If it does not, nothing shipped: stop and
+   report the failure instead.
+2. Name the release commit: `git rev-parse HEAD`, on the branch you released
+   from. It must be the `Release <version>` commit, and
+   `git ls-remote origin <branch>` must show the same hash — the script pushes
+   the source before it uploads.
+3. The local tag: `git rev-parse -q --verify "refs/tags/v<version>^{commit}"`.
+   - Prints nothing: create it at that commit,
+     `git tag -a v<version> -m "Release v<version>" <release commit>`.
+   - Prints the release commit: it exists, do not create it again.
+   - Prints any other commit: stop and ask the user. Do not move a tag.
+4. The remote tag: `git ls-remote origin "refs/tags/v<version>^{}"`.
+   - Prints nothing: `git push origin v<version>`.
+   - Prints the release commit: it is already pushed.
+   - Prints any other commit: stop and ask the user.
+5. Then publish the note: `publish_release(project, version)`.
 
 `--note-by-agent` and `--skip-notes` cannot be combined, and they are not the
 same thing: `--skip-notes` means no note at all, and is for maestro being down.

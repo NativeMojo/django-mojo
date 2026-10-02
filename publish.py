@@ -27,6 +27,7 @@ carries, and for the same reason.
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -51,8 +52,9 @@ PYPI_JSON_URL = "https://pypi.org/pypi/{name}/{version}/json"
 PYPI_SIMPLE_URL = "https://pypi.org/simple/{name}/"
 
 # How long to wait, after the upload, for the release to become resolvable by
-# the world. Overridable with PUBLISH_VISIBLE_TIMEOUT / PUBLISH_VISIBLE_INTERVAL;
-# the default outlasts any normal CDN lag by two orders of magnitude.
+# the world. Overridable with PUBLISH_VISIBLE_TIMEOUT / PUBLISH_VISIBLE_INTERVAL
+# (see visibility_settings); the default outlasts any normal CDN lag by two
+# orders of magnitude.
 VISIBILITY_TIMEOUT = 600.0
 VISIBILITY_INTERVAL = 5.0
 
@@ -124,7 +126,7 @@ def git(*args, dry_run=False):
     return run(["git", *args], dry_run=dry_run)
 
 
-def validate_environment(args):
+def validate_environment(args, environ):
     """uv present, pyproject present, and a PyPI token when we intend to upload."""
     run(["uv", "--version"])
 
@@ -134,8 +136,31 @@ def validate_environment(args):
     # Only an actual upload needs the token. Requiring it for --nopypi or
     # --dry-run would block the two modes that exist to be run without one.
     if not args.nopypi and not args.dry_run:
-        if not os.environ.get("UV_PUBLISH_TOKEN"):
+        if not environ.get("UV_PUBLISH_TOKEN"):
             raise PublishError("UV_PUBLISH_TOKEN is not set. Add it to your .env file.")
+
+
+def visibility_settings(environ):
+    """(timeout, interval) in seconds for the wait that follows the upload.
+
+    Read in main() before the build, in every mode. The wait runs after the
+    one step that cannot be undone, so a value it cannot use has to stop the
+    run here, and stop a rehearsal the same way.
+    """
+    resolved = []
+    for name, default in (("PUBLISH_VISIBLE_TIMEOUT", VISIBILITY_TIMEOUT),
+                          ("PUBLISH_VISIBLE_INTERVAL", VISIBILITY_INTERVAL)):
+        raw = environ.get(name, default)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = None
+        # nan never reaches the deadline and inf cannot be slept.
+        if value is None or not math.isfinite(value) or value < 0:
+            raise PublishError(
+                f"{name} must be a number of seconds, zero or more; got {raw!r}")
+        resolved.append(value)
+    return tuple(resolved)
 
 
 def require_clean_tree():
@@ -480,7 +505,7 @@ def _url_ok(url):
         return False, ""
 
 
-def wait_for_pypi_visibility(version, timeout=None, interval=None):
+def wait_for_pypi_visibility(version, timeout, interval):
     """Block until the uploaded release is resolvable by the world.
 
     Two endpoints, deliberately: the JSON API reflects an upload almost
@@ -494,13 +519,9 @@ def wait_for_pypi_visibility(version, timeout=None, interval=None):
     A timeout warns and returns False instead of raising: the upload has
     already happened and a PyPI version can never be re-cut, so aborting here
     would misreport a release that shipped — and would strand a rerun behind
-    the already-on-PyPI precondition.
+    the already-on-PyPI precondition. For the same reason nothing in here may
+    raise: `timeout` and `interval` arrive checked, from visibility_settings().
     """
-    # Read here, not at import: .env is loaded by main().
-    if timeout is None:
-        timeout = float(os.environ.get("PUBLISH_VISIBLE_TIMEOUT", VISIBILITY_TIMEOUT))
-    if interval is None:
-        interval = float(os.environ.get("PUBLISH_VISIBLE_INTERVAL", VISIBILITY_INTERVAL))
     json_url = PYPI_JSON_URL.format(name=PACKAGE_NAME, version=version)
     simple_url = PYPI_SIMPLE_URL.format(name=PACKAGE_NAME)
     # Filenames normalize the dashes; anchor the version so 1.15.1 can never
@@ -609,9 +630,13 @@ def parse_arguments(argv=None):
     return parser.parse_args(argv)
 
 
-def main(argv=None):
+def main(argv=None, environ=None):
+    """`environ` is the mapping .env fills and the settings are read from: the
+    process environment, unless a test hands in its own."""
+    if environ is None:
+        environ = os.environ
     try:
-        load_env(ENV_FILE, os.environ)
+        load_env(ENV_FILE, environ)
         args = parse_arguments(argv)
 
         if args.dry_run:
@@ -620,7 +645,8 @@ def main(argv=None):
 
         # Everything below the build is ordered so the irreversible step (the
         # PyPI upload) happens last and only after the source is on the remote.
-        validate_environment(args)
+        validate_environment(args, environ)
+        timeout, interval = visibility_settings(environ)
         require_clean_tree()
 
         version = get_current_version()
@@ -650,7 +676,7 @@ def main(argv=None):
             else:
                 publish_to_pypi(wheel, dry_run=args.dry_run)
                 if not args.dry_run:
-                    visible = wait_for_pypi_visibility(version)
+                    visible = wait_for_pypi_visibility(version, timeout, interval)
 
         tag_release(version, branch, dry_run=args.dry_run)
         next_step = post_release_notes(
