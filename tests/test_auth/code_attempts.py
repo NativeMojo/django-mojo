@@ -446,6 +446,12 @@ def test_admin_throttle_reads_code_counters(opts):
 # Password reset code
 # -----------------------------------------------------------------
 
+def _ghost_name():
+    """A username no account has. Letters only: a name holding ten digits
+    reads as a phone number and is counted in that form."""
+    return "ca_ghost_" + "".join(chr(97 + int(c, 16)) for c in uuid.uuid4().hex[:10])
+
+
 def _new_ip():
     octets = uuid.uuid4().int
     return "10.%d.%d.%d" % ((octets >> 16) & 0xFF, (octets >> 8) & 0xFF, octets & 0xFF)
@@ -509,7 +515,7 @@ def test_reset_unknown_account_is_counted_like_a_real_one(opts):
     from mojo.apps.account.models import User
     from mojo.decorators import limits
 
-    ghost = f"ca_ghost_{uuid.uuid4().hex[:10]}"
+    ghost = _ghost_name()
     assert_true(not User.objects.filter(username=ghost).exists(), "the test needs a name with no account")
     ghost_id = limits.unknown_account_id(ghost)
 
@@ -1065,3 +1071,203 @@ def test_hosted_pages_show_the_wait(opts):
     assert_eq(shown["no_wait"], "Too many attempts. Try again later.",
               "a 429 with no wait given must still say what happened")
     assert_eq(shown["other"], "Invalid code", "other errors must be shown unchanged")
+
+
+# -----------------------------------------------------------------
+# Review 63853: the reset endpoint and several identifiers; overlapping sends
+# -----------------------------------------------------------------
+
+def _post_reset_fields(opts, code, **fields):
+    opts.ca.logout()
+    return opts.ca.post("/api/auth/password/reset/code",
+                        dict(fields, code=code, new_password=STRONG_PWORD),
+                        headers={"X-Real-IP": _new_ip()})
+
+
+def _typed_count(value):
+    """The reset counter for one typed identifier, read as support tooling would."""
+    from mojo.decorators import limits
+    return _count("reset", limits.unknown_account_id(value))
+
+
+def _clear_typed(*values):
+    from mojo.decorators import limits
+    for value in values:
+        limits.clear_code_attempts("reset", limits.unknown_account_id(value))
+
+
+@th.django_unit_test("reset code: a second identifier can't be used to tell a real account from an unknown one")
+def test_reset_extra_identifier_cannot_tell_accounts_apart(opts):
+    from mojo.apps.account.models import User
+
+    pk = opts.ca_reset_id
+    ghost = _ghost_name()
+    assert_true(not User.objects.filter(username=ghost).exists(), "the test needs a name with no account")
+    _clear(pk)
+    _clear_typed("ca_reset", ghost)
+    _seed_reset(pk)
+
+    seen = {}
+    for username in ("ca_reset", ghost):
+        statuses = []
+        for _ in range(LIMIT + 1):
+            # A fixed username with a different, unrelated email on every try.
+            resp = _post_reset_fields(opts, WRONG, username=username,
+                                      email=f"nobody_{uuid.uuid4().hex[:12]}@example.com")
+            statuses.append(resp.status_code)
+        seen[username] = statuses
+    assert_eq(seen["ca_reset"], [400] * LIMIT + [429],
+              f"a real account must be refused on the sixth try, got {seen['ca_reset']}")
+    assert_eq(seen[ghost], seen["ca_reset"],
+              "an unknown username must be answered exactly as a real one, try for try, "
+              f"whatever other identifier is sent with it: got {seen[ghost]}")
+    _clear(pk)
+    _clear_typed("ca_reset", ghost)
+
+
+@th.django_unit_test("reset code: every identifier sent is counted the same whether or not an account was found")
+def test_reset_identifiers_are_counted_alike(opts):
+    from mojo.apps.account.models import User
+
+    pk = opts.ca_reset_id
+    ghost = _ghost_name()
+    assert_true(not User.objects.filter(username=ghost).exists(), "the test needs a name with no account")
+    _clear(pk)
+    _clear_typed("ca_reset", ghost)
+    _seed_reset(pk)
+
+    counts = {}
+    for username in ("ca_reset", ghost):
+        email = f"nobody_{uuid.uuid4().hex[:12]}@example.com"
+        resp = _post_reset_fields(opts, WRONG, username=username, email=email)
+        assert_eq(resp.status_code, 400, f"a wrong code must be refused, got {resp.status_code}")
+        counts[username] = (_typed_count(username), _typed_count(email))
+    assert_eq(counts["ca_reset"], (1, 1),
+              f"with a real account each identifier sent must still be counted, got {counts['ca_reset']}")
+    assert_eq(counts[ghost], counts["ca_reset"],
+              "the counters left behind must not depend on whether the account exists")
+    _clear(pk)
+    _clear_typed("ca_reset", ghost)
+
+
+@th.django_unit_test("reset code: identifiers of two different accounts in one try are each counted")
+def test_reset_conflicting_identifiers(opts):
+    first, second = opts.ca_reset_id, opts.ca_sms_id
+    other_email = "ca_sms@example.com"
+    for pk in (first, second):
+        _clear(pk)
+    _clear_typed("ca_reset", other_email)
+    _seed_reset(first)
+    _seed_reset(second)
+    stored = {pk: _fresh(pk).password for pk in (first, second)}
+
+    resp = _post_reset_fields(opts, WRONG, username="ca_reset", email=other_email)
+    assert_eq(resp.status_code, 400, f"a wrong code must be refused, got {resp.status_code}")
+    assert_eq(_count("reset", first) + _count("reset", second), 1,
+              "the try must be counted against the one account whose code was compared")
+    assert_eq((_typed_count("ca_reset"), _typed_count(other_email)), (1, 1),
+              "both identifiers sent must be counted, so neither can be swapped out to get more tries")
+
+    # Five tries naming the first account, each with the second's email.
+    for _ in range(LIMIT - 1):
+        _post_reset_fields(opts, WRONG, username="ca_reset", email=other_email)
+    for fields in (dict(username="ca_reset"), dict(email=other_email),
+                   dict(username="ca_reset", email=other_email)):
+        resp = _post_reset_fields(opts, RIGHT, **fields)
+        _assert_refused(opts, resp, f"reset code after five tries, sent as {sorted(fields)}")
+    for pk in (first, second):
+        assert_eq(_fresh(pk).password, stored[pk], "a refused reset must leave the password unchanged")
+        _clear(pk)
+        _seed(pk, password_reset_code=None, password_reset_code_ts=None)
+    _clear_typed("ca_reset", other_email)
+
+
+@th.django_unit_test("reset code: one unknown phone number typed in different ways is one counter")
+def test_reset_phone_formats_share_a_counter(opts):
+    from mojo.apps.account.models import User
+    from mojo.decorators import limits
+
+    last4 = "%04d" % (uuid.uuid4().int % 10000)
+    plain = f"555000{last4}"
+    e164 = f"+1{plain}"
+    assert_true(not User.objects.filter(phone_number=e164).exists(), "the test needs a number with no account")
+    _clear_typed(e164)
+    formats = [plain, e164, f"(555) 000-{last4}", f"555-000-{last4}", f"1 555 000 {last4}"]
+
+    statuses = [_post_reset_fields(opts, WRONG, username=typed).status_code for typed in formats]
+    assert_eq(statuses, [400] * LIMIT, f"five tries must be answered as wrong codes, got {statuses}")
+    resp = _post_reset_fields(opts, WRONG, username=plain)
+    _assert_refused(opts, resp, "reset code for an unknown phone number, sixth try")
+    resp = _post_reset_fields(opts, WRONG, phone_number=e164)
+    _assert_refused(opts, resp, "the same number sent as phone_number")
+    limits.clear_code_attempts("reset", limits.unknown_account_id(e164))
+
+
+@th.django_unit_test("reset code: a right code and an admin release clear the identifier counters too")
+def test_reset_identifier_counters_are_cleared(opts):
+    pk = opts.ca_reset_id
+    _clear(pk)
+    _clear_typed("ca_reset", "ca_reset@example.com")
+    _seed_reset(pk)
+
+    for _ in range(LIMIT):
+        _post_reset_fields(opts, WRONG, username="ca_reset")
+    resp = _post_reset_fields(opts, RIGHT, username="ca_reset")
+    _assert_refused(opts, resp, "reset code at the limit")
+
+    admin = _admin_client(opts)
+    resp = admin.post("/api/auth/manage/clear_rate_limit", {"key": "login", "username": "ca_reset"})
+    assert_eq(resp.status_code, 200, f"the admin release must succeed, got {resp.status_code}: {resp.response}")
+    assert_eq(_typed_count("ca_reset"), 0, "the release must clear the counter for the name that was typed")
+
+    resp = _post_reset_fields(opts, WRONG, username="ca_reset")
+    assert_eq(resp.status_code, 400, f"after the release a try must reach the code check, got {resp.status_code}")
+    resp = _post_reset_fields(opts, RIGHT, username="ca_reset")
+    assert_eq(resp.status_code, 200, f"after the release the right code must work, "
+                                     f"got {resp.status_code}: {opts.ca.last_response.body}")
+    assert_eq(_count("reset", pk), 0, "a right code must clear the account's counter")
+    assert_eq(_typed_count("ca_reset"), 0, "a right code must clear the counter for the name that was typed")
+    _fresh(pk).save_password(PWORD)
+
+
+@th.django_unit_test("sms code send: two requests that read the account before either wrote send one code")
+def test_overlapping_sms_sends_keep_one_code(opts):
+    from mojo.apps.account.rest import sms as sms_rest
+
+    pk = opts.ca_send_id
+    _reset_sends(pk)
+    sender = _Sender()
+    # Both requests have loaded the account before either has stored a code.
+    first, second = _fresh(pk), _fresh(pk)
+
+    sms_rest._send_otp(first, send=sender)
+    stored = _fresh(pk).get_secret("sms_otp_code")
+    stored_ts = _fresh(pk).get_secret("sms_otp_ts")
+    sms_rest._send_otp(second, send=sender)
+
+    assert_eq(len(sender.calls), 2, "both requests must send")
+    assert_eq(sender.calls[0][0][1], sender.calls[1][0][1],
+              "the second request must send the code the first one stored, not a new one")
+    assert_eq(_fresh(pk).get_secret("sms_otp_code"), stored, "the stored code must not be replaced")
+    assert_eq(_fresh(pk).get_secret("sms_otp_ts"), stored_ts, "the code's life must not be extended")
+    assert_eq(second.get_secret("sms_otp_code"), stored,
+              "the request's own copy of the account must carry the live code, or a later save would undo it")
+    _reset_sends(pk)
+
+
+@th.django_unit_test("reset code send: two requests that read the account before either wrote send one code")
+def test_overlapping_reset_requests_keep_one_code(opts):
+    from mojo.apps.account.rest import user as user_rest
+
+    pk = opts.ca_send_id
+    _reset_sends(pk)
+    first, second = _fresh(pk), _fresh(pk)
+
+    code = user_rest._reset_code_for(first)
+    stored_ts = _fresh(pk).get_secret("password_reset_code_ts")
+    again = user_rest._reset_code_for(second)
+
+    assert_eq(again, code, "the second request must be given the code the first one stored, not a new one")
+    assert_eq(_fresh(pk).get_secret("password_reset_code"), code, "the stored code must not be replaced")
+    assert_eq(_fresh(pk).get_secret("password_reset_code_ts"), stored_ts, "the code's life must not be extended")
+    _reset_sends(pk)

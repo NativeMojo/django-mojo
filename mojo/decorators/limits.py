@@ -702,7 +702,7 @@ def _take_attempt(r, key, account_id, limit, window, now, member, count=True):
 
 
 def check_code_attempt(kind, account_id, request=None, ttl=None, *, limit=None,
-                       window=None, daily_limit=None, now=None):
+                       window=None, daily_limit=None, now=None, also=()):
     """
     Count one try at a one-time code against the account it belongs to.
 
@@ -724,6 +724,9 @@ def check_code_attempt(kind, account_id, request=None, ttl=None, *, limit=None,
         ttl:         That code's lifetime in seconds. The window is never
                      shorter, or a long-lived code would get more than `limit`
                      guesses.
+        also:        More ids the same try is counted against, with the same
+                     limit and window. The try is refused if any of them is
+                     full, and is then counted against none.
         limit, window, daily_limit, now: test seams. The limit and window come
                      from CODE_ATTEMPT_LIMIT (5) and CODE_ATTEMPT_WINDOW
                      (900 s), the daily cap from TOTP_ATTEMPT_DAILY_LIMIT (20).
@@ -733,11 +736,16 @@ def check_code_attempt(kind, account_id, request=None, ttl=None, *, limit=None,
     if window is None:
         window = settings.get("CODE_ATTEMPT_WINDOW", 900, kind="int")
     key = f"code:{kind}"
-    buckets = [(key, max(1, int(limit)), max(1, int(window), int(ttl or 0)))]
+    code_limit = max(1, int(limit))
+    code_window = max(1, int(window), int(ttl or 0))
+    buckets = [(key, account_id, code_limit, code_window)]
+    for other in also:
+        if other != account_id:
+            buckets.append((key, other, code_limit, code_window))
     if kind in TOTP_DAILY_KINDS:
         if daily_limit is None:
             daily_limit = settings.get("TOTP_ATTEMPT_DAILY_LIMIT", 20, kind="int")
-        buckets.append((TOTP_DAILY_BUCKET, max(1, int(daily_limit)), TOTP_DAILY_WINDOW))
+        buckets.append((TOTP_DAILY_BUCKET, account_id, max(1, int(daily_limit)), TOTP_DAILY_WINDOW))
     if now is None:
         now = time.time()
     member = _attempt_member(now)
@@ -745,22 +753,22 @@ def check_code_attempt(kind, account_id, request=None, ttl=None, *, limit=None,
     try:
         r = get_connection()
         counted = []
-        for bucket, bucket_limit, bucket_window in buckets:
+        for bucket, bucket_id, bucket_limit, bucket_window in buckets:
             # Once one bucket has refused, the rest are only looked at: the
             # wait reported must be the longest any full bucket needs, or the
             # caller is told to come back while still locked out.
             admitted, bucket_wait = _take_attempt(
-                r, bucket, account_id, bucket_limit, bucket_window, now, member,
+                r, bucket, bucket_id, bucket_limit, bucket_window, now, member,
                 count=(wait == 0))
             if not admitted:
                 wait = max(wait, bucket_wait)
             elif wait == 0:
-                counted.append(bucket)
+                counted.append((bucket, bucket_id))
         if wait:
             # Refused: the try must not stay counted in a bucket that took it
             # before the refusal.
-            for earlier in counted:
-                r.zrem(_account_key(earlier, account_id), member)
+            for earlier, earlier_id in counted:
+                r.zrem(_account_key(earlier, earlier_id), member)
     except Exception as err:
         logger.error(f"check_code_attempt: Redis error for key '{key}' account '{account_id}': {err}")
         return
@@ -918,11 +926,13 @@ def clear_account_limits(account_id):
 
 
 def unknown_account_id(identifier):
-    """Counter id for a code try that names no real account.
+    """Counter id for an identifier as typed, whether or not it names an account.
 
-    A try against an unknown identifier is counted like one against a real
-    account, so the 429 at the limit can't be used to tell which identifiers
-    exist. The identifier is hashed: it is whatever the caller typed.
+    On an endpoint that answers the same for an unknown account and a wrong
+    code, every try is counted against what was typed — for a real account
+    too, beside its own counter. The 429 at the limit, and the counters a try
+    leaves behind, then can't be used to tell which identifiers exist. The
+    identifier is hashed: it is whatever the caller typed.
     """
     return f"unknown:{_hash_key(str(identifier).lower().strip())}"
 

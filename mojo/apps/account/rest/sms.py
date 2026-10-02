@@ -21,6 +21,7 @@ from mojo.apps.account.rest.user import jwt_login
 from mojo.apps.account.services import mfa as mfa_service
 from mojo.apps.account.services import auth_config
 from mojo.apps.account.services import sms_delivery
+from mojo.apps.account.utils import tokens
 from mojo.apps import phonehub
 from mojo.apps.phonehub.services.phonenumbers import normalize as normalize_phone
 from mojo.decorators.limits import allow_code_send, check_code_attempt, clear_code_attempts
@@ -39,22 +40,15 @@ def _otp_sms_body(code, request=None):
     return f"Your verification code is: {code}"
 
 
-def _live_otp(user):
-    """The stored code while it is still inside its lifetime, else None."""
-    code = user.get_secret("sms_otp_code")
-    stored_ts = int(user.get_secret("sms_otp_ts") or 0)
-    if not code or int(dates.utcnow().timestamp()) - stored_ts > int(settings.get("SMS_OTP_TTL", 600)):
-        return None
-    return code
-
-
 def _send_otp(user, request=None, *, send=None):
     """Send the user's SMS code: the live one if there is one, else a new
     6-digit code stored on the user.
 
     A repeat request inside a code's life re-sends that code and does not
     extend its life. Minting a new one each time let anyone who knew a
-    username replace the code its owner was typing.
+    username replace the code its owner was typing. Finding the live code and
+    storing a new one are one locked step (tokens.live_or_new_code), so two
+    requests arriving together send the same code.
 
     Acceptance is classified by `sms_delivery.was_accepted()`, not by
     `sms.status == "failed"`: a `None` result (the transport returned nothing)
@@ -68,12 +62,8 @@ def _send_otp(user, request=None, *, send=None):
     if not user.phone_number:
         raise merrors.ValueException("No phone number on file for this account")
 
-    code = _live_otp(user)
-    if code is None:
-        code = crypto.random_string(6, allow_digits=True, allow_chars=False, allow_special=False)
-        user.set_secret("sms_otp_code", code)
-        user.set_secret("sms_otp_ts", int(dates.utcnow().timestamp()))
-        user.save()
+    code = tokens.live_or_new_code(
+        user, "sms_otp_code", "sms_otp_ts", settings.get("SMS_OTP_TTL", 600))
 
     sender = send if send is not None else phonehub.send_sms
     try:

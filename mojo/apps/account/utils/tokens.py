@@ -592,3 +592,32 @@ def generate_token(user):
 
 def validate_token(hex_token):
     return verify_password_reset_token(hex_token)
+
+
+def live_or_new_code(user, code_key, ts_key, ttl, length=6):
+    """The account's live one-time code, or a new one stored on it.
+
+    Looking for a live code and storing a new one are one step, under a lock
+    on the account's row, with the stored state read inside the lock. Two
+    requests that both loaded the account before either stored a code would
+    otherwise each see none, and the second would replace the code the first
+    one sent while it was still live.
+
+    A live code is returned as it is and its life is not extended. The
+    caller's own copy of the account is refreshed, so a later save on it
+    can't write the old secrets back.
+    """
+    from django.db import transaction
+
+    with transaction.atomic():
+        locked = User.objects.select_for_update().get(pk=user.pk)
+        now = int(dates.utcnow().timestamp())
+        code = locked.get_secret(code_key)
+        stored_ts = int(locked.get_secret(ts_key) or 0)
+        if not code or now - stored_ts > int(ttl):
+            code = crypto.random_string(length, allow_digits=True, allow_chars=False, allow_special=False)
+            locked.set_secret(code_key, code)
+            locked.set_secret(ts_key, now)
+            locked.save(update_fields=["mojo_secrets", "modified"])
+    user.refresh_from_db(fields=["mojo_secrets", "modified"])
+    return code

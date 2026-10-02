@@ -83,6 +83,15 @@ def on_clear_rate_limit(request):
     deleted = clear_rate_limits(ip=ip, key=key, duid=duid, muid=muid, account_id=account_id)
     if account_id is not None:
         deleted += clear_account_limits(account_id)
+        # Reset-code tries are also counted against the identifier as typed.
+        target = User.objects.filter(pk=account_id).first()
+        if target is not None:
+            from mojo.decorators.limits import clear_code_attempts, unknown_account_id
+            typed = _typed_identifier_ids(target.username, target.email, target.phone_number)
+            if target.email:
+                typed.append(unknown_account_id(str(target.email).lower().strip()))
+            for counter in typed:
+                clear_code_attempts("reset", counter)
     return JsonResponse({"status": True, "data": {"deleted": deleted}})
 
 
@@ -1115,18 +1124,52 @@ def _reset_code_for(user):
 
     A repeat request inside a code's life re-sends that code and does not
     extend its life. Minting a new one each time let anyone who knew a
-    username replace the code its owner was typing.
+    username replace the code its owner was typing. Finding the live code and
+    storing a new one are one locked step, so two requests arriving together
+    are given the same code.
     """
-    code = user.get_secret("password_reset_code")
-    code_ts = int(user.get_secret("password_reset_code_ts") or 0)
-    code_ttl = settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int")
-    if code and int(dates.utcnow().timestamp()) - code_ts <= code_ttl:
-        return code
-    code = crypto.random_string(6, True, False, False)
-    user.set_secret("password_reset_code", code)
-    user.set_secret("password_reset_code_ts", int(dates.utcnow().timestamp()))
-    user.save()
-    return code
+    return tokens.live_or_new_code(
+        user, "password_reset_code", "password_reset_code_ts",
+        settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int"))
+
+
+def _typed_identifier_ids(*values):
+    """Reset-code counter ids for identifiers as typed.
+
+    A value that reads as a phone number is counted in its normalised form,
+    so one number typed five ways is one counter, as it is one account. Any
+    other value is counted as typed, lowercased.
+    """
+    from mojo.decorators.limits import unknown_account_id
+    ids = []
+    for value in values:
+        value = str(value or "").lower().strip()
+        if not value:
+            continue
+        counter = unknown_account_id(User.normalize_phone(value) or value)
+        if counter not in ids:
+            ids.append(counter)
+    return ids
+
+
+def _reset_try_ids(request, user):
+    """Every counter one reset-code try is counted against.
+
+    The endpoint answers "Invalid code" for an unknown account and a wrong
+    code alike, so what is counted must not depend on whether an account was
+    found: each identifier sent is counted as typed, always. A real account
+    is counted too, so its username, email and phone can't each be given
+    five tries. A try is refused when any of them is full.
+    """
+    ids = [user.pk] if user is not None else []
+    email = str(request.DATA.get("email") or "").lower().strip()
+    if email:
+        from mojo.decorators.limits import unknown_account_id
+        ids.append(unknown_account_id(email))
+    for counter in _typed_identifier_ids(request.DATA.get("username"), request.DATA.get("phone_number")):
+        if counter not in ids:
+            ids.append(counter)
+    return ids
 
 
 @md.POST("auth/forgot")
@@ -1224,8 +1267,7 @@ def on_user_forgot(request, *, send_sms=None, send_email=None):
 @md.requires_geofence(scope="auth", after_auth=True)
 @md.requires_params("code", "new_password")
 def on_user_password_reset_code(request):
-    from mojo.decorators.limits import (
-        check_code_attempt, clear_code_attempts, unknown_account_id)
+    from mojo.decorators.limits import check_code_attempt, clear_code_attempts
 
     code = request.DATA.get("code")
     new_password = request.DATA.get("new_password")
@@ -1240,15 +1282,16 @@ def on_user_password_reset_code(request):
         # Counted like a try against a real account: this endpoint answers
         # "Invalid code" for an unknown account and a wrong code alike, and
         # the 429 at the limit must not be what tells them apart.
-        identifier = (request.DATA.get("email") or request.DATA.get("username")
-                      or request.DATA.get("phone_number"))
-        if identifier:
-            check_code_attempt("reset", unknown_account_id(identifier), request, ttl=code_ttl)
+        try_ids = _reset_try_ids(request, None)
+        if try_ids:
+            check_code_attempt("reset", try_ids[0], request, ttl=code_ttl, also=try_ids[1:])
         raise merrors.ValueException("Invalid code")
 
-    # Five tries per account, whatever address they come from. Counted before
-    # the compare; a refused try raises the 429 here.
-    check_code_attempt("reset", user.pk, request, ttl=code_ttl)
+    # Five tries per account, whatever address they come from, and five per
+    # identifier as typed. Counted before the compare; a refused try raises
+    # the 429 here.
+    try_ids = _reset_try_ids(request, user)
+    check_code_attempt("reset", try_ids[0], request, ttl=code_ttl, also=try_ids[1:])
 
     sec_code = user.get_secret("password_reset_code")
     code_ts = int(user.get_secret("password_reset_code_ts") or 0)
@@ -1266,7 +1309,8 @@ def on_user_password_reset_code(request):
         raise merrors.ValueException("Expired code")
     # Cleared as soon as the code matches: a right code with a weak new
     # password is not a guess.
-    clear_code_attempts("reset", user.pk)
+    for counter in try_ids:
+        clear_code_attempts("reset", counter)
     user.set_permanent_password(new_password)
     user.set_secret("password_reset_code", None)
     user.set_secret("password_reset_code_ts", None)
