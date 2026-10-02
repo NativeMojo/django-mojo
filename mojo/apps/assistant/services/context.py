@@ -7,9 +7,11 @@ falls back to generic serialization through the server-selected assistant graph
 (`RestMeta.GRAPHS["ai"]`, else `"default"`) — never the wider `detail` graph.
 """
 from django.apps import apps
-from django.db import transaction
+from django.core.exceptions import ValidationError
+from django.db import DataError, transaction
 from django.db.models import Q
 
+from mojo import errors as me
 from mojo.apps.assistant.services import model_serialization
 from mojo.helpers import logit
 
@@ -81,7 +83,7 @@ def clean_pk(model, value):
         return None
     try:
         return model._meta.pk.to_python(value)
-    except Exception:
+    except (ValidationError, ValueError, TypeError):
         return None
 
 
@@ -114,6 +116,10 @@ def authorize_source(request, model, instance):
         allowed = model.rest_check_permission(request, "VIEW_PERMS", instance)
         if "graph" in request.DATA:
             selected = request.DATA.get("graph")
+    except me.PermissionDeniedException:
+        # a view hook that refuses by raising: the same answer as any refusal,
+        # not a 403 that would tell the caller the row exists
+        allowed = False
     finally:
         request.group = group
         request.DATA.pop("graph", None)
@@ -234,8 +240,8 @@ def open_context(request):
     if pk is None:
         return None, "Invalid pk", 400
     try:
-        instance = model.objects.filter(pk=pk).first()
-    except Exception:
+        instance = model._default_manager.filter(pk=pk).first()
+    except (ValidationError, ValueError, TypeError, OverflowError, DataError):
         # a value the key type accepts and the column does not
         return None, "Invalid pk", 400
     if instance is None:

@@ -797,6 +797,8 @@ def test_context_invalid_hook_selection_fails_closed(opts):
             def rest_check_permission(cls, request, permission_keys, instance=None):
                 request.DATA.set("graph", value)
                 request.group = None
+                if isinstance(value, Exception):
+                    raise value
                 return True
         return Stub
 
@@ -810,6 +812,16 @@ def test_context_invalid_hook_selection_fails_closed(opts):
     request = _source_request(opts.admin, group=opts.context_group)
     assert_eq(context.authorize_source(request, model_selecting("narrow"), object()), (True, "narrow"),
               "a shape the model does declare is passed on exactly")
+
+    # A check that refuses by raising is a refusal like any other, with the
+    # request put back, and not an error that tells the caller the row exists.
+    from mojo import errors as me
+    request = _source_request(opts.admin, group=opts.context_group)
+    assert_eq(context.authorize_source(
+        request, model_selecting(me.PermissionDeniedException("no")), object()), (False, None),
+        "a permission check that raises must count as a refusal")
+    assert_true(request.group is opts.context_group and "graph" not in request.DATA,
+                "after a check that raised, the request was not put back")
 
     # A model that declares no view permissions is open to everyone over REST.
     # Here it stays closed, as it was before this change.
