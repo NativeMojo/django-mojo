@@ -6,8 +6,11 @@ request carried, or on the frontend of any group the caller named.
 
 The test project sets neither BASE_URL nor WEBAPP_BASE_URL, so the account
 gets an org whose metadata names the frontend the link must land on. The link
-is read back from the account's newest ShortLink row. Three sends in total,
+is read back from the account's newest ShortLink row. Four sends in total,
 under the endpoints' 5-per-300 s limit.
+
+Maestro item #6350 adds the write side: a manager of a sub-group of that tenant
+cannot store an address of their own for the link to land on.
 """
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
@@ -17,6 +20,9 @@ TESTIT_TIER = "core"
 EMAIL = "tlh_account@test.com"
 GROUP_HOME = "tlh-home"
 GROUP_FOREIGN = "tlh-foreign"
+GROUP_HOME_CHILD = "tlh-home-child"
+EMAIL_SUB_MANAGER = "tlh_sub_manager@test.com"
+PASSWORD = "Tlh##link99"
 HOME_BASE = "https://home.tlh-tenant.example"
 EVIL = "https://evil.example"
 # `.invalid` never resolves: nothing can follow the link these tests read back.
@@ -45,7 +51,8 @@ def setup_token_link_host(opts):
     ShortLink.objects.filter(user__email=EMAIL).delete()
     ShortLink.objects.filter(source="tlh_magic_login").delete()
     ShortLink.objects.filter(source="tlh_markup").delete()
-    User.objects.filter(email__in=[EMAIL, EMAIL_MARKUP]).delete()
+    User.objects.filter(email__in=[EMAIL, EMAIL_MARKUP, EMAIL_SUB_MANAGER]).delete()
+    Group.objects.filter(name=GROUP_HOME_CHILD).delete()
     Group.objects.filter(name__in=[GROUP_HOME, GROUP_FOREIGN, GROUP_MARKUP]).delete()
 
     home = Group.objects.create(
@@ -56,6 +63,15 @@ def setup_token_link_host(opts):
     user = User.objects.create(username=EMAIL, email=EMAIL, is_active=True, org=home)
     opts.user_id = user.pk
     opts.foreign_id = foreign.pk
+    # A sub-group of the home tenant, with a manager who holds nothing globally.
+    child = Group.objects.create(name=GROUP_HOME_CHILD, is_active=True, parent=home)
+    opts.home_child_id = child.pk
+    manager = User.objects.create_user(
+        username=EMAIL_SUB_MANAGER, email=EMAIL_SUB_MANAGER, password=PASSWORD)
+    manager.is_email_verified = True
+    manager.save()
+    member = child.add_member(manager)
+    member.add_permission("manage_group")
     markup = Group.objects.create(
         name=GROUP_MARKUP, is_active=True, metadata={"webapp_base_url": MARKUP_BASE})
     User.objects.create(
@@ -102,6 +118,30 @@ def test_magic_send_ignores_foreign_group(opts):
     url = _send_and_read_link(
         opts, "auth/magic/send", {"email": EMAIL}, "magic_login",
         params={"group": opts.foreign_id})
+    _assert_on_home(url, "ml", "magic_login")
+
+
+@th.django_unit_test("#6350: a sub-group manager cannot move the tenant's link to their own site")
+def test_sub_group_manager_cannot_move_the_link(opts):
+    from mojo.apps.account.models import Group
+
+    assert_true(opts.client.login(EMAIL_SUB_MANAGER, PASSWORD), "the sub-group manager must be able to sign in")
+    try:
+        resp = opts.client.post(f"/api/group/{opts.home_child_id}", {"name": GROUP_HOME_CHILD})
+        assert_eq(resp.status_code, 200, "the manager must be able to save their own sub-group")
+        resp = opts.client.post(
+            f"/api/group/{opts.home_child_id}",
+            {"metadata": {"webapp_base_url": EVIL, "webapp_auth_path": "/steal"}})
+        assert_eq(resp.status_code, 403, "storing a site address on the sub-group must be refused")
+    finally:
+        opts.client.logout()
+    stored = Group.objects.get(pk=opts.home_child_id).metadata
+    assert_true("webapp_base_url" not in stored and "webapp_auth_path" not in stored,
+                f"the sub-group must hold no site address, got {stored}")
+
+    url = _send_and_read_link(
+        opts, "auth/magic/send", {"email": EMAIL}, "magic_login",
+        params={"group": opts.home_child_id})
     _assert_on_home(url, "ml", "magic_login")
 
 

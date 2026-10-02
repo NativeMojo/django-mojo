@@ -1,7 +1,8 @@
 from django.db import models, transaction
 from mojo.models import MojoModel, MojoSecrets
 from mojo.helpers import crypto, dates, logit
-from mojo.helpers.request import restricted_identity
+from mojo.helpers.request import (
+    is_key_backed_session, is_request_user, restricted_identity)
 from mojo.apps import metrics
 from mojo.helpers.settings import settings
 from mojo import errors as merrors
@@ -13,6 +14,14 @@ WEBHOOK_SECRET_KEY = "webhook_secret"
 WEBHOOK_SECRET_PREFIX = "wsec_"
 WEBHOOK_SECRET_TOKEN_LEN = 48
 
+
+# Where a tenant's sign-in, password-reset and invite links land. Token links
+# are built on these (mojo/apps/account/utils/webapp_url.py), so writing one,
+# or moving a group to a tree that carries one, decides where every account of
+# that tenant is sent.
+WEBAPP_URL_KEYS = ("webapp_base_url", "webapp_auth_path")
+WEBAPP_URL_PERMS = ["manage_groups", "groups"]
+_ABSENT = object()
 
 GROUP_LAST_ACTIVITY_FREQ = settings.get_static("GROUP_LAST_ACTIVITY_FREQ", 300)
 METRICS_TIMEZONE = settings.get_static("METRICS_TIMEZONE", "America/Los_Angeles")
@@ -461,7 +470,9 @@ class Group(MojoSecrets, MojoModel):
     def get_metadata_value(self, key):
         from mojo.apps.account.services import group_hierarchy
         for current in group_hierarchy.ancestors(self, include_self=True):
-            if key in current.metadata:
+            # A row whose metadata is not a dict has no keys: skip it rather
+            # than raise for every lookup that passes through it.
+            if isinstance(current.metadata, dict) and key in current.metadata:
                 return current.metadata[key]
         return None
 
@@ -734,7 +745,65 @@ class Group(MojoSecrets, MojoModel):
             request=self.active_request,
         )
 
+    def _has_global_permission(self, perms):
+        """True only for a signed-in person whose OWN global permissions hold
+        one of `perms`, or a superuser.
+
+        The bar `requires_global_perms` applies: no member-level grant, no
+        group API key and no group token, whoever they act as, and nothing at
+        all outside a request. Not `user_has_permission` (it accepts a
+        member-level grant) and not `active_user.has_permission` (for an API
+        key that is the key's own list, which a group manager fills in).
+        """
+        request = self.active_request
+        if request is None or is_key_backed_session(request) or not is_request_user(request):
+            return False
+        return request.user.has_permission(list(perms))
+
+    def _guard_webapp_url_and_tree(self, created):
+        """Refuse a change of where this tenant's token links land.
+
+        Two ways to change it: write `webapp_base_url` or `webapp_auth_path`
+        in metadata, or move the group to a different tree, since the resolver
+        trusts a group by the top of its tree. Both are compared against the
+        stored row: a JSON merge does not show in changed_fields.
+        """
+        stored_metadata, stored_parent_id = {}, None
+        if not created and self.pk:
+            row = type(self).objects.filter(pk=self.pk).values_list(
+                "metadata", "parent_id").first()
+            if row is not None:
+                stored_metadata, stored_parent_id = row
+        if not isinstance(stored_metadata, dict):
+            stored_metadata = {}
+        metadata = self.metadata if isinstance(self.metadata, dict) else {}
+        # _ABSENT, not None: a stored null is a value, and it hides the
+        # parent's address from get_metadata_value.
+        changes = {}
+        for key in WEBAPP_URL_KEYS:
+            old, new = stored_metadata.get(key, _ABSENT), metadata.get(key, _ABSENT)
+            if old != new:
+                changes[key] = (old, new)
+        for key in changes:
+            if not self._has_global_permission(WEBAPP_URL_PERMS):
+                raise merrors.PermissionDeniedException(
+                    f"Changing metadata.{key} requires the global "
+                    "manage_groups (or groups) permission")
+        if not created and self.pk and stored_parent_id != self.parent_id:
+            old_top = self.pk
+            if stored_parent_id is not None:
+                old_top = type(self).objects.get(pk=stored_parent_id).top_most_parent.pk
+            new_top = self.pk if self.parent is None else self.parent.top_most_parent.pk
+            if old_top != new_top and not self._has_global_permission(WEBAPP_URL_PERMS):
+                raise merrors.PermissionDeniedException(
+                    "Moving a group to a different group tree requires the "
+                    "global manage_groups (or groups) permission")
+        if changes:
+            # logged after the save lands
+            self._webapp_url_change = changes
+
     def on_rest_pre_save(self, changed_fields, created):
+        self._guard_webapp_url_and_tree(created)
         if created or "parent" in changed_fields or "parent_id" in changed_fields:
             from mojo.apps.account.services import group_hierarchy
             group_hierarchy.validate_parent(self, self.parent)
@@ -798,6 +867,16 @@ class Group(MojoSecrets, MojoModel):
         # not serve stale allows for up to GEOFENCE_CACHE_TTL. Bounded scan.
         if not created:
             self._invalidate_geofence_decisions()
+        # A merge into metadata leaves no record of who changed it, and this
+        # change moves a tenant's sign-in links.
+        url_change = getattr(self, "_webapp_url_change", None)
+        if url_change:
+            self._webapp_url_change = None
+            shown = "; ".join(
+                f"{key}: {'(not set)' if old is _ABSENT else repr(old)} -> "
+                f"{'(not set)' if new is _ABSENT else repr(new)}"
+                for key, (old, new) in url_change.items())
+            self.log(shown, kind="group:webapp_url_changed")
         # A strict-posture flip is compliance evidence (change detected and
         # stashed in on_rest_pre_save).
         change = getattr(self, "_geofence_strict_change", None)
