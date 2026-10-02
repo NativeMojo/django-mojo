@@ -86,11 +86,8 @@ def on_clear_rate_limit(request):
         # Reset-code tries are also counted against the identifier as typed.
         target = User.objects.filter(pk=account_id).first()
         if target is not None:
-            from mojo.decorators.limits import clear_code_attempts, unknown_account_id
-            typed = _typed_identifier_ids(target.username, target.email, target.phone_number)
-            if target.email:
-                typed.append(unknown_account_id(str(target.email).lower().strip()))
-            for counter in typed:
+            from mojo.decorators.limits import clear_code_attempts
+            for counter in _typed_identifier_ids(target.username, target.email, target.phone_number):
                 clear_code_attempts("reset", counter)
     return JsonResponse({"status": True, "data": {"deleted": deleted}})
 
@@ -1136,9 +1133,16 @@ def _reset_code_for(user):
 def _typed_identifier_ids(*values):
     """Reset-code counter ids for identifiers as typed.
 
-    A value that reads as a phone number is counted in its normalised form,
-    so one number typed five ways is one counter, as it is one account. Any
-    other value is counted as typed, lowercased.
+    Every value is counted in each form the account lookup can match it in:
+    as typed (lowercased and trimmed, as User.lookup_from_request does), and
+    as a phone number when it reads as one, so one number typed five ways is
+    one counter, as it is one account.
+
+    The ids depend on the values alone, never on the field a value was sent
+    in. The lookup accepts one string under several field names — an email is
+    matched from `email` or from `username`, a phone from `phone_number` or
+    from `username` — and a counter that followed the field name gave the
+    same string a fresh set of tries under each name.
     """
     from mojo.decorators.limits import unknown_account_id
     ids = []
@@ -1146,9 +1150,12 @@ def _typed_identifier_ids(*values):
         value = str(value or "").lower().strip()
         if not value:
             continue
-        counter = unknown_account_id(User.normalize_phone(value) or value)
-        if counter not in ids:
-            ids.append(counter)
+        for form in (value, User.normalize_phone(value)):
+            if not form:
+                continue
+            counter = unknown_account_id(form)
+            if counter not in ids:
+                ids.append(counter)
     return ids
 
 
@@ -1157,16 +1164,14 @@ def _reset_try_ids(request, user):
 
     The endpoint answers "Invalid code" for an unknown account and a wrong
     code alike, so what is counted must not depend on whether an account was
-    found: each identifier sent is counted as typed, always. A real account
-    is counted too, so its username, email and phone can't each be given
-    five tries. A try is refused when any of them is full.
+    found: each identifier sent is counted as typed, always, whatever field
+    it was sent in. A real account is counted too, so its username, email and
+    phone can't each be given five tries. A try is refused when any of them
+    is full.
     """
     ids = [user.pk] if user is not None else []
-    email = str(request.DATA.get("email") or "").lower().strip()
-    if email:
-        from mojo.decorators.limits import unknown_account_id
-        ids.append(unknown_account_id(email))
-    for counter in _typed_identifier_ids(request.DATA.get("username"), request.DATA.get("phone_number")):
+    for counter in _typed_identifier_ids(request.DATA.get("username"), request.DATA.get("email"),
+                                         request.DATA.get("phone_number")):
         if counter not in ids:
             ids.append(counter)
     return ids

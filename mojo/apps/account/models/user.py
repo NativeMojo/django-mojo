@@ -1138,19 +1138,25 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             raise merrors.PermissionDeniedException(
                 "Use the phone change flow to update an existing phone number")
 
-    def notify_phone_removed(self, old_phone, send=None):
+    def notify_phone_removed(self, old_phone, send=None, report=None):
         """Record that a VERIFIED phone number was removed from this account,
         and tell the account's email address — best effort.
 
         Clearing a number and setting a new one skips the alert the phone
         change flow sends to the old number, so the removal itself is
         announced. The email names the number by its last four digits only.
-        Never raises: the save has already gone through.
+        Never raises: the save has already gone through. The event and the
+        email are tried separately, so a failure to record the one does not
+        stop the other.
 
-        `send` is a test seam for send_template_email.
+        `send` and `report` are test seams for send_template_email and
+        report_incident.
         """
-        self.report_incident(
-            f"{self.username} verified phone number removed", "phone:removed")
+        reporter = report if report is not None else self.report_incident
+        try:
+            reporter(f"{self.username} verified phone number removed", "phone:removed")
+        except Exception as err:
+            logit.error("phone_removed", f"removal event failed: {err}")
         if not str(self.email or "").strip():
             return
         sender = send if send is not None else self.send_template_email

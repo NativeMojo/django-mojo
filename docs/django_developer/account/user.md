@@ -214,8 +214,9 @@ would be a change with no check at all. The rule is
 was verified, `User.notify_phone_removed(old_phone)` runs after the save has
 gone through: it files a `phone:removed` event on the account and sends the
 `phone_removed_notify` email to the account's address, naming the number by
-its last four digits only. It is best effort and never fails the save; an
-account with no email gets the event only. An admin removing the number
+its last four digits only. It is best effort and never fails the save. The
+event and the email are tried separately, so a failure to record the event
+does not stop the email. An account with no email gets the event only. An admin removing the number
 triggers it as well. Removing an unverified number sends nothing.
 
 ### Date of Birth (`dob`) — immutable to the account holder once set

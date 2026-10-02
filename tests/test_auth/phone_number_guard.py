@@ -185,6 +185,28 @@ def test_removal_notice(opts):
     assert_eq(len(silent.calls), 0, "an account with no email has nowhere to send the notice")
 
 
+@th.django_unit_test("phone number: a failure to record the removal event neither raises nor stops the email")
+def test_removal_notice_survives_event_failure(opts):
+    user = _fresh(opts.pg_notice_id)
+    recorded = []
+
+    def failing_recorder(details, event_type, **kwargs):
+        recorded.append(event_type)
+        raise RuntimeError("event store down")
+
+    sender = _Sender()
+    # Review 63901: the event was recorded outside the guarded block, so a
+    # failure there raised out of a save that had already gone through, and
+    # the email was never tried.
+    user.notify_phone_removed(NOTICE_PHONE, send=sender, report=failing_recorder)
+    assert_eq(recorded, ["phone:removed"], "the removal event must be tried once")
+    assert_eq(len(sender.calls), 1, "the email must still be tried when recording the event fails")
+
+    both_fail = _Sender(fail=True)
+    user.notify_phone_removed(NOTICE_PHONE, send=both_fail, report=failing_recorder)
+    assert_eq(len(both_fail.calls), 1, "with both failing the notice must still not raise")
+
+
 @th.django_unit_test("phone number: the removal notice template ships with the framework")
 def test_removal_notice_template_ships(opts):
     from mojo.apps.aws.services.email_templates import load_shipped_templates

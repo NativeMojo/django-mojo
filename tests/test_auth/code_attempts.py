@@ -45,6 +45,7 @@ USERS = {
     "ca_send": "+15550006230",
     "ca_sms": "+15550006227",
     "ca_reset": None,
+    "ca_num_5550006290": None,   # its email holds ten digits: it reads as a phone number too
     "ca_verify": "+15550006228",
     "ca_change": None,
     "ca_totp": None,
@@ -1185,7 +1186,6 @@ def test_reset_conflicting_identifiers(opts):
 @th.django_unit_test("reset code: one unknown phone number typed in different ways is one counter")
 def test_reset_phone_formats_share_a_counter(opts):
     from mojo.apps.account.models import User
-    from mojo.decorators import limits
 
     last4 = "%04d" % (uuid.uuid4().int % 10000)
     plain = f"555000{last4}"
@@ -1200,7 +1200,7 @@ def test_reset_phone_formats_share_a_counter(opts):
     _assert_refused(opts, resp, "reset code for an unknown phone number, sixth try")
     resp = _post_reset_fields(opts, WRONG, phone_number=e164)
     _assert_refused(opts, resp, "the same number sent as phone_number")
-    limits.clear_code_attempts("reset", limits.unknown_account_id(e164))
+    _clear_typed(*formats)
 
 
 @th.django_unit_test("reset code: a right code and an admin release clear the identifier counters too")
@@ -1227,6 +1227,122 @@ def test_reset_identifier_counters_are_cleared(opts):
                                      f"got {resp.status_code}: {opts.ca.last_response.body}")
     assert_eq(_count("reset", pk), 0, "a right code must clear the account's counter")
     assert_eq(_typed_count("ca_reset"), 0, "a right code must clear the counter for the name that was typed")
+    _fresh(pk).save_password(PWORD)
+
+
+# -----------------------------------------------------------------
+# Review 63901: one identifier sent under different field names
+# -----------------------------------------------------------------
+
+NUM_USER = "ca_num_5550006290"
+NUM_EMAIL = f"{NUM_USER}@example.com"
+NUM_PHONE_FORM = "+15550006290"   # how the email above reads as a phone number
+
+
+def _ghost_num_email():
+    """An email no account has, whose local part holds ten digits."""
+    return "ca_ghost_556%07d@example.com" % (uuid.uuid4().int % 10000000)
+
+
+def _phone_form(value):
+    from mojo.apps.account.models import User
+    return User.normalize_phone(value)
+
+
+@th.django_unit_test("reset code: one email sent as `email` or as `username` is one counter, account or not")
+def test_reset_same_email_through_either_field(opts):
+    from mojo.apps.account.models import User
+
+    pk = opts.ca_num_5550006290_id
+    for first, then in (("email", "username"), ("username", "email")):
+        ghost = _ghost_num_email()
+        assert_true(not User.objects.filter(email=ghost).exists(), "the test needs an email with no account")
+        assert_true(_phone_form(ghost), "the test needs an email that also reads as a phone number")
+        _clear(pk)
+        _clear_typed(NUM_EMAIL, NUM_PHONE_FORM, ghost, _phone_form(ghost))
+        _seed_reset(pk)
+
+        seen = {}
+        for address in (NUM_EMAIL, ghost):
+            statuses = [_post_reset_fields(opts, WRONG, **{first: address}).status_code
+                        for _ in range(LIMIT)]
+            # The identical address, now under the other field name.
+            statuses.append(_post_reset_fields(opts, WRONG, **{then: address}).status_code)
+            seen[address] = statuses
+        assert_eq(seen[NUM_EMAIL], [400] * LIMIT + [429],
+                  f"a real account must be refused on the sixth try ({first} then {then}), got {seen[NUM_EMAIL]}")
+        assert_eq(seen[ghost], seen[NUM_EMAIL],
+                  f"an unknown email must be answered exactly as a real one, try for try, when the same "
+                  f"address moves from `{first}` to `{then}`: got {seen[ghost]}")
+        _clear(pk)
+        _clear_typed(NUM_EMAIL, NUM_PHONE_FORM, ghost, _phone_form(ghost))
+    _seed(pk, password_reset_code=None, password_reset_code_ts=None)
+
+
+@th.django_unit_test("reset code: the counters a try leaves depend on what was typed, not on the field it was typed in")
+def test_reset_counters_ignore_the_field_name(opts):
+    from mojo.apps.account.models import User
+
+    pk = opts.ca_num_5550006290_id
+    ghost = _ghost_num_email()
+    assert_true(not User.objects.filter(email=ghost).exists(), "the test needs an email with no account")
+    left = {}
+    for address, phone_form in ((NUM_EMAIL, NUM_PHONE_FORM), (ghost, _phone_form(ghost))):
+        for field in ("email", "username"):
+            _clear(pk)
+            _clear_typed(address, phone_form)
+            _seed_reset(pk)
+            resp = _post_reset_fields(opts, WRONG, **{field: address})
+            assert_eq(resp.status_code, 400, f"a wrong code must be refused, got {resp.status_code}")
+            left[(address, field)] = (_typed_count(address), _typed_count(phone_form))
+        _clear(pk)
+        _clear_typed(address, phone_form)
+    assert_eq(left[(NUM_EMAIL, "email")], (1, 1),
+              f"an address is counted as typed and in its phone form, got {left[(NUM_EMAIL, 'email')]}")
+    for key, counts in left.items():
+        assert_eq(counts, left[(NUM_EMAIL, "email")],
+                  f"the counters left by {key} must match those left by the real address sent as `email`")
+    _seed(pk, password_reset_code=None, password_reset_code_ts=None)
+
+
+@th.django_unit_test("reset code: a right code clears every counter the earlier tries used, whatever field they used")
+def test_reset_right_code_clears_across_fields(opts):
+    pk = opts.ca_num_5550006290_id
+    _clear(pk)
+    _clear_typed(NUM_EMAIL, NUM_PHONE_FORM)
+    _seed_reset(pk)
+
+    for _ in range(2):
+        resp = _post_reset_fields(opts, WRONG, username=NUM_EMAIL)
+        assert_eq(resp.status_code, 400, f"a wrong code must be refused, got {resp.status_code}")
+    resp = _post_reset_fields(opts, RIGHT, email=NUM_EMAIL)
+    assert_eq(resp.status_code, 200, f"the right code must work, got {resp.status_code}: {opts.ca.last_response.body}")
+    assert_eq((_count("reset", pk), _typed_count(NUM_EMAIL), _typed_count(NUM_PHONE_FORM)), (0, 0, 0),
+              "a right code must clear the account's counter and both forms of the address, "
+              "or tries made under the other field name stay counted")
+    _fresh(pk).save_password(PWORD)
+
+
+@th.django_unit_test("reset code: an admin release clears both forms of the account's own identifiers")
+def test_reset_admin_release_clears_both_forms(opts):
+    pk = opts.ca_num_5550006290_id
+    _clear(pk)
+    _clear_typed(NUM_EMAIL, NUM_PHONE_FORM, NUM_USER)
+    _seed_reset(pk)
+
+    for _ in range(LIMIT):
+        _post_reset_fields(opts, WRONG, email=NUM_EMAIL)
+    resp = _post_reset_fields(opts, RIGHT, username=NUM_USER)
+    _assert_refused(opts, resp, "reset code at the limit, sent under the account's username")
+
+    admin = _admin_client(opts)
+    resp = admin.post("/api/auth/manage/clear_rate_limit", {"key": "login", "username": NUM_USER})
+    assert_eq(resp.status_code, 200, f"the admin release must succeed, got {resp.status_code}: {resp.response}")
+    assert_eq((_count("reset", pk), _typed_count(NUM_EMAIL), _typed_count(NUM_PHONE_FORM), _typed_count(NUM_USER)),
+              (0, 0, 0, 0), "the release must clear the account's counter and every form of its identifiers")
+    resp = _post_reset_fields(opts, RIGHT, username=NUM_USER)
+    assert_eq(resp.status_code, 200, f"after the release the right code must work, "
+                                     f"got {resp.status_code}: {opts.ca.last_response.body}")
     _fresh(pk).save_password(PWORD)
 
 
