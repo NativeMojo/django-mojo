@@ -151,6 +151,18 @@ group.metadata["feature_flags"] = {"new_ui": True}
 group.save()
 ```
 
+### Keys that need a global permission
+
+Two metadata keys decide where a tenant's sign-in, password-reset and invite
+links land: `webapp_base_url` and `webapp_auth_path` (see
+[auth.md](auth.md)). Setting, changing or clearing either one over REST needs a
+signed-in person holding **global** `manage_groups` or `groups`, or a
+superuser. A member-level `manage_group` (or a member-level grant named
+`manage_groups`) is refused with a `403`, and so is every group API key and
+group token. An unchanged value in the payload is fine: a manager editing
+another key, or resending the whole metadata as it is, still gets `200`.
+`geofence_strict` has its own global gate (`manage_geofence` / `security`).
+
 ### Protected Metadata
 
 The reserved root key `"protected"` in `metadata` is write-protected at the framework level. Only a superuser or a user with a permission listed in `PROTECTED_JSON_PERMS` (for Group: `"admin_compliance"` or `"admin_verify"`) can set or update it via the REST API. Any attempt by an unprivileged user raises a `403 PermissionDeniedException`. The gate cannot be bypassed with `"__replace": true` or a non-dict overwrite — a wholesale replace that would rewrite **or drop** the existing `protected` subtree is denied the same as a merge that touches it.
@@ -424,6 +436,17 @@ Each Group's active webhook delivery targets are managed through the `WebhookSub
 ```python
 group.touch()   # updates last_activity (rate-limited by GROUP_LAST_ACTIVITY_FREQ)
 ```
+
+## Moving a group between trees
+
+A change of `parent` that changes the **top of the tree** the group sits under
+— attaching a top-level group beneath another tree, detaching a sub-group, or
+moving it from one tree to another — needs the same global `manage_groups` or
+`groups` permission (or a superuser) as the two link-address keys above, and a
+group API key or group token never passes. The link resolver trusts a group by
+the top of its tree, so a group moved into a tenant could otherwise bring an
+address with it. Moving a sub-group to another parent **inside the same tree**
+needs only the ordinary write grant.
 
 ## Hierarchy integrity
 
