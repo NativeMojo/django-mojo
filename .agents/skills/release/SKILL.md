@@ -23,6 +23,11 @@ to live in somebody's head:
 | **This skill** | read what shipped, pick the version, write the note, bump the files, commit |
 | **`publish.py`** | verify, build, push, upload, tag, publish the note |
 
+**Only the wheel is uploaded.** The source archive is built for the packaging
+check and then removed, and the wheel is refused if it holds anything git does
+not track (`scripts/release_wheel_only.py`). A source archive packs every file
+`.gitignore` does not name, which is how agent worktrees reached PyPI.
+
 Do not reimplement the script's steps here, and do not let the script grow this
 skill's judgement. A PyPI version can never be reused, so the irreversible half
 stays a script that behaves identically every time.
