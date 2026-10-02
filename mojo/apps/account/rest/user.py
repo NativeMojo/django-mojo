@@ -1185,10 +1185,12 @@ def on_user_forgot(request):
 @md.requires_geofence(scope="auth", after_auth=True)
 @md.requires_params("code", "new_password")
 def on_user_password_reset_code(request):
-    from mojo.decorators.limits import check_code_attempt, clear_code_attempts
+    from mojo.decorators.limits import (
+        check_code_attempt, clear_code_attempts, unknown_account_id)
 
     code = request.DATA.get("code")
     new_password = request.DATA.get("new_password")
+    code_ttl = settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int")
     user = User.lookup_from_request(request, phone_as_username=True)
     if user is None:
         User.class_report_incident(
@@ -1196,11 +1198,17 @@ def on_user_password_reset_code(request):
             event_type="reset:unknown",
             level=8,
             request=request)
+        # Counted like a try against a real account: this endpoint answers
+        # "Invalid code" for an unknown account and a wrong code alike, and
+        # the 429 at the limit must not be what tells them apart.
+        identifier = (request.DATA.get("email") or request.DATA.get("username")
+                      or request.DATA.get("phone_number"))
+        if identifier:
+            check_code_attempt("reset", unknown_account_id(identifier), request, ttl=code_ttl)
         raise merrors.ValueException("Invalid code")
 
     # Five tries per account, whatever address they come from. Counted before
     # the compare; a refused try raises the 429 here.
-    code_ttl = settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int")
     check_code_attempt("reset", user.pk, request, ttl=code_ttl)
 
     sec_code = user.get_secret("password_reset_code")

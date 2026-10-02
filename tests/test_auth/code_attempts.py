@@ -355,6 +355,33 @@ def test_reset_right_code_weak_password_is_not_counted(opts):
     assert_true(_fresh(pk).check_password(STRONG_PWORD), "the new password must be set")
 
 
+@th.django_unit_test("reset code: an unknown account is limited the same way, so the 429 can't tell them apart")
+def test_reset_unknown_account_is_counted_like_a_real_one(opts):
+    from mojo.apps.account.models import User
+    from mojo.decorators import limits
+
+    ghost = f"ca_ghost_{uuid.uuid4().hex[:10]}"
+    assert_true(not User.objects.filter(username=ghost).exists(), "the test needs a name with no account")
+    ghost_id = limits.unknown_account_id(ghost)
+
+    _clear_ip("password_reset_code")
+    opts.client.logout()
+    resp = opts.client.post("/api/auth/password/reset/code", {
+        "username": ghost.upper(), "code": WRONG, "new_password": STRONG_PWORD})
+    assert_eq(resp.status_code, 400, f"a try for an unknown account must be refused, got {resp.status_code}")
+    assert_eq(opts.client.last_response.body.get("error"), "Invalid code",
+              "an unknown account must answer exactly as a wrong code does")
+    assert_eq(_count("reset", ghost_id), 1,
+              "a try for an unknown account must be counted, whatever the case it was typed in")
+
+    _spend("reset", ghost_id, LIMIT - 1)
+    _clear_ip("password_reset_code")
+    resp = opts.client.post("/api/auth/password/reset/code", {
+        "username": ghost, "code": WRONG, "new_password": STRONG_PWORD})
+    _assert_refused(opts, resp, "reset code for an unknown account")
+    limits.clear_code_attempts("reset", ghost_id)
+
+
 # -----------------------------------------------------------------
 # Phone and email verify codes (signed in)
 # -----------------------------------------------------------------

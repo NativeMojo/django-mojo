@@ -14,7 +14,7 @@ logger = logit.get_logger("error", "error.log")
 
 __all__ = ["rate_limit", "strict_rate_limit", "endpoint_metrics", "clear_rate_limits",
            "check_account_attempt", "read_account_attempt", "check_api_throttle",
-           "check_code_attempt", "clear_code_attempts"]
+           "check_code_attempt", "clear_code_attempts", "unknown_account_id"]
 
 
 def _hash_key(value):
@@ -721,6 +721,16 @@ def check_code_attempt(kind, account_id, request=None, ttl=None, *, limit=None,
         if request is not None:
             _note_block(key, request, "hours")
         raise merrors.RateLimitException(wait)
+
+
+def unknown_account_id(identifier):
+    """Counter id for a code try that names no real account.
+
+    A try against an unknown identifier is counted like one against a real
+    account, so the 429 at the limit can't be used to tell which identifiers
+    exist. The identifier is hashed: it is whatever the caller typed.
+    """
+    return f"unknown:{_hash_key(str(identifier).lower().strip())}"
 
 
 def clear_code_attempts(kind, account_id):
