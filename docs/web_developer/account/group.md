@@ -90,9 +90,13 @@ POST_SAVE_ACTION also requires `manage_group`.
 Note: `metadata.webapp_base_url` and `metadata.webapp_auth_path` (where the
 tenant's sign-in, password-reset and invite links land) can be set, changed or
 cleared only by a signed-in user holding the **global** `manage_groups` or
-`groups` permission. A tenant admin with `manage_group`, and any API key,
-receives a `403` and nothing is stored. Sending the stored value back unchanged
-is fine, so a form that resubmits the whole `metadata` keeps working.
+`groups` permission. A tenant admin with `manage_group`, and any group API key
+or group token, receives a `403` and nothing is stored. A per-user API key is
+that person's own session: it passes when the person holds the global
+permission. Sending the stored value back unchanged is fine, so a form that
+resubmits the whole `metadata` keeps working. If an operator changes the
+address while your save is on its way, your save keeps the operator's value and
+still stores your other edits.
 
 Note: `metadata.protected.*` requires `admin_compliance` or `admin_verify` — a
 write grant alone is not enough. Any update that would touch it (a merge

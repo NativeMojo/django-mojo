@@ -1326,6 +1326,12 @@ key or the tree: server code that sets a tenant's address assigns
 `group.metadata[...]` and calls `group.save()`, as above. A plain ORM write is
 not guarded.
 
+The decision that counts is made in `Group.save()`, on the locked row, so a
+save that overlaps an operator's change cannot undo it: a value the saving
+instance did not change is taken from the stored row, and a value it did
+change is judged against what is stored at that moment. See
+[group.md](group.md#keys-that-need-a-global-permission).
+
 List an operator frontend (file-only, so a database row cannot widen it):
 
 ```python

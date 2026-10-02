@@ -161,7 +161,20 @@ superuser. A member-level `manage_group` (or a member-level grant named
 `manage_groups`) is refused with a `403`, and so is every group API key and
 group token. An unchanged value in the payload is fine: a manager editing
 another key, or resending the whole metadata as it is, still gets `200`.
-`geofence_strict` has its own global gate (`manage_geofence` / `security`).
+A per-user API key is the person's own session and passes when that person
+holds the global permission. `geofence_strict` has its own global gate
+(`manage_geofence` / `security`).
+
+**A save does not write back a link setting it did not change.** A `Group`
+instance remembers the two keys and the parent it was loaded with. `save()`
+locks the row, and for each of the three that this instance left as loaded it
+takes the stored value instead of the loaded one. So a request, a `touch()` or
+a job holding a row loaded before an operator's change cannot put the old
+address or the old parent back; its other edits are still stored. A value the
+instance did change is written as before, and for a REST save the permission
+is judged again on the locked row. This covers a full `save()` and any
+`save(update_fields=...)` that names `metadata` or `parent`. Other metadata
+keys are not merged: the last full save still wins for those.
 
 ### Protected Metadata
 
