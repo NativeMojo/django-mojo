@@ -668,7 +668,9 @@ security event. The same goes for a secret field on a related record, and for
 free-form JSON fields such as `metadata`. This is separate from what a row
 shows: a row still carries every key in `serialization.fields`, including a
 JSON field listed there. The log entry names the field, never the value that
-was tried. Max 200 rows. Each row carries exactly the keys in `describe_model`'s `serialization.fields`.
+was tried. `search` follows the same rule: on a model whose search would look
+inside a secret field, every search is refused and logged, and `describe_model`
+shows an empty `search_fields` for it. Max 200 rows. Each row carries exactly the keys in `describe_model`'s `serialization.fields`.
 
 **Example response shape**:
 
@@ -763,7 +765,7 @@ would return for it. A request can ask for fewer columns or a different order;
 it cannot add a column the model does not publish to the assistant. Asking for
 a column outside that set, the same column twice, or no columns at all is
 refused and no file is created. A column that holds a secret cannot be asked
-for by name, and filters and sorting follow the same rule as `query_model`. An
+for by name, and filters, sorting and `search` follow the same rule as `query_model`. An
 export with no matching rows still produces a file with the header row.
 
 **Example queries that trigger this tool**:

@@ -631,7 +631,8 @@ graph; return model instances, or build the dictionaries yourself.
 
 The graph above decides what a row **shows**. A second, separate rule decides
 what a caller may **ask by**: the paths in `filters`, `ordering`, an
-aggregation's `field`, `group_by`, and the names in `export_data`'s `fields`.
+aggregation's `field`, `group_by`, the names in `export_data`'s `fields`, and
+the fields a `search` is matched against.
 Without it a column the graph never shows could still be read one comparison at
 a time — `filters={"edata__startswith": "A"}` with `count_only`, repeated over
 an alphabet — or outright with `min`/`max`.
@@ -673,12 +674,24 @@ Details that matter when you declare one:
 - **Aggregation aliases and `having` keys are output names** and are not
   checked against the model. An alias is still subject to the name heuristic
   when it is used in `ordering`.
+- **`search` is a comparison too.** `query_model` and `export_data` hand
+  `search` to the model's `on_rest_list_search`, which matches the text against
+  `SEARCH_FIELDS` (every text column when none are declared) after dropping
+  what the shared helper calls sensitive. If a field is left in that list that
+  this rule refuses — in practice a foreign key declared as `"user_id"` with
+  `"user__username"` in `SEARCH_FIELDS` — the tools refuse **every** search on
+  that model, plain or `field:value`, and file one event naming the field. The
+  search text is never recorded. The fix is in the model: declare the relation
+  by its own name, or take the path out of `SEARCH_FIELDS`. A `field:value`
+  term naming a field that is not a search field compares nothing, as on REST.
 - **`describe_model` follows the same rule passively.** Its `fields` list
-  leaves out what would be refused, and reports nothing.
+  leaves out what would be refused, `search_fields` lists only what a search
+  compares against (empty when searches on the model are refused), and it
+  reports nothing.
 - **Every refused call files one event**: category `assistant_sensitive_field`,
   level 7, naming the model, the path and the surface (`filter`, `ordering`,
-  `aggregation`, `group_by`, `export field`). It never carries the value the
-  caller tried — that value is the guess being tested.
+  `aggregation`, `group_by`, `export field`, `search`). It never carries the
+  value the caller tried — that value is the guess being tested.
 
 The rule is `_is_sensitive_input` in
 `mojo/apps/assistant/services/tools/models.py`. It delegates the relation walk
@@ -701,7 +714,7 @@ The AI gate runs **before** the REST permission check, so denied requests return
 
 The tool delegates to `instance.on_rest_save(request, data)` so all model-level save hooks, validators, and `POST_SAVE_ACTIONS` fire exactly as they would through the REST API. The `action_response` from `POST_SAVE_ACTIONS` is included in the return dict when present. Setting `CAN_CREATE = False` in `RestMeta` blocks creates; setting `CAN_UPDATE = False` blocks updates to existing instances.
 
-All five tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter, order, group, aggregate or narrow an export by a sensitive path are refused and reported as security events — see [What a caller may ask by](#what-a-caller-may-ask-by-sensitive_fields).
+All five tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter, order, group, aggregate, search or narrow an export by a sensitive path are refused and reported as security events — see [What a caller may ask by](#what-a-caller-may-ask-by-sensitive_fields).
 
 #### `add_context` — Clickable model references
 
@@ -933,7 +946,7 @@ The assistant reports security-relevant actions and errors to the incident syste
 | `assistant:approval:denied` | 6 | A resolution was refused (suppressed + budgeted — see [Approvals](approvals.md)) |
 | `assistant:approval:failed` | 6 | An approved handler raised or returned an error |
 | `assistant:tool:<name>` | 5 | Successful mutating tool execution (block_ip, disable_user, etc.). Unchanged — it now fires from `approvals.resolve()`, so existing RuleSets keep working. |
-| `assistant_sensitive_field` | 7 | A model tool refused a filter, ordering, aggregation, `group_by` or export field on a sensitive path. One event per refused call; the attempted value is never recorded. |
+| `assistant_sensitive_field` | 7 | A model tool refused a filter, ordering, aggregation, `group_by`, export field or search on a sensitive path. One event per refused call; the attempted value is never recorded. |
 | `assistant:error` | 6 | Tool handler raised an unhandled exception |
 | `assistant:error` | 7 | Agent loop crashed |
 | `assistant:error` | 5 | Max tool turns exhausted |

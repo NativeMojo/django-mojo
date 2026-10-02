@@ -128,6 +128,46 @@ def _deny_sensitive_input(model_label, path, surface, user, message):
     return {"error": message}
 
 
+def _blocked_search_fields(model):
+    """The fields a search on ``model`` compares against that the input rule
+    refuses.
+
+    ``on_rest_list_search`` matches the search text against the model's
+    SEARCH_FIELDS — every text column when none are declared — after dropping
+    what the shared helper calls sensitive. It drops by that helper alone, so
+    a field only this module's rule refuses (a foreign key under its other
+    spelling, a name the heuristic catches) is still compared, and a search
+    then answers "which rows match this text" about it.
+    """
+    from mojo.models.rest import is_sensitive_filter_path
+
+    fields = getattr(model.RestMeta, "SEARCH_FIELDS", None)
+    if fields is None:
+        fields = [
+            f.name for f in model._meta.get_fields()
+            if hasattr(f, "get_internal_type") and f.get_internal_type() in ("CharField", "TextField")
+        ]
+    return [
+        f for f in fields
+        if not is_sensitive_filter_path(model, f) and _is_sensitive_input(model, f)
+    ]
+
+
+def _validate_search(model, user, model_label):
+    """Refuse a search the shared search would run against a sensitive field.
+
+    The whole search is refused, targeted or not: the shared method takes no
+    field list, so it cannot be told to leave one field out. Returns error
+    dict or None.
+    """
+    blocked = _blocked_search_fields(model)
+    if not blocked:
+        return None
+    return _deny_sensitive_input(
+        model_label, ", ".join(blocked), "search", user,
+        f"Search on {model_label} is not allowed: it compares against a sensitive field")
+
+
 def _resolve_model(app_name, model_name):
     """Resolve and validate a model. Returns (model_class, error_dict)."""
     from mojo.models import MojoModel
@@ -583,8 +623,14 @@ def _tool_describe_model(params, user):
     view_perms = model.get_rest_meta_prop("VIEW_PERMS", [])
     save_perms = model.get_rest_meta_prop("SAVE_PERMS", [])
 
-    # Search fields
-    search_fields = getattr(model.RestMeta, "SEARCH_FIELDS", None) or []
+    # Search fields — what a search compares against, and nothing a search
+    # is refused for
+    search_fields = []
+    if not _blocked_search_fields(model):
+        search_fields = [
+            f for f in getattr(model.RestMeta, "SEARCH_FIELDS", None) or []
+            if not _is_sensitive_input(model, f)
+        ]
 
     return {
         "model": f"{app_name}.{model_name}",
@@ -708,6 +754,13 @@ def _tool_query_model(params, user):
         if order_field not in valid_fields:
             return {"error": f"Unknown ordering field '{order_field}' on {model_label}"}
 
+    # Validate search
+    search = params.get("search", "").strip()
+    if search:
+        search_err = _validate_search(model, user, model_label)
+        if search_err:
+            return search_err
+
     # Build queryset
     queryset = model.objects.all()
 
@@ -715,7 +768,6 @@ def _tool_query_model(params, user):
     queryset = _apply_owner_group_filter(model, request, queryset)
 
     # Apply search if provided
-    search = params.get("search", "").strip()
     if search:
         request.DATA["search"] = search
         queryset = model.on_rest_list_search(request, queryset)
@@ -1569,12 +1621,18 @@ def _tool_export_data(params, user):
         if order_field not in valid_fields:
             return {"error": f"Unknown ordering field '{order_field}' on {model_label}"}
 
+    # Validate search
+    search = params.get("search", "").strip()
+    if search:
+        search_err = _validate_search(model, user, model_label)
+        if search_err:
+            return search_err
+
     # Build queryset
     queryset = model.objects.all()
     queryset = _apply_owner_group_filter(model, request, queryset)
 
     # Search
-    search = params.get("search", "").strip()
     if search:
         request.DATA["search"] = search
         queryset = model.on_rest_list_search(request, queryset)
