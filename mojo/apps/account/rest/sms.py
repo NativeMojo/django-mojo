@@ -200,6 +200,7 @@ def on_sms_verify(request):
 @md.POST("auth/sms/login")
 @md.strict_rate_limit("sms_login", ip_limit=10, ip_window=60)
 @md.public_endpoint()
+@md.requires_bouncer_token('login')
 @md.requires_geofence(scope="auth")
 def on_sms_login(request, *, send=None):
     """Send an SMS OTP to start a passwordless login.
@@ -210,6 +211,10 @@ def on_sms_login(request, *, send=None):
     docs/django_developer/account/auth_pages.md), so the no-phone case is
     handled HERE rather than by relaxing `_send_otp`, whose other callers are
     authenticated and are entitled to a real error.
+
+    Carries the same bouncer check as password login: log-only unless the
+    deployment or the group requires a token, and then a request without a
+    valid `login` token is refused before anything is looked up or sent.
 
     `send` is a test seam, not part of the wire contract."""
     # UX-only per-group method gate (no-op without a resolving group_uuid).

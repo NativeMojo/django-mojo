@@ -752,8 +752,9 @@
 
         /**
          * Start a passwordless SMS-code login — sends a 6-digit code to the
-         * phone on file. Always resolves (the server returns a generic
-         * success even for unknown accounts, to avoid user enumeration).
+         * phone on file. The server returns a generic success even for
+         * unknown accounts, to avoid user enumeration. Carries a bouncer
+         * token like login(), so it rejects when verification is unavailable.
          * @param {string} phone - phone number / username
          * @param {object} [options] - { group_uuid }
          * @returns {Promise<object>}
@@ -761,7 +762,7 @@
         startSmsLogin: function (phone, options) {
             var payload = { username: phone };
             if (options && options.group_uuid) payload.group_uuid = options.group_uuid;
-            return post(ep('smsLogin'), _withDevice(payload));
+            return protectedPost(ep('smsLogin'), payload, 'login');
         },
 
         /**
