@@ -245,10 +245,14 @@ done. This is what happened for 1.31.4.
      `git tag -a v<version> -m "Release v<version>" <release commit>`.
    - Prints the release commit: it exists, do not create it again.
    - Prints any other commit: stop and ask the user. Do not move a tag.
-4. The remote tag: `git ls-remote origin "refs/tags/v<version>^{}"`.
-   - Prints nothing: `git push origin v<version>`.
-   - Prints the release commit: it is already pushed.
-   - Prints any other commit: stop and ask the user.
+4. The remote tag, asked for by both of its names:
+   `git ls-remote origin "refs/tags/v<version>" "refs/tags/v<version>^{}"`.
+   The commit it points at is the hash on the line ending in `^{}`. A plain
+   tag has no such line, only the first one, and then that line's hash is the
+   commit.
+   - Prints nothing: the tag is not on the remote, `git push origin v<version>`.
+   - The commit is the release commit: it is already pushed.
+   - The commit is any other: stop and ask the user. Do not move a tag.
 5. Then publish the note: `publish_release(project, version)`.
 
 `--note-by-agent` and `--skip-notes` cannot be combined, and they are not the

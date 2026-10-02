@@ -262,19 +262,23 @@ def test_note_is_required_by_default(opts):
 
 @th.unit_test("publish: a wait setting that is not a usable number stops a release and a dry run alike, before the build")
 def test_bad_wait_setting_stops_before_build(opts):
+    # 1e100 is a number, and no clock can sleep it: the index is not showing
+    # the version here, so a run that got as far as the wait would have to.
     for name in (TIMEOUT, INTERVAL):
-        for flags in (("--note-by-agent",), ("--dry-run", "--note-by-agent"),
-                      ("--skip-notes", "--nopypi")):
-            for where in ("environment", ".env"):
-                case = f"{name}=not-a-number in the {where}, {flags}"
-                if where == "environment":
-                    harness = Harness(environ=dict(TOKEN, **{name: "not-a-number"}))
-                else:
-                    harness = Harness(env_file=f"{name}=not-a-number\n")
-                assert_eq(harness.main(*flags), 1, f"the run must be refused: {case}")
-                assert_true(not harness.executed("uv", "build"),
-                            f"the refusal must come before the build: {case}")
-                _nothing_left_the_machine(harness, f"with {case}")
+        for value in ("not-a-number", "1e100"):
+            for flags in (("--note-by-agent",), ("--dry-run", "--note-by-agent"),
+                          ("--skip-notes", "--nopypi")):
+                for where in ("environment", ".env"):
+                    case = f"{name}={value} in the {where}, {flags}"
+                    if where == "environment":
+                        harness = Harness(environ=dict(TOKEN, **{name: value}),
+                                          visible=False)
+                    else:
+                        harness = Harness(env_file=f"{name}={value}\n", visible=False)
+                    assert_eq(harness.main(*flags), 1, f"the run must be refused: {case}")
+                    assert_true(not harness.executed("uv", "build"),
+                                f"the refusal must come before the build: {case}")
+                    _nothing_left_the_machine(harness, f"with {case}")
 
 
 @th.unit_test("publish: wait settings in .env reach the wait after the upload")
@@ -298,8 +302,10 @@ def test_visibility_settings(opts):
               "both settings must be read as seconds")
     assert_eq(module.visibility_settings({TIMEOUT: "0", INTERVAL: "0"}), (0.0, 0.0),
               "zero is allowed: poll once, do not wait")
+    assert_eq(module.visibility_settings({TIMEOUT: "86400", INTERVAL: "86400"}),
+              (86400.0, 86400.0), "a day is the longest wait allowed, and it is allowed")
     for name in (TIMEOUT, INTERVAL):
-        for value in ("soon", "", "nan", "inf", "-1"):
+        for value in ("soon", "", "nan", "inf", "-1", "86400.5", "1e100"):
             try:
                 module.visibility_settings({name: value})
             except module.PublishError as err:

@@ -27,7 +27,6 @@ carries, and for the same reason.
 
 import argparse
 import json
-import math
 import os
 import re
 import subprocess
@@ -57,6 +56,9 @@ PYPI_SIMPLE_URL = "https://pypi.org/simple/{name}/"
 # orders of magnitude.
 VISIBILITY_TIMEOUT = 600.0
 VISIBILITY_INTERVAL = 5.0
+# The longest either may be set to. A number can be finite and still be more
+# than time.sleep() accepts; a day is far inside what every platform sleeps.
+VISIBILITY_MAX = 86400.0
 
 # What require_release_note returns under --note-by-agent: no note was read,
 # and the calling agent owns both the check and the publish.
@@ -155,10 +157,12 @@ def visibility_settings(environ):
             value = float(raw)
         except (TypeError, ValueError):
             value = None
-        # nan never reaches the deadline and inf cannot be slept.
-        if value is None or not math.isfinite(value) or value < 0:
+        # nan never reaches the deadline (and fails this comparison); inf and
+        # a finite 1e100 cannot be slept.
+        if value is None or not 0 <= value <= VISIBILITY_MAX:
             raise PublishError(
-                f"{name} must be a number of seconds, zero or more; got {raw!r}")
+                f"{name} must be a number of seconds from 0 to "
+                f"{VISIBILITY_MAX:g}; got {raw!r}")
         resolved.append(value)
     return tuple(resolved)
 
