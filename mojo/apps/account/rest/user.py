@@ -1253,14 +1253,17 @@ def on_user_password_reset_code(request):
     sec_code = user.get_secret("password_reset_code")
     code_ts = int(user.get_secret("password_reset_code_ts") or 0)
     now_ts = int(dates.utcnow().timestamp())
-    # Expiry is decided before the compare, so the answer for a stale code
-    # never depends on the guess.
-    if sec_code and now_ts - code_ts > code_ttl:
-        user.report_incident(f"{user.username} expired password reset code", "password_reset")
-        raise merrors.ValueException("Expired code")
+    # Expiry is decided before the compare: an expired code can never reset a
+    # password. The answers are unchanged — "Expired code" only for the code
+    # that was sent, "Invalid code" for any other guess, as for an unknown
+    # account. A wrong guess must not learn that a stale code is on file.
+    expired = now_ts - code_ts > code_ttl
     if len(str(code or "")) != 6 or not crypto.codes_match(code, sec_code):
         user.report_incident(f"{user.username} invalid password reset code", "password_reset")
         raise merrors.ValueException("Invalid code")
+    if expired:
+        user.report_incident(f"{user.username} expired password reset code", "password_reset")
+        raise merrors.ValueException("Expired code")
     # Cleared as soon as the code matches: a right code with a weak new
     # password is not a guess.
     clear_code_attempts("reset", user.pk)
@@ -2043,10 +2046,9 @@ def on_email_change_confirm(request):
         if not request.user or not request.user.is_authenticated:
             raise merrors.PermissionDeniedException("Authentication required", 401, 401)
         user = request.user
-        from mojo.decorators.limits import check_code_attempt, clear_code_attempts
+        from mojo.decorators.limits import check_code_attempt
         check_code_attempt("email_change", user.pk, request, ttl=tok_utils.email_change_code_ttl())
         new_email = tok_utils.verify_email_change_otp(user, code)
-        clear_code_attempts("email_change", user.pk)
     else:
         # Link/token path — token is the credential; no active session required
         user, new_email = tok_utils.verify_email_change_token(token)

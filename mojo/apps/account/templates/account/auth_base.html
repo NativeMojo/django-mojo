@@ -65,7 +65,7 @@
     </div>
 
     {{ login_methods|json_script:"mat-login-methods" }}
-    <script nonce="{{ csp_nonce }}" src="{{ api_base }}/api/account/static/mojo-auth.js?v=mobile-1"></script>
+    <script nonce="{{ csp_nonce }}" src="{{ api_base }}/api/account/static/mojo-auth.js?v=f046efd5d3"></script>
     {% if hosted_bouncer %}
     {{ hosted_bouncer|json_script:"mat-hosted-bouncer" }}
     <script nonce="{{ csp_nonce }}" src="/api/account/static/mojo-hosted-bouncer.js?v=mobile-1"></script>

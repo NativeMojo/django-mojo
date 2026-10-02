@@ -242,6 +242,14 @@ def generate_email_verify_code(user):
     return code
 
 
+def _clear_attempts(kind, user):
+    """Clear the account's try counter for one kind of code. Called at the
+    match, before the code is consumed: the save that consumes it can fail,
+    and a right code that could not be saved is not a guess."""
+    from mojo.decorators.limits import clear_code_attempts
+    clear_code_attempts(kind, user.pk)
+
+
 def email_verify_code_ttl():
     """Lifetime in seconds of an email verification code."""
     ttl = EMAIL_VERIFY_CODE_TTL if EMAIL_VERIFY_CODE_TTL is not None else settings.get("EMAIL_VERIFY_CODE_TTL", 600)
@@ -255,23 +263,27 @@ def verify_email_verify_code(user, code):
     Consumes the code on success (single-use).
 
     Takes no request, so the per-account try limit sits in the caller:
-    limits.check_code_attempt("email_verify", ...) before this call.
+    limits.check_code_attempt("email_verify", ...) before this call. The
+    counter is cleared here, at the match.
     """
     stored = user.get_secret("email_verify_code")
     stored_ts = int(user.get_secret("email_verify_code_ts") or 0)
     now_ts = int(dates.utcnow().timestamp())
-    # Expiry is decided before the compare, so the answer for a stale code
-    # never depends on the guess.
-    if stored and now_ts - stored_ts > email_verify_code_ttl():
-        user.report_incident(
-            details=f"{user.username} expired email verify code",
-            event_type="email_verify:expired")
-        raise merrors.ValueException("Expired code")
+    # Expiry is decided before the compare: an expired code can never verify.
+    # The answers are unchanged — "Expired code" only for the code that was
+    # sent, "Invalid code" for any other guess.
+    expired = now_ts - stored_ts > email_verify_code_ttl()
     if not crypto.codes_match(code, stored):
         user.report_incident(
             details=f"{user.username} invalid email verify code",
             event_type="email_verify:invalid")
         raise merrors.ValueException("Invalid code")
+    if expired:
+        user.report_incident(
+            details=f"{user.username} expired email verify code",
+            event_type="email_verify:expired")
+        raise merrors.ValueException("Expired code")
+    _clear_attempts("email_verify", user)
     # Consume — single use
     user.set_secret("email_verify_code", None)
     user.set_secret("email_verify_code_ts", None)
@@ -302,23 +314,27 @@ def verify_phone_verify_code(user, code):
     Consumes the code on success (single-use).
 
     Takes no request, so the per-account try limit sits in the caller:
-    limits.check_code_attempt("phone_verify", ...) before this call.
+    limits.check_code_attempt("phone_verify", ...) before this call. The
+    counter is cleared here, at the match.
     """
     stored = user.get_secret("phone_verify_code")
     stored_ts = int(user.get_secret("phone_verify_ts") or 0)
     now_ts = int(dates.utcnow().timestamp())
-    # Expiry is decided before the compare, so the answer for a stale code
-    # never depends on the guess.
-    if stored and now_ts - stored_ts > phone_verify_code_ttl():
-        user.report_incident(
-            details=f"{user.username} expired phone verify code",
-            event_type="phone_verify:expired")
-        raise merrors.ValueException("Expired code")
+    # Expiry is decided before the compare: an expired code can never verify.
+    # The answers are unchanged — "Expired code" only for the code that was
+    # sent, "Invalid code" for any other guess.
+    expired = now_ts - stored_ts > phone_verify_code_ttl()
     if not crypto.codes_match(code, stored):
         user.report_incident(
             details=f"{user.username} invalid phone verify code",
             event_type="phone_verify:invalid")
         raise merrors.ValueException("Invalid code")
+    if expired:
+        user.report_incident(
+            details=f"{user.username} expired phone verify code",
+            event_type="phone_verify:expired")
+        raise merrors.ValueException("Expired code")
+    _clear_attempts("phone_verify", user)
     # Consume — single use
     user.set_secret("phone_verify_code", None)
     user.set_secret("phone_verify_ts", None)
@@ -432,7 +448,8 @@ def verify_email_change_otp(user, code):
     Clears all email-change OTP secrets on success so this is single-use.
 
     Takes no request, so the per-account try limit sits in the caller:
-    limits.check_code_attempt("email_change", ...) before this call.
+    limits.check_code_attempt("email_change", ...) before this call. The
+    counter is cleared here, at the match.
     """
     new_email = user.get_secret("pending_email")
     stored_otp = user.get_secret("email_change_otp")
@@ -460,6 +477,7 @@ def verify_email_change_otp(user, code):
             details=f"{user.username} invalid email change OTP",
             event_type="email_change:invalid_otp")
         raise merrors.ValueException("Invalid code")
+    _clear_attempts("email_change", user)
 
     # Consume — single use
     user.set_secret("pending_email", None)

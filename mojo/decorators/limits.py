@@ -649,9 +649,12 @@ _CODE_TTL_SETTINGS = {
     "email_change": "EMAIL_CHANGE_CODE_TTL",
 }
 
-# KEYS[1] the sorted set. ARGV: now, member, limit, window.
-# Returns "0" when the try was counted, else the seconds to wait as a string
-# (a Lua number would be truncated to an integer on the way out).
+# KEYS[1] the sorted set. ARGV: now, member, limit, window, count ("1"/"0").
+# Returns {admitted, wait}. admitted is 1 when the bucket has room (and, when
+# count is "1", the try has been added), 0 when it is full. The verdict is its
+# own value and never inferred from the wait: a wait that rounds to zero is
+# still a refusal. wait is the seconds until the try that has to age out does,
+# as a string (a Lua number would be truncated to an integer on the way out).
 _TAKE_ATTEMPT_LUA = """
 local now = tonumber(ARGV[1])
 local limit = tonumber(ARGV[3])
@@ -659,11 +662,13 @@ local window = tonumber(ARGV[4])
 redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, now - window)
 if redis.call('ZCARD', KEYS[1]) >= limit then
     local ages_out = redis.call('ZRANGE', KEYS[1], -limit, -limit, 'WITHSCORES')
-    return tostring(tonumber(ages_out[2]) + window - now)
+    return {0, tostring(tonumber(ages_out[2]) + window - now)}
 end
-redis.call('ZADD', KEYS[1], now, ARGV[2])
-redis.call('EXPIRE', KEYS[1], window * 2)
-return "0"
+if ARGV[5] == "1" then
+    redis.call('ZADD', KEYS[1], now, ARGV[2])
+    redis.call('EXPIRE', KEYS[1], window * 2)
+end
+return {1, "0"}
 """
 
 
@@ -671,18 +676,24 @@ def _account_key(key, account_id):
     return f"srl:{key}:account:{account_id}"
 
 
-def _take_attempt(r, key, account_id, limit, window, now, member):
-    """Refuse or count one try. Returns 0 when counted, else the seconds to wait."""
-    wait = r.eval(_TAKE_ATTEMPT_LUA, 1, _account_key(key, account_id),
-                  repr(float(now)), member, int(limit), int(window))
+def _take_attempt(r, key, account_id, limit, window, now, member, count=True):
+    """Refuse or admit one try against one bucket.
+
+    Returns (admitted, wait). admitted is True when the bucket has room; the
+    try is then counted unless count is False (a look without counting).
+    When the bucket is full, wait is the whole seconds until it has room
+    again, never less than one.
+    """
+    admitted, wait = r.eval(_TAKE_ATTEMPT_LUA, 1, _account_key(key, account_id),
+                            repr(float(now)), member, int(limit), int(window),
+                            "1" if count else "0")
+    if int(admitted) == 1:
+        return True, 0
     if isinstance(wait, bytes):
         wait = wait.decode()
-    # Rounded first: the script's float arithmetic can land a hair either side
-    # of a whole second.
-    wait = round(float(wait), 3)
-    if wait <= 0:
-        return 0
-    return max(1, math.ceil(wait))
+    # Rounded before the ceiling only so float noise can't turn 600.0000001
+    # into 601. The verdict above does not depend on it.
+    return False, max(1, math.ceil(round(float(wait), 3)))
 
 
 def check_code_attempt(kind, account_id, request=None, ttl=None, *, limit=None,
@@ -730,14 +741,21 @@ def check_code_attempt(kind, account_id, request=None, ttl=None, *, limit=None,
         r = get_connection()
         counted = []
         for bucket, bucket_limit, bucket_window in buckets:
-            wait = _take_attempt(r, bucket, account_id, bucket_limit, bucket_window, now, member)
-            if wait:
-                # Refused by this bucket: the try must not stay counted in an
-                # earlier one.
-                for earlier in counted:
-                    r.zrem(_account_key(earlier, account_id), member)
-                break
-            counted.append(bucket)
+            # Once one bucket has refused, the rest are only looked at: the
+            # wait reported must be the longest any full bucket needs, or the
+            # caller is told to come back while still locked out.
+            admitted, bucket_wait = _take_attempt(
+                r, bucket, account_id, bucket_limit, bucket_window, now, member,
+                count=(wait == 0))
+            if not admitted:
+                wait = max(wait, bucket_wait)
+            elif wait == 0:
+                counted.append(bucket)
+        if wait:
+            # Refused: the try must not stay counted in a bucket that took it
+            # before the refusal.
+            for earlier in counted:
+                r.zrem(_account_key(earlier, account_id), member)
     except Exception as err:
         logger.error(f"check_code_attempt: Redis error for key '{key}' account '{account_id}': {err}")
         return
@@ -785,12 +803,12 @@ def allow_code_send(kind, account_id, request=None, ttl=None, *, limit=None,
         tries = r.zcount(_account_key(f"code:{kind}", account_id), now - try_window, "+inf")
         if tries >= try_limit:
             return False
-        wait = _take_attempt(r, key, account_id, max(1, int(limit)), max(1, int(window)),
-                             now, _attempt_member(now))
+        admitted, _ = _take_attempt(r, key, account_id, max(1, int(limit)), max(1, int(window)),
+                                    now, _attempt_member(now))
     except Exception as err:
         logger.error(f"allow_code_send: Redis error for key '{key}' account '{account_id}': {err}")
         return True
-    if wait:
+    if not admitted:
         if request is not None:
             _note_block(key, request, "hours")
         return False

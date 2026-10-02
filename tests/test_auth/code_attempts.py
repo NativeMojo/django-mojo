@@ -78,10 +78,16 @@ def _spend(kind, account_id, tries=LIMIT):
         limits.check_code_attempt(kind, account_id)
 
 
-def _clear_ip(*keys):
-    from mojo.decorators.limits import clear_rate_limits
-    for key in keys:
-        clear_rate_limits(ip="127.0.0.1", key=key)
+def _own_client(opts):
+    """A client with this run's own source address. nginx sets X-Real-IP to the
+    true client and the framework trusts exactly that header, so the per-IP
+    limits on these endpoints are counted apart from every other module's —
+    this module neither spends 127.0.0.1's budget nor has to clear it under
+    a test that is trying to reach it."""
+    from testit.client import RestClient
+    client = RestClient(opts.client.host)
+    client.headers["X-Real-IP"] = opts.ca_ip
+    return client
 
 
 def _seed(pk, **secrets):
@@ -94,13 +100,13 @@ def _seed(pk, **secrets):
 def _assert_refused(opts, resp, what):
     """The refusal is the standard 429, with the wait in the body and the header."""
     assert_eq(resp.status_code, 429, f"{what}: at the limit the try must be refused with 429, "
-                                     f"got {resp.status_code}: {opts.client.last_response.body}")
-    body = opts.client.last_response.body
+                                     f"got {resp.status_code}: {opts.ca.last_response.body}")
+    body = opts.ca.last_response.body
     wait = body.get("retry_after")
     assert_true(isinstance(wait, int) and 0 < wait <= WINDOW,
                 f"{what}: the 429 body must carry retry_after in seconds, got {body}")
     # The client stores the raw lowercase wire names in a plain dict.
-    headers = {str(k).lower(): v for k, v in (opts.client.last_response.headers or {}).items()}
+    headers = {str(k).lower(): v for k, v in (opts.ca.last_response.headers or {}).items()}
     header = headers.get("retry-after")
     assert_eq(header, str(wait), f"{what}: Retry-After must match the body, got {header!r}")
 
@@ -112,7 +118,8 @@ def setup_code_attempts(opts):
     from mojo.decorators import limits
     import pyotp
 
-    limits.clear_rate_limits(ip="127.0.0.1", key="login")
+    opts.ca_ip = _new_ip()
+    opts.ca = _own_client(opts)
     User.objects.filter(username__in=list(USERS)).delete()
     User.objects.filter(phone_number__in=[p for p in USERS.values() if p]).update(phone_number=None)
     User.objects.filter(email=NEW_EMAIL).delete()
@@ -189,6 +196,50 @@ def test_wait_comes_from_the_oldest_try(opts):
 
     limits.check_code_attempt("sms", account, now=start + WINDOW + 1)
     limits.clear_code_attempts("sms", account)
+
+
+@th.django_unit_test("code limit: a refusal a hair before the window ends is still a refusal")
+def test_refusal_at_the_window_edge_is_not_an_uncounted_try(opts):
+    from mojo import errors as merrors
+    from mojo.decorators import limits
+
+    account = f"ca-{uuid.uuid4().hex}"
+    start = time.time() - WINDOW
+    for _ in range(LIMIT):
+        limits.check_code_attempt("sms", account, now=start)
+    # Less than a millisecond of the window is left. The wait rounds to zero,
+    # and a zero wait must not be read as "the try was let through".
+    for _ in range(2):
+        try:
+            limits.check_code_attempt("sms", account, now=start + WINDOW - 0.0004)
+            wait = None
+        except merrors.RateLimitException as err:
+            wait = err.retry_after
+        assert_true(wait is not None, "a try inside the window must be refused, however little of it is left")
+        assert_true(wait >= 1, f"a refusal must report at least one second, got {wait}")
+    limits.clear_code_attempts("sms", account)
+
+
+@th.django_unit_test("code limit: with both authenticator caps full, the wait reported is the longer one")
+def test_wait_is_the_longest_of_the_full_buckets(opts):
+    from mojo import errors as merrors
+    from mojo.decorators import limits
+
+    account = f"ca-{uuid.uuid4().hex}"
+    now = time.time()
+    for _ in range(LIMIT):
+        limits.check_code_attempt("totp", account, daily_limit=LIMIT, now=now)
+    try:
+        limits.check_code_attempt("totp", account, daily_limit=LIMIT, now=now + 1)
+        wait = None
+    except merrors.RateLimitException as err:
+        wait = err.retry_after
+    assert_true(wait is not None, "the sixth try must be refused")
+    assert_true(wait > WINDOW, f"retrying after the wait reported must not be refused again by the "
+                               f"daily cap: got {wait}, the daily cap needs about 86,400")
+    assert_eq(_count("totp", account), LIMIT, "a refused try must not stay counted in the 15-minute bucket")
+    assert_eq(_count("totp_daily", account), LIMIT, "a refused try must not stay counted in the daily bucket")
+    limits.clear_code_attempts("totp", account)
 
 
 @th.django_unit_test("code limit: two tries in the same instant count as two")
@@ -272,9 +323,8 @@ def test_totp_daily_cap(opts):
 # -----------------------------------------------------------------
 
 def _post_sms(opts, code):
-    _clear_ip("sms_verify")
-    opts.client.logout()
-    return opts.client.post("/api/auth/sms/verify", {"username": "ca_sms", "code": code})
+    opts.ca.logout()
+    return opts.ca.post("/api/auth/sms/verify", {"username": "ca_sms", "code": code})
 
 
 @th.django_unit_test("sms code: a wrong try is counted, a right one clears the count")
@@ -289,7 +339,7 @@ def test_sms_wrong_then_right(opts):
 
     resp = _post_sms(opts, RIGHT)
     assert_eq(resp.status_code, 200, f"wrong-then-right inside the limit must sign in, "
-                                     f"got {resp.status_code}: {opts.client.last_response.body}")
+                                     f"got {resp.status_code}: {opts.ca.last_response.body}")
     assert_eq(_count("sms", pk), 0, "a right code must clear the account's counter")
 
 
@@ -317,8 +367,7 @@ def test_sms_right_code_refused_at_limit(opts):
 # -----------------------------------------------------------------
 
 def _admin_client(opts):
-    from testit.client import RestClient
-    client = RestClient(opts.client.host)
+    client = _own_client(opts)
     assert_true(client.login(ADMIN, PWORD), "the admin must be able to log in")
     return client
 
@@ -348,7 +397,7 @@ def test_admin_release_clears_every_account_counter(opts):
 
     resp = _post_sms(opts, RIGHT)
     assert_eq(resp.status_code, 200, f"after the release the right code must work, "
-                                     f"got {resp.status_code}: {opts.client.last_response.body}")
+                                     f"got {resp.status_code}: {opts.ca.last_response.body}")
 
 
 @th.django_unit_test("admin release: a release by user id works without a key")
@@ -397,11 +446,18 @@ def test_admin_throttle_reads_code_counters(opts):
 # Password reset code
 # -----------------------------------------------------------------
 
-def _post_reset(opts, code, new_password):
-    _clear_ip("password_reset_code")
-    opts.client.logout()
-    return opts.client.post("/api/auth/password/reset/code", {
-        "username": "ca_reset", "code": code, "new_password": new_password})
+def _new_ip():
+    octets = uuid.uuid4().int
+    return "10.%d.%d.%d" % ((octets >> 16) & 0xFF, (octets >> 8) & 0xFF, octets & 0xFF)
+
+
+def _post_reset(opts, code, new_password, username="ca_reset"):
+    # The endpoint allows five requests per address in five minutes, and this
+    # module makes more than that: each request comes from its own address.
+    opts.ca.logout()
+    return opts.ca.post("/api/auth/password/reset/code", {
+        "username": username, "code": code, "new_password": new_password},
+        headers={"X-Real-IP": _new_ip()})
 
 
 def _seed_reset(pk):
@@ -436,15 +492,15 @@ def test_reset_right_code_weak_password_is_not_counted(opts):
     for attempt in range(1, LIMIT + 1):
         resp = _post_reset(opts, RIGHT, WEAK_PWORD)
         assert_eq(resp.status_code, 400, f"weak password try {attempt} must be turned down, "
-                                         f"got {resp.status_code}: {opts.client.last_response.body}")
-        assert_true("weak" in str(opts.client.last_response.body.get("error", "")).lower(),
+                                         f"got {resp.status_code}: {opts.ca.last_response.body}")
+        assert_true("weak" in str(opts.ca.last_response.body.get("error", "")).lower(),
                     f"try {attempt} must fail on the password, not the code: "
-                    f"{opts.client.last_response.body}")
+                    f"{opts.ca.last_response.body}")
         assert_eq(_count("reset", pk), 0, "the counter must be cleared as soon as the code matches")
 
     resp = _post_reset(opts, RIGHT, STRONG_PWORD)
     assert_eq(resp.status_code, 200, f"the reset must succeed after five weak passwords, "
-                                     f"got {resp.status_code}: {opts.client.last_response.body}")
+                                     f"got {resp.status_code}: {opts.ca.last_response.body}")
     assert_true(_fresh(pk).check_password(STRONG_PWORD), "the new password must be set")
 
 
@@ -457,20 +513,15 @@ def test_reset_unknown_account_is_counted_like_a_real_one(opts):
     assert_true(not User.objects.filter(username=ghost).exists(), "the test needs a name with no account")
     ghost_id = limits.unknown_account_id(ghost)
 
-    _clear_ip("password_reset_code")
-    opts.client.logout()
-    resp = opts.client.post("/api/auth/password/reset/code", {
-        "username": ghost.upper(), "code": WRONG, "new_password": STRONG_PWORD})
+    resp = _post_reset(opts, WRONG, STRONG_PWORD, username=ghost.upper())
     assert_eq(resp.status_code, 400, f"a try for an unknown account must be refused, got {resp.status_code}")
-    assert_eq(opts.client.last_response.body.get("error"), "Invalid code",
+    assert_eq(opts.ca.last_response.body.get("error"), "Invalid code",
               "an unknown account must answer exactly as a wrong code does")
     assert_eq(_count("reset", ghost_id), 1,
               "a try for an unknown account must be counted, whatever the case it was typed in")
 
     _spend("reset", ghost_id, LIMIT - 1)
-    _clear_ip("password_reset_code")
-    resp = opts.client.post("/api/auth/password/reset/code", {
-        "username": ghost, "code": WRONG, "new_password": STRONG_PWORD})
+    resp = _post_reset(opts, WRONG, STRONG_PWORD, username=ghost)
     _assert_refused(opts, resp, "reset code for an unknown account")
     limits.clear_code_attempts("reset", ghost_id)
 
@@ -483,25 +534,22 @@ def _verify_flow(opts, kind, path, code_key, ts_key, ip_key):
     pk = opts.ca_verify_id
     _clear(pk)
     _seed(pk, **{code_key: RIGHT, ts_key: int(time.time())})
-    assert_true(opts.client.login("ca_verify", PWORD), "the user must be able to log in")
+    assert_true(opts.ca.login("ca_verify", PWORD), "the user must be able to log in")
 
-    _clear_ip(ip_key)
-    resp = opts.client.post(path, {"code": WRONG})
+    resp = opts.ca.post(path, {"code": WRONG})
     assert_eq(resp.status_code, 400, f"{kind}: a wrong code must be refused, got {resp.status_code}")
     assert_eq(_count(kind, pk), 1, f"{kind}: a wrong code must be counted against the account")
 
     _spend(kind, pk, LIMIT - 1)
-    _clear_ip(ip_key)
-    resp = opts.client.post(path, {"code": RIGHT})
+    resp = opts.ca.post(path, {"code": RIGHT})
     _assert_refused(opts, resp, kind)
     assert_eq(_fresh(pk).get_secret(code_key), RIGHT, f"{kind}: a refused try must not consume the code")
 
     _clear(pk)
     _spend(kind, pk, 2)
-    _clear_ip(ip_key)
-    resp = opts.client.post(path, {"code": RIGHT})
+    resp = opts.ca.post(path, {"code": RIGHT})
     assert_eq(resp.status_code, 200, f"{kind}: the right code inside the limit must verify, "
-                                     f"got {resp.status_code}: {opts.client.last_response.body}")
+                                     f"got {resp.status_code}: {opts.ca.last_response.body}")
     assert_eq(_count(kind, pk), 0, f"{kind}: a right code must clear the account's counter")
 
 
@@ -517,6 +565,42 @@ def test_email_verify_code_limit(opts):
                  "email_verify_code", "email_verify_code_ts", "email_verify_code_confirm")
 
 
+@th.django_unit_test("verify codes: a match clears the counter even if saving the result then fails")
+def test_match_clears_the_counter_before_anything_can_fail(opts):
+    from mojo.apps.account.utils import tokens
+
+    pk = opts.ca_verify_id
+
+    def failing_save(*args, **kwargs):
+        raise RuntimeError("the database is away")
+
+    cases = (
+        ("email_verify", tokens.verify_email_verify_code,
+         dict(email_verify_code=RIGHT, email_verify_code_ts=int(time.time()))),
+        ("phone_verify", tokens.verify_phone_verify_code,
+         dict(phone_verify_code=RIGHT, phone_verify_ts=int(time.time()))),
+        ("email_change", tokens.verify_email_change_otp,
+         dict(pending_email=NEW_EMAIL, email_change_otp=RIGHT, email_change_otp_ts=int(time.time()))),
+    )
+    for kind, verify, secrets in cases:
+        _clear(pk)
+        _seed(pk, **secrets)
+        _spend(kind, pk, LIMIT - 1)
+        user = _fresh(pk)
+        user.save = failing_save
+        failed = False
+        try:
+            verify(user, RIGHT)
+        except RuntimeError:
+            failed = True
+        assert_true(failed, f"{kind}: the test needs the save after the match to fail")
+        assert_eq(_count(kind, pk), 0, f"{kind}: a right code must clear the counter at the match, "
+                                       "or five failed saves lock out the person who has the code")
+    _clear(pk)
+    _seed(pk, pending_email=None, email_change_otp=None, email_change_otp_ts=None,
+          email_verify_code=None, email_verify_code_ts=None, phone_verify_code=None, phone_verify_ts=None)
+
+
 @th.django_unit_test("email change code: counted, refused at the limit, cleared on a match")
 def test_email_change_code_limit(opts):
     pk = opts.ca_change_id
@@ -527,24 +611,23 @@ def test_email_change_code_limit(opts):
               email_change_otp_ts=int(time.time()))
 
     seed()
-    assert_true(opts.client.login("ca_change", PWORD), "the user must be able to log in")
-    _clear_ip("email_change_confirm")
-    resp = opts.client.post("/api/auth/email/change/confirm", {"code": WRONG})
+    assert_true(opts.ca.login("ca_change", PWORD), "the user must be able to log in")
+    resp = opts.ca.post("/api/auth/email/change/confirm", {"code": WRONG})
     assert_eq(resp.status_code, 400, f"a wrong code must be refused, got {resp.status_code}")
     assert_eq(_count("email_change", pk), 1, "a wrong email-change code must be counted")
 
     _spend("email_change", pk, LIMIT - 1)
-    resp = opts.client.post("/api/auth/email/change/confirm", {"code": RIGHT})
+    resp = opts.ca.post("/api/auth/email/change/confirm", {"code": RIGHT})
     _assert_refused(opts, resp, "email change")
     assert_eq(_fresh(pk).email, "ca_change@example.com", "a refused try must not change the email")
 
     _clear(pk)
     _spend("email_change", pk, 2)
-    resp = opts.client.post("/api/auth/email/change/confirm", {"code": RIGHT})
+    resp = opts.ca.post("/api/auth/email/change/confirm", {"code": RIGHT})
     assert_eq(resp.status_code, 200, f"the right code inside the limit must change the email, "
-                                     f"got {resp.status_code}: {opts.client.last_response.body}")
+                                     f"got {resp.status_code}: {opts.ca.last_response.body}")
     assert_eq(_count("email_change", pk), 0, "a right code must clear the account's counter")
-    opts.client.logout()
+    opts.ca.logout()
 
 
 # -----------------------------------------------------------------
@@ -562,9 +645,8 @@ def _mfa_token(pk):
 
 
 def _post_totp_verify(opts, pk, code):
-    _clear_ip("totp_verify")
-    opts.client.logout()
-    return opts.client.post("/api/auth/totp/verify", {"mfa_token": _mfa_token(pk), "code": code})
+    opts.ca.logout()
+    return opts.ca.post("/api/auth/totp/verify", {"mfa_token": _mfa_token(pk), "code": code})
 
 
 @th.django_unit_test("authenticator second step: counted, refused at the limit, cleared on a match")
@@ -579,7 +661,7 @@ def test_totp_verify_limit(opts):
 
     resp = _post_totp_verify(opts, pk, _totp_now(opts.ca_totp_secret))
     assert_eq(resp.status_code, 200, f"wrong-then-right inside the limit must sign in, "
-                                     f"got {resp.status_code}: {opts.client.last_response.body}")
+                                     f"got {resp.status_code}: {opts.ca.last_response.body}")
     assert_eq(_count("totp", pk), 0, "a right code must clear the account's counter")
     assert_eq(_count("totp_daily", pk), 0, "a right code must clear the daily count")
 
@@ -595,44 +677,41 @@ def test_totp_login_uses_its_own_bucket(opts):
 
     pk = opts.ca_totp_id
     _clear(pk)
-    opts.client.logout()
+    opts.ca.logout()
 
-    _clear_ip("totp_login")
-    resp = opts.client.post("/api/auth/totp/login", {"username": "ca_totp", "code": "000000"})
+    resp = opts.ca.post("/api/auth/totp/login", {"username": "ca_totp", "code": "000000"})
     assert_eq(resp.status_code, 401, f"a wrong code must be refused, got {resp.status_code}")
     assert_eq(_count("totp_login", pk), 1, "a wrong authenticator sign-in code must be counted")
     password_tries = read_account_attempt("login", pk, limit=10, window=900)["count"]
     assert_eq(password_tries, 0, "a wrong authenticator code must not use up password tries")
 
     _spend("totp_login", pk, LIMIT - 1)
-    _clear_ip("totp_login")
-    resp = opts.client.post("/api/auth/totp/login", {
+    resp = opts.ca.post("/api/auth/totp/login", {
         "username": "ca_totp", "code": _totp_now(opts.ca_totp_secret)})
     _assert_refused(opts, resp, "totp login")
     assert_eq(_count("totp", pk), 0, "sign-in tries must not lock the second-step check")
 
     _clear(pk)
-    _clear_ip("totp_login")
-    resp = opts.client.post("/api/auth/totp/login", {
+    resp = opts.ca.post("/api/auth/totp/login", {
         "username": "ca_totp", "code": _totp_now(opts.ca_totp_secret)})
     assert_eq(resp.status_code, 200, f"after the counter is cleared the right code must sign in, "
-                                     f"got {resp.status_code}: {opts.client.last_response.body}")
-    opts.client.logout()
+                                     f"got {resp.status_code}: {opts.ca.last_response.body}")
+    opts.ca.logout()
 
 
 @th.django_unit_test("authenticator set-up checks: their own bucket, so typos can't lock sign-in")
 def test_totp_manage_limit(opts):
     pk = opts.ca_manage_id
     _clear(pk)
-    assert_true(opts.client.login("ca_manage", PWORD), "the user must be able to log in")
+    assert_true(opts.ca.login("ca_manage", PWORD), "the user must be able to log in")
 
-    resp = opts.client.post("/api/account/totp/confirm", {"code": "000000"})
+    resp = opts.ca.post("/api/account/totp/confirm", {"code": "000000"})
     assert_eq(resp.status_code, 400, f"a wrong confirm code must be refused, got {resp.status_code}")
-    resp = opts.client.post("/api/account/totp/recovery-codes/regenerate", {"code": "000000"})
+    resp = opts.ca.post("/api/account/totp/recovery-codes/regenerate", {"code": "000000"})
     assert_eq(resp.status_code, 403, f"a wrong regenerate code must be refused, got {resp.status_code}")
-    resp = opts.client.post("/api/user/me", {"confirm_totp": {"code": "000000"}})
+    resp = opts.ca.post("/api/user/me", {"confirm_totp": {"code": "000000"}})
     assert_eq(resp.status_code, 400, f"a wrong confirm action code must be refused, got {resp.status_code}")
-    resp = opts.client.post("/api/user/me", {"regenerate_totp_codes": {"code": "000000"}})
+    resp = opts.ca.post("/api/user/me", {"regenerate_totp_codes": {"code": "000000"}})
     assert_eq(resp.status_code, 403, f"a wrong regenerate action code must be refused, got {resp.status_code}")
     assert_eq(_count("totp_manage", pk), 4, "each signed-in authenticator check must be counted")
     assert_eq(_count("totp", pk), 0, "set-up typos must not count against sign-in")
@@ -645,15 +724,15 @@ def test_totp_manage_limit(opts):
             ("/api/account/totp/recovery-codes/regenerate", {"code": code}),
             ("/api/user/me", {"confirm_totp": {"code": code}}),
             ("/api/user/me", {"regenerate_totp_codes": {"code": code}})):
-        resp = opts.client.post(path, body)
+        resp = opts.ca.post(path, body)
         _assert_refused(opts, resp, f"{path} {sorted(body)}")
 
     _clear(pk)
-    resp = opts.client.post("/api/user/me", {"regenerate_totp_codes": {"code": _totp_now(opts.ca_manage_secret)}})
+    resp = opts.ca.post("/api/user/me", {"regenerate_totp_codes": {"code": _totp_now(opts.ca_manage_secret)}})
     assert_eq(resp.status_code, 200, f"the right code inside the limit must work, "
-                                     f"got {resp.status_code}: {opts.client.last_response.body}")
+                                     f"got {resp.status_code}: {opts.ca.last_response.body}")
     assert_eq(_count("totp_manage", pk), 0, "a right code must clear the account's counter")
-    opts.client.logout()
+    opts.ca.logout()
 
 
 # -----------------------------------------------------------------
@@ -661,8 +740,7 @@ def test_totp_manage_limit(opts):
 # -----------------------------------------------------------------
 
 def _post_register_verify(opts, session_token, code):
-    _clear_ip("phone_register_verify")
-    return opts.client.post("/api/auth/phone/register/verify", {
+    return opts.ca.post("/api/auth/phone/register/verify", {
         "session_token": session_token, "code": code})
 
 
@@ -672,7 +750,7 @@ def test_phone_register_code_limit(opts):
     from mojo.decorators import limits
 
     limits.clear_code_attempts("phone_register", REGISTER_PHONE)
-    opts.client.logout()
+    opts.ca.logout()
     session, code, _ = phone_register.start(REGISTER_PHONE)
     wrong = "000000" if code != "000000" else "111111"
 
@@ -683,7 +761,7 @@ def test_phone_register_code_limit(opts):
 
     resp = _post_register_verify(opts, session, code)
     assert_eq(resp.status_code, 200, f"wrong-then-right inside the limit must verify, "
-                                     f"got {resp.status_code}: {opts.client.last_response.body}")
+                                     f"got {resp.status_code}: {opts.ca.last_response.body}")
     assert_eq(_count("phone_register", REGISTER_PHONE), 0, "a right code must clear the counter")
 
     # A new session for the same number does not start a new count.
@@ -859,13 +937,12 @@ def test_forgot_code_sends(opts):
 def test_forgot_code_over_http_keeps_the_code(opts):
     pk = opts.ca_send_id
     _reset_sends(pk)
-    opts.client.logout()
+    opts.ca.logout()
     codes = []
     for _ in range(2):
-        _clear_ip("auth_forgot")
-        resp = opts.client.post("/api/auth/forgot", {"username": "ca_send", "method": "code"})
+        resp = opts.ca.post("/api/auth/forgot", {"username": "ca_send", "method": "code"})
         assert_eq(resp.status_code, 200, f"forgot must answer 200, got {resp.status_code}: "
-                                         f"{opts.client.last_response.body}")
+                                         f"{opts.ca.last_response.body}")
         codes.append(_fresh(pk).get_secret("password_reset_code"))
     assert_true(codes[0], "the first request must store a reset code")
     assert_eq(codes[1], codes[0], "a second request must not replace the reset code")
@@ -942,16 +1019,25 @@ def test_codes_match(opts):
                 "non-ASCII input must be refused, not raise")
 
 
-@th.django_unit_test("code compare: an expired code is reported as expired before it is compared")
-def test_expired_code_is_checked_before_the_compare(opts):
+@th.django_unit_test("reset code: an expired code never works, and a wrong guess can't tell it is there")
+def test_expired_reset_code_answers_like_an_unknown_account(opts):
+    other_pword = "ca##Other55Reset"
     pk = opts.ca_reset_id
     _clear(pk)
     _seed(pk, password_reset_code=RIGHT, password_reset_code_ts=int(time.time()) - 3600)
 
-    resp = _post_reset(opts, WRONG, STRONG_PWORD)
+    resp = _post_reset(opts, WRONG, other_pword)
+    assert_eq(resp.status_code, 400, f"a wrong guess must be refused, got {resp.status_code}")
+    assert_eq(opts.ca.last_response.body.get("error"), "Invalid code",
+              "a wrong guess at an account with a stale code must answer exactly as an unknown "
+              "account does, or the first guess tells which accounts exist")
+
+    resp = _post_reset(opts, RIGHT, other_pword)
     assert_eq(resp.status_code, 400, f"an expired code must be refused, got {resp.status_code}")
-    assert_eq(opts.client.last_response.body.get("error"), "Expired code",
-              "expiry must be decided before the compare, so the answer can't depend on the guess")
+    assert_eq(opts.ca.last_response.body.get("error"), "Expired code",
+              "the person holding the code that was sent is still told it has expired")
+    assert_true(not _fresh(pk).check_password(other_pword), "an expired code must not change the password")
+    assert_eq(_count("reset", pk), 2, "an expired code is not a match: both tries stay counted")
     _clear(pk)
 
 
