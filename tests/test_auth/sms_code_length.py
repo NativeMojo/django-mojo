@@ -146,16 +146,6 @@ def test_length_range(opts):
                   f"a length of {given!r} is not a finite number and must read as 6")
 
 
-@th.django_unit_test("sms code length: an infinite number in the settings file reads as 6, it does not raise")
-def test_static_non_finite_setting(opts):
-    from django.test import override_settings
-    from mojo.apps.account.utils import tokens
-    for given in (float("inf"), float("-inf"), float("nan")):
-        with override_settings(SMS_OTP_LENGTH=given):
-            assert_eq(tokens.sms_otp_length(), 6,
-                      f"SMS_OTP_LENGTH = {given!r} in the settings file must read as 6")
-
-
 # -----------------------------------------------------------------
 # SMS sign-in code
 # -----------------------------------------------------------------

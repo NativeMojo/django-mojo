@@ -209,3 +209,19 @@ def test_stored_infinite_number(opts):
     finally:
         Setting.remove(KEY)
         _reset(opts.scls_user_id)
+
+
+@th.django_unit_test("SMS_OTP_LENGTH as an infinite number in the settings file: it reads as 6, it does not raise")
+def test_static_infinite_number(opts):
+    # override_settings swaps django.conf.settings for the whole process, so
+    # this lives here, in the serial opt-in package, not in test_auth.
+    from django.test import override_settings
+    from mojo.apps.account.models.setting import Setting
+    from mojo.apps.account.utils import tokens
+    Setting.remove(KEY)
+    for given in (float("inf"), float("-inf"), float("nan")):
+        with override_settings(SMS_OTP_LENGTH=given):
+            assert_eq(tokens.sms_otp_length(), 6,
+                      f"SMS_OTP_LENGTH = {given!r} in the settings file must read as 6")
+    assert_eq(tokens.sms_otp_length(), 6,
+              "with the override gone and the setting unset the length is 6 again")
