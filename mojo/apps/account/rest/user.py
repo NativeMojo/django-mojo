@@ -95,9 +95,9 @@ def on_read_throttle(request):
       user_id  — resolve by user id
       username — resolve by username (alternative to user_id)
       key      — counter name (default "login"). One of
-                 mojo.decorators.limits.ACCOUNT_BUCKETS: "login", a one-time
-                 code counter such as "code:sms" or "code:reset", or
-                 "code:totp_daily".
+                 mojo.decorators.limits.ACCOUNT_BUCKETS: "login",
+                 "password_check", a one-time code counter such as "code:sms"
+                 or "code:reset", or "code:totp_daily".
 
     Returns: {count, limit, window, retry_after_seconds}, with the limit and
     window of the counter asked for.
@@ -1723,9 +1723,12 @@ def on_email_change_request(request, *, send=None, notify_send=None):
     current_password = request.DATA.get("current_password", "")
 
     if current_password:
+        from mojo.decorators.limits import check_password_attempt, clear_password_attempts
+        check_password_attempt(user.pk, request)
         if not user.check_password(current_password):
             user.report_incident("Invalid password on email change request", "email_change:bad_password")
             raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
+        clear_password_attempts(user.pk)
     if not new_email or not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
         raise merrors.ValueException("Invalid email address")
     if new_email == str(user.email).lower():
@@ -2217,9 +2220,12 @@ def on_phone_change_request(request, *, send=None):
     user = request.user
     current_password = request.DATA.get("current_password")
     if current_password:
+        from mojo.decorators.limits import check_password_attempt, clear_password_attempts
+        check_password_attempt(user.pk, request)
         if not user.check_password(current_password):
             user.report_incident("Invalid password on phone change request", "phone_change:bad_password")
             raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
+        clear_password_attempts(user.pk)
 
     new_phone_raw = request.DATA.get("phone_number", "").strip()
     normalized = user.normalize_phone(new_phone_raw)

@@ -821,9 +821,15 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             old_password = self.active_request.DATA.get("current_password", None)
             if not old_password and not self.active_request.user.has_permission(["users", "manage_users"]):
                 raise merrors.ValueException("You must provide your current password")
-        if old_password and not self.check_password(old_password):
-            self.report_incident(f"{self.username} entered an invalid password", "invalid_password")
-            raise merrors.ValueException("Incorrect current password")
+        if old_password:
+            from mojo.decorators import limits
+            # Counted per account before the compare: a signed-in session must
+            # not be a way to guess the password (maestro #6226).
+            limits.check_password_attempt(self.pk, self.active_request)
+            if not self.check_password(old_password):
+                self.report_incident(f"{self.username} entered an invalid password", "invalid_password")
+                raise merrors.ValueException("Incorrect current password")
+            limits.clear_password_attempts(self.pk)
         self.set_permanent_password(new_password)
         self._set_field_change("new_password", "*", "*********")
 

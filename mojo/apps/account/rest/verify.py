@@ -74,6 +74,7 @@ def on_email_verify_send(request, *, send=None):
 
 
 @md.POST('auth/verify/email/confirm')
+@md.strict_rate_limit("email_verify_code_confirm", ip_limit=10, ip_window=300)
 @md.requires_auth()
 @md.requires_params('code')
 def on_email_verify_code_confirm(request):
@@ -178,6 +179,7 @@ def on_phone_verify_send(request, *, send=None):
 
 
 @md.POST('auth/verify/phone/confirm')
+@md.strict_rate_limit("phone_verify_confirm", ip_limit=10, ip_window=300)
 @md.requires_auth()
 @md.requires_params('code')
 def on_phone_verify_confirm(request):

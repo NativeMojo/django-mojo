@@ -627,14 +627,19 @@ TOTP_DAILY_KINDS = ("totp", "totp_login")
 TOTP_DAILY_BUCKET = "code:totp_daily"
 TOTP_DAILY_WINDOW = 86400
 
-# Every counter keyed on a user account: what an admin release clears and the
-# throttle read reports. The phone sign-up counter is not here — it is keyed on
-# a phone number, no account exists yet, and it ends on its own.
 # Kinds of code a caller who is not signed in can ask to be sent. Each has a
 # send counter `code_send:<kind>` beside its try counter.
 CODE_SEND_KINDS = ("sms", "reset", "phone_register")
 
-ACCOUNT_BUCKETS = (("login",)
+# A signed-in caller asked for the account's current password (the password
+# change, the email-change and phone-change requests). Its own bucket, so
+# these tries can't lock password sign-in, with the sign-in numbers.
+PASSWORD_CHECK_BUCKET = "password_check"
+
+# Every counter keyed on a user account: what an admin release clears and the
+# throttle read reports. The phone sign-up counter is not here — it is keyed on
+# a phone number, no account exists yet, and it ends on its own.
+ACCOUNT_BUCKETS = (("login", PASSWORD_CHECK_BUCKET)
                    + tuple(f"code:{kind}" for kind in CODE_KINDS if kind != "phone_register")
                    + (TOTP_DAILY_BUCKET,)
                    + tuple(f"code_send:{kind}" for kind in CODE_SEND_KINDS if kind != "phone_register"))
@@ -815,6 +820,55 @@ def allow_code_send(kind, account_id, request=None, ttl=None, *, limit=None,
     return True
 
 
+def check_password_attempt(account_id, request=None, *, limit=None, window=None, now=None):
+    """
+    Count one try at an account's current password by a signed-in caller.
+
+    Call it BEFORE the compare, keyed on the account whose password is being
+    checked. It behaves like check_code_attempt: at the limit the try is
+    refused, not counted, and RateLimitException is raised with the real wait;
+    otherwise the try is counted and the call returns. Call
+    clear_password_attempts() as soon as the password matches.
+
+    The numbers are those of password sign-in, LOGIN_USERNAME_LIMIT (10) per
+    LOGIN_USERNAME_WINDOW (900 s), in a bucket of its own.
+
+    Fail-open on Redis errors, like every other limit here.
+
+    Args:
+        account_id:  The account whose password is checked (user.pk).
+        request:     Request, for the once-a-minute metric and incident on a
+                     refusal. Optional: the model setter may have none.
+        limit, window, now: test seams.
+    """
+    if limit is None:
+        limit = settings.get("LOGIN_USERNAME_LIMIT", 10, kind="int")
+    if window is None:
+        window = settings.get("LOGIN_USERNAME_WINDOW", 900, kind="int")
+    if now is None:
+        now = time.time()
+    try:
+        admitted, wait = _take_attempt(
+            get_connection(), PASSWORD_CHECK_BUCKET, account_id,
+            max(1, int(limit)), max(1, int(window)), now, _attempt_member(now))
+    except Exception as err:
+        logger.error(f"check_password_attempt: Redis error for account '{account_id}': {err}")
+        return
+    if not admitted:
+        if request is not None:
+            _note_block(PASSWORD_CHECK_BUCKET, request, "hours")
+        raise merrors.RateLimitException(wait)
+
+
+def clear_password_attempts(account_id):
+    """Clear an account's current-password counter. Call it as soon as the
+    password matches, before anything else can fail."""
+    try:
+        get_connection().delete(_account_key(PASSWORD_CHECK_BUCKET, account_id))
+    except Exception as err:
+        logger.error(f"clear_password_attempts: Redis error for account '{account_id}': {err}")
+
+
 def clear_code_sends(kind, account_id):
     """Clear an account's (or phone number's) send counter for one kind of code."""
     try:
@@ -830,6 +884,9 @@ def account_bucket_numbers(key):
     if key == "login":
         return (settings.get("LOGIN_USERNAME_LIMIT", 10, kind="int"),
                 settings.get("LOGIN_USERNAME_WINDOW", 900, kind="int"))
+    if key == PASSWORD_CHECK_BUCKET:
+        return (max(1, settings.get("LOGIN_USERNAME_LIMIT", 10, kind="int")),
+                max(1, settings.get("LOGIN_USERNAME_WINDOW", 900, kind="int")))
     if key == TOTP_DAILY_BUCKET:
         return (max(1, settings.get("TOTP_ATTEMPT_DAILY_LIMIT", 20, kind="int")),
                 TOTP_DAILY_WINDOW)
