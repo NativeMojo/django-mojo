@@ -276,3 +276,44 @@ def test_every_user_relation_is_accounted_for(opts):
     for key in ("user", "is_enabled", "secrets", "mojo_secrets", "secret"):
         assert_true(key in totp_no_save,
                     f"`{key}` must be in UserTOTP.RestMeta.NO_SAVE_FIELDS")
+
+
+@th.django_unit_test("sign-in connection save: an admin cannot move a connection to another account through `user_id`")
+def test_admin_cannot_rebind_oauth_connection_by_alias(opts):
+    # Found in review (Brenda, #6226 note 63596): `user` was blocked, but the
+    # REST field resolver also accepts the column alias `user_id`.
+    from mojo.apps.account.models.oauth import OAuthConnection
+
+    OAuthConnection.objects.filter(provider_uid__startswith="usg-").delete()
+    conn = OAuthConnection.objects.create(
+        user_id=opts.usg_admin_id, provider="google", provider_uid="usg-admin-own-uid",
+        email=f"{ADMIN}@example.com")
+
+    assert_true(opts.client.login(ADMIN, PWORD), "the admin must be able to log in")
+    for key in ("user_id", "user"):
+        resp = opts.client.post(f"/api/account/oauth_connection/{conn.pk}",
+                                {key: opts.usg_target_id})
+        assert_eq(resp.status_code, 200,
+                  f"an ignored key must not fail the save, got {resp.status_code}")
+        assert_eq(OAuthConnection.objects.get(pk=conn.pk).user_id, opts.usg_admin_id,
+                  f"posting `{key}` must not move a sign-in connection to another account")
+
+
+@th.django_unit_test("api key save: an admin cannot move their own key to another account through `user_id`")
+def test_admin_cannot_rebind_user_api_key_by_alias(opts):
+    # A personal API key authenticates as its record's user, so a key moved to
+    # another account signs in as that account.
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.user_api_key import UserAPIKey
+
+    admin = User.objects.get(pk=opts.usg_admin_id)
+    UserAPIKey.objects.filter(user=admin).delete()
+    key = UserAPIKey.create_for_user(admin, expire_days=1, label="usg-admin")
+
+    assert_true(opts.client.login(ADMIN, PWORD), "the admin must be able to log in")
+    for name in ("user_id", "user"):
+        resp = opts.client.post(f"/api/account/api_keys/{key.id}", {name: opts.usg_target_id})
+        assert_eq(resp.status_code, 200,
+                  f"an ignored key must not fail the save, got {resp.status_code}")
+        assert_eq(UserAPIKey.objects.get(pk=key.id).user_id, opts.usg_admin_id,
+                  f"posting `{name}` must not move an API key to another account")

@@ -1908,6 +1908,16 @@ class MojoModel:
             # Skip fields that shouldn't be saved
             if key in no_save_fields:
                 continue
+            # A foreign key answers to two names, `user` and its column
+            # `user_id`. get_model_field resolves either and the related save
+            # assigns the field itself, so a list that blocks one name blocks
+            # both: otherwise `{"user_id": 7}` re-owns a row whose `user` is
+            # declared unwritable.
+            aliased = self.get_model_field(key)
+            if aliased is not None and (
+                    aliased.name in no_save_fields
+                    or getattr(aliased, "attname", None) in no_save_fields):
+                continue
             if key in post_save_actions:
                 post_save_data[key] = value
                 continue
