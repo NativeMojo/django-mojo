@@ -182,3 +182,25 @@ def test_secret_stores_are_not_rest_writable(opts):
     for key in ("id", "pk", "created", "uuid"):
         assert_true(key in ApiKey.get_rest_meta_prop("NO_SAVE_FIELDS", []),
                     f"`{key}` must stay in ApiKey.RestMeta.NO_SAVE_FIELDS")
+
+
+@th.django_unit_test("sign-in connection save: an admin cannot re-point another user's provider identity")
+def test_admin_cannot_repoint_oauth_connection(opts):
+    from mojo.apps.account.models.oauth import OAuthConnection
+
+    OAuthConnection.objects.filter(provider_uid__startswith="usg-").delete()
+    conn = OAuthConnection.objects.create(
+        user_id=opts.usg_target_id, provider="google", provider_uid="usg-target-uid",
+        email=f"{TARGET}@example.com")
+
+    assert_true(opts.client.login(ADMIN, PWORD), "the admin must be able to log in")
+    resp = opts.client.post(f"/api/account/oauth_connection/{conn.pk}", {
+        "provider": "github", "provider_uid": "usg-admin-uid",
+        "email": "usg-admin@example.com", "is_active": False})
+    assert_eq(resp.status_code, 200, f"an ignored key must not fail the save, got {resp.status_code}")
+    saved = OAuthConnection.objects.get(pk=conn.pk)
+    assert_eq((saved.provider, saved.provider_uid, saved.email),
+              ("google", "usg-target-uid", f"{TARGET}@example.com"),
+              "the provider identity sign-in resolves by must not be writable through a save")
+    assert_eq(saved.user_id, opts.usg_target_id, "the connection must stay with its user")
+    assert_eq(saved.is_active, False, "an admin must still be able to deactivate a connection")

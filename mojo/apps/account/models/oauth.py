@@ -38,9 +38,18 @@ class OAuthConnection(MojoSecrets, MojoModel):
         OWNER_FIELD = "user"
         # OAuth connection ties an external identity to a local user — never
         # body-settable. Framework auto-stamps user from request.
+        #
+        # `provider`, `provider_uid` and `email` ARE the external identity:
+        # sign-in resolves a provider account to this row's user by
+        # (provider, provider_uid). SAVE_PERMS admits manage_users/users, so
+        # a writable one let an admin re-point another user's connection at
+        # their own provider account and sign in as that user. The OAuth
+        # callback is the only writer; `is_active` stays writable.
+        #
         # `secrets` / `mojo_secrets` hold the provider tokens; the REST save
         # would otherwise hand a posted `secrets` to MojoSecrets.set_secrets.
-        NO_SAVE_FIELDS = ["user", "secrets", "mojo_secrets", "secret"]
+        NO_SAVE_FIELDS = ["user", "provider", "provider_uid", "email",
+                          "secrets", "mojo_secrets", "secret"]
         NO_SHOW_FIELDS = ["mojo_secrets"]
         GRAPHS = {
             "default": {
