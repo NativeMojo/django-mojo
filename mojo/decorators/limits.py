@@ -14,7 +14,8 @@ logger = logit.get_logger("error", "error.log")
 
 __all__ = ["rate_limit", "strict_rate_limit", "endpoint_metrics", "clear_rate_limits",
            "check_account_attempt", "read_account_attempt", "check_api_throttle",
-           "check_code_attempt", "clear_code_attempts", "unknown_account_id"]
+           "check_code_attempt", "clear_code_attempts", "unknown_account_id",
+           "clear_account_limits", "account_bucket_numbers"]
 
 
 def _hash_key(value):
@@ -625,6 +626,23 @@ TOTP_DAILY_KINDS = ("totp", "totp_login")
 TOTP_DAILY_BUCKET = "code:totp_daily"
 TOTP_DAILY_WINDOW = 86400
 
+# Every counter keyed on a user account: what an admin release clears and the
+# throttle read reports. The phone sign-up counter is not here — it is keyed on
+# a phone number, no account exists yet, and it ends on its own.
+ACCOUNT_BUCKETS = (("login",)
+                   + tuple(f"code:{kind}" for kind in CODE_KINDS if kind != "phone_register")
+                   + (TOTP_DAILY_BUCKET,))
+
+# The setting holding each code's lifetime, for reporting a counter's window.
+# The check itself is handed the lifetime by its caller.
+_CODE_TTL_SETTINGS = {
+    "sms": "SMS_OTP_TTL",
+    "reset": "PASSWORD_RESET_CODE_TTL",
+    "phone_verify": "PHONE_VERIFY_CODE_TTL",
+    "email_verify": "EMAIL_VERIFY_CODE_TTL",
+    "email_change": "EMAIL_CHANGE_CODE_TTL",
+}
+
 # KEYS[1] the sorted set. ARGV: now, member, limit, window.
 # Returns "0" when the try was counted, else the seconds to wait as a string
 # (a Lua number would be truncated to an integer on the way out).
@@ -721,6 +739,40 @@ def check_code_attempt(kind, account_id, request=None, ttl=None, *, limit=None,
         if request is not None:
             _note_block(key, request, "hours")
         raise merrors.RateLimitException(wait)
+
+
+def account_bucket_numbers(key):
+    """(limit, window) for one of ACCOUNT_BUCKETS, or None for any other key."""
+    if key not in ACCOUNT_BUCKETS:
+        return None
+    if key == "login":
+        return (settings.get("LOGIN_USERNAME_LIMIT", 10, kind="int"),
+                settings.get("LOGIN_USERNAME_WINDOW", 900, kind="int"))
+    if key == TOTP_DAILY_BUCKET:
+        return (max(1, settings.get("TOTP_ATTEMPT_DAILY_LIMIT", 20, kind="int")),
+                TOTP_DAILY_WINDOW)
+    limit = max(1, settings.get("CODE_ATTEMPT_LIMIT", 5, kind="int"))
+    window = max(1, settings.get("CODE_ATTEMPT_WINDOW", 900, kind="int"))
+    ttl_setting = _CODE_TTL_SETTINGS.get(key.split(":", 1)[1])
+    if ttl_setting:
+        window = max(window, settings.get(ttl_setting, 600, kind="int"))
+    return limit, window
+
+
+def clear_account_limits(account_id):
+    """Clear every per-account counter for one user: the password counter, each
+    code counter and the daily authenticator cap. Returns how many were set.
+
+    This is the admin release. It takes no bucket name on purpose: support
+    tooling sends the one it knows ("login"), and a user locked out of code
+    entry must be released by the same button."""
+    r = get_connection()
+    if not r:
+        return 0
+    deleted = 0
+    for key in ACCOUNT_BUCKETS:
+        deleted += int(r.delete(_account_key(key, account_id)))
+    return deleted
 
 
 def unknown_account_id(identifier):

@@ -35,7 +35,9 @@ REGISTER_PHONE = "+15550006226"
 LIMIT = 5
 WINDOW = 900
 
+ADMIN = "ca_admin"
 USERS = {
+    "ca_admin": None,
     "ca_sms": "+15550006227",
     "ca_reset": None,
     "ca_verify": "+15550006228",
@@ -115,6 +117,8 @@ def setup_code_attempts(opts):
         user.is_email_verified = True
         user.save_password(PWORD)
         user.remove_all_permissions()
+        if name == ADMIN:
+            user.add_permission(["manage_users"])
         setattr(opts, f"{name}_id", user.pk)
         _clear(user.pk)
         limits.clear_rate_limits(key="login", account_id=user.pk)
@@ -297,6 +301,87 @@ def test_sms_right_code_refused_at_limit(opts):
     resp = _post_sms(opts, RIGHT)
     _assert_refused(opts, resp, "sms verify, second refused try")
     assert_eq(_count("sms", pk), LIMIT, "two more tries must leave the count at five")
+    _clear(pk)
+
+
+# -----------------------------------------------------------------
+# Admin release
+# -----------------------------------------------------------------
+
+def _admin_client(opts):
+    from testit.client import RestClient
+    client = RestClient(opts.client.host)
+    assert_true(client.login(ADMIN, PWORD), "the admin must be able to log in")
+    return client
+
+
+@th.django_unit_test("admin release: the portal's clear, sent with key 'login', releases a code lock")
+def test_admin_release_clears_every_account_counter(opts):
+    from mojo.decorators import limits
+
+    pk = opts.ca_sms_id
+    _clear(pk)
+    _seed(pk, sms_otp_code=RIGHT, sms_otp_ts=int(time.time()))
+    for kind in KINDS:
+        _spend(kind, pk)
+    limits.check_account_attempt("login", pk, 10, 900)
+    resp = _post_sms(opts, RIGHT)
+    _assert_refused(opts, resp, "sms verify before the release")
+
+    admin = _admin_client(opts)
+    resp = admin.post("/api/auth/manage/clear_rate_limit", {"key": "login", "username": "ca_sms"})
+    assert_eq(resp.status_code, 200, f"the admin release must succeed, got {resp.status_code}: {resp.response}")
+    assert_true(resp.response.data.deleted >= len(KINDS),
+                f"the release must report the counters it cleared, got {resp.response.data}")
+    for kind in KINDS + ("totp_daily",):
+        assert_eq(_count(kind, pk), 0, f"the release must clear the {kind} counter whatever key was sent")
+    assert_eq(limits.read_account_attempt("login", pk, limit=10, window=900)["count"], 0,
+              "the release must still clear the password counter")
+
+    resp = _post_sms(opts, RIGHT)
+    assert_eq(resp.status_code, 200, f"after the release the right code must work, "
+                                     f"got {resp.status_code}: {opts.client.last_response.body}")
+
+
+@th.django_unit_test("admin release: a release by user id works without a key")
+def test_admin_release_by_user_id(opts):
+    pk = opts.ca_verify_id
+    _clear(pk)
+    _spend("phone_verify", pk)
+    admin = _admin_client(opts)
+    resp = admin.post("/api/auth/manage/clear_rate_limit", {"user_id": pk})
+    assert_eq(resp.status_code, 200, f"the admin release must succeed, got {resp.status_code}: {resp.response}")
+    assert_eq(_count("phone_verify", pk), 0, "a release with no key must clear the code counters too")
+
+
+@th.django_unit_test("admin throttle read: code counters are reported with their own numbers")
+def test_admin_throttle_reads_code_counters(opts):
+    pk = opts.ca_reset_id
+    _clear(pk)
+    _spend("reset", pk)
+    _spend("totp", pk, 2)
+    admin = _admin_client(opts)
+
+    resp = admin.get("/api/auth/manage/throttle", params={"username": "ca_reset", "key": "code:reset"})
+    assert_eq(resp.status_code, 200, f"the read must succeed, got {resp.status_code}: {resp.response}")
+    data = resp.response.data
+    assert_eq(data.count, LIMIT, f"the reset-code counter must be reported, got {data}")
+    assert_eq(data.limit, LIMIT, "a code counter must be reported with the code limit, not the password one")
+    assert_eq(data.window, WINDOW, "a code counter must be reported with the code window")
+    assert_true(0 < data.retry_after_seconds <= WINDOW, f"a locked counter must report the wait, got {data}")
+
+    resp = admin.get("/api/auth/manage/throttle", params={"user_id": pk, "key": "code:totp_daily"})
+    assert_eq(resp.status_code, 200, f"the daily read must succeed, got {resp.status_code}: {resp.response}")
+    assert_eq(resp.response.data.count, 2, "the daily authenticator count must be reported")
+    assert_eq(resp.response.data.limit, 20, "the daily cap must be reported with its own limit")
+    assert_eq(resp.response.data.window, 86400, "the daily cap must be reported with its own window")
+
+    resp = admin.get("/api/auth/manage/throttle", params={"username": "ca_reset"})
+    assert_eq(resp.status_code, 200, f"the default read must still succeed, got {resp.status_code}")
+    assert_eq(resp.response.data.limit, 10, "with no key the password counter is reported, as before")
+
+    resp = admin.get("/api/auth/manage/throttle", params={"username": "ca_reset", "key": "code:nonsense"})
+    assert_eq(resp.status_code, 400, f"an unknown counter must be refused, got {resp.status_code}")
     _clear(pk)
 
 

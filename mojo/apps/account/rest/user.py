@@ -45,13 +45,18 @@ def on_clear_rate_limit(request):
 
     Optional body params:
       ip       — clear all srl/rl keys for this IP (optionally scoped via key)
-      key      — limit bucket name (e.g. "login"); required for duid/muid/account
+      key      — limit bucket name (e.g. "login"); required for duid/muid
       duid     — clear the device counter (requires key)
       muid     — clear the client cookie counter (requires key)
-      user_id  — clear the per-account counter for this user (requires key)
-      username — resolve to user_id and clear the per-account counter (requires key)
+      user_id  — clear every per-account counter for this user
+      username — resolve to user_id and clear every per-account counter
+
+    An account-scope clear releases the user from every per-account limit —
+    the password counter and each one-time-code counter — whatever key is
+    sent. Support tooling sends key="login"; the same button must release a
+    user locked out of code entry.
     """
-    from mojo.decorators.limits import clear_rate_limits
+    from mojo.decorators.limits import clear_rate_limits, clear_account_limits
     ip = request.DATA.get("ip")
     key = request.DATA.get("key")
     duid = request.DATA.get("duid")
@@ -76,27 +81,35 @@ def on_clear_rate_limit(request):
         key = "login"
 
     deleted = clear_rate_limits(ip=ip, key=key, duid=duid, muid=muid, account_id=account_id)
+    if account_id is not None:
+        deleted += clear_account_limits(account_id)
     return JsonResponse({"status": True, "data": {"deleted": deleted}})
 
 
 @md.GET('auth/manage/throttle')
 @md.requires_global_perms("users", "manage_users")
 def on_read_throttle(request):
-    """Read the per-account login attempt counter for support tooling.
+    """Read one per-account attempt counter for support tooling.
 
     Query params:
       user_id  — resolve by user id
       username — resolve by username (alternative to user_id)
-      key      — limit bucket name (default "login"; only "login" supported in v1)
+      key      — counter name (default "login"). One of
+                 mojo.decorators.limits.ACCOUNT_BUCKETS: "login", a one-time
+                 code counter such as "code:sms" or "code:reset", or
+                 "code:totp_daily".
 
-    Returns: {count, limit, window, retry_after_seconds}.
+    Returns: {count, limit, window, retry_after_seconds}, with the limit and
+    window of the counter asked for.
     Reading does not affect the counter — use clear_rate_limit to reset.
     """
-    from mojo.decorators.limits import read_account_attempt
+    from mojo.decorators.limits import read_account_attempt, account_bucket_numbers
 
     key = request.DATA.get("key", "login")
-    if key != "login":
-        raise merrors.ValueException("only key='login' is supported")
+    numbers = account_bucket_numbers(key)
+    if numbers is None:
+        raise merrors.ValueException("unknown key")
+    limit, window = numbers
 
     user_id = request.DATA.get("user_id")
     username = request.DATA.get("username")
@@ -116,8 +129,6 @@ def on_read_throttle(request):
     else:
         raise merrors.ValueException("user_id or username is required")
 
-    limit = settings.get("LOGIN_USERNAME_LIMIT", 10, kind="int")
-    window = settings.get("LOGIN_USERNAME_WINDOW", 900, kind="int")
     data = read_account_attempt(key, account_id, limit=limit, window=window)
     return JsonResponse({"status": True, "data": data})
 
