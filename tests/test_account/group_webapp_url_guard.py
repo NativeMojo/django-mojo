@@ -652,3 +652,159 @@ def test_stale_save_outside_rest_keeps_the_address(opts):
             f"an address assigned by server code and saved must be stored, got {_stored(top)}"
     finally:
         _restore(opts)
+
+
+# ---------------------------------------------------------------------------
+# What a group remembers as stored follows what it really read and wrote: a
+# partial refresh, a field loaded late and a partial save each move only
+# their own part of it.
+# ---------------------------------------------------------------------------
+
+def _touch(group):
+    group.last_activity = None
+    group.touch()
+
+
+@th.django_unit_test("#6350: a row that re-read its address or parent does not write that value over a later change")
+def test_partial_refresh_is_not_an_edit(opts):
+    from mojo.apps.account.models import Group
+    top, child2, w_top = opts.ids["a_top"], opts.ids["a_child2"], opts.ids["w_top"]
+    second = "https://second.gwu-outside.example"
+
+    def set_address(value, what):
+        _operator_posts(opts, top, {"metadata": {"webapp_base_url": value}}, what)
+
+    try:
+        # the address, re-read on its own, then changed again by the operator
+        _restore(opts)
+        stale = Group.objects.get(pk=top)
+        set_address(second, "change the address")
+        stale.refresh_from_db(fields=["metadata"])
+        assert stale.metadata.get("webapp_base_url") == second, \
+            f"the refresh must load the stored address, got {stale.metadata}"
+        set_address(W1_BASE, "change the address again")
+        _touch(stale)
+        assert _stored(top).get("webapp_base_url") == W1_BASE, \
+            f"SECURITY: touch() on a row that only re-read the address put " \
+            f"{_stored(top).get('webapp_base_url')!r} back over the operator's"
+
+        # the same for an address that was not loaded with the row at all
+        for name, load in (("defer", lambda: Group.objects.defer("metadata").get(pk=top)),
+                           ("only", lambda: Group.objects.only("name", "last_activity").get(pk=top))):
+            _restore(opts)
+            late = load()
+            assert late.metadata.get("webapp_base_url") == A_BASE, \
+                f"{name}(): the late read must load the stored address, got {late.metadata}"
+            set_address(W1_BASE, "change the address")
+            _touch(late)
+            assert _stored(top).get("webapp_base_url") == W1_BASE, \
+                f"SECURITY: touch() on a row that read its address late ({name}) put " \
+                f"{_stored(top).get('webapp_base_url')!r} back over the operator's"
+
+        # the parent, re-read on its own, then moved by the operator
+        for field in ("parent", "parent_id"):
+            _restore(opts)
+            stale = Group.objects.get(pk=child2)
+            Group.objects.filter(pk=child2).update(parent_id=opts.ids["a_child"])
+            stale.refresh_from_db(fields=[field])
+            assert stale.parent_id == opts.ids["a_child"], \
+                f"the refresh of {field} must load the stored parent, got {stale.parent_id}"
+            _operator_posts(opts, child2, {"parent": w_top}, "move the group to another tree")
+            _touch(stale)
+            assert _parent_id(child2) == w_top, \
+                f"SECURITY: touch() on a row that only re-read {field} moved the group back " \
+                f"under {_parent_id(child2)} after the operator moved it out"
+
+        # a parent that was not loaded with the row
+        _restore(opts)
+        late = Group.objects.defer("parent").get(pk=child2)
+        assert late.parent_id == top, f"the late read must load the stored parent, got {late.parent_id}"
+        _operator_posts(opts, child2, {"parent": w_top}, "move the group to another tree")
+        _touch(late)
+        assert _parent_id(child2) == w_top, \
+            f"SECURITY: touch() on a row that read its parent late moved the group back under " \
+            f"{_parent_id(child2)}"
+
+        # A refresh of one of them leaves an edit of the other waiting to be saved.
+        _restore(opts)
+        mine = Group.objects.get(pk=child2)
+        mine.metadata["webapp_base_url"] = second
+        mine.refresh_from_db(fields=["parent"])
+        mine.save()
+        assert _stored(child2).get("webapp_base_url") == second, \
+            f"an address assigned before a refresh of the parent must still be stored, got {_stored(child2)}"
+        _restore(opts)
+        mine = Group.objects.get(pk=child2)
+        mine.parent_id = opts.ids["a_child"]
+        mine.refresh_from_db(fields=["metadata"])
+        mine.save()
+        assert _parent_id(child2) == opts.ids["a_child"], \
+            f"a parent assigned before a refresh of the settings must still be stored, got {_parent_id(child2)}"
+    finally:
+        _restore(opts)
+
+
+@th.django_unit_test("#6350: a partial save does not lose an edit it left for a later save")
+def test_partial_save_keeps_what_it_did_not_write(opts):
+    from mojo.apps.account.models import Group
+    child2, other = opts.ids["a_child2"], opts.ids["a_child"]
+    mine_base = "https://job.gwu.example"
+    try:
+        # address and parent both assigned; the parent is saved first
+        _restore(opts)
+        group = Group.objects.get(pk=child2)
+        group.metadata["webapp_base_url"] = mine_base
+        group.parent_id = other
+        group.save(update_fields=["parent"])
+        assert _parent_id(child2) == other, f"the parent must be stored, got {_parent_id(child2)}"
+        assert "webapp_base_url" not in _stored(child2), \
+            f"a save of the parent alone must not store the address, got {_stored(child2)}"
+        group.save(update_fields=["metadata"])
+        assert _stored(child2).get("webapp_base_url") == mine_base, \
+            f"the address assigned before the first save was dropped by the second, got {_stored(child2)}"
+
+        # the other order: the settings are saved first, the parent after
+        _restore(opts)
+        group = Group.objects.get(pk=child2)
+        group.parent_id = other
+        group.metadata["motto"] = "partial"
+        group.save(update_fields=["metadata"])
+        assert _parent_id(child2) == opts.ids["a_top"], \
+            f"a save of the settings alone must not store the parent, got {_parent_id(child2)}"
+        group.save(update_fields=["parent"])
+        assert _parent_id(child2) == other, \
+            f"the parent assigned before the first save was dropped by the second, got {_parent_id(child2)}"
+
+        # a save of an unrelated field, then a full save
+        _restore(opts)
+        group = Group.objects.get(pk=child2)
+        group.metadata["webapp_base_url"] = mine_base
+        group.parent_id = other
+        group.save(update_fields=["modified"])
+        group.save()
+        assert _stored(child2).get("webapp_base_url") == mine_base and _parent_id(child2) == other, \
+            f"edits left by a save of another field must be stored by the full save, got " \
+            f"{_stored(child2)} under {_parent_id(child2)}"
+
+        # What a partial save did write counts as stored: the row does not put
+        # its own earlier value back over an operator's later one.
+        _restore(opts)
+        group = Group.objects.get(pk=child2)
+        group.metadata["webapp_base_url"] = mine_base
+        group.save(update_fields=["metadata"])
+        _operator_posts(opts, child2, {"metadata": {"webapp_base_url": W1_BASE}}, "change the address")
+        _touch(group)
+        assert _stored(child2).get("webapp_base_url") == W1_BASE, \
+            f"SECURITY: a row that saved an address earlier put it back over the operator's, " \
+            f"got {_stored(child2)}"
+
+        # A row whose settings were never loaded saves its other fields and
+        # leaves the stored address alone.
+        _restore(opts)
+        bare = Group.objects.defer("metadata").get(pk=opts.ids["a_top"])
+        _operator_posts(opts, opts.ids["a_top"], {"metadata": {"webapp_base_url": W1_BASE}}, "change the address")
+        _touch(bare)
+        assert _stored(opts.ids["a_top"]).get("webapp_base_url") == W1_BASE, \
+            f"a row that never loaded its settings changed the address, got {_stored(opts.ids['a_top'])}"
+    finally:
+        _restore(opts)

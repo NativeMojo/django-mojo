@@ -237,22 +237,37 @@ class Group(MojoSecrets, MojoModel):
         return instance
 
     def refresh_from_db(self, using=None, fields=None, **kwargs):
+        if fields is not None:
+            fields = list(fields)
         super().refresh_from_db(using=using, fields=fields, **kwargs)
-        if fields is None:
-            self._remember_link_settings()
+        # Also how a field left out of the query loads later. Only what was
+        # read here is remembered: an edit of the other one is still pending.
+        self._remember_link_settings(
+            metadata=fields is None or "metadata" in fields,
+            parent=fields is None or bool({"parent", "parent_id"}.intersection(fields)))
 
-    def _remember_link_settings(self):
+    def _remember_link_settings(self, metadata=True, parent=True):
         """Note what this instance last saw stored for the settings that decide
         where token links land (WEBAPP_URL_KEYS and the parent), so a save can
-        tell a value this instance changed from one it only carried."""
-        if "metadata" not in self.__dict__ or "parent_id" not in self.__dict__:
-            self._link_settings_seen = None  # deferred: nothing to compare
-            return
-        metadata = self.metadata if isinstance(self.metadata, dict) else {}
-        # only the keys that are present: an absent key is not a stored null
-        self._link_settings_seen = [
-            {key: copy.deepcopy(metadata[key]) for key in WEBAPP_URL_KEYS if key in metadata},
-            self.parent_id]
+        tell a value this instance changed from one it only carried.
+
+        `metadata` and `parent` say which of the two was just read from the
+        row or written to it; the other keeps what it had. One that is not
+        loaded has nothing to compare and is left out.
+        """
+        seen = dict(self.__dict__.get("_link_settings_seen") or {})
+        if metadata:
+            seen.pop("metadata", None)
+            if "metadata" in self.__dict__:
+                current = self.metadata if isinstance(self.metadata, dict) else {}
+                # only the keys that are present: an absent key is not a stored null
+                seen["metadata"] = {
+                    key: copy.deepcopy(current[key]) for key in WEBAPP_URL_KEYS if key in current}
+        if parent:
+            seen.pop("parent", None)
+            if "parent_id" in self.__dict__:
+                seen["parent"] = self.parent_id
+        self._link_settings_seen = seen
 
     def _keep_unchanged_link_settings(self, stored_metadata, stored_parent_id):
         """Take the stored value of every link setting this instance did not
@@ -263,36 +278,41 @@ class Group(MojoSecrets, MojoModel):
         request undoing an operator's change. What this instance did change is
         left alone, for the REST guard to judge or for server code to store.
         """
-        seen = getattr(self, "_link_settings_seen", None)
-        if seen is None:
-            return
+        seen = dict(self.__dict__.get("_link_settings_seen") or {})
 
         def value(source, key):
             return (key in source, source.get(key))
 
-        metadata = self.metadata if isinstance(self.metadata, dict) else {}
-        for key in WEBAPP_URL_KEYS:
-            if value(metadata, key) != value(seen[0], key) \
-                    or value(stored_metadata, key) == value(seen[0], key):
-                continue
-            if key in stored_metadata:
-                if not isinstance(self.metadata, dict):
-                    self.metadata = metadata
-                metadata[key] = copy.deepcopy(stored_metadata[key])
-                seen[0][key] = copy.deepcopy(stored_metadata[key])
-            else:
-                metadata.pop(key, None)
-                seen[0].pop(key, None)
-        if self.parent_id == seen[1] and stored_parent_id != seen[1]:
+        if "metadata" in seen and "metadata" in self.__dict__:
+            metadata = self.metadata if isinstance(self.metadata, dict) else {}
+            seen["metadata"] = dict(seen["metadata"])
+            for key in WEBAPP_URL_KEYS:
+                if value(metadata, key) != value(seen["metadata"], key) \
+                        or value(stored_metadata, key) == value(seen["metadata"], key):
+                    continue
+                if key in stored_metadata:
+                    if not isinstance(self.metadata, dict):
+                        self.metadata = metadata
+                    metadata[key] = copy.deepcopy(stored_metadata[key])
+                    seen["metadata"][key] = copy.deepcopy(stored_metadata[key])
+                else:
+                    metadata.pop(key, None)
+                    seen["metadata"].pop(key, None)
+        if "parent" in seen and "parent_id" in self.__dict__ \
+                and self.parent_id == seen["parent"] and stored_parent_id != seen["parent"]:
             self.parent_id = stored_parent_id
-            seen[1] = stored_parent_id
+            seen["parent"] = stored_parent_id
+        self._link_settings_seen = seen
 
     def save(self, *args, **kwargs):
         """Serialize link-setting and parent changes with the saved row."""
-        update_fields = kwargs.get("update_fields")
+        update_fields = args[3] if len(args) > 3 else kwargs.get("update_fields")
+        if update_fields is not None and len(args) <= 3:
+            update_fields = kwargs["update_fields"] = list(update_fields)
+        writes_metadata = update_fields is None or "metadata" in update_fields
         writes_parent = update_fields is None or bool(
             {"parent", "parent_id"}.intersection(update_fields))
-        if not writes_parent and "metadata" not in update_fields:
+        if not writes_parent and not writes_metadata:
             return super().save(*args, **kwargs)
         from mojo.apps.account.services import group_hierarchy
         # An existing row is locked from here to the write, so what is
@@ -315,7 +335,9 @@ class Group(MojoSecrets, MojoModel):
             if writes_parent and (self.pk is None or old_parent_id != self.parent_id):
                 group_hierarchy.validate_parent(self, self.parent, lock=True)
             result = super().save(*args, **kwargs)
-        self._remember_link_settings()
+        # Only what this save wrote is now known to be stored. An edit it
+        # left out is still an edit, for the save that does write it.
+        self._remember_link_settings(metadata=writes_metadata, parent=writes_parent)
         return result
 
     def is_effectively_active(self, max_depth=8):
