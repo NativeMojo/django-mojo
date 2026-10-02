@@ -181,11 +181,15 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         # `secrets` / `mojo_secrets` hold every one-time code, so a writable
         # one lets its owner (or an admin, on another account) plant a code;
         # `permanent_password` sets a password without the current one.
+        #
+        # `totp` is the reverse one-to-one to UserTOTP. The REST save writes a
+        # posted dict INTO a to-one related row, so `{"totp": {...}}` reached
+        # the authenticator's secret and enabled flag through the account save.
         NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified",
                           "requires_password_change",
                           "secrets", "mojo_secrets", "secret",
                           "permanent_password", "protected_metadata",
-                          "unusable_password"]
+                          "unusable_password", "totp"]
         # org is guarded by MANAGE_USERS_ONLY_FIELDS in on_rest_pre_save;
         # skip the Group VIEW_PERMS gate so manage_users admins (who may not
         # have view_groups) can still assign an org to a user.

@@ -27,7 +27,13 @@ class UserTOTP(MojoSecrets, MojoModel):
         OWNER_FIELD = "user"
         # A TOTP record must always bind to request.user — never body-settable.
         # Framework auto-stamps user from request via CREATED_BY_OWNER_FIELD.
-        NO_SAVE_FIELDS = ["user"]
+        #
+        # Nothing here is REST-writable. The secret and recovery codes live in
+        # `secrets` / `mojo_secrets`, and `is_enabled` is what sign-in checks;
+        # the setup, confirm and disable flows write them through the ORM after
+        # verifying a code. This model has no CRUD endpoint, but a nested save
+        # through a parent row reaches on_rest_save all the same.
+        NO_SAVE_FIELDS = ["user", "is_enabled", "secrets", "mojo_secrets", "secret"]
         NO_SHOW_FIELDS = ["mojo_secrets"]
         GRAPHS = {
             "default": {

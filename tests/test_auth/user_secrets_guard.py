@@ -173,7 +173,9 @@ def test_secret_stores_are_not_rest_writable(opts):
     from mojo.apps.account.models.oauth import OAuthConnection
     from mojo.apps.account.models.user_api_key import UserAPIKey
 
-    for model in (UserAPIKey, OAuthConnection, ApiKey):
+    from mojo.apps.account.models.totp import UserTOTP
+
+    for model in (UserAPIKey, OAuthConnection, ApiKey, UserTOTP):
         no_save = model.get_rest_meta_prop("NO_SAVE_FIELDS", [])
         for key in ("secrets", "mojo_secrets", "secret"):
             assert_true(key in no_save,
@@ -204,3 +206,73 @@ def test_admin_cannot_repoint_oauth_connection(opts):
               "the provider identity sign-in resolves by must not be writable through a save")
     assert_eq(saved.user_id, opts.usg_target_id, "the connection must stay with its user")
     assert_eq(saved.is_active, False, "an admin must still be able to deactivate a connection")
+
+
+TOTP_SECRET = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+TOTP_PLANTED = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+
+
+def _reset_totp(user_id):
+    from mojo.apps.account.models.totp import UserTOTP
+
+    UserTOTP.objects.filter(user_id=user_id).delete()
+    totp = UserTOTP(user_id=user_id, is_enabled=True)
+    totp.save()
+    totp.set_secret("totp_secret", TOTP_SECRET)
+    totp.save()
+    return totp.pk
+
+
+def _assert_totp_untouched(pk, who):
+    from mojo.apps.account.models.totp import UserTOTP
+
+    totp = UserTOTP.objects.get(pk=pk)
+    assert_true(totp.get_secret("totp_secret") == TOTP_SECRET,
+                f"{who}: a nested `totp` save must not replace the authenticator secret")
+    assert_eq(totp.is_enabled, True,
+              f"{who}: a nested `totp` save must not turn the authenticator off")
+
+
+@th.django_unit_test("user save: a nested `totp` cannot replace or disable the owner's authenticator")
+def test_owner_cannot_write_totp_through_user_save(opts):
+    # Found in review (Brenda, #6226 note 63533): the reverse one-to-one is a
+    # related field, and the REST save writes a dict into the related row.
+    pk = _reset_totp(opts.usg_owner_id)
+    assert_true(opts.client.login(OWNER, PWORD), "the owner must be able to log in")
+    resp = opts.client.post("/api/user/me", {
+        "totp": {"secrets": {"totp_secret": TOTP_PLANTED}, "is_enabled": False}})
+    assert_eq(resp.status_code, 200, f"an ignored key must not fail the save, got {resp.status_code}")
+    _assert_totp_untouched(pk, "owner")
+
+
+@th.django_unit_test("user save: an admin cannot replace or disable another account's authenticator")
+def test_admin_cannot_write_totp_through_user_save(opts):
+    pk = _reset_totp(opts.usg_target_id)
+    assert_true(opts.client.login(ADMIN, PWORD), "the admin must be able to log in")
+    resp = opts.client.post(f"/api/user/{opts.usg_target_id}", {
+        "totp": {"secrets": {"totp_secret": TOTP_PLANTED}, "is_enabled": False}})
+    assert_eq(resp.status_code, 200, f"an ignored key must not fail the save, got {resp.status_code}")
+    _assert_totp_untouched(pk, "admin")
+
+
+@th.django_unit_test("user save: every related record a posted key can reach is accounted for")
+def test_every_user_relation_is_accounted_for(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.totp import UserTOTP
+
+    no_save = set(User.get_rest_meta_prop("NO_SAVE_FIELDS", []))
+    # The REST save writes a posted dict INTO the related row of a to-one
+    # relation, forward or reverse. `org` and `avatar` are meant to be reachable
+    # and are gated by their own model's save permissions.
+    nested_ok = {"org", "avatar"}
+    to_one = sorted(field.name for field in User._meta.get_fields()
+                    if field.is_relation and (field.many_to_one or field.one_to_one))
+    unguarded = [name for name in to_one if name not in no_save and name not in nested_ok]
+    assert_eq(unguarded, [],
+              f"a posted dict reaches the related row of {unguarded}: add it to "
+              f"User.RestMeta.NO_SAVE_FIELDS, or to nested_ok once that model is safe to save")
+    assert_true("totp" in no_save, "`totp` must be in User.RestMeta.NO_SAVE_FIELDS")
+    totp_no_save = UserTOTP.get_rest_meta_prop("NO_SAVE_FIELDS", [])
+    for key in ("user", "is_enabled", "secrets", "mojo_secrets", "secret"):
+        assert_true(key in totp_no_save,
+                    f"`{key}` must be in UserTOTP.RestMeta.NO_SAVE_FIELDS")
