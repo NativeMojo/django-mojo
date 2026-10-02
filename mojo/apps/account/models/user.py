@@ -1007,6 +1007,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     def on_rest_saved(self, changed_fields, created):
         if "is_active" in changed_fields:
             metrics.set_value("total_users", User.objects.filter(is_active=True).count(), account="global")
+        removed_phone = getattr(self, "_removed_verified_phone", None)
+        if removed_phone:
+            self._removed_verified_phone = None
+            self.notify_phone_removed(removed_phone)
 
     def on_rest_pre_save(self, changed_fields, created):
         for _field in SUPERUSER_ONLY_FIELDS:
@@ -1039,6 +1043,12 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             if qset.exists():
                 raise merrors.ValueException("Username already exists")
         if "phone_number" in changed_fields:
+            # Read before the reset below: a verified number that is removed
+            # is announced once the save has gone through.
+            was_verified = changed_fields.get("is_phone_verified", self.is_phone_verified)
+            self._removed_verified_phone = None
+            if was_verified and not self.phone_number:
+                self._removed_verified_phone = changed_fields.get("phone_number")
             if self.phone_number:
                 normalized = self.normalize_phone(self.phone_number)
                 if not normalized:
@@ -1068,15 +1078,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         creds_changed = "email" in changed_fields or "username" in changed_fields
         if creds_changed and not admin_caller:
             raise merrors.PermissionDeniedException("You are not allowed to change email or username")
-        if "phone_number" in changed_fields and not admin_caller:
-            old_phone = changed_fields.get("phone_number")
-            # Block replacing an existing phone number directly — must use the phone change
-            # flow (POST /api/auth/phone/change/request → confirm) so ownership of the new
-            # number is verified via OTP before it is committed.
-            # Clearing a phone number or setting one for the first time is always allowed.
-            if old_phone and self.phone_number:
-                raise merrors.PermissionDeniedException(
-                    "Use the phone change flow to update an existing phone number")
+        if "phone_number" in changed_fields:
+            self.check_phone_number_change(changed_fields.get("phone_number"), admin_caller)
         if "dob" in changed_fields and not admin_caller:
             # Date of birth is an eligibility field on age-gated deployments, not a
             # profile preference. Once a row HAS one, only an admin may correct it —
@@ -1109,6 +1112,52 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if "is_active" in changed_fields:
             if not self.is_active:
                 metrics.record("user_deactivated", category="user", min_granularity="hours")
+
+    def check_phone_number_change(self, old_phone, admin_caller, allow_change=None):
+        """The rule for a phone number changed through a save. Raises when the
+        change is not allowed; self.phone_number is the new value.
+
+        An admin may do anything, and a first number is always accepted. For
+        anyone else a number on file:
+          - can't be replaced here — that goes through the phone change flow
+            (POST /api/auth/phone/change/request → confirm), which proves
+            ownership of the new number before it is committed;
+          - can be cleared only while ALLOW_PHONE_CHANGE is on. With it off,
+            clearing is refused too: clear-then-set would be a change with no
+            check at all (maestro #6226).
+
+        `allow_change` is a test seam for the ALLOW_PHONE_CHANGE setting.
+        """
+        if admin_caller or not old_phone:
+            return
+        if allow_change is None:
+            allow_change = settings.get("ALLOW_PHONE_CHANGE", True, kind="bool")
+        if not allow_change:
+            raise merrors.PermissionDeniedException("Phone number change is not allowed")
+        if self.phone_number:
+            raise merrors.PermissionDeniedException(
+                "Use the phone change flow to update an existing phone number")
+
+    def notify_phone_removed(self, old_phone, send=None):
+        """Record that a VERIFIED phone number was removed from this account,
+        and tell the account's email address — best effort.
+
+        Clearing a number and setting a new one skips the alert the phone
+        change flow sends to the old number, so the removal itself is
+        announced. The email names the number by its last four digits only.
+        Never raises: the save has already gone through.
+
+        `send` is a test seam for send_template_email.
+        """
+        self.report_incident(
+            f"{self.username} verified phone number removed", "phone:removed")
+        if not str(self.email or "").strip():
+            return
+        sender = send if send is not None else self.send_template_email
+        try:
+            sender("phone_removed_notify", context=dict(phone_last4=str(old_phone)[-4:]))
+        except Exception as err:
+            logit.error("phone_removed", f"removal notice failed: {err}")
 
     def check_edit_permission(self, perms, request):
         # User is a groupless (platform-global) model, and this override is
