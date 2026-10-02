@@ -157,15 +157,18 @@ before asserting. Browser evidence is written under
 records). Do not describe unexecuted fixtures as measured compatibility.
 
 ```bash
-uv build
+uv build --wheel
 uv run python scripts/verify_admin_portal_package.py --dist dist --build-smoke
 MOJO_ADMIN_CHROME=/absolute/path/to/chrome \
   bin/run_tests --agent --extra slow -t test_account
 ```
 
-Package verification rejects duplicate, traversing and nonregular archive
-members, validates exact bytes in both wheel and sdist, builds a wheel from the
-sdist, installs it into a clean environment and performs a dependency-free
-installed-asset smoke check. `publish.py` validates the committed tree before
-building and requires archive/build-smoke proof before any push. Its dry-run
-continues to print the intended commands without building or publishing.
+Package verification takes exactly one wheel and refuses a folder that also
+holds a source archive: a release uploads the wheel alone, and no source
+archive is built. It rejects duplicate, traversing and nonregular archive
+members, validates exact bytes in the wheel, installs that wheel into a clean
+environment and performs a dependency-free installed-asset smoke check.
+`publish.py` validates the committed tree before building, builds the wheel in
+a private temporary folder, and requires archive/build-smoke proof before any
+push. Its dry-run builds and checks for real, in the same way, and stops before
+the push, the upload and the tag.

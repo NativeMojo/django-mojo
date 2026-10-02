@@ -31,6 +31,12 @@ to keep a particular task local is the exception.
   between concurrent builds.
 - Keep the primary checkout on `main` for integration. After scoped
   verification is green, merge the completed branch into `main` and push it.
+- Agent worktrees live under `.worktrees/`, which the committed `.gitignore`
+  excludes. A line in `.git/info/exclude` is not enough: it hides the folder
+  from git only, and a build tool does not read that file — that is how every
+  worktree reached PyPI inside a source archive (maestro #6348).
+- Never run `uv build` or `uv publish` by hand to release. `publish.py` builds
+  and checks the one wheel in a private folder and uploads it by path.
 - Cleanup is part of done: verify the branch is merged and published, remove that exact
   worktree, delete that exact merged local branch, run
   `uv run python testit/testenv.py prune` and `git worktree prune`, then
