@@ -7,6 +7,7 @@ from mojo.apps import metrics
 from mojo.helpers.settings import settings
 from mojo import errors as merrors
 from objict import objict
+import copy
 import uuid
 
 
@@ -229,23 +230,93 @@ class Group(MojoSecrets, MojoModel):
             return ms.has_permission(perms)
         return False
 
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+        instance._remember_link_settings()
+        return instance
+
+    def refresh_from_db(self, using=None, fields=None, **kwargs):
+        super().refresh_from_db(using=using, fields=fields, **kwargs)
+        if fields is None:
+            self._remember_link_settings()
+
+    def _remember_link_settings(self):
+        """Note what this instance last saw stored for the settings that decide
+        where token links land (WEBAPP_URL_KEYS and the parent), so a save can
+        tell a value this instance changed from one it only carried."""
+        if "metadata" not in self.__dict__ or "parent_id" not in self.__dict__:
+            self._link_settings_seen = None  # deferred: nothing to compare
+            return
+        metadata = self.metadata if isinstance(self.metadata, dict) else {}
+        # only the keys that are present: an absent key is not a stored null
+        self._link_settings_seen = [
+            {key: copy.deepcopy(metadata[key]) for key in WEBAPP_URL_KEYS if key in metadata},
+            self.parent_id]
+
+    def _keep_unchanged_link_settings(self, stored_metadata, stored_parent_id):
+        """Take the stored value of every link setting this instance did not
+        change itself.
+
+        A row loaded before someone else's save still carries the old address
+        and the old parent, and a full save would write them back: a member's
+        request undoing an operator's change. What this instance did change is
+        left alone, for the REST guard to judge or for server code to store.
+        """
+        seen = getattr(self, "_link_settings_seen", None)
+        if seen is None:
+            return
+
+        def value(source, key):
+            return (key in source, source.get(key))
+
+        metadata = self.metadata if isinstance(self.metadata, dict) else {}
+        for key in WEBAPP_URL_KEYS:
+            if value(metadata, key) != value(seen[0], key) \
+                    or value(stored_metadata, key) == value(seen[0], key):
+                continue
+            if key in stored_metadata:
+                if not isinstance(self.metadata, dict):
+                    self.metadata = metadata
+                metadata[key] = copy.deepcopy(stored_metadata[key])
+                seen[0][key] = copy.deepcopy(stored_metadata[key])
+            else:
+                metadata.pop(key, None)
+                seen[0].pop(key, None)
+        if self.parent_id == seen[1] and stored_parent_id != seen[1]:
+            self.parent_id = stored_parent_id
+            seen[1] = stored_parent_id
+
     def save(self, *args, **kwargs):
-        """Serialize and validate parent changes with the saved row."""
+        """Serialize link-setting and parent changes with the saved row."""
         update_fields = kwargs.get("update_fields")
-        parent_may_change = update_fields is None or bool(
+        writes_parent = update_fields is None or bool(
             {"parent", "parent_id"}.intersection(update_fields))
-        if self.pk is not None and parent_may_change:
-            old_parent_id = type(self).objects.filter(pk=self.pk).values_list(
-                "parent_id", flat=True).first()
-            parent_may_change = old_parent_id != self.parent_id
-        if not parent_may_change:
+        if not writes_parent and "metadata" not in update_fields:
             return super().save(*args, **kwargs)
         from mojo.apps.account.services import group_hierarchy
+        # An existing row is locked from here to the write, so what is
+        # compared is what is replaced: a save that began before another one
+        # finished waits for it, then sees its result.
         with transaction.atomic():
+            row, old_parent_id = None, None
             if self.pk is not None:
-                type(self).objects.select_for_update().filter(pk=self.pk).exists()
-            group_hierarchy.validate_parent(self, self.parent, lock=True)
-            return super().save(*args, **kwargs)
+                row = type(self).objects.select_for_update().filter(pk=self.pk).values_list(
+                    "metadata", "parent_id").first()
+            if row is not None:
+                stored_metadata, old_parent_id = row
+                if not isinstance(stored_metadata, dict):
+                    stored_metadata = {}
+                self._keep_unchanged_link_settings(stored_metadata, old_parent_id)
+                if self.__dict__.pop("_link_guard_pending", False):
+                    # A REST save: its permission was judged before this lock,
+                    # on a row that may have changed since. Judge it again.
+                    self._guard_webapp_url_and_tree(False, stored=(stored_metadata, old_parent_id))
+            if writes_parent and (self.pk is None or old_parent_id != self.parent_id):
+                group_hierarchy.validate_parent(self, self.parent, lock=True)
+            result = super().save(*args, **kwargs)
+        self._remember_link_settings()
+        return result
 
     def is_effectively_active(self, max_depth=8):
         """A group counts as active only if it AND every ancestor is active
@@ -760,22 +831,28 @@ class Group(MojoSecrets, MojoModel):
             return False
         return request.user.has_permission(list(perms))
 
-    def _guard_webapp_url_and_tree(self, created):
+    def _guard_webapp_url_and_tree(self, created, stored=None):
         """Refuse a change of where this tenant's token links land.
 
         Two ways to change it: write `webapp_base_url` or `webapp_auth_path`
         in metadata, or move the group to a different tree, since the resolver
         trusts a group by the top of its tree. Both are compared against the
         stored row: a JSON merge does not show in changed_fields.
+
+        Runs twice for a REST save of an existing group: in on_rest_pre_save,
+        to refuse before anything else happens, and in save() with `stored`
+        read under the row lock, which is the decision that counts.
         """
-        stored_metadata, stored_parent_id = {}, None
-        if not created and self.pk:
+        stored_metadata, stored_parent_id = stored or ({}, None)
+        if stored is None and not created and self.pk:
             row = type(self).objects.filter(pk=self.pk).values_list(
                 "metadata", "parent_id").first()
             if row is not None:
                 stored_metadata, stored_parent_id = row
-        if not isinstance(stored_metadata, dict):
-            stored_metadata = {}
+                if not isinstance(stored_metadata, dict):
+                    stored_metadata = {}
+                self._keep_unchanged_link_settings(stored_metadata, stored_parent_id)
+                self._link_guard_pending = True
         metadata = self.metadata if isinstance(self.metadata, dict) else {}
         # _ABSENT, not None: a stored null is a value, and it hides the
         # parent's address from get_metadata_value.
@@ -798,9 +875,8 @@ class Group(MojoSecrets, MojoModel):
                 raise merrors.PermissionDeniedException(
                     "Moving a group to a different group tree requires the "
                     "global manage_groups (or groups) permission")
-        if changes:
-            # logged after the save lands
-            self._webapp_url_change = changes
+        # logged after the save lands
+        self._webapp_url_change = changes or None
 
     def on_rest_pre_save(self, changed_fields, created):
         self._guard_webapp_url_and_tree(created)

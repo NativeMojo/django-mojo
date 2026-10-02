@@ -470,3 +470,185 @@ def test_global_holder_can_move_between_trees(opts):
     finally:
         opts.client.logout()
         _restore(opts)
+
+
+# ---------------------------------------------------------------------------
+# Overlapping saves: a save that began before an operator's change must not
+# write the old address or the old parent back.
+# ---------------------------------------------------------------------------
+
+def _overlapping_save(opts, pk, actor, payload, meanwhile):
+    """Run the REST save of group `pk` as `actor` in this process, and run
+    `meanwhile()` after its permission check, just before its write.
+
+    The row is loaded first, as a request loads it, so it carries what was
+    stored before `meanwhile()` runs. The hook is on this one instance only.
+    """
+    from objict import objict
+    from mojo.apps.account.models import Group, User
+    from mojo.models import rest as mojo_rest
+    stale = Group.objects.get(pk=pk)
+    request = objict(
+        user=User.objects.get(email=_email(actor)), DATA=objict(payload),
+        QUERY_PARAMS=objict(), method="POST", group=stale, bearer=None,
+        ip="127.0.0.1", path=f"/api/group/{pk}", META={}, api_key=None,
+        group_token=None)
+    write = stale.atomic_save
+
+    def write_after_the_other_save():
+        meanwhile()
+        return write()
+
+    stale.atomic_save = write_after_the_other_save
+    token = mojo_rest.ACTIVE_REQUEST.set(request)
+    try:
+        stale.on_rest_save(request, request.DATA)
+    finally:
+        mojo_rest.ACTIVE_REQUEST.reset(token)
+
+
+def _operator_posts(opts, pk, payload, what):
+    _login(opts, "global_mg")
+    try:
+        resp = _post(opts, pk, payload)
+        assert resp.status_code == 200, \
+            f"the operator must be able to {what}, got {resp.status_code}: {opts.client.last_response.body}"
+    finally:
+        opts.client.logout()
+
+
+@th.django_unit_test("#6350: a manager's save already in flight cannot undo an operator's change of address")
+def test_overlapping_manager_save_keeps_the_operators_address(opts):
+    from mojo.apps.account.models import Group, User
+    from mojo.apps.logit.models import Log
+    top = opts.ids["a_top"]
+    account = User.objects.get(pk=opts.account_id)
+    logs = Log.objects.filter(kind=LOG_KIND, model_id=top)
+    cases = (
+        # the manager edits something else while the operator corrects the address
+        ("corrects", {"metadata": {"motto": "overlap"}},
+         {"metadata": {"webapp_base_url": W1_BASE}}, W1_BASE),
+        # the manager's form sends the whole settings back, old address included,
+        # while the operator removes that address
+        ("removes", {"metadata": {"motto": "overlap", "webapp_base_url": A_BASE}},
+         {"metadata": {"webapp_base_url": None}}, None),
+    )
+    try:
+        for what, manager_payload, operator_payload, expected in cases:
+            _restore(opts)
+            before = logs.count()
+
+            def operator_saves():
+                _operator_posts(opts, top, operator_payload, f"{what} the address")
+                assert _stored(top).get("webapp_base_url") == expected, \
+                    f"the operator's save did not land: {_stored(top)}"
+
+            _overlapping_save(opts, top, "top_mgr", manager_payload, operator_saves)
+            stored = _stored(top)
+            assert stored.get("webapp_base_url") == expected, \
+                f"SECURITY: the operator {what} the address and a manager's overlapping save put " \
+                f"{stored.get('webapp_base_url')!r} back"
+            assert stored.get("motto") == "overlap", \
+                f"the manager's own edit must still land beside the operator's, got {stored}"
+            assert logs.count() == before + 1, \
+                f"only the operator's change is a change of address, got {logs.count() - before} log rows"
+            if expected:
+                link = _link(account, Group.objects.get(pk=top))
+                assert link.startswith(expected), \
+                    f"SECURITY: after the overlap the tenant's link is built on {link}, not {expected}"
+    finally:
+        _restore(opts)
+
+
+@th.django_unit_test("#6350: a manager's save already in flight cannot undo an operator's move of a group")
+def test_overlapping_manager_save_keeps_the_operators_move(opts):
+    child2 = opts.ids["a_child2"]
+    _restore(opts)
+    try:
+        def operator_moves():
+            _operator_posts(opts, child2, {"parent": opts.ids["w_top"]}, "move the group to another tree")
+            assert _parent_id(child2) == opts.ids["w_top"], "the operator's move did not land"
+
+        _overlapping_save(opts, child2, "top_mgr", {"metadata": {"motto": "overlap"}}, operator_moves)
+        assert _parent_id(child2) == opts.ids["w_top"], \
+            f"SECURITY: the operator moved the group out of the tenant and a manager's overlapping save " \
+            f"moved it back under {_parent_id(child2)}"
+        assert _stored(child2).get("motto") == "overlap", \
+            f"the manager's own edit must still land, got {_stored(child2)}"
+    finally:
+        _restore(opts)
+
+
+@th.django_unit_test("#6350: an operator's save that arrives during a manager's write waits for it, then stands")
+def test_operator_save_waits_for_a_write_in_progress(opts):
+    """Two connections at once: this process holds the manager's row lock while
+    the server takes the operator's request."""
+    import threading
+    from mojo.apps.account.models import Group
+    top = opts.ids["a_top"]
+    _restore(opts)
+    try:
+        stale = Group.objects.get(pk=top)
+        stale.metadata["motto"] = "overlap"
+        outcome = {}
+
+        def operator_saves():
+            try:
+                _operator_posts(opts, top, {"metadata": {"webapp_base_url": W1_BASE}}, "change the address")
+                outcome["ok"] = True
+            except AssertionError as err:
+                outcome["error"] = str(err)
+
+        worker = threading.Thread(target=operator_saves)
+
+        def between_the_lock_and_the_write():
+            worker.start()
+            worker.join(timeout=1.5)
+            outcome["finished_early"] = not worker.is_alive()
+
+        # save_secrets() runs inside save(), after the row is locked and before
+        # it is written. Hooked on this one instance.
+        stale.save_secrets = between_the_lock_and_the_write
+        stale.save()
+        worker.join(timeout=20)
+        assert not worker.is_alive(), "the operator's save never returned after the manager's write finished"
+        assert outcome.get("ok"), f"the operator's save failed: {outcome.get('error')}"
+        assert not outcome["finished_early"], \
+            "SECURITY: the operator's save finished while a manager's write of the same row was in " \
+            "progress, so that write could replace it"
+        assert _stored(top).get("webapp_base_url") == W1_BASE, \
+            f"SECURITY: after both saves the address is {_stored(top).get('webapp_base_url')!r}, " \
+            f"not the operator's"
+    finally:
+        _restore(opts)
+
+
+@th.django_unit_test("#6350: a save outside REST that did not touch the address does not write an old one back")
+def test_stale_save_outside_rest_keeps_the_address(opts):
+    from mojo.apps.account.models import Group
+    top = opts.ids["a_top"]
+    writers = (
+        ("touch()", lambda group: (setattr(group, "last_activity", None), group.touch())),
+        ("save()", lambda group: (group.metadata.update(motto="job"), group.save())),
+        ("set_protected_metadata()", lambda group: group.set_protected_metadata("gwu_flag", True)),
+    )
+    try:
+        for name, write in writers:
+            _restore(opts)
+            stale = Group.objects.get(pk=top)
+            _operator_posts(opts, top, {"metadata": {"webapp_base_url": W1_BASE}}, "change the address")
+            write(stale)
+            assert _stored(top).get("webapp_base_url") == W1_BASE, \
+                f"SECURITY: {name} on a row loaded before the operator's change put " \
+                f"{_stored(top).get('webapp_base_url')!r} back"
+
+        # Server code that sets the address itself still does: assign and save.
+        _restore(opts)
+        mine = Group.objects.get(pk=top)
+        _operator_posts(opts, top, {"metadata": {"webapp_base_url": W1_BASE}}, "change the address")
+        mine.metadata["webapp_base_url"] = EVIL.replace("evil", "job")
+        mine.save()
+        assert _stored(top).get("webapp_base_url") == EVIL.replace("evil", "job"), \
+            f"an address assigned by server code and saved must be stored, got {_stored(top)}"
+    finally:
+        _restore(opts)
