@@ -337,6 +337,7 @@ These template names are used by the framework. Create matching `EmailTemplate` 
 | `email_change_confirm` | Confirm an email change by link | `new_email`, `token_url`, `display_name` |
 | `email_change_code` | Confirm an email change by code | `new_email`, `code`, `display_name` |
 | `email_change_notify` | Notify the current address of a requested change | `new_email`, `display_name` |
+| `phone_removed_notify` | Security notice when a verified phone number is removed from the account | `user`, `phone_last4` |
 | `account_deactivate_confirm` | Confirm self-service account deactivation | `token_url`, `display_name` |
 | `account_inactive_warning` | Auto-disable sweep (users) | `days_until_disable`, `inactive_days` |
 | `group_inactive_warning` | Auto-disable sweep (groups) | `group_name`, `group_id`, `days_until_disable`, `inactive_days` |

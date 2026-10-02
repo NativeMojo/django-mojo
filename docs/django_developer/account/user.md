@@ -202,8 +202,21 @@ Gated by `_handle_existing_user_pre_save`:
 - **Allowed** for any admin tier (`users` / `manage_users` / `is_superuser`).
 - **Blocked** for self-acting users with only `owner` perm — they must use the dedicated change flows (`POST /api/auth/email/change/{request,confirm}` etc.) which verify ownership of the new channel via OTP/link.
 
-Phone clear (setting `null`) and first-set (when the user has none) are
-allowed for anyone with edit access.
+Phone first-set (when the user has none) is allowed for anyone with edit
+access. Phone clear (setting `null`) is allowed for anyone with edit access
+**while `ALLOW_PHONE_CHANGE` is on** (the default). With it off, someone who
+is not an admin can neither replace nor clear a number on file — the save
+answers 403 `"Phone number change is not allowed"` — because clear-then-set
+would be a change with no check at all. The rule is
+`User.check_phone_number_change(old_phone, admin_caller)`.
+
+**Removing a verified number is announced.** When a save clears a number that
+was verified, `User.notify_phone_removed(old_phone)` runs after the save has
+gone through: it files a `phone:removed` event on the account and sends the
+`phone_removed_notify` email to the account's address, naming the number by
+its last four digits only. It is best effort and never fails the save; an
+account with no email gets the event only. An admin removing the number
+triggers it as well. Removing an unverified number sends nothing.
 
 ### Date of Birth (`dob`) — immutable to the account holder once set
 

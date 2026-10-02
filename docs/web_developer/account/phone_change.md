@@ -10,10 +10,10 @@ Self-service phone number change is a two-step flow: **request → confirm.**
 
 `current_password` is **optional**. If provided and correct it is validated; if omitted the request proceeds — this supports OAuth-only and passkey-only users who have no usable password. When `FRESH_AUTH_WINDOW` is enabled server-side, a recent login is required instead (see [Step-Up Auth](step_up_auth.md)).
 
-The feature is controlled by the `ALLOW_PHONE_CHANGE` setting (default `True`). When set to `False`, all requests to `POST /api/auth/phone/change/request` return 403.
+The feature is controlled by the `ALLOW_PHONE_CHANGE` setting (default `True`). When set to `False`, all requests to `POST /api/auth/phone/change/request` return 403, and a user can no longer clear or replace their number through `POST /api/user/me` either: both return 403 `"Phone number change is not allowed"`. Setting a first number still works, and so does an admin edit.
 
 > **Note — first-time number vs. change:**
-> This flow is required only when **replacing** an existing phone number with a new one. If the account has no phone number yet, you may set one directly via `POST /api/user/me` with a `phone_number` field. Clearing a phone number (setting it to `null`) is similarly allowed via the profile endpoint. The change flow exists specifically to prove ownership of the incoming number before replacing a verified one.
+> This flow is required only when **replacing** an existing phone number with a new one. If the account has no phone number yet, you may set one directly via `POST /api/user/me` with a `phone_number` field. Clearing a phone number (setting it to `null`) is similarly allowed via the profile endpoint while `ALLOW_PHONE_CHANGE` is on. The change flow exists specifically to prove ownership of the incoming number before replacing a verified one.
 
 ---
 
@@ -39,6 +39,7 @@ Requires authentication (Bearer token). Rate limited.
 |---|---|---|
 | Step-up auth required (stale session, `FRESH_AUTH_WINDOW` enabled) | 440 | `"error": "reauth_required"` |
 | `current_password` provided but incorrect | 401 | `"error": "Incorrect password"` |
+| Too many tries at `current_password` (10 per 15 minutes per account) | 429 | `"error": "Rate limit exceeded"`, with `Retry-After` and a `retry_after` field (seconds). A correct password is refused too until the wait is over |
 | `phone_number` has an invalid format | 400 | `"error": "Invalid phone number format"` |
 | `phone_number` is the same as the current number | 400 | `"error": "New phone number must be different from current phone number"` |
 | `phone_number` is already registered to another account | 400 | `"error": "Phone number already in use"` |
@@ -201,7 +202,8 @@ After a successful confirm, `is_phone_verified` is `true` for the new number. Yo
 - **The session token proves identity; the OTP proves number ownership.** Both must be correct for the change to commit.
 - **The `session_token` (pc:) is single-use and bound to the user's `auth_key`.** It cannot be replayed, transferred to another user, or used after it has been consumed or cancelled.
 - **Availability is re-checked at confirm time.** Another account may have registered the target number in the 10-minute window. The confirm step will reject the request if this has occurred.
-- **Direct replacement of an existing phone number via `POST /api/user/me` is blocked.** The REST layer enforces use of this change flow whenever an existing verified number is being replaced, ensuring the new number is always OTP-verified before it is committed. Clearing a phone number (setting it to `null`) and setting one for the first time are not restricted.
+- **Direct replacement of an existing phone number via `POST /api/user/me` is blocked.** The REST layer enforces use of this change flow whenever an existing verified number is being replaced, ensuring the new number is always OTP-verified before it is committed. Setting one for the first time is not restricted. Clearing a phone number (setting it to `null`) is allowed while `ALLOW_PHONE_CHANGE` is on, and refused with 403 when it is off — otherwise clear-then-set would be a change with no check at all.
+- **Removing a verified number is announced.** When a verified number is cleared, the account's email address gets a security notice naming the number by its last four digits, and a `phone:removed` event is recorded. Do not add your own duplicate notification.
 - **`is_phone_verified` is always reset** if the phone number is changed by any path. It is only set back to `true` after the OTP confirm step succeeds.
 
 ---
@@ -210,5 +212,5 @@ After a successful confirm, `is_phone_verified` is `true` for the new number. Yo
 
 | Setting | Default | Description |
 |---|---|---|
-| `ALLOW_PHONE_CHANGE` | `True` | Set to `False` to disable self-service phone number change entirely. The request endpoint returns 403 when disabled. |
+| `ALLOW_PHONE_CHANGE` | `True` | Set to `False` to disable self-service phone number change entirely. The request endpoint returns 403 when disabled, and so does clearing or replacing a number on file through `POST /api/user/me` by anyone who is not an admin. |
 | `PHONE_CHANGE_TOKEN_TTL` | `600` (10 min) | Expiry time for phone change session tokens and OTP codes, in seconds |

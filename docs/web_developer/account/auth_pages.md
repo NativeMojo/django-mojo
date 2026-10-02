@@ -63,6 +63,13 @@ sets `registration.enabled` to `false`, both this SMS sign-up link and the main
 "Create one" switcher are omitted so invite-only groups do not advertise a
 disabled registration path.
 
+The page fetches a fresh bouncer token for each SMS code request, as it does for
+password sign-in, so SMS sign-in keeps working on a deployment that enforces
+bouncer tokens. "Resend code" sends the same code again while it is still live.
+After five wrong codes in 15 minutes the page shows "Too many attempts. Try
+again in N minutes."; see
+[Too many attempts](authentication.md#too-many-attempts-on-a-code-or-a-current-password).
+
 ### URL Parameters
 
 | Param | Purpose |

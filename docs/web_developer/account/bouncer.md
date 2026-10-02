@@ -489,7 +489,7 @@ Once a token is obtained from the assess endpoint, include it in every auth API 
 }
 ```
 
-The same field applies to all auth endpoints that carry `@md.requires_bouncer_token`:
+The same field applies to all auth endpoints that carry `@md.requires_bouncer_token`. `POST /api/auth/sms/login` is one of them and takes a `login` token like `POST /api/login`:
 
 ```json
 {

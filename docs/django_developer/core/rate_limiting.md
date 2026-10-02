@@ -397,6 +397,61 @@ clear_rate_limits(key="login", account_id=user.pk)
 
 ---
 
+## `check_code_attempt` — Per-Account Limit on One-Time Codes
+
+A six-digit code is one in a million per guess, and a per-IP limit does nothing against a guesser who rotates addresses. Every check of a one-time code is therefore counted against the account the code belongs to.
+
+```python
+from mojo.decorators.limits import check_code_attempt, clear_code_attempts
+from mojo.helpers import crypto
+
+check_code_attempt("sms", user.pk, request, ttl=settings.get("SMS_OTP_TTL", 600))
+if not crypto.codes_match(submitted, stored):
+    raise merrors.PermissionDeniedException("Invalid or expired code", 401, 401)
+clear_code_attempts("sms", user.pk)
+```
+
+**Signature:**
+
+```python
+def check_code_attempt(kind, account_id, request=None, ttl=None, *, also=(), ...)
+```
+
+| Param | Description |
+|---|---|
+| `kind` | One of `limits.CODE_KINDS`: `sms`, `reset`, `phone_verify`, `email_verify`, `email_change`, `phone_register`, `totp`, `totp_login`, `totp_manage`. The counter is `code:<kind>` |
+| `account_id` | The account the code belongs to (`user.pk`), or for a code with no account yet, what it was sent to |
+| `request` | Used for the once-a-minute metric and incident on a refusal. Optional |
+| `ttl` | That code's lifetime in seconds. The window is never shorter, or a long-lived code would get more than the limit |
+| `also` | More ids the same try is counted against. The try is refused if any of them is full, and is then counted against none |
+
+It differs from `check_account_attempt` in three ways:
+
+- **It raises.** A refused try raises `mojo.errors.RateLimitException(retry_after)`, which the REST dispatcher answers as the standard 429 with `Retry-After` and a `retry_after` field in the body. That lets a limit reached inside a model setter or action answer like the decorators do.
+- **A refused try is not counted.** Retrying while locked does not extend the wait, and the wait reported is the real one.
+- **Refuse-or-count is one Redis script**, so two tries arriving together are both counted before either compare.
+
+Call it **before** the compare, and call `clear_code_attempts(kind, account_id)` as soon as a code matches, before anything else can fail.
+
+The limit and window come from `CODE_ATTEMPT_LIMIT` (5) and `CODE_ATTEMPT_WINDOW` (900 s). `totp` and `totp_login` also share `TOTP_ATTEMPT_DAILY_LIMIT` (20 per 24 hours). **Fail-open** on Redis errors.
+
+Compare codes with `mojo.helpers.crypto.codes_match(submitted, stored)`: constant-time, and `False` when either side is missing.
+
+Related helpers in the same module:
+
+| Helper | Purpose |
+|---|---|
+| `allow_code_send(kind, account_id, request=None, ttl=None)` | `False` when a code must not be sent now: the account's code entry is locked, or it has had `CODE_SEND_LIMIT` (5) sends in `CODE_SEND_WINDOW` (900 s). Send nothing and answer as if it had been sent. Kinds: `sms`, `reset`, `phone_register` |
+| `clear_code_sends(kind, account_id)` | Clear one send counter |
+| `check_password_attempt(account_id, request=None)` / `clear_password_attempts(account_id)` | The same refuse-or-count for a signed-in caller's `current_password`, counter `password_check`, with the `LOGIN_USERNAME_LIMIT` / `LOGIN_USERNAME_WINDOW` numbers |
+| `clear_account_limits(account_id)` | The admin release: clears every counter in `ACCOUNT_BUCKETS` for one user |
+| `account_bucket_numbers(key)` | `(limit, window)` for one of `ACCOUNT_BUCKETS`, or `None` |
+| `unknown_account_id(identifier)` | Counter id for an identifier as typed, for endpoints that must count an unknown account like a real one |
+
+See [Failed Login Protection](../account/auth.md#failed-login-protection) for where each is used.
+
+---
+
 ## `clear_rate_limits` — Cache Clearing Helper
 
 ```python
