@@ -1162,6 +1162,13 @@ registered resource is enabled; until then every endpoint answers 404.
 
 - `SMS_FAKE_MAPPINGS`
 - `SMS_INBOUND_HANDLER`
+- `SMS_OTP_LENGTH` — int, default `6`. How many digits the two SMS codes that
+  can sign someone in have: the SMS sign-in / second-factor code
+  (`auth/sms/login`, `auth/sms/send`) and the phone sign-up code
+  (`auth/phone/register/start`). Allowed range `6` to `10`: a value below `6`
+  reads as `6`, so the setting can only lengthen a code, a value above `10`
+  reads as `10`, and a value that is not a number reads as `6`. See
+  [Code length](../account/auth.md#code-length).
 - `SMS_OTP_TTL`
 
 ### SNS

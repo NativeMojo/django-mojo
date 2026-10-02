@@ -1448,6 +1448,16 @@ How a try is handled, in `mojo.decorators.limits.check_code_attempt`:
 
 `totp_login` is no longer the password `login` bucket, so wrong authenticator codes cannot lock password sign-in. `totp_manage` is separate from both sign-in checks, so set-up typos cannot lock sign-in either.
 
+#### Code length
+
+The per-account limit bounds guessing at one account. It does nothing against a guesser who spreads single guesses over many accounts: each guess at a six-digit code is one in a million whichever account it hits. A deployment that wants longer odds sets `SMS_OTP_LENGTH`.
+
+- **What it covers:** the two SMS codes that can sign someone in. The SMS sign-in / second-factor code (`auth/sms/login`, `auth/sms/send`, checked by `auth/sms/verify`) and the phone sign-up code (`auth/phone/register/start`, checked by `auth/phone/register/verify`), which signs in an existing account when the number already has one.
+- **What it does not cover:** the phone verification, phone change, email and password reset codes. They stay six digits.
+- **Range:** `6` to `10`, default `6`. The value is read by `mojo.apps.account.utils.tokens.sms_otp_length()`. A value below `6` reads as `6`: the setting is DB-backed, so it must not be a way to shorten a code. A value above `10` reads as `10`. A value that is not a number reads as `6`.
+- **A code already sent keeps its length.** The check compares against the stored code and does not look at the setting, so changing it never breaks a code someone is typing. New codes use the new length.
+- **The hosted sign-in and register pages follow it.** `_auth_context` passes `sms_code_length`, and the two code boxes take their `maxlength` and wording from it. An application with its own sign-in screen must accept the longer code itself: do not hard-code six.
+
 **Authenticator daily cap.** Three authenticator codes are valid at any moment and the secret never expires, so `totp` and `totp_login` also share a cap of `TOTP_ATTEMPT_DAILY_LIMIT` (20) tries per 24 hours, in the counter `code:totp_daily`. When both the 15-minute and the daily counter are full, the wait reported is the longer one.
 
 **The phone-change code has no counter.** Its session token is consumed before the compare, so each request already gets one guess.

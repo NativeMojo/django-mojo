@@ -20,6 +20,7 @@ from mojo.helpers import logit
 from mojo.helpers.settings import settings
 from mojo.helpers.response import JsonResponse
 from mojo.apps import metrics
+from mojo.apps.account.utils import tokens
 from mojo.apps.account.rest.bouncer.assess import (
     _geolocate, _report_bouncer_event, verify_pass_cookie,
 )
@@ -319,6 +320,10 @@ def _auth_context(request, group=None, include_registration_extras=False):
         'register_step3_field_rows': step3_field_rows,
         'identity_field': identity_field,
         'forgot_channel': forgot_channel,
+        # How many digits the SMS sign-in and sign-up codes have
+        # (SMS_OTP_LENGTH, 6 to 10). The pages size their code box from it;
+        # a box capped at 6 could not take a longer code.
+        'sms_code_length': tokens.sms_otp_length(),
     }
     # Step-up links from the Admin portal must show the credential form even
     # when a refresh token exists: refresh preserves auth_time and would loop

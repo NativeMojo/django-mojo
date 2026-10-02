@@ -35,7 +35,7 @@ Which methods are shown depends on the resolved auth config's `login.methods`.
 Default set: `password`, `sms`, `passkey`, `magic`, `google`, `apple`, `github`.
 
 - **password** — email/password sign in
-- **sms** — phone number + 6-digit SMS code sign in
+- **sms** — phone number + SMS code sign in (6 digits by default; up to 10 where the deployment sets `SMS_OTP_LENGTH`, and the code box follows it)
 - **google** — redirects to Google, returns to `/auth?code=...&state=...`
 - **apple** — same flow
 - **github** — same flow

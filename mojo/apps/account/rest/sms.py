@@ -40,15 +40,18 @@ def _otp_sms_body(code, request=None):
     return f"Your verification code is: {code}"
 
 
-def _send_otp(user, request=None, *, send=None):
+def _send_otp(user, request=None, *, send=None, length=None):
     """Send the user's SMS code: the live one if there is one, else a new
-    6-digit code stored on the user.
+    code stored on the user. A new code has SMS_OTP_LENGTH digits (6 to 10,
+    default 6; tokens.sms_otp_length).
 
     A repeat request inside a code's life re-sends that code and does not
     extend its life. Minting a new one each time let anyone who knew a
     username replace the code its owner was typing. Finding the live code and
     storing a new one are one locked step (tokens.live_or_new_code), so two
-    requests arriving together send the same code.
+    requests arriving together send the same code. A live code keeps the
+    length it was sent with, so changing the setting never breaks a code
+    someone is typing.
 
     Acceptance is classified by `sms_delivery.was_accepted()`, not by
     `sms.status == "failed"`: a `None` result (the transport returned nothing)
@@ -57,13 +60,14 @@ def _send_otp(user, request=None, *, send=None):
     nothing at all — a send that never happened looked clean in the incident
     trail.
 
-    `send` is a test seam, not part of the wire contract.
+    `send` and `length` are test seams, not part of the wire contract.
     """
     if not user.phone_number:
         raise merrors.ValueException("No phone number on file for this account")
 
     code = tokens.live_or_new_code(
-        user, "sms_otp_code", "sms_otp_ts", settings.get("SMS_OTP_TTL", 600))
+        user, "sms_otp_code", "sms_otp_ts", settings.get("SMS_OTP_TTL", 600),
+        length=tokens.sms_otp_length(length))
 
     sender = send if send is not None else phonehub.send_sms
     try:

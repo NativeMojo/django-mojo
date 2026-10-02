@@ -31,11 +31,11 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
 
     {# ---- STEP 2 — Verify ---- #}
     <div id="view-reg-step2" class="mat-view" data-step="2">
-        <p class="mat-view-sub" id="reg-step2-help">Enter the 6-digit code we sent.</p>
+        <p class="mat-view-sub" id="reg-step2-help">Enter the {{ sms_code_length|default:6 }}-digit code we sent.</p>
         <div class="mat-field">
             <input class="mat-input" type="text" id="reg-phone-code"
-                   inputmode="numeric" pattern="\d*" maxlength="6"
-                   autocomplete="one-time-code" placeholder="6-digit code" />
+                   inputmode="numeric" pattern="\d*" maxlength="{{ sms_code_length|default:6 }}"
+                   autocomplete="one-time-code" placeholder="{{ sms_code_length|default:6 }}-digit code" />
         </div>
         <button class="mat-btn mat-btn-primary" type="button" id="btn-reg-verify">
             <span class="mat-btn-text">Verify</span>
@@ -331,7 +331,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
         return MojoAuth.startPhoneRegister(phone)
             .then(function (data) {
                 $("reg-phone-session-token").value = data.session_token;
-                $("reg-step2-help").textContent = "We sent a 6-digit code to " + phone + ".";
+                $("reg-step2-help").textContent = "We sent {% if sms_code_length == 8 %}an{% else %}a{% endif %} {{ sms_code_length|default:6 }}-digit code to " + phone + ".";
                 m.setLoading(btn, false);
                 showStep(2);
                 startResendCooldown();
@@ -354,7 +354,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
                 var sessionToken = $("reg-phone-session-token").value;
                 var code = ($("reg-phone-code").value || "").trim();
                 if (!sessionToken) { m.showMessage("Session expired. Please go back and try again.", "error"); return; }
-                if (!code) { m.showMessage("Enter the 6-digit code.", "error"); return; }
+                if (!code) { m.showMessage("Enter the {{ sms_code_length|default:6 }}-digit code.", "error"); return; }
                 m.setLoading(verifyBtn, true); m.hideMessage();
                 MojoAuth.verifyPhoneRegister(sessionToken, code)
                     .then(function (data) {

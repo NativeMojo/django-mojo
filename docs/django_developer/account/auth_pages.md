@@ -445,7 +445,7 @@ Methods rendered are those listed in the resolved auth config's
 `google`, `apple`, `github`.
 
 - `password` — email/password sign in
-- `sms` — phone number + 6-digit SMS code sign in
+- `sms` — phone number + SMS code sign in (6 digits unless `SMS_OTP_LENGTH` says more; the code box follows the setting)
 - `google` — Google OAuth redirect flow
 - `apple` — Apple OAuth redirect flow
 - `github` — GitHub OAuth redirect flow

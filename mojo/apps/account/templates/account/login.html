@@ -144,7 +144,7 @@
     <button class="mat-back" type="button" id="btn-back-signin-sms"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
     {% endif %}
     <p class="mat-view-title">Sign in with a code</p>
-    <p class="mat-view-sub" id="sms-help">Enter your phone number. We'll text a 6-digit code only if it's already linked to an account.</p>
+    <p class="mat-view-sub" id="sms-help">Enter your phone number. We'll text {% if sms_code_length == 8 %}an{% else %}a{% endif %} {{ sms_code_length|default:6 }}-digit code only if it's already linked to an account.</p>
     <form id="form-sms" novalidate>
         <div class="mat-field">
             <label class="mat-label" for="sms-phone">Phone Number</label>
@@ -153,7 +153,7 @@
         <div id="sms-code-block" style="display:none">
             <div class="mat-field">
                 <label class="mat-label" for="sms-code">Verification Code</label>
-                <input class="mat-input" type="text" id="sms-code" inputmode="numeric" pattern="\d*" maxlength="6" autocomplete="one-time-code" placeholder="6-digit code" />
+                <input class="mat-input" type="text" id="sms-code" inputmode="numeric" pattern="\d*" maxlength="{{ sms_code_length|default:6 }}" autocomplete="one-time-code" placeholder="{{ sms_code_length|default:6 }}-digit code" />
             </div>
         </div>
         <button class="mat-btn mat-btn-primary" type="submit" id="btn-sms"><span class="mat-btn-text">Send Code</span><span class="mat-spinner"></span></button>
@@ -394,7 +394,7 @@
                     .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Could not send code.", "error"); });
             } else {
                 var code = $("sms-code").value.trim();
-                if (!code) { m.showMessage("Enter the 6-digit code.", "error"); return; }
+                if (!code) { m.showMessage("Enter the {{ sms_code_length|default:6 }}-digit code.", "error"); return; }
                 m.setLoading(btn, true); m.hideMessage();
                 MojoAuth.verifySmsLogin(phone, code, { group_uuid: cfg.groupUuid })
                     .then(m.onAuthSuccess)
