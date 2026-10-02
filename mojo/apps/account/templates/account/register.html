@@ -34,7 +34,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
         <p class="mat-view-sub" id="reg-step2-help">Enter the {{ sms_code_length|default:6 }}-digit code we sent.</p>
         <div class="mat-field">
             <input class="mat-input" type="text" id="reg-phone-code"
-                   inputmode="numeric" pattern="\d*" maxlength="{{ sms_code_length|default:6 }}"
+                   inputmode="numeric" pattern="\d*" maxlength="{{ sms_code_max_length|default:10 }}"
                    autocomplete="one-time-code" placeholder="{{ sms_code_length|default:6 }}-digit code" />
         </div>
         <button class="mat-btn mat-btn-primary" type="button" id="btn-reg-verify">

@@ -153,7 +153,7 @@
         <div id="sms-code-block" style="display:none">
             <div class="mat-field">
                 <label class="mat-label" for="sms-code">Verification Code</label>
-                <input class="mat-input" type="text" id="sms-code" inputmode="numeric" pattern="\d*" maxlength="{{ sms_code_length|default:6 }}" autocomplete="one-time-code" placeholder="{{ sms_code_length|default:6 }}-digit code" />
+                <input class="mat-input" type="text" id="sms-code" inputmode="numeric" pattern="\d*" maxlength="{{ sms_code_max_length|default:10 }}" autocomplete="one-time-code" placeholder="{{ sms_code_length|default:6 }}-digit code" />
             </div>
         </div>
         <button class="mat-btn mat-btn-primary" type="submit" id="btn-sms"><span class="mat-btn-text">Send Code</span><span class="mat-spinner"></span></button>

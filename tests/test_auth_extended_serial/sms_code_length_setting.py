@@ -129,25 +129,83 @@ def test_set_too_short_or_garbage(opts):
         _reset(opts.scls_user_id)
 
 
-@th.django_unit_test("SMS_OTP_LENGTH=8: the hosted sign-in page's code box takes 8 characters")
-def test_hosted_page_follows_the_setting(opts):
+def _sign_in_box(length_note):
+    """Render the hosted sign-in page now; return how many characters its code box takes."""
+    import re
     from django.shortcuts import render
     from django.test import RequestFactory
-    from mojo.apps.account.models.setting import Setting
     from mojo.apps.account.rest.bouncer.views import _auth_context
+    request = RequestFactory().get("/auth")
+    ctx = _auth_context(request, group=None)
+    ctx["page_mode"] = "login"
+    ctx["page_title"] = "Sign In"
+    ctx["login_methods"] = ["password", "sms"]
+    html = render(request, "account/login.html", ctx).content.decode("utf-8")
+    start = html.rfind("<input", 0, html.index('id="sms-code"'))
+    tag = html[start:html.index(">", start) + 1]
+    found = re.search(r'maxlength="(\d+)"', tag)
+    assert_true(found is not None, f"{length_note}: the code box must carry a maxlength, got {tag}")
+    return ctx, tag, int(found.group(1))
+
+
+@th.django_unit_test("SMS_OTP_LENGTH=8: the hosted sign-in page says 8 digits and its box takes the code")
+def test_hosted_page_follows_the_setting(opts):
+    from mojo.apps.account.models.setting import Setting
     try:
         Setting.set(KEY, "8")
-        request = RequestFactory().get("/auth")
-        ctx = _auth_context(request, group=None)
+        ctx, tag, box = _sign_in_box("SMS_OTP_LENGTH=8")
         assert_eq(ctx.get("sms_code_length"), 8,
                   "the page context must carry the configured SMS code length")
-        ctx["page_mode"] = "login"
-        ctx["page_title"] = "Sign In"
-        ctx["login_methods"] = ["password", "sms"]
-        html = render(request, "account/login.html", ctx).content.decode("utf-8")
-        start = html.rfind("<input", 0, html.index('id="sms-code"'))
-        tag = html[start:html.index(">", start) + 1]
-        assert_true('maxlength="8"' in tag,
+        assert_true(box >= 8,
                     f"with SMS_OTP_LENGTH=8 the sign-in code box must take 8 characters, got {tag}")
+        assert_true('placeholder="8-digit code"' in tag,
+                    f"with SMS_OTP_LENGTH=8 the sign-in code box must say '8-digit code', got {tag}")
     finally:
         Setting.remove(KEY)
+
+
+@th.django_unit_test("SMS_OTP_LENGTH lowered 8 to 6 with a code live: the page takes it and it signs in")
+def test_lowered_with_a_live_code(opts):
+    from mojo.apps.account.models.setting import Setting
+    _reset(opts.scls_user_id)
+    try:
+        Setting.set(KEY, "8")
+        live = _request_code(opts)
+        assert_true(isinstance(live, str) and len(live) == 8,
+                    f"with SMS_OTP_LENGTH=8 the stored code must be 8 digits, got {live!r}")
+        Setting.set(KEY, "6")
+        again = _request_code(opts)
+        assert_eq(again, live,
+                  "asking again while the 8-digit code is live must send that same code")
+        _ctx, tag, box = _sign_in_box("SMS_OTP_LENGTH lowered to 6")
+        assert_true(box >= len(live),
+                    f"the sign-in code box takes {box} characters, but the live code has {len(live)}: {tag}")
+        resp = opts.scls.post("/api/auth/sms/verify", {"username": USERNAME, "code": live})
+        assert_eq(resp.status_code, 200,
+                  f"the live 8-digit code must still sign the account in, got {resp.status_code}: "
+                  f"{opts.scls.last_response.body}")
+    finally:
+        Setting.remove(KEY)
+        _reset(opts.scls_user_id)
+
+
+@th.django_unit_test("SMS_OTP_LENGTH stored as an infinite number, cache cold: sign-in still sends a 6-digit code")
+def test_stored_infinite_number(opts):
+    from mojo.apps.account.models.setting import Setting
+    from mojo.apps.account.utils import tokens
+    try:
+        for stored in (float("inf"), float("-inf")):
+            _reset(opts.scls_user_id)
+            # A secret row keeps its type; with the cache cold the reader gets
+            # the number itself, not its text.
+            Setting.set(KEY, stored, is_secret=True)
+            Setting.objects.get(key=KEY, group=None).remove_from_cache()
+            assert_eq(tokens.sms_otp_length(), 6,
+                      f"a stored SMS_OTP_LENGTH of {stored!r} must read as 6, not raise")
+            Setting.objects.get(key=KEY, group=None).remove_from_cache()
+            code = _request_code(opts)
+            assert_true(isinstance(code, str) and len(code) == 6 and code.isdigit(),
+                        f"with SMS_OTP_LENGTH={stored!r} the stored code must be 6 digits, got {code!r}")
+    finally:
+        Setting.remove(KEY)
+        _reset(opts.scls_user_id)

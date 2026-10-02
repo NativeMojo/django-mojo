@@ -141,6 +141,19 @@ def test_length_range(opts):
     for given in ("eight", "", [], {}):
         assert_eq(tokens.sms_otp_length(given), 6,
                   f"a length of {given!r} is not a number and must read as 6")
+    for given in (float("inf"), float("-inf"), float("nan")):
+        assert_eq(tokens.sms_otp_length(given), 6,
+                  f"a length of {given!r} is not a finite number and must read as 6")
+
+
+@th.django_unit_test("sms code length: an infinite number in the settings file reads as 6, it does not raise")
+def test_static_non_finite_setting(opts):
+    from django.test import override_settings
+    from mojo.apps.account.utils import tokens
+    for given in (float("inf"), float("-inf"), float("nan")):
+        with override_settings(SMS_OTP_LENGTH=given):
+            assert_eq(tokens.sms_otp_length(), 6,
+                      f"SMS_OTP_LENGTH = {given!r} in the settings file must read as 6")
 
 
 # -----------------------------------------------------------------
@@ -286,31 +299,42 @@ def _code_input(html, input_id):
     return html[start:html.index(">", start) + 1]
 
 
+def _box_size(html, input_id):
+    """How many characters the code box with this id takes."""
+    import re
+    tag = _code_input(html, input_id)
+    found = re.search(r'maxlength="(\d+)"', tag)
+    assert_true(found is not None, f"the code box must carry a maxlength, got {tag}")
+    return int(found.group(1))
+
+
 @th.django_unit_test("sms code length: the hosted pages are given the length, 6 by default")
 def test_hosted_pages_default(opts):
     ctx, html = _render("account/login.html")
     assert_eq(ctx.get("sms_code_length"), 6,
               "the page context must carry the SMS code length, 6 with the setting unset")
-    tag = _code_input(html, "sms-code")
-    assert_true('maxlength="6"' in tag,
-                f"with the setting unset the sign-in code box must take 6 characters, got {tag}")
+    assert_eq(ctx.get("sms_code_max_length"), 10,
+              "the page context must carry the longest SMS code a deployment can set")
+    assert_eq(_box_size(html, "sms-code"), 10,
+              "the sign-in code box must take the longest code, whatever the setting is")
     assert_true("We'll text a 6-digit code only if" in html,
                 "with the setting unset the sign-in page's wording must be unchanged")
+    assert_true('placeholder="6-digit code"' in _code_input(html, "sms-code"),
+                "with the setting unset the sign-in code box must still say '6-digit code'")
 
     _ctx, html = _render("account/register.html")
-    tag = _code_input(html, "reg-phone-code")
-    assert_true('maxlength="6"' in tag,
-                f"with the setting unset the sign-up code box must take 6 characters, got {tag}")
+    assert_eq(_box_size(html, "reg-phone-code"), 10,
+              "the sign-up code box must take the longest code, whatever the setting is")
     assert_true("6-digit code" in html,
                 "with the setting unset the register page must say '6-digit code'")
 
 
-@th.django_unit_test("sms code length: at 8 the hosted code boxes take 8 characters and say so")
+@th.django_unit_test("sms code length: at 8 the hosted pages say 8 digits and the boxes take the code")
 def test_hosted_pages_longer(opts):
     _ctx, html = _render("account/login.html", length=8)
     tag = _code_input(html, "sms-code")
-    assert_true('maxlength="8"' in tag,
-                f"at length 8 the sign-in code box must take 8 characters, got {tag}")
+    assert_eq(_box_size(html, "sms-code"), 10,
+              "at length 8 the sign-in code box must still take the longest code")
     assert_true('placeholder="8-digit code"' in tag,
                 f"at length 8 the sign-in code box must say '8-digit code', got {tag}")
     assert_true("We'll text an 8-digit code" in html and "Enter the 8-digit code." in html,
@@ -318,11 +342,57 @@ def test_hosted_pages_longer(opts):
 
     _ctx, html = _render("account/register.html", length=8)
     tag = _code_input(html, "reg-phone-code")
-    assert_true('maxlength="8"' in tag,
-                f"at length 8 the sign-up code box must take 8 characters, got {tag}")
+    assert_eq(_box_size(html, "reg-phone-code"), 10,
+              "at length 8 the sign-up code box must still take the longest code")
     assert_true('placeholder="8-digit code"' in tag,
                 f"at length 8 the sign-up code box must say '8-digit code', got {tag}")
     assert_true('"We sent an 8-digit code to "' in html,
                 "at length 8 the register page must say it sent an 8-digit code")
     assert_true("6-digit" not in html,
                 "at length 8 the register page must not still say 6 digits anywhere")
+
+
+# -----------------------------------------------------------------
+# The setting changes while a code is live or a page is open
+# -----------------------------------------------------------------
+
+@th.django_unit_test("sms code length: lowered while a longer code is live, the sign-in box still takes that code")
+def test_lowered_setting_live_code_fits_sign_in_box(opts):
+    from mojo.apps.account.rest.sms import _verify_otp
+    pk = opts.scl_live_id
+    _clear_code(pk)
+    live, _ = _send(pk, length=10)
+    again, _ = _send(pk, length=6)
+    assert_eq(again, live, "the live 10-digit code must be the one sent again")
+
+    # The page as it renders after the setting went back to 6.
+    _ctx, html = _render("account/login.html", length=6)
+    box = _box_size(html, "sms-code")
+    assert_true(box >= len(live),
+                f"the sign-in code box takes {box} characters, but the live code has {len(live)}: "
+                f"the person holding it could not type it")
+    assert_true(_verify_otp(_fresh(pk), live),
+                "the live 10-digit code must still be accepted")
+    _clear_code(pk)
+
+
+@th.django_unit_test("sms code length: raised after a page was opened, the open page still takes the new code")
+def test_raised_setting_open_pages_take_the_new_code(opts):
+    from mojo.apps.account.services import phone_register
+    # Both pages as they rendered while the setting was 6.
+    _ctx, register_html = _render("account/register.html", length=6)
+    _ctx, login_html = _render("account/login.html", length=6)
+
+    # The setting is raised to the longest; the open pages do not reload.
+    _session, code, _ttl = phone_register.start(REGISTER_PHONE, length=10)
+    box = _box_size(register_html, "reg-phone-code")
+    assert_true(box >= len(code),
+                f"the open sign-up page's box takes {box} characters, but the code sent has {len(code)}")
+
+    pk = opts.scl_live_id
+    _clear_code(pk)
+    code, _ = _send(pk, length=10)
+    box = _box_size(login_html, "sms-code")
+    assert_true(box >= len(code),
+                f"the open sign-in page's box takes {box} characters, but the code sent has {len(code)}")
+    _clear_code(pk)

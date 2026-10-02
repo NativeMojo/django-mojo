@@ -321,9 +321,13 @@ def _auth_context(request, group=None, include_registration_extras=False):
         'identity_field': identity_field,
         'forgot_channel': forgot_channel,
         # How many digits the SMS sign-in and sign-up codes have
-        # (SMS_OTP_LENGTH, 6 to 10). The pages size their code box from it;
-        # a box capped at 6 could not take a longer code.
+        # (SMS_OTP_LENGTH, 6 to 10): the pages' wording follows it.
         'sms_code_length': tokens.sms_otp_length(),
+        # The code BOX takes the longest code the setting allows, not the
+        # current length. A code sent before the setting changed stays valid
+        # at its own length, and a page opened before a change is not
+        # redrawn, so a box sized from the setting could refuse a good code.
+        'sms_code_max_length': tokens.SMS_OTP_LENGTH_MAX,
     }
     # Step-up links from the Admin portal must show the credential form even
     # when a refresh token exists: refresh preserves auth_time and would loop
