@@ -25,6 +25,19 @@ def _clear_register_limits():
     clear_rate_limits(ip="127.0.0.1", key="phone_register_verify")
 
 
+# These tests leave a wrong try on fixed numbers every run. The sign-up code
+# is limited to five tries per number in 15 minutes, so the counters are
+# cleared here or a sixth run inside that window would be refused.
+PHONES = tuple(f"+1555000710{n}" for n in range(1, 7))
+
+
+@th.django_unit_setup()
+def setup_dev_bypass(opts):
+    from mojo.decorators.limits import clear_code_attempts
+    for phone in PHONES:
+        clear_code_attempts("phone_register", phone)
+
+
 @th.django_unit_test("dev bypass: endpoint accepts bypass code when header is set")
 def test_endpoint_accepts_bypass_via_header(opts):
     """End-to-end with the test-mode header: bypass code mints a verified

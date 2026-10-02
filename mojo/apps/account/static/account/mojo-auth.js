@@ -265,6 +265,16 @@
         if (typeof DOMException !== 'undefined' && err instanceof DOMException) {
             return WEBAUTHN_LOGIN_COPY[err.name] || WEBAUTHN_LOGIN_COPY._default;
         }
+        // A rate-limit refusal: say what happened and, when the backend sent
+        // the wait (retry_after, in seconds), how long. Rounded up, so the
+        // user is never told to come back before the limit has lifted.
+        if (err.code === 429) {
+            var wait = Number(err.retry_after);
+            if (!(wait > 0)) return 'Too many attempts. Try again later.';
+            var minutes = Math.ceil(wait / 60);
+            return 'Too many attempts. Try again in ' + minutes +
+                (minutes === 1 ? ' minute.' : ' minutes.');
+        }
         var msg = err.message || err.error ||
             (Array.isArray(err.errors) && err.errors[0] && err.errors[0].message) ||
             '';

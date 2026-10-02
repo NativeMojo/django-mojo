@@ -1185,6 +1185,8 @@ def on_user_forgot(request):
 @md.requires_geofence(scope="auth", after_auth=True)
 @md.requires_params("code", "new_password")
 def on_user_password_reset_code(request):
+    from mojo.decorators.limits import check_code_attempt, clear_code_attempts
+
     code = request.DATA.get("code")
     new_password = request.DATA.get("new_password")
     user = User.lookup_from_request(request, phone_as_username=True)
@@ -1196,15 +1198,25 @@ def on_user_password_reset_code(request):
             request=request)
         raise merrors.ValueException("Invalid code")
 
+    # Five tries per account, whatever address they come from. Counted before
+    # the compare; a refused try raises the 429 here.
+    code_ttl = settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int")
+    check_code_attempt("reset", user.pk, request, ttl=code_ttl)
+
     sec_code = user.get_secret("password_reset_code")
     code_ts = int(user.get_secret("password_reset_code_ts") or 0)
     now_ts = int(dates.utcnow().timestamp())
-    if len(code or "") != 6 or code != (sec_code or ""):
-        user.report_incident(f"{user.username} invalid password reset code", "password_reset")
-        raise merrors.ValueException("Invalid code")
-    if now_ts - code_ts > settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int"):
+    # Expiry is decided before the compare, so the answer for a stale code
+    # never depends on the guess.
+    if sec_code and now_ts - code_ts > code_ttl:
         user.report_incident(f"{user.username} expired password reset code", "password_reset")
         raise merrors.ValueException("Expired code")
+    if len(str(code or "")) != 6 or not crypto.codes_match(code, sec_code):
+        user.report_incident(f"{user.username} invalid password reset code", "password_reset")
+        raise merrors.ValueException("Invalid code")
+    # Cleared as soon as the code matches: a right code with a weak new
+    # password is not a guess.
+    clear_code_attempts("reset", user.pk)
     user.set_permanent_password(new_password)
     user.set_secret("password_reset_code", None)
     user.set_secret("password_reset_code_ts", None)
@@ -1984,7 +1996,10 @@ def on_email_change_confirm(request):
         if not request.user or not request.user.is_authenticated:
             raise merrors.PermissionDeniedException("Authentication required", 401, 401)
         user = request.user
+        from mojo.decorators.limits import check_code_attempt, clear_code_attempts
+        check_code_attempt("email_change", user.pk, request, ttl=tok_utils.email_change_code_ttl())
         new_email = tok_utils.verify_email_change_otp(user, code)
+        clear_code_attempts("email_change", user.pk)
     else:
         # Link/token path — token is the credential; no active session required
         user, new_email = tok_utils.verify_email_change_token(token)

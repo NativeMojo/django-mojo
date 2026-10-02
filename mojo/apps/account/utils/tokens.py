@@ -242,26 +242,36 @@ def generate_email_verify_code(user):
     return code
 
 
+def email_verify_code_ttl():
+    """Lifetime in seconds of an email verification code."""
+    ttl = EMAIL_VERIFY_CODE_TTL if EMAIL_VERIFY_CODE_TTL is not None else settings.get("EMAIL_VERIFY_CODE_TTL", 600)
+    return int(ttl)
+
+
 def verify_email_verify_code(user, code):
     """
     Verify the 6-digit email verification code for a user.
     Raises ValueException on mismatch or expiry.
     Consumes the code on success (single-use).
+
+    Takes no request, so the per-account try limit sits in the caller:
+    limits.check_code_attempt("email_verify", ...) before this call.
     """
     stored = user.get_secret("email_verify_code")
     stored_ts = int(user.get_secret("email_verify_code_ts") or 0)
     now_ts = int(dates.utcnow().timestamp())
-    if not stored or code != stored:
-        user.report_incident(
-            details=f"{user.username} invalid email verify code",
-            event_type="email_verify:invalid")
-        raise merrors.ValueException("Invalid code")
-    verify_ttl = EMAIL_VERIFY_CODE_TTL if EMAIL_VERIFY_CODE_TTL is not None else settings.get("EMAIL_VERIFY_CODE_TTL", 600)
-    if now_ts - stored_ts > int(verify_ttl):
+    # Expiry is decided before the compare, so the answer for a stale code
+    # never depends on the guess.
+    if stored and now_ts - stored_ts > email_verify_code_ttl():
         user.report_incident(
             details=f"{user.username} expired email verify code",
             event_type="email_verify:expired")
         raise merrors.ValueException("Expired code")
+    if not crypto.codes_match(code, stored):
+        user.report_incident(
+            details=f"{user.username} invalid email verify code",
+            event_type="email_verify:invalid")
+        raise merrors.ValueException("Invalid code")
     # Consume — single use
     user.set_secret("email_verify_code", None)
     user.set_secret("email_verify_code_ts", None)
@@ -280,25 +290,35 @@ def generate_phone_verify_code(user):
     return code
 
 
+def phone_verify_code_ttl():
+    """Lifetime in seconds of a phone verification code."""
+    return int(settings.get("PHONE_VERIFY_CODE_TTL", 600))
+
+
 def verify_phone_verify_code(user, code):
     """
     Verify the 6-digit code for a user.
     Raises ValueException on mismatch or expiry.
     Consumes the code on success (single-use).
+
+    Takes no request, so the per-account try limit sits in the caller:
+    limits.check_code_attempt("phone_verify", ...) before this call.
     """
     stored = user.get_secret("phone_verify_code")
     stored_ts = int(user.get_secret("phone_verify_ts") or 0)
     now_ts = int(dates.utcnow().timestamp())
-    if not stored or code != stored:
-        user.report_incident(
-            details=f"{user.username} invalid phone verify code",
-            event_type="phone_verify:invalid")
-        raise merrors.ValueException("Invalid code")
-    if now_ts - stored_ts > int(settings.get("PHONE_VERIFY_CODE_TTL", 600)):
+    # Expiry is decided before the compare, so the answer for a stale code
+    # never depends on the guess.
+    if stored and now_ts - stored_ts > phone_verify_code_ttl():
         user.report_incident(
             details=f"{user.username} expired phone verify code",
             event_type="phone_verify:expired")
         raise merrors.ValueException("Expired code")
+    if not crypto.codes_match(code, stored):
+        user.report_incident(
+            details=f"{user.username} invalid phone verify code",
+            event_type="phone_verify:invalid")
+        raise merrors.ValueException("Invalid code")
     # Consume — single use
     user.set_secret("phone_verify_code", None)
     user.set_secret("phone_verify_ts", None)
@@ -396,6 +416,12 @@ def generate_email_change_otp(user, new_email):
     return otp
 
 
+def email_change_code_ttl():
+    """Lifetime in seconds of an email-change code."""
+    ttl = EMAIL_CHANGE_CODE_TTL if EMAIL_CHANGE_CODE_TTL is not None else settings.get("EMAIL_CHANGE_CODE_TTL", 600)
+    return int(ttl)
+
+
 def verify_email_change_otp(user, code):
     """
     Complete a code-based email change.
@@ -404,6 +430,9 @@ def verify_email_change_otp(user, code):
     Returns new_email on success.
     Raises ValueException on any failure (bad code, expired, no pending change).
     Clears all email-change OTP secrets on success so this is single-use.
+
+    Takes no request, so the per-account try limit sits in the caller:
+    limits.check_code_attempt("email_change", ...) before this call.
     """
     new_email = user.get_secret("pending_email")
     stored_otp = user.get_secret("email_change_otp")
@@ -416,8 +445,7 @@ def verify_email_change_otp(user, code):
         raise merrors.ValueException("No pending email change")
 
     now_ts = int(dates.utcnow().timestamp())
-    change_ttl = EMAIL_CHANGE_CODE_TTL if EMAIL_CHANGE_CODE_TTL is not None else settings.get("EMAIL_CHANGE_CODE_TTL", 600)
-    if now_ts - stored_ts > int(change_ttl):
+    if now_ts - stored_ts > email_change_code_ttl():
         user.set_secret("pending_email", None)
         user.set_secret("email_change_otp", None)
         user.set_secret("email_change_otp_ts", None)
@@ -427,7 +455,7 @@ def verify_email_change_otp(user, code):
             event_type="email_change:expired")
         raise merrors.ValueException("Expired code")
 
-    if code != stored_otp:
+    if not crypto.codes_match(code, stored_otp):
         user.report_incident(
             details=f"{user.username} invalid email change OTP",
             event_type="email_change:invalid_otp")
@@ -510,7 +538,7 @@ def verify_phone_change_token(token, code):
         raise merrors.ValueException("Expired code")
 
     # Constant-time comparison to resist timing attacks
-    if code != stored_otp:
+    if not crypto.codes_match(code, stored_otp):
         user.report_incident(
             details=f"{user.username} invalid phone change OTP",
             event_type="phone_change:invalid_otp")

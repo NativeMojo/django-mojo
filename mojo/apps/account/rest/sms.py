@@ -23,6 +23,7 @@ from mojo.apps.account.services import auth_config
 from mojo.apps.account.services import sms_delivery
 from mojo.apps import phonehub
 from mojo.apps.phonehub.services.phonenumbers import normalize as normalize_phone
+from mojo.decorators.limits import check_code_attempt, clear_code_attempts
 from mojo.helpers import crypto, dates, logit
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
@@ -76,9 +77,9 @@ def _verify_otp(user, code):
     now_ts = int(dates.utcnow().timestamp())
     sms_otp_ttl = settings.get("SMS_OTP_TTL", 600)  # 10 minutes
 
-    if not stored_code or now_ts - stored_ts > sms_otp_ttl:
+    if not stored_code or now_ts - stored_ts > int(sms_otp_ttl):
         return False
-    return code == stored_code
+    return crypto.codes_match(code, stored_code)
 
 
 def _clear_otp(user):
@@ -153,10 +154,14 @@ def on_sms_verify(request):
     if not user:
         raise merrors.PermissionDeniedException()
 
+    # Five tries per account, whatever address they come from. Counted before
+    # the compare; a refused try raises the 429 here.
+    check_code_attempt("sms", user.pk, request, ttl=settings.get("SMS_OTP_TTL", 600))
     if not _verify_otp(user, code):
         user.report_incident("Invalid SMS OTP code", "sms:otp_failed")
         raise merrors.PermissionDeniedException("Invalid or expired code", 401, 401)
 
+    clear_code_attempts("sms", user.pk)
     _clear_otp(user)
     # For standalone phone login, entering the OTP proves phone ownership.
     # We must check the gate BEFORE auto-verifying so the gate sees the

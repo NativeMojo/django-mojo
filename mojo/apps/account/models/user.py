@@ -1228,6 +1228,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     def on_action_confirm_totp(self, value):
         from mojo.apps.account.models.totp import UserTOTP
         from mojo.apps.account.services import totp as totp_service
+        from mojo.decorators import limits
         if not isinstance(value, dict):
             value = {}
         self._require_fresh_auth()
@@ -1240,9 +1241,11 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             raise merrors.ValueException(
                 "TOTP setup not started. Call /api/account/totp/setup first.")
         code = (value.get("code") or "").strip()
+        limits.check_code_attempt("totp_manage", self.pk, self.active_request)
         if not totp_service.verify_code(secret, code):
             self.report_incident("Invalid TOTP confirmation code", "totp:confirm_failed")
             raise merrors.ValueException("Invalid code")
+        limits.clear_code_attempts("totp_manage", self.pk)
         totp.is_enabled = True
         totp.save()
         codes = totp.generate_recovery_codes()
@@ -1253,6 +1256,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     def on_action_regenerate_totp_codes(self, value):
         from mojo.apps.account.models.totp import UserTOTP
         from mojo.apps.account.services import totp as totp_service
+        from mojo.decorators import limits
         if not isinstance(value, dict):
             value = {}
         self._require_fresh_auth()
@@ -1261,8 +1265,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             raise merrors.ValueException("TOTP is not enabled for this account")
         secret = totp.get_secret("totp_secret")
         code = (value.get("code") or "").strip()
+        limits.check_code_attempt("totp_manage", self.pk, self.active_request)
         if not totp_service.verify_code(secret, code):
             raise merrors.PermissionDeniedException("Invalid TOTP code", 403, 403)
+        limits.clear_code_attempts("totp_manage", self.pk)
         codes = totp.generate_recovery_codes()
         return {"status": True, "data": {"is_enabled": True, "recovery_codes": codes}}
 

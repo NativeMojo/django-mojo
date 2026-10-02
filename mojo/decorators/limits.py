@@ -1,6 +1,9 @@
 import hashlib
+import math
+import secrets
 import time
 from functools import wraps
+from mojo import errors as merrors
 from mojo.helpers.redis import get_connection
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
@@ -10,7 +13,8 @@ from mojo.apps import metrics
 logger = logit.get_logger("error", "error.log")
 
 __all__ = ["rate_limit", "strict_rate_limit", "endpoint_metrics", "clear_rate_limits",
-           "check_account_attempt", "read_account_attempt", "check_api_throttle"]
+           "check_account_attempt", "read_account_attempt", "check_api_throttle",
+           "check_code_attempt", "clear_code_attempts"]
 
 
 def _hash_key(value):
@@ -26,7 +30,7 @@ def _retry_after_sliding(window):
     return max(1, window)
 
 
-def _block(key, request, retry_after, min_granularity, include_request_in_incident=True):
+def _note_block(key, request, min_granularity, include_request_in_incident=True):
     # Metric + incident event are gated to fire once per key+IP per minute
     # (SET NX). A retry storm that keeps hitting a limit must not turn every
     # rejected request into a synchronous Event INSERT + rule evaluation —
@@ -73,6 +77,10 @@ def _block(key, request, retry_after, min_granularity, include_request_in_incide
             )
         except Exception:
             pass
+
+
+def _block(key, request, retry_after, min_granularity, include_request_in_incident=True):
+    _note_block(key, request, min_granularity, include_request_in_incident)
     resp = JsonResponse({"error": "Rate limit exceeded", "code": 429, "status": False}, status=429)
     resp["Retry-After"] = str(retry_after)
     return resp
@@ -89,17 +97,26 @@ def _incr_fixed(r, redis_key, window):
     return count
 
 
-def _check_sliding(r, redis_key, window, limit):
+def _attempt_member(now):
+    # The timestamp alone is not unique: two tries in the same instant would
+    # be one set member and count once.
+    return f"{now}:{secrets.token_hex(4)}"
+
+
+def _check_sliding(r, redis_key, window, limit, now=None):
     """
     Sliding-window counter using a Redis sorted set.
     Adds current timestamp, removes entries outside the window, returns current count.
     Returns (count, allowed).
+
+    `now` is a test seam.
     """
-    now = time.time()
+    if now is None:
+        now = time.time()
     cutoff = now - window
     p = r.pipeline(transaction=False)
     p.zremrangebyscore(redis_key, 0, cutoff)
-    p.zadd(redis_key, {str(now): now})
+    p.zadd(redis_key, {_attempt_member(now): now})
     p.zcard(redis_key)
     p.expire(redis_key, window * 2)
     results = p.execute()
@@ -579,6 +596,146 @@ def read_account_attempt(key, account_id, limit=None, window=None):
     except Exception as err:
         logger.error(f"read_account_attempt: Redis error for key '{key}' account '{account_id}': {err}")
     return result
+
+
+# ---------------------------------------------------------------------------
+# Per-account limit on one-time code checks (maestro #6226)
+#
+# A six-digit code is one in a million per guess, and the per-IP limits on the
+# verify endpoints do nothing against a guesser who rotates addresses. Every
+# code check therefore counts tries against the ACCOUNT the code belongs to.
+#
+# Unlike the password counter above, a refused try is not counted: retrying
+# while locked must not extend the wait, and the wait reported is the real
+# one. The refuse-or-count step is one Lua script so that two tries arriving
+# together are both counted before either compare — no sixth compare happens
+# in a window. One key per script call keeps it valid on a Redis cluster.
+# ---------------------------------------------------------------------------
+
+# Kinds of code, each its own bucket `code:<kind>`. `totp_manage` (the
+# signed-in set-up checks) is separate from the two sign-in checks so set-up
+# typos can't lock sign-in, and `totp_login` is separate from the password
+# `login` bucket so wrong authenticator codes can't lock password sign-in.
+CODE_KINDS = ("sms", "reset", "phone_verify", "email_verify", "email_change",
+              "phone_register", "totp", "totp_login", "totp_manage")
+
+# Three authenticator codes are valid at any moment and the secret never
+# expires, so the two authenticator sign-in checks also share a daily cap.
+TOTP_DAILY_KINDS = ("totp", "totp_login")
+TOTP_DAILY_BUCKET = "code:totp_daily"
+TOTP_DAILY_WINDOW = 86400
+
+# KEYS[1] the sorted set. ARGV: now, member, limit, window.
+# Returns "0" when the try was counted, else the seconds to wait as a string
+# (a Lua number would be truncated to an integer on the way out).
+_TAKE_ATTEMPT_LUA = """
+local now = tonumber(ARGV[1])
+local limit = tonumber(ARGV[3])
+local window = tonumber(ARGV[4])
+redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, now - window)
+if redis.call('ZCARD', KEYS[1]) >= limit then
+    local ages_out = redis.call('ZRANGE', KEYS[1], -limit, -limit, 'WITHSCORES')
+    return tostring(tonumber(ages_out[2]) + window - now)
+end
+redis.call('ZADD', KEYS[1], now, ARGV[2])
+redis.call('EXPIRE', KEYS[1], window * 2)
+return "0"
+"""
+
+
+def _account_key(key, account_id):
+    return f"srl:{key}:account:{account_id}"
+
+
+def _take_attempt(r, key, account_id, limit, window, now, member):
+    """Refuse or count one try. Returns 0 when counted, else the seconds to wait."""
+    wait = r.eval(_TAKE_ATTEMPT_LUA, 1, _account_key(key, account_id),
+                  repr(float(now)), member, int(limit), int(window))
+    if isinstance(wait, bytes):
+        wait = wait.decode()
+    # Rounded first: the script's float arithmetic can land a hair either side
+    # of a whole second.
+    wait = round(float(wait), 3)
+    if wait <= 0:
+        return 0
+    return max(1, math.ceil(wait))
+
+
+def check_code_attempt(kind, account_id, request=None, ttl=None, *, limit=None,
+                       window=None, daily_limit=None, now=None):
+    """
+    Count one try at a one-time code against the account it belongs to.
+
+    Call it BEFORE the compare. When the account already has its tries in the
+    window the try is refused, not counted, and RateLimitException is raised;
+    the REST dispatcher answers the standard 429 with `Retry-After` and a
+    `retry_after` field. Otherwise the try is counted and the call returns.
+    Call clear_code_attempts() as soon as a code matches.
+
+    Fail-open on Redis errors, like check_account_attempt: a Redis outage must
+    never lock everyone out, and the codes still expire.
+
+    Args:
+        kind:        One of CODE_KINDS.
+        account_id:  The account the code belongs to (user.pk), or for a code
+                     with no account yet, what it was sent to.
+        request:     Request, for the once-a-minute metric and incident on a
+                     refusal. Optional.
+        ttl:         That code's lifetime in seconds. The window is never
+                     shorter, or a long-lived code would get more than `limit`
+                     guesses.
+        limit, window, daily_limit, now: test seams. The limit and window come
+                     from CODE_ATTEMPT_LIMIT (5) and CODE_ATTEMPT_WINDOW
+                     (900 s), the daily cap from TOTP_ATTEMPT_DAILY_LIMIT (20).
+    """
+    if limit is None:
+        limit = settings.get("CODE_ATTEMPT_LIMIT", 5, kind="int")
+    if window is None:
+        window = settings.get("CODE_ATTEMPT_WINDOW", 900, kind="int")
+    key = f"code:{kind}"
+    buckets = [(key, max(1, int(limit)), max(1, int(window), int(ttl or 0)))]
+    if kind in TOTP_DAILY_KINDS:
+        if daily_limit is None:
+            daily_limit = settings.get("TOTP_ATTEMPT_DAILY_LIMIT", 20, kind="int")
+        buckets.append((TOTP_DAILY_BUCKET, max(1, int(daily_limit)), TOTP_DAILY_WINDOW))
+    if now is None:
+        now = time.time()
+    member = _attempt_member(now)
+    wait = 0
+    try:
+        r = get_connection()
+        counted = []
+        for bucket, bucket_limit, bucket_window in buckets:
+            wait = _take_attempt(r, bucket, account_id, bucket_limit, bucket_window, now, member)
+            if wait:
+                # Refused by this bucket: the try must not stay counted in an
+                # earlier one.
+                for earlier in counted:
+                    r.zrem(_account_key(earlier, account_id), member)
+                break
+            counted.append(bucket)
+    except Exception as err:
+        logger.error(f"check_code_attempt: Redis error for key '{key}' account '{account_id}': {err}")
+        return
+    if wait:
+        if request is not None:
+            _note_block(key, request, "hours")
+        raise merrors.RateLimitException(wait)
+
+
+def clear_code_attempts(kind, account_id):
+    """Clear an account's counter for one kind of code. Call it as soon as a
+    code matches, before anything else can fail: a right code followed by, say,
+    a weak new password is not a guess."""
+    try:
+        r = get_connection()
+        keys = [_account_key(f"code:{kind}", account_id)]
+        if kind in TOTP_DAILY_KINDS:
+            keys.append(_account_key(TOTP_DAILY_BUCKET, account_id))
+        for key in keys:
+            r.delete(key)
+    except Exception as err:
+        logger.error(f"clear_code_attempts: Redis error for kind '{kind}' account '{account_id}': {err}")
 
 
 # ---------------------------------------------------------------------------

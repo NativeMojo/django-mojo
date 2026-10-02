@@ -1,4 +1,5 @@
 from Crypto.Random import get_random_bytes
+import hmac
 import string
 from base64 import b64encode, b64decode
 import json
@@ -26,6 +27,23 @@ def random_string(length, allow_digits=True, allow_chars=True, allow_special=Tru
         raise ValueError("At least one character set (digits, chars, special) must be allowed")
     random_bytes = get_random_bytes(length)
     return ''.join(characters[b % len(characters)] for b in random_bytes)
+
+
+def codes_match(submitted, stored):
+    """
+    Constant-time compare of a submitted one-time code with the stored one.
+
+    False when either side is missing or empty. Both sides are compared as
+    UTF-8 bytes: hmac.compare_digest raises on a non-ASCII str, and the
+    submitted side is whatever the caller posted.
+    """
+    if submitted is None or stored is None:
+        return False
+    submitted = str(submitted).encode("utf-8")
+    stored = str(stored).encode("utf-8")
+    if not submitted or not stored:
+        return False
+    return hmac.compare_digest(submitted, stored)
 
 
 def b64_encode(data):

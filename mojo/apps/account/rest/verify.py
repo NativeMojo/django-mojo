@@ -1,4 +1,5 @@
 import mojo.decorators as md
+from mojo.decorators.limits import check_code_attempt, clear_code_attempts
 from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
 from mojo.apps.account.services import email_delivery
@@ -84,7 +85,9 @@ def on_email_verify_code_confirm(request):
     the user's existing session remains active.
     """
     user = request.user
+    check_code_attempt("email_verify", user.pk, request, ttl=tokens.email_verify_code_ttl())
     tokens.verify_email_verify_code(user, request.DATA.code)
+    clear_code_attempts("email_verify", user.pk)
     user.is_email_verified = True
     user.save(update_fields=["is_email_verified", "modified"])
     user.report_incident(f"{user.username} email verified (code)", "email_verify:confirmed_code")
@@ -181,7 +184,9 @@ def on_phone_verify_send(request, *, send=None):
 def on_phone_verify_confirm(request):
     """Confirm phone ownership by submitting the 6-digit code."""
     user = request.user
+    check_code_attempt("phone_verify", user.pk, request, ttl=tokens.phone_verify_code_ttl())
     tokens.verify_phone_verify_code(user, request.DATA.code)
+    clear_code_attempts("phone_verify", user.pk)
     user.is_phone_verified = True
     user.save(update_fields=["is_phone_verified", "modified"])
     user.report_incident(f"{user.username} phone verified", "phone_verify:confirmed")

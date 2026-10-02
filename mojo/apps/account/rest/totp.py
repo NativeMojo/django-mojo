@@ -29,6 +29,7 @@ from mojo.apps.account.models.totp import UserTOTP
 from mojo.apps.account.rest.user import jwt_login
 from mojo.apps.account.services import mfa as mfa_service
 from mojo.apps.account.services import totp as totp_service
+from mojo.decorators.limits import check_code_attempt, clear_code_attempts
 from mojo.helpers import logit
 from mojo.helpers.qrcode import generate_qrcode
 from mojo.helpers.response import JsonResponse
@@ -81,9 +82,12 @@ def on_totp_confirm(request):
         raise merrors.ValueException("TOTP setup not started. Call /api/account/totp/setup first.")
 
     code = request.DATA.get("code", "").strip()
+    # The signed-in checks have their own bucket, so set-up typos can't lock sign-in.
+    check_code_attempt("totp_manage", request.user.pk, request)
     if not totp_service.verify_code(secret, code):
         request.user.report_incident("Invalid TOTP confirmation code", "totp:confirm_failed")
         raise merrors.ValueException("Invalid code")
+    clear_code_attempts("totp_manage", request.user.pk)
 
     totp.is_enabled = True
     totp.save()
@@ -133,8 +137,10 @@ def on_totp_recovery_codes_regenerate(request):
         raise merrors.ValueException("TOTP is not enabled for this account")
     secret = totp.get_secret("totp_secret")
     code = request.DATA.get("code", "").strip()
+    check_code_attempt("totp_manage", request.user.pk, request)
     if not totp_service.verify_code(secret, code):
         raise merrors.PermissionDeniedException("Invalid TOTP code", 403, 403)
+    clear_code_attempts("totp_manage", request.user.pk)
     codes = totp.generate_recovery_codes()
     return JsonResponse({"status": True, "data": {"is_enabled": True, "recovery_codes": codes}})
 
@@ -167,10 +173,14 @@ def on_totp_verify(request):
 
     secret = totp.get_secret("totp_secret")
     code = request.DATA.get("code", "").strip()
+    # Five tries per account in 15 minutes, and a daily cap: three codes are
+    # valid at any moment and the secret never expires.
+    check_code_attempt("totp", user.pk, request)
     if not totp_service.verify_code(secret, code):
         user.report_incident("Invalid TOTP code during login", "totp:login_failed")
         raise merrors.PermissionDeniedException("Invalid code", 401, 401)
 
+    clear_code_attempts("totp", user.pk)
     return jwt_login(request, user, source="totp_mfa")
 
 
@@ -226,9 +236,6 @@ def on_totp_recover(request):
 @md.requires_geofence(scope="auth", after_auth=True)
 def on_totp_login(request):
     """Passwordless login using a TOTP code."""
-    from mojo.decorators.limits import check_account_attempt, clear_rate_limits
-    from mojo.helpers.settings import settings
-
     username = request.DATA.get("username", "").lower().strip()
     user = User.objects.filter(Q(username=username) | Q(email=username)).first()
 
@@ -241,23 +248,19 @@ def on_totp_login(request):
         )
         raise merrors.PermissionDeniedException()
 
-    # Same per-account guard as password login — totp/login is a passwordless
-    # guess against a known username and must not be brute-forceable.
-    acct_limit = settings.get("LOGIN_USERNAME_LIMIT", 10, kind="int")
-    acct_window = settings.get("LOGIN_USERNAME_WINDOW", 900, kind="int")
-    _, blocked = check_account_attempt("login", user.pk, acct_limit, acct_window, request=request)
-    if blocked is not None:
-        return blocked
-
     totp = UserTOTP.objects.filter(user=user, is_enabled=True).first()
     if not totp:
         raise merrors.PermissionDeniedException("TOTP not enabled for this account")
 
+    # totp/login is a passwordless guess against a known username and must not
+    # be brute-forceable. It has its own per-account bucket, not the password
+    # `login` one: wrong authenticator codes must not lock password sign-in.
+    check_code_attempt("totp_login", user.pk, request)
     secret = totp.get_secret("totp_secret")
     code = request.DATA.get("code", "").strip()
     if not totp_service.verify_code(secret, code):
         user.report_incident("Invalid TOTP code during standalone login", "totp:login_failed")
         raise merrors.PermissionDeniedException("Invalid code", 401, 401)
 
-    clear_rate_limits(key="login", account_id=user.pk)
+    clear_code_attempts("totp_login", user.pk)
     return jwt_login(request, user, source="totp")
