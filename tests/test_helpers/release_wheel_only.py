@@ -149,3 +149,33 @@ def test_publish_runs_the_check_before_push(opts):
     assert_true(build_at < check_at, "the wheel check must run after the build")
     assert_true(call_build < call_push < call_upload,
                 "the build and its check must run before the push and the upload")
+
+
+@th.unit_test("release wheel: a local file packed as license metadata is refused")
+def test_untracked_license_file_is_refused(opts):
+    # Found in review (Brenda, #6226 note 63596): the build copies every file
+    # matching LICENSE*/NOTICE* into the wheel's metadata, tracked or not.
+    module = _load()
+    tracked = TRACKED | {"LICENSE", "NOTICE"}
+    with tempfile.TemporaryDirectory() as directory:
+        dist = Path(directory)
+        licenses = f"django_mojo-{VERSION}.dist-info/licenses/"
+        wheel = _write_wheel(dist, module, TRACKED | {licenses + "LICENSE", licenses + "NOTICE"})
+        assert_eq(module.check(dist, VERSION, tracked), wheel,
+                  "tracked license files in the metadata must pass")
+        wheel.unlink()
+        _write_wheel(dist, module, TRACKED | {licenses + "LICENSE", licenses + "LICENSE.local.txt"})
+        message = _refused(module, dist, tracked=tracked)
+        assert_true(message and "LICENSE.local.txt" in message,
+                    f"an untracked file packed as a license must be refused by name, got {message!r}")
+
+
+@th.unit_test("release wheel: an unexpected file in the wheel's metadata is refused")
+def test_unexpected_metadata_file_is_refused(opts):
+    module = _load()
+    with tempfile.TemporaryDirectory() as directory:
+        dist = Path(directory)
+        _write_wheel(dist, module, TRACKED | {f"django_mojo-{VERSION}.dist-info/notes.txt"})
+        message = _refused(module, dist)
+        assert_true(message and "notes.txt" in message,
+                    f"a metadata file the build does not generate must be refused, got {message!r}")
