@@ -1,13 +1,15 @@
 """Maestro item #6348 — a release uploads one checked wheel and nothing else.
 
-`uv publish` uploads everything in dist/. The source archive used to go up
-with the wheel, and it packed every agent worktree; 1.31.4 was half-uploaded
-when the index refused it for size. scripts/release_wheel_only.py removes the
-source archive and refuses a wheel that holds anything git does not track.
-Each test builds its own dist/ in a temporary directory.
+The source archive used to go up with the wheel, and it packed every agent
+worktree; 1.31.4 was half-uploaded when the index refused it for size. No
+source archive is built now, and scripts/release_wheel_only.py refuses a build
+folder holding anything but this version's wheel, and a wheel holding anything
+git does not track. Each test builds its own folder in a temporary directory.
+The last tests pin the build settings that keep a hand-run build clean.
 """
 import importlib.util
 from pathlib import Path
+import re
 import tempfile
 import zipfile
 
@@ -45,27 +47,19 @@ def _refused(module, dist, tracked=None, **kwargs):
     return None
 
 
-@th.unit_test("release wheel: a wheel of tracked files passes, and the source archive is removed")
+@th.unit_test("release wheel: a wheel of tracked files, alone beside uv's .gitignore, passes")
 def test_clean_wheel_passes(opts):
     module = _load()
     with tempfile.TemporaryDirectory() as directory:
         dist = Path(directory)
         (dist / ".gitignore").write_text("*")
-        (dist / f"django_mojo-{VERSION}.tar.gz").write_bytes(b"source archive")
         wheel = _write_wheel(dist, module, TRACKED)
-
-        removed = module.remove_source_archives(dist)
-        assert_eq(removed, [f"django_mojo-{VERSION}.tar.gz"],
-                  "the source archive must be removed before upload")
         assert_eq(module.check(dist, VERSION, TRACKED), wheel,
                   "a wheel holding exactly the tracked files must pass")
-        left = sorted(path.name for path in dist.iterdir())
-        assert_eq(left, [".gitignore", wheel.name],
-                  "only the wheel may be left for `uv publish` to upload")
 
 
-@th.unit_test("release wheel: a source archive left in dist/ is refused")
-def test_source_archive_left_behind_is_refused(opts):
+@th.unit_test("release wheel: a source archive beside the wheel is refused, and left in place")
+def test_source_archive_beside_the_wheel_is_refused(opts):
     module = _load()
     with tempfile.TemporaryDirectory() as directory:
         dist = Path(directory)
@@ -73,7 +67,9 @@ def test_source_archive_left_behind_is_refused(opts):
         _write_wheel(dist, module, TRACKED)
         message = _refused(module, dist)
         assert_true(message and "must hold exactly" in message,
-                    f"a second file in dist/ must be refused, got {message!r}")
+                    f"a second file in the build folder must be refused, got {message!r}")
+        assert_true((dist / f"django_mojo-{VERSION}.tar.gz").exists(),
+                    "the check must refuse a source archive, not quietly delete it")
 
 
 @th.unit_test("release wheel: another version's wheel, or none, is refused")
@@ -138,19 +134,6 @@ def test_oversized_wheel_is_refused(opts):
                   "the default limit must be the index's 100 MiB")
 
 
-@th.unit_test("release wheel: publish.py runs the check after the build and before the push")
-def test_publish_runs_the_check_before_push(opts):
-    source = (ROOT / "publish.py").read_text(encoding="utf-8")
-    build_at = source.index('run(["uv", "build"]')
-    check_at = source.index('"scripts/release_wheel_only.py"')
-    call_build = source.index("build(version, dry_run=args.dry_run)")
-    call_push = source.index("push_source(branch, dry_run=args.dry_run)")
-    call_upload = source.index("publish_to_pypi(dry_run=args.dry_run)")
-    assert_true(build_at < check_at, "the wheel check must run after the build")
-    assert_true(call_build < call_push < call_upload,
-                "the build and its check must run before the push and the upload")
-
-
 @th.unit_test("release wheel: a local file packed as license metadata is refused")
 def test_untracked_license_file_is_refused(opts):
     # Found in review (Brenda, #6226 note 63596): the build copies every file
@@ -179,3 +162,43 @@ def test_unexpected_metadata_file_is_refused(opts):
         message = _refused(module, dist)
         assert_true(message and "notes.txt" in message,
                     f"a metadata file the build does not generate must be refused, got {message!r}")
+
+
+def _toml_list(table, key):
+    """The strings of `key = [...]` in one table of pyproject.toml.
+
+    A regular expression, because tomllib is not in Python 3.10.
+    """
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    body = re.search(r"^\[" + re.escape(table) + r"\]\n(.*?)(?=^\[|\Z)", text,
+                     re.MULTILINE | re.DOTALL)
+    if not body:
+        return None
+    found = re.search(r"^" + re.escape(key) + r"\s*=\s*\[(.*?)\]", body.group(1),
+                      re.MULTILINE | re.DOTALL)
+    if not found:
+        return None
+    return re.findall(r'"([^"]+)"', found.group(1))
+
+
+@th.unit_test("release wheel: the check and the build settings name the same packages")
+def test_packages_agree_with_the_build_settings(opts):
+    module = _load()
+    assert_eq(_toml_list("tool.hatch.build.targets.wheel", "packages"), list(module.PACKAGES),
+              "the wheel's packages must be the ones the check allows")
+    assert_eq(_toml_list("tool.hatch.build.targets.sdist", "only-include"), list(module.PACKAGES),
+              "a hand-built source archive must be limited to the same packages")
+
+
+@th.unit_test("release wheel: license files are named, never matched by pattern")
+def test_license_files_are_named(opts):
+    assert_eq(_toml_list("project", "license-files"), ["LICENSE", "NOTICE"],
+              "a pattern would pack any local file named like a license")
+
+
+@th.unit_test("release wheel: the committed .gitignore excludes agent worktrees and local session settings")
+def test_gitignore_names_worktrees(opts):
+    lines = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    for entry in (".worktrees/", ".claude/settings.local.json"):
+        assert_true(entry in lines,
+                    f"{entry} must be in .gitignore: a build tool does not read .git/info/exclude")

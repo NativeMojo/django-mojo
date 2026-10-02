@@ -12,6 +12,10 @@ So this script never writes to the working tree and never commits. It refuses
 to run against a dirty tree, because a release whose source was not committed
 first is unreproducible — and a PyPI version number can never be reused.
 
+One file is uploaded: the wheel, built and checked in a private temporary
+folder and named to `uv publish` by its path. No source archive is built, and
+dist/ in the checkout is neither written nor read (maestro #6348).
+
 It also asks for no input. There are no release notes here: notes belong on the
 maestro board, and once maestro's project release notes ship (#1494) this script
 will push them from there. See post_release_notes().
@@ -27,34 +31,34 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-# Load .env if present (UV_PUBLISH_TOKEN lives there).
-_env_file = Path(".env")
-if _env_file.exists():
-    for _line in _env_file.read_text().splitlines():
-        _line = _line.strip()
-        if _line and not _line.startswith("#") and "=" in _line:
-            _key, _val = _line.split("=", 1)
-            os.environ.setdefault(_key.strip(), _val.strip())
-
+ENV_FILE = Path(".env")
 PYPROJECT_FILE = Path("pyproject.toml")
 INIT_FILE = Path("mojo/__init__.py")
 LOCK_FILE = Path("uv.lock")
 
 PACKAGE_NAME = "django-mojo"
+# Must match wheel_name() in scripts/release_wheel_only.py, which refuses a
+# folder holding anything but this one file.
+WHEEL_NAME = "django_mojo-{version}-py3-none-any.whl"
 PYPI_JSON_URL = "https://pypi.org/pypi/{name}/{version}/json"
 PYPI_SIMPLE_URL = "https://pypi.org/simple/{name}/"
 
 # How long to wait, after the upload, for the release to become resolvable by
-# the world. Overridable for tests; the default outlasts any normal CDN lag
-# by two orders of magnitude.
-VISIBILITY_TIMEOUT = float(os.environ.get("PUBLISH_VISIBLE_TIMEOUT", "600"))
-VISIBILITY_INTERVAL = float(os.environ.get("PUBLISH_VISIBLE_INTERVAL", "5"))
+# the world. Overridable with PUBLISH_VISIBLE_TIMEOUT / PUBLISH_VISIBLE_INTERVAL;
+# the default outlasts any normal CDN lag by two orders of magnitude.
+VISIBILITY_TIMEOUT = 600.0
+VISIBILITY_INTERVAL = 5.0
+
+# What require_release_note returns under --note-by-agent: no note was read,
+# and the calling agent owns both the check and the publish.
+NOTE_BY_AGENT = "note-by-agent"
 
 # The files the agent is expected to have bumped and committed before calling us.
 VERSION_FILES = (PYPROJECT_FILE, INIT_FILE, LOCK_FILE)
@@ -65,10 +69,26 @@ class PublishError(Exception):
     pass
 
 
-def say(message):
+def load_env(path, environ):
+    """Fill `environ` from a .env file, keeping what is already set.
+
+    UV_PUBLISH_TOKEN lives there. Called first in main(), not at import, so
+    loading this file as a module changes nothing.
+    """
+    path = Path(path)
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            environ.setdefault(key.strip(), value.strip())
+
+
+def say(message, prefix="==> "):
     """Progress output. Plain print, not logging — nothing here needs a logger,
     and `mojo.helpers.logit` is unavailable to a script that cannot import mojo."""
-    print(f"==> {message}", flush=True)
+    print(f"{prefix}{message}", flush=True)
 
 
 def run(argv, dry_run=False, capture=True):
@@ -306,8 +326,9 @@ def maestro_request(method, path, params=None, payload=None, timeout=20):
     url, key, scheme, _project = maestro_credentials()
     if not url or not key:
         raise PublishError(
-            "no maestro credential found — install the maestro MCP server, or "
-            "pass --skip-notes to release without a note")
+            "no maestro credential found — install the maestro MCP server; "
+            "from an agent session, confirm the note yourself and pass "
+            "--note-by-agent; pass --skip-notes only when maestro is down")
 
     target = f"{url}{path}"
     if params:
@@ -353,17 +374,29 @@ def find_release_note(version, project):
     return None
 
 
-def require_release_note(version, project, skip=False):
+def require_release_note(version, project, skip=False, by_agent=False):
     """Refuse to release a version nobody wrote a note for.
 
     A precondition, NOT a closing step, and that ordering is the whole point: a
     PyPI version can never be reused, so a note check that runs after the
     upload has nothing left to protect. Draft is what we require — publishing
     it is what `post_release_notes` does once the release actually shipped.
+
+    Under --note-by-agent nothing is requested and nothing is verified here.
+    An agent session's maestro connection is handed to it at launch and stored
+    in no file this script can read, so the agent confirms the draft with its
+    own tools before the run and publishes it after (maestro #6349).
     """
     if skip:
         say("release note check skipped (--skip-notes)")
         return None
+    if by_agent:
+        if not project:
+            raise PublishError(
+                ".claude/maestro.json names no project — the calling agent "
+                "needs it to publish the release note")
+        say("release note not checked by this script: the calling agent confirms it")
+        return NOTE_BY_AGENT
     if not project:
         raise PublishError(
             ".claude/maestro.json names no project — cannot check for a "
@@ -388,24 +421,27 @@ def current_branch():
     return branch
 
 
-def build(version, dry_run=False):
-    """Build, verify, and leave only a checked wheel in dist/.
+def build(version, out_dir):
+    """Build the wheel into `out_dir`, check it there, and return its path.
 
-    `uv publish` uploads whatever dist/ holds. The source archive is needed by
-    the packaging check and is then removed: it packs every file `.gitignore`
-    does not name, including each agent worktree, and the index refusing it
-    for size AFTER the wheel was up is how 1.31.4 went out half-uploaded
-    (maestro #6348). The last step also refuses a wheel holding anything git
-    does not track.
+    Runs for real under --dry-run as well: a rehearsal that builds nothing
+    cannot fail where the release would. `out_dir` is a private temporary
+    folder, so nothing another session leaves in dist/ can be uploaded, and
+    the file that was checked is the file that goes up.
+
+    No source archive is built. One packs every file `.gitignore` does not
+    name, including each agent worktree, and the index refusing it for size
+    AFTER the wheel was up is how 1.31.4 went out half-uploaded (maestro
+    #6348). The last step refuses a wheel holding anything git does not track.
     """
-    run([sys.executable, "scripts/vendor_admin_portal.py", "--check"],
-        dry_run=dry_run, capture=False)
-    run(["rm", "-rf", "dist"], dry_run=dry_run, capture=False)
-    run(["uv", "build"], dry_run=dry_run, capture=False)
-    run([sys.executable, "scripts/verify_admin_portal_package.py", "--dist", "dist",
-         "--build-smoke"], dry_run=dry_run, capture=False)
-    run([sys.executable, "scripts/release_wheel_only.py", "--dist", "dist",
-         "--version", version], dry_run=dry_run, capture=False)
+    out_dir = str(out_dir)
+    run([sys.executable, "scripts/vendor_admin_portal.py", "--check"], capture=False)
+    run(["uv", "build", "--wheel", "--out-dir", out_dir], capture=False)
+    run([sys.executable, "scripts/verify_admin_portal_package.py", "--dist", out_dir,
+         "--build-smoke"], capture=False)
+    run([sys.executable, "scripts/release_wheel_only.py", "--dist", out_dir,
+         "--version", version], capture=False)
+    return Path(out_dir) / WHEEL_NAME.format(version=version)
 
 
 def push_source(branch, dry_run=False):
@@ -422,13 +458,16 @@ def push_source(branch, dry_run=False):
     run(["git", "push", "origin", branch], dry_run=dry_run, capture=False)
 
 
-def publish_to_pypi(dry_run=False):
-    """The one irreversible step.
+def publish_to_pypi(wheel, dry_run=False):
+    """The one irreversible step: upload the one checked wheel, by its path.
+
+    A bare `uv publish` uploads everything in dist/. Naming the file means
+    nothing else can go up with it.
 
     The token is read from the environment by uv rather than passed in argv,
     where it would be visible in `ps` to any local user.
     """
-    run(["uv", "publish"], dry_run=dry_run, capture=False)
+    run(["uv", "publish", str(wheel)], dry_run=dry_run, capture=False)
 
 
 def _url_ok(url):
@@ -457,8 +496,11 @@ def wait_for_pypi_visibility(version, timeout=None, interval=None):
     would misreport a release that shipped — and would strand a rerun behind
     the already-on-PyPI precondition.
     """
-    timeout = VISIBILITY_TIMEOUT if timeout is None else timeout
-    interval = VISIBILITY_INTERVAL if interval is None else interval
+    # Read here, not at import: .env is loaded by main().
+    if timeout is None:
+        timeout = float(os.environ.get("PUBLISH_VISIBLE_TIMEOUT", VISIBILITY_TIMEOUT))
+    if interval is None:
+        interval = float(os.environ.get("PUBLISH_VISIBLE_INTERVAL", VISIBILITY_INTERVAL))
     json_url = PYPI_JSON_URL.format(name=PACKAGE_NAME, version=version)
     simple_url = PYPI_SIMPLE_URL.format(name=PACKAGE_NAME)
     # Filenames normalize the dashes; anchor the version so 1.15.1 can never
@@ -494,7 +536,7 @@ def tag_release(version, branch, dry_run=False):
     run(["git", "push", "origin", tag], dry_run=dry_run, capture=False)
 
 
-def post_release_notes(version, note, dry_run=False):
+def post_release_notes(version, note, project=None, dry_run=False):
     """Flip this version's maestro note from draft to published.
 
     Runs LAST, after the tag, because publishing a note for a release that
@@ -505,7 +547,17 @@ def post_release_notes(version, note, dry_run=False):
     pushed, so aborting would misreport a release that happened. Publishing the
     note by hand afterwards is a two-second fix; un-publishing a package is not
     possible at all.
+
+    Under --note-by-agent the publish is the calling agent's. Returns the line
+    main() prints last for it, and only on a real run: a rehearsal must never
+    tell an agent to publish the note of a release that did not ship.
     """
+    if note == NOTE_BY_AGENT:
+        if dry_run:
+            say(f"[dry-run] release note step skipped for {version}: "
+                "the calling agent publishes it after a real release")
+            return None
+        return f'NEXT: publish_release(project={project}, version="{version}")'
     if note is None:
         say(f"release notes for {version}: nothing to publish")
         return
@@ -532,7 +584,7 @@ def post_release_notes(version, note, dry_run=False):
             f"({err}) — publish it from the board")
 
 
-def parse_arguments():
+def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(
         description=(
             "Release django-mojo. The version must already be bumped and "
@@ -542,20 +594,29 @@ def parse_arguments():
         help="Skip the PyPI upload (still verifies, builds, pushes and tags)")
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="Run every check for real, but execute nothing that changes anything")
-    parser.add_argument(
+        help=("Run every check and the build for real, but push, upload and "
+              "tag nothing"))
+    notes = parser.add_mutually_exclusive_group()
+    notes.add_argument(
         "--skip-notes", action="store_true",
         help=("Release without a maestro release note. The gate is fail-closed "
               "on purpose — reach for this only when maestro is down"))
-    return parser.parse_args()
+    notes.add_argument(
+        "--note-by-agent", action="store_true",
+        help=("For an agent session, which has no maestro login in any file: "
+              "the agent has confirmed the draft note and publishes it after "
+              "the release. This script does not verify that"))
+    return parser.parse_args(argv)
 
 
-def main():
+def main(argv=None):
     try:
-        args = parse_arguments()
+        load_env(ENV_FILE, os.environ)
+        args = parse_arguments(argv)
 
         if args.dry_run:
-            say("DRY RUN — checks run for real, nothing is pushed or published")
+            say("DRY RUN — checks and the build run for real, "
+                "nothing is pushed or published")
 
         # Everything below the build is ordered so the irreversible step (the
         # PyPI upload) happens last and only after the source is on the remote.
@@ -570,23 +631,30 @@ def main():
         # Before the build, and well before PyPI: a version can never be
         # reused, so every precondition has to fail while failing is still free.
         _url, _key, _scheme, project = maestro_credentials()
-        note = require_release_note(version, project, skip=args.skip_notes)
+        note = require_release_note(
+            version, project, skip=args.skip_notes, by_agent=args.note_by_agent)
 
         branch = current_branch()
 
-        build(version, dry_run=args.dry_run)
-        push_source(branch, dry_run=args.dry_run)
+        # Only this run can see the folder, and it is gone when the block ends.
+        with tempfile.TemporaryDirectory(prefix="django-mojo-release-") as out_dir:
+            wheel = build(version, Path(out_dir).resolve())
+            # Again, after the build: sessions share this checkout, and the
+            # wheel check compares file names with git, not file contents.
+            require_clean_tree()
+            push_source(branch, dry_run=args.dry_run)
 
-        visible = True
-        if args.nopypi:
-            say("skipping PyPI upload (--nopypi)")
-        else:
-            publish_to_pypi(dry_run=args.dry_run)
-            if not args.dry_run:
-                visible = wait_for_pypi_visibility(version)
+            visible = True
+            if args.nopypi:
+                say("skipping PyPI upload (--nopypi)")
+            else:
+                publish_to_pypi(wheel, dry_run=args.dry_run)
+                if not args.dry_run:
+                    visible = wait_for_pypi_visibility(version)
 
         tag_release(version, branch, dry_run=args.dry_run)
-        post_release_notes(version, note, dry_run=args.dry_run)
+        next_step = post_release_notes(
+            version, note, project=project, dry_run=args.dry_run)
 
         if args.dry_run:
             say(f"dry run complete for {version}")
@@ -595,6 +663,9 @@ def main():
         else:
             say(f"released {version} — but it is NOT yet resolvable on PyPI "
                 "(see the WARNING above); hold deploys until it is")
+        if next_step:
+            # Last line on purpose: it is the one step left, and it is the agent's.
+            say(next_step, prefix="")
 
     except PublishError as err:
         print(f"ERROR: {err}", file=sys.stderr)
