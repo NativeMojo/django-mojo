@@ -355,3 +355,30 @@ def test_export_zero_rows_keeps_graph_header(opts):
     assert result["row_count"] == 0, f"Expected 0 rows, got: {result['row_count']}"
     text, rows = _read_export(opts)
     assert rows == [["Name", "Id"]], f"Expected a header-only file, got: {rows}"
+
+
+@th.tier("bug")
+@th.django_unit_test()
+def test_export_reads_columns_by_their_exact_key(opts):
+    """A public key holding a dot, or named like a dict method, is a key and not a path."""
+    ai = {
+        "fields": ["id", "name"],
+        "extra": [("get_model_string", "model.ref"), ("get_model_string", "items")],
+    }
+    with _skill_rest_meta(graphs={"ai": ai}):
+        result = _export_skills(opts)
+        narrowed = _export_skills(opts, fields=["model.ref"])
+    assert "error" not in result, f"Should succeed: {result.get('error')}"
+    assert "error" not in narrowed, f"Narrowing to a dotted key should succeed: {narrowed.get('error')}"
+
+    files = list(_skill_export_files(opts).order_by("-pk")[:2])
+    full, slim = [list(csv.reader(io.StringIO(_file_text(f)))) for f in reversed(files)]
+    assert full[0] == ["Id", "Name", "Model Ref", "Items"], \
+        f"Header should be the ai graph's public keys, got: {full[0]}"
+    assert len(full) > 1, "the export should hold the setup's skills"
+    for row in full[1:]:
+        assert row[2] == "assistant.Skill", f"The dotted key should carry its serialized value, got: {row}"
+        assert row[3] == "assistant.Skill", f"A key named like a dict method should carry its value, got: {row}"
+    assert slim[0] == ["Model Ref"], f"Narrowed header should be the dotted key alone, got: {slim[0]}"
+    assert [row for row in slim[1:] if row != ["assistant.Skill"]] == [], \
+        f"Every narrowed row should carry the serialized value, got: {slim[1:4]}"

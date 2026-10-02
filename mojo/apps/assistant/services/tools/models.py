@@ -1361,12 +1361,16 @@ def _rows_to_csv(rows, columns):
         csv.writer(output).writerow(headers)
         return output.getvalue()
 
-    # The formatter reads a column with hasattr() before it tries a dict key,
-    # so a column named like a dict method ('items', 'keys', 'values') would
-    # return that method. Plain attribute objects have no such names.
+    # The formatter resolves a column NAME: it walks a dotted one as a path,
+    # and it tries hasattr() before a dict key, so 'items' would return the
+    # dict method. A public key is neither, so the formatter is never given
+    # one: each row is handed over under positional names, read by exact key.
+    names = [f"c{index}" for index in range(len(columns))]
     formatter = get_serializer_manager().get_format_serializer("csv")
     response = formatter.serialize_data(
-        [SimpleNamespace(**row) for row in rows], fields=columns, headers=headers)
+        [SimpleNamespace(**{name: row.get(column) for name, column in zip(names, columns)})
+         for row in rows],
+        fields=names, headers=headers)
     return response.content.decode("utf-8")
 
 

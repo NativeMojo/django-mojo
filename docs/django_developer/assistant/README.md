@@ -603,7 +603,9 @@ Rules, all fail-closed:
 - **`export_data` writes those keys as its columns.** Each row is serialized
   through the selected graph first and the resulting dictionaries are written to
   CSV, so excludes, extras and nested graphs are already applied. A nested graph
-  fills one column under its key. `fields` only narrows.
+  fills one column under its key. A key is read exactly as the graph names it:
+  an `extra` alias such as `owner.label` is one column, not a path. `fields`
+  only narrows.
 - **`count_only` and `aggregate_model` do not serialize rows** and work on a
   model regardless of its graphs.
 
@@ -1069,7 +1071,7 @@ Ticket and Incident have custom builders that load related data:
 
 ### Generic Fallback
 
-Any MojoModel without a registered builder is serialized through the [assistant's serialization graph](#the-assistants-serialization-graph-ai-else-default) — `ai` when the model declares it, otherwise `default`, never the wider `detail` — with sensitive-looking keys stripped on top as defense in depth. `GRAPH_PERMISSIONS` on that graph is checked against the caller. This means the endpoint works for RuleSets, Jobs, Users, or any other model — the context is less rich but still useful. Registered rich builders (Ticket, Incident) are unaffected.
+Any MojoModel without a registered builder is serialized through the [assistant's serialization graph](#the-assistants-serialization-graph-ai-else-default) — `ai` when the model declares it, otherwise `default`, never the wider `detail` — with sensitive-looking keys stripped on top as defense in depth. `GRAPH_PERMISSIONS` on that graph is checked against the caller. The context heading and the conversation title use the row's `title` or `name` only when that graph serialized it; otherwise they read `<Model> #<pk>`. This means the endpoint works for RuleSets, Jobs, Users, or any other model — the context is less rich but still useful. Registered rich builders (Ticket, Incident) are unaffected.
 
 ### Registering Custom Builders
 

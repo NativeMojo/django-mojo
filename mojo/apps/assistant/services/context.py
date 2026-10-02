@@ -102,7 +102,7 @@ def _build_generic_context(model_string, instance, request=None):
     if isinstance(data, dict):
         data = _strip_sensitive(data)
 
-    title = _generic_title(model_string, instance, data)
+    title = _generic_title(model_string, instance.pk, data)
     lines = [f"I need help with this {model_string.split('.')[-1]}:\n"]
     lines.append(f"## {title}\n")
 
@@ -126,13 +126,18 @@ def _strip_sensitive(data):
     return cleaned
 
 
-def _generic_title(model_string, instance, data):
-    """Generate a reasonable title for a generic model."""
+def _generic_title(model_string, pk, data):
+    """Title for a generic model: its `title` or `name` as the graph serialized it.
+
+    It takes the serialized ``data`` and not the instance, so it cannot read a
+    field the graph left out. The title heads the context message and names
+    the conversation, so a name the graph omits must be missing from both.
+    """
     model_name = model_string.split(".")[-1]
-    label = getattr(instance, "title", None) or getattr(instance, "name", None) or ""
-    if label:
-        return f"{model_name} #{instance.pk}: {label[:100]}"
-    return f"{model_name} #{instance.pk}"
+    label = data.get("title") or data.get("name")
+    if isinstance(label, str) and label:
+        return f"{model_name} #{pk}: {label[:100]}"
+    return f"{model_name} #{pk}"
 
 
 # ---------------------------------------------------------------------------
