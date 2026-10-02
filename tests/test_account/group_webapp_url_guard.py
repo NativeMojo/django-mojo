@@ -798,6 +798,39 @@ def test_partial_save_keeps_what_it_did_not_write(opts):
             f"SECURITY: a row that saved an address earlier put it back over the operator's, " \
             f"got {_stored(child2)}"
 
+        # The field list may come by position and as anything that can be
+        # read once, such as a generator: it is saved all the same.
+        import warnings
+        for fields, check in (
+                (["metadata"], lambda: _stored(child2).get("webapp_base_url") == mine_base),
+                (["parent"], lambda: _parent_id(child2) == other),
+                (["metadata", "parent"], lambda: _stored(child2).get("webapp_base_url") == mine_base
+                    and _parent_id(child2) == other),
+                (["name"], lambda: True)):
+            for by_position in (True, False):
+                _restore(opts)
+                group = Group.objects.get(pk=child2)
+                group.metadata["webapp_base_url"] = mine_base
+                group.parent_id = other
+                once = (name for name in fields)
+                how = "by position" if by_position else "by name"
+                try:
+                    if by_position:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")  # positional save arguments are deprecated
+                            group.save(False, False, None, once)
+                    else:
+                        group.save(update_fields=once)
+                except Exception as err:
+                    assert False, f"save of {fields} given {how} as a generator raised {type(err).__name__}: {err}"
+                assert check(), \
+                    f"save of {fields} given {how} as a generator did not store them, got " \
+                    f"{_stored(child2)} under {_parent_id(child2)}"
+                group.save()
+                assert _stored(child2).get("webapp_base_url") == mine_base and _parent_id(child2) == other, \
+                    f"after a save of {fields} {how}, the full save must store what it left, got " \
+                    f"{_stored(child2)} under {_parent_id(child2)}"
+
         # A row whose settings were never loaded saves its other fields and
         # leaves the stored address alone.
         _restore(opts)

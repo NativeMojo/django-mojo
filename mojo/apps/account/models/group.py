@@ -306,9 +306,16 @@ class Group(MojoSecrets, MojoModel):
 
     def save(self, *args, **kwargs):
         """Serialize link-setting and parent changes with the saved row."""
-        update_fields = args[3] if len(args) > 3 else kwargs.get("update_fields")
-        if update_fields is not None and len(args) <= 3:
-            update_fields = kwargs["update_fields"] = list(update_fields)
+        by_position = len(args) > 3
+        update_fields = args[3] if by_position else kwargs.get("update_fields")
+        if update_fields is not None:
+            # Read it once and pass that on where it came from: a generator
+            # read here would reach Django already spent.
+            update_fields = list(update_fields)
+            if by_position:
+                args = args[:3] + (update_fields,) + args[4:]
+            else:
+                kwargs["update_fields"] = update_fields
         writes_metadata = update_fields is None or "metadata" in update_fields
         writes_parent = update_fields is None or bool(
             {"parent", "parent_id"}.intersection(update_fields))
