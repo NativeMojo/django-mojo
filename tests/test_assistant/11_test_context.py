@@ -338,3 +338,36 @@ def test_context_generic_model(opts):
 
     # Cleanup
     skill.delete()
+
+
+@th.tier("bug")
+@th.django_unit_test()
+def test_context_generic_model_uses_default_graph_not_detail(opts):
+    """Generic context is built from the `ai`/`default` graph, never the wider `detail`."""
+    from mojo.apps.assistant.models import Conversation, Message, Skill
+
+    marker = "CTX-DETAIL-ONLY-MARKER"
+    Skill.objects.filter(name="[CTX-TEST] Graph Skill").delete()
+    skill = Skill.objects.create(
+        user=opts.admin, tier="user", name="[CTX-TEST] Graph Skill",
+        description="visible in default",
+        triggers=[marker], steps=[{"note": marker}], metadata={"marker": marker},
+    )
+    assert_true(marker in str(skill.to_dict("detail")),
+                "precondition: the detail graph carries the marker")
+
+    opts.client.login(TEST_EMAIL_ADMIN, TEST_PASSWORD)
+    resp = opts.client.post(
+        "/api/assistant/context", {"model": "assistant.Skill", "pk": skill.pk})
+    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}: {resp.json}")
+    conv = Conversation.objects.get(pk=resp.json.data.conversation_id)
+    content = Message.objects.filter(conversation=conv).first().content
+    assert_true("visible in default" in content,
+                f"Context should carry the default graph's fields, got: {content[:400]}")
+    assert_true(marker not in content,
+                "Generic context serialized through the wider `detail` graph")
+    for key in ("triggers", "steps", "metadata"):
+        assert_true(f"**{key}**" not in content, f"detail-only key '{key}' reached the context")
+    assert_eq(conv.group_id, None, "serializing the row must not stamp a group on the conversation")
+
+    skill.delete()

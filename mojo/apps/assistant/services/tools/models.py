@@ -4,6 +4,7 @@ import objict
 from django.apps import apps
 
 from mojo.apps.assistant import tool
+from mojo.apps.assistant.services import model_serialization
 from mojo.helpers import logit
 from mojo import errors as me
 
@@ -402,6 +403,49 @@ def _apply_owner_group_filter(model, request, queryset):
 
 
 # ---------------------------------------------------------------------------
+# Serialization graph — chosen by the server, never by the caller
+# ---------------------------------------------------------------------------
+
+_GRAPH_PARAM_ERROR = (
+    "The 'graph' parameter is not supported. Each model chooses the shape the "
+    "assistant reads: its 'ai' graph when it declares one, otherwise 'default'."
+)
+
+
+def _reject_caller_graph(params):
+    """Refuse a caller-supplied ``graph`` key outright. Returns error dict or None.
+
+    The schemas do not advertise one. A handler that receives it anyway must
+    not ignore it (the caller would believe it was honored) and must never
+    serialize through it.
+    """
+    if "graph" in params:
+        return {"error": _GRAPH_PARAM_ERROR}
+    return None
+
+
+def _resolve_assistant_graph(model, request, user, model_label, tool_name):
+    """Select the assistant graph for ``model`` and check the caller may see it.
+
+    Returns ``(graph_name, error_dict)``. Nothing in ``params`` reaches this:
+    the override seam on the serialization helper is left unset on every model
+    tool.
+    """
+    try:
+        return model_serialization.resolve_graph(model, request=request), None
+    except me.PermissionDeniedException as pe:
+        details = f"Graph permission denied: {tool_name} on {model_label} by user {user.id}"
+        logger.warning(details)
+        _report_security_event(
+            "assistant_permission_denied", 5, details, user,
+            model_name=model_label,
+        )
+        return None, {"error": pe.reason}
+    except me.MojoException as ge:
+        return None, {"error": ge.reason}
+
+
+# ---------------------------------------------------------------------------
 # Tool handlers
 # ---------------------------------------------------------------------------
 
@@ -411,8 +455,11 @@ def _apply_owner_group_filter(model, request, queryset):
     permission="view_admin",
     core=True,
     description=(
-        "Describe a MojoModel's fields, available graphs, permissions, and search fields. "
+        "Describe a MojoModel's fields, the shape its rows are returned in, "
+        "permissions, and search fields. "
         "Use this to discover what data is available before querying. "
+        "The model owns the shape the assistant reads (its RestMeta.GRAPHS['ai'], "
+        "else 'default'); it cannot be chosen per call. "
         "Example: describe_model(app_name='account', model_name='User')"
     ),
     input_schema={
@@ -431,7 +478,11 @@ def _apply_owner_group_filter(model, request, queryset):
     },
 )
 def _tool_describe_model(params, user):
-    """Describe a model's fields, graphs, and permissions."""
+    """Describe a model's fields, assistant serialization shape, and permissions."""
+    err = _reject_caller_graph(params)
+    if err:
+        return err
+
     app_name = params.get("app_name", "").strip()
     model_name = params.get("model_name", "").strip()
 
@@ -450,14 +501,16 @@ def _tool_describe_model(params, user):
 
     fields = _get_field_info(model)
 
-    # Graphs
-    graphs = {}
-    raw_graphs = model.get_rest_meta_prop("GRAPHS", {})
-    for name, graph in raw_graphs.items():
-        graph_fields = graph.get("fields", [])
-        # Filter out sensitive fields from graph info
-        safe_fields = [f for f in graph_fields if not _is_sensitive_field(f)]
-        graphs[name] = safe_fields
+    # The one graph the assistant reads this model through, and the keys it
+    # produces. Other graph names are not advertised: they cannot be requested.
+    try:
+        graph = model_serialization.select_graph(model)
+    except me.MojoException as ge:
+        return {"error": ge.reason}
+    serialization = {
+        "graph": graph,
+        "fields": model_serialization.output_fields(model, graph),
+    }
 
     # Permissions
     view_perms = model.get_rest_meta_prop("VIEW_PERMS", [])
@@ -469,7 +522,7 @@ def _tool_describe_model(params, user):
     return {
         "model": f"{app_name}.{model_name}",
         "fields": fields,
-        "graphs": graphs,
+        "serialization": serialization,
         "permissions": {
             "view": view_perms,
             "save": save_perms,
@@ -489,7 +542,9 @@ def _tool_describe_model(params, user):
         "Respects RestMeta permissions and owner/group filtering. Max 200 rows. "
         "For CSV/file exports use export_data instead. "
         "For counts, sums, averages use aggregate_model instead. "
-        "Use describe_model first to discover available fields and graphs. "
+        "Use describe_model first to discover available fields and the keys each row returns. "
+        "The model owns the row shape (its RestMeta.GRAPHS['ai'], else 'default'); "
+        "it cannot be chosen per call. "
         "Example: query_model(app_name='account', model_name='User', "
         "filters={'is_active': true}, ordering='-created', limit=10)"
     ),
@@ -520,10 +575,6 @@ def _tool_describe_model(params, user):
                 "type": "integer",
                 "description": "Max results to return (default 50, max 200)",
             },
-            "graph": {
-                "type": "string",
-                "description": "Serialization graph name (default 'default')",
-            },
             "count_only": {
                 "type": "boolean",
                 "description": "If true, return only the count (no data)",
@@ -534,6 +585,10 @@ def _tool_describe_model(params, user):
 )
 def _tool_query_model(params, user):
     """Query a model with filters, search, ordering, and format options."""
+    err = _reject_caller_graph(params)
+    if err:
+        return err
+
     app_name = params.get("app_name", "").strip()
     model_name = params.get("model_name", "").strip()
 
@@ -622,25 +677,13 @@ def _tool_query_model(params, user):
         logger.info("query_model", model_label, f"count_only={count}", f"user={user.id}")
         return {"model": model_label, "count": count}
 
-    # Serialization
-    graph = params.get("graph", "default").strip()
-    # Gate the caller-supplied graph exactly as the REST boundary does. This
-    # tool serializes OUTSIDE the REST read sites, so without this an assistant
-    # user could pull a permission-gated graph (e.g. a deployment's raw
-    # evidence) that the REST layer would refuse, and could probe unknown graph
-    # names for a 200.
-    try:
-        model.rest_resolve_graph_or_raise(request, graph)
-    except me.PermissionDeniedException as pe:
-        details = f"Graph permission denied: {model_label} graph={graph!r} by user {user.id}"
-        logger.warning(details)
-        _report_security_event(
-            "assistant_permission_denied", 5, details, user,
-            model_name=model_label,
-        )
-        return {"error": pe.reason}
-    except me.MojoException as ge:
-        return {"error": ge.reason}
+    # Serialization — through the graph the SERVER selects ('ai', else
+    # 'default'). This tool serializes outside the REST read sites, so a
+    # caller-named graph would reach any graph whose author never added a
+    # GRAPH_PERMISSIONS entry. The gate still runs, on the selected name.
+    graph, err = _resolve_assistant_graph(model, request, user, model_label, "query_model")
+    if err:
+        return err
     results = model.queryset_to_dict(queryset[:limit], graph=graph)
     total = queryset.count()
 
@@ -1079,6 +1122,10 @@ def _tool_aggregate_model(params, user):
     """Run aggregate queries on a model."""
     from django.db.models import Count, Sum, Avg, Min, Max
 
+    err = _reject_caller_graph(params)
+    if err:
+        return err
+
     app_name = params.get("app_name", "").strip()
     model_name = params.get("model_name", "").strip()
 
@@ -1272,6 +1319,57 @@ DEFAULT_EXPORT_LIMIT = 5000
 MAX_EXPORT_LIMIT = 50000
 
 
+def _validate_export_fields(fields, columns, model_label):
+    """Validate export_data's optional ``fields``. Returns error dict or None.
+
+    ``fields`` narrows the selected graph's output and reorders it; it never
+    widens it. An empty list is refused rather than read as "everything".
+    """
+    if not isinstance(fields, (list, tuple)) or not fields:
+        return {"error": "'fields' must be a non-empty list of column names"}
+    seen = set()
+    for name in fields:
+        if not isinstance(name, str):
+            return {"error": "'fields' must be a non-empty list of column names"}
+        if _is_sensitive_field(name):
+            return {"error": f"Field '{name}' is not allowed in exports"}
+        if name not in columns:
+            return {"error": (
+                f"Field '{name}' is not exported for {model_label}. "
+                f"Available: {columns}"
+            )}
+        if name in seen:
+            return {"error": f"Field '{name}' is listed more than once"}
+        seen.add(name)
+    return None
+
+
+def _rows_to_csv(rows, columns):
+    """Render graph-serialized row dicts as CSV text with exactly ``columns``.
+
+    The header is written from ``columns`` whether or not there are rows, so an
+    empty export still names its columns and never names any others.
+    """
+    import csv
+    import io
+    from types import SimpleNamespace
+    from mojo.serializers.core.manager import get_serializer_manager
+
+    headers = [c.replace("_", " ").replace(".", " ").title() for c in columns]
+    if not rows:
+        output = io.StringIO()
+        csv.writer(output).writerow(headers)
+        return output.getvalue()
+
+    # The formatter reads a column with hasattr() before it tries a dict key,
+    # so a column named like a dict method ('items', 'keys', 'values') would
+    # return that method. Plain attribute objects have no such names.
+    formatter = get_serializer_manager().get_format_serializer("csv")
+    response = formatter.serialize_data(
+        [SimpleNamespace(**row) for row in rows], fields=columns, headers=headers)
+    return response.content.decode("utf-8")
+
+
 @tool(
     name="export_data",
     domain="models",
@@ -1281,7 +1379,9 @@ MAX_EXPORT_LIMIT = 50000
         "Export query results to a downloadable CSV file stored in file storage (S3). "
         "Data is written directly to a file — NOT returned inline. "
         "Returns a download URL for the user. Use for any export request. "
-        "For summaries (counts, sums, averages) use aggregate_model instead."
+        "For summaries (counts, sums, averages) use aggregate_model instead. "
+        "The model owns the exported columns (its RestMeta.GRAPHS['ai'], else 'default'); "
+        "'fields' can only narrow them — see describe_model's serialization.fields."
     ),
     input_schema={
         "type": "object",
@@ -1313,11 +1413,10 @@ MAX_EXPORT_LIMIT = 50000
             "fields": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Specific fields to include (optional, defaults to model's graph config)",
-            },
-            "graph": {
-                "type": "string",
-                "description": "Serialization graph name for field config (default 'default')",
+                "description": (
+                    "Columns to keep, in this order (optional). Each must be one of "
+                    "describe_model's serialization.fields; it cannot add columns."
+                ),
             },
         },
         "required": ["app_name", "model_name"],
@@ -1330,6 +1429,10 @@ def _tool_export_data(params, user):
     from datetime import timedelta
     from django.utils import timezone
     from mojo.helpers.settings import settings
+
+    err = _reject_caller_graph(params)
+    if err:
+        return err
 
     app_name = params.get("app_name", "").strip()
     model_name = params.get("model_name", "").strip()
@@ -1405,6 +1508,19 @@ def _tool_export_data(params, user):
     limit = min(params.get("limit", DEFAULT_EXPORT_LIMIT), MAX_EXPORT_LIMIT)
     export_qs = queryset[:limit]
 
+    # Columns — the server-selected graph is the ceiling. 'fields' may only
+    # narrow it. Settled before the FileManager lookup so that a refusal never
+    # leaves a File row behind.
+    graph, err = _resolve_assistant_graph(model, request, user, model_label, "export_data")
+    if err:
+        return err
+    columns = model_serialization.output_fields(model, graph)
+    if params.get("fields") is not None:
+        err = _validate_export_fields(params["fields"], columns, model_label)
+        if err:
+            return err
+        columns = list(params["fields"])
+
     # Resolve FileManager
     from mojo.apps.fileman.models import FileManager
     group = getattr(user, "group", None)
@@ -1421,31 +1537,17 @@ def _tool_export_data(params, user):
     if not fm:
         return {"error": "No file storage configured. Contact your administrator."}
 
-    # Generate CSV
-    custom_fields = params.get("fields")
-    if custom_fields:
-        for f in custom_fields:
-            if _is_sensitive_field(f):
-                return {"error": f"Field '{f}' is not allowed in exports"}
+    # Generate CSV — every row goes through the selected graph first, so its
+    # excludes, extras and nested shapes are already applied. The formatter
+    # only ever sees those dictionaries, never a model instance.
     try:
-        if custom_fields:
-            # Use CsvFormatter directly with custom fields
-            from mojo.serializers.core.manager import get_serializer_manager
-            manager = get_serializer_manager()
-            serializer = manager.get_format_serializer("csv")
-            csv_data = serializer.serialize_queryset(
-                export_qs, fields=custom_fields, raw_data=True,
-            )
-        else:
-            csv_data = model.to_csv(export_qs, format="csv")
+        rows = model.queryset_to_dict(export_qs, graph=graph)
+        csv_data = _rows_to_csv(rows, columns)
     except Exception as e:
         logger.warning("export_data csv error", model_label, str(e))
         return {"error": "CSV generation failed"}
 
-    # Count rows (header line excluded)
-    row_count = csv_data.count("\n") - 1 if csv_data.strip() else 0
-    if row_count < 0:
-        row_count = 0
+    row_count = len(rows)
 
     # Build file-like object
     date_str = timezone.now().strftime("%Y-%m-%d")

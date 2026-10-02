@@ -9,6 +9,7 @@ incident reporting. Covers:
 """
 
 TESTIT_TIER = "bug"
+import contextlib
 import json
 import decimal
 import datetime
@@ -20,6 +21,37 @@ from testit.helpers import assert_true, assert_eq
 
 TEST_EMAIL = 'tool-err-admin@example.com'
 TEST_PASSWORD = 'TestPass1!'
+SKILL_SECRET = "TOOLERR-SECRET-MARKER"
+SKILL_DEFAULT_KEYS = [
+    "id", "tier", "name", "description", "auto_execute", "is_active",
+    "created", "modified", "user",
+]
+
+
+@contextlib.contextmanager
+def _skill_rest_meta(graphs=None, **attrs):
+    """Temporarily ADD graphs / RestMeta attributes to assistant.Skill.
+
+    Additive only: `default` and `detail` are left exactly as shipped, so the
+    only code that can see a difference is the assistant's own graph selection,
+    which runs in this package's thread.
+    """
+    from mojo.apps.assistant.models import Skill
+
+    original = Skill.RestMeta
+    merged = dict(original.GRAPHS)
+    merged.update(graphs or {})
+    attrs["GRAPHS"] = merged
+    Skill.RestMeta = type("RestMeta", (original,), attrs)
+    try:
+        yield Skill
+    finally:
+        Skill.RestMeta = original
+
+
+def _skills():
+    from mojo.apps.assistant.models import Skill
+    return Skill.objects.filter(name__startswith="toolerr_skill_").order_by("name")
 
 
 def _clear_events(user, category):
@@ -56,6 +88,15 @@ def setup_user(opts):
     opts.user.is_email_verified = True
     opts.user.save()
     opts.user.add_permission("view_admin")
+
+    # Rows carrying a value the `default` graph does not expose.
+    from mojo.apps.assistant.models import Skill
+    _skills().delete()
+    for i in range(2):
+        Skill.objects.create(
+            user=opts.user, tier="user", name=f"toolerr_skill_{i}",
+            steps=[{"note": SKILL_SECRET}], metadata={"marker": SKILL_SECRET},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -248,9 +289,9 @@ def test_execute_tool_result_with_model_instance_soft_coerces(opts):
     )
     parsed = json.loads(result["content"])
     assert_true("user" in parsed, "model field must serialize, not crash")
-    # MojoModel.to_dict() is used — the RestMeta graph governs which fields
-    # are exposed, so sensitive fields (password hashes, tokens) are already
-    # filtered out by the model's default graph.
+    # The row goes through the server-selected assistant graph (`ai`, else
+    # `default`), so sensitive fields (password hashes, tokens) are already
+    # filtered out by the model's own graph.
     assert_true(
         isinstance(parsed["user"], (dict, int)),
         "model instance must coerce to a JSON-native value",
@@ -263,3 +304,96 @@ def test_execute_tool_result_with_model_instance_soft_coerces(opts):
             forbidden.isdisjoint(parsed["user"]),
             "User default RestMeta graph exposed a credential field",
         )
+
+
+# ---------------------------------------------------------------------------
+# Model rows in a tool result go through the server-selected graph
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_json_default_model_instance_uses_selected_graph(opts):
+    """An instance is serialized through `default`, and through `ai` when declared."""
+    from mojo.apps.assistant.services.agent import _json_default
+
+    skill = _skills().first()
+    plain = _json_default(skill, user=opts.user)
+    assert_eq(list(plain), SKILL_DEFAULT_KEYS, "without `ai` the default graph's keys are used")
+    with _skill_rest_meta(graphs={"ai": {"fields": ["id", "name"]}}):
+        chosen = _json_default(skill, user=opts.user)
+    assert_eq(chosen, {"id": skill.pk, "name": skill.name}, "with `ai` declared, its keys are used")
+
+
+@th.django_unit_test()
+def test_json_default_queryset_uses_selected_graph(opts):
+    """A model queryset is serialized through the selected graph, never `.values()`."""
+    from mojo.apps.assistant.services.agent import _json_default
+
+    rows = _json_default(_skills(), user=opts.user)
+    assert_eq([list(r) for r in rows], [SKILL_DEFAULT_KEYS] * 2,
+              "each row should have exactly the default graph's keys")
+    assert_true(SKILL_SECRET not in json.dumps(rows),
+                "a column outside the selected graph escaped through a queryset result")
+    with _skill_rest_meta(graphs={"ai": {"fields": ["name"]}}):
+        chosen = _json_default(_skills(), user=opts.user)
+    assert_eq(chosen, [{"name": "toolerr_skill_0"}, {"name": "toolerr_skill_1"}],
+              "with `ai` declared, the queryset goes through it")
+
+
+@th.django_unit_test()
+def test_json_default_withholds_raw_value_querysets(opts):
+    """`.values()` / `.values_list()` querysets never reach the result as rows."""
+    from mojo.apps.assistant.services.agent import _json_default
+
+    for label, qs in (
+            ("values()", _skills().values()),
+            ("values(...)", _skills().values("id", "metadata")),
+            ("values_list()", _skills().values_list()),
+            ("values_list(flat)", _skills().values_list("metadata", flat=True))):
+        out = _json_default(qs, user=opts.user)
+        assert_true(isinstance(out, dict) and "error" in out,
+                    f"{label} must be withheld with a marker, got: {out!r}")
+        assert_true(SKILL_SECRET not in json.dumps(out), f"{label} leaked a raw column")
+
+
+@th.django_unit_test()
+def test_json_default_withholds_rows_without_a_usable_graph(opts):
+    """Malformed `ai`, or a gated graph with no permission, yields a reference only."""
+    from mojo.apps.assistant.services.agent import _json_default
+
+    skill = _skills().first()
+    with _skill_rest_meta(graphs={"ai": None}):
+        one = _json_default(skill, user=opts.user)
+        many = _json_default(_skills(), user=opts.user)
+    assert_eq(one, {"pk": skill.pk, "model": "Skill"}, "a malformed graph leaves only a reference")
+    assert_true(isinstance(many, dict) and "error" in many, f"a queryset is withheld, got: {many!r}")
+
+    gate = {"ai": ["toolerr_ai_reader"]}
+    with _skill_rest_meta(graphs={"ai": {"fields": ["id", "name"]}}, GRAPH_PERMISSIONS=gate):
+        denied = _json_default(skill, user=opts.user)
+        no_caller = _json_default(skill)
+    assert_eq(denied, {"pk": skill.pk, "model": "Skill"},
+              "a caller without the graph permission gets a reference only")
+    assert_eq(no_caller, {"pk": skill.pk, "model": "Skill"},
+              "with no caller to check, a gated graph is not served")
+
+
+@th.django_unit_test()
+def test_execute_tool_queryset_result_is_graph_serialized(opts):
+    """End to end: a handler returning a queryset emits selected-graph rows only."""
+    from mojo.apps.assistant.services.agent import _execute_tool
+
+    def handler(params, user):
+        return {"rows": _skills(), "raw": _skills().values(), "first": _skills().first()}
+
+    block = {"id": "tu_4", "name": "stub_tool", "input": {}}
+    result = _execute_tool(
+        block, _make_registry(handler), opts.user, _FakeConversation(),
+        tools=[], on_event=None, tool_calls_made=[],
+    )
+    assert_true(SKILL_SECRET not in result["content"],
+                "a tool result carried a column outside the selected graph")
+    parsed = json.loads(result["content"])
+    assert_eq([list(r) for r in parsed["rows"]], [SKILL_DEFAULT_KEYS] * 2,
+              "queryset rows should carry the default graph's keys")
+    assert_eq(list(parsed["first"]), SKILL_DEFAULT_KEYS, "an instance should carry the default graph's keys")
+    assert_true("error" in parsed["raw"], "a raw-values queryset should be withheld")
