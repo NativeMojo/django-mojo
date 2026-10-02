@@ -511,7 +511,7 @@ bound to the originating browser Origin.
 
 | Tool | Permission | Mutates | Description |
 |---|---|---|---|
-| `describe_model` | `view_admin` | No | Describe a MojoModel's fields, the shape its rows are returned in (`serialization`), permissions, and search fields. Use this to discover what data is available before querying. Requires `app_name` and `model_name`. Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secret`) are excluded from the `fields` metadata. Only works on MojoModels with a `RestMeta` definition and without `NO_REST = True`. |
+| `describe_model` | `view_admin` | No | Describe a MojoModel's fields, the shape its rows are returned in (`serialization`), permissions, and search fields. Use this to discover what data is available before querying. Requires `app_name` and `model_name`. `fields` lists only what may be asked by: a field the [input rule](#what-a-caller-may-ask-by-sensitive_fields) refuses — a sensitive name, a field the model declares in `SENSITIVE_FIELDS`, a JSON column — is left out. Only works on MojoModels with a `RestMeta` definition and without `NO_REST = True`. |
 | `query_model` | `view_admin` | No | Query any MojoModel and return results inline as JSON. Best for small result sets (detail lookups, spot-checking). Respects `RestMeta` permissions and owner/group filtering. Max 200 rows. For exports use `export_data`; for counts/sums use `aggregate_model`. |
 | `aggregate_model` | `view_admin` | No | Run aggregate queries (count, sum, avg, min, max, count_distinct) on any MojoModel, with optional `group_by`. Use for summaries — never pull rows just to count or sum them. |
 | `export_data` | `view_admin` | Yes | Export query results to a CSV file in file storage (S3). Data is written directly to a `fileman.File` record — not returned inline. Returns a download URL. Use for any export request, especially large result sets. |
@@ -627,6 +627,63 @@ serialized the same way. A `.values()` / `.values_list()` queryset is withheld
 (a one-line marker replaces it) because its raw column rows never pass through a
 graph; return model instances, or build the dictionaries yourself.
 
+#### What a caller may ask by (`SENSITIVE_FIELDS`)
+
+The graph above decides what a row **shows**. A second, separate rule decides
+what a caller may **ask by**: the paths in `filters`, `ordering`, an
+aggregation's `field`, `group_by`, and the names in `export_data`'s `fields`.
+Without it a column the graph never shows could still be read one comparison at
+a time — `filters={"edata__startswith": "A"}` with `count_only`, repeated over
+an alphabet — or outright with `min`/`max`.
+
+A path is refused when any of these holds:
+
+- a segment contains `password`, `auth_key`, `onetime_code`, `secret` or
+  `token` (the name heuristic, unchanged);
+- a segment names a field in the `RestMeta.SENSITIVE_FIELDS` of the model that
+  segment lands on. Relations are followed, forward and reverse, so
+  `vault_data__edata` is judged by `VaultData`'s declaration from whichever
+  model the query starts on;
+- a segment is `mojo_secrets`, on any model, declared or not;
+- a segment is a JSON column. A JSON lookup takes any key the caller invents,
+  so a JSON column cannot be filtered, ordered, grouped or aggregated on
+  through the assistant.
+
+```python
+class RestMeta:
+    # Not filterable, sortable, groupable or aggregatable through the
+    # assistant (or through REST list filters), on this model or through a
+    # relation to it.
+    SENSITIVE_FIELDS = ["ekey", "edata"]
+```
+
+Details that matter when you declare one:
+
+- **A foreign key is refused under both spellings.** Declaring `"user"` also
+  refuses `user_id`, and the reverse. (REST list filters compare the spelling
+  as written; the assistant asks about both.)
+- **This rule does not edit a graph.** If you put a sensitive field in the
+  model's `ai` graph, rows and exports carry it: the graph is yours.
+  `serialization.fields` in `describe_model` is not filtered either. Keep
+  secrets out of `ai` and `default`.
+- **Export `fields` are output names, not lookups.** A name the model declares
+  sensitive (or one the name heuristic matches) cannot be singled out with
+  `fields`, even where the graph shows it. The JSON rule does not apply there:
+  an export may be narrowed to a JSON column the graph returns.
+- **Aggregation aliases and `having` keys are output names** and are not
+  checked against the model. An alias is still subject to the name heuristic
+  when it is used in `ordering`.
+- **`describe_model` follows the same rule passively.** Its `fields` list
+  leaves out what would be refused, and reports nothing.
+- **Every refused call files one event**: category `assistant_sensitive_field`,
+  level 7, naming the model, the path and the surface (`filter`, `ordering`,
+  `aggregation`, `group_by`, `export field`). It never carries the value the
+  caller tried — that value is the guess being tested.
+
+The rule is `_is_sensitive_input` in
+`mojo/apps/assistant/services/tools/models.py`. It delegates the relation walk
+to `mojo.models.rest.is_sensitive_filter_path`; do not write a second walker.
+
 #### `DENY_AI_*` RestMeta flags
 
 Every tool in the Models Domain honors per-model opt-out flags on `RestMeta`: `DENY_AI_VIEW` (context attachment/describe/query/aggregate/export), `DENY_AI_CREATE`, `DENY_AI_UPDATE`, `DENY_AI_DELETE`, plus `DENY_AI` as a shorthand for all four. `POST /api/assistant/context` applies the same view gate before object lookup, serialization, or conversation creation. All flags default `False`.
@@ -644,7 +701,7 @@ The AI gate runs **before** the REST permission check, so denied requests return
 
 The tool delegates to `instance.on_rest_save(request, data)` so all model-level save hooks, validators, and `POST_SAVE_ACTIONS` fire exactly as they would through the REST API. The `action_response` from `POST_SAVE_ACTIONS` is included in the return dict when present. Setting `CAN_CREATE = False` in `RestMeta` blocks creates; setting `CAN_UPDATE = False` blocks updates to existing instances.
 
-All five tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter or aggregate on sensitive fields are blocked and reported as security events.
+All five tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter, order, group, aggregate or narrow an export by a sensitive path are refused and reported as security events — see [What a caller may ask by](#what-a-caller-may-ask-by-sensitive_fields).
 
 #### `add_context` — Clickable model references
 
@@ -876,6 +933,7 @@ The assistant reports security-relevant actions and errors to the incident syste
 | `assistant:approval:denied` | 6 | A resolution was refused (suppressed + budgeted — see [Approvals](approvals.md)) |
 | `assistant:approval:failed` | 6 | An approved handler raised or returned an error |
 | `assistant:tool:<name>` | 5 | Successful mutating tool execution (block_ip, disable_user, etc.). Unchanged — it now fires from `approvals.resolve()`, so existing RuleSets keep working. |
+| `assistant_sensitive_field` | 7 | A model tool refused a filter, ordering, aggregation, `group_by` or export field on a sensitive path. One event per refused call; the attempted value is never recorded. |
 | `assistant:error` | 6 | Tool handler raised an unhandled exception |
 | `assistant:error` | 7 | Agent loop crashed |
 | `assistant:error` | 5 | Max tool turns exhausted |
