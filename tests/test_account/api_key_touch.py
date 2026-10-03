@@ -14,6 +14,15 @@ import uuid
 from testit import helpers as th
 
 
+def _fresh_log(connection):
+    # CaptureQueriesContext slices Django's BOUNDED per-connection query log.
+    # Once a long parallel run fills it, both indexes sit at maxlen while new
+    # queries rotate through and the capture comes back empty. Start from a
+    # clean log (this thread's connection only) — same fix as
+    # test_dnsman/19_group_choices.py.
+    connection.queries_log.clear()
+
+
 def _updates_to(captured, table):
     prefix = f'UPDATE "{table}"'
     return [q["sql"] for q in captured if q["sql"].startswith(prefix)]
@@ -40,6 +49,7 @@ def test_user_api_key_touch_is_throttled(opts):
         assert UserAPIKey.objects.get(pk=package.id).last_used is None, (
             "a new key must start with last_used unset")
 
+        _fresh_log(connection)
         with CaptureQueriesContext(connection) as ctx:
             first, err = User.validate_jwt(package.token, _request())
             assert err is None and first is not None and first.pk == user.pk, (
@@ -62,6 +72,7 @@ def test_user_api_key_touch_is_throttled(opts):
         # A stamp older than the window is rewritten on the next request.
         stale = stamped - datetime.timedelta(seconds=key_module.API_KEY_TOUCH_SECONDS + 60)
         UserAPIKey.objects.filter(pk=package.id).update(last_used=stale)
+        _fresh_log(connection)
         with CaptureQueriesContext(connection) as ctx:
             third, err = User.validate_jwt(package.token, _request())
             assert err is None and third is not None, (
@@ -94,6 +105,7 @@ def test_group_api_key_touch_is_throttled(opts):
         api_key, token = ApiKey.create_for_group(group, "touch test")
         assert api_key.last_used is None, "a new key must start with last_used unset"
 
+        _fresh_log(connection)
         with CaptureQueriesContext(connection) as ctx:
             first, err = ApiKey.validate_token(token, _request())
             assert err is None and first is not None, (
@@ -115,6 +127,7 @@ def test_group_api_key_touch_is_throttled(opts):
 
         stale = stamped - datetime.timedelta(seconds=key_module.API_KEY_TOUCH_SECONDS + 60)
         ApiKey.objects.filter(pk=api_key.pk).update(last_used=stale)
+        _fresh_log(connection)
         with CaptureQueriesContext(connection) as ctx:
             third, err = ApiKey.validate_token(token, _request())
             assert err is None and third is not None, (
