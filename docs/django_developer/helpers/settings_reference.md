@@ -175,8 +175,11 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
 - `API_THROTTLE_APIKEY_EVENT_BUDGET` — maximum distinct ApiKey/source
   observation Events per event window (default `100`)
 - `API_THROTTLE_WINDOW` — global fixed-window seconds (default `60`)
-- `API_THROTTLE_EXEMPT_PREFIXES` — enforcement carve-outs; accounting and
-  observation still run
+- `API_THROTTLE_EXEMPT_PREFIXES` — path carve-outs from the per-identity
+  budget: a matching request is never refused, never counted against the
+  identity and never triggers an ApiKey observation Event, but still counts in
+  traffic totals and top-talker sets. Bound an exempt path some other way. See
+  [Exempt paths](../security/abuse_hardening.md#exempt-paths).
 - `API_THROTTLE_REPORT_FLOOR` — retained legacy setting; direct five-minute
   top-talker accounting now records every authenticated request
 - `API_THROTTLE_CONFIG_TTL` — in-process setting cache seconds (default `30`)

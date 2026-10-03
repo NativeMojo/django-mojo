@@ -32,6 +32,13 @@ ApiKey's group. Rotating IPs, opening tabs, or clearing cookies does not reset
 that budget. Strict endpoint IP/device gates are separate and remain active
 for every caller.
 
+A deployment may exempt specific routes from that identity budget (for
+example, a desktop app's background bookkeeping). A call to an exempt route
+never gets the global identity 429 and does not use up the budget, so it
+cannot get your next ordinary call throttled. An exempt route can still have
+a limit of its own (the deployment is expected to bound it some other way), so
+the 429 contract above applies to every route.
+
 ## ApiKey defaults and explicit limits
 
 On an ordinary endpoint, `Authorization: apikey <token>` skips consumer

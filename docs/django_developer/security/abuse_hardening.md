@@ -46,7 +46,7 @@ until the window resets):
 | `API_THROTTLE_APIKEY_EVENT_WINDOW` | `3600` | Per ApiKey/source suppression window for observation Events, seconds. |
 | `API_THROTTLE_APIKEY_EVENT_BUDGET` | `100` | Maximum distinct ApiKey/source observation Events per event window. |
 | `API_THROTTLE_WINDOW` | `60` | Fixed window, seconds. |
-| `API_THROTTLE_EXEMPT_PREFIXES` | `[]` | Path carve-outs, same shape as `LOGIT_NO_LOG_PREFIX`: `"/api/foo"` or `"POST:/api/foo"`. |
+| `API_THROTTLE_EXEMPT_PREFIXES` | `[]` | Path carve-outs, same shape as `LOGIT_NO_LOG_PREFIX`: `"/api/foo"` or `"POST:/api/foo"`. A matching request is never refused and never counted against the identity; it still counts in traffic totals and top-talker sets. See [Exempt paths](#exempt-paths). |
 | `API_THROTTLE_REPORT_FLOOR` | `60` | Legacy compatibility setting; direct five-minute accounting no longer drops identities below a floor. |
 | `API_THROTTLE_CONFIG_TTL` | `30` | In-process config cache, seconds. Setting changes land within this + one window. |
 
@@ -55,6 +55,34 @@ most once per `API_THROTTLE_CONFIG_TTL` per process — never per request. The
 User default catches machine-rate traffic: 240/min sustained for a full minute
 is ~4 req/s from one account. The ApiKey observation default produces a review
 signal at 600/min but does not reject the request.
+
+### Exempt paths
+
+`API_THROTTLE_EXEMPT_PREFIXES` takes a matching request out of the per-identity
+budget entirely (#6601):
+
+| What happens to an exempt request | |
+|---|---|
+| Refused with the global 429 | Never |
+| Counted against the identity's budget (`rl:api:{kind}:{pk}:{window_start}`) | No |
+| Counted toward an ApiKey's observation threshold, or able to trigger its Event | No |
+| Counted in `traffic:total:{bucket}` and the top-talker sets (§2) | Yes |
+
+So a burst of exempt calls never spends the budget the identity's next ordinary
+request needs. Ordinary requests are counted exactly as before and still get a
+429 past the limit, and concentration detection and traffic views still see
+the exempt traffic.
+
+The global throttle therefore does not bound an exempt path at all. An
+application that exempts a path must bound it some other way: a per-endpoint
+`rate_limit` / `strict_rate_limit` (this setting does not affect those), or a
+guard of its own. Maestro, which exempts its desktop app's bookkeeping paths
+so a computer restarting dozens of agents cannot lock its owner out of the
+page, bounds them with a per-address guard.
+
+> Before #6601 an exempt request was never refused but was still counted, so
+> enough exempt traffic in one window got the identity's next ordinary request
+> a 429.
 
 ### Per-key hard limits and ordinary endpoint behavior
 
@@ -75,8 +103,9 @@ positive consumer threshold.
 
 `strict_rate_limit` is the safety boundary for credentials, expensive work,
 and write amplification. It keeps IP/duid/muid gates hard for every caller,
-including ApiKeys. Exempt prefixes bypass only the global 429; they do not
-turn off identity counters, observation Events, or concentration accounting.
+including ApiKeys. Neither decorator reads `API_THROTTLE_EXEMPT_PREFIXES`; an
+exemption lifts only the global per-identity budget and the global ApiKey
+observation threshold (see [Exempt paths](#exempt-paths)).
 Missing, malformed, and non-positive per-key limit entries fail open with
 bounded logging; revoke/deactivate a key instead of using `limit=0` as a kill
 switch.
@@ -104,10 +133,11 @@ the doom-loop mechanism.
 The postmortem signature this catches: *one account silently becoming 96% of
 a service's traffic*. Detection is always on (independent of enforcement):
 
-- Every authenticated request increments its identity in the current 5-minute
-  `traffic:top:{bucket}` set and increments `traffic:total:{bucket}` directly,
-  independent of its enforcement window. Source-IP attribution lives in the
-  separate `traffic:top_ip:{bucket}` set, capped at the highest-scoring 1,000
+- Every authenticated request, exempt paths included, increments its identity
+  in the current 5-minute `traffic:top:{bucket}` set and increments
+  `traffic:total:{bucket}` directly, independent of its enforcement window.
+  Source-IP attribution lives in the separate `traffic:top_ip:{bucket}` set,
+  capped at the highest-scoring 1,000
   members, so rotating IPs cannot crowd authenticated identities out of the
   detector or grow attribution without bound. A burst remains visible after
   the caller stops; no later request is needed to flush it. All buckets expire
