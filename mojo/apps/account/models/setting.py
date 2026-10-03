@@ -7,6 +7,17 @@ REDIS_GLOBAL_KEY = "settings:global"
 REDIS_GROUP_PREFIX = "settings:g:"
 MAX_PARENT_DEPTH = 10
 
+# A scope's hash field holds this when the scope has NO row for the key, so an
+# unset key costs one Redis read instead of a SELECT on every request. A real
+# value can never equal it: PostgreSQL text cannot store a NUL byte.
+CACHE_MISS = "\x00unset"
+# Backstop for any write that bypasses push_to_cache/remove_from_cache (a
+# queryset update, raw SQL): the whole hash expires this long after it was
+# first written and is rebuilt from the database on demand. Set only when the
+# hash has no TTL, so a busy hash cannot keep postponing it forever.
+CACHE_TTL = 3600
+_POOL = object()
+
 
 class Setting(MojoSecrets, MojoModel):
     """
@@ -14,6 +25,8 @@ class Setting(MojoSecrets, MojoModel):
 
     Lookup chain (via SettingsHelper):
         Redis cache -> DB (group -> parent chain -> global) -> django.conf.settings
+    A scope with no row is cached as CACHE_MISS, so an unset key costs no SQL
+    after its first read (see resolve).
 
     Secret values are stored encrypted in mojo_secrets (via MojoSecrets mixin).
     Non-secret values are stored in the plain `value` field.
@@ -203,8 +216,28 @@ class Setting(MojoSecrets, MojoModel):
             return f"{REDIS_GROUP_PREFIX}{group_id}"
         return REDIS_GLOBAL_KEY
 
+    @staticmethod
+    def _cache_text(val):
+        return val if isinstance(val, str) else json.dumps(val)
+
+    @staticmethod
+    def _cache_write(r, rkey, name, text, only_if_absent=False):
+        """HSET (or HSETNX) one field and start the hash's TTL if it has none."""
+        pipe = r.pipeline(transaction=False)
+        if only_if_absent:
+            pipe.hsetnx(rkey, name, text)
+        else:
+            pipe.hset(rkey, name, text)
+        pipe.ttl(rkey)
+        if pipe.execute()[-1] == -1:
+            r.expire(rkey, CACHE_TTL)
+
     def push_to_cache(self):
-        """Write this setting into the Redis hash for its scope."""
+        """Write this setting into the Redis hash for its scope.
+
+        Overwrites a cached miss, so a key set after it was read as unset is
+        visible on the next read.
+        """
         r = self._redis()
         if not r:
             return
@@ -213,7 +246,7 @@ class Setting(MojoSecrets, MojoModel):
         if val is None:
             r.hdel(rkey, self.key)
         else:
-            r.hset(rkey, self.key, val if isinstance(val, str) else json.dumps(val))
+            self._cache_write(r, rkey, self.key, self._cache_text(val))
 
     def remove_from_cache(self):
         """Remove this setting from the Redis hash."""
@@ -235,40 +268,81 @@ class Setting(MojoSecrets, MojoModel):
         for s in qs:
             val = s.get_value()
             if val is not None:
-                pipe.hset(rkey, s.key, val if isinstance(val, str) else json.dumps(val))
+                pipe.hset(rkey, s.key, cls._cache_text(val))
+        pipe.expire(rkey, CACHE_TTL)
         pipe.execute()
+
+    @staticmethod
+    def _cache_read(r, rkey, name):
+        """HGET one field: the cached text, CACHE_MISS, or None. Raises when
+        Redis does."""
+        val = r.hget(rkey, name)
+        if isinstance(val, bytes):
+            val = val.decode("utf-8")
+        return val
 
     @classmethod
     def get_cached(cls, name, group_id=None):
-        """Read a single key from Redis cache. Returns (value, found)."""
+        """Read a single key from Redis cache. Returns (value, found).
+
+        A cached miss reads as not found, like an uncached key.
+        """
         r = cls._redis()
         if not r:
             return None, False
-        val = r.hget(cls._redis_key(group_id), name)
-        if val is None:
+        try:
+            val = cls._cache_read(r, cls._redis_key(group_id), name)
+        except Exception:
             return None, False
-        if isinstance(val, bytes):
-            val = val.decode("utf-8")
+        if val is None or val == CACHE_MISS:
+            return None, False
         return val, True
+
+    @classmethod
+    def _query_db(cls, name, group_id=None):
+        """Read a single key from DB. Returns (value, found); raises on error."""
+        s = cls.objects.filter(key=name, group_id=group_id).first()
+        if s is None:
+            return None, False
+        return s.get_value(), True
 
     @classmethod
     def get_from_db(cls, name, group_id=None):
         """Read a single key from DB. Returns (value, found)."""
         try:
-            s = cls.objects.filter(key=name, group_id=group_id).first()
-            if s is None:
-                return None, False
-            return s.get_value(), True
+            return cls._query_db(name, group_id=group_id)
         except Exception:
             return None, False
 
     @classmethod
-    def resolve(cls, name, group=None, default=None):
+    def resolve(cls, name, group=None, default=None, *, redis=_POOL):
         """
-        Full lookup chain: Redis -> DB -> parent chain -> global.
+        Full lookup chain: group -> parent chain -> global. Each scope is read
+        from Redis first and from the database only when Redis holds nothing.
         Returns the resolved value or default.
+
+        The database answer is cached either way — the value, or CACHE_MISS
+        when the scope has no row — so an unset key costs zero SQL after its
+        first read. Three rules keep that correct:
+
+        - The miss is cached per scope ("this scope has no row"), never as
+          "the whole chain resolved to nothing". Setting a key on a parent
+          after a child cached its miss therefore needs no descendant
+          invalidation: the child's miss is still true, and the walk goes on
+          to the parent's new value. (The alternative — hdel the name from
+          every descendant hash — is unbounded and has nothing to fix.)
+        - Reader writes use HSETNX. push_to_cache (every Setting.save) uses
+          HSET, so a reader that raced a writer can never overwrite the
+          value the writer just pushed with its stale miss.
+        - A database error is not a miss and is never cached.
+
+        Redis down (no client, or a command raises) means the database
+        answers every scope, uncached — never an exception.
+
+        `redis` is a test seam: pass a client, or None for "Redis is down".
         """
-        # Walk group + parent chain
+        r = cls._redis() if redis is _POOL else redis
+        scopes = []
         if group is not None:
             try:
                 from mojo.apps.account.services import group_hierarchy
@@ -276,30 +350,34 @@ class Setting(MojoSecrets, MojoModel):
                     group, include_self=True, max_depth=MAX_PARENT_DEPTH)
             except Exception:
                 return default
-            for current in chain:
-                val, found = cls.get_cached(name, group_id=current.pk)
-                if found:
-                    return val
-                val, found = cls.get_from_db(name, group_id=current.pk)
-                if found:
-                    # Backfill cache
-                    r = cls._redis()
-                    if r:
-                        r.hset(cls._redis_key(current.pk), name, val if isinstance(val, str) else json.dumps(val))
-                    return val
-
-        # Global scope
-        val, found = cls.get_cached(name)
-        if found:
-            return val
-        val, found = cls.get_from_db(name)
-        if found:
-            # Backfill global cache
-            r = cls._redis()
+            scopes = [current.pk for current in chain]
+        scopes.append(None)
+        for group_id in scopes:
+            rkey = cls._redis_key(group_id)
+            cached = None
             if r:
-                r.hset(REDIS_GLOBAL_KEY, name, val if isinstance(val, str) else json.dumps(val))
-            return val
-
+                try:
+                    cached = cls._cache_read(r, rkey, name)
+                except Exception:
+                    # Stop asking a Redis that failed; the rest of the walk
+                    # reads the database only.
+                    r = None
+            if cached == CACHE_MISS:
+                continue
+            if cached is not None:
+                return cached
+            try:
+                val, found = cls._query_db(name, group_id=group_id)
+            except Exception:
+                continue
+            if r:
+                text = cls._cache_text(val) if found else CACHE_MISS
+                try:
+                    cls._cache_write(r, rkey, name, text, only_if_absent=True)
+                except Exception:
+                    pass  # uncached; the next read asks the database again
+            if found:
+                return val
         return default
 
     # ------------------------------------------------------------------
