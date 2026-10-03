@@ -26,6 +26,9 @@ The server records a client IP for every WebSocket connection (used in connectio
   tab/app rather than opening one per widget.
 - **Auth window:** you must authenticate within the advertised timeout (see
   below) or the socket is closed.
+- **Idle window:** once authenticated, the socket is closed after 90 seconds
+  (server-configured) with no frame from you. Answer the server's `ping` with
+  a `pong` and it stays open — see [Ping / Keep-Alive](#ping-keep-alive).
 
 See [Rate Limits & Client Backoff](../security/rate_limits.md#websocket-rules)
 for the full client contract.
@@ -35,7 +38,7 @@ for the full client contract.
 ### Step 1: Server sends auth challenge
 
 ```json
-{"type": "auth_required", "timeout_seconds": 10}
+{"type": "auth_required", "timeout": 10}
 ```
 
 The timeout is server-configured (default **10 seconds**) — always read it
@@ -126,14 +129,38 @@ Allowed topic messages retain the existing envelope:
 
 ## Ping / Keep-Alive
 
+An authenticated socket is closed after **90 seconds** (server-configured)
+without a frame from the client. Messages the server sends you do not count.
+Keep-alive works in both directions:
+
+**Server → client.** Every **20 seconds** (server-configured; a deployment may
+turn it off) the server sends:
+
 ```json
-{"action": "ping"}
+{"type": "ping", "ts": 1712345678}
+```
+
+Answer it:
+
+```json
+{"type": "pong", "ts": 1712345678}
+```
+
+Echoing `ts` is optional. The server sends nothing back for a `pong`; it only
+resets your idle timer. A client that answers every server ping stays connected
+even if it never sends anything else — useful for a background tab whose own
+timers the browser throttles, as long as its message handler still runs.
+
+**Client → server.** You may also ping on your own schedule:
+
+```json
+{"type": "ping"}
 ```
 
 **Response:**
 
 ```json
-{"type": "pong", "instance_kind": "user", "instance": "alice@example.com"}
+{"type": "pong", "user_type": "user", "user_id": 42}
 ```
 
 ---
@@ -198,7 +225,8 @@ The server routes it to a registered handler or the model's `on_realtime_message
 | `subscribed` | Subscribe action succeeded |
 | `unsubscribed` | Unsubscribe action succeeded |
 | `notification` | Push message from server |
-| `pong` | Response to ping |
+| `ping` | Server keep-alive (every 20 s by default) — answer with `pong` |
+| `pong` | Response to your ping |
 | `disconnect` | Server closes the socket (`reason: "forced_disconnect"`) |
 
 ### Client → Server
@@ -208,7 +236,8 @@ The server routes it to a registered handler or the model's `on_realtime_message
 | `type: "authenticate"` | Authentication with token |
 | `action: "subscribe"` | Subscribe to a topic |
 | `action: "unsubscribe"` | Unsubscribe from a topic |
-| `action: "ping"` | Keep-alive ping |
+| `action: "ping"` | Keep-alive ping (answered with `pong`) |
+| `type: "pong"` | Answer to a server `ping` (no reply) |
 | `message_type: "<custom>"` | App-specific message |
 
 ---

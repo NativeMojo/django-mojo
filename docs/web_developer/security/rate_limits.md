@@ -73,6 +73,9 @@ limited per session. If your app reports client-side errors:
   the backoff schedule, even after a clean network blip.
 - **Authenticate within 10 seconds** of connecting (the `auth_required`
   message advertises the window) or the socket is closed.
+- **Answer the server's `ping` with a `pong`.** An authenticated socket that
+  sends nothing for 90 seconds is closed; the pong is all it takes to stay up
+  (see [Ping / Keep-Alive](../realtime/websocket.md#ping-keep-alive)).
 - Each account may hold a limited number of concurrent sockets (default 10).
   Share one connection per tab/app; don't open one per widget.
 - If your session is disabled or revoked server-side, your socket receives a

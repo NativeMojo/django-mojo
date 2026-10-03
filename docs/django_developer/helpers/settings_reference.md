@@ -1242,6 +1242,13 @@ registered resource is enabled; until then every endpoint answers 404.
   (default `10`, `<= 0` disables).
 - `WS_UNAUTH_TIMEOUT` — seconds an unauthenticated socket may live before
   being closed (default `10`).
+- `WS_IDLE_TIMEOUT` — seconds an authenticated socket may go without a client
+  frame before it is closed (default `90`).
+- `WS_SERVER_PING_SECONDS` — interval of the server's `{"type": "ping"}` to
+  authenticated sockets (default `20`, `<= 0` disables). See
+  [Activity Timeout and Keepalive](../realtime/architecture.md#activity-timeout-and-keepalive).
+- All `WS_*` settings are read once, from Django settings, when the realtime
+  handler is first imported; a DB-backed `Setting` row is not consulted.
 
 ## Notes
 
