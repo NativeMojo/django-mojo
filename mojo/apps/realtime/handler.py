@@ -23,6 +23,7 @@ from mojo.helpers.settings import settings
 from .auth import async_validate_bearer_token
 from .channels import broadcast_channel, topic_channel, messages_channel
 from .permissions import can_access_group_topic, get_group_topic_permissions
+from .signals import realtime_connection_changed
 
 logger = logit.get_logger("realtime", "realtime.log")
 
@@ -542,6 +543,10 @@ class WebSocketHandler:
         user_topic = f"{self.user_type}:{self.user.id}"
         await self.subscribe_to_topic(user_topic)
 
+        # Presence is the Redis set written above; products that need the
+        # edge listen for the signal instead of a User save (#6562).
+        await self.send_connection_changed(True)
+
         # Call user's connected hook if available
         if hasattr(self.user, 'on_realtime_connection'):
             connection_data = {
@@ -652,6 +657,32 @@ class WebSocketHandler:
             await self.send_error("Authentication required")
             return
         await self.refresh_presence()
+
+    async def send_connection_changed(self, connected):
+        """Send `realtime_connection_changed` for this socket (#6562).
+
+        Runs off the event loop (receivers may use the ORM) and never raises
+        into the socket's auth or teardown; a receiver's exception is logged.
+        Skipped entirely when nothing is listening."""
+        if self.user is None:
+            return
+        sender = type(self.user)
+        if not realtime_connection_changed.has_listeners(sender):
+            return
+
+        def send():
+            results = realtime_connection_changed.send_robust(
+                sender=sender, user=self.user, connected=connected,
+                connection_id=self.connection_id)
+            for receiver, result in results:
+                if isinstance(result, Exception):
+                    self._log(f"realtime_connection_changed receiver {receiver!r} failed: {result!r}")
+
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, database_thread_target(send))
+        except Exception:
+            self._log_exception("realtime_connection_changed send failed")
 
     async def handle_response(self, data):
         """Handle client response to a request() call from Django."""
@@ -1020,6 +1051,9 @@ class WebSocketHandler:
                 self._log_exception("redis cleanup failed")
 
         await asyncio.get_event_loop().run_in_executor(None, cleanup)
+
+        if self.authenticated:
+            await self.send_connection_changed(False)
 
         # Call user's disconnected hook if available
         if self.authenticated and hasattr(self.user, 'on_realtime_disconnected'):

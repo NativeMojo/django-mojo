@@ -1,10 +1,12 @@
-"""Realtime keepalive (#6562).
+"""Realtime keepalive and the cost of a connect (#6562).
 
 - The idle cull is WS_IDLE_TIMEOUT (default 90 s), not a hard-coded 30 s.
 - The server pings every authenticated socket every WS_SERVER_PING_SECONDS
   with an application frame; a client's `pong` (like any inbound frame) resets
   the idle clock and is answered with nothing, so a socket that only listens
   stays open for as long as it answers.
+- A connect or disconnect touches Redis, not the User row. Products hear it
+  through `realtime_connection_changed`.
 
 Most of these drive the real WebSocketHandler in-process over a fake socket,
 shrinking the timeouts through the handler's keyword seams: the live test
@@ -182,6 +184,59 @@ def test_pong_resets_idle_without_a_reply_or_the_user_hook(opts):
     assert socket.sent == [], f"a pong must not be answered, got {socket.sent}"
     assert handler.user.messages == [], (
         f"a pong must not fall through to on_realtime_message: {handler.user.messages}")
+
+
+@th.django_unit_test()
+def test_connect_and_disconnect_leave_the_user_row_alone(opts):
+    """A socket's connect and disconnect write nothing to account_user (any
+    UPDATE gives the row a new xmin) and send realtime_connection_changed
+    after the Redis presence set changed — even when a receiver raises."""
+    from django.db import connection
+    from mojo.apps import realtime
+    from mojo.apps.account.models import User
+    from mojo.apps.realtime.signals import realtime_connection_changed
+    from mojo.helpers import dates
+
+    uid = opts.ka_uid
+    events = []
+
+    def record(sender, user, connected, connection_id, **kwargs):
+        if getattr(user, "pk", None) == uid:
+            events.append((sender, connected, connection_id,
+                           bool(realtime.is_online("user", uid))))
+
+    def explode(sender, user, **kwargs):
+        if getattr(user, "pk", None) == uid:
+            raise RuntimeError("a broken receiver must not reach the socket")
+
+    def row_version():
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f'SELECT xmin::text FROM "{User._meta.db_table}" WHERE id = %s', [uid])
+            return cursor.fetchone()[0]
+
+    # Bearer validation touches last_activity at most every
+    # USER_LAST_ACTIVITY_FREQ; stamp it now so this session's auth is a read.
+    User.objects.filter(pk=uid).update(last_activity=dates.utcnow())
+    before = row_version()
+    realtime_connection_changed.connect(record, weak=False, dispatch_uid="test6562.record")
+    realtime_connection_changed.connect(explode, weak=False, dispatch_uid="test6562.explode")
+    try:
+        socket, handler, _ = _run_session(opts.ka_token, hold=0.3, idle_timeout=5, ping_seconds=0)
+    finally:
+        realtime_connection_changed.disconnect(dispatch_uid="test6562.record")
+        realtime_connection_changed.disconnect(dispatch_uid="test6562.explode")
+    after = row_version()
+
+    assert socket.frames("auth_success"), (
+        f"auth must succeed although a receiver raised: {socket.sent}")
+    assert after == before, (
+        f"a realtime connect/disconnect updated account_user row {uid} "
+        f"(xmin {before} -> {after})")
+    cid = handler.connection_id
+    assert events == [(User, True, cid, True), (User, False, cid, False)], (
+        "expected one connected and one disconnected event for this socket, each "
+        f"sent after the presence set changed (sender, connected, id, online): {events}")
 
 
 @th.unit_test("ws_pong_is_absorbed_by_the_live_server")
