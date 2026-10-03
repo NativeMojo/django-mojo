@@ -27,6 +27,13 @@ from mojo import errors as merrors
 # which together hand a caller every enabled vhost in a fleet pool AND the
 # private key of every certificate those vhosts reference — including the
 # platform's own. It is a node identity, never a tenant one.
+# How stale `last_used` may get before an authenticated request rewrites it.
+# Without a floor every key-authenticated request paid an UPDATE just to move
+# a "last seen" stamp nobody reads at second resolution (#6565). Shared with
+# UserAPIKey; mirrors User.touch() / USER_LAST_ACTIVITY_FREQ.
+API_KEY_TOUCH_SECONDS = settings.get_static("API_KEY_TOUCH_SECONDS", 300)
+
+
 APIKEY_PERMS_PROTECTION_DEFAULTS = {
     "geoip_sync": "sys.geoip_sync",
     "dnsman_acme_federation": "sys.dnsman_acme_federation",
@@ -748,10 +755,7 @@ class ApiKey(MojoSecrets, MojoModel):
         # on (mojo/helpers/request.py is_key_backed_session).
         request.acting_user = api_key.user
 
-        try:
-            cls.objects.filter(pk=api_key.pk).update(last_used=dates.utcnow())
-        except Exception:
-            pass
+        api_key.touch_last_used()
 
         # NOTE for anyone fixing WebSocket api-key auth: it is dead today —
         # realtime/handler.py calls async_validate_bearer_token with
@@ -770,6 +774,25 @@ class ApiKey(MojoSecrets, MojoModel):
         api_key.username = f"apikey:{api_key.id}"
 
         return api_key, None
+
+    def touch_last_used(self):
+        """Stamp last_used, at most once per API_KEY_TOUCH_SECONDS.
+
+        Compared against the value already loaded with the row, so a fresh
+        stamp costs no query at all. A single-column queryset UPDATE, not
+        save(): no other field, signal or `modified` bump rides along. Never
+        raises — a failed stamp must not fail the request it describes.
+        """
+        if self.last_used is not None and not dates.has_time_elsapsed(
+                self.last_used, seconds=API_KEY_TOUCH_SECONDS):
+            return False
+        now = dates.utcnow()
+        try:
+            type(self).objects.filter(pk=self.pk).update(last_used=now)
+        except Exception:
+            return False
+        self.last_used = now
+        return True
 
     def get_token(self):
         """Returns the raw token from encrypted storage."""

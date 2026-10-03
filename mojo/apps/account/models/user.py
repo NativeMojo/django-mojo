@@ -1871,10 +1871,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             # trusting the client-visible JWT claims.
             if request is not None:
                 request.user_api_key = key_record
-            try:
-                UserAPIKey.objects.filter(pk=key_record.pk).update(last_used=dates.utcnow())
-            except Exception:
-                pass
+            key_record.touch_last_used()
             return key_record.user, None
 
         if jwt_data.get("token_type") == "mcp":
