@@ -55,8 +55,22 @@ def setup_permission_events(opts):
     Event.objects.filter(uid=user.id).delete()
 
 
+def _drain_queued_events(uid):
+    """Run this user's queued incident writes (#6565).
+
+    A routine 4xx no longer writes its Event on the request thread: the
+    dispatcher queues it to the jobs app and a job writes it. Run exactly
+    this user's queued writes so the rows exist before a test counts them —
+    including the zero-count tests, which would otherwise pass vacuously.
+    """
+    from mojo.apps.incident.reporter import QUEUED_EVENT_JOB
+    return th.run_pending_jobs(
+        channel="incident_handlers", func=QUEUED_EVENT_JOB, payload={"uid": uid})
+
+
 def _events_for_user(uid, category=None):
     from mojo.apps.incident.models.event import Event
+    _drain_queued_events(uid)
     qs = Event.objects.filter(uid=uid)
     if category:
         qs = qs.filter(category=category)
@@ -71,6 +85,7 @@ def test_get_protected_instance_emits_view_permission_denied(opts):
     the instance-view branch and the dispatcher emits view_permission_denied.
     """
     from mojo.apps.incident.models.event import Event
+    _drain_queued_events(opts.user_id)
     Event.objects.filter(uid=opts.user_id).delete()
 
     assert opts.client.login(TEST_NOPERM, TEST_PWORD), "login failed"
@@ -103,6 +118,7 @@ def test_post_protected_emits_user_permission_denied(opts):
     user_permission_denied via the dispatcher.
     """
     from mojo.apps.incident.models.event import Event
+    _drain_queued_events(opts.user_id)
     Event.objects.filter(uid=opts.user_id, category="user_permission_denied").delete()
 
     assert opts.client.login(TEST_NOPERM, TEST_PWORD), "login failed"
@@ -134,6 +150,7 @@ def test_post_protected_emits_user_permission_denied(opts):
 def test_delete_protected_emits_user_permission_denied(opts):
     """DELETE /api/incident/ticket/<id> by a no-perms user."""
     from mojo.apps.incident.models.event import Event
+    _drain_queued_events(opts.user_id)
     Event.objects.filter(uid=opts.user_id, category="user_permission_denied").delete()
 
     assert opts.client.login(TEST_NOPERM, TEST_PWORD), "login failed"
@@ -157,6 +174,7 @@ def test_recovery_path_emits_no_event(opts):
     must produce zero denial events for an authenticated user.
     Doubles up the regression already covered in test_account."""
     from mojo.apps.incident.models.event import Event
+    _drain_queued_events(opts.user_id)
     Event.objects.filter(uid=opts.user_id).delete()
 
     assert opts.client.login(TEST_NOPERM, TEST_PWORD), "login failed"
@@ -165,6 +183,7 @@ def test_recovery_path_emits_no_event(opts):
         f"Expected 200 from recovery path, got {resp.status_code}"
     )
 
+    _drain_queued_events(opts.user_id)
     bogus = Event.objects.filter(
         uid=opts.user_id,
         category__in=[
