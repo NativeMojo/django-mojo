@@ -85,10 +85,11 @@ Turn boundaries are announced once each through `announce()`.
 * **One terminal outcome.** `assistant_response` or `assistant_error` resolves a
   turn. Nothing else does.
 * **Keep-alive is mandatory.** The realtime consumer closes an authenticated
-  socket after `AUTH_IDLE_TIMEOUT_SECONDS = 30` of *client* silence, and
-  `last_activity` is stamped on inbound messages only — server→client events do
-  not count. The transport sends `{"action": "ping"}` every 12s; two consecutive
-  missing pongs trigger a reconnect.
+  socket after `WS_IDLE_TIMEOUT` (default 90 s) of *client* silence, and
+  `last_activity` is stamped on inbound messages only — server→client events,
+  including the server's own `ping`, do not count. The transport sends
+  `{"action": "ping"}` every 12s; two consecutive missing pongs trigger a
+  reconnect.
 * **Watchdog, not a verdict.** After 240s with no event of any kind the turn is
   resolved as an error saying it *may still be running*, with a reload control.
   A late terminal event is still accepted and appended, because the server did

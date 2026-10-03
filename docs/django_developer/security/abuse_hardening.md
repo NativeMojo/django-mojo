@@ -175,6 +175,11 @@ with a TTL, after checking CGNAT collateral across all properties).
 | `WS_MAX_CONNECTIONS` | `10` | Concurrent sockets per authenticated identity, checked at auth. `<= 0` disables. |
 | `WS_UNAUTH_TIMEOUT` | `10` | Seconds an unauthenticated socket may live (advertised in `auth_required`). |
 
+These are read once per process, from Django settings, when the realtime
+handler is first imported — not per connection and not from a DB-backed
+`Setting` row (#6562). The authenticated idle timeout and server keepalive are
+in [Realtime Architecture](../realtime/architecture.md#activity-timeout-and-keepalive).
+
 A reconnect storm now costs one Redis `INCR` and a refused handshake (close
 code **4429** — clients must treat it as "deliberate rejection, back off"),
 instead of a dedicated Redis pub/sub connection + three asyncio tasks + 30
