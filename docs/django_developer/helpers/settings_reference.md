@@ -153,6 +153,11 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
 
 ### API
 
+- `API_KEY_TOUCH_SECONDS` — **file-only** (`settings.get_static`). Integer,
+  default `300`. A `UserAPIKey` or `ApiKey` rewrites `last_used` only when it
+  is unset or older than this many seconds, so a burst of requests on one key
+  costs one single-column UPDATE instead of one per request. See
+  [API keys](../account/api_keys.md).
 - `API_METRICS`
 - `API_METRICS_GRANULARITY`
 - `API_THROTTLE_ENABLED` — global per-identity API throttle enforcement
@@ -801,6 +806,12 @@ restart. See
 - `INCIDENT_EVENT_PRUNE_DAYS`
 - `INCIDENT_LEVEL_THRESHOLD`
 - `INCIDENT_METRICS_MIN_GRANULARITY`
+- `INCIDENT_SYNC_CATEGORIES` — **file-only** (`settings.get_static`). List of
+  event categories that always write inline, **added to** the built-in
+  `incident.reporter.SYNC_CATEGORIES` security list (it cannot remove from
+  it). Every other routine 4xx the REST dispatcher reports is written by a job
+  on `incident_handlers`. See
+  [Deferred reporting](../logging/incidents.md#deferred-reporting--defertrue-routine-4xx).
 - `MOJOSEC_CATEGORY_VOLUME_ALERT_THRESHOLD` — **file-only**
   (`settings.get_static`). Integer, default `10000`; `<=0` disables. Each
   digest-matched durable MojoSec receipt contributes its wire occurrence count

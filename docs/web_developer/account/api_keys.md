@@ -226,6 +226,12 @@ Authorization: apikey <token>
 }
 ```
 
+`last_used` is coarse: it moves at most once every five minutes per key (the
+server's `API_KEY_TOUCH_SECONDS`), not on every request. Read it as "used
+within the last few minutes of this time", and do not use it to count or
+order individual requests. The same holds for `last_used` on a user's
+long-lived auth tokens.
+
 ### Rotate a Key — `POST /api/group/apikey/rotate`
 
 Rotates the **calling** API key's secret **in place** — same key, same permissions, a new token. Authenticate with the key being rotated; the previous token stops working immediately and cannot be recovered. Save the new one — though note it is **not** write-once: a caller with `manage_group` / `manage_groups` / `groups` can read it back from `GET /api/group/apikey/<id>?graph=token` (see Security Notes). No management permission needed to rotate (you already hold the secret); a user/JWT session gets `401`.
