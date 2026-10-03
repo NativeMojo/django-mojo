@@ -115,6 +115,16 @@ Allowed topic messages retain the existing envelope:
 }
 ```
 
+### Chat topics
+
+`chat:<room_id>` access is checked when you subscribe, against the room's
+membership and group permissions. The server then trusts that answer until the
+room announces a membership change for you (you leave, are removed or banned,
+or the room is deleted) or until its re-check window passes (300 seconds by
+default). When access is gone it drops the message and unsubscribes the
+connection from that topic, exactly as for protected group topics above. See
+[Chat](../chat/README.md#incoming-events-subscribe-to-chatroom_id).
+
 ## Unsubscribing
 
 ```json

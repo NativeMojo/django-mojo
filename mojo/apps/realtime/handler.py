@@ -20,6 +20,7 @@ from mojo.helpers.async_db import database_thread_target
 from mojo.helpers.redis.client import get_async_connection, get_connection
 from mojo.helpers.request import normalize_ip
 from mojo.helpers.settings import settings
+from .access import TopicAccess, changes_access, is_chat_topic
 from .auth import async_validate_bearer_token
 from .channels import broadcast_channel, topic_channel, messages_channel
 from .permissions import can_access_group_topic, get_group_topic_permissions
@@ -127,6 +128,8 @@ class WebSocketHandler:
         # onto every message the user hook receives. See handle_custom_message.
         self.bearer_prefix = None
         self.subscribed_topics = set()
+        # Remembered chat access decisions, so delivery needs no SQL per frame.
+        self.topic_access = TopicAccess()
 
         # Capture remote IP and User-Agent from helpers (KISS)
         self.remote_ip = self.resolve_remote_ip()
@@ -590,8 +593,14 @@ class WebSocketHandler:
             return
 
         # Topic authorization check
+        chat_topic = is_chat_topic(topic)
+        chat_checked = False
         if hasattr(self.user, 'on_realtime_can_subscribe'):
             def check_permission():
+                if chat_topic:
+                    # The same current-row check delivery runs: its answer is
+                    # remembered below, so it must not trust the connect-time User.
+                    return self._can_receive_chat(topic)
                 return self.user.on_realtime_can_subscribe(topic)
 
             try:
@@ -602,6 +611,7 @@ class WebSocketHandler:
                     await self.report_incident(f"access denied for topic {topic}", "permission_denied", 4)
                     await self.send_error(f"Access denied to topic: {topic}")
                     return
+                chat_checked = chat_topic
             except Exception as e:
                 self._log_exception(f"Error checking topic permission for {topic}: {e}")
                 await self.send_error("Authorization check failed")
@@ -609,6 +619,8 @@ class WebSocketHandler:
 
         if await self.subscribe_to_topic(topic) is False:
             return
+        if chat_checked:
+            self.topic_access.allow(topic)
 
         await self.send_message({
             "type": "subscribed",
@@ -859,6 +871,8 @@ class WebSocketHandler:
 
     async def unsubscribe_from_topic(self, topic):
         """Unsubscribe connection from a topic"""
+        # A later hook-driven resubscribe must check again, not inherit this.
+        self.topic_access.forget(topic)
         if topic not in self.subscribed_topics:
             return
 
@@ -887,22 +901,31 @@ class WebSocketHandler:
                 await self.unsubscribe_from_topic(topic)
                 return
 
-        if message_type == "topic_message" and isinstance(topic, str) and topic.startswith("chat:"):
-            # Membership can change after subscribe, and disconnect is only
-            # best-effort. Recheck every chat frame before exposing its payload.
-            # Also drop queued frames after a successful local unsubscribe.
+        if message_type == "topic_message" and is_chat_topic(topic):
+            # Drop queued frames after a successful local unsubscribe.
             if topic not in self.subscribed_topics:
                 return
-            allowed = False
-            try:
-                if self.authenticated and callable(getattr(self.user, "on_realtime_can_subscribe", None)):
-                    allowed = await asyncio.get_event_loop().run_in_executor(
-                        None, database_thread_target(self._can_receive_chat), topic)
-            except Exception:
-                self._log_exception("Chat delivery authorization failed")
-            if not allowed:
-                await self.unsubscribe_from_topic(topic)
-                return
+            # Membership can change after subscribe, and disconnect is only
+            # best-effort. A remembered allow decision delivers without SQL; a
+            # frame announcing an access change for this user forgets it, so
+            # that very frame is re-checked (see realtime/access.py).
+            if changes_access(data.get("data"), self.user):
+                self.topic_access.forget(topic)
+            if not (self.authenticated and self.topic_access.allows(topic)):
+                allowed = False
+                try:
+                    if self.authenticated and callable(getattr(self.user, "on_realtime_can_subscribe", None)):
+                        allowed = await asyncio.get_event_loop().run_in_executor(
+                            None, database_thread_target(self._can_receive_chat), topic)
+                except Exception:
+                    self._log_exception("Chat delivery authorization failed")
+                if not allowed:
+                    self.topic_access.forget(topic)
+                    await self.unsubscribe_from_topic(topic)
+                    return
+                # The client may have unsubscribed while the check ran.
+                if topic in self.subscribed_topics:
+                    self.topic_access.allow(topic)
 
         if message_type in ["broadcast", "topic_message", "direct_message"]:
             # Forward to client wrapped in {"type": "message", "data": ...}
