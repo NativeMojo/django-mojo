@@ -279,6 +279,32 @@ deletion".
 `run_cleanup(*, handler=_UNSET)` keeps its signature and return value: the total
 number of rows deleted.
 
+## Access-change frames
+
+Open realtime sockets remember their chat access decision rather than querying
+per frame, and re-check when an access-change frame for their user (or a room
+deletion) arrives on the room topic.
+
+```python
+from mojo.apps.chat.services.access import publish_access_change
+
+publish_access_change(room.pk, "chat_member_removed", user_id)
+publish_access_change(room_id, "chat_room_deleted")
+```
+
+`publish_access_change(room_id, kind, user_id=None, *, publisher=None)`
+publishes `{type: kind, room_id, user_id?}` on `chat:<room_id>` through
+`transaction.on_commit`: after the write commits, or at once outside a
+transaction, and never for a rolled-back write. A frame published before the
+commit could be re-checked against the old rows and re-arm the stale decision.
+A publish failure is logged, not raised; the socket's periodic re-check still
+bounds it. `publisher` is a test seam.
+
+`kind` must be one the realtime handler acts on: `chat_member_left`,
+`chat_member_removed`, `chat_member_banned` or `chat_room_deleted`
+(`mojo.apps.realtime.access.ACCESS_CHANGE_FRAMES`). The REST leave, member
+remove, member ban and room delete paths call it.
+
 ## Settings
 
 All optional, all defaulting to today's behavior.

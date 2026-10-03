@@ -179,6 +179,40 @@ While enabled:
 
 Revocation is checked on the next protected delivery; it does not wait for a Redis TTL or use a periodic permission cache. Already-sent messages cannot be recalled. Restoring permission does not replay dropped messages or automatically resubscribe the connection; the client must subscribe again. Redis pub/sub provides no replay guarantee.
 
+### Chat-topic delivery (`chat:<room_id>`)
+
+Chat topics are checked once per subscription, not once per frame. A
+`subscribe` to a chat topic runs the room check (`on_realtime_can_subscribe`
+on a fresh, active `User` row read from the primary database) and the socket
+remembers the allow decision (`mojo/apps/realtime/access.py`). Frames on that
+topic are then delivered without SQL until one of these happens:
+
+| Trigger | Effect |
+|---|---|
+| The decision is older than `WS_SUBSCRIPTION_RECHECK_SECONDS` | The next frame re-runs the check. |
+| A `chat_member_left`, `chat_member_removed` or `chat_member_banned` frame whose `user_id` is this socket's user, or any `chat_room_deleted` frame | That frame is re-checked before delivery. |
+| The socket unsubscribes | The decision is forgotten. A later subscribe, including one returned by a hook, checks again. |
+
+A topic subscribed through a hook response, without a client `subscribe`,
+starts with no remembered decision, so its first frame is checked. A denied or
+failed check (an exception counts as a denial) drops the frame and unsubscribes
+the topic, as before; the socket stays open. Access-change frames can only
+force a check, never grant access.
+
+The chat REST endpoints publish the access-change frames after the write
+commits (`mojo/apps/chat/services/access.py`): leave, member remove, member
+ban, and REST room delete. Changes that publish nothing are bounded by the
+re-check window instead: a platform or group permission removed, an account
+deactivated without the disable service (which force-disconnects its sockets),
+or a group deleted together with its rooms.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `WS_SUBSCRIPTION_RECHECK_SECONDS` | `300` | How long a socket trusts a chat access decision. `<= 0` re-checks every frame, the behavior before this cache. File-static: a database Setting row cannot change it. |
+
+Group topics protected by `REALTIME_GROUP_TOPIC_PERMISSIONS` are unaffected and
+still check every delivery.
+
 ## Activity Timeout
 
 Connections are monitored for activity. If no client message (including `ping`) arrives within 30 seconds, the connection is closed. Clients should send periodic pings to stay alive:
