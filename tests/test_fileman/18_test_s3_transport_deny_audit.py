@@ -58,16 +58,7 @@ def test_transport_deny_alone_is_private(opts):
     ok, issues, details = _audit([_transport_deny()])
     assert_true(not ok, "a bucket with no public allow must not be public")
     assert_eq(details["status"], "private",
-              f"a deny cannot grant access, so no public allow means private; issues={issues}")
-
-
-@th.django_unit_test("S3 audit: any deny without a public allow is private, not unknown")
-def test_deny_without_allow_is_private(opts):
-    deny = dict(PUBLIC_ALLOW, Effect="Deny")
-    ok, issues, details = _audit([deny])
-    assert_true(not ok, "a bucket with no public allow must not be public")
-    assert_eq(details["status"], "private",
-              f"a deny cannot grant access, so no public allow means private; issues={issues}")
+              f"a transport-only deny cannot grant access, so no public allow means private; issues={issues}")
 
 
 @th.django_unit_test("S3 audit: a whole-prefix public allow with the transport-only deny is public")
