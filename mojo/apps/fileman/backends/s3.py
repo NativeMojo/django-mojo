@@ -608,7 +608,7 @@ class S3StorageBackend(StorageBackend):
         )
 
     @classmethod
-    def _deny_can_get_object(cls, statement):
+    def _statement_can_get_object(cls, statement):
         if "Action" in statement:
             return cls._action_can_get_object(statement.get("Action"))
         if "NotAction" in statement:
@@ -619,6 +619,31 @@ class S3StorageBackend(StorageBackend):
                 for pattern in excluded
             )
         return False
+
+    @classmethod
+    def _deny_is_transport_only(cls, statement):
+        """True only for a Deny conditioned solely on aws:SecureTransport being false.
+
+        Such a statement can deny plain-HTTP requests and nothing else, whatever
+        its Principal, Action and Resource are. Any other condition shape is
+        treated as a Deny that may apply.
+        """
+        condition = statement.get("Condition")
+        if not isinstance(condition, dict) or list(condition) != ["Bool"]:
+            return False
+        keys = condition["Bool"]
+        if not isinstance(keys, dict) or len(keys) != 1:
+            return False
+        key, value = next(iter(keys.items()))
+        if not isinstance(key, str) or key.lower() != "aws:securetransport":
+            return False
+        if isinstance(value, list):
+            if len(value) != 1:
+                return False
+            value = value[0]
+        if value is False:
+            return True
+        return isinstance(value, str) and value.lower() == "false"
 
     def _resource_covers_entire_prefix(self, resource):
         """Accept only a trailing-star resource with an unambiguous literal base."""
@@ -758,11 +783,27 @@ class S3StorageBackend(StorageBackend):
         for statement in statements:
             if not isinstance(statement, dict):
                 continue
-            if statement.get("Effect") == "Deny" and self._deny_can_get_object(statement):
+            if statement.get("Effect") == "Deny" and self._statement_can_get_object(statement):
                 if "NotResource" in statement or self._resource_may_overlap_prefix(statement.get("Resource")):
-                    matching_deny = True
+                    # A transport-only deny cannot refuse the HTTPS requests
+                    # this backend hands out, so it does not override an allow.
+                    if (self._deny_is_transport_only(statement)
+                            and urlparse(self.endpoint_url or "").scheme == "https"):
+                        details["transport_only_deny"] = True
+                    else:
+                        matching_deny = True
                 continue
             if statement.get("Effect") != "Allow":
+                continue
+            if any(key in statement for key in ("NotPrincipal", "NotAction", "NotResource")):
+                # An allow written by exclusion may reach anonymous GetObject on
+                # this prefix; it is never conclusive either way.
+                if (("NotPrincipal" in statement
+                        or self._principal_is_public(statement.get("Principal")))
+                        and self._statement_can_get_object(statement)
+                        and ("NotResource" in statement
+                             or self._resource_may_overlap_prefix(statement.get("Resource")))):
+                    ambiguous_allow = True
                 continue
             if not self._principal_is_public(statement.get("Principal")):
                 continue
