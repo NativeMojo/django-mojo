@@ -262,11 +262,20 @@ policy shapes it classifies; anything not listed answers `unknown`:
 | Unreadable policy, a policy that is not valid JSON, or any statement not in the standard form (see below) | `unknown` |
 | Unreadable Public Access Block | `unknown` |
 
-Valid JSON is not enough. Every statement must be an object with `Effect`
-`Allow` or `Deny`, exactly one of `Action`/`NotAction` and exactly one of
-`Resource`/`NotResource`, each a string or a non-empty list of strings, and a
-`Condition` that is an object when present. One statement outside that form
-makes the whole result `unknown`, whatever the other statements say.
+Valid JSON is not enough. Every statement must be an object in the standard
+policy form, and one statement outside it makes the whole result `unknown`,
+whatever the other statements say:
+
+- only the elements `Sid`, `Effect`, `Principal`/`NotPrincipal`,
+  `Action`/`NotAction`, `Resource`/`NotResource` and `Condition`;
+- `Effect` exactly `Allow` or `Deny`;
+- exactly one of each pair, where an action or resource is a string or a
+  non-empty list of strings, and a principal is the string `*` or an object
+  keyed by `AWS`, `Service`, `Federated` or `CanonicalUser` with a string or a
+  non-empty list of strings;
+- a `Condition`, when present, that is a non-empty object of operators, each a
+  non-empty object of keys, each with a string, number or boolean or a
+  non-empty list of them. An empty `Condition` object answers `unknown`.
 
 A public Allow is `Principal` `*` (or `{"AWS": "*"}`) with an `Action` matching
 `s3:GetObject`, no `Condition`, and a `Resource` ending in `*` whose literal

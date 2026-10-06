@@ -188,15 +188,20 @@ def test_transport_deny_value_forms(opts):
         "integer 0": {"Bool": {"aws:SecureTransport": 0}},
         "lower-case operator": {"bool": {"aws:SecureTransport": "false"}},
         "two-element list": {"Bool": {"aws:SecureTransport": ["false", "false"]}},
-        "nested list": {"Bool": {"aws:SecureTransport": [["false"]]}},
-        "empty condition": {},
     }
     for label, condition in not_recognised.items():
         result = _audit([PUBLIC_ALLOW, dict(transport, Condition=condition)])
         _assert_unknown_for(label, result, DENY_ISSUE)
 
-    result = _audit([PUBLIC_ALLOW, dict(transport, Condition="aws:SecureTransport=false")])
-    _assert_unknown_for("a deny whose Condition is not an object", result, MALFORMED_ISSUE)
+    not_a_condition = {
+        "nested list": {"Bool": {"aws:SecureTransport": [["false"]]}},
+        "empty list": {"Bool": {"aws:SecureTransport": []}},
+        "empty condition": {},
+        "condition that is not an object": "aws:SecureTransport=false",
+    }
+    for label, condition in not_a_condition.items():
+        result = _audit([PUBLIC_ALLOW, dict(transport, Condition=condition)])
+        _assert_unknown_for(f"a deny with {label}", result, MALFORMED_ISSUE)
 
 
 @th.django_unit_test("S3 audit: provisioning's public access block keeps a public allow private")
@@ -295,6 +300,25 @@ def test_malformed_statement_is_unknown(opts):
         "a statement with both Resource and NotResource": dict(PUBLIC_ALLOW, NotResource=resource),
         "a statement with no Effect": {key: value for key, value in PUBLIC_ALLOW.items() if key != "Effect"},
         "a statement with a lower-case effect": dict(PUBLIC_ALLOW, Effect="allow"),
+        "an allow with an empty Condition object": dict(PUBLIC_ALLOW, Condition={}),
+        "an allow whose Condition operator is a number": dict(PUBLIC_ALLOW, Condition={"Bool": 42}),
+        "an allow whose Condition operator is empty": dict(PUBLIC_ALLOW, Condition={"Bool": {}}),
+        "an allow whose Condition value is an object": dict(
+            PUBLIC_ALLOW, Condition={"Bool": {"aws:SecureTransport": {"is": "false"}}}),
+        "an allow whose Condition value is null": dict(
+            PUBLIC_ALLOW, Condition={"Bool": {"aws:SecureTransport": None}}),
+        "a principal list with a number in it": dict(PUBLIC_ALLOW, Principal={"AWS": ["*", 42]}),
+        "a principal with a malformed sibling": dict(PUBLIC_ALLOW, Principal={"AWS": "*", "Service": 42}),
+        "a principal of an unknown kind": dict(PUBLIC_ALLOW, Principal={"Everyone": "*"}),
+        "a principal that is an empty object": dict(PUBLIC_ALLOW, Principal={}),
+        "a principal string that is not the wildcard": dict(PUBLIC_ALLOW, Principal="everyone"),
+        "a principal that is a list": dict(PUBLIC_ALLOW, Principal=["*"]),
+        "a statement with no principal": {
+            key: value for key, value in PUBLIC_ALLOW.items() if key != "Principal"},
+        "a statement with both Principal and NotPrincipal": dict(
+            PUBLIC_ALLOW, NotPrincipal={"AWS": "arn:aws:iam::123456789012:role/app"}),
+        "a statement with an element the grammar does not have": dict(PUBLIC_ALLOW, Principals="*"),
+        "a statement whose Sid is a number": dict(PUBLIC_ALLOW, Sid=7),
     }
     for label, statement in malformed.items():
         # Beside the transport-only deny: the case the exemption must not open.
@@ -314,7 +338,19 @@ def test_malformed_statement_is_unknown(opts):
     well_formed = {
         "a single statement object": PUBLIC_ALLOW,
         "an action list": [dict(PUBLIC_ALLOW, Action=["s3:GetObject", "s3:GetObjectVersion"]), transport],
-        "an allow with an empty Condition object": [dict(PUBLIC_ALLOW, Condition={}), transport],
+        "a principal written as an AWS list": [dict(PUBLIC_ALLOW, Principal={"AWS": ["*"]}), transport],
+        "a statement with a Sid": [dict(PUBLIC_ALLOW, Sid="PublicRead"), transport],
+        "a conditional allow beside the public allow": [
+            PUBLIC_ALLOW,
+            dict(PUBLIC_ALLOW, Condition={"StringEquals": {"aws:PrincipalOrgID": "o-example"}}),
+            transport],
+        "a role allow with a numeric and a list condition beside the public allow": [
+            PUBLIC_ALLOW,
+            dict(PUBLIC_ALLOW, Principal={"AWS": "arn:aws:iam::123456789012:role/app", "Service": [
+                "cloudfront.amazonaws.com"]}, Condition={
+                    "NumericLessThan": {"s3:max-keys": 10},
+                    "IpAddress": {"aws:SourceIp": ["203.0.113.0/24", "198.51.100.0/24"]}}),
+            transport],
     }
     for label, statements in well_formed.items():
         backend = _backend([])

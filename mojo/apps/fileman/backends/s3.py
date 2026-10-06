@@ -627,6 +627,35 @@ class S3StorageBackend(StorageBackend):
         return (isinstance(value, list) and bool(value)
                 and all(isinstance(pattern, str) for pattern in value))
 
+    _STATEMENT_KEYS = frozenset((
+        "Sid", "Effect", "Principal", "NotPrincipal", "Action", "NotAction",
+        "Resource", "NotResource", "Condition"))
+    _PRINCIPAL_TYPES = frozenset(("AWS", "Service", "Federated", "CanonicalUser"))
+
+    @classmethod
+    def _principal_is_well_formed(cls, principal):
+        if isinstance(principal, str):
+            return principal == "*"
+        if not isinstance(principal, dict) or not principal:
+            return False
+        return all(
+            key in cls._PRINCIPAL_TYPES and cls._is_pattern_block(value)
+            for key, value in principal.items())
+
+    @staticmethod
+    def _condition_is_well_formed(condition):
+        if not isinstance(condition, dict) or not condition:
+            return False
+        for keys in condition.values():
+            if not isinstance(keys, dict) or not keys:
+                return False
+            for value in keys.values():
+                values = value if isinstance(value, list) else [value]
+                if not values or not all(
+                        isinstance(item, (str, bool, int, float)) for item in values):
+                    return False
+        return True
+
     @classmethod
     def _statement_is_well_formed(cls, statement):
         """True when a decoded statement has the structure the policy grammar requires.
@@ -634,17 +663,22 @@ class S3StorageBackend(StorageBackend):
         Valid JSON is not a valid policy. The audit only draws a conclusion
         from statements it can read as written; anything else is unknown.
         """
-        if not isinstance(statement, dict):
+        if not isinstance(statement, dict) or not cls._STATEMENT_KEYS.issuperset(statement):
             return False
         if statement.get("Effect") not in ("Allow", "Deny"):
             return False
-        for name in ("Action", "Resource"):
+        if not isinstance(statement.get("Sid", ""), str):
+            return False
+        for name in ("Principal", "Action", "Resource"):
             if (name in statement) == (f"Not{name}" in statement):
                 return False
             block = statement[name] if name in statement else statement[f"Not{name}"]
-            if not cls._is_pattern_block(block):
+            if name == "Principal":
+                if not cls._principal_is_well_formed(block):
+                    return False
+            elif not cls._is_pattern_block(block):
                 return False
-        return "Condition" not in statement or isinstance(statement["Condition"], dict)
+        return "Condition" not in statement or cls._condition_is_well_formed(statement["Condition"])
 
     @classmethod
     def _deny_is_transport_only(cls, statement):
