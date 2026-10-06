@@ -256,12 +256,46 @@ model. Force a bulk policy refresh after such a change:
 ```bash
 python manage.py reconcile_fileman_public_access
 python manage.py reconcile_fileman_public_access --dry-run
+python manage.py reconcile_fileman_public_access --groups
+python manage.py reconcile_fileman_public_access --manager 12 --manager 40
 ```
 
-The command audits active user-scoped S3 managers independently, reports
+The command audits each selected manager independently, reports
 `public`/`private`/`unknown` totals, and continues if one manager fails. Dry-run
 performs the read-only AWS inspection without changing `is_public` or audit
-metadata.
+metadata. Which managers are selected depends on the arguments:
+
+- No argument — active user-scoped S3 managers only. If active group-scoped S3
+  managers exist, one line reports how many were not checked.
+- `--groups` — also every active S3 manager that has a group, whether or not
+  it also has a user.
+- `--manager <pk>` (repeatable) — only the named managers, user-scoped or
+  group-scoped. It overrides `--groups`.
+
+Inactive managers and system managers (no user and no group) are never
+checked. One named with `--manager` is reported as skipped with the reason, as
+is a manager that is not S3 or does not exist. A reactivated group manager is
+not re-checked on its own; run the command for it.
+
+A user-scoped manager is corrected in both directions. A group-scoped manager
+is only ever corrected from public to private. The command never turns a group
+manager public, because a group manager's policy answer is never confirmed
+against a real object, and a store kept private on purpose (a FileVault store,
+or one under a world-readable prefix) would have its expiring signed links
+replaced by permanent unsigned ones. Two notes mark the group managers the
+command left for an operator:
+
+- `(policy is public, is_public False kept)` — the policy allows anonymous
+  reads but the manager is flagged private. Its links stay signed and keep
+  working. Set `is_public` on the manager if it should be public.
+- `(is_public True kept, not verified)` — the manager is flagged public and
+  the check answered `unknown`. Its links stay unsigned and may be refused by
+  the bucket. These are counted as `unverified_public` in the summary.
+
+The summary line also reports `changed` (`would_change` in a dry run) and
+`skipped`. On a bucket whose only Deny statement is the TLS-only one, the check
+is conclusive only from the release that carries the TLS-only Deny fix; before
+it, such group managers report `unknown`.
 
 ### Backend interface — `download(file_path, local_path)`
 
