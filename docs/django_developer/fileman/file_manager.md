@@ -259,12 +259,19 @@ policy shapes it classifies; anything not listed answers `unknown`:
 | Whole-prefix public Allow and a transport-only Deny, endpoint that is not HTTPS | `unknown` |
 | Public Allow that is conditional or covers only part of the prefix | `unknown` |
 | Allow written with `NotPrincipal`, `NotAction` or `NotResource` that may reach anonymous `s3:GetObject` on the prefix | `unknown` |
-| Unreadable policy, a policy that is not valid JSON, or any statement not in the standard form (see below) | `unknown` |
+| Unreadable policy, a policy that is not valid JSON, a policy document or statement not in the standard form (see below) | `unknown` |
 | Unreadable Public Access Block | `unknown` |
 
-Valid JSON is not enough. Every statement must be an object in the standard
-policy form, and one statement outside it makes the whole result `unknown`,
-whatever the other statements say:
+Valid JSON is not enough. The policy text is read strictly: a member written
+twice in the same object, at any depth, answers `unknown`, because a JSON
+reader keeps only the last one and the audit would then judge a different
+document from the one stored. So does a number written as `NaN` or `Infinity`.
+The document may hold only `Version`, `Id` and `Statement`, and `Statement`
+must be there and not be an empty list.
+
+Every statement must be an object in the standard policy form, and one
+statement outside it makes the whole result `unknown`, whatever the other
+statements say:
 
 - only the elements `Sid`, `Effect`, `Principal`/`NotPrincipal`,
   `Action`/`NotAction`, `Resource`/`NotResource` and `Condition`;

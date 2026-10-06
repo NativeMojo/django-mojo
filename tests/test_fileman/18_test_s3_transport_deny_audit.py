@@ -19,6 +19,7 @@ PUBLIC_ALLOW = {
 DENY_ISSUE = "A matching deny may override anonymous GetObject access."
 PARTIAL_ISSUE = "The bucket policy has only conditional or partial public access."
 MALFORMED_ISSUE = "The bucket policy has a statement this check cannot read safely."
+PARSE_ISSUE = "Unable to parse bucket policy safely."
 
 # What provisioning turns on (mojo/deploy/provision/storage.py, wanted_block).
 PROVISIONED_BLOCK = {
@@ -335,11 +336,70 @@ def test_malformed_statement_is_unknown(opts):
     _assert_unknown_for("a Statement that is a number",
                         backend.check_public_access_for_prefix(), MALFORMED_ISSUE)
 
+    # Members repeated in the stored text: json.loads keeps the last one, so
+    # only raw text can show them. Each of these reads as a clean public policy
+    # once the first member is dropped.
+    allow = json.dumps(PUBLIC_ALLOW)
+    deny = json.dumps(transport)
+    role = '{"AWS": "arn:aws:iam::123456789012:role/app"}'
+    repeated = {
+        "a repeated Effect": '{"Effect": "Deny", ' + allow[1:],
+        "a repeated Principal": allow.replace(
+            '"Principal": "*"', f'"Principal": {role}, "Principal": "*"'),
+        "a repeated Condition": deny.replace(
+            '"Condition":', '"Condition": {"Bool": {"aws:SecureTransport": "true"}}, "Condition":'),
+        "a repeated condition key": deny.replace(
+            '"aws:SecureTransport": "false"',
+            '"aws:SecureTransport": "true", "aws:SecureTransport": "false"'),
+        "a repeated condition operator": deny.replace(
+            '"Bool":', '"Bool": {"aws:SourceIp": "203.0.113.0/24"}, "Bool":'),
+        "a repeated principal kind": allow.replace(
+            '"Principal": "*"',
+            '"Principal": {"AWS": "arn:aws:iam::123456789012:role/app", "AWS": "*"}'),
+    }
+    for label, statement in repeated.items():
+        assert_true(statement not in (allow, deny), f"{label}: the fixture did not change the text")
+        for beside, statements in (
+                ("beside a public allow and the transport-only deny", [allow, statement, deny]),
+                ("beside the transport-only deny", [statement, deny]),
+                ("beside a public allow", [allow, statement])):
+            text = '{"Version": "2012-10-17", "Statement": [' + ", ".join(statements) + "]}"
+            backend = _backend([])
+            backend._client.get_bucket_policy = lambda text=text, **kwargs: {"Policy": text}
+            ok, issues, details = backend.check_public_access_for_prefix()
+            assert_true(not ok and details["status"] == "unknown",
+                        f"{label} {beside} must be unknown, got {details['status']}")
+            assert_eq(issues, [PARSE_ISSUE], f"{label} {beside} must be unknown as unparseable")
+
+    statements = f"[{allow}, {deny}]"
+    documents = {
+        "a repeated Statement": '{"Version": "2012-10-17", "Statement": [' + deny + '], "Statement": '
+                                + statements + "}",
+        "a repeated Version": '{"Version": "2008-10-17", "Version": "2012-10-17", "Statement": '
+                              + statements + "}",
+        "a document with no Statement": '{"Version": "2012-10-17"}',
+        "a document with a member the grammar does not have":
+            '{"Version": "2012-10-17", "Statements": [], "Statement": ' + statements + "}",
+        "a condition value that is not JSON": '{"Version": "2012-10-17", "Statement": [' + allow + ", "
+            + json.dumps(dict(PUBLIC_ALLOW, Condition={"NumericLessThan": {"s3:max-keys": 1}})).replace(
+                ": 1}", ": NaN}") + ", " + deny + "]}",
+    }
+    for label, text in documents.items():
+        backend = _backend([])
+        backend._client.get_bucket_policy = lambda text=text, **kwargs: {"Policy": text}
+        ok, issues, details = backend.check_public_access_for_prefix()
+        assert_true(not ok and details["status"] == "unknown",
+                    f"{label} must be unknown, got {details['status']}")
+        assert_eq(issues, [PARSE_ISSUE], f"{label} must be unknown as unparseable")
+
+    _assert_unknown_for("an empty Statement list", _audit([]), MALFORMED_ISSUE)
+
     well_formed = {
         "a single statement object": PUBLIC_ALLOW,
         "an action list": [dict(PUBLIC_ALLOW, Action=["s3:GetObject", "s3:GetObjectVersion"]), transport],
         "a principal written as an AWS list": [dict(PUBLIC_ALLOW, Principal={"AWS": ["*"]}), transport],
         "a statement with a Sid": [dict(PUBLIC_ALLOW, Sid="PublicRead"), transport],
+        "the same statement twice": [PUBLIC_ALLOW, PUBLIC_ALLOW, transport],
         "a conditional allow beside the public allow": [
             PUBLIC_ALLOW,
             dict(PUBLIC_ALLOW, Condition={"StringEquals": {"aws:PrincipalOrgID": "o-example"}}),

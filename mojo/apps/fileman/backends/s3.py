@@ -656,6 +656,30 @@ class S3StorageBackend(StorageBackend):
                     return False
         return True
 
+    _POLICY_KEYS = frozenset(("Version", "Id", "Statement"))
+
+    @staticmethod
+    def _decode_policy(policy_text):
+        """Decode policy text, refusing what json.loads would quietly accept.
+
+        A repeated member is not allowed by the policy grammar, and json.loads
+        keeps only the last one, so the statement the audit read would not be
+        the document that was stored.
+        """
+        def unique_members(pairs):
+            members = {}
+            for key, value in pairs:
+                if key in members:
+                    raise ValueError("bucket policy repeats a member")
+                members[key] = value
+            return members
+
+        def reject_constant(name):
+            raise ValueError("bucket policy has a value that is not JSON")
+
+        return json.loads(
+            policy_text, object_pairs_hook=unique_members, parse_constant=reject_constant)
+
     @classmethod
     def _statement_is_well_formed(cls, statement):
         """True when a decoded statement has the structure the policy grammar requires.
@@ -816,9 +840,11 @@ class S3StorageBackend(StorageBackend):
 
         try:
             policy_text = self.client.get_bucket_policy(Bucket=self.bucket_name).get("Policy")
-            policy = json.loads(policy_text) if policy_text else None
+            policy = self._decode_policy(policy_text) if policy_text else None
             if not isinstance(policy, dict):
                 raise ValueError("bucket policy is not a JSON object")
+            if not self._POLICY_KEYS.issuperset(policy) or "Statement" not in policy:
+                raise ValueError("bucket policy is not a policy document")
             details["policy"] = policy
         except ClientError as exc:
             code = self._error_code(exc)
@@ -834,13 +860,14 @@ class S3StorageBackend(StorageBackend):
             details["failure"] = safe_error_detail(exc, "s3.parse_bucket_policy")
             return False, ["Unable to parse bucket policy safely."], details
 
-        raw_statements = policy.get("Statement", [])
+        raw_statements = policy["Statement"]
         statements = raw_statements if isinstance(raw_statements, list) else [raw_statements]
         covering_allow = False
         ambiguous_allow = False
         matching_deny = False
 
-        if not all(self._statement_is_well_formed(statement) for statement in statements):
+        if not statements or not all(
+                self._statement_is_well_formed(statement) for statement in statements):
             details["status"] = "unknown"
             return False, ["The bucket policy has a statement this check cannot read safely."], details
 
