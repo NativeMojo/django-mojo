@@ -232,7 +232,7 @@ three statuses:
 
 - `public` — anonymous access was conclusively established; `is_public` is repaired to `True` and unsigned URLs are allowed.
 - `private` — anonymous access was conclusively denied; `is_public` is repaired to `False`.
-- `unknown` — AWS could not establish either result. The stored `is_public` value is preserved, but download behavior fails closed to a presigned URL.
+- `unknown` — AWS could not establish either result. The stored `is_public` value is preserved. For a personal (user-scoped) manager, download behavior fails closed to a presigned URL. For a group or system manager, the stored `is_public` value alone decides whether links are signed.
 
 The audit uses an anonymous HEAD probe after authenticated S3 access confirms a
 real object exists. An anonymous 403 is enough to disprove manager-wide public
@@ -322,3 +322,14 @@ If no `FileManager` exists for a group or user, the system-wide default is used
 automatically. Set `is_default=True` on one FileManager to designate it. A new
 user manager inherits the system manager's public/private value and reconciles
 its derived S3 prefix before it is returned.
+
+A new group manager created by `get_for_group()` follows the same contract: it
+inherits the system manager's public/private value and its S3 prefix is checked
+once, at creation. A conclusive check repairs `is_public` in either direction.
+An `unknown` check keeps the inherited value. An existing group manager is
+returned as stored and is not re-checked on read.
+
+The inherited value is the operator's setting on the system default manager.
+That setting is not itself checked automatically.
+`reconcile_fileman_public_access` covers user-scoped managers only. It does not
+check group or system managers.
