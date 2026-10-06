@@ -18,6 +18,7 @@ PUBLIC_ALLOW = {
 
 DENY_ISSUE = "A matching deny may override anonymous GetObject access."
 PARTIAL_ISSUE = "The bucket policy has only conditional or partial public access."
+MALFORMED_ISSUE = "The bucket policy has a statement this check cannot read safely."
 
 # What provisioning turns on (mojo/deploy/provision/storage.py, wanted_block).
 PROVISIONED_BLOCK = {
@@ -189,11 +190,13 @@ def test_transport_deny_value_forms(opts):
         "two-element list": {"Bool": {"aws:SecureTransport": ["false", "false"]}},
         "nested list": {"Bool": {"aws:SecureTransport": [["false"]]}},
         "empty condition": {},
-        "condition that is not an object": "aws:SecureTransport=false",
     }
     for label, condition in not_recognised.items():
         result = _audit([PUBLIC_ALLOW, dict(transport, Condition=condition)])
         _assert_unknown_for(label, result, DENY_ISSUE)
+
+    result = _audit([PUBLIC_ALLOW, dict(transport, Condition="aws:SecureTransport=false")])
+    _assert_unknown_for("a deny whose Condition is not an object", result, MALFORMED_ISSUE)
 
 
 @th.django_unit_test("S3 audit: provisioning's public access block keeps a public allow private")
@@ -270,3 +273,53 @@ def test_object_path_with_transport_deny(opts):
     assert_true(not ok and details["status"] == "unknown",
                 f"one readable object under an overriding deny must not make the prefix public; "
                 f"got {details['status']}")
+
+
+@th.django_unit_test("S3 audit: valid JSON that is not a valid policy statement is unknown")
+def test_malformed_statement_is_unknown(opts):
+    transport = _transport_deny()
+    resource = PUBLIC_ALLOW["Resource"]
+    no_action = {key: value for key, value in PUBLIC_ALLOW.items() if key != "Action"}
+    no_resource = {key: value for key, value in PUBLIC_ALLOW.items() if key != "Resource"}
+    malformed = {
+        "an allow whose Condition is a list": dict(PUBLIC_ALLOW, Condition=[]),
+        "an allow whose Condition is a string": dict(PUBLIC_ALLOW, Condition="none"),
+        "a statement that is a number": 42,
+        "a statement that is a list": [PUBLIC_ALLOW],
+        "a deny with no Action": dict(no_action, Effect="Deny"),
+        "a deny whose Action is a number": dict(PUBLIC_ALLOW, Effect="Deny", Action=42),
+        "a deny whose Action is an empty list": dict(PUBLIC_ALLOW, Effect="Deny", Action=[]),
+        "a deny with no Resource": dict(no_resource, Effect="Deny"),
+        "a deny whose Resource is a number": dict(PUBLIC_ALLOW, Effect="Deny", Resource=42),
+        "a statement with both Action and NotAction": dict(PUBLIC_ALLOW, NotAction="s3:PutObject"),
+        "a statement with both Resource and NotResource": dict(PUBLIC_ALLOW, NotResource=resource),
+        "a statement with no Effect": {key: value for key, value in PUBLIC_ALLOW.items() if key != "Effect"},
+        "a statement with a lower-case effect": dict(PUBLIC_ALLOW, Effect="allow"),
+    }
+    for label, statement in malformed.items():
+        # Beside the transport-only deny: the case the exemption must not open.
+        _assert_unknown_for(f"{label} beside a public allow and the transport-only deny",
+                            _audit([PUBLIC_ALLOW, statement, transport]), MALFORMED_ISSUE)
+        _assert_unknown_for(f"{label} beside the transport-only deny",
+                            _audit([statement, transport]), MALFORMED_ISSUE)
+        _assert_unknown_for(f"{label} beside a public allow",
+                            _audit([PUBLIC_ALLOW, statement]), MALFORMED_ISSUE)
+
+    backend = _backend([])
+    backend._client.get_bucket_policy = lambda **kwargs: {
+        "Policy": json.dumps({"Version": "2012-10-17", "Statement": 42})}
+    _assert_unknown_for("a Statement that is a number",
+                        backend.check_public_access_for_prefix(), MALFORMED_ISSUE)
+
+    well_formed = {
+        "a single statement object": PUBLIC_ALLOW,
+        "an action list": [dict(PUBLIC_ALLOW, Action=["s3:GetObject", "s3:GetObjectVersion"]), transport],
+        "an allow with an empty Condition object": [dict(PUBLIC_ALLOW, Condition={}), transport],
+    }
+    for label, statements in well_formed.items():
+        backend = _backend([])
+        backend._client.get_bucket_policy = lambda statements=statements, **kwargs: {
+            "Policy": json.dumps({"Version": "2012-10-17", "Statement": statements})}
+        ok, issues, details = backend.check_public_access_for_prefix()
+        assert_true(ok and details["status"] == "public",
+                    f"{label} is a valid policy form and stays public; got {details['status']}, issues={issues}")

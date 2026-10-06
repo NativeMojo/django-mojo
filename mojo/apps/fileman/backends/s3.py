@@ -620,6 +620,32 @@ class S3StorageBackend(StorageBackend):
             )
         return False
 
+    @staticmethod
+    def _is_pattern_block(value):
+        if isinstance(value, str):
+            return True
+        return (isinstance(value, list) and bool(value)
+                and all(isinstance(pattern, str) for pattern in value))
+
+    @classmethod
+    def _statement_is_well_formed(cls, statement):
+        """True when a decoded statement has the structure the policy grammar requires.
+
+        Valid JSON is not a valid policy. The audit only draws a conclusion
+        from statements it can read as written; anything else is unknown.
+        """
+        if not isinstance(statement, dict):
+            return False
+        if statement.get("Effect") not in ("Allow", "Deny"):
+            return False
+        for name in ("Action", "Resource"):
+            if (name in statement) == (f"Not{name}" in statement):
+                return False
+            block = statement[name] if name in statement else statement[f"Not{name}"]
+            if not cls._is_pattern_block(block):
+                return False
+        return "Condition" not in statement or isinstance(statement["Condition"], dict)
+
     @classmethod
     def _deny_is_transport_only(cls, statement):
         """True only for a Deny conditioned solely on aws:SecureTransport being false.
@@ -780,9 +806,11 @@ class S3StorageBackend(StorageBackend):
         ambiguous_allow = False
         matching_deny = False
 
+        if not all(self._statement_is_well_formed(statement) for statement in statements):
+            details["status"] = "unknown"
+            return False, ["The bucket policy has a statement this check cannot read safely."], details
+
         for statement in statements:
-            if not isinstance(statement, dict):
-                continue
             if statement.get("Effect") == "Deny" and self._statement_can_get_object(statement):
                 if "NotResource" in statement or self._resource_may_overlap_prefix(statement.get("Resource")):
                     # A transport-only deny cannot refuse the HTTPS requests

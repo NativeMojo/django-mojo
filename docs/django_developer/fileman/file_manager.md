@@ -259,7 +259,14 @@ policy shapes it classifies; anything not listed answers `unknown`:
 | Whole-prefix public Allow and a transport-only Deny, endpoint that is not HTTPS | `unknown` |
 | Public Allow that is conditional or covers only part of the prefix | `unknown` |
 | Allow written with `NotPrincipal`, `NotAction` or `NotResource` that may reach anonymous `s3:GetObject` on the prefix | `unknown` |
-| Unreadable or malformed policy, or an unreadable Public Access Block | `unknown` |
+| Unreadable policy, a policy that is not valid JSON, or any statement not in the standard form (see below) | `unknown` |
+| Unreadable Public Access Block | `unknown` |
+
+Valid JSON is not enough. Every statement must be an object with `Effect`
+`Allow` or `Deny`, exactly one of `Action`/`NotAction` and exactly one of
+`Resource`/`NotResource`, each a string or a non-empty list of strings, and a
+`Condition` that is an object when present. One statement outside that form
+makes the whole result `unknown`, whatever the other statements say.
 
 A public Allow is `Principal` `*` (or `{"AWS": "*"}`) with an `Action` matching
 `s3:GetObject`, no `Condition`, and a `Resource` ending in `*` whose literal
