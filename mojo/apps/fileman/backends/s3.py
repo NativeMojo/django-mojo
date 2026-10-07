@@ -608,7 +608,7 @@ class S3StorageBackend(StorageBackend):
         )
 
     @classmethod
-    def _deny_can_get_object(cls, statement):
+    def _statement_can_get_object(cls, statement):
         if "Action" in statement:
             return cls._action_can_get_object(statement.get("Action"))
         if "NotAction" in statement:
@@ -619,6 +619,115 @@ class S3StorageBackend(StorageBackend):
                 for pattern in excluded
             )
         return False
+
+    @staticmethod
+    def _is_pattern_block(value):
+        if isinstance(value, str):
+            return True
+        return (isinstance(value, list) and bool(value)
+                and all(isinstance(pattern, str) for pattern in value))
+
+    _STATEMENT_KEYS = frozenset((
+        "Sid", "Effect", "Principal", "NotPrincipal", "Action", "NotAction",
+        "Resource", "NotResource", "Condition"))
+    _PRINCIPAL_TYPES = frozenset(("AWS", "Service", "Federated", "CanonicalUser"))
+
+    @classmethod
+    def _principal_is_well_formed(cls, principal):
+        if isinstance(principal, str):
+            return principal == "*"
+        if not isinstance(principal, dict) or not principal:
+            return False
+        return all(
+            key in cls._PRINCIPAL_TYPES and cls._is_pattern_block(value)
+            for key, value in principal.items())
+
+    @staticmethod
+    def _condition_is_well_formed(condition):
+        if not isinstance(condition, dict) or not condition:
+            return False
+        for keys in condition.values():
+            if not isinstance(keys, dict) or not keys:
+                return False
+            for value in keys.values():
+                values = value if isinstance(value, list) else [value]
+                if not values or not all(
+                        isinstance(item, (str, bool, int, float)) for item in values):
+                    return False
+        return True
+
+    _POLICY_KEYS = frozenset(("Version", "Id", "Statement"))
+
+    @staticmethod
+    def _decode_policy(policy_text):
+        """Decode policy text, refusing what json.loads would quietly accept.
+
+        A repeated member is not allowed by the policy grammar, and json.loads
+        keeps only the last one, so the statement the audit read would not be
+        the document that was stored.
+        """
+        def unique_members(pairs):
+            members = {}
+            for key, value in pairs:
+                if key in members:
+                    raise ValueError("bucket policy repeats a member")
+                members[key] = value
+            return members
+
+        def reject_constant(name):
+            raise ValueError("bucket policy has a value that is not JSON")
+
+        return json.loads(
+            policy_text, object_pairs_hook=unique_members, parse_constant=reject_constant)
+
+    @classmethod
+    def _statement_is_well_formed(cls, statement):
+        """True when a decoded statement has the structure the policy grammar requires.
+
+        Valid JSON is not a valid policy. The audit only draws a conclusion
+        from statements it can read as written; anything else is unknown.
+        """
+        if not isinstance(statement, dict) or not cls._STATEMENT_KEYS.issuperset(statement):
+            return False
+        if statement.get("Effect") not in ("Allow", "Deny"):
+            return False
+        if not isinstance(statement.get("Sid", ""), str):
+            return False
+        for name in ("Principal", "Action", "Resource"):
+            if (name in statement) == (f"Not{name}" in statement):
+                return False
+            block = statement[name] if name in statement else statement[f"Not{name}"]
+            if name == "Principal":
+                if not cls._principal_is_well_formed(block):
+                    return False
+            elif not cls._is_pattern_block(block):
+                return False
+        return "Condition" not in statement or cls._condition_is_well_formed(statement["Condition"])
+
+    @classmethod
+    def _deny_is_transport_only(cls, statement):
+        """True only for a Deny conditioned solely on aws:SecureTransport being false.
+
+        Such a statement can deny plain-HTTP requests and nothing else, whatever
+        its Principal, Action and Resource are. Any other condition shape is
+        treated as a Deny that may apply.
+        """
+        condition = statement.get("Condition")
+        if not isinstance(condition, dict) or list(condition) != ["Bool"]:
+            return False
+        keys = condition["Bool"]
+        if not isinstance(keys, dict) or len(keys) != 1:
+            return False
+        key, value = next(iter(keys.items()))
+        if not isinstance(key, str) or key.lower() != "aws:securetransport":
+            return False
+        if isinstance(value, list):
+            if len(value) != 1:
+                return False
+            value = value[0]
+        if value is False:
+            return True
+        return isinstance(value, str) and value.lower() == "false"
 
     def _resource_covers_entire_prefix(self, resource):
         """Accept only a trailing-star resource with an unambiguous literal base."""
@@ -731,9 +840,11 @@ class S3StorageBackend(StorageBackend):
 
         try:
             policy_text = self.client.get_bucket_policy(Bucket=self.bucket_name).get("Policy")
-            policy = json.loads(policy_text) if policy_text else None
+            policy = self._decode_policy(policy_text) if policy_text else None
             if not isinstance(policy, dict):
                 raise ValueError("bucket policy is not a JSON object")
+            if not self._POLICY_KEYS.issuperset(policy) or "Statement" not in policy:
+                raise ValueError("bucket policy is not a policy document")
             details["policy"] = policy
         except ClientError as exc:
             code = self._error_code(exc)
@@ -749,20 +860,39 @@ class S3StorageBackend(StorageBackend):
             details["failure"] = safe_error_detail(exc, "s3.parse_bucket_policy")
             return False, ["Unable to parse bucket policy safely."], details
 
-        raw_statements = policy.get("Statement", [])
+        raw_statements = policy["Statement"]
         statements = raw_statements if isinstance(raw_statements, list) else [raw_statements]
         covering_allow = False
         ambiguous_allow = False
         matching_deny = False
 
+        if not statements or not all(
+                self._statement_is_well_formed(statement) for statement in statements):
+            details["status"] = "unknown"
+            return False, ["The bucket policy has a statement this check cannot read safely."], details
+
         for statement in statements:
-            if not isinstance(statement, dict):
-                continue
-            if statement.get("Effect") == "Deny" and self._deny_can_get_object(statement):
+            if statement.get("Effect") == "Deny" and self._statement_can_get_object(statement):
                 if "NotResource" in statement or self._resource_may_overlap_prefix(statement.get("Resource")):
-                    matching_deny = True
+                    # A transport-only deny cannot refuse the HTTPS requests
+                    # this backend hands out, so it does not override an allow.
+                    if (self._deny_is_transport_only(statement)
+                            and urlparse(self.endpoint_url or "").scheme == "https"):
+                        details["transport_only_deny"] = True
+                    else:
+                        matching_deny = True
                 continue
             if statement.get("Effect") != "Allow":
+                continue
+            if any(key in statement for key in ("NotPrincipal", "NotAction", "NotResource")):
+                # An allow written by exclusion may reach anonymous GetObject on
+                # this prefix; it is never conclusive either way.
+                if (("NotPrincipal" in statement
+                        or self._principal_is_public(statement.get("Principal")))
+                        and self._statement_can_get_object(statement)
+                        and ("NotResource" in statement
+                             or self._resource_may_overlap_prefix(statement.get("Resource")))):
+                    ambiguous_allow = True
                 continue
             if not self._principal_is_public(statement.get("Principal")):
                 continue
