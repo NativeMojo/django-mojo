@@ -20,6 +20,12 @@ Owner membership is auto-created with `role="owner"`.
 
 ### `GET /api/chat/room/<pk>` — Get room detail
 
+### `DELETE /api/chat/room/<pk>` — Delete a room
+
+Requires `manage_chat`. Notifies `CHAT_MESSAGE_DELETED_HANDLER` before the
+cascade, and publishes `chat_room_deleted` `{room_id}` on the room topic after
+the delete commits, so open sockets drop the topic at once.
+
 ### `POST /api/chat/room/join` — Join a channel
 
 Only works for `kind="channel"`. For group-linked channels, checks group permission.
@@ -30,7 +36,7 @@ Only works for `kind="channel"`. For group-linked channels, checks group permiss
 
 ### `POST /api/chat/room/leave` — Leave a room
 
-Cannot leave DM rooms.
+Cannot leave DM rooms. Publishes `chat_member_left` `{room_id, user_id}` after the write commits.
 
 ```json
 {"room_id": 5}
@@ -46,7 +52,7 @@ Requires room admin or `manage_chat` permission.
 
 ### `POST /api/chat/room/member/remove` — Remove member
 
-Requires room admin or `manage_chat` permission.
+Requires room admin or `manage_chat` permission. Publishes `chat_member_removed` `{room_id, user_id}` after the write commits, so the removed user's open sockets stop receiving the room at once.
 
 ```json
 {"room_id": 5, "user_id": 42}
@@ -62,7 +68,7 @@ Requires room admin, `moderate_chat`, or `manage_chat` permission. Muted users c
 
 ### `POST /api/chat/room/member/ban` — Ban member
 
-Requires room admin, `moderate_chat`, or `manage_chat` permission. Banned users cannot subscribe.
+Requires room admin, `moderate_chat`, or `manage_chat` permission. Banned users cannot subscribe. Publishes `chat_member_banned` `{room_id, user_id}` after the write commits, so the banned user's open sockets stop receiving the room at once.
 
 ```json
 {"room_id": 5, "user_id": 42}

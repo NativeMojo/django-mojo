@@ -4,6 +4,7 @@ from mojo.helpers import dates
 from mojo.helpers.request import (
     identity_allows_group, is_override_user_session, restricted_identity)
 from ..models import ChatRoom, ChatMembership
+from ..services.access import publish_access_change
 from ..services.messages import send_message
 
 
@@ -138,12 +139,7 @@ def on_chat_room_leave(request):
         kind="system", client_authored=False,
         enforce_room_policy=False, broadcast=False,
     )
-    from mojo.apps.realtime import publish_topic
-    publish_topic(room.topic, {
-        "type": "chat_member_left",
-        "room_id": room.pk,
-        "user_id": request.user.pk,
-    })
+    publish_access_change(room.pk, "chat_member_left", request.user.pk)
 
     return {"status": True}
 
@@ -213,6 +209,8 @@ def on_chat_room_remove_member(request):
         return ChatRoom.rest_error_response(request, 404, error="Member not found")
 
     membership.delete()
+    # Open sockets remember room access; this frame makes theirs re-check.
+    publish_access_change(room.pk, "chat_member_removed", membership.user_id)
     return {"status": True}
 
 
@@ -261,6 +259,8 @@ def on_chat_room_ban_member(request):
 
     membership.status = "banned"
     membership.save(update_fields=["status"])
+    # Open sockets remember room access; this frame makes theirs re-check.
+    publish_access_change(room.pk, "chat_member_banned", membership.user_id)
     return membership.on_rest_get(request)
 
 

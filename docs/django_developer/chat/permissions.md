@@ -48,6 +48,27 @@ Users with `manage_chat` in `user.permissions` have global access.
 - **Muted**: can subscribe (see messages) but handler rejects sends
 - **Banned**: cannot subscribe at all (`on_realtime_can_subscribe` returns False)
 
+### Open sockets
+
+A socket checks chat access when it subscribes to `chat:<room_id>` and
+remembers the answer, so delivering a frame costs no SQL. Loss of access still
+reaches an open socket:
+
+- **Within one frame** for the writes that publish an access-change frame on
+  the room topic after they commit: `room/leave` (`chat_member_left`),
+  `room/member/remove` (`chat_member_removed`), `room/member/ban`
+  (`chat_member_banned`) and REST room delete (`chat_room_deleted`). The
+  affected socket re-checks that frame, drops it, and unsubscribes.
+- **At the next re-check** (`WS_SUBSCRIPTION_RECHECK_SECONDS`, default 300)
+  for everything else: a `chat` / `manage_chat` permission removed from the
+  user or the group member, a membership row changed outside these endpoints,
+  a group deleted with its rooms.
+
+Code that removes access some other way and needs it to take effect at once
+should call `publish_access_change` (see [Services](services.md#access-change-frames)).
+See [realtime architecture](../realtime/architecture.md#chat-topic-delivery-chatroom_id)
+for the mechanism.
+
 `status in ("active", "muted")` is the **read-side predicate**, used by
 `GET /api/chat/room/messages`, `GET /api/chat/unread`, `chat_read`,
 `POST /api/chat/room/read` and `chat_react`. Active-only (as `chat_typing`

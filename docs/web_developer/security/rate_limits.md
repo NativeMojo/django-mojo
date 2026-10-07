@@ -32,6 +32,13 @@ ApiKey's group. Rotating IPs, opening tabs, or clearing cookies does not reset
 that budget. Strict endpoint IP/device gates are separate and remain active
 for every caller.
 
+A deployment may exempt specific routes from that identity budget (for
+example, a desktop app's background bookkeeping). A call to an exempt route
+never gets the global identity 429 and does not use up the budget, so it
+cannot get your next ordinary call throttled. An exempt route can still have
+a limit of its own (the deployment is expected to bound it some other way), so
+the 429 contract above applies to every route.
+
 ## ApiKey defaults and explicit limits
 
 On an ordinary endpoint, `Authorization: apikey <token>` skips consumer
@@ -73,6 +80,9 @@ limited per session. If your app reports client-side errors:
   the backoff schedule, even after a clean network blip.
 - **Authenticate within 10 seconds** of connecting (the `auth_required`
   message advertises the window) or the socket is closed.
+- **Answer the server's `ping` with a `pong`.** An authenticated socket that
+  sends nothing for 90 seconds is closed; the pong is all it takes to stay up
+  (see [Ping / Keep-Alive](../realtime/websocket.md#ping-keep-alive)).
 - Each account may hold a limited number of concurrent sockets (default 10).
   Share one connection per tab/app; don't open one per widget.
 - If your session is disabled or revoked server-side, your socket receives a
