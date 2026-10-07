@@ -1290,6 +1290,29 @@ class MojoModel:
         return None
 
     @classmethod
+    def _resolve_date_range_field(cls, dr_field):
+        """The column `dr_field` names, or a 400.
+
+        dr_field is client-chosen and is spliced into a filter() key, so an
+        unchecked value is an arbitrary filter path: ``dr_field=user__last_login``
+        (or a sensitive column, or a JSON path) would narrow the list ``count``
+        on a related row the caller cannot read, with none of the guards
+        build_rest_filters applies. Only a LOCAL concrete DateField /
+        DateTimeField of this model is accepted: no ``__``, no relation, not
+        RestMeta.SENSITIVE_FIELDS. Empty means the default, ``created``.
+        """
+        if dr_field in (None, ""):
+            dr_field = "created"
+        if not isinstance(dr_field, str) or "__" in dr_field or "." in dr_field \
+                or dr_field in _model_sensitive_fields(cls):
+            raise me.ValueException(f"Invalid dr_field: {dr_field}", code=400, status=400)
+        field = cls.get_model_field(dr_field)
+        if field is None or not getattr(field, "concrete", False) or field.is_relation \
+                or not isinstance(field, dm.DateField):
+            raise me.ValueException(f"Invalid dr_field: {dr_field}", code=400, status=400)
+        return field.name
+
+    @classmethod
     def on_rest_list_date_range_filter(cls, request, queryset):
         """
         Filter queryset based on a date range provided in the request.
@@ -1310,6 +1333,9 @@ class MojoModel:
         dr_field = request.DATA.get("dr_field", "created")
         dr_start = request.DATA.get("dr_start")
         dr_end = request.DATA.get("dr_end")
+        if not dr_start and not dr_end:
+            return queryset
+        dr_field = cls._resolve_date_range_field(dr_field)
 
         tz = cls._resolve_filter_timezone(request)
 
