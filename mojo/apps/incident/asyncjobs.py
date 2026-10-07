@@ -322,6 +322,17 @@ def broadcast_reconcile_geolocated_ip(data):
         _release_checked_host_lock(redis_client, lock_key, lock_token)
 
 
+def record_queued_event(job):
+    """Write an incident Event a request thread queued instead of writing (#6565).
+
+    Published by incident.reporter.report_event(defer=True) for a routine 4xx.
+    The INSERT, geolocation and rules run here exactly as the inline path runs
+    them; see reporter.write_queued_event.
+    """
+    from mojo.apps.incident import reporter
+    reporter.write_queued_event(job.payload)
+
+
 def prune_events(job):
     qset = Event.objects.filter(
         created__lt=timezone.now() - timedelta(days=INCIDENT_EVENT_PRUNE_DAYS),
