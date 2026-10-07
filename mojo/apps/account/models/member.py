@@ -1,15 +1,71 @@
+import json
 from django.db import models, router, transaction
 from mojo.models import MojoModel
 from mojo import errors as merrors
 from mojo.helpers.settings import settings
-from mojo.helpers import dates
+from mojo.helpers import dates, logit
 from mojo.helpers.perms import implied_perms
 
 
+def _valid_protection_requirement(value):
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set)):
+        return bool(value) and all(
+            isinstance(item, str) and item.strip() for item in value)
+    return False
+
+
+def parse_member_perms_protection(value):
+    """Return one MEMBER_PERMS_PROTECTION source as a dict, or None if malformed.
+
+    None and a blank (empty or whitespace-only) string are "nothing configured"
+    and return {}. Accepted: a dict, or a string holding a JSON object, whose
+    keys are non-empty strings and whose values are a non-empty string or a
+    non-empty list/tuple/set of non-empty strings.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        if not value.strip():
+            return {}
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    if not isinstance(value, dict):
+        return None
+    for perm, requirement in value.items():
+        if not isinstance(perm, str) or not perm.strip():
+            return None
+        if not _valid_protection_requirement(requirement):
+            return None
+    return dict(value)
+
+
+def resolve_member_perms_protection(file_value, db_value):
+    """Merge the settings-file map over the platform-wide Setting row.
+
+    The file is the floor: it wins for every permission it names, so a row can
+    add protected permissions but never remove or loosen one. Returns None
+    when either source is malformed — the caller refuses rather than reading
+    an unreadable map as empty.
+    """
+    file_map = parse_member_perms_protection(file_value)
+    db_map = parse_member_perms_protection(db_value)
+    if file_map is None or db_map is None:
+        return None
+    return {**db_map, **file_map}
+
+
 def _member_perms_protection():
-    # kind="dict" so a DB-backed Setting (stored as a JSON string) parses into a
-    # dict — otherwise `perm in <str>` would silently degrade to substring matching.
-    return settings.get("MEMBER_PERMS_PROTECTION", {}, kind="dict") or {}
+    # Read the two sources separately — settings.get would return a DB row
+    # WHOLESALE in place of the file value. No kind= on the file read, so a
+    # wrong type is seen as malformed rather than coerced to {}.
+    from mojo.apps.account.models.setting import Setting
+    return resolve_member_perms_protection(
+        settings.get_static("MEMBER_PERMS_PROTECTION", None),
+        Setting.resolve("MEMBER_PERMS_PROTECTION"))
 
 
 def _user_last_activity_freq():
@@ -110,6 +166,14 @@ class GroupMember(models.Model, MojoModel):
         req_member = self.group.get_member_for_user(request.user, check_parents=True)
         if req_member is not None:
             member_perms_protection = _member_perms_protection()
+            if member_perms_protection is None:
+                # Nobody knows which permissions were meant to be protected, so
+                # refuse every member-level change. Global managers returned
+                # above and can repair the setting.
+                logit.error(
+                    "MEMBER_PERMS_PROTECTION is malformed; refusing member-level "
+                    "permission changes until it is fixed")
+                return False
             if perm in member_perms_protection:
                 return req_member.has_permission(member_perms_protection[perm])
             return req_member.has_permission(["manage_group", "manage_members", "manage_users", "manage_groups"])

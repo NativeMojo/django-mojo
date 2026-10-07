@@ -493,6 +493,16 @@ def _validate_scope_list(key, parsed):
         raise ValueError(f"{key} must be a JSON list of non-empty strings")
 
 
+def _validate_member_perms_protection(key, parsed):
+    # A malformed map refuses every member-level permission change at read
+    # time (GroupMember.can_change_permission), so refuse to store one.
+    from mojo.apps.account.models.member import parse_member_perms_protection
+    if parse_member_perms_protection(parsed) is None:
+        raise ValueError(
+            f"{key} must be a JSON object mapping each permission to a "
+            "non-empty string or a non-empty list of non-empty strings")
+
+
 Setting.register_validator("GEOFENCE_SYSTEM_RULES", _validate_geofence_rule)
 Setting.register_validator("GEOFENCE_ALLOWLIST", _validate_geofence_allowlist)
 Setting.register_validator("GEOFENCE_STRICT_POSTURE", _validate_json_bool)
@@ -501,3 +511,4 @@ Setting.register_validator("GEOFENCE_FAIL_CLOSED", _validate_json_bool)
 Setting.register_validator("GEOFENCE_ALLOW_PRIVATE_IPS", _validate_json_bool)
 Setting.register_validator("GEOFENCE_CACHE_TTL", _validate_cache_ttl)
 Setting.register_validator("GEOFENCE_FAIL_CLOSED_SCOPES", _validate_scope_list)
+Setting.register_validator("MEMBER_PERMS_PROTECTION", _validate_member_perms_protection)
