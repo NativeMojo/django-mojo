@@ -93,21 +93,26 @@ uvicorn project.asgi:application --host 0.0.0.0 --port 8000
    commands (connection records, topic sets, presence) stay on the sync client
    in the executor.
 8. Auto-subscribes to `<user_type>:<id>` topic
-9. Calls `on_realtime_connection(connection_data)` hook (if defined)
-10. Processes hook response (sends response, subscribes to topics)
-11. Sends: `{"type": "auth_success", "user_type": "user", "user_id": 42}`
+9. Sends `realtime_connection_changed(connected=True)` to any receivers
+   (see [Instance Hooks](hooks.md#connection-signal)) — no database write
+10. Calls `on_realtime_connection(connection_data)` hook (if defined)
+11. Processes hook response (sends response, subscribes to topics)
+12. Sends: `{"type": "auth_success", "user_type": "user", "user_id": 42}`
+13. Starts the server ping (`WS_SERVER_PING_SECONDS`) — see
+    [Activity Timeout and Keepalive](#activity-timeout-and-keepalive)
 
 If no `authenticate` message arrives within `WS_UNAUTH_TIMEOUT` seconds
 (default **10**, shortened from 30 in DM-042), the connection is closed.
-Once authenticated, the normal activity/idle timeout (30s of inactivity)
-applies instead.
+Once authenticated, the idle timeout (`WS_IDLE_TIMEOUT`, default 90 s without
+a client frame) applies instead.
 
 ### Database connections
 
 Bearer validation and every hook or permission check that can reach the
 database (`on_realtime_connection`, `on_realtime_connected`,
 `on_realtime_message`, `on_realtime_can_subscribe`,
-`on_realtime_disconnected`, group-topic and chat checks, incident reports) run
+`on_realtime_disconnected`, `realtime_connection_changed` receivers,
+group-topic and chat checks, incident reports) run
 inside [`database_connection_boundary`](../helpers/async_db.md). Each call
 drops a dead or expired connection before it runs and closes or returns its
 connection afterwards, the way an HTTP request does. A database restart,
@@ -127,6 +132,13 @@ connection before it is used.
 | `WS_CONNECT_RATE_LIMIT` | `30` | Connects per minute per IP, checked before accept. `<= 0` disables. |
 | `WS_MAX_CONNECTIONS` | `10` | Concurrent sockets per authenticated identity. `<= 0` disables. |
 | `WS_UNAUTH_TIMEOUT` | `10` | Seconds an unauthenticated socket may live. |
+| `WS_IDLE_TIMEOUT` | `90` | Seconds an authenticated socket may go without a client frame. |
+| `WS_SERVER_PING_SECONDS` | `20` | Server ping interval for authenticated sockets. `<= 0` disables. |
+
+Every `WS_*` setting is read **once**, from Django settings, when
+`realtime/handler.py` is first imported (the first socket of the process) —
+never per connection, and never from a DB-backed `Setting` row (#6562). Change
+one in the settings file and restart the ASGI process.
 
 A rejected pre-accept connection closes with code **4429** — clients should
 treat this as a deliberate rejection and back off, not a network error. See
@@ -179,13 +191,68 @@ While enabled:
 
 Revocation is checked on the next protected delivery; it does not wait for a Redis TTL or use a periodic permission cache. Already-sent messages cannot be recalled. Restoring permission does not replay dropped messages or automatically resubscribe the connection; the client must subscribe again. Redis pub/sub provides no replay guarantee.
 
-## Activity Timeout
+### Chat-topic delivery (`chat:<room_id>`)
 
-Connections are monitored for activity. If no client message (including `ping`) arrives within 30 seconds, the connection is closed. Clients should send periodic pings to stay alive:
+Chat topics are checked once per subscription, not once per frame. A
+`subscribe` to a chat topic runs the room check (`on_realtime_can_subscribe`
+on a fresh, active `User` row read from the primary database) and the socket
+remembers the allow decision (`mojo/apps/realtime/access.py`). Frames on that
+topic are then delivered without SQL until one of these happens:
+
+| Trigger | Effect |
+|---|---|
+| The decision is older than `WS_SUBSCRIPTION_RECHECK_SECONDS` | The next frame re-runs the check. |
+| A `chat_member_left`, `chat_member_removed` or `chat_member_banned` frame whose `user_id` is this socket's user, or any `chat_room_deleted` frame | That frame is re-checked before delivery. |
+| The socket unsubscribes | The decision is forgotten. A later subscribe, including one returned by a hook, checks again. |
+
+A topic subscribed through a hook response, without a client `subscribe`,
+starts with no remembered decision, so its first frame is checked. A denied or
+failed check (an exception counts as a denial) drops the frame and unsubscribes
+the topic, as before; the socket stays open. Access-change frames can only
+force a check, never grant access.
+
+The chat REST endpoints publish the access-change frames after the write
+commits (`mojo/apps/chat/services/access.py`): leave, member remove, member
+ban, and REST room delete. Changes that publish nothing are bounded by the
+re-check window instead: a platform or group permission removed, an account
+deactivated without the disable service (which force-disconnects its sockets),
+or a group deleted together with its rooms.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `WS_SUBSCRIPTION_RECHECK_SECONDS` | `300` | How long a socket trusts a chat access decision. `<= 0` re-checks every frame, the behavior before this cache. File-static: a database Setting row cannot change it. |
+
+Group topics protected by `REALTIME_GROUP_TOPIC_PERMISSIONS` are unaffected and
+still check every delivery.
+
+## Activity Timeout and Keepalive
+
+An authenticated socket is closed when no frame **from the client** has
+arrived for `WS_IDLE_TIMEOUT` seconds (default 90). The check runs every 5 s.
+Frames the server sends never count as activity.
+
+The server keeps its own clients alive (#6562): from `auth_success` on, every
+`WS_SERVER_PING_SECONDS` (default 20, `<= 0` disables) it sends
 
 ```json
-{"type": "ping"}
+{"type": "ping", "ts": 1712345678}
 ```
+
+and a client that answers
+
+```json
+{"type": "pong"}
+```
+
+resets its idle clock — so a socket that only listens to server pushes stays up
+for as long as it answers. A `pong` gets no reply, refreshes presence
+(throttled) and never reaches `on_realtime_message`. Clients may also keep
+sending their own `{"type": "ping"}`, which the server answers with
+`{"type": "pong", ...}` as before.
+
+These are application frames on purpose: uvicorn answers protocol-level
+WebSocket pings itself (`bin/asgi_prod` configures no `--ws-ping-*`), so those
+never reach the handler.
 
 ## Redis Architecture
 

@@ -50,8 +50,7 @@ Legacy connection hook. Called only if `on_realtime_connection` is not defined. 
 ```python
 def on_realtime_connected(self):
     """Called after successful WebSocket authentication (legacy)."""
-    self.metadata["realtime_connected"] = True
-    self.atomic_save()
+    return {"subscriptions": ["general_announcements"]}
 ```
 
 ### on_realtime_disconnected()
@@ -61,9 +60,55 @@ Called when the WebSocket connection closes.
 ```python
 def on_realtime_disconnected(self):
     """Called when the WebSocket connection closes."""
-    self.metadata["realtime_connected"] = False
-    self.atomic_save()
+    pass  # e.g. release something this socket held
 ```
+
+Every reconnect runs these hooks, so keep them cheap — a hook that saves the
+row turns each reconnect into database writes. To know who is online, read
+`realtime.is_online(user_type, id)` (Redis) instead of storing a flag.
+
+The built-in account `User` defines **neither** hook (#6562): connecting or
+disconnecting writes nothing to `account_user`, and its old
+`metadata["realtime_connected"]` / `realtime_connected_at` /
+`realtime_disconnected_at` keys are no longer written. Use `User.is_online` or
+`realtime.is_online("user", id)`, or the signal below.
+
+### Connection signal
+
+`mojo.apps.realtime.signals.realtime_connection_changed` is the hook point for
+code that cannot (or should not) add a method to the identity model — e.g. a
+product reacting to account `User` connects. The handler sends it once per
+authenticated socket on connect and once on disconnect:
+
+| Argument | Value |
+|---|---|
+| `sender` | The identity's model class (`User` for account users) |
+| `user` | The authenticated identity instance |
+| `connected` | `True` on connect, `False` on disconnect |
+| `connection_id` | The socket's connection UUID |
+
+```python
+from mojo.apps.account.models import User
+from mojo.apps.realtime.signals import realtime_connection_changed
+
+def publish_presence(sender, user, connected, connection_id, **kwargs):
+    from mojo.apps import realtime
+    online = realtime.is_online("user", user.pk)  # already reflects this socket
+    ...
+
+realtime_connection_changed.connect(publish_presence, sender=User,
+                                    dispatch_uid="myapp.presence")
+```
+
+- It fires **after** the Redis presence set changed, so `is_online()` already
+  reflects the event. It is per socket, not per identity: decide
+  online/offline edges from `is_online()`, not from `connected`.
+- Receivers run on an executor thread with a database connection boundary,
+  like the hooks; they sit inside every socket's auth and teardown, so keep
+  them cheap.
+- It is sent with `send_robust`: a receiver that raises is logged and never
+  reaches the socket. Nothing is sent (no executor hop) when no receiver is
+  connected.
 
 ### on_realtime_message(data)
 
@@ -145,21 +190,23 @@ The `response` dict is delivered **directly over the WebSocket** — not through
 4. Update connection auth in Redis
 5. Register user online in Redis
 6. Auto-subscribe to `<user_type>:<id>` topic
-7. **`on_realtime_connection(connection_data)`** called (or `on_realtime_connected()` fallback)
-8. Process hook response -> deliver `response`, process `subscriptions`
-9. Server sends `auth_success`
+7. **`realtime_connection_changed(connected=True)`** sent (if any receiver)
+8. **`on_realtime_connection(connection_data)`** called (or `on_realtime_connected()` fallback)
+9. Process hook response -> deliver `response`, process `subscriptions`
+10. Server sends `auth_success`, then starts its `ping` every `WS_SERVER_PING_SECONDS`
 
 ### Disconnect
 
 1. WebSocket closes
 2. Redis cleanup (connection record, topic memberships, online status)
-3. **`on_realtime_disconnected()`** called
+3. **`realtime_connection_changed(connected=False)`** sent (if any receiver)
+4. **`on_realtime_disconnected()`** called
 
 ### Message
 
 1. Message arrives from client
 2. Activity timeout is reset
-3. Built-in types handled: `authenticate`, `subscribe`, `unsubscribe`, `ping`, `response`
+3. Built-in types handled: `authenticate`, `subscribe`, `unsubscribe`, `ping`, `pong`, `response`
 4. Otherwise: check `REALTIME_MESSAGE_HANDLERS` setting
 5. If not matched -> **`on_realtime_message(data)`** called
 6. Hook response processed and delivered
@@ -167,9 +214,9 @@ The `response` dict is delivered **directly over the WebSocket** — not through
 ## Reserved Message Types
 
 Do not use these as client message types — they are handled by the framework:
-- `authenticate`, `subscribe`, `unsubscribe`, `ping`, `response`
+- `authenticate`, `subscribe`, `unsubscribe`, `ping`, `pong`, `response`
 
 These server -> client types are framework-controlled:
 - `auth_required`, `auth_success`, `auth_timeout`
-- `error`, `subscribed`, `unsubscribed`, `pong`
+- `error`, `subscribed`, `unsubscribed`, `ping`, `pong`
 - `message` (wraps `send_to_user` payloads)

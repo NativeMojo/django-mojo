@@ -99,6 +99,20 @@ class ChatRoom(models.Model, MojoModel):
         else:
             notify_room_deleted(self, handler=handler)
 
+    def on_rest_delete(self, request):
+        """Delete, then tell open sockets on the room topic to re-check.
+
+        Sockets remember room access instead of querying per frame, so a
+        delete that published nothing would leave them delivering anything
+        still published to the topic until their periodic re-check.
+        """
+        room_id = self.pk
+        response = super().on_rest_delete(request)
+        if getattr(response, "status_code", None) == 200:
+            from ..services.access import publish_access_change
+            publish_access_change(room_id, "chat_room_deleted")
+        return response
+
     def on_rest_created(self):
         if self.user:
             from .membership import ChatMembership

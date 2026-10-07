@@ -153,6 +153,11 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
 
 ### API
 
+- `API_KEY_TOUCH_SECONDS` — **file-only** (`settings.get_static`). Integer,
+  default `300`. A `UserAPIKey` or `ApiKey` rewrites `last_used` only when it
+  is unset or older than this many seconds, so a burst of requests on one key
+  costs one single-column UPDATE instead of one per request. See
+  [API keys](../account/api_keys.md).
 - `API_METRICS`
 - `API_METRICS_GRANULARITY`
 - `API_THROTTLE_ENABLED` — global per-identity API throttle enforcement
@@ -170,8 +175,11 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
 - `API_THROTTLE_APIKEY_EVENT_BUDGET` — maximum distinct ApiKey/source
   observation Events per event window (default `100`)
 - `API_THROTTLE_WINDOW` — global fixed-window seconds (default `60`)
-- `API_THROTTLE_EXEMPT_PREFIXES` — enforcement carve-outs; accounting and
-  observation still run
+- `API_THROTTLE_EXEMPT_PREFIXES` — path carve-outs from the per-identity
+  budget: a matching request is never refused, never counted against the
+  identity and never triggers an ApiKey observation Event, but still counts in
+  traffic totals and top-talker sets. Bound an exempt path some other way. See
+  [Exempt paths](../security/abuse_hardening.md#exempt-paths).
 - `API_THROTTLE_REPORT_FLOOR` — retained legacy setting; direct five-minute
   top-talker accounting now records every authenticated request
 - `API_THROTTLE_CONFIG_TTL` — in-process setting cache seconds (default `30`)
@@ -731,6 +739,7 @@ reasoning: [edge README](../edge/README.md#settings),
 - `GEOIP_ENABLE_CLOUD_DETECTION`
 - `GEOIP_ENABLE_TOR_DETECTION`
 - `GEOIP_ENABLE_VPN_DETECTION`
+- `GEOIP_FAILURE_TTL`
 - `GEOIP_FALLBACK_PROVIDER`
 - `GEOIP_PRIMARY_PROVIDER`
 
@@ -801,6 +810,12 @@ restart. See
 - `INCIDENT_EVENT_PRUNE_DAYS`
 - `INCIDENT_LEVEL_THRESHOLD`
 - `INCIDENT_METRICS_MIN_GRANULARITY`
+- `INCIDENT_SYNC_CATEGORIES` — **file-only** (`settings.get_static`). List of
+  event categories that always write inline, **added to** the built-in
+  `incident.reporter.SYNC_CATEGORIES` security list (it cannot remove from
+  it). Every other routine 4xx the REST dispatcher reports is written by a job
+  on `incident_handlers`. See
+  [Deferred reporting](../logging/incidents.md#deferred-reporting--defertrue-routine-4xx).
 - `MOJOSEC_CATEGORY_VOLUME_ALERT_THRESHOLD` — **file-only**
   (`settings.get_static`). Integer, default `10000`; `<=0` disables. Each
   digest-matched durable MojoSec receipt contributes its wire occurrence count
@@ -1242,6 +1257,13 @@ registered resource is enabled; until then every endpoint answers 404.
   (default `10`, `<= 0` disables).
 - `WS_UNAUTH_TIMEOUT` — seconds an unauthenticated socket may live before
   being closed (default `10`).
+- `WS_IDLE_TIMEOUT` — seconds an authenticated socket may go without a client
+  frame before it is closed (default `90`).
+- `WS_SERVER_PING_SECONDS` — interval of the server's `{"type": "ping"}` to
+  authenticated sockets (default `20`, `<= 0` disables). See
+  [Activity Timeout and Keepalive](../realtime/architecture.md#activity-timeout-and-keepalive).
+- All `WS_*` settings are read once, from Django settings, when the realtime
+  handler is first imported; a DB-backed `Setting` row is not consulted.
 
 ## Notes
 

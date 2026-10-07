@@ -15,7 +15,12 @@ Authorization: apikey <raw_token>
 1. SHA-256 hashes the incoming token and looks it up by `token_hash`
 2. Checks `is_active` and `expires_at`
 3. Sets `request.group = api_key.group` and `request.api_key = api_key`
-4. Returns a synthetic user object whose `has_permission` delegates to `api_key.has_permission`
+4. Stamps `last_used` via `api_key.touch_last_used()` — at most once per
+   `API_KEY_TOUCH_SECONDS` (default 300): the loaded value is compared first,
+   and only a stale or unset stamp costs a single-column UPDATE. `UserAPIKey`
+   (a user's long-lived JWT, validated in `User.validate_jwt`) uses the same
+   method and setting.
+5. Returns a synthetic user object whose `has_permission` delegates to `api_key.has_permission`
 
 From that point forward the request behaves like a **group-scoped** request against **group-owned** data — `RestMeta` permission checks, `requires_perms`, and `request.group` filtering all confine the key to its own group. This synthetic user is not a request `User`, so any code that touches group membership must be ApiKey-safe: see [`Group.get_member_for_user` / `user_has_permission`](group.md#membership) for the identity guard that makes group permission gates degrade to deny/`None` instead of raising for a non-`User` identity.
 

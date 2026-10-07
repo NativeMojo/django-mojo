@@ -177,8 +177,10 @@ Missing, malformed, zero, and negative limits do not create a hard ceiling;
 deactivate or delete the key when access must stop.
 
 Global hard ceilings apply only while global throttle enforcement is enabled
-and the route is not in the deployment's exempt-prefix list. Strict endpoint
-limits are independent of that global switch.
+and the route is not in the deployment's exempt-prefix list. A call to an
+exempt route is not counted against the key's global ceiling or its
+observation threshold; it still appears in the five-minute concentration data.
+Strict endpoint limits are independent of that global switch.
 
 **Deactivating the key's group instantly suspends the key** — every group-scoped request (list, detail, save, delete, custom endpoints, with or without a `group=` param) is denied while the group is inactive, including reads/writes of the group record itself. The key is never modified, so reactivating the group restores it immediately; you do not need to (and should not have to) deactivate the key itself. The key still *authenticates* (so the group-independent federation-sync path keeps working) — it simply has no group context. **Deactivating a parent group also suspends every descendant's keys** — a child group is only reachable via `group=<child id>` while it *and every ancestor* are active; an active child under a deactivated parent is treated as inactive too, with no flag written to the child. Reactivating the parent restores the whole subtree instantly.
 
@@ -225,6 +227,12 @@ Authorization: apikey <token>
   }
 }
 ```
+
+`last_used` is coarse: it moves at most once every five minutes per key (the
+server's `API_KEY_TOUCH_SECONDS`), not on every request. Read it as "used
+within the last few minutes of this time", and do not use it to count or
+order individual requests. The same holds for `last_used` on a user's
+long-lived auth tokens.
 
 ### Rotate a Key — `POST /api/group/apikey/rotate`
 

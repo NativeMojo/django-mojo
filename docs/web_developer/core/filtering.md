@@ -115,7 +115,7 @@ GET /api/myapp/book?dr_field=modified&dr_start=2024-06-01
 
 | Param | Description |
 |---|---|
-| `dr_field` | Field to filter on (default: `created`) |
+| `dr_field` | Field to filter on (default: `created`). Must be a date/datetime column of the listed model itself: a related path (`user__last_login`), a JSON path, a sensitive field or a non-date field is a **400** |
 | `dr_start` | Start datetime (inclusive) |
 | `dr_end` | End datetime (inclusive) |
 
