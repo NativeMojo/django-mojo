@@ -244,6 +244,69 @@ settings do not restrict the existing policy. Before any object exists, that
 same conservative policy evidence is used by itself. The audit never adds or
 broadens bucket policy statements.
 
+The policy evidence reads the bucket policy and the bucket and account Public
+Access Block settings. It does not read object or bucket ACLs. These are the
+policy shapes it classifies; anything not listed answers `unknown`:
+
+| Bucket policy | Result |
+|---|---|
+| No policy | `private` |
+| Transport-only Deny, no public Allow, HTTPS endpoint | `private` |
+| Any other Deny that overlaps the prefix, with or without a public Allow | `unknown` |
+| Public Allow covering the whole prefix | `public` |
+| Whole-prefix public Allow and a transport-only Deny, HTTPS endpoint | `public` |
+| Either of the two rows above with `RestrictPublicBuckets` on, bucket or account | `private` |
+| Whole-prefix public Allow and a transport-only Deny, endpoint that is not HTTPS | `unknown` |
+| Public Allow that is conditional or covers only part of the prefix | `unknown` |
+| Allow written with `NotPrincipal`, `NotAction` or `NotResource` that may reach anonymous `s3:GetObject` on the prefix | `unknown` |
+| Unreadable policy, a policy that is not valid JSON, a policy document or statement not in the standard form (see below) | `unknown` |
+| Unreadable Public Access Block | `unknown` |
+
+Valid JSON is not enough. The policy text is read strictly: a member written
+twice in the same object, at any depth, answers `unknown`, because a JSON
+reader keeps only the last one and the audit would then judge a different
+document from the one stored. So does a number written as `NaN` or `Infinity`.
+The document may hold only `Version`, `Id` and `Statement`, and `Statement`
+must be there and not be an empty list.
+
+Every statement must be an object in the standard policy form, and one
+statement outside it makes the whole result `unknown`, whatever the other
+statements say:
+
+- only the elements `Sid`, `Effect`, `Principal`/`NotPrincipal`,
+  `Action`/`NotAction`, `Resource`/`NotResource` and `Condition`;
+- `Effect` exactly `Allow` or `Deny`;
+- exactly one of each pair, where an action or resource is a string or a
+  non-empty list of strings, and a principal is the string `*` or an object
+  keyed by `AWS`, `Service`, `Federated` or `CanonicalUser` with a string or a
+  non-empty list of strings;
+- a `Condition`, when present, that is a non-empty object of operators, each a
+  non-empty object of keys, each with a string, number or boolean or a
+  non-empty list of them. An empty `Condition` object answers `unknown`.
+
+A public Allow is `Principal` `*` (or `{"AWS": "*"}`) with an `Action` matching
+`s3:GetObject`, no `Condition`, and a `Resource` ending in `*` whose literal
+part is a prefix of the manager's own prefix.
+
+The **transport-only Deny** is the one Deny that does not block a `public`
+answer. It is a Deny whose `Condition` is exactly
+`{"Bool": {"aws:SecureTransport": "false"}}`: one operator, named exactly
+`Bool`, with that one key (its name compared without case) and the value
+`false` as a string in any case, as the boolean `false`, or as a one-element
+list of either. This is the statement storage provisioning
+(`mojo/deploy/provision/storage.py`, `secure_transport_policy`) writes on every
+bucket. It can refuse plain-HTTP requests only, so it cannot override anonymous
+reads over HTTPS. The audit sets it aside only when the backend's own endpoint
+is HTTPS, and records `transport_only_deny: true` in the stored evidence when
+it does. `BoolIfExists`, a second key or operator, the value `true`, a minimum
+TLS version rule, a source address rule and an unconditional Deny are all still
+treated as able to override, and keep the result `unknown`.
+
+Provisioning has its own looser matcher, `_has_secure_transport_deny`, which
+only asks whether plain HTTP is denied at all. The audit does not use it: a
+loose match is safe for that question and unsafe for this one, so the two are
+kept separate on purpose.
+
 Audit metadata carries a one-way fingerprint of the backend URL/type and
 effective connection settings. Changing those FileManager inputs invalidates
 the evidence. Normal reads do not use an hourly TTL and do not poll AWS after
