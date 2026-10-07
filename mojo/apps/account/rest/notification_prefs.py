@@ -1,12 +1,17 @@
 """
 Notification preferences REST endpoints.
 
-GET  /api/account/notification/preferences  — return current preferences
+GET  /api/account/notification/preferences  — return current preferences,
+     the registered kinds and the valid channels
 POST /api/account/notification/preferences  — partial-update preferences
+
+The kind ``"*"`` is the reserved per-channel master switch; it is validated
+and stored like any other kind.
 """
 from mojo import decorators as md
 from mojo import errors as merrors
 from mojo.apps.account.services.notification_prefs import get_preferences, set_preferences
+from mojo.apps.account.services.notification_kinds import list_notification_kinds
 from mojo.helpers.response import JsonResponse
 
 
@@ -37,9 +42,13 @@ def _validate_preferences(prefs):
 @md.GET("account/notification/preferences")
 @md.requires_auth()
 def on_notification_preferences_get(request):
-    """Return the user's current notification preferences."""
+    """Return the user's preferences, the registered kinds and the valid channels."""
     prefs = get_preferences(request.user)
-    return JsonResponse({"status": True, "data": {"preferences": prefs}})
+    return JsonResponse({"status": True, "data": {
+        "preferences": prefs,
+        "kinds": list_notification_kinds(),
+        "channels": sorted(VALID_CHANNELS),
+    }})
 
 
 @md.POST("account/notification/preferences")
