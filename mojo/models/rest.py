@@ -33,6 +33,25 @@ COMMON_GRAPH_NAMES = frozenset(settings.get_static(
     "REST_COMMON_GRAPH_NAMES",
     ("default", "basic", "list", "simple", "detail", "detailed", "full")))
 
+# Sentinel: the request carried no `graph` key (see on_rest_save).
+_GRAPH_UNSET = object()
+
+
+def _restore_request_graph(request, graph):
+    """Put request.DATA["graph"] back to the caller's value (or remove a key a
+    permission check added) after an FK-attach check in on_rest_save."""
+    data = getattr(request, "DATA", None)
+    if data is None or not hasattr(data, "get"):
+        return
+    if graph is _GRAPH_UNSET:
+        if "graph" in data:
+            try:
+                del data["graph"]
+            except Exception:
+                data.pop("graph", None)
+    elif data.get("graph", _GRAPH_UNSET) != graph:
+        data["graph"] = graph
+
 # Django ORM date-component lookup suffixes. Values are integers, not dates,
 # so normalize_rest_value must skip its datetime-parse branch when it sees one.
 _DATE_COMPONENT_LOOKUPS = {
@@ -1901,6 +1920,18 @@ class MojoModel:
         # the new row with no group instead of the caller's. Same restore
         # on_rest_handle_batch already does between rows.
         _caller_group = getattr(request, "group", None)
+        # The same FK-attach VIEW check can also downgrade the caller's
+        # RESPONSE graph: Group.check_view_permission's any-member fallthrough
+        # sets request.DATA["graph"] = "basic" to limit what a plain member
+        # sees of that GROUP. That is about the related row, never about the
+        # row being saved, yet on_rest_get serializes the saved row with
+        # request.DATA["graph"] — so a member saving any model that carries a
+        # `group` FK and defines its own `basic` graph got the slim graph back
+        # (the pre-flight in on_rest_handle_save already resolved the caller's
+        # real graph). Snapshot it and restore it with request.group.
+        _request_data = getattr(request, "DATA", None)
+        _caller_graph = (_request_data.get("graph", _GRAPH_UNSET)
+                         if hasattr(_request_data, "get") else _GRAPH_UNSET)
         # Iterate a snapshot — perm checks (e.g. Group.check_view_permission)
         # legitimately mutate request.DATA mid-save (graph downgrade etc.), so a
         # live view trips CPython's dict-mutation guard.
@@ -1931,6 +1962,7 @@ class MojoModel:
                 self.on_rest_save_field(key, value, request)
             finally:
                 request.group = _caller_group
+                _restore_request_graph(request, _caller_graph)
 
         created = self.pk is None
         if not actions_only or created:
