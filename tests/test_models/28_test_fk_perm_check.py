@@ -222,3 +222,63 @@ def test_denied_assignment_records_incident(opts):
 
     skill.refresh_from_db()
     skill.delete()
+
+
+# ---------------------------------------------------------------------------
+# The FK-attach VIEW check must not change the caller's response graph
+# ---------------------------------------------------------------------------
+
+TEST_MEMBER_EMAIL = "fkperm_member@test.com"
+
+
+def _plain_member(opts):
+    """Global view_admin (may save a Skill) and a plain member of the group
+    with no group perms: Group.check_view_permission admits it through the
+    any-member fallthrough, which downgrades request.DATA["graph"]."""
+    from mojo.apps.account.models import User, GroupMember
+    User.objects.filter(email=TEST_MEMBER_EMAIL).delete()
+    user = User.objects.create_user(
+        username=TEST_MEMBER_EMAIL, email=TEST_MEMBER_EMAIL, password="pass123")
+    user.is_email_verified = True
+    user.save()
+    user.add_permission("view_admin")
+    GroupMember.objects.create(user=user, group=opts.group, is_active=True)
+    return user
+
+
+@th.django_unit_test()
+def test_fk_attach_keeps_caller_graph(opts):
+    """REGRESSION: a plain member attaching a `group` FK passes the VIEW check
+    via the member fallthrough, which sets request.DATA["graph"] = "basic" to
+    limit the GROUP. on_rest_save must restore the caller's graph (absent, or
+    the value it sent) so the saved row is not served with its own `basic`
+    graph."""
+    import objict
+    from mojo.apps.assistant.models import Skill
+
+    member = _plain_member(opts)
+    try:
+        skill = Skill(tier="user", name="fkperm_member_graph")
+        request = _build_synthetic_request(member)
+        request.DATA = objict.objict(
+            {"name": "fkperm_member_graph", "tier": "user", "group": opts.group.pk})
+        skill.on_rest_save(request, request.DATA)
+        skill.refresh_from_db()
+        assert skill.group_id == opts.group.pk, \
+            f"a plain member may attach their own group, got {skill.group_id}"
+        assert "graph" not in request.DATA, \
+            f"the FK check must not leave a graph on the request, got {request.DATA.get('graph')!r}"
+        skill.delete()
+
+        skill = Skill(tier="user", name="fkperm_member_graph2")
+        request = _build_synthetic_request(member)
+        request.DATA = objict.objict(
+            {"name": "fkperm_member_graph2", "tier": "user", "group": opts.group.pk,
+             "graph": "default"})
+        skill.on_rest_save(request, request.DATA)
+        assert request.DATA.get("graph") == "default", \
+            f"the caller's graph must survive the FK check, got {request.DATA.get('graph')!r}"
+        skill.delete()
+    finally:
+        from mojo.apps.account.models import User
+        User.objects.filter(email=TEST_MEMBER_EMAIL).delete()

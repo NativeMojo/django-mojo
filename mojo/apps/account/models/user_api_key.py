@@ -5,7 +5,14 @@ from django.utils import timezone
 from objict import objict
 from mojo.models import MojoModel
 from mojo.models.secrets import MojoSecrets
+from mojo.helpers import dates
+from mojo.helpers.settings import settings
 from mojo.apps.account.utils.jwtoken import JWToken
+
+
+# Same floor as ApiKey (mojo/apps/account/models/api_key.py, #6565): last_used
+# is rewritten at most this often, not on every authenticated request.
+API_KEY_TOUCH_SECONDS = settings.get_static("API_KEY_TOUCH_SECONDS", 300)
 
 
 class UserAPIKey(MojoSecrets, MojoModel):
@@ -61,6 +68,25 @@ class UserAPIKey(MojoSecrets, MojoModel):
                 ],
             }
         }
+
+    def touch_last_used(self):
+        """Stamp last_used, at most once per API_KEY_TOUCH_SECONDS.
+
+        Compared against the value loaded with the row, so a fresh stamp
+        costs no query. A single-column queryset UPDATE, not save(): no
+        secret re-encryption, signal or `modified` bump rides along. Never
+        raises — a failed stamp must not fail the request it describes.
+        """
+        if self.last_used is not None and not dates.has_time_elsapsed(
+                self.last_used, seconds=API_KEY_TOUCH_SECONDS):
+            return False
+        now = dates.utcnow()
+        try:
+            type(self).objects.filter(pk=self.pk).update(last_used=now)
+        except Exception:
+            return False
+        self.last_used = now
+        return True
 
     def get_auth_key(self):
         """Return the per-key JWT signing secret."""

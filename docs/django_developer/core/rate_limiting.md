@@ -432,8 +432,12 @@ requests are skipped entirely (they remain covered by `rate_limit` /
 unlimited by default (`API_THROTTLE_APIKEY=0`) but observed at 600/min
 (`API_THROTTLE_APIKEY_OBSERVE=600`); a positive `ApiKey.limits["api"]` or
 explicitly configured positive deployment-wide hard setting returns 429 when
-global enforcement is enabled and the path is not exempt. Accounting continues
-for unlimited, disabled, and exempt traffic.
+global enforcement is enabled and the path is not exempt. Traffic accounting
+(totals and top talkers) continues for unlimited, disabled, and exempt
+traffic. A request on an `API_THROTTLE_EXEMPT_PREFIXES` path is never counted
+against the identity, so it cannot use up the budget of that identity's
+ordinary requests; an application that exempts a path must bound it some
+other way (see [Exempt paths](../security/abuse_hardening.md#exempt-paths)).
 
 See [Authenticated-Abuse Hardening](../security/abuse_hardening.md) for the
 full settings table, traffic-concentration detection, and deployment

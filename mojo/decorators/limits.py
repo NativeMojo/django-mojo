@@ -590,9 +590,12 @@ def read_account_attempt(key, account_id, limit=None, window=None):
 # decorators above, and IP-keyed global limits punish CGNAT bystanders.
 #
 # Hot-path cost: one pipelined Redis round-trip. Every request increments the
-# current identity and traffic-accounting buckets so a burst that stops before
-# the next identity window is still visible to the concentration detector.
-# Fail-open on any Redis error.
+# traffic-accounting buckets so a burst that stops before the next identity
+# window is still visible to the concentration detector. Every request except
+# one on an API_THROTTLE_EXEMPT_PREFIXES path also increments the identity's
+# enforcement counter (#6601): an exempt request is neither refused nor
+# counted against the identity, so the application must bound it some other
+# way. Fail-open on any Redis error.
 # ---------------------------------------------------------------------------
 
 TRAFFIC_BUCKET_SECONDS = 300   # accounting bucket the concentration detector reads
@@ -735,9 +738,15 @@ def check_api_throttle(request, now=None, config=None, connection=None):
     and enforcement is enabled, else None.
 
     - Anonymous requests: immediate None, zero Redis cost.
-    - Accounting (identity counter + bucket total + top talkers) always
-      runs for authenticated identities, even when enforcement is disabled —
-      the concentration detector must see traffic regardless of 429 posture.
+    - Traffic accounting (bucket total + top talkers) always runs for
+      authenticated identities, even when enforcement is disabled or the
+      path is exempt — the concentration detector must see traffic
+      regardless of 429 posture.
+    - The identity counter — what enforcement and the ApiKey observation
+      threshold read — counts every request except one on an exempt prefix,
+      with enforcement on or off. An exempt request is never refused, never
+      counted against the identity, and never triggers an ApiKey observation
+      Event (#6601).
     - Per-key hard override: request.api_key.limits["api"] = {"limit": N,
       "window": minutes} (same convention as the rate_limit decorators).
     - ApiKeys have no built-in hard ceiling; their default 600/window
@@ -777,8 +786,11 @@ def check_api_throttle(request, now=None, config=None, connection=None):
 
         r = get_connection() if connection is None else connection
         p = r.pipeline(transaction=False)
-        p.incr(ident_key)
-        p.expire(ident_key, window * 2)
+        if not exempt:
+            # Exempt requests never spend the identity's budget: counted, a
+            # burst of them would 429 the identity's next ordinary request.
+            p.incr(ident_key)
+            p.expire(ident_key, window * 2)
         p.incr(f"traffic:total:{bucket}")
         p.expire(f"traffic:total:{bucket}", TRAFFIC_KEY_TTL)
         p.zincrby(top_key, 1, f"{kind}:{pk}")
@@ -791,7 +803,12 @@ def check_api_throttle(request, now=None, config=None, connection=None):
             # without bound or crowd authenticated identities out of top-K.
             p.zremrangebyrank(top_ip_key, 0, -(TRAFFIC_IP_MEMBER_LIMIT + 1))
             p.expire(top_ip_key, TRAFFIC_KEY_TTL)
-        count = p.execute()[0]
+        results = p.execute()
+        if exempt:
+            # Never refused and never an ApiKey observation trigger: the
+            # counter either would be judged by did not move.
+            return None
+        count = results[0]
 
         if kind == "apikey" and not enforcement_active:
             observe_limit = _positive_int(cfg["apikey_observe_limit"])

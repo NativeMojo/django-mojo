@@ -311,6 +311,22 @@ the send frame.
 | `chat_read` | Messages read `{room_id, user_id, up_to_message_id}` — the id is server-resolved, not the sender's raw value, and the event only fires when one resolved |
 | `chat_member_joined` | Member joined `{room_id, user_id}` |
 | `chat_member_left` | Member left `{room_id, user_id}` |
+| `chat_member_removed` | An admin removed a member `{room_id, user_id}` |
+| `chat_member_banned` | A moderator banned a member `{room_id, user_id}` |
+
+The member named in `chat_member_left`, `chat_member_removed` or
+`chat_member_banned` does not receive that event: the server re-checks their
+access on it, drops it, and unsubscribes their socket from the room. A
+`chat_room_deleted` `{room_id}` frame is published when a room is deleted
+through REST, but no client receives it, because nobody has access to a
+deleted room; every socket on the topic is unsubscribed instead.
+
+Losing access is silent on the socket: no error frame, no `unsubscribed` frame,
+and the connection and its other topics stay open. Access removed by these
+events stops delivery immediately; access removed any other way (a group or
+platform `chat` / `manage_chat` permission revoked, for example) stops it within
+the server's re-check window, 300 seconds by default. Subscribe again once
+access is restored; dropped events are not replayed.
 
 ## Advisory moderation and display
 

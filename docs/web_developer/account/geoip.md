@@ -155,7 +155,7 @@ per IP for every caller, including ApiKeys. Honor `Retry-After` on 429.
 | Param | Required | Description |
 |---|---|---|
 | `ip` | Yes | IP address to geolocate |
-| `auto_refresh` | No | Refresh expired cache (default: `true`). Pass `false`, `0`, `no`, or `off` to get the cached record as-is rather than waiting on a provider re-fetch. |
+| `auto_refresh` | No | Refresh expired cache (default: `true`). Pass `false`, `0`, `no`, or `off` to get the cached record as-is rather than waiting on a provider re-fetch. A failed lookup is cached too (see below), so it is not retried until it expires. |
 | `graph` | No | Response graph (`default`, `basic`, `detailed`, `federation`) |
 
 **Auth:** any authenticated caller. An ApiKey token works here and needs **no
@@ -174,6 +174,12 @@ the permissions returns `200` with the federation payload rather than a `403`.
 > An API key exists so an instance can *be* a GeoIP provider, not so it can
 > manage or inspect another fleet's GeoIP data. If you need the full record,
 > use `GET system/geoip/<pk>` with a user session that holds the permissions.
+
+**Failed lookups are cached.** When no provider can resolve an address, the
+record comes back with blank location fields and, in graphs that include it,
+`"provider": "failed"`. The server does not retry that address for
+`GEOIP_FAILURE_TTL` seconds (default one hour); the `refresh` action on
+`system/geoip/<pk>` retries it immediately.
 
 ### Response
 
