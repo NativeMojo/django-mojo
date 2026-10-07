@@ -101,6 +101,50 @@ rules = settings.get("MY_RULES", {}, kind="dict")     # JSON object
 Because the default is what a garbage value degrades to, pass the same default
 at every read site of a key (the framework's geofence reads already do).
 
+## Lookup Order and the Miss Cache
+
+`settings.get(name, default, group=None)` returns the first of:
+
+1. a `Setting` row on `group`, then on each parent (nearest first, at most 10
+   levels) — only when `group` is passed;
+2. a global `Setting` row;
+3. the Django settings file (`django.conf`);
+4. `default`.
+
+Every `Setting` scope in steps 1–2 is read from its Redis hash
+(`settings:global`, `settings:g:<group_id>`) first and from the database only
+when the hash holds nothing for the key. The database's answer is cached
+**either way**: the value, or a miss marker (`Setting` module constant
+`CACHE_MISS`) meaning "this scope has no row". After the first read, an unset
+key costs one Redis `HGET` per scope and **no SQL** — the per-request reads
+(`API_METRICS`, `EVENTS_ON_ERRORS`, …) no longer hit the database when nobody
+has set them.
+
+- **Writes are visible on the next read, with no restart.** `Setting.save()`,
+  `Setting.set()`, `Setting.remove()`, `delete()` and the `/api/settings` REST
+  surface overwrite or delete the cached field, miss marker included.
+- **A miss is per scope.** Setting a key on a parent, or globally, is visible
+  at once to a child group that cached its own miss: the child's miss is still
+  true and the walk continues to the parent.
+- **Readers never overwrite writers.** A read backfills with `HSETNX`, so a
+  reader whose `SELECT` raced a save cannot replace the value the save pushed.
+- **Backstop.** Each hash expires one hour (`CACHE_TTL`) after it is first
+  written and is rebuilt on demand, so a missed invalidation heals itself.
+- **Redis down** means the database answers every scope, uncached — never an
+  exception. A database error is never cached as a miss.
+
+Writes that bypass `Setting.save()` — `QuerySet.update()`, `bulk_create()`,
+raw SQL — must refresh the cache themselves, as the dedicated writers in
+`mojo/apps/account/services/` do: `transaction.on_commit(row.push_to_cache)`
+after a write, `hdel(Setting._redis_key(group_id), key)` after a delete.
+Otherwise a cached miss hides the new row for up to an hour. Code that reads
+the hash directly must treat `CACHE_MISS` as "no value"; `Setting.get_cached()`
+already does.
+
+The parent chain is walked through `group.parent`, so the first group-scoped
+read on a freshly loaded `Group` fetches each ancestor once; Django caches it
+on that instance for later reads.
+
 ## `settings.get_static()` — Conf-File-Only Reads
 
 `settings.get()` is DB/Redis-aware: it checks the `Setting` model (Redis cache →

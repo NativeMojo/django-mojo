@@ -293,10 +293,12 @@ def catalog(*, capabilities=None):
     ]
     redis = Setting._redis()
     if redis and dynamic_keys:
+        from mojo.apps.account.models.setting import CACHE_MISS
         try:
+            # CACHE_MISS marks "no row" in the resolver's hash; it is not a value.
             cached = {key: value for key, value in zip(
                 dynamic_keys, redis.hmget(Setting._redis_key(), dynamic_keys))
-                      if value is not None}
+                      if value is not None and value != CACHE_MISS}
         except Exception:
             cached = {}
     entries = []

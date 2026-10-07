@@ -838,6 +838,64 @@ incident.report_event(
 
 To suppress group derivation even when `request.group` is set, pass `group=None` explicitly.
 
+### Deferred reporting — `defer=True` (routine 4xx)
+
+`report_event(..., defer=True)` lets a request thread hand steps 1, 3 and 4 to
+a job instead of paying for them before the response. The REST dispatcher
+(`mojo/decorators/http.py` `dispatch_error_handler`) passes it for every
+**4xx** it reports — permission denials, other `MojoException`s below 500
+(`mojo_rest_error`, including the 404 from `get_instance_or_404`), bare
+`PermissionError` (`api_denied`) and `ValueError` (`rest_value_error`). A
+**5xx** never defers: the 500 page shows the incident id as its reference and
+the row has to exist for that.
+
+What happens on a deferred call:
+
+1. `_create_event_dict` runs on the request thread exactly as before — it
+   reads only the request object, so the ip, path, method, user, masked
+   bearer, group snapshot and host-sensitive masking are all captured at
+   request time.
+2. That dict is parked in Redis under a one-off key `incident:queued:<hex>`
+   with a one-day TTL, and a job is published on the `incident_handlers`
+   channel: `mojo.apps.incident.asyncjobs.record_queued_event` with payload
+   `{"key", "category", "uid"}` only. **The request facts never go into the
+   job row**: job payloads are readable with `view_jobs`, and incident
+   metadata (emails, request bodies, stack traces) is `view_security` data.
+3. `report_event` returns `None` — there is no row yet.
+4. The job (`reporter.write_queued_event`) claims the facts with a MULTI
+   get+delete, re-resolves the group (a group deleted meanwhile becomes
+   `None`; the metadata snapshot keeps its name), then saves, geolocates and
+   `publish()`es — rules, incidents and handlers fire as they always did,
+   just from the job. A second run of the same job finds nothing and writes
+   nothing.
+
+It stays inline — today's path, returning the `Event` — when:
+
+- the category is in `reporter.sync_categories()`: the built-in
+  `reporter.SYNC_CATEGORIES` (the threat-intel confirmed/suspect categories,
+  the auth-failure categories, `invalid_token`, `expired_token`) **plus**
+  anything listed in `INCIDENT_SYNC_CATEGORIES`. The setting adds to the
+  built-in list; it cannot remove from it. Read with `get_static`, so it
+  lives in the settings file, not in a DB `Setting` row;
+- `mojo.apps.jobs` is not in `INSTALLED_APPS`;
+- queueing fails for any reason (facts not JSON, Redis down, the publish
+  refused or unconfirmed). The Redis copy is deleted first, so a job row that
+  jobs committed but could not confirm finds nothing if an operator requeues
+  it — the inline write is the only one.
+
+Consequences to know about:
+
+- `Event.created` is when the job ran, normally well under a second after the
+  request. A runner must consume `incident_handlers` (the default
+  `JOBS_CHANNELS` does) or deferred 4xx events wait for one — up to the
+  one-day expiry, after which they are dropped.
+- Tests that assert on a dispatcher 4xx event must run the queued write
+  first: `th.run_pending_jobs(channel="incident_handlers",
+  func=reporter.QUEUED_EVENT_JOB, payload={"uid": uid})` — scope the payload
+  filter to the test's own user (or `category` + `uid=None` for an anonymous
+  request). Do it before zero-count checks too, or they pass vacuously. See
+  `tests/test_incident_core/deferred_events.py`.
+
 ### Rate-limited reporting — `report_event_suppressed`
 
 `report_event` files unconditionally — one call, one row. That is wrong when the
@@ -962,7 +1020,7 @@ Every permission denial issued by `MojoModel`'s permission system is automatical
 
 **`feature_disabled` batch metadata fields:** same shape as `batch_row_denied` — `branch` (`batch_can_update_false`/`batch_can_create_false`), `index`, `instance_id`, `model_name`, `request_path`. Emitted per row dropped from `on_rest_handle_batch` because `CAN_UPDATE`/`CAN_CREATE` is `False`, distinct from the whole-request `feature_disabled` raised for `CAN_BATCH=False` itself (which carries the standard `PermissionDeniedException` metadata instead).
 
-No extra code required — the dispatcher handles this automatically for all framework 401/403 paths.
+No extra code required — the dispatcher handles this automatically for all framework 401/403 paths. The 401/403 rows the dispatcher files are written by a job a moment after the response — see [Deferred reporting](#deferred-reporting--defertrue-routine-4xx); `fk_attach_denied`, `batch_row_denied` and per-row `feature_disabled` are reported directly and stay inline.
 
 ---
 
