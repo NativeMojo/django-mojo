@@ -72,7 +72,10 @@ def setup_setting_scope(opts):
     grp_b = Group.objects.create(
         name=f"setscope_grp_b_{tag}", kind="organization", is_active=True)
     opts.grp_a = grp_a.pk
-    opts.grp_a_uuid = str(grp_a.uuid)
+    # Group.uuid is null until asked for; get_uuid() allocates and saves one.
+    opts.grp_a_uuid = grp_a.get_uuid()
+    assert opts.grp_a_uuid and opts.grp_a_uuid != "None", \
+        f"group A needs a real uuid for the group_uuid tests, got {opts.grp_a_uuid!r}"
     opts.grp_b = grp_b.pk
 
     opts.members_email = f"setscope_members_{tag}@account.test"
@@ -169,36 +172,61 @@ def test_update_cannot_move(opts):
         _drop(Setting.objects.filter(key="TESTIT_SCOPE_MOVE"))
 
 
-@th.django_unit_test("#7149: a create authorized in one group cannot land in another")
-def test_create_cannot_land_elsewhere(opts):
+@th.django_unit_test("#7149: a create authorized by group id cannot land in another group")
+def test_create_by_id_cannot_land_elsewhere(opts):
     from mojo.apps.account.models import Setting
 
     _login(opts, opts.settings_email)
     try:
-        by_id = opts.client.post("/api/settings", {
+        resp = opts.client.post("/api/settings", {
             "group": opts.grp_a, "group_id": opts.grp_b,
             "key": "TESTIT_SCOPE_GRAFT_ID", "value": "v"})
-        assert not Setting.objects.filter(key="TESTIT_SCOPE_GRAFT_ID").exists(), (
+        stored = list(Setting.objects.filter(
+            key="TESTIT_SCOPE_GRAFT_ID").values_list("group_id", flat=True))
+        assert not stored, (
             f"SECURITY: a create authorized in group A stored a row in "
-            f"{list(Setting.objects.filter(key='TESTIT_SCOPE_GRAFT_ID').values_list('group_id', flat=True))} "
-            f"(status {by_id.status_code})")
-        assert by_id.status_code == 403, (
+            f"{stored} (status {resp.status_code})")
+        assert resp.status_code == 403, (
             f"group + group_id of another group must be refused with 403, got "
-            f"{by_id.status_code}: {opts.client.last_response.body}")
-
-        by_uuid = opts.client.post("/api/settings", {
-            "group_uuid": opts.grp_a_uuid, "group_id": opts.grp_b,
-            "key": "TESTIT_SCOPE_GRAFT_UUID", "value": "v"})
-        assert not Setting.objects.filter(key="TESTIT_SCOPE_GRAFT_UUID").exists(), (
-            f"SECURITY: a create authorized by group_uuid of A stored a row in "
-            f"{list(Setting.objects.filter(key='TESTIT_SCOPE_GRAFT_UUID').values_list('group_id', flat=True))} "
-            f"(status {by_uuid.status_code})")
-        assert by_uuid.status_code == 403, (
-            f"group_uuid + group_id of another group must be refused with 403, "
-            f"got {by_uuid.status_code}: {opts.client.last_response.body}")
+            f"{resp.status_code}: {opts.client.last_response.body}")
     finally:
         opts.client.logout()
         _drop(Setting.objects.filter(key="TESTIT_SCOPE_GRAFT_ID"))
+
+
+@th.django_unit_test("#7149: a create authorized by group_uuid lands in that group and nowhere else")
+def test_create_by_uuid_cannot_land_elsewhere(opts):
+    from mojo.apps.account.models import Setting
+
+    _login(opts, opts.settings_email)
+    try:
+        # The uuid must really authorize: without this a bad uuid would be
+        # refused before the scope rule and the test below would prove nothing.
+        own = opts.client.post("/api/settings", {
+            "group_uuid": opts.grp_a_uuid,
+            "key": "TESTIT_SCOPE_UUID_OWN", "value": "v"})
+        assert own.status_code == 200, (
+            f"a create authorized by the member's own group_uuid must work, "
+            f"got {own.status_code}: {opts.client.last_response.body}")
+        landed = list(Setting.objects.filter(
+            key="TESTIT_SCOPE_UUID_OWN").values_list("group_id", flat=True))
+        assert landed == [opts.grp_a], \
+            f"a group_uuid create must land in that group, got {landed}"
+
+        resp = opts.client.post("/api/settings", {
+            "group_uuid": opts.grp_a_uuid, "group_id": opts.grp_b,
+            "key": "TESTIT_SCOPE_GRAFT_UUID", "value": "v"})
+        stored = list(Setting.objects.filter(
+            key="TESTIT_SCOPE_GRAFT_UUID").values_list("group_id", flat=True))
+        assert not stored, (
+            f"SECURITY: a create authorized by group_uuid of A stored a row in "
+            f"{stored} (status {resp.status_code})")
+        assert resp.status_code == 403, (
+            f"group_uuid + group_id of another group must be refused with 403, "
+            f"got {resp.status_code}: {opts.client.last_response.body}")
+    finally:
+        opts.client.logout()
+        _drop(Setting.objects.filter(key="TESTIT_SCOPE_UUID_OWN"))
         _drop(Setting.objects.filter(key="TESTIT_SCOPE_GRAFT_UUID"))
 
 
