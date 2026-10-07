@@ -980,13 +980,13 @@ restart. See
   the settings file.
   **Malformed refuses.** Each value must be a non-empty string or a non-empty
   list (in the file also a tuple or set) of non-empty strings, keyed by a
-  non-empty string. If either source is anything else — a list, a number, a
+  non-empty string; a list, tuple or set means "any of". If either source is anything else — a list, a number, a
   non-JSON string — every member-level permission change is refused (403) and
   an error is logged, until a platform administrator fixes it; holders of
   global `manage_groups`/`manage_users` are unaffected. `None`, `""` and `{}`
-  read as empty. Saving a malformed row is refused with a 400 (`/api/settings`,
-  `Setting.set`, any `save()`), and the key can be neither secret nor
-  group-scoped.
+  read as empty. Saving a malformed row — including a JSON `null` — is refused
+  with a 400 (`/api/settings`, `Setting.set`, any `save()`), and the key can
+  be neither secret nor group-scoped.
 
 ### METRICS
 

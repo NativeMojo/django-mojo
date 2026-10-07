@@ -22,7 +22,8 @@ def parse_member_perms_protection(value):
     None and a blank (empty or whitespace-only) string are "nothing configured"
     and return {}. Accepted: a dict, or a string holding a JSON object, whose
     keys are non-empty strings and whose values are a non-empty string or a
-    non-empty list/tuple/set of non-empty strings.
+    non-empty list/tuple/set of non-empty strings. A tuple is returned as a
+    list — has_permission reads only a list or set as "any of".
     """
     if value is None:
         return {}
@@ -35,12 +36,14 @@ def parse_member_perms_protection(value):
             return None
     if not isinstance(value, dict):
         return None
+    parsed = {}
     for perm, requirement in value.items():
         if not isinstance(perm, str) or not perm.strip():
             return None
         if not _valid_protection_requirement(requirement):
             return None
-    return dict(value)
+        parsed[perm] = list(requirement) if isinstance(requirement, tuple) else requirement
+    return parsed
 
 
 def resolve_member_perms_protection(file_value, db_value):

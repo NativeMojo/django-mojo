@@ -186,7 +186,8 @@ def test_settings_api_refuses_malformed_map(opts):
     _clear_row()
     _login(opts, opts.settings_admin_email)
     try:
-        for payload in ("not json", '["a"]', '{"a": ""}', '{"a": []}', '{"a": 5}'):
+        for payload in ("not json", '["a"]', '{"a": ""}', '{"a": []}', '{"a": 5}',
+                        "null", "5", '"a"', "true"):
             resp = opts.client.post("/api/settings", {"key": KEY, "value": payload})
             assert resp.status_code == 400, (
                 f"{KEY}={payload!r} must be refused at write time, "

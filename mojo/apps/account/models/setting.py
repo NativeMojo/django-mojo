@@ -496,8 +496,10 @@ def _validate_scope_list(key, parsed):
 def _validate_member_perms_protection(key, parsed):
     # A malformed map refuses every member-level permission change at read
     # time (GroupMember.can_change_permission), so refuse to store one.
+    # The decoded value must itself be an object: a stored `null` decodes to
+    # None here but is read back as the string "null", which is malformed.
     from mojo.apps.account.models.member import parse_member_perms_protection
-    if parse_member_perms_protection(parsed) is None:
+    if not isinstance(parsed, dict) or parse_member_perms_protection(parsed) is None:
         raise ValueError(
             f"{key} must be a JSON object mapping each permission to a "
             "non-empty string or a non-empty list of non-empty strings")

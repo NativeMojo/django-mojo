@@ -23,8 +23,11 @@ def test_parse_accepts_dict_and_json_object(opts):
               "a list of requirements must be accepted")
     assert_eq(parse('{"a": ["x", "y"]}'), {"a": ["x", "y"]},
               "a JSON list of requirements must be accepted")
-    assert_eq(parse({"a": ("x", "y")}), {"a": ("x", "y")},
-              "a tuple of requirements (settings file) must be accepted")
+    assert_eq(parse({"a": ("x", "y")}), {"a": ["x", "y"]},
+              "a tuple of requirements (settings file) must be accepted and "
+              "returned as a list, the 'any of' form has_permission reads")
+    assert_eq(parse({"a": ("x",)}), {"a": ["x"]},
+              "a one-item tuple must come back as a one-item list")
     assert_eq(parse({"a": {"x", "y"}}), {"a": {"x", "y"}},
               "a set of requirements (settings file) must be accepted")
 
