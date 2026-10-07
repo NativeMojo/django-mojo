@@ -185,6 +185,15 @@ class Setting(MojoSecrets, MojoModel):
             # enforcement value ("******") from every other admin.
             raise merrors.ValueException(
                 f"{self.key} is a validated setting and cannot be secret")
+        if not isinstance(self.value, str):
+            # A non-string assigned straight to the field (Setting(value={...}),
+            # a JSON body value) would be persisted as its Python repr, which
+            # is not what was validated and not JSON. Store what set_value
+            # stores, so the value validated here is the value read back.
+            try:
+                self.value = json.dumps(self.value)
+            except (TypeError, ValueError):
+                raise merrors.ValueException(f"{self.key} must be valid JSON")
         parsed = self.value
         if isinstance(parsed, str):
             if not parsed.strip():

@@ -237,3 +237,41 @@ def test_blank_row_keeps_file_floor(opts):
     finally:
         opts.client.logout()
         _clear_row()
+
+
+@th.django_unit_test("member protection floor: a direct model save of a dict is stored as JSON and enforced")
+def test_direct_dict_save_is_stored_as_json(opts):
+    """Setting(value={...}).save() bypasses set_value. The dict passed the
+    validator but was persisted as its Python repr (single quotes), which the
+    reader treats as malformed once the cache entry is gone — refusing every
+    member-level change platform-wide."""
+    import json
+    from mojo.apps.account.models.setting import Setting
+    _clear_row()
+    try:
+        with th.server_settings(MEMBER_PERMS_PROTECTION=FILE_MAP):
+            row = Setting(key=KEY, value={ROW_PERM: NEVER})
+            row.save()
+            stored = Setting.objects.get(pk=row.pk).value
+            assert json.loads(stored) == {ROW_PERM: NEVER}, \
+                f"a dict saved directly must be persisted as JSON, got {stored!r}"
+            # Read from the database, not from a cache entry a writer pushed.
+            row.remove_from_cache()
+            _login(opts, opts.manager_email)
+            _assert_allowed(opts, PLAIN_PERM, "direct dict save, unlisted permission")
+            _assert_refused(opts, ROW_PERM, "direct dict save, row-protected permission")
+            _assert_refused(opts, FILE_PERM, "direct dict save, file-protected permission")
+
+            for bad in (None, 5, True, ["a"], {"a": []}):
+                _clear_row()
+                refused = False
+                try:
+                    Setting(key=KEY, value=bad).save()
+                except Exception:
+                    refused = True
+                assert refused, f"a direct save of {bad!r} must be refused"
+                assert not Setting.objects.filter(key=KEY, group=None).exists(), \
+                    f"a refused direct save of {bad!r} must not persist a row"
+    finally:
+        opts.client.logout()
+        _clear_row()
