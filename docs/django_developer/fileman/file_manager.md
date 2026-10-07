@@ -428,5 +428,6 @@ returned as stored and is not re-checked on read.
 
 The inherited value is the operator's setting on the system default manager.
 That setting is not itself checked automatically.
-`reconcile_fileman_public_access` covers user-scoped managers only. It does not
-check group or system managers.
+`reconcile_fileman_public_access` checks user-scoped managers by default and
+group-scoped managers when run with `--groups` or `--manager <pk>`. It never
+checks system managers.
