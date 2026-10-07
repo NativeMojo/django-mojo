@@ -954,8 +954,7 @@ restart. See
 
 ### MEMBER
 
-- `MEMBER_PERMS_PROTECTION` — dict, default `{}` (read with `kind="dict"`, so a
-  DB-backed `Setting` JSON string is honored). Maps a member-assignable
+- `MEMBER_PERMS_PROTECTION` — dict, default `{}`. Maps a member-assignable
   permission key → the permission(s) the granter must themselves hold to assign
   it, gating `GroupMember.set_permissions` / the group-invite path. Empty by
   default (any group admin holding `manage_group`/`manage_members`/`manage_users`/
@@ -970,6 +969,24 @@ restart. See
   save) does not deny the write. Granting and revoking a protected key both
   still require the stated authority. Use it to stop tenant admins
   from minting high-privilege member grants.
+  **Two sources, merged — the settings file is the floor.** The map is the
+  settings-file value with the platform-wide `Setting` row (a JSON object
+  string) merged *under* it: the file wins for every permission it names, so a
+  database row can **add** protected permissions but can never remove or loosen
+  one the file configured. A row's entry for a file key is ignored. A
+  group-scoped row is never read. A blank row (empty or whitespace-only) adds
+  nothing. Row additions are best-effort — if the database and Redis cannot be
+  read, only the file map applies — so put anything that must always hold in
+  the settings file.
+  **Malformed refuses.** Each value must be a non-empty string or a non-empty
+  list (in the file also a tuple or set) of non-empty strings, keyed by a
+  non-empty string. If either source is anything else — a list, a number, a
+  non-JSON string — every member-level permission change is refused (403) and
+  an error is logged, until a platform administrator fixes it; holders of
+  global `manage_groups`/`manage_users` are unaffected. `None`, `""` and `{}`
+  read as empty. Saving a malformed row is refused with a 400 (`/api/settings`,
+  `Setting.set`, any `save()`), and the key can be neither secret nor
+  group-scoped.
 
 ### METRICS
 
