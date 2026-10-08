@@ -1055,8 +1055,8 @@ After a high-confidence block (score >= `BOUNCER_LEARN_MIN_SCORE`, default 80), 
 | Signature Type | Threshold | TTL | Description |
 |---------------|-----------|-----|-------------|
 | Subnet /24 | Never learned | — | Manual only. 5 reports from one /24 in an hour record one `security:bouncer:subnet` event (level 5, no address, no block) |
-| User Agent | Never learned | — | Manual only (`source='manual'`) |
-| Fingerprint | Never learned | — | Manual only (`source='manual'`) |
+| User Agent | Never learned | — | Created by an operator; a row with `source='auto'` is not enforced |
+| Fingerprint | Never learned | — | Created by an operator; a row with `source='auto'` is not enforced |
 | Signal Set (Campaign) | 5 blocks with same signal pattern | 30 days | Recorded with a campaign incident; not matched by pre-screen |
 
 Signatures are cached in Redis for pre-screen checks. When a request matches a cached signature, it is blocked immediately without running full scoring. The cache is rebuilt after every learn job and every 15 minutes by the scheduled `refresh_bouncer_sig_cache` job.

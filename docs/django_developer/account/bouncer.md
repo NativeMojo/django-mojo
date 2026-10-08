@@ -583,8 +583,10 @@ address and every signature a person adds are unchanged.
   changes nothing when the row's `source` is not `auto` or the row is switched
   off. It used to set `is_active=True` and a new expiry on any existing row,
   which switched a signature an operator had turned off back on and put an
-  expiry on a permanent manual block. Only `signal_set` rows are still
-  written, and they are never enforced.
+  expiry on a permanent manual block. The condition is part of the write
+  itself, so an operator's edit that lands while a learn job is running is
+  not written over. Only `signal_set` rows are still written, and they are
+  never enforced.
 - `BOUNCER_LEARN_SUBNET_TTL` is no longer read.
 
 For the two caller-chosen types:

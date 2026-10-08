@@ -314,6 +314,64 @@ def test_learner_does_not_change_a_manual_signature(opts):
         net.cleanup()
 
 
+class _EditWhileTheLearnerHoldsTheRow:
+    """Apply an operator's edit to one signature at the moment the learner
+    has read it and not yet written: the row the learner holds is then older
+    than the table. Uses Django's own post_init signal as the seam, so no
+    production code is replaced."""
+
+    def __init__(self, row, **edit):
+        self.pk, self.edit, self.done = row.pk, edit, 0
+
+    def _receive(self, sender, instance, **kwargs):
+        if instance.pk == self.pk and not self.done:
+            self.done += 1
+            # update(), not save(): it builds no instance, so it cannot re-enter
+            sender.objects.filter(pk=self.pk).update(**self.edit)
+
+    def __enter__(self):
+        from django.db.models.signals import post_init
+        from mojo.apps.account.models import BotSignature
+        self._signal, self._sender = post_init, BotSignature
+        post_init.connect(self._receive, sender=BotSignature, weak=False)
+        return self
+
+    def __exit__(self, *exc):
+        self._signal.disconnect(self._receive, sender=self._sender)
+
+
+def _overlapping_edit_is_kept(what, **edit):
+    from mojo.apps.account.models import BotSignature
+    from mojo.apps.account.services.bouncer.learner import _upsert_signature
+    net = _Net()
+    value = net.campaign_hash([net.signal])
+    try:
+        # a campaign row the learner wrote: it is allowed to extend this one
+        row = net.row(sig_type='signal_set', value=value, source='auto',
+                      expires_at=_in_a_day(), confidence=10)
+        with _EditWhileTheLearnerHoldsTheRow(row, expires_at=None, **edit) as step:
+            _upsert_signature('signal_set', value, 'auto', 90, 86400)
+        assert_eq(step.done, 1, 'this test needs the edit to land while the learner holds the row')
+        stored = BotSignature.objects.filter(pk=row.pk).values(
+            'source', 'is_active', 'expires_at', 'block_count', 'confidence').get()
+        expected = {'source': 'auto', 'is_active': True, 'expires_at': None,
+                    'block_count': 1, 'confidence': 10}
+        expected.update(edit)
+        assert_eq(stored, expected, f'{what} while the learner held the row is left exactly as the operator saved it')
+    finally:
+        net.cleanup()
+
+
+@th.django_unit_test('#7392: a signature switched off while the learner holds it is not written over')
+def test_switch_off_during_the_learner_save_is_kept(opts):
+    _overlapping_edit_is_kept('a signature switched off and made permanent', is_active=False)
+
+
+@th.django_unit_test('#7392: a signature made manual while the learner holds it is not written over')
+def test_made_manual_during_the_learner_save_is_kept(opts):
+    _overlapping_edit_is_kept('a signature made manual and permanent', source='manual')
+
+
 @th.django_unit_test('#7392: the learner still extends a campaign signature it wrote itself')
 def test_learner_still_extends_its_own_campaign_signature(opts):
     from mojo.apps.account.models import BotSignature

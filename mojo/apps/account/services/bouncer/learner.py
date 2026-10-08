@@ -145,6 +145,8 @@ def _check_campaign(triggered_signals, redis):
 
 
 def _upsert_signature(sig_type, value, source, confidence, ttl_seconds):
+    from django.db.models import F
+    from django.db.models.functions import Greatest
     from mojo.apps.account.models.bot_signature import BotSignature
     expires_at = dates.utcnow() + timedelta(seconds=ttl_seconds)
     sig, created = BotSignature.objects.get_or_create(
@@ -159,13 +161,19 @@ def _upsert_signature(sig_type, value, source, confidence, ttl_seconds):
         },
     )
     if not created:
-        # A row a person made, or switched off, is theirs: left as it is.
-        if sig.source != 'auto' or not sig.is_active:
+        # A row a person made, or switched off, is theirs: left as it is. The
+        # condition is part of the write, not a check on the row as it was
+        # read: an operator's edit that lands in between is not written over.
+        updated = BotSignature.objects.filter(
+            pk=sig.pk, source='auto', is_active=True,
+        ).update(
+            block_count=F('block_count') + 1,
+            confidence=Greatest(F('confidence'), confidence),
+            expires_at=expires_at,  # extend TTL on repeated blocks
+            modified=dates.utcnow(),
+        )
+        if not updated:
             return
-        sig.block_count += 1
-        sig.confidence = max(sig.confidence, confidence)
-        sig.expires_at = expires_at  # extend TTL on repeated blocks
-        sig.save(update_fields=['block_count', 'confidence', 'expires_at', 'modified'])
     try:
         from mojo.apps import metrics
         metrics.record("bouncer:signatures_learned", category="bouncer")
