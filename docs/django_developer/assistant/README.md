@@ -511,7 +511,7 @@ bound to the originating browser Origin.
 
 | Tool | Permission | Mutates | Description |
 |---|---|---|---|
-| `describe_model` | `view_admin` | No | Describe a MojoModel's fields, graphs, permissions, and search fields. Use this to discover what data is available before querying. Requires `app_name` and `model_name`. Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secret`) are excluded from output. Only works on MojoModels with a `RestMeta` definition and without `NO_REST = True`. |
+| `describe_model` | `view_admin` | No | Describe a MojoModel's fields, the shape its rows are returned in (`serialization`), permissions, and search fields. Use this to discover what data is available before querying. Requires `app_name` and `model_name`. Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secret`) are excluded from the `fields` metadata. Only works on MojoModels with a `RestMeta` definition and without `NO_REST = True`. |
 | `query_model` | `view_admin` | No | Query any MojoModel and return results inline as JSON. Best for small result sets (detail lookups, spot-checking). Respects `RestMeta` permissions and owner/group filtering. Max 200 rows. For exports use `export_data`; for counts/sums use `aggregate_model`. |
 | `aggregate_model` | `view_admin` | No | Run aggregate queries (count, sum, avg, min, max, count_distinct) on any MojoModel, with optional `group_by`. Use for summaries — never pull rows just to count or sum them. |
 | `export_data` | `view_admin` | Yes | Export query results to a CSV file in file storage (S3). Data is written directly to a `fileman.File` record — not returned inline. Returns a download URL. Use for any export request, especially large result sets. |
@@ -528,7 +528,6 @@ bound to the originating browser Origin.
 | `search` | string | — | Free-text search using the model's `SEARCH_FIELDS` |
 | `ordering` | string | `-pk` | Order by field, prefix with `-` for descending (e.g. `-created`) |
 | `limit` | integer | `50` | Max results to return (max 200) |
-| `graph` | string | `default` | Serialization graph name |
 | `count_only` | boolean | `false` | If true, return only the total count with no row data |
 
 `aggregate_model` parameters:
@@ -554,10 +553,79 @@ bound to the originating browser Origin.
 | `search` | string | — | Free-text search using the model's `SEARCH_FIELDS` |
 | `ordering` | string | `-pk` | Order by field |
 | `limit` | integer | `5000` | Max rows to export (max 50000) |
-| `fields` | array | — | Specific fields to include. Defaults to the model's graph config. |
-| `graph` | string | `default` | Serialization graph name |
+| `fields` | array | — | Columns to keep, in this order. Each must be one of `describe_model`'s `serialization.fields`: it narrows the export and can never add a column. An empty list, a duplicate, or a name outside that set is refused before any file is created. |
 
 `export_data` requires `fileman` to be installed and a `FileManager` configured for the user/group. Files are stored with `metadata.expires_at` set to `FILEMAN_EXPORT_EXPIRES_DAYS` days from creation (default 14). If `mojo.apps.shortlink` is installed, the returned URL is a shortlink. The assistant should present the URL using a `file` block (see structured block types in the system prompt).
+
+#### The assistant's serialization graph (`ai`, else `default`)
+
+The assistant never chooses a graph, and neither does the person talking to it.
+Every generic path that turns a model row into data for the LLM — `query_model`,
+`export_data`, the generic context builder, and a tool result that happens to
+contain a model instance or queryset — serializes through **one** graph the
+server selects:
+
+1. `RestMeta.GRAPHS["ai"]` when the model declares it;
+2. otherwise `RestMeta.GRAPHS["default"]`.
+
+```python
+class RestMeta:
+    GRAPHS = {
+        "default": {"fields": ["id", "name", "status", "created"]},
+        "detail": {"fields": ["id", "name", "status", "notes", "metadata", "created"]},
+        # What the assistant reads. Omit it and the assistant reads `default`.
+        "ai": {"fields": ["id", "name", "status"]},
+    }
+```
+
+Rules, all fail-closed:
+
+- **No tool accepts a `graph`.** `describe_model`, `query_model`,
+  `aggregate_model` and `export_data` do not advertise one, and a call that
+  sends a `graph` key anyway is refused with an error — it is neither ignored
+  nor honored.
+- **A wider graph is unreachable.** A `detail`, `full` or special-purpose graph
+  cannot be reached through the assistant, whether or not its author added a
+  `GRAPH_PERMISSIONS` entry for it. A graph added to a model later is closed to
+  the assistant by default.
+- **The selected entry must be a mapping.** A present-but-malformed `ai`
+  (`None`, a string, a list) is an error, not a reason to fall back to
+  `default`. A model with no `default` and no `ai` — including a model that
+  declares no `GRAPHS` at all — cannot be read row-by-row by the assistant. An
+  explicit `{}` is valid and means the framework's all-fields graph.
+- **`GRAPH_PERMISSIONS` still applies**, to the selected name. A model that
+  gates `ai` or `default` has that gate checked against the caller before any
+  row is serialized. See [Core → Graphs](../core/graphs.md#per-graph-permissions-graph_permissions).
+- **`describe_model` reports it**: `"serialization": {"graph": "ai" | "default",
+  "fields": [...]}`. `fields` is the ordered list of keys a row will carry —
+  the graph's fields after `exclude` and `NO_SHOW_FIELDS`, then `extra`
+  aliases, then nested-graph keys. Other graph names are not listed.
+- **`export_data` writes those keys as its columns.** Each row is serialized
+  through the selected graph first and the resulting dictionaries are written to
+  CSV, so excludes, extras and nested graphs are already applied. A nested graph
+  fills one column under its key. A key is read exactly as the graph names it:
+  an `extra` alias such as `owner.label` is one column, not a path. `fields`
+  only narrows.
+- **`count_only` and `aggregate_model` do not serialize rows** and work on a
+  model regardless of its graphs.
+
+> **`ai` is a selection convention, not a private graph.** An ordinary REST
+> caller who holds the model's `VIEW_PERMS` can still request `?graph=ai`. Do
+> not put anything on `ai` that those callers may not read. To restrict who may
+> read it, add a `GRAPH_PERMISSIONS["ai"]` entry — the assistant honors it too.
+
+The selection lives in `mojo.apps.assistant.services.model_serialization`
+(`select_graph`, `resolve_graph`, `output_fields`, `serialize_instance`,
+`serialize_queryset`). The serializers take an optional `graph_override`
+argument. It exists for **server code only** — the case where an instance
+permission hook downgrades a caller to a narrower graph — and no model tool
+passes it; nothing in a tool's parameters can reach it. Never fill it from
+caller input.
+
+A tool handler that returns a model instance or a queryset in its result is
+serialized the same way. A `.values()` / `.values_list()` queryset is withheld
+(a one-line marker replaces it) because its raw column rows never pass through a
+graph; return model instances, or build the dictionaries yourself.
 
 #### `DENY_AI_*` RestMeta flags
 
@@ -988,7 +1056,7 @@ Returns:
 1. Resolves the model via `apps.get_model(app_label, ModelName)`
 2. Checks the user has at least one of the model's `VIEW_PERMS`
 3. Checks for duplicate: same user + same model + same pk returns the existing conversation (with `"existing": true`)
-4. Builds a context message — rich builders for Ticket and Incident, generic `to_dict()` fallback for everything else
+4. Builds a context message — rich builders for Ticket and Incident; everything else is serialized through the assistant's graph (`ai`, else `default`)
 5. Creates a Conversation with `metadata: {"source_model": "incident.ticket", "source_pk": 123}`
 6. Stores the context as the first `user` message
 
@@ -1003,7 +1071,7 @@ Ticket and Incident have custom builders that load related data:
 
 ### Generic Fallback
 
-Any MojoModel without a registered builder gets `to_dict(graph="detail")` serialization with sensitive fields stripped. This means the endpoint works for RuleSets, Jobs, Users, or any other model — the context is less rich but still useful.
+Any MojoModel without a registered builder is serialized through the [assistant's serialization graph](#the-assistants-serialization-graph-ai-else-default) — `ai` when the model declares it, otherwise `default`, never the wider `detail` — with sensitive-looking keys stripped on top as defense in depth. `GRAPH_PERMISSIONS` on that graph is checked against the caller. The context heading and the conversation title use the row's `title` or `name` only when that graph serialized it; otherwise they read `<Model> #<pk>`. This means the endpoint works for RuleSets, Jobs, Users, or any other model — the context is less rich but still useful. Registered rich builders (Ticket, Incident) are unaffected.
 
 ### Registering Custom Builders
 

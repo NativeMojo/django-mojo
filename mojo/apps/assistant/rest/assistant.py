@@ -220,7 +220,7 @@ def on_assistant_context(request):
         return JsonResponse({"status": True, "data": {"conversation_id": existing.pk, "existing": True}})
 
     # Build the context message
-    title, message, error = build_context(model_string, pk)
+    title, message, error = build_context(model_string, pk, request=request)
     if error:
         return JsonResponse({"status": False, "error": error}, status=404)
 

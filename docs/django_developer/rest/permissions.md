@@ -361,6 +361,13 @@ GRAPHS = {
 
 The client selects a graph via `?graph=detail`. Default is `"default"`.
 
+The admin assistant is the exception: it never accepts a graph name. Its model
+tools, generic context and tool results serialize through `GRAPHS["ai"]` when a
+model declares it, otherwise `GRAPHS["default"]`, and `GRAPH_PERMISSIONS` is
+checked on that selected name. `ai` stays requestable over REST by anyone with
+`VIEW_PERMS`, so it is a narrower shape, not a private one. See
+[Core → Graphs](../core/graphs.md#the-ai-graph-what-the-assistant-reads).
+
 For list endpoints, the framework uses `"list"` graph if it exists, otherwise `"default"`.
 
 ## FK Assignment During Save

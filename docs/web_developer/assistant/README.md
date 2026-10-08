@@ -195,7 +195,13 @@ route uses the admin key.
 POST /api/assistant/context
 ```
 
-Create a conversation pre-loaded with the full context of any model instance. Use this for "Open in Assistant" buttons on detail views.
+Create a conversation pre-loaded with the context of any model instance. Use this for "Open in Assistant" buttons on detail views.
+
+Tickets and incidents get a purpose-built summary. Every other model is
+pre-loaded in the shape that model publishes for the assistant — its `ai`
+shape when it has one, otherwise its `default` shape — not the wider
+`?graph=detail` view a detail screen may be showing. A field that appears on
+your detail view may therefore be absent from the assistant's context.
 
 **Permission**: `view_admin` + the model's own `VIEW_PERMS`
 
@@ -612,7 +618,7 @@ Users with `view_admin` can ask the assistant to introspect and query any MojoMo
 
 ### `describe_model`
 
-Returns a model's fields, available graphs, permissions, and search fields. Useful for discovery before querying.
+Returns a model's fields, the shape its rows are returned in, permissions, and search fields. Useful for discovery before querying.
 
 **Required permission**: `view_admin`
 
@@ -628,9 +634,9 @@ Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secre
         {"name": "email", "type": "email", "nullable": false},
         {"name": "is_active", "type": "boolean", "nullable": false}
     ],
-    "graphs": {
-        "default": ["id", "email", "username", "is_active", "created"],
-        "detail": ["id", "email", "username", "first_name", "last_name", "is_active", "created"]
+    "serialization": {
+        "graph": "default",
+        "fields": ["id", "email", "username", "is_active", "created"]
     },
     "permissions": {
         "view": ["view_admin"],
@@ -640,13 +646,21 @@ Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secre
 }
 ```
 
+`serialization` names the one shape the assistant reads this model in, and
+`serialization.fields` lists the keys each row will carry. `graph` is `"ai"`
+when the model publishes an assistant-specific shape and `"default"` otherwise.
+The shape is chosen by the model, not by the conversation: there is no `graph`
+input on any model tool, and a request that includes one is refused. Asking the
+assistant for "the detail view" or "all fields" of a record does not widen what
+it can read.
+
 ### `query_model`
 
 Query a MojoModel and return results inline as JSON. Best for small result sets (detail lookups, spot-checking records). Respects the same `RestMeta` permissions and owner/group scoping as the REST API.
 
 **Required permission**: `view_admin` plus any permissions the model's `RestMeta` `VIEW_PERMS` requires.
 
-Filtering on sensitive fields is blocked and logged as a security event. Max 200 rows.
+Filtering on sensitive fields is blocked and logged as a security event. Max 200 rows. Each row carries exactly the keys in `describe_model`'s `serialization.fields`.
 
 **Example response shape**:
 
@@ -729,6 +743,14 @@ Run aggregate queries (count, sum, avg, min, max, count_distinct) on any MojoMod
 Export query results to a downloadable CSV file stored in file storage. Data is written directly to storage — not returned inline. The assistant responds with a `file` block containing the download URL.
 
 **Required permission**: `view_admin` plus model `VIEW_PERMS`. Requires `fileman` with a configured `FileManager` for the user/group.
+
+The file's columns are the keys in `describe_model`'s `serialization.fields`
+for that model, in that order, and each cell holds the same value `query_model`
+would return for it. A request can ask for fewer columns or a different order;
+it cannot add a column the model does not publish to the assistant. Asking for
+a column outside that set, the same column twice, or no columns at all is
+refused and no file is created. An export with no matching rows still produces
+a file with the header row.
 
 **Example queries that trigger this tool**:
 

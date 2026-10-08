@@ -435,3 +435,23 @@ def test_aggregate_model_registered(opts):
     assert entry["permission"] == "view_admin", f"Permission: {entry['permission']}"
     assert entry["core"] is True, "Should be core tool"
     assert entry["domain"] == "models", f"Domain: {entry['domain']}"
+
+
+# ---------------------------------------------------------------------------
+# Serialization graph — never a caller input
+# ---------------------------------------------------------------------------
+
+@th.tier("bug")
+@th.django_unit_test()
+def test_aggregate_refuses_caller_graph(opts):
+    """aggregate_model serializes no rows, and still refuses a `graph` key outright."""
+    result = _aggregate({
+        "app_name": "incident", "model_name": "Event",
+        "filters": {"title__startswith": "aggtest_"},
+        "aggregations": [{"field": "id", "func": "count"}],
+        "graph": "default",
+    }, opts.admin)
+    assert "error" in result, f"aggregate_model must refuse a 'graph' key, got: {result}"
+    assert "'graph' parameter is not supported" in result["error"], \
+        f"Error should name the parameter: {result['error']}"
+    assert "results" not in result, "No aggregate may be returned alongside the refusal"

@@ -149,7 +149,9 @@ class RestMeta:
 - **Enforced at the REST boundary and the assistant model tools**, not in the
   serializer (which has no request). Internal `to_dict(graph=…)` and service
   callers are unaffected — a service that needs a privileged graph already has
-  its own authorization.
+  its own authorization. The assistant never takes a graph name from a caller:
+  it serializes through `ai`, else `default` (see [The `ai` Graph](#the-ai-graph-what-the-assistant-reads)),
+  and this gate is checked on that selected name.
 - **Tenancy caveat.** A member-level grant satisfies a graph permission only on
   a model whose tenancy is derivable (a `group` FK or `GROUP_FIELD`), where the
   check binds to the row's own tenant. On a groupless model, or one gated only
@@ -161,6 +163,33 @@ Nested graphs are **not** permission-gated: a graph's field lists and its nested
 sensitive related data out of a nested graph (the convention is to snapshot the
 needed fields rather than nest — see `incident/models/event.py`), or gate the
 top-level graph that pulls it in.
+
+## The `ai` Graph: What the Assistant Reads
+
+`ai` is a reserved graph name. The admin assistant's generic model paths —
+`query_model`, `export_data`, generic context, and a model or queryset returned
+in a tool result — serialize a row through `GRAPHS["ai"]` when the model
+declares it and through `GRAPHS["default"]` otherwise. No caller can name a
+different graph, so a `detail` or special-purpose graph is unreachable through
+the assistant even when it has no `GRAPH_PERMISSIONS` entry.
+
+```python
+GRAPHS = {
+    "default": {"fields": ["id", "name", "status", "created"]},
+    "detail": {"fields": ["id", "name", "status", "notes", "metadata"]},
+    "ai": {"fields": ["id", "name", "status"]},   # optional
+}
+```
+
+- Declare `ai` when the assistant should see less (or differently shaped data)
+  than `default`. Leave it out and the assistant reads `default`.
+- A malformed `ai` (`None`, a string, a list) is an error for the assistant,
+  not a fall back to `default`. `{}` is valid and means all fields.
+- **`ai` is not private.** A REST caller with the model's `VIEW_PERMS` can still
+  request `?graph=ai`. Put nothing on it that those callers may not read, or
+  gate it with `GRAPH_PERMISSIONS["ai"]`, which the assistant also honors.
+
+Details: [Assistant → serialization graph](../assistant/README.md#the-assistants-serialization-graph-ai-else-default).
 
 ### Opt-In Sensitive Graphs
 

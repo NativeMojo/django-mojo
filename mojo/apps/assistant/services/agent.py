@@ -137,12 +137,48 @@ def _report_event(category, level, title, details, user=None, _reporter=None, **
         logger.exception("Failed to report event: %s / %s", category, title)
 
 
-def _json_default(obj):
+def _serialize_model_result(obj, user):
+    """Serialize a MojoModel instance or queryset a tool handler returned.
+
+    Goes through the server-selected assistant graph (``ai``, else
+    ``default``) — never a bare ``to_dict()`` and never ``.values()``, which
+    would emit every column. When no usable graph exists, or the caller may not
+    see it, the rows are withheld: an instance becomes a ``{pk, model}``
+    reference and a queryset becomes a one-line marker.
+    """
+    from mojo.apps.assistant.services import model_serialization
+
+    is_queryset = model_serialization.is_mojo_queryset(obj)
+    model = obj.model if is_queryset else obj.__class__
+    request = None
+    if user is not None:
+        from mojo.apps.assistant.services.tools.models import _build_request
+        request = _build_request(user)
+    try:
+        if is_queryset:
+            return model_serialization.serialize_queryset(obj, request=request)
+        return model_serialization.serialize_instance(obj, request=request)
+    except Exception as exc:
+        logger.warning(
+            "tool result model serialization withheld",
+            model_serialization.model_label(model), str(exc))
+    if is_queryset:
+        return {
+            "model": model.__name__,
+            "error": "rows withheld: not serializable for the assistant",
+        }
+    return {"pk": obj.pk, "model": model.__name__}
+
+
+def _json_default(obj, user=None):
     """JSON fallback encoder for tool results.
 
     Coerces common non-JSON-native types that tool handlers may return
     (datetime/date, Decimal, UUID, set, Django Model, QuerySet) into
     JSON-safe values so the boundary never crashes on them.
+
+    ``user`` is the caller the tool ran for; it lets a model's
+    ``GRAPH_PERMISSIONS`` be checked before a row is serialized.
     """
     if isinstance(obj, (datetime.datetime, datetime.date)):
         return obj.isoformat()
@@ -157,25 +193,23 @@ def _json_default(obj):
             return obj.decode("utf-8")
         except Exception:
             return repr(obj)
-    # Django Model: use MojoModel.to_dict() — the RestMeta graph system
-    # controls exactly which fields are exposed, so sensitive fields
-    # (password hashes, tokens, etc.) are already excluded from the
-    # default graph. Fall back to a minimal {pk, model} reference if
-    # to_dict() is unavailable or raises.
+    # MojoModel instance or queryset: the server-selected assistant graph is
+    # the only way out. There is no `.values()` fallback — it would emit every
+    # column, `mojo_secrets` included, with no caller input at all.
+    from mojo.apps.assistant.services import model_serialization
+    if (model_serialization.is_mojo_model(obj)
+            or model_serialization.is_mojo_queryset(obj)):
+        return _serialize_model_result(obj, user)
+    # Anything else that knows how to describe itself.
     to_dict = getattr(obj, "to_dict", None)
     if callable(to_dict):
         try:
             return to_dict()
         except Exception:
             pass
+    # A Django object that is not a MojoModel: a minimal reference only.
     if hasattr(obj, "pk") and hasattr(obj, "_meta"):
         return {"pk": obj.pk, "model": obj.__class__.__name__}
-    values = getattr(obj, "values", None)
-    if callable(values) and hasattr(obj, "model"):
-        try:
-            return list(obj.values())
-        except Exception:
-            pass
     return str(obj)
 
 
@@ -208,7 +242,7 @@ def _dumps_tool_result(
     a JSON error payload so the agent turn keeps flowing.
     """
     try:
-        return json.dumps(obj, default=_json_default)
+        return json.dumps(obj, default=lambda value: _json_default(value, user=user))
     except Exception as exc:
         conv_pk = getattr(conversation, "pk", None)
         user_email = getattr(user, "email", None)

@@ -338,3 +338,95 @@ def test_context_generic_model(opts):
 
     # Cleanup
     skill.delete()
+
+
+@th.tier("bug")
+@th.django_unit_test()
+def test_context_generic_model_uses_default_graph_not_detail(opts):
+    """Generic context is built from the `ai`/`default` graph, never the wider `detail`."""
+    from mojo.apps.assistant.models import Conversation, Message, Skill
+
+    marker = "CTX-DETAIL-ONLY-MARKER"
+    Skill.objects.filter(name="[CTX-TEST] Graph Skill").delete()
+    skill = Skill.objects.create(
+        user=opts.admin, tier="user", name="[CTX-TEST] Graph Skill",
+        description="visible in default",
+        triggers=[marker], steps=[{"note": marker}], metadata={"marker": marker},
+    )
+    assert_true(marker in str(skill.to_dict("detail")),
+                "precondition: the detail graph carries the marker")
+
+    opts.client.login(TEST_EMAIL_ADMIN, TEST_PASSWORD)
+    resp = opts.client.post(
+        "/api/assistant/context", {"model": "assistant.Skill", "pk": skill.pk})
+    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}: {resp.json}")
+    conv = Conversation.objects.get(pk=resp.json.data.conversation_id)
+    content = Message.objects.filter(conversation=conv).first().content
+    assert_true("visible in default" in content,
+                f"Context should carry the default graph's fields, got: {content[:400]}")
+    assert_true(marker not in content,
+                "Generic context serialized through the wider `detail` graph")
+    for key in ("triggers", "steps", "metadata"):
+        assert_true(f"**{key}**" not in content, f"detail-only key '{key}' reached the context")
+    assert_eq(conv.group_id, None, "serializing the row must not stamp a group on the conversation")
+
+    skill.delete()
+
+
+@th.tier("bug")
+@th.django_unit_test()
+def test_context_generic_title_comes_from_the_graph(opts):
+    """The heading and conversation title carry a name only when the selected graph does."""
+    from mojo.apps.assistant.models import Skill
+    from mojo.apps.assistant.services.context import build_context
+
+    private = "CTX-PRIVATE-NAME-MARKER"
+    Skill.objects.filter(name=private).delete()
+    skill = Skill.objects.create(
+        user=opts.admin, tier="user", name=private, description="visible in ai", steps=[])
+
+    # Additive: `default` and `detail` stay as shipped, and only the assistant's
+    # own graph selection, called in-process here, reads `ai`.
+    original = Skill.RestMeta
+    graphs = dict(original.GRAPHS)
+    graphs["ai"] = {"fields": ["id", "tier", "description"]}
+    Skill.RestMeta = type("RestMeta", (original,), {"GRAPHS": graphs})
+    try:
+        title, message, error = build_context("assistant.Skill", skill.pk)
+    finally:
+        Skill.RestMeta = original
+    shown_title, shown_message, shown_error = build_context("assistant.Skill", skill.pk)
+    pk = skill.pk
+    skill.delete()
+
+    assert_eq(error, None, f"a graph without the name must still build a context, got: {error}")
+    assert_true("visible in ai" in message,
+                f"the context should carry the ai graph's fields, got: {message[:300]}")
+    assert_true(private not in title,
+                f"a name the graph leaves out reached the conversation title: {title}")
+    assert_true(private not in message,
+                f"a name the graph leaves out reached the context heading: {message[:300]}")
+    assert_eq(title, f"Skill #{pk}",
+              "with no name in the graph the title is the model and its id")
+
+    assert_eq(shown_error, None, f"the default graph must build a context, got: {shown_error}")
+    assert_true(private in shown_title and f"## {shown_title}" in shown_message,
+                f"a name the graph does serialize still titles the context, got: {shown_title}")
+
+
+@th.tier("bug")
+@th.django_unit_test()
+def test_context_generic_title_reads_serialized_data_only(opts):
+    """`title` wins over `name`, and neither is used unless the graph serialized it."""
+    from mojo.apps.assistant.services.context import _generic_title
+
+    assert_eq(_generic_title("app.Thing", 7, {"id": 7, "public": "visible"}), "Thing #7",
+              "with no title or name in the serialized row the title is the model and its id")
+    assert_eq(_generic_title("app.Thing", 7, {"title": "A title", "name": "A name"}),
+              "Thing #7: A title", "a serialized title heads the context")
+    assert_eq(_generic_title("app.Thing", 7, {"title": "", "name": "A name"}),
+              "Thing #7: A name", "an empty title falls back to the serialized name")
+    assert_eq(_generic_title("app.Thing", 7, {"name": {"nested": "shape"}}), "Thing #7",
+              "a name that is not text is not put in a heading")
+    assert_eq(_generic_title("app.Thing", 7, {"title": "x" * 300}), "Thing #7: " + "x" * 100,
+              "a long title is cut to 100 characters")

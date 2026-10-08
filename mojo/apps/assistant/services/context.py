@@ -2,11 +2,13 @@
 Build context messages for assistant conversations from any MojoModel instance.
 
 Supports a registry of rich context builders for models that need deeper context
-(e.g., tickets with notes, incidents with history/events). Falls back to generic
-`to_dict(graph="detail")` serialization for any other MojoModel.
+(e.g., tickets with notes, incidents with history/events). Any other MojoModel
+falls back to generic serialization through the server-selected assistant graph
+(`RestMeta.GRAPHS["ai"]`, else `"default"`) — never the wider `detail` graph.
 """
 from django.apps import apps
 
+from mojo.apps.assistant.services import model_serialization
 from mojo.helpers import logit
 
 logger = logit.get_logger("assistant", "assistant.log")
@@ -58,9 +60,13 @@ def resolve_model(model_string):
     return model, None
 
 
-def build_context(model_string, pk):
+def build_context(model_string, pk, request=None):
     """
     Build a context message for a model instance.
+
+    ``request`` is the caller's request. The generic fallback uses it to check
+    ``GRAPH_PERMISSIONS`` on the graph it serializes through; without one, a
+    gated graph is refused.
 
     Returns (title, message, error).
     - On success: (title_str, message_str, None)
@@ -81,26 +87,22 @@ def build_context(model_string, pk):
         return _CONTEXT_BUILDERS[key](instance)
 
     # Generic fallback
-    return _build_generic_context(model_string, instance)
+    return _build_generic_context(model_string, instance, request=request)
 
 
-def _build_generic_context(model_string, instance):
-    """Generic context from to_dict serialization."""
-    # Try "detail" graph first, fall back to "default"
-    graphs = getattr(instance.RestMeta, "GRAPHS", {})
-    graph = "detail" if "detail" in graphs else "default"
-
+def _build_generic_context(model_string, instance, request=None):
+    """Generic context through the server-selected assistant graph."""
     try:
-        data = instance.to_dict(graph=graph)
+        data = model_serialization.serialize_instance(instance, request=request)
     except Exception:
         logger.exception("Failed to serialize %s pk=%s", model_string, instance.pk)
         return None, None, f"Failed to serialize {model_string}"
 
-    # Strip sensitive fields
+    # Strip sensitive fields — defense in depth behind the graph
     if isinstance(data, dict):
         data = _strip_sensitive(data)
 
-    title = _generic_title(model_string, instance, data)
+    title = _generic_title(model_string, instance.pk, data)
     lines = [f"I need help with this {model_string.split('.')[-1]}:\n"]
     lines.append(f"## {title}\n")
 
@@ -124,13 +126,18 @@ def _strip_sensitive(data):
     return cleaned
 
 
-def _generic_title(model_string, instance, data):
-    """Generate a reasonable title for a generic model."""
+def _generic_title(model_string, pk, data):
+    """Title for a generic model: its `title` or `name` as the graph serialized it.
+
+    It takes the serialized ``data`` and not the instance, so it cannot read a
+    field the graph left out. The title heads the context message and names
+    the conversation, so a name the graph omits must be missing from both.
+    """
     model_name = model_string.split(".")[-1]
-    label = getattr(instance, "title", None) or getattr(instance, "name", None) or ""
-    if label:
-        return f"{model_name} #{instance.pk}: {label[:100]}"
-    return f"{model_name} #{instance.pk}"
+    label = data.get("title") or data.get("name")
+    if isinstance(label, str) and label:
+        return f"{model_name} #{pk}: {label[:100]}"
+    return f"{model_name} #{pk}"
 
 
 # ---------------------------------------------------------------------------
