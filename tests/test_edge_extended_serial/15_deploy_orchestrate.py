@@ -1301,6 +1301,70 @@ def test_mid_canary_lost_lease_with_newer_target_is_superseded(opts):
     deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
 
 
+@th.django_unit_test("orchestrate: a successor seen mid-canary stays a supersession when its target key is gone at the end")
+def test_mid_canary_successor_whose_target_then_disappears_is_superseded(opts):
+    import contextlib
+
+    from mojo.apps.edge.services import deploy
+
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me, FLEET_ID])
+    _publish_orchestrate(SHA_A, deployment)
+    newer = _successor(opts)
+    reads = []
+    read_target = deploy.get_target
+    seen = []
+
+    def expired_after_a_push(*args, **kwargs):
+        reads.append(1)
+        if len(reads) == 1:
+            return dict(state=deploy.STATUS_MIGRATING, sha=SHA_A,
+                        deployment=str(deployment.pk))
+        if len(reads) == 2:
+            deploy.get_client().delete(deploy.STATUS_KEY)
+            deploy.set_target(SHA_B, actor="test", deployment_id=newer.pk)
+        return None
+
+    def target_gone_once_seen(*args, **kwargs):
+        if seen:
+            # The read after the one that showed B: the key expired, or Redis
+            # was flushed, between the canary loop and the terminal.
+            deploy.get_client().delete(deploy.TARGET_KEY)
+            return None
+        current = read_target(*args, **kwargs)
+        if current and current.get("deployment") == str(newer.pk):
+            seen.append(1)
+        return current
+
+    incidents = mock.Mock(return_value=mock.Mock(pk=4857))
+    with contextlib.ExitStack() as stack:
+        calls = stack.enter_context(th.capture_publishes(_deploy_publish))
+        for patch in _orchestrate_patches(
+                opts, incidents,
+                canary_timeout=dict(return_value=120),
+                get_status=dict(side_effect=expired_after_a_push),
+                get_target=dict(side_effect=target_gone_once_seen)):
+            stack.enter_context(patch)
+        _drain(opts)
+
+    th.assert_eq(seen, [1], "this test needs the canary loop to have seen the newer target")
+    th.assert_true(not incidents.called,
+                   f"a deploy replaced mid-canary files no incident, "
+                   f"got {incidents.call_args_list!r}")
+    deployment.refresh_from_db()
+    last = (deployment.transitions or [{}])[-1]
+    th.assert_eq(deployment.status, "superseded",
+                 f"a successor that was seen means superseded even when its target key "
+                 f"is gone at the end, got {deployment.status!r} {last!r}")
+    th.assert_eq((last.get("detail") or {}).get("next_deployment"), str(newer.pk),
+                 "the row names the deployment that replaced it")
+    chained = [c for c in calls if c.get("func") == deploy.DEPLOY_ORCHESTRATE_JOB]
+    th.assert_eq(chained, [], f"with no target left nothing is chained, got {chained!r}")
+    newer.refresh_from_db()
+    th.assert_true(newer.status not in ("failed", "superseded"),
+                   f"the newer deployment's own row is untouched, got {newer.status!r}")
+    deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
+
+
 @th.django_unit_test("the stale sweep files one incident when two sweeps hold the same snapshot")
 def test_overlapping_sweeps_report_once(opts):
     """Two sweeps read the same requested row before either closes it: the

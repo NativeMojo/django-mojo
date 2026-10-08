@@ -331,9 +331,16 @@ def deploy_orchestrate(job):
             newer = deploy.get_target()
             if newer and newer.get("deployment") != deployment_id:
                 # The lease is gone but a newer target is recorded: that is a
-                # successor, not a stall. The terminal's chain check marks
-                # this deploy superseded and starts the newer one.
+                # successor, not a stall. Recorded here, while it is seen: the
+                # target key can be gone again by the terminal's own read, and
+                # a superseded row is not changed by the failure path. The
+                # terminal's chain check starts the newer one if it is still
+                # the target.
                 target_moved = True
+                platform_deploy.transition(
+                    deployment_id, "superseded",
+                    {"reason": "target_moved_mid_canary",
+                     "next_deployment": newer.get("deployment")})
                 break
             # The lease expired (or was flushed) and NOBODY holds it: there is
             # no newer deploy, so this is a stall to report, not a
@@ -533,7 +540,12 @@ def _deploy_terminal(sha, me, framework, released, deployment_id,
     detail = {"reason": reason}
     if diagnosis:
         detail["diagnosis"] = diagnosis
-    platform_deploy.transition(deployment_id, "failed", detail)
+    if not platform_deploy.transition(deployment_id, "failed", detail):
+        # Already terminal. A deploy recorded as superseded when its successor
+        # was seen stays that, even though the successor's target is gone.
+        record = platform_deploy.get(deployment_id)
+        if record is not None and record.status == "superseded":
+            return f"superseded:{sha}"
     return f"failed:{sha}"
 
 

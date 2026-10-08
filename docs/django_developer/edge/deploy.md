@@ -176,7 +176,7 @@ The orchestrator now tells two things apart that used to share one branch:
 | Lease state mid-canary | Recorded as | Incident |
 |---|---|---|
 | names **another** deployment | `superseded` / `lease_superseded` — a newer deploy took the plane; stand down quietly | none |
-| **absent**, and the target names **another** deployment | `superseded` — a newer push was recorded and this deploy's lease then expired; the terminal chains the newer target | none |
+| **absent**, and the target names **another** deployment | `superseded` / `target_moved_mid_canary`, recorded when the newer target is seen — a newer push was recorded and this deploy's lease then expired. The terminal chains the newer target if it is still recorded; if that key is gone too, the row stays `superseded` and nothing is chained | none |
 | **absent** (expired or flushed, nobody armed) | `failed` / `lease_expired_mid_canary` — the canary was told to update and may still be doing so, no other node was released, and nothing will retry by itself | `Edge deploy lost its coordination lease`, naming the canary being waited on |
 
 The same distinction applies before the canary is dispatched: coordination
