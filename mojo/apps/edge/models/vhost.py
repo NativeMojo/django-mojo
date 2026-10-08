@@ -153,8 +153,8 @@ class Vhost(models.Model, MojoModel):
         DELETE_PERMS = ["manage_dns", "security"]
         LOG_CHANGES = True
         SEARCH_FIELDS = ["label", "kind", "pool"]
-        # A declared NO_SAVE_FIELDS list REPLACES the framework default, so the
-        # defaults have to be re-included.
+        # A declared NO_SAVE_FIELDS list ADDS to the framework's always-protected
+        # names (id, pk, created, uuid); restating them here is harmless.
         #
         # `domain` is deliberately NOT here. NO_SAVE_FIELDS is applied on the
         # CREATE path too (mojo/models/rest.py), so pinning it would make a
