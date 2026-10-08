@@ -20,7 +20,7 @@ import uuid
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
-TESTIT_TIER = "core"
+TESTIT_TIER = "framework"
 
 PWORD = "pc##mojo99Check"
 NEW_PWORD = "pc##Changed77Pass"
