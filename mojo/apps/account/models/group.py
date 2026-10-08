@@ -330,21 +330,32 @@ class Group(MojoSecrets, MojoModel):
         # compared is what is replaced: a save that began before another one
         # finished waits for it, then sees its result.
         with transaction.atomic():
-            row, old_parent_id = None, None
+            row, old_parent_id, stored_metadata = None, None, {}
             if self.pk is not None:
                 row = type(self).objects.select_for_update().filter(pk=self.pk).values_list(
                     "metadata", "parent_id").first()
+            # A REST save: its permission was judged before this lock, on
+            # rows that may have changed since. It is judged again below.
+            judged = self.__dict__.pop("_link_guard_pending", False)
             if row is not None:
                 stored_metadata, old_parent_id = row
                 if not isinstance(stored_metadata, dict):
                     stored_metadata = {}
                 self._keep_unchanged_link_settings(stored_metadata, old_parent_id)
-                if self.__dict__.pop("_link_guard_pending", False):
-                    # A REST save: its permission was judged before this lock,
-                    # on a row that may have changed since. Judge it again.
-                    self._guard_webapp_url_and_tree(False, stored=(stored_metadata, old_parent_id))
-            if writes_parent and (self.pk is None or old_parent_id != self.parent_id):
+            if writes_parent and (row is None or old_parent_id != self.parent_id):
+                # Locks the new parent and every ancestor of it, to the write.
                 group_hierarchy.validate_parent(self, self.parent, lock=True)
+                if judged and old_parent_id is not None:
+                    # The parent it leaves is judged too: lock its chain as well.
+                    group_hierarchy.ancestors(
+                        type(self)(pk=old_parent_id), include_self=True, lock=True)
+            if judged:
+                # After the locks, so no parent involved can move between
+                # this decision and the write (#6364).
+                if row is not None:
+                    self._guard_webapp_url_and_tree(False, stored=(stored_metadata, old_parent_id))
+                else:
+                    self._guard_parent_change(True, None, locked=True)
             result = super().save(*args, **kwargs)
         # Only what this save wrote is now known to be stored. An edit it
         # left out is still an edit, for the save that does write it.
@@ -885,7 +896,9 @@ class Group(MojoSecrets, MojoModel):
                 if not isinstance(stored_metadata, dict):
                     stored_metadata = {}
                 self._keep_unchanged_link_settings(stored_metadata, stored_parent_id)
-                self._link_guard_pending = True
+        if stored is None:
+            # save() judges it again, for a new group too
+            self._link_guard_pending = True
         metadata = self.metadata if isinstance(self.metadata, dict) else {}
         # _ABSENT, not None: a stored null is a value, and it hides the
         # parent's address from get_metadata_value.
@@ -903,13 +916,93 @@ class Group(MojoSecrets, MojoModel):
             old_top = self.pk
             if stored_parent_id is not None:
                 old_top = type(self).objects.get(pk=stored_parent_id).top_most_parent.pk
-            new_top = self.pk if self.parent is None else self.parent.top_most_parent.pk
+            new_parent = self._parent_as_stored(stored is not None)
+            new_top = self.pk if new_parent is None else new_parent.top_most_parent.pk
             if old_top != new_top and not self._has_global_permission(WEBAPP_URL_PERMS):
                 raise merrors.PermissionDeniedException(
                     "Moving a group to a different group tree requires the "
                     "global manage_groups (or groups) permission")
+        self._guard_parent_change(created, stored_parent_id, locked=stored is not None)
         # logged after the save lands
         self._webapp_url_change = changes or None
+
+    def _parent_as_stored(self, locked):
+        """The new parent. Under the lock it is read again by primary key:
+        the one this instance carries was loaded before the lock, with its
+        chain."""
+        if self.parent_id is None:
+            return None
+        if not locked:
+            return self.parent
+        return type(self).objects.filter(pk=self.parent_id).first()
+
+    def _may_manage_tree_position(self, group):
+        """True when the caller holds save rights on `group` itself: through a
+        member row of it or of an ancestor, or as a group API key or group
+        token confined to a tree that holds it.
+
+        A `manage_group` on the caller's own user row does not count
+        (check_user=False). It passes for every group there is, so it says
+        nothing about this one. Nothing at all outside a request.
+        """
+        request = self.active_request
+        if request is None or group is None:
+            return False
+        perms = self.RestMeta.SAVE_PERMS
+        identity = restricted_identity(request)
+        if identity is not None:
+            return identity.is_group_allowed(group) and identity.has_permission(perms)
+        return group.user_has_permission(request.user, perms, check_user=False)
+
+    def _guard_parent_change(self, created, stored_parent_id, locked=False):
+        """Refuse a place in the tree the caller has no authority over.
+
+        A new group under a parent, or a move from one parent to another
+        inside one tree, needs save rights on every parent involved (see
+        _may_manage_tree_position) or the global permission. A move that
+        leaves "no parent", arrives at it or crosses to another tree was
+        judged by _guard_webapp_url_and_tree, which calls this.
+
+        Compared against the stored parent, not changed_fields: a post that
+        repeats the current parent is not a move. `locked` is the pass in
+        save(), for a move and for a new group: this row and the chains of
+        every parent involved are locked by then, and the new parent is read
+        again (see _parent_as_stored).
+        """
+        if created or not self.pk:
+            if self.parent_id is None or self._has_global_permission(WEBAPP_URL_PERMS):
+                return
+            if not self._may_manage_tree_position(self._parent_as_stored(locked)):
+                self._refuse_parent_change(None, "Creating a group under this parent")
+            return
+        if stored_parent_id is None or self.parent_id is None \
+                or stored_parent_id == self.parent_id:
+            return
+        if self._has_global_permission(WEBAPP_URL_PERMS):
+            return
+        groups = type(self).objects
+        old_parent = groups.filter(pk=stored_parent_id).first()
+        new_parent = self._parent_as_stored(locked)
+        if old_parent is None or new_parent is None:
+            self._refuse_parent_change(stored_parent_id, "Moving a group to this parent")
+        if old_parent.top_most_parent.pk != new_parent.top_most_parent.pk:
+            # only under the lock: the new parent left the tree after the
+            # first pass compared the tops
+            raise merrors.PermissionDeniedException(
+                "Moving a group to a different group tree requires the "
+                "global manage_groups (or groups) permission")
+        if not (self._may_manage_tree_position(old_parent)
+                and self._may_manage_tree_position(new_parent)):
+            self._refuse_parent_change(stored_parent_id, "Moving a group to another parent")
+
+    def _refuse_parent_change(self, stored_parent_id, what):
+        logit.warning(
+            f"group:parent_change_refused group={self.pk} "
+            f"old_parent={stored_parent_id} new_parent={self.parent_id} "
+            f"by={getattr(self.active_user, 'pk', None)}")
+        raise merrors.PermissionDeniedException(
+            f"{what} requires manage_group as a member of every parent "
+            "involved, or the global manage_groups (or groups) permission")
 
     def on_rest_pre_save(self, changed_fields, created):
         self._guard_webapp_url_and_tree(created)

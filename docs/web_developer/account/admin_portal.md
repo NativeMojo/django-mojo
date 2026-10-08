@@ -582,6 +582,11 @@ POST /api/user/<id>
 
 Requires `manage_users` or `users` permission.
 
+**Changing a group's parent** in the group form follows the rule in
+[Hierarchical Groups](group.md#hierarchical-groups): a move inside a tree needs
+a member grant on both parents, anything else needs global
+`manage_groups`/`groups`, and a refused save returns a `403`.
+
 **Update a group member's permissions:**
 
 ```

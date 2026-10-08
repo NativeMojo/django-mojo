@@ -228,8 +228,26 @@ boundary.
 Moving a group to a **different tree** — giving a top-level group a parent,
 setting `parent` to `null`, or choosing a parent under another top-level group
 — needs the global `manage_groups` or `groups` permission and returns a `403`
-without it. Moving a sub-group to another parent inside the same tree needs
-only the ordinary write grant.
+without it.
+
+Moving a sub-group to another parent **inside the same tree** needs
+`manage_group` (or `manage_groups`/`groups`) held **as a member** of both the
+parent it leaves and the parent it joins. A grant on a group higher up covers
+the parents below it, so a manager of the top group can move any sub-group in
+the tree. A manager of the sub-group alone, or of only one of the two parents,
+gets a `403` and the parent is unchanged. Creating a group with a `parent`
+needs the same grant on that parent. Three details:
+
+- A global `manage_group` on the user's own record lets them save any group,
+  but it is not a grant on a parent: such a user needs the member grant too,
+  or the global `manage_groups`/`groups`, which passes everywhere.
+- The **nearest** membership decides. A manager of the top group who also has
+  a plain member row, with no grant, on one of the two parents is refused.
+- A group API key may move a group only between parents inside its own tree,
+  and can never move the group it belongs to.
+
+Posting the `parent` a group already has is not a move and is never refused,
+so a form that sends every field on save keeps working.
 
 ---
 
