@@ -193,7 +193,54 @@ code = auth_handoff.create_handoff_code(request.user, destination=destination, i
 # Consumed by the public POST /api/auth/exchange handler
 data = auth_handoff.consume_handoff_code(code)
 # -> {"uid": <id>, "ip": "...", "dest": "https://app.example.com/"} or None
+#    plus "cc": "<S256 challenge>" when the code was minted with one
 ```
+
+### PKCE: binding a code to the party that asked for it
+
+`create_handoff_code(..., code_challenge=...)` stores an already-validated S256
+challenge in the record as `cc`. The handlers use four service functions:
+
+| Function | Answers |
+|---|---|
+| `get_pkce_mode()` | `"off"` or `"native"`, from `AUTH_HANDOFF_REQUIRE_PKCE`. File-only; an unknown value is logged and read as `"native"`. |
+| `is_app_destination(dest)` | False only for http/https on a host that is not loopback. A custom scheme, `127.0.0.1` in any spelling a browser accepts (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`), `[::1]`, `0.0.0.0`, `localhost`, an absent destination and one that does not parse are all True. So is a web host this function cannot read the way a browser does: one with a percent-escape, a non-ASCII character or a backslash. A name that only *resolves* to loopback is not detected; refuse it with the allowlist. |
+| `pkce_required(dest)` | `get_pkce_mode() == "native" and is_app_destination(dest)`. |
+| `check_exchange(data, code_verifier=NOT_SENT)` | True when the verifier is what the consumed record calls for. Pass `NOT_SENT` when the request has no such field; a field sent as `null` was sent. Never raises. |
+| `request_facts(request)` | The request facts a handoff incident keeps: address, path, method, user agent, signed-in user. Never the query string or body. |
+
+`check_exchange` has three cases. No `cc` and no verifier field: True, a client
+from before PKCE. No `cc` and a verifier field of any value, `null` included:
+**False**, because accepting it would let
+an attacker mint a code for their own account and feed it to the real app. A
+`cc`: the verifier must be its S256 pre-image. The validation and comparison
+are the OAuth server's own (`oauth_server.codes.validate_pkce_challenge`,
+`verify_pkce`); there is one implementation.
+
+`on_auth_exchange` runs the check right after the code is consumed and before
+the user is looked up, so a caller without the secret cannot tell a disabled
+account (403) from a bad code (401). A failed check spends the code. A code
+minted with a challenge needs the verifier in **every** mode; the setting only
+decides whether a code may be minted without one.
+
+Presence is tested, not value: `code_challenge`, `code_challenge_method` and
+`code_verifier` sent as JSON `null` are fields that were sent. A null challenge
+or method is a `400`; a null verifier fails the check.
+
+The three PKCE incidents are filed **without** the request object. The incident
+reporter stores the query string of a request it is handed, and both endpoints
+accept their fields there, so the code, the challenge and the verifier would be
+kept. `request_facts` passes the address, path, method, user agent and user
+instead.
+
+**What PKCE does not cover.** A sign-in the hostile app starts itself: it
+supplies its own challenge and holds the verifier (RFC 8252 section 8.6).
+django-mojo has no consent step of its own; a project that hands codes to apps
+must have its page ask the person before it calls `/api/auth/handoff`.
+
+Rolling it out: leave the setting `off`, ship apps and pages that send a
+challenge, watch `auth:handoff_pkce_missing` until it goes quiet, then set
+`"native"`.
 
 Codes are 32-hex random strings stored under Redis key `auth:handoff:<code>`,
 with a TTL controlled by the `AUTH_HANDOFF_CODE_TTL` setting (default `60`
@@ -1306,6 +1353,32 @@ group.metadata["webapp_auth_path"] = "/login"  # optional, default /auth
 group.save()
 ```
 
+**Who may set a tenant's address.** The address decides where every account
+of that tenant is sent with a sign-in token, so over REST only a signed-in
+person holding **global** `manage_groups` or `groups`, or a superuser, can
+set, change or clear either key. A member-level grant is not enough, whatever
+it is named, and a group API key or a group token never passes, even one that
+acts as a member who holds the permission. The same permission is needed to
+move a group into, out of or between group trees (a change of `parent` that
+changes the top of the tree), because a group is trusted by the tree it sits
+in. Moving a sub-group inside its own tree is not affected. An allowed change
+writes one `group:webapp_url_changed` log row with the old and new values.
+
+The guard is in `Group.on_rest_pre_save`, so it covers every save that goes
+through the REST machinery: a merge, a `"__replace": true` payload, a dotted
+key, `metadata` sent as a JSON string, a nested save through another row, and
+`update_from_dict` / `create_from_dict`. Called with no request (a job, a
+management command, a shell), those two are **refused** when they change either
+key or the tree: server code that sets a tenant's address assigns
+`group.metadata[...]` and calls `group.save()`, as above. A plain ORM write is
+not guarded.
+
+The decision that counts is made in `Group.save()`, on the locked row, so a
+save that overlaps an operator's change cannot undo it: a value the saving
+instance did not change is taken from the stored row, and a value it did
+change is judged against what is stored at that moment. See
+[group.md](group.md#keys-that-need-a-global-permission).
+
 List an operator frontend (file-only, so a database row cannot widen it):
 
 ```python
@@ -1344,6 +1417,30 @@ the link goes to the default frontend instead and an incident names the host:
 | A request `webapp_base_url` with a path | The path is dropped | Use `WEBAPP_AUTH_PATH` or the tenant's `webapp_auth_path` |
 | A custom-scheme (deep-link) base in a request or in tenant metadata | Not accepted | Use an `https` frontend origin |
 | A tenant `webapp_base_url` with a query, a fragment, credentials or no scheme (`//host`) | Skipped; the link goes to the next source | Store a plain `https://host[/path]` or a relative path such as `/portal` |
+
+**Upgrading to the release that carries #6350.** A stored address keeps
+working exactly as before, whoever stored it; nothing records who wrote it.
+Before this release anyone who could save a group could store one, so list
+every group that has one and check each:
+
+```python
+from mojo.apps.account.models import Group
+
+for key in ("webapp_base_url", "webapp_auth_path"):
+    for group in Group.objects.filter(metadata__has_key=key):
+        print(group.pk, group.name, group.parent_id, key, group.metadata.get(key))
+```
+
+An address on a **sub-group** deserves the closest look: the public send
+endpoints accept `?group=`, so any anonymous caller can select that sub-group's
+address for every account of its tenant. Remove any you did not put there.
+After the upgrade:
+
+| Before | Now | What to do |
+|---|---|---|
+| A tenant manager (member-level `manage_group`) or a group API key sets `webapp_base_url` / `webapp_auth_path` over REST | `403` | Set it as a holder of global `manage_groups` / `groups` |
+| The same caller moves a group to another tree, or detaches it from its tree | `403` | Same |
+| Server code calls `group.update_from_dict({"metadata": {"webapp_base_url": ...}})` outside a request | `PermissionDeniedException` | Assign `group.metadata[...]` and call `group.save()` |
 
 ## Failed Login Protection
 
