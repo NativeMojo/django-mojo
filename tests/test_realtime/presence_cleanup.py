@@ -961,38 +961,65 @@ def _late_write_state(cid, uid):
     return found
 
 
+class _WatchedLock:
+    """The handler's presence lock, telling the test when someone has to
+    wait for it: cleanup, behind a write that is still running."""
+
+    def __init__(self):
+        import threading
+        self._lock = threading.Lock()
+        self.waited_for = threading.Event()
+
+    def __enter__(self):
+        if not self._lock.acquire(blocking=False):
+            self.waited_for.set()
+            self._lock.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self._lock.release()
+
+
 def _cancelled_with_a_write_in_flight(opts, name, chosen):
     """Cancel the handler while one Redis command of its own is still running
-    in the executor, let the handler finish, then let the command finish.
-    Returns what was left right after the handler finished, and what is left
-    once the late command and whatever follows it have run."""
+    in the executor, and release the command only once cleanup has either
+    finished or is waiting behind it. Returns what Redis holds for the
+    connection after the handler and the late command have both finished."""
     uid = opts.pc_uid
 
     async def scenario():
         redis = _HoldingRedis(name, chosen)
         session = _Session(opts.pc_token, redis_client=redis)
+        lock = session.handler._presence_lock = _WatchedLock()
         session.socket.client_send({"type": "authenticate", "token": opts.pc_token, "prefix": "bearer"})
         session.task = asyncio.create_task(session.handler.handle_connection())
+        waiting = None
         try:
-            assert await _wait_until(redis.entered.is_set, 10), f"the handler never reached the held {name}"
+            assert await asyncio.to_thread(redis.entered.wait, 10), f"the handler never reached the held {name}"
             session.task.cancel()
+            # Either cleanup runs to its end while the command is held, or it
+            # waits for the lock the command's write holds. Not before one of
+            # the two may the command finish.
+            waiting = asyncio.create_task(asyncio.to_thread(lock.waited_for.wait, 30))
+            await asyncio.wait({session.task, waiting}, timeout=30, return_when=asyncio.FIRST_COMPLETED)
+            assert session.task.done() or lock.waited_for.is_set(), (
+                "cleanup neither finished nor waited for the held command")
+            assert not redis.done.is_set(), "the held command must still be running at this point"
+            redis.release.set()
             try:
                 await asyncio.wait_for(session.task, timeout=15)
             except asyncio.CancelledError:
                 pass
-            assert session.task.done(), "the cancelled handler must finish while the command is still held"
-            assert not redis.done.is_set(), "the held command must still be running when cleanup has finished"
-            before = await asyncio.to_thread(_late_write_state, session.connection_id, uid)
-            redis.release.set()
-            assert await _wait_until(redis.done.is_set, 10), "the held command must finish once released"
-            await _wait_until(lambda: not _late_write_state(session.connection_id, uid), 5)
-            after = await asyncio.to_thread(_late_write_state, session.connection_id, uid)
-            return before, after
+            assert session.task.done(), "the cancelled handler must finish"
+            assert await asyncio.to_thread(redis.done.wait, 10), "the held command must finish once released"
+            return await asyncio.to_thread(_late_write_state, session.connection_id, uid)
         finally:
             redis.release.set()
+            lock.waited_for.set()
+            if waiting is not None:
+                await waiting
             if not session.task.done():
                 session.task.cancel()
-            await asyncio.sleep(0.1)
             cleaner = _redis()
             cleaner.delete(_record_key(session.connection_id))
             cleaner.srem(_topic_key(f"{USER_TYPE}:{uid}"), session.connection_id)
@@ -1004,37 +1031,33 @@ def _cancelled_with_a_write_in_flight(opts, name, chosen):
         _reset(uid)
 
 
-@th.django_unit_test("#4567: a connection record written after a cancelled handler's cleanup is removed")
-def test_late_connection_record_is_removed(opts):
-    before, after = _cancelled_with_a_write_in_flight(
+@th.django_unit_test("#4567: a record write still running when the handler is cancelled leaves no record")
+def test_record_write_in_flight_at_cancel_leaves_no_record(opts):
+    found = _cancelled_with_a_write_in_flight(
         opts, "setex", lambda seen, args: seen == 1)
-    assert before == [], f"cleanup itself must leave nothing: {before}"
-    assert after == [], f"the first record write finished after cleanup and stayed: {after}"
+    assert found == [], f"the first record write was still running at the cancel and its record stayed: {found}"
 
 
-@th.django_unit_test("#4567: an online membership written after a cancelled handler's cleanup is removed")
-def test_late_online_membership_is_removed(opts):
+@th.django_unit_test("#4567: a registration still running when the handler is cancelled leaves no online member")
+def test_registration_in_flight_at_cancel_leaves_no_member(opts):
     # The second script call is the registration; the first is the admission.
-    before, after = _cancelled_with_a_write_in_flight(
+    found = _cancelled_with_a_write_in_flight(
         opts, "eval", lambda seen, args: seen == 2)
-    assert before == [], f"cleanup itself must leave nothing: {before}"
-    assert after == [], f"the registration finished after cleanup and stayed: {after}"
+    assert found == [], f"the registration was still running at the cancel and its member stayed: {found}"
 
 
-@th.django_unit_test("#4567: an admission that finishes after a cancelled handler's cleanup is removed")
-def test_late_admission_is_removed(opts):
-    before, after = _cancelled_with_a_write_in_flight(
+@th.django_unit_test("#4567: an admission still running when the handler is cancelled leaves no online member")
+def test_admission_in_flight_at_cancel_leaves_no_member(opts):
+    found = _cancelled_with_a_write_in_flight(
         opts, "eval", lambda seen, args: seen == 1)
-    assert before == [], f"cleanup itself must leave nothing: {before}"
-    assert after == [], f"the admission finished after cleanup and stayed: {after}"
+    assert found == [], f"the admission was still running at the cancel and its member stayed: {found}"
 
 
-@th.django_unit_test("#4567: a topic membership written after a cancelled handler's cleanup is removed")
-def test_late_topic_membership_is_removed(opts):
-    before, after = _cancelled_with_a_write_in_flight(
+@th.django_unit_test("#4567: a topic add still running when the handler is cancelled leaves no topic member")
+def test_topic_add_in_flight_at_cancel_leaves_no_member(opts):
+    found = _cancelled_with_a_write_in_flight(
         opts, "sadd", lambda seen, args: str(_text(args[0])).startswith("realtime:topic:"))
-    assert before == [], f"cleanup itself must leave nothing: {before}"
-    assert after == [], f"the topic add finished after cleanup and stayed: {after}"
+    assert found == [], f"the topic add was still running at the cancel and its member stayed: {found}"
 
 
 @th.django_unit_test("#4567: a handler cancelled between a topic's Redis add and its bookkeeping leaves no membership")

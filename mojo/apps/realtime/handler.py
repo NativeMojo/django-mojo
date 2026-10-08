@@ -35,6 +35,9 @@ CONNECTION_TTL_SECONDS = 300         # connection record TTL
 ONLINE_TTL_SECONDS = 300             # user online presence TTL
 TOPIC_TTL_SECONDS = 300              # topic membership TTL
 PRESENCE_REFRESH_MIN_INTERVAL = 30   # throttle presence refreshes
+
+# Returned by a guarded write that wrote nothing because the handler is closing.
+_WRITE_SKIPPED = object()
 ACTIVITY_CHECK_SECONDS = 5           # longest gap between idle checks
 WS_CONNECT_WINDOW_SECONDS = 60       # fixed window for the pre-accept rate check
 
@@ -291,23 +294,20 @@ class WebSocketHandler:
                 await asyncio.gather(*pending, return_exceptions=True)
             await self.cleanup_connection()
 
-    def _undo_if_closing(self, undo, what):
-        """Called in the executor thread right after a write of this
-        connection's own Redis state. Cancelling a task does not stop a call
-        already running in the executor, so such a write can land after
-        cleanup's removals (#4567). `_closing` is set before cleanup removes
-        anything: a write that still sees it unset is removed by cleanup, and
-        one that sees it set removes what it wrote, here."""
-        if not getattr(self, "_closing", False):
-            return
-        try:
-            undo()
-        except Exception:
-            self._log_exception(f"redis cleanup failed: late {what}")
+    def _write_unless_closing(self, write):
+        """Run a Redis write that adds this connection. Called in the
+        executor thread, by every such write.
 
-    def _write_connection_record(self, key, value):
-        self.redis_client.setex(key, CONNECTION_TTL_SECONDS, value)
-        self._undo_if_closing(lambda: self.redis_client.delete(key), "connection record")
+        Cancelling a task does not stop a call already running in the
+        executor, so without this such a write could land after cleanup's
+        removals (#4567). Under the presence lock, like the refresh: the
+        write either finishes before cleanup removes anything, or runs after
+        it and writes nothing. Returns _WRITE_SKIPPED in that case; the
+        caller then does nothing more, with no error and no incident."""
+        with getattr(self, "_presence_lock", None) or threading.Lock():
+            if getattr(self, "_closing", False):
+                return _WRITE_SKIPPED
+            return write()
 
     async def register_connection(self):
         """Register connection in Redis with TTL"""
@@ -324,7 +324,8 @@ class WebSocketHandler:
         try:
             await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: self._write_connection_record(key, json.dumps(connection_data))
+                lambda: self._write_unless_closing(
+                    lambda: self.redis_client.setex(key, CONNECTION_TTL_SECONDS, json.dumps(connection_data)))
             )
         except Exception as e:
             self._log_exception("registration failed")
@@ -348,7 +349,8 @@ class WebSocketHandler:
         try:
             await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: self._write_connection_record(key, json.dumps(connection_data))
+                lambda: self._write_unless_closing(
+                    lambda: self.redis_client.setex(key, CONNECTION_TTL_SECONDS, json.dumps(connection_data)))
             )
         except Exception as e:
             self._log_exception("update failed")
@@ -361,6 +363,8 @@ class WebSocketHandler:
         the admission script: a prune can have removed this connection since
         its admission, and another may hold its place by now (#4567). Returns
         False when the set is full without it; the caller refuses the socket.
+        Returns _WRITE_SKIPPED when the handler is closing: nothing is written
+        and nobody is refused.
         A Redis error stays fail-open: when the script itself fails, the
         plain add, so the socket is still registered.
         """
@@ -386,11 +390,7 @@ class WebSocketHandler:
             return True
 
         def get_and_update():
-            try:
-                return register()
-            finally:
-                self._undo_if_closing(
-                    lambda: self.redis_client.srem(key, self.connection_id), "online member")
+            return self._write_unless_closing(register)
 
         return await asyncio.get_event_loop().run_in_executor(None, get_and_update)
 
@@ -575,7 +575,7 @@ class WebSocketHandler:
         # simultaneous connects cannot pass the cap between them.
         max_connections = getattr(self, "max_connections", WS_MAX_CONNECTIONS)
 
-        def admit_connection():
+        def admit():
             try:
                 current = presence.prune(self.redis_client, online_key)
                 admitted = presence.admit(
@@ -586,10 +586,14 @@ class WebSocketHandler:
                 # Fail open: a Redis error must never refuse every socket.
                 self._log_exception("ws connection admission failed — failing open")
                 return True, 0
-            finally:
-                self._undo_if_closing(
-                    lambda: self.redis_client.srem(online_key, self.connection_id), "online member")
-        admitted, current = await asyncio.get_event_loop().run_in_executor(None, admit_connection)
+
+        def admit_connection():
+            return self._write_unless_closing(admit)
+        admission = await asyncio.get_event_loop().run_in_executor(None, admit_connection)
+        if admission is _WRITE_SKIPPED:
+            # The handler is closing: nothing was written, nobody is refused.
+            return
+        admitted, current = admission
         if admitted:
             self._online_key = online_key
             # Update Redis state. Still before `authenticated`: a prune can
@@ -598,7 +602,10 @@ class WebSocketHandler:
             # registration is a second admission, and a connection refused
             # there was never announced as connected.
             await self.update_connection_auth()
-            if not await self.register_user_online():
+            registered = await self.register_user_online()
+            if registered is _WRITE_SKIPPED:
+                return
+            if not registered:
                 admitted, current = False, max_connections
         if not admitted:
             self.user = None
@@ -937,7 +944,7 @@ class WebSocketHandler:
         if topic in self.subscribed_topics:
             return
 
-        def subscribe():
+        def add_subscriber():
             try:
                 # Add to topic subscribers (storage key — no isolation prefix)
                 self.redis_client.sadd(f"realtime:topic:{topic}", self.connection_id)
@@ -945,17 +952,18 @@ class WebSocketHandler:
             except Exception as e:
                 self._log(f"Failed to subscribe to topic {topic}: {e}")
                 raise
-            finally:
-                self._undo_if_closing(
-                    lambda: self.redis_client.srem(f"realtime:topic:{topic}", self.connection_id),
-                    f"topic {topic}")
 
         # Pending from before the Redis write until the topic is in
         # `subscribed_topics`: a handler stopped in between still has the
         # membership removed by cleanup (#4567).
         pending = self.__dict__.setdefault("_pending_topics", set())
         pending.add(topic)
-        await asyncio.get_event_loop().run_in_executor(None, subscribe)
+
+        def subscribe():
+            return self._write_unless_closing(add_subscriber)
+
+        if await asyncio.get_event_loop().run_in_executor(None, subscribe) is _WRITE_SKIPPED:
+            return
         try:
             # Subscribe to Redis channel
             await self.pubsub.subscribe(topic_channel(topic))
