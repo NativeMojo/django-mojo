@@ -238,6 +238,18 @@ def test_allow_save_fields_is_limited(opts):
     assert_eq(list(IdOnly.get_no_save_fields()), list(DEFAULTS),
               "ALLOW_SAVE_FIELDS = ['id'] must not make `id` writable")
 
+    # a name the model itself declares stays protected even when it is also allowed
+    for name, other in (("created", "uuid"), ("uuid", "created")):
+        class Overlap(MojoModel):
+            class RestMeta:
+                NO_SAVE_FIELDS = [name]
+                ALLOW_SAVE_FIELDS = ["created", "uuid"]
+
+        effective = Overlap.get_no_save_fields()
+        assert_true(name in effective, f"`{name}` is declared and allowed: the declaration wins")
+        assert_true(other not in effective, f"`{other}` is only allowed, so it is handed back")
+        assert_eq(len(effective), len(set(effective)), "no name is listed twice")
+
 
 @th.django_unit_test("#7189: a groups admin can still change a group's uuid, and nothing else of the four")
 def test_group_uuid_stays_writable(opts):
