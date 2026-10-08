@@ -8,7 +8,8 @@ only the `priority` channel and the engine's own box-direct channel — the
 two channels the deploy plane publishes on — may claim into them.
 
 The live test drives the real main loop in a thread against this checkout's
-Redis, on the same `default` channel `test_core_engine` uses and clears.
+Redis, on an ordinary channel of its own, so it neither consumes nor clears
+work on the `default` channel that `test_core_engine` uses.
 """
 import threading
 import time
@@ -46,7 +47,10 @@ def gated_job(job):
 BLOCKING = f"{__name__}.blocking_job"
 QUICK = f"{__name__}.quick_job"
 GATED = f"{__name__}.gated_job"
-ORDINARY = "default"
+# Publishable without a declaration because of its suffix, and ordinary to the
+# engine under test: only `priority` and the engine's own RUNNER_ID channel
+# may use a reserved slot.
+ORDINARY = "t4857-ordinary-engine"
 RUNNER_ID = "t4857-reserved-engine"
 
 

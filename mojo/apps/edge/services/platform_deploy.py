@@ -1082,9 +1082,13 @@ def reconcile_stale(verify_fleet=None):
                 # of what the fleet is supposed to converge onto.
                 continue
             never_orchestrated = row.status == PlatformDeployment.STATUS_REQUESTED
+            # expected: only the caller that moves the row out of the status
+            # it saw may report. Two sweeps can hold the same snapshot (the
+            # cron claim fails open), and the second must find it changed.
             aged_out = transition(
                 row.pk, PlatformDeployment.STATUS_UNKNOWN,
-                {"reason": "coordination_lease_expired"})
+                {"reason": "coordination_lease_expired"},
+                expected=[row.status])
             changed += int(aged_out)
             if aged_out and never_orchestrated:
                 _report_never_orchestrated(row)

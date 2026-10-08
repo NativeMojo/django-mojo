@@ -176,6 +176,7 @@ The orchestrator now tells two things apart that used to share one branch:
 | Lease state mid-canary | Recorded as | Incident |
 |---|---|---|
 | names **another** deployment | `superseded` / `lease_superseded` — a newer deploy took the plane; stand down quietly | none |
+| **absent**, and the target names **another** deployment | `superseded` — a newer push was recorded and this deploy's lease then expired; the terminal chains the newer target | none |
 | **absent** (expired or flushed, nobody armed) | `failed` / `lease_expired_mid_canary` — the canary was told to update and may still be doing so, no other node was released, and nothing will retry by itself | `Edge deploy lost its coordination lease`, naming the canary being waited on |
 
 The same distinction applies before the canary is dispatched: coordination
@@ -185,12 +186,22 @@ with reason `lease_expired_before_start` and an incident saying the lease died
 `target_moved_before_start` supersession. A genuinely moved target is still
 chained.
 
+A successor is judged before an expiry, from whichever key is still there. One
+key can be gone while the other names the deploy that took over: this deploy's
+lease expired after a newer target was recorded, or a newer deploy holds the
+lease and the target key expired. Both are supersessions with no incident; the
+first chains the newer target, the second leaves the newer deploy's lease
+alone. An expiry is reported only when no remaining key names another
+deployment.
+
 A third case never reaches the orchestrator at all: an orchestrate job that
 waited in the queue past its own lifetime is expired by the engine and never
 runs. The stale sweep (`platform_deploy.reconcile_stale`) closes that
 deployment as `unknown` / `coordination_lease_expired` and, when it had never
-left `requested`, files one `Edge deploy was never orchestrated` incident. The
-three reasons are deliberately distinct:
+left `requested`, files one `Edge deploy was never orchestrated` incident. Only
+the sweep that moves the row out of the status it saw reports: two sweeps
+holding the same snapshot (the cron claim fails open) still file one incident.
+The three reasons are deliberately distinct:
 
 | Reason | Status | Who writes it | Meaning |
 |---|---|---|---|

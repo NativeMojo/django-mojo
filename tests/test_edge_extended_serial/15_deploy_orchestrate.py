@@ -1170,3 +1170,181 @@ def test_sweep_reports_never_orchestrated(opts):
     th.assert_eq((driven.links or {}).get("incident_events", []), [],
                  f"a deployment that reached its canary is not this incident, got {driven.links!r}")
     PlatformDeployment.objects.filter(pk__in=[never.pk, driven.pk]).delete()
+
+
+# --- #4857 review 84971: a successor named by only one coordination key ------
+#
+# The expiry report ran whenever either key was missing, before the key that
+# was still there was asked who owns the plane. A deploy that had been
+# replaced was then reported as "no newer deploy took over".
+
+
+def _successor(opts):
+    """A second deployment row, not armed: the test stores the one key it wants."""
+    from mojo.apps.edge.models import PlatformDeployment
+    return PlatformDeployment.objects.create(
+        sha=SHA_B, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=[CANARY_ID, opts.me, FLEET_ID], transitions=[], detail={})
+
+
+@th.django_unit_test("orchestrate: a newer target with no lease left is a supersession, not an expiry")
+def test_preflight_newer_target_without_lease_is_superseded(opts):
+    import contextlib
+
+    from mojo.apps.edge.services import deploy
+
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me, FLEET_ID])
+    _publish_orchestrate(SHA_A, deployment)
+    newer = _successor(opts)
+    # A's lease expired in the queue after B was recorded as the next target.
+    deploy.get_client().delete(deploy.STATUS_KEY)
+    deploy.set_target(SHA_B, actor="test", deployment_id=newer.pk)
+
+    incidents = mock.Mock(return_value=mock.Mock(pk=4857))
+    with contextlib.ExitStack() as stack:
+        calls = stack.enter_context(th.capture_publishes(_deploy_publish))
+        for patch in _orchestrate_patches(opts, incidents):
+            stack.enter_context(patch)
+        _drain(opts)
+
+    th.assert_true(not incidents.called,
+                   f"a deploy replaced by a newer one files no incident, "
+                   f"got {incidents.call_args_list!r}")
+    deployment.refresh_from_db()
+    th.assert_eq(deployment.status, "superseded",
+                 f"a newer target means superseded, got {deployment.status!r}")
+    th.assert_eq(_node_calls(calls), [],
+                 f"the replaced deploy must tell no node, got {calls!r}")
+    chained = [c for c in calls if c.get("func") == deploy.DEPLOY_ORCHESTRATE_JOB]
+    th.assert_eq([c["payload"].get("deployment") for c in chained], [str(newer.pk)],
+                 f"the newer target is started once, got {chained!r}")
+    th.assert_eq((deploy.get_status() or {}).get("deployment"), str(newer.pk),
+                 "and the lease is armed for the newer deployment")
+    deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
+
+
+@th.django_unit_test("orchestrate: a newer deploy's lease with no target left is a supersession, and its lease is kept")
+def test_preflight_newer_lease_without_target_is_superseded(opts):
+    import contextlib
+
+    from mojo.apps.edge.services import deploy
+
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me, FLEET_ID])
+    _publish_orchestrate(SHA_A, deployment)
+    newer = _successor(opts)
+    # B holds the lease; the target key is gone.
+    deploy.arm_status(SHA_B, force=True, deployment_id=newer.pk)
+    deploy.get_client().delete(deploy.TARGET_KEY)
+
+    incidents = mock.Mock(return_value=mock.Mock(pk=4857))
+    with contextlib.ExitStack() as stack:
+        calls = stack.enter_context(th.capture_publishes(_deploy_publish))
+        for patch in _orchestrate_patches(opts, incidents):
+            stack.enter_context(patch)
+        _drain(opts)
+
+    th.assert_true(not incidents.called,
+                   f"a deploy whose lease a newer one took files no incident, "
+                   f"got {incidents.call_args_list!r}")
+    deployment.refresh_from_db()
+    th.assert_eq(deployment.status, "superseded",
+                 f"a lease held by a newer deploy means superseded, not failed, "
+                 f"got {deployment.status!r}")
+    th.assert_eq(calls, [], f"nothing is told and nothing is chained, got {calls!r}")
+    th.assert_eq((deploy.get_status() or {}).get("deployment"), str(newer.pk),
+                 "the newer deployment keeps its lease")
+    deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
+
+
+@th.django_unit_test("orchestrate: a lease lost mid-canary with a newer target recorded is a supersession, not an expiry")
+def test_mid_canary_lost_lease_with_newer_target_is_superseded(opts):
+    import contextlib
+
+    from mojo.apps.edge.services import deploy
+
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me, FLEET_ID])
+    _publish_orchestrate(SHA_A, deployment)
+    newer = _successor(opts)
+    reads = []
+
+    def expired_after_a_push(*args, **kwargs):
+        reads.append(1)
+        if len(reads) == 1:
+            # The pre-flight read: this deploy still owns the lease.
+            return dict(state=deploy.STATUS_MIGRATING, sha=SHA_A,
+                        deployment=str(deployment.pk))
+        if len(reads) == 2:
+            # While the canary works, a push records B and A's lease expires.
+            deploy.get_client().delete(deploy.STATUS_KEY)
+            deploy.set_target(SHA_B, actor="test", deployment_id=newer.pk)
+        return None
+
+    incidents = mock.Mock(return_value=mock.Mock(pk=4857))
+    with contextlib.ExitStack() as stack:
+        calls = stack.enter_context(th.capture_publishes(_deploy_publish))
+        for patch in _orchestrate_patches(
+                opts, incidents,
+                canary_timeout=dict(return_value=120),
+                get_status=dict(side_effect=expired_after_a_push)):
+            stack.enter_context(patch)
+        _drain(opts)
+
+    th.assert_true(not incidents.called,
+                   f"a deploy replaced mid-canary files no lease incident, "
+                   f"got {incidents.call_args_list!r}")
+    deployment.refresh_from_db()
+    th.assert_eq(deployment.status, "superseded",
+                 f"a newer target means superseded, got {deployment.status!r}")
+    chained = [c for c in calls if c.get("func") == deploy.DEPLOY_ORCHESTRATE_JOB]
+    th.assert_eq([c["payload"].get("deployment") for c in chained], [str(newer.pk)],
+                 f"the newer target is started once, got {chained!r}")
+    deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
+
+
+@th.django_unit_test("the stale sweep files one incident when two sweeps hold the same snapshot")
+def test_overlapping_sweeps_report_once(opts):
+    """Two sweeps read the same requested row before either closes it: the
+    cron claim fails open, and a slow sweep can overlap the next minute's.
+    The second sweep runs here, whole, inside the first one, after the first
+    has taken its snapshot and just before it closes the row."""
+    import datetime
+    import mojo.apps.incident.reporter as reporter_module
+    from django.utils import timezone
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
+    old = timezone.now() - datetime.timedelta(seconds=deploy.status_ttl() + 600)
+    never = PlatformDeployment.objects.create(
+        sha=SHA_A, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=[CANARY_ID, opts.me], transitions=[],
+        status=PlatformDeployment.STATUS_REQUESTED)
+    PlatformDeployment.objects.filter(pk=never.pk).update(modified=old)
+
+    real_transition = platform_deploy.transition
+    inner = []
+
+    def other_sweep_gets_there_first(*args, **kwargs):
+        # The first transition asked for is the outer sweep's, on the row it
+        # snapshotted. Before it runs, the other sweep runs whole.
+        if not inner:
+            inner.append(None)  # set first: the other sweep transitions too
+            inner[0] = platform_deploy.reconcile_stale(
+                verify_fleet=lambda *a, **k: None)
+        return real_transition(*args, **kwargs)
+
+    incidents = mock.Mock(return_value=mock.Mock(pk=4857))
+    with mock.patch.object(reporter_module, "report_event", incidents), \
+         mock.patch.object(platform_deploy, "transition",
+                           side_effect=other_sweep_gets_there_first):
+        outer = platform_deploy.reconcile_stale(verify_fleet=lambda *a, **k: None)
+
+    th.assert_eq(inner, [1], f"the sweep that got there first closes the row, got {inner!r}")
+    th.assert_eq(outer, 0, f"the sweep holding the stale snapshot changes nothing, got {outer!r}")
+    th.assert_eq(incidents.call_count, 1,
+                 f"two overlapping sweeps must file one incident, got {incidents.call_args_list!r}")
+    never.refresh_from_db()
+    unknown = [t for t in (never.transitions or []) if t.get("status") == "unknown"]
+    th.assert_eq(len(unknown), 1,
+                 f"and record one transition to unknown, got {never.transitions!r}")
+    PlatformDeployment.objects.filter(pk=never.pk).delete()

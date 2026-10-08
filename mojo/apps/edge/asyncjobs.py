@@ -209,6 +209,20 @@ def deploy_orchestrate(job):
 
     target = deploy.get_target()
     status = deploy.get_status()
+    # A successor is judged first, from whichever key still exists: one key
+    # can be gone (this deploy's lease expired after a newer target was
+    # recorded, or the newer deploy holds the lease and the target expired)
+    # and the other still names the deploy that took over.
+    target_moved = bool(target) and target.get("deployment") != deployment_id
+    lease_taken = bool(status) and status.get("deployment") != deployment_id
+    if target_moved or lease_taken:
+        platform_deploy.transition(
+            deployment_id, "superseded", {"reason": "target_moved_before_start"})
+        if target_moved:
+            return _deploy_terminal(
+                sha, me, framework=None, released=False,
+                deployment_id=deployment_id)
+        return "superseded"
     if not target or not status:
         # Nothing took the plane — the coordination keys simply expired (or
         # Redis was flushed) while this job waited for a worker. Calling that
@@ -219,15 +233,6 @@ def deploy_orchestrate(job):
             sha, me, framework=None, released=False,
             deployment_id=deployment_id, reason="lease_expired_before_start",
             diagnosis=diagnosis)
-    if (target.get("deployment") != deployment_id
-            or status.get("deployment") != deployment_id):
-        platform_deploy.transition(
-            deployment_id, "superseded", {"reason": "target_moved_before_start"})
-        if target.get("deployment") != deployment_id:
-            return _deploy_terminal(
-                sha, me, framework=None, released=False,
-                deployment_id=deployment_id)
-        return "superseded"
     # The lease was armed when the push arrived; every second this job spent
     # queued has already been taken off it. Start the canary window fresh.
     deploy.touch_status(deployment_id)
@@ -319,9 +324,17 @@ def deploy_orchestrate(job):
     deadline = _time.time() + deploy.canary_timeout()
     outcome = None
     lease_lost = False
+    target_moved = False
     while _time.time() < deadline:
         status = deploy.get_status()
         if not status:
+            newer = deploy.get_target()
+            if newer and newer.get("deployment") != deployment_id:
+                # The lease is gone but a newer target is recorded: that is a
+                # successor, not a stall. The terminal's chain check marks
+                # this deploy superseded and starts the newer one.
+                target_moved = True
+                break
             # The lease expired (or was flushed) and NOBODY holds it: there is
             # no newer deploy, so this is a stall to report, not a
             # supersession to stand down from. Before #4857 this branch was
@@ -367,6 +380,8 @@ def deploy_orchestrate(job):
                 deployment_id=deployment_id,
                 api_cohort=runner_id in set(api_runners))
         logit.info(f"edge deploy {sha}: released to {len(runners) - 2} fleet node(s)")
+    elif target_moved:
+        reason = "target_moved_mid_canary"
     elif lease_lost:
         reason = "lease_expired_mid_canary"
         diagnosis = _lease_expired(sha, deployment_id, waiting_on=canary)
