@@ -54,13 +54,20 @@ def _members(uid):
     return {m.decode() if isinstance(m, bytes) else m for m in _redis().smembers(_online_key(uid))}
 
 
+def _refusals(uid):
+    """The cap's incident events for this user. They carry no uid: a refused
+    socket has no identity."""
+    from mojo.apps.incident.models import Event
+    return Event.objects.filter(
+        category="traffic:ws_maxconn", details__contains=f"for {USER_TYPE}:{uid} ")
+
+
 def _reset(uid):
     """Remove this user's presence, its refusal marker and its incidents."""
-    from mojo.apps.incident.models import Event
     redis = _redis()
     redis.delete(_online_key(uid))
     redis.delete(f"rl:ws_maxconn:{USER_TYPE}:{uid}")
-    Event.objects.filter(category="traffic:ws_maxconn", uid=uid).delete()
+    _refusals(uid).delete()
 
 
 def _seed_stale(uid, count):
@@ -205,7 +212,6 @@ def test_stale_members_do_not_consume_the_cap(opts):
 
 @th.django_unit_test("#4567: a full cap of live connections still refuses the next socket")
 def test_live_cap_still_refuses(opts):
-    from mojo.apps.incident.models import Event
     uid = opts.pc_uid
     _reset(uid)
 
@@ -225,7 +231,7 @@ def test_live_cap_still_refuses(opts):
         assert outcomes[2] == "Too many connections", f"the third live socket must be refused, got {outcomes[2]}"
         assert closed, "a refused socket is closed by the server"
         assert members == set(ids[:2]), f"a refused socket is not a member, got {members}"
-        events = Event.objects.filter(category="traffic:ws_maxconn", uid=uid).count()
+        events = _refusals(uid).count()
         assert events == 1, f"a refusal reports one incident, got {events}"
     finally:
         _reset(uid)

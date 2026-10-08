@@ -13,6 +13,7 @@ All connection state is stored in Redis for scalability.
 
 import asyncio
 import json
+import threading
 import time
 import uuid
 from mojo.helpers import logit
@@ -25,6 +26,7 @@ from .auth import async_validate_bearer_token
 from .channels import broadcast_channel, topic_channel, messages_channel
 from .permissions import can_access_group_topic, get_group_topic_permissions
 from .signals import realtime_connection_changed
+from . import presence
 
 logger = logit.get_logger("realtime", "realtime.log")
 
@@ -117,7 +119,8 @@ async def check_connect_rate(scope):
 
 
 class WebSocketHandler:
-    def __init__(self, websocket, path, *, idle_timeout=None, ping_seconds=None):
+    def __init__(self, websocket, path, *, idle_timeout=None, ping_seconds=None,
+                 max_connections=None, redis_client=None):
         self.websocket = websocket
         self.path = path
         self.connection_id = str(uuid.uuid4())
@@ -141,7 +144,7 @@ class WebSocketHandler:
         # pubsub stays None until authentication succeeds (DM-042): an
         # unauthenticated socket must not hold a dedicated Redis pub/sub
         # connection — that's exactly the cost a reconnect storm multiplies.
-        self.redis_client = get_connection()
+        self.redis_client = get_connection() if redis_client is None else redis_client
         self.pubsub = None
         self._redis_task = None
         self._ping_task = None
@@ -152,6 +155,15 @@ class WebSocketHandler:
         self.unauth_timeout = WS_UNAUTH_TIMEOUT
         self.idle_timeout = WS_IDLE_TIMEOUT if idle_timeout is None else idle_timeout
         self.ping_seconds = WS_SERVER_PING_SECONDS if ping_seconds is None else ping_seconds
+        self.max_connections = WS_MAX_CONNECTIONS if max_connections is None else max_connections
+
+        # Presence (#4567). The online key is saved once this socket is a
+        # member of it. `_closing` is set first thing in cleanup; a presence
+        # refresh still running in the executor checks it under the lock, so
+        # it cannot write a closed connection back.
+        self._online_key = None
+        self._closing = False
+        self._presence_lock = threading.Lock()
 
         # Control flags
         self.running = True
@@ -425,6 +437,9 @@ class WebSocketHandler:
             if not self.running:
                 break
             await self.send_message({"type": "ping", "ts": int(time.time())})
+            # The server's own timer is the heartbeat (#4567): a live handler
+            # keeps its record and prunes its identity whatever the client sends.
+            await self.refresh_presence(force=True)
 
     async def handle_redis_messages(self):
         """Handle messages from Redis pub/sub (started post-auth)"""
@@ -500,37 +515,52 @@ class WebSocketHandler:
             await self.send_error(f"Authentication failed: {error}")
             return
 
-        # Per-identity concurrency cap (DM-042): a reconnect loop that leaks
-        # sockets (or an agent opening one per scrape) is bounded here. The
-        # presence set is TTL'd (300s) so a stale overcount self-heals.
-        max_connections = WS_MAX_CONNECTIONS
-        if max_connections > 0:
-            def count_connections():
-                try:
-                    return self.redis_client.scard(f"realtime:online:{key_name}:{user.id}")
-                except Exception:
-                    return 0  # fail open
-            current = await asyncio.get_event_loop().run_in_executor(None, count_connections)
-            if current >= max_connections:
-                # One incident event per identity per minute — never one per
-                # rejected attempt.
-                def report_once():
-                    try:
-                        return self.redis_client.set(
-                            f"rl:ws_maxconn:{key_name}:{user.id}", 1, nx=True, ex=60)
-                    except Exception:
-                        return False
-                if await asyncio.get_event_loop().run_in_executor(None, report_once):
-                    await self.report_incident(
-                        f"too many connections for {key_name}:{user.id} "
-                        f"({current} >= {max_connections})",
-                        "traffic:ws_maxconn", 6)
-                await self.send_error("Too many connections")
-                await self.close_connection()
-                return
-
+        # The identity is set before admission, so nothing between here and
+        # cleanup can leave a member behind that cleanup does not know.
         self.user = user
         self.user_type = key_name
+        online_key = self.user_online_key()
+
+        # Per-identity concurrency cap (DM-042): a reconnect loop that leaks
+        # sockets (or an agent opening one per scrape) is bounded here. The cap
+        # counts members that still have a connection record (#4567): members
+        # without one are pruned first, then one script counts and adds, so
+        # simultaneous connects cannot pass the cap between them.
+        max_connections = getattr(self, "max_connections", WS_MAX_CONNECTIONS)
+
+        def admit_connection():
+            try:
+                current = presence.prune(self.redis_client, online_key)
+                admitted = presence.admit(
+                    self.redis_client, online_key, self.connection_id,
+                    max_connections, ONLINE_TTL_SECONDS)
+                return admitted, current
+            except Exception:
+                # Fail open: a Redis error must never refuse every socket.
+                self._log_exception("ws connection admission failed — failing open")
+                return True, 0
+        admitted, current = await asyncio.get_event_loop().run_in_executor(None, admit_connection)
+        if not admitted:
+            self.user = None
+            self.user_type = None
+            # One incident event per identity per minute — never one per
+            # rejected attempt.
+            def report_once():
+                try:
+                    return self.redis_client.set(
+                        f"rl:ws_maxconn:{key_name}:{user.id}", 1, nx=True, ex=60)
+                except Exception:
+                    return False
+            if await asyncio.get_event_loop().run_in_executor(None, report_once):
+                await self.report_incident(
+                    f"too many connections for {key_name}:{user.id} "
+                    f"({current} >= {max_connections})",
+                    "traffic:ws_maxconn", 6)
+            await self.send_error("Too many connections")
+            await self.close_connection()
+            return
+
+        self._online_key = online_key
         self.bearer_prefix = str(prefix or "").strip().lower()
         self.authenticated = True
 
@@ -967,29 +997,63 @@ class WebSocketHandler:
             "message": error_message
         })
 
+    def _connection_record(self):
+        return {
+            "connection_id": self.connection_id,
+            "user_id": self.user.id if self.user else None,
+            "user_type": self.user_type,
+            "authenticated": self.authenticated,
+            "connected_at": self.connected_at,
+            "last_ping": time.time(),
+            "topics": list(self.subscribed_topics),
+            "remote_ip": self.remote_ip,
+            "user_agent": self.user_agent
+        }
+
     async def refresh_presence(self, force=False):
         """
-        Refresh connection and online presence TTLs without blocking the event loop.
-        Throttled by PRESENCE_REFRESH_MIN_INTERVAL unless force=True.
+        Refresh connection and online presence without blocking the event loop.
+        Throttled by PRESENCE_REFRESH_MIN_INTERVAL unless force=True. The
+        server ping timer forces one every WS_SERVER_PING_SECONDS (#4567).
+
+        Extends this connection's record, writing it again if it is gone, keeps
+        this connection in its identity's online set, and prunes that set of
+        members with no record. Does nothing once the handler is closing.
         """
+        if getattr(self, "_closing", False):
+            return
         now = time.time()
         if not force and (now - getattr(self, "last_presence_refresh", 0)) < PRESENCE_REFRESH_MIN_INTERVAL:
             return
 
         self.last_presence_refresh = now
         conn_key = f"realtime:connections:{self.connection_id}"
+        online_key = getattr(self, "_online_key", None)
+        # Built here, on the event loop: the executor thread must not read
+        # the topic set while the loop changes it.
+        record = json.dumps(self._connection_record())
+        lock = getattr(self, "_presence_lock", None) or threading.Lock()
 
         def do_refresh():
-            try:
-                # Extend connection record TTL
-                self.redis_client.expire(conn_key, CONNECTION_TTL_SECONDS)
-                # Extend user online presence TTL, if authenticated
-                if self.user and self.user_type:
-                    online_key = f"realtime:online:{self.user_type}:{self.user.id}"
-                    self.redis_client.expire(online_key, ONLINE_TTL_SECONDS)
-            except Exception:
-                # Keep presence refresh best-effort
-                pass
+            with lock:
+                if getattr(self, "_closing", False):
+                    return
+                try:
+                    # Extend the connection record, or write it again
+                    if not self.redis_client.expire(conn_key, CONNECTION_TTL_SECONDS):
+                        self.redis_client.setex(conn_key, CONNECTION_TTL_SECONDS, record)
+                    # Stay in the online set and extend it, if authenticated
+                    if online_key:
+                        self.redis_client.sadd(online_key, self.connection_id)
+                        self.redis_client.expire(online_key, ONLINE_TTL_SECONDS)
+                except Exception:
+                    # Keep presence refresh best-effort
+                    pass
+            if online_key:
+                try:
+                    presence.prune(self.redis_client, online_key, keep=self.connection_id)
+                except Exception:
+                    self._log_exception("presence prune failed")
 
         await asyncio.get_event_loop().run_in_executor(None, do_refresh)
 
@@ -1040,6 +1104,8 @@ class WebSocketHandler:
 
     async def cleanup_connection(self):
         """Clean up connection state in Redis"""
+        # First, so a presence refresh still in flight writes nothing after this.
+        self._closing = True
         self._log("disconnected")
 
         # Stop the post-auth pub/sub and ping tasks if they were started (they
@@ -1052,26 +1118,29 @@ class WebSocketHandler:
                 except (asyncio.CancelledError, Exception):
                     pass
         def cleanup():
-            try:
-                # Remove connection record
-                self.redis_client.delete(f"realtime:connections:{self.connection_id}")
+            # Under the presence lock: a refresh already in the executor has
+            # either finished its writes or will see _closing and write nothing.
+            with getattr(self, "_presence_lock", None) or threading.Lock():
+                try:
+                    # Remove connection record
+                    self.redis_client.delete(f"realtime:connections:{self.connection_id}")
 
-                # Remove from all subscribed topics
-                for topic in self.subscribed_topics:
-                    self.redis_client.srem(f"realtime:topic:{topic}", self.connection_id)
+                    # Remove from all subscribed topics
+                    for topic in self.subscribed_topics:
+                        self.redis_client.srem(f"realtime:topic:{topic}", self.connection_id)
 
-                # Update user online status
-                if self.user and self.user_type:
-                    key = self.user_online_key()
-                    # Remove this connection from the online set
-                    self.redis_client.srem(key, self.connection_id)
-                    # If set is empty, delete; otherwise refresh TTL
-                    if self.redis_client.scard(key) == 0:
-                        self.redis_client.delete(key)
-                    else:
-                        self.redis_client.expire(key, ONLINE_TTL_SECONDS)
-            except Exception as e:
-                self._log_exception("redis cleanup failed")
+                    # Update user online status
+                    if self.user and self.user_type:
+                        key = self.user_online_key()
+                        # Remove this connection from the online set
+                        self.redis_client.srem(key, self.connection_id)
+                        # If set is empty, delete; otherwise refresh TTL
+                        if self.redis_client.scard(key) == 0:
+                            self.redis_client.delete(key)
+                        else:
+                            self.redis_client.expire(key, ONLINE_TTL_SECONDS)
+                except Exception as e:
+                    self._log_exception("redis cleanup failed")
 
         await asyncio.get_event_loop().run_in_executor(None, cleanup)
 

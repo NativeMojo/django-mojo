@@ -380,7 +380,7 @@ REDIS_ONLY_EXECUTOR_CALLS = {
     ("register_connection", "lambda"),
     ("update_connection_auth", "lambda"),
     ("register_user_online", "get_and_update"),
-    ("handle_authenticate", "count_connections"),
+    ("handle_authenticate", "admit_connection"),
     ("handle_authenticate", "report_once"),
     ("handle_response", "push_response"),
     ("check_waiters", "do_check"),
