@@ -519,9 +519,15 @@ how that is read:
 
 The decision compares the stored `parent_id` with the new one, so a payload
 that repeats the current parent is not a move. It runs in `on_rest_pre_save`
-and again in `save()` under the row lock, where the new parent is read again
-by primary key: a parent that left the tree while the save was in flight is
-judged as it now stands.
+and again in `save()`, for a move and for a new group. That second pass is
+the one that counts. By then `save()` holds row locks on the group itself, on
+the new parent and every ancestor of it, and on the parent it leaves and
+every ancestor of that, and it keeps them to the write. The new parent is
+read again by primary key, so a parent that left the tree while the save was
+in flight is judged as it now stands, and no parent involved can move between
+the decision and the write. A save that moves one of those rows waits for
+this one. Member rows are not locked: a grant removed while a save is in
+flight may still carry that save.
 
 **Server code is not checked.** The guard belongs to the REST save. A plain
 `group.save()`, `Group.objects.create(parent=...)`, a queryset `.update()` and

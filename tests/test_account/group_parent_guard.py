@@ -395,6 +395,182 @@ def test_stale_new_parent_is_judged_again_under_the_lock(opts):
         _restore(opts)
 
 
+def _rest_save(actor, instance, data):
+    """The REST model save of `instance` as `actor`, without the HTTP layer,
+    so a test can step in at a chosen point of it."""
+    from objict import objict
+    from mojo.apps.account.models import User
+    from mojo.models import rest as mojo_rest
+    request = objict(
+        user=User.objects.get(email=_email(actor)), DATA=objict(data),
+        QUERY_PARAMS=objict(), method="POST", group=instance, bearer=None,
+        ip="127.0.0.1", path="/api/group", META={}, api_key=None,
+        group_token=None)
+    token = mojo_rest.ACTIVE_REQUEST.set(request)
+    try:
+        instance.on_rest_save(request, request.DATA)
+    finally:
+        mojo_rest.ACTIVE_REQUEST.reset(token)
+
+
+def _elsewhere(work):
+    """Run `work()` to its end on another database connection, as another
+    request would, and return what it returned."""
+    import threading
+    from django.db import connections
+    out = {}
+
+    def run():
+        try:
+            out["result"] = work()
+        except BaseException as exc:  # reported by the caller's assert
+            out["error"] = repr(exc)
+        finally:
+            connections.close_all()
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    worker.join(15)
+    assert not worker.is_alive(), "the other connection is still waiting: it was blocked"
+    assert "error" not in out, f"the other connection failed: {out['error']}"
+    return out.get("result")
+
+
+def _move_unless_locked(pk, parent_id):
+    """Another request moving group `pk`, right now. Returns False when the
+    row is locked by a save in flight, without waiting for it."""
+    from django.db import DatabaseError, transaction
+    from mojo.apps.account.models import Group
+
+    def attempt():
+        try:
+            with transaction.atomic():
+                Group.objects.select_for_update(nowait=True).filter(pk=pk).first()
+                Group.objects.filter(pk=pk).update(parent_id=parent_id)
+            return True
+        except DatabaseError:
+            return False
+    return _elsewhere(attempt)
+
+
+@th.django_unit_test("#6364: the new parent cannot move between the decision on a move and its write")
+def test_new_parent_cannot_move_after_the_decision(opts):
+    from mojo.apps.account.models import Group
+    _restore(opts)
+    s, b, t, x = opts.ids["s"], opts.ids["b"], opts.ids["t"], opts.ids["x"]
+    try:
+        moving = Group.objects.get(pk=s)
+        judge = moving._may_manage_tree_position
+        seen = {"on_b": 0}
+
+        def judge_then_the_other_request(group):
+            answer = judge(group)
+            if group is not None and group.pk == b:
+                seen["on_b"] += 1
+                if seen["on_b"] == 2:
+                    # the second answer on B is the one inside save()
+                    seen["other_moved_b"] = _move_unless_locked(b, x)
+            return answer
+
+        moving._may_manage_tree_position = judge_then_the_other_request
+        _rest_save("t_mgr", moving, {"parent": b})
+        assert seen["on_b"] == 2, \
+            f"the move must be judged before the save and again inside it, B was judged {seen['on_b']} time(s)"
+        assert seen["other_moved_b"] is False and _parent_id(b) == t, \
+            f"SECURITY: the new parent left the tenant between the decision and the write: " \
+            f"moved={seen['other_moved_b']}, B is under {_parent_id(b)}, S is under {_parent_id(s)}"
+        assert _parent_id(s) == b, f"the move itself must land, S is under {_parent_id(s)}"
+    finally:
+        _restore(opts)
+
+
+@th.django_unit_test("#6364: a parent that left the tenant after the create's check does not carry the create")
+def test_create_is_judged_again_inside_its_save(opts):
+    from mojo import errors as merrors
+    from mojo.apps.account.models import Group
+    _restore(opts)
+    b, x = opts.ids["b"], opts.ids["x"]
+
+    def create(name, meanwhile):
+        """The REST create under B as the tenant manager, with `meanwhile()`
+        run after its permission check and just before its save."""
+        name = f"{PREFIX}new_{name}"
+        fresh = Group(name=name)
+        write = fresh.atomic_save
+
+        def write_after_the_other_save():
+            meanwhile()
+            return write()
+
+        fresh.atomic_save = write_after_the_other_save
+        refused = False
+        try:
+            _rest_save("t_mgr", fresh, {"name": name, "kind": "organization", "parent": b})
+        except merrors.PermissionDeniedException:
+            refused = True
+        return refused, Group.objects.filter(name=name).first()
+
+    try:
+        refused, made = create("in_tenant", lambda: None)
+        assert not refused and made is not None and made.parent_id == b, \
+            f"this test needs the plain create to work: refused={refused}"
+
+        moved = {}
+        refused, made = create("late", lambda: moved.update(b=_move_unless_locked(b, x)))
+        assert moved == {"b": True} and _parent_id(b) == x, f"the other save must have landed: {moved}"
+        assert refused and made is None, \
+            f"SECURITY: a group was created under a parent that left the creator's tenant first: " \
+            f"refused={refused}, created={getattr(made, 'pk', None)}"
+    finally:
+        _restore(opts)
+
+
+@th.django_unit_test("#6364: every parent involved stays locked from the decision to the write")
+def test_parents_stay_locked_until_the_write(opts):
+    from django.db import DatabaseError, transaction
+    from mojo.apps.account.models import Group
+    _restore(opts)
+    ids = opts.ids
+
+    def held(pk):
+        """True when another connection cannot lock this row right now."""
+        def attempt():
+            try:
+                with transaction.atomic():
+                    Group.objects.select_for_update(nowait=True).filter(pk=pk).first()
+                return False
+            except DatabaseError:
+                return True
+        return _elsewhere(attempt)
+
+    def at_the_write(instance, names, seen):
+        write = instance.save_base
+
+        def save_base(*args, **kwargs):
+            seen.update({name: held(ids[name]) for name in names})
+            return write(*args, **kwargs)
+
+        instance.save_base = save_base
+
+    try:
+        moving, seen = Group.objects.get(pk=ids["s"]), {}
+        at_the_write(moving, ("s", "a", "b", "t"), seen)
+        _rest_save("t_mgr", moving, {"parent": ids["b"]})
+        assert _parent_id(ids["s"]) == ids["b"], f"the move must land, S is under {_parent_id(ids['s'])}"
+        assert seen == {"s": True, "a": True, "b": True, "t": True}, \
+            f"SECURITY: a row the move was judged on could change before the write (True = locked): {seen}"
+
+        name, seen = f"{PREFIX}new_locked", {}
+        fresh = Group(name=name)
+        at_the_write(fresh, ("b", "t"), seen)
+        _rest_save("t_mgr", fresh, {"name": name, "kind": "organization", "parent": ids["b"]})
+        assert Group.objects.filter(name=name, parent_id=ids["b"]).exists(), "the create must land"
+        assert seen == {"b": True, "t": True}, \
+            f"SECURITY: a row the create was judged on could change before the write (True = locked): {seen}"
+    finally:
+        _restore(opts)
+
+
 # ---------------------------------------------------------------------------
 # What must keep working
 # ---------------------------------------------------------------------------

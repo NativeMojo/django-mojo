@@ -330,21 +330,32 @@ class Group(MojoSecrets, MojoModel):
         # compared is what is replaced: a save that began before another one
         # finished waits for it, then sees its result.
         with transaction.atomic():
-            row, old_parent_id = None, None
+            row, old_parent_id, stored_metadata = None, None, {}
             if self.pk is not None:
                 row = type(self).objects.select_for_update().filter(pk=self.pk).values_list(
                     "metadata", "parent_id").first()
+            # A REST save: its permission was judged before this lock, on
+            # rows that may have changed since. It is judged again below.
+            judged = self.__dict__.pop("_link_guard_pending", False)
             if row is not None:
                 stored_metadata, old_parent_id = row
                 if not isinstance(stored_metadata, dict):
                     stored_metadata = {}
                 self._keep_unchanged_link_settings(stored_metadata, old_parent_id)
-                if self.__dict__.pop("_link_guard_pending", False):
-                    # A REST save: its permission was judged before this lock,
-                    # on a row that may have changed since. Judge it again.
-                    self._guard_webapp_url_and_tree(False, stored=(stored_metadata, old_parent_id))
-            if writes_parent and (self.pk is None or old_parent_id != self.parent_id):
+            if writes_parent and (row is None or old_parent_id != self.parent_id):
+                # Locks the new parent and every ancestor of it, to the write.
                 group_hierarchy.validate_parent(self, self.parent, lock=True)
+                if judged and old_parent_id is not None:
+                    # The parent it leaves is judged too: lock its chain as well.
+                    group_hierarchy.ancestors(
+                        type(self)(pk=old_parent_id), include_self=True, lock=True)
+            if judged:
+                # After the locks, so no parent involved can move between
+                # this decision and the write (#6364).
+                if row is not None:
+                    self._guard_webapp_url_and_tree(False, stored=(stored_metadata, old_parent_id))
+                else:
+                    self._guard_parent_change(True, None, locked=True)
             result = super().save(*args, **kwargs)
         # Only what this save wrote is now known to be stored. An edit it
         # left out is still an edit, for the save that does write it.
@@ -885,7 +896,9 @@ class Group(MojoSecrets, MojoModel):
                 if not isinstance(stored_metadata, dict):
                     stored_metadata = {}
                 self._keep_unchanged_link_settings(stored_metadata, stored_parent_id)
-                self._link_guard_pending = True
+        if stored is None:
+            # save() judges it again, for a new group too
+            self._link_guard_pending = True
         metadata = self.metadata if isinstance(self.metadata, dict) else {}
         # _ABSENT, not None: a stored null is a value, and it hides the
         # parent's address from get_metadata_value.
@@ -903,7 +916,8 @@ class Group(MojoSecrets, MojoModel):
             old_top = self.pk
             if stored_parent_id is not None:
                 old_top = type(self).objects.get(pk=stored_parent_id).top_most_parent.pk
-            new_top = self.pk if self.parent is None else self.parent.top_most_parent.pk
+            new_parent = self._parent_as_stored(stored is not None)
+            new_top = self.pk if new_parent is None else new_parent.top_most_parent.pk
             if old_top != new_top and not self._has_global_permission(WEBAPP_URL_PERMS):
                 raise merrors.PermissionDeniedException(
                     "Moving a group to a different group tree requires the "
@@ -911,6 +925,16 @@ class Group(MojoSecrets, MojoModel):
         self._guard_parent_change(created, stored_parent_id, locked=stored is not None)
         # logged after the save lands
         self._webapp_url_change = changes or None
+
+    def _parent_as_stored(self, locked):
+        """The new parent. Under the lock it is read again by primary key:
+        the one this instance carries was loaded before the lock, with its
+        chain."""
+        if self.parent_id is None:
+            return None
+        if not locked:
+            return self.parent
+        return type(self).objects.filter(pk=self.parent_id).first()
 
     def _may_manage_tree_position(self, group):
         """True when the caller holds save rights on `group` itself: through a
@@ -940,14 +964,15 @@ class Group(MojoSecrets, MojoModel):
         judged by _guard_webapp_url_and_tree, which calls this.
 
         Compared against the stored parent, not changed_fields: a post that
-        repeats the current parent is not a move. `locked` is the pass under
-        the row lock, where the new parent is read again: the one this
-        instance carries was loaded before the lock, with its chain.
+        repeats the current parent is not a move. `locked` is the pass in
+        save(), for a move and for a new group: this row and the chains of
+        every parent involved are locked by then, and the new parent is read
+        again (see _parent_as_stored).
         """
         if created or not self.pk:
             if self.parent_id is None or self._has_global_permission(WEBAPP_URL_PERMS):
                 return
-            if not self._may_manage_tree_position(self.parent):
+            if not self._may_manage_tree_position(self._parent_as_stored(locked)):
                 self._refuse_parent_change(None, "Creating a group under this parent")
             return
         if stored_parent_id is None or self.parent_id is None \
@@ -957,7 +982,7 @@ class Group(MojoSecrets, MojoModel):
             return
         groups = type(self).objects
         old_parent = groups.filter(pk=stored_parent_id).first()
-        new_parent = groups.filter(pk=self.parent_id).first() if locked else self.parent
+        new_parent = self._parent_as_stored(locked)
         if old_parent is None or new_parent is None:
             self._refuse_parent_change(stored_parent_id, "Moving a group to this parent")
         if old_parent.top_most_parent.pk != new_parent.top_most_parent.pk:
