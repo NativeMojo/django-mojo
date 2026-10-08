@@ -814,3 +814,245 @@ def test_node_unconfigured_reports_failure(opts):
     th.assert_eq((status or {}).get("detail"), "unconfigured",
                  f"the lease must be released as failed, got {status!r}")
     deploy.clear_status(deployment.pk)
+
+
+# ----------------------------------------------------------------------
+# lease expiry vs supersession (maestro #4857)
+# ----------------------------------------------------------------------
+#
+# Production, 2026-09-18: the orchestrate job waited 9 minutes for a worker,
+# the canary job never got one, and the 15-minute lease armed at webhook time
+# expired mid-canary. The poll loop read the missing lease as "someone else
+# took the plane" and recorded the attempt superseded — no incident, no
+# failure, no successor, fleet still on the old release.
+
+
+def _orchestrate_patches(opts, incidents, **extra):
+    """The shared patch set: roster, framework pin, fast poll, incident sink."""
+    import mojo.apps.incident.reporter as reporter_module
+    import mojo.apps.jobs as jobs_module
+    from mojo.apps.edge import asyncjobs
+    from mojo.apps.edge.services import deploy
+
+    patches = [
+        mock.patch.object(jobs_module, "get_runners",
+                          return_value=_runners(CANARY_ID, opts.me, FLEET_ID)),
+        mock.patch.object(deploy, "resolve_framework_version",
+                          return_value=FRAMEWORK),
+        mock.patch.object(asyncjobs, "DEPLOY_POLL_INTERVAL", 0.05),
+        mock.patch.object(reporter_module, "report_event", incidents),
+    ]
+    for name, value in extra.items():
+        patches.append(mock.patch.object(deploy, name, **value))
+    return patches
+
+
+def _last_transition(deployment):
+    deployment.refresh_from_db()
+    return (deployment.transitions or [])[-1]
+
+
+@th.django_unit_test("orchestrate: a lease that expired with NO successor is a failure with an incident, not a supersession")
+def test_lease_expired_without_successor_is_failure(opts):
+    import contextlib
+    import time as _time
+
+    from mojo.apps.edge.services import deploy
+
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me, FLEET_ID])
+    _publish_orchestrate(SHA_A, deployment)
+    reads = []
+
+    def expired_lease(*args, **kwargs):
+        reads.append(1)
+        if len(reads) == 1:
+            # The pre-flight read: this deploy still owns the lease.
+            return dict(state=deploy.STATUS_MIGRATING, sha=SHA_A,
+                        deployment=str(deployment.pk))
+        return None  # gone — expired or flushed, nobody armed anything
+
+    incidents = mock.Mock(return_value=mock.Mock(pk=4857))
+    started = _time.time()
+    with contextlib.ExitStack() as stack:
+        calls = stack.enter_context(th.capture_publishes(_deploy_publish))
+        for patch in _orchestrate_patches(
+                opts, incidents,
+                canary_timeout=dict(return_value=120),
+                get_status=dict(side_effect=expired_lease)):
+            stack.enter_context(patch)
+        _drain(opts)
+    elapsed = _time.time() - started
+
+    th.assert_true(elapsed < 10,
+                   f"a lost lease must be reported at once, not after the "
+                   f"canary timeout — took {elapsed:.1f}s")
+    th.assert_eq(len(_node_calls(calls)), 1,
+                 f"only the canary may ever have been told, got {calls!r}")
+    chained = [c for c in calls if c.get("func") == deploy.DEPLOY_ORCHESTRATE_JOB]
+    th.assert_eq(chained, [],
+                 f"nothing took the lease, so there is nothing to chain, got {chained!r}")
+    deployment.refresh_from_db()
+    th.assert_eq(deployment.status, "failed",
+                 f"an expired lease with no successor is a FAILED attempt, "
+                 f"got {deployment.status!r}")
+    last = _last_transition(deployment)
+    th.assert_eq(last["detail"].get("reason"), "coordination_lease_expired",
+                 f"the failure must name the lease expiry, got {last!r}")
+    th.assert_eq((last["detail"].get("diagnosis") or {}).get("waiting_on"), CANARY_ID,
+                 f"the diagnosis must say which canary was being waited on, got {last!r}")
+    th.assert_true(incidents.called,
+                   "a lost lease must file an incident — the fleet is stuck on "
+                   "the old release and nothing will retry by itself")
+    message = incidents.call_args.args[0]
+    th.assert_in("lease expired", message,
+                 f"the incident must say the lease expired, got {message!r}")
+    th.assert_in("retry", message,
+                 f"the incident must tell the operator what to do, got {message!r}")
+
+
+@th.django_unit_test("orchestrate: the lease is renewed while waiting, so queue delay never counts against the canary")
+def test_orchestrator_renews_lease_while_waiting(opts):
+    """A lease armed at webhook time with 1s left must survive a 3s canary
+    wait: the orchestrator renews it on arrival and on every poll. Before
+    #4857 it expired ~1s in and the attempt ended 'superseded'."""
+    import contextlib
+    import time as _time
+
+    from mojo.apps.edge.services import deploy
+
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me, FLEET_ID])
+    _publish_orchestrate(SHA_A, deployment)  # canary remains silent
+    # The push armed the lease long ago; the orchestrate job sat in the queue
+    # and only 1s of the lease is left when it finally gets a worker.
+    deploy.get_client().expire(deploy.STATUS_KEY, 1)
+    _time.sleep(0.6)
+
+    incidents = mock.Mock(return_value=mock.Mock(pk=4857))
+    with contextlib.ExitStack() as stack:
+        calls = stack.enter_context(th.capture_publishes(_deploy_publish))
+        for patch in _orchestrate_patches(
+                opts, incidents,
+                canary_timeout=dict(return_value=3),
+                status_ttl=dict(return_value=1)):
+            stack.enter_context(patch)
+        _drain(opts)
+
+    th.assert_eq(len(_node_calls(calls)), 1,
+                 f"a silent canary must leave the fleet untouched, got {calls!r}")
+    deployment.refresh_from_db()
+    th.assert_eq(deployment.status, "failed",
+                 f"a silent canary is a failed attempt, got {deployment.status!r}")
+    last = _last_transition(deployment)
+    th.assert_eq(last["detail"].get("reason"), "canary_not_proven",
+                 f"the lease must have outlived the canary wait — a lease "
+                 f"expiry here means it was not renewed, got {last!r}")
+    th.assert_true(incidents.called, "a canary timeout must file an incident")
+    th.assert_in("did not report", incidents.call_args.args[0],
+                 f"the incident must be the canary timeout, not a lease loss, "
+                 f"got {incidents.call_args!r}")
+    th.assert_eq(deploy.get_status(), None,
+                 "the timeout terminal must still clear the status")
+
+
+@th.django_unit_test("orchestrate: a canary job that never got a worker is named as such in the incident")
+def test_canary_never_started_is_diagnosed(opts):
+    import contextlib
+    import uuid as _uuid
+
+    from mojo.apps.edge.services import deploy
+    from mojo.apps.jobs.models import Job
+
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me, FLEET_ID])
+    _publish_orchestrate(SHA_A, deployment)
+    # The canary's job row as production showed it: expired before execution,
+    # attempt 0, never started — every worker on that node was busy.
+    canary_job = Job.objects.create(
+        id=_uuid.uuid4().hex, channel=CANARY_ID, func=deploy.DEPLOY_NODE_JOB,
+        payload={"sha": SHA_A}, status="expired", attempt=0)
+    canary_job_id = canary_job.pk  # delete() below clears .pk
+
+    incidents = mock.Mock(return_value=mock.Mock(pk=4857))
+    try:
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                th.capture_publishes(_deploy_publish, result=canary_job_id))
+            for patch in _orchestrate_patches(
+                    opts, incidents, canary_timeout=dict(return_value=1)):
+                stack.enter_context(patch)
+            _drain(opts)
+    finally:
+        canary_job.delete()
+
+    th.assert_true(incidents.called, "a canary timeout must file an incident")
+    message = incidents.call_args.args[0]
+    th.assert_in("never started", message,
+                 f"the incident must say the canary job never got a worker, "
+                 f"got {message!r}")
+    th.assert_in(CANARY_ID, message,
+                 f"the incident must name the starved node, got {message!r}")
+    last = _last_transition(deployment)
+    diagnosis = last["detail"].get("diagnosis") or {}
+    th.assert_eq(diagnosis.get("state"), "never_started",
+                 f"the durable row must carry the same diagnosis, got {last!r}")
+    th.assert_eq(diagnosis.get("canary_job"), canary_job_id,
+                 f"the diagnosis must point at the canary job, got {diagnosis!r}")
+    th.assert_eq(deploy.get_status(), None,
+                 "the timeout terminal must still clear the status")
+
+
+@th.django_unit_test("orchestrate: coordination that expired before the orchestrator ran is reported, not called superseded")
+def test_preflight_expired_coordination_is_failure(opts):
+    import contextlib
+
+    from mojo.apps.edge.services import deploy
+
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me, FLEET_ID])
+    _publish_orchestrate(SHA_A, deployment)
+    # Both keys expired while the job sat in the queue; nobody re-armed.
+    deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
+
+    incidents = mock.Mock(return_value=mock.Mock(pk=4857))
+    with contextlib.ExitStack() as stack:
+        calls = stack.enter_context(th.capture_publishes(_deploy_publish))
+        for patch in _orchestrate_patches(opts, incidents):
+            stack.enter_context(patch)
+        _drain(opts)
+
+    th.assert_eq(calls, [], f"no node may be told without a lease, got {calls!r}")
+    deployment.refresh_from_db()
+    th.assert_eq(deployment.status, "failed",
+                 f"expired coordination with no successor is a failure, "
+                 f"got {deployment.status!r}")
+    th.assert_eq(_last_transition(deployment)["detail"].get("reason"),
+                 "coordination_lease_expired",
+                 f"the failure must name the expiry, got {_last_transition(deployment)!r}")
+    th.assert_true(incidents.called, "expired coordination must file an incident")
+    th.assert_in("before the orchestrator", incidents.call_args.args[0],
+                 f"the incident must say the lease died before the orchestrator "
+                 f"ran, got {incidents.call_args!r}")
+
+
+@th.django_unit_test("touch_status renews only the lease it owns, and never creates one")
+def test_touch_status_is_owner_gated(opts):
+    from mojo.apps.edge.services import deploy
+
+    th.assert_eq(deploy.touch_status("nobody"), False,
+                 "touching with no lease armed must not create one")
+    th.assert_eq(deploy.get_status(), None,
+                 "touching with no lease armed must leave the key absent")
+
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me])
+    client = deploy.get_client()
+    client.expire(deploy.STATUS_KEY, 5)
+    th.assert_eq(deploy.touch_status("someone-else"), False,
+                 "a foreign deployment must not be able to renew the lease")
+    th.assert_true(client.ttl(deploy.STATUS_KEY) <= 5,
+                   f"a refused touch must not move the expiry, ttl={client.ttl(deploy.STATUS_KEY)}")
+    th.assert_eq(deploy.touch_status(deployment.pk), True,
+                 "the owner must be able to renew its own lease")
+    th.assert_true(client.ttl(deploy.STATUS_KEY) > 5,
+                   f"a renewed lease must carry a full TTL, ttl={client.ttl(deploy.STATUS_KEY)}")
+    status = deploy.get_status()
+    th.assert_eq((status or {}).get("deployment"), str(deployment.pk),
+                 f"renewing must not rewrite the lease body, got {status!r}")
+    deploy.clear_status(deployment.pk)

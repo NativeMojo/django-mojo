@@ -133,9 +133,17 @@ Controls the job engine (runner) behavior.
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `JOBS_ENGINE_MAX_WORKERS` | `10` | Thread pool size per engine instance |
+| `JOBS_ENGINE_RESERVED_WORKERS` | unset → `min(2, max_workers // 4)` | Slots ordinary channels may never fill; only `priority` and the engine's own box-direct channel claim into them, so a deploy starts on a node whose other workers are all busy. Set explicitly to override (`0` disables; clamped below `max_workers`). |
 | `JOBS_ENGINE_CLAIM_BUFFER` | `2` | Claim multiplier (can claim up to `max_workers * buffer` jobs) |
 | `JOBS_ENGINE_CLAIM_BATCH` | `5` | Max jobs to claim in one request |
 | `JOBS_ENGINE_READ_TIMEOUT` | `100` | Redis XREADGROUP timeout in milliseconds |
+
+Reserved slots are a floor for the reserved channels, not a cap: ordinary
+channels stop being polled once `max_workers - reserved` jobs are in flight,
+while `priority` and box-direct jobs may also use ordinary slots when they are
+free. A pool of 8 or more reserves two by default, 4–7 one, smaller pools
+nothing. The fleet deploy plane (orchestrator on `priority`, node updates
+box-direct) is what this protects — see [Fleet code deploy](../edge/deploy.md#queue-capacity-and-the-coordination-lease).
 
 ## Redis Configuration
 
