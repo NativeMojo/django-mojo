@@ -193,7 +193,54 @@ code = auth_handoff.create_handoff_code(request.user, destination=destination, i
 # Consumed by the public POST /api/auth/exchange handler
 data = auth_handoff.consume_handoff_code(code)
 # -> {"uid": <id>, "ip": "...", "dest": "https://app.example.com/"} or None
+#    plus "cc": "<S256 challenge>" when the code was minted with one
 ```
+
+### PKCE: binding a code to the party that asked for it
+
+`create_handoff_code(..., code_challenge=...)` stores an already-validated S256
+challenge in the record as `cc`. The handlers use four service functions:
+
+| Function | Answers |
+|---|---|
+| `get_pkce_mode()` | `"off"` or `"native"`, from `AUTH_HANDOFF_REQUIRE_PKCE`. File-only; an unknown value is logged and read as `"native"`. |
+| `is_app_destination(dest)` | False only for http/https on a host that is not loopback. A custom scheme, `127.0.0.1` in any spelling a browser accepts (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`), `[::1]`, `0.0.0.0`, `localhost`, an absent destination and one that does not parse are all True. So is a web host this function cannot read the way a browser does: one with a percent-escape, a non-ASCII character or a backslash. A name that only *resolves* to loopback is not detected; refuse it with the allowlist. |
+| `pkce_required(dest)` | `get_pkce_mode() == "native" and is_app_destination(dest)`. |
+| `check_exchange(data, code_verifier=NOT_SENT)` | True when the verifier is what the consumed record calls for. Pass `NOT_SENT` when the request has no such field; a field sent as `null` was sent. Never raises. |
+| `request_facts(request)` | The request facts a handoff incident keeps: address, path, method, user agent, signed-in user. Never the query string or body. |
+
+`check_exchange` has three cases. No `cc` and no verifier field: True, a client
+from before PKCE. No `cc` and a verifier field of any value, `null` included:
+**False**, because accepting it would let
+an attacker mint a code for their own account and feed it to the real app. A
+`cc`: the verifier must be its S256 pre-image. The validation and comparison
+are the OAuth server's own (`oauth_server.codes.validate_pkce_challenge`,
+`verify_pkce`); there is one implementation.
+
+`on_auth_exchange` runs the check right after the code is consumed and before
+the user is looked up, so a caller without the secret cannot tell a disabled
+account (403) from a bad code (401). A failed check spends the code. A code
+minted with a challenge needs the verifier in **every** mode; the setting only
+decides whether a code may be minted without one.
+
+Presence is tested, not value: `code_challenge`, `code_challenge_method` and
+`code_verifier` sent as JSON `null` are fields that were sent. A null challenge
+or method is a `400`; a null verifier fails the check.
+
+The three PKCE incidents are filed **without** the request object. The incident
+reporter stores the query string of a request it is handed, and both endpoints
+accept their fields there, so the code, the challenge and the verifier would be
+kept. `request_facts` passes the address, path, method, user agent and user
+instead.
+
+**What PKCE does not cover.** A sign-in the hostile app starts itself: it
+supplies its own challenge and holds the verifier (RFC 8252 section 8.6).
+django-mojo has no consent step of its own; a project that hands codes to apps
+must have its page ask the person before it calls `/api/auth/handoff`.
+
+Rolling it out: leave the setting `off`, ship apps and pages that send a
+challenge, watch `auth:handoff_pkce_missing` until it goes quiet, then set
+`"native"`.
 
 Codes are 32-hex random strings stored under Redis key `auth:handoff:<code>`,
 with a TTL controlled by the `AUTH_HANDOFF_CODE_TTL` setting (default `60`
