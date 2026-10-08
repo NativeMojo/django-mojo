@@ -86,6 +86,10 @@ class Book(models.Model, MojoModel):
 > it: `ALLOW_SAVE_FIELDS = ["uuid"]`. Only those two names can be handed back.
 > `id`, `pk` and anything the model lists in its own `NO_SAVE_FIELDS` cannot.
 > `Group` is the one framework model that declares it (`uuid`).
+>
+> **Never list `created` in `ALLOW_SAVE_FIELDS` on a model that keeps secrets**
+> (`MojoSecrets`). `created` is part of the key that encrypts the row's
+> secrets, so changing it leaves them unreadable.
 
 > **`NO_SAVE_FIELDS` does not disable the create-time auto-stamps.** It only
 > filters the request-body field loop. On create, the framework still stamps
