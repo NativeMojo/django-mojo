@@ -95,11 +95,17 @@ class _ClientSocket:
     def client_hang_up(self):
         self.inbound.put_nowait(None)
 
+    def client_reset(self):
+        """The transport dies under the handler: no close frame, an error."""
+        self.inbound.put_nowait(ConnectionResetError("connection reset by peer (simulated)"))
+
     async def __aiter__(self):
         while True:
             message = await self.inbound.get()
             if message is None:
                 return
+            if isinstance(message, Exception):
+                raise message
             yield message
 
     async def send(self, message):
@@ -541,5 +547,193 @@ def test_non_set_key_is_left_alone(opts):
         value = redis.get(key)
         value = value.decode() if isinstance(value, bytes) else value
         assert value == "legacy", f"and is not rewritten or removed, got {value!r}"
+    finally:
+        _reset(uid)
+
+
+# ---------------------------------------------------------------------------
+# Part B: the lifecycle
+# ---------------------------------------------------------------------------
+
+def _topic_key(topic):
+    return f"realtime:topic:{topic}"
+
+
+def _text(value):
+    return value.decode() if isinstance(value, bytes) else value
+
+
+async def _open_live(token, **seams):
+    """An authenticated session with its server ping timer running, plus the
+    names of what it holds: its topics, its pub/sub and its background tasks."""
+    seams.setdefault("ping_seconds", 0.2)
+    session = _Session(token, answer_pings=True, **seams)
+    outcome = await session.open()
+    assert outcome == "admitted", f"the socket must authenticate: {outcome}"
+    handler = session.handler
+    topics = set(handler.subscribed_topics)
+    assert topics, "an authenticated socket is subscribed to its own topic"
+    assert handler.pubsub is not None and handler._redis_task is not None, "pub/sub must be running"
+    assert handler._ping_task is not None, "the server ping timer must be running"
+    return session, topics
+
+
+async def _leftovers(session, topics, uid, own_tasks):
+    """Everything a finished handler may still hold, as a list of findings.
+    Empty means released. `own_tasks` are the scenario's tasks that are
+    allowed to be alive."""
+    handler = session.handler
+    cid = session.connection_id
+    redis = _redis()
+
+    def redis_state():
+        found = []
+        if redis.exists(_record_key(cid)):
+            found.append("the connection record still exists")
+        if redis.sismember(_online_key(uid), cid):
+            found.append("the id is still in the online set")
+        for topic in sorted(topics):
+            if redis.sismember(_topic_key(topic), cid):
+                found.append(f"the id is still in the topic set of {topic}")
+        return found
+
+    found = await asyncio.to_thread(redis_state)
+    if not handler._ping_task.done():
+        found.append("the ping task is still running")
+    if not handler._redis_task.done():
+        found.append("the pub/sub task is still running")
+    if handler.pubsub.connection is not None:
+        found.append("the pub/sub connection is still open")
+    # The two child tasks of handle_connection, and anything else the handler
+    # started: after it returns, no task but the scenario's own may be alive.
+    await asyncio.sleep(0.05)
+    alive = [task for task in asyncio.all_tasks()
+             if task not in own_tasks and not task.done()]
+    for task in alive:
+        found.append(f"a task is still running: {task.get_coro().__qualname__}")
+        task.cancel()
+    return found
+
+
+@th.django_unit_test("#4567: a clean disconnect releases the record, the memberships, the tasks and pub/sub")
+def test_clean_disconnect_releases_everything(opts):
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        session, topics = await _open_live(opts.pc_token)
+        session.socket.client_hang_up()
+        await asyncio.wait_for(session.task, timeout=15)
+        return await _leftovers(session, topics, uid, {asyncio.current_task()})
+
+    try:
+        found = asyncio.run(scenario())
+        assert found == [], f"a clean disconnect must release everything, left: {found}"
+    finally:
+        _reset(uid)
+
+
+@th.django_unit_test("#4567: an abrupt disconnect releases the record, the memberships, the tasks and pub/sub")
+def test_abrupt_disconnect_releases_everything(opts):
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        session, topics = await _open_live(opts.pc_token)
+        session.socket.client_reset()
+        await asyncio.wait_for(session.task, timeout=15)
+        return await _leftovers(session, topics, uid, {asyncio.current_task()})
+
+    try:
+        found = asyncio.run(scenario())
+        assert found == [], f"a reset transport must release everything, left: {found}"
+    finally:
+        _reset(uid)
+
+
+@th.django_unit_test("#4567: a cancelled handler releases the record, the memberships, the tasks and pub/sub")
+def test_cancelled_handler_releases_everything(opts):
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        session, topics = await _open_live(opts.pc_token)
+        session.task.cancel()
+        try:
+            await asyncio.wait_for(session.task, timeout=15)
+        except asyncio.CancelledError:
+            pass
+        assert session.task.done(), "the cancelled handler must finish"
+        return await _leftovers(session, topics, uid, {asyncio.current_task()})
+
+    try:
+        found = asyncio.run(scenario())
+        assert found == [], f"a cancelled handler must release everything, left: {found}"
+    finally:
+        _reset(uid)
+
+
+@th.django_unit_test("#4567: one failing Redis call at cleanup does not skip the others")
+def test_one_failed_redis_call_does_not_skip_the_rest(opts):
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        redis = _FailingRedis("delete")
+        session, topics = await _open_live(opts.pc_token, redis_client=redis)
+        session.socket.client_hang_up()
+        await asyncio.wait_for(session.task, timeout=15)
+        found = await _leftovers(session, topics, uid, {asyncio.current_task()})
+        return found, redis.failed, session.connection_id
+
+    cid = None
+    try:
+        found, failed, cid = asyncio.run(scenario())
+        assert "delete" in failed, f"the record removal must have been attempted and failed: {failed}"
+        assert found == ["the connection record still exists"], (
+            f"only the record, whose removal failed, may be left (it expires): {found}")
+    finally:
+        if cid:
+            _redis().delete(_record_key(cid))
+        _reset(uid)
+
+
+@th.django_unit_test("#4567: a dead worker leaves only state that expires or is pruned")
+def test_worker_death_leaves_only_expiring_state(opts):
+    from mojo.apps.realtime import presence
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        session, topics = await _open_live(opts.pc_token)
+        cid = session.connection_id
+        redis = _redis()
+        keys = [_record_key(cid), _online_key(uid)] + [_topic_key(topic) for topic in sorted(topics)]
+
+        def expiries():
+            return {key: redis.ttl(key) for key in keys}
+
+        def record_expired_then_pruned():
+            # The worker died: no cleanup ran, and the record ran out.
+            redis.delete(_record_key(cid))
+            left = presence.prune(redis, _online_key(uid))
+            return left, redis.sismember(_online_key(uid), cid)
+
+        try:
+            ttls = await asyncio.to_thread(expiries)
+            # Stop the handler's own heartbeat without any cleanup, as a
+            # killed process would.
+            session.handler._closing = True
+            left, still_member = await asyncio.to_thread(record_expired_then_pruned)
+            return ttls, left, still_member
+        finally:
+            await _close_all([session])
+
+    try:
+        ttls, left, still_member = asyncio.run(scenario())
+        without = {key: ttl for key, ttl in ttls.items() if ttl <= 0}
+        assert not without, f"every key of a live socket must carry an expiry, without one: {without}"
+        assert left == 0 and not still_member, (
+            f"once the record is gone a prune removes the member, left {left}, member {still_member}")
     finally:
         _reset(uid)
