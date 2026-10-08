@@ -27,6 +27,17 @@ APP_DESTS = [
     ("com.example.app:/oauth", "a custom scheme with no authority"),
     ("http://127.0.0.1:8123/cb", "an IPv4 loopback listener"),
     ("http://[::1]:8123/cb", "an IPv6 loopback listener"),
+    ("http://127.1:8123/cb", "loopback, short form"),
+    ("http://2130706433:8123/cb", "loopback, as one integer"),
+    ("http://0x7f000001:8123/cb", "loopback, hex"),
+    ("http://0177.0.0.1:8123/cb", "loopback, octal"),
+    ("http://127.0.0.1.:8123/cb", "loopback with a trailing dot"),
+    ("http://[::ffff:127.0.0.1]:8123/cb", "loopback mapped into IPv6"),
+    ("http://0.0.0.0:8123/cb", "the unspecified address"),
+    ("http://127.0.0.%31:8123/cb", "a percent-escaped host"),
+    ("http://\uff11\uff12\uff17.0.0.1/cb", "full-width digits"),
+    ("http://1.2.3.4.5/cb", "a numeric host a browser refuses"),
+    ("http://127.0.0.1\\@example.com/cb", "a backslash before the host"),
     ("http://localhost/cb", "localhost"),
     ("https://app.localhost/cb", "a .localhost name"),
     ("javascript:alert(1)", "a URL that does not parse as a destination"),
@@ -96,7 +107,9 @@ def test_is_app_destination(opts):
         assert_true(auth_handoff.is_app_destination(dest),
                     f"{dest!r} ({why}) must count as an app destination")
     for dest in (HTTPS_DEST, "http://example.com/app", "https://127.example.com/x",
-                 "https://localhost.example.com/x"):
+                 "https://localhost.example.com/x", "http://8.8.8.8/x",
+                 "https://134744072/x",
+                 "https://xn--bcher-kva.example/x"):
         assert_true(not auth_handoff.is_app_destination(dest),
                     f"{dest!r} is a web origin and must not count as an app destination")
 
@@ -160,6 +173,10 @@ def test_native_mode_requires_a_challenge(opts):
             ({"redirect_uri": "myapp://auth"}, "a custom scheme"),
             ({"redirect_uri": "http://127.0.0.1:8123/cb"}, "a loopback listener"),
             ({"redirect_uri": "http://localhost/cb"}, "localhost"),
+            ({"redirect_uri": "http://127.1:8123/cb"}, "loopback, short form"),
+            ({"redirect_uri": "http://2130706433:8123/cb"}, "loopback, as one integer"),
+            ({"redirect_uri": "http://0x7f000001:8123/cb"}, "loopback, hex"),
+            ({"redirect_uri": "http://0177.0.0.1:8123/cb"}, "loopback, octal"),
             ({}, "no redirect_uri"),
         ]
         for body, why in refused:
@@ -199,6 +216,26 @@ def test_native_mode_requires_a_challenge(opts):
         "a refused handoff must file an auth:handoff_pkce_refused incident")
 
 
+@th.django_unit_test("#7397: with the suppression store down the two reports are dropped, not filed per request")
+def test_reports_fail_closed_without_redis(opts):
+    """The destination is the caller's. Fail-open would file one incident per
+    request for as long as Redis is unreachable."""
+    from unittest import mock
+    from mojo.apps.account.services import auth_handoff
+
+    def down():
+        raise ConnectionError("redis is down")
+
+    filed = []
+    with mock.patch("mojo.helpers.redis.get_connection", down), \
+            mock.patch("mojo.apps.incident.report_event",
+                       lambda *args, **kwargs: filed.append(kwargs.get("category"))):
+        for refused in (False, True):
+            for _ in range(3):
+                auth_handoff.report_pkce_missing("hpkcedown://auth", refused=refused)
+    assert_eq(filed, [], f"no incident may be filed while suppression is unavailable, got {filed}")
+
+
 @th.unit_test("#7397 off: an app destination without a challenge still mints, and is reported")
 def test_off_mode_mints_and_reports(opts):
     from mojo.apps.incident.models import Event as IncidentEvent
@@ -220,11 +257,16 @@ def test_off_mode_mints_and_reports(opts):
     resp = opts.client.post("/api/auth/exchange", {"code": code})
     assert_eq(resp.status_code, 200,
               f"and exchange as before, got {resp.status_code}: {resp.response}")
+    event = IncidentEvent.objects.filter(
+        category="auth:handoff_pkce_missing", metadata__redirect_host="hpkceapp").first()
     assert_true(
-        IncidentEvent.objects.filter(
-            category="auth:handoff_pkce_missing", metadata__redirect_host="hpkceapp").exists(),
+        event is not None,
         "an app handoff with no challenge must be reported, so an operator can "
         "see who still signs in without one before turning the requirement on")
+    assert_true("http_query_string" not in event.metadata,
+                "the report must not keep the request's query string")
+    assert_eq(event.uid, opts.user_id, "the report must still name the account")
+    assert_true(bool(event.source_ip), "and the caller's address")
 
 
 @th.unit_test("#7397: a gated code minted with a challenge needs the secret too")

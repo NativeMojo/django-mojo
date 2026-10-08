@@ -368,11 +368,12 @@ The rules the server applies:
   also `401`. So the page and the app must switch together: both send, or
   neither.
 - A malformed challenge, `plain`, or a missing method answers `400` and no code
-  is minted.
+  is minted. A field sent as `null` counts as sent: leave a field out rather
+  than sending `null`.
 - Where the server sets `AUTH_HANDOFF_REQUIRE_PKCE = "native"`, a handoff with
   no challenge answers `400` *"code_challenge is required for this
-  destination"* for a custom scheme, a loopback address, `localhost`, or no
-  `redirect_uri`. An `https://` web destination is unaffected.
+  destination"* for a custom scheme, a loopback address in any spelling
+  (`127.0.0.1`, `127.1`, `[::1]`), `localhost`, or no `redirect_uri`. An `https://` web destination is unaffected.
 
 **What this does not protect against.** PKCE stops another app from using a
 code it *caught*. It does not stop a hostile app from *starting* the sign-in

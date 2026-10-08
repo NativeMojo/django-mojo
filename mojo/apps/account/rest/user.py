@@ -251,11 +251,12 @@ def _handoff_code_challenge(request, destination):
     from mojo.apps.account.services import auth_handoff
     from mojo.apps.account.services.oauth_server import codes as oauth_codes
 
-    challenge = request.DATA.get("code_challenge")
-    method = request.DATA.get("code_challenge_method")
-    if challenge is not None or method is not None:
+    # Presence, not value: a field sent as null was sent, and is malformed.
+    if "code_challenge" in request.DATA or "code_challenge_method" in request.DATA:
         try:
-            return oauth_codes.validate_pkce_challenge(method, challenge)
+            return oauth_codes.validate_pkce_challenge(
+                request.DATA.get("code_challenge_method"),
+                request.DATA.get("code_challenge"))
         except ValueError as exc:
             raise merrors.ValueException(str(exc))
     if not auth_handoff.is_app_destination(destination):
@@ -272,6 +273,7 @@ def _report_handoff_pkce_failed(request, data):
     is about to answer 401 and a reporting fault must not turn that into a 500."""
     try:
         from mojo.apps import incident
+        from mojo.apps.account.services import auth_handoff
         incident.report_event(
             "A handoff code was presented with a missing or wrong code_verifier. "
             "The code is spent. Either the app is broken or someone else holds "
@@ -280,9 +282,10 @@ def _report_handoff_pkce_failed(request, data):
             category="auth:handoff_pkce_failed",
             scope="account",
             level=6,
-            request=request,
-            uid=data.get("uid"),
-            redirect_uri=str(data.get("dest") or "")[:200])
+            # No `request=`: the reporter would store its query string, which
+            # can carry the code and the verifier.
+            redirect_uri=str(data.get("dest") or "")[:200],
+            **{**auth_handoff.request_facts(request), "uid": data.get("uid")})
     except Exception as exc:
         logit.error("account.auth_handoff", f"failed to file auth:handoff_pkce_failed: {exc}")
 
@@ -467,7 +470,9 @@ def on_auth_exchange(request):
         raise merrors.PermissionDeniedException("Invalid or expired handoff code", 401, 401)
     # Before the user lookup, so a caller without the secret cannot tell a
     # disabled account (403) from a bad code (401). The code is already spent.
-    if not auth_handoff.check_exchange(data, request.DATA.get("code_verifier")):
+    verifier = (request.DATA.get("code_verifier") if "code_verifier" in request.DATA
+                else auth_handoff.NOT_SENT)
+    if not auth_handoff.check_exchange(data, verifier):
         _report_handoff_pkce_failed(request, data)
         raise merrors.PermissionDeniedException("Invalid or expired handoff code", 401, 401)
     user = User.objects.filter(pk=data.get("uid")).first()

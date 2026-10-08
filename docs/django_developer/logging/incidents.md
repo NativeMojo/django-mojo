@@ -1860,9 +1860,9 @@ Three categories from `POST /api/auth/handoff` and `/api/auth/exchange`
 
 | Category | Level | Suppression | Meaning |
 |---|---|---|---|
-| `auth:handoff_pkce_missing` | 3 | once per destination per hour (web host, or app-link scheme), 50 destinations/hour | `AUTH_HANDOFF_REQUIRE_PKCE` is `off` and a code was minted for an app on the device with no PKCE challenge. The feed lists who still signs in without one; turn the requirement on once it is quiet. |
+| `auth:handoff_pkce_missing` | 3 | once per destination per hour (web host, or app-link scheme), 50 destinations/hour; dropped while Redis is unreachable (`fail_open=False`) | `AUTH_HANDOFF_REQUIRE_PKCE` is `off` and a code was minted for an app on the device with no PKCE challenge. The feed lists who still signs in without one; turn the requirement on once it is quiet. |
 | `auth:handoff_pkce_refused` | 5 | the same | `AUTH_HANDOFF_REQUIRE_PKCE` is `native` and a handoff with no challenge was refused. No code was minted. |
-| `auth:handoff_pkce_failed` | 6 | none | A valid handoff code was presented with a missing or wrong `code_verifier`. The code is spent. Either the app is broken or someone else holds the code. It needs a real code each time, so it cannot be flooded without one. |
+| `auth:handoff_pkce_failed` | 6 | none | A valid handoff code was presented with a missing or wrong `code_verifier`. The code is spent. Either the app is broken or someone else holds the code. It needs a real code each time, so it cannot be flooded without one. None of the three stores the request's query string or body. |
 
 **Two deliberately-unconverted file logs.** `handoff_group._should_report` and
 `redirect_allowlist.report_unlisted_destination` each keep a `logit.warning` in

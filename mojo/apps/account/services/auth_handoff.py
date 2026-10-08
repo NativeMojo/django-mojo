@@ -29,6 +29,7 @@ project's.
 """
 import ipaddress
 import json
+import re
 import uuid
 from urllib.parse import urlsplit
 
@@ -70,28 +71,96 @@ def get_pkce_mode():
     return mode
 
 
+_HOST_PLAIN_RE = re.compile(r"^[a-z0-9.\-]+$")
+_HOST_NUMBER_RE = re.compile(r"^(?:[0-9]+|0x[0-9a-f]*)$")
+
+
+def _parse_browser_ipv4(host):
+    """The IPv4 address a browser turns `host` into, or None if it refuses it.
+
+    A browser reads a host whose last label is a number as an IPv4 address and
+    accepts short, integer, octal and hex spellings (WHATWG URL, "IPv4
+    parser"): `127.1`, `2130706433`, `0x7f000001` and `0177.0.0.1` are all
+    127.0.0.1. `ipaddress` rejects every one of them.
+    """
+    labels = host.split(".")
+    if len(labels) > 4:
+        return None
+    numbers = []
+    for label in labels:
+        if not _HOST_NUMBER_RE.match(label):
+            return None
+        try:
+            if label.startswith("0x"):
+                numbers.append(int(label[2:] or "0", 16))
+            elif len(label) > 1 and label.startswith("0"):
+                numbers.append(int(label, 8))
+            else:
+                numbers.append(int(label, 10))
+        except ValueError:
+            return None
+    if any(n > 255 for n in numbers[:-1]):
+        return None
+    last = numbers[-1]
+    if last >= 256 ** (5 - len(numbers)):
+        return None
+    value = last
+    for index, n in enumerate(numbers[:-1]):
+        value += n * 256 ** (3 - index)
+    return ipaddress.IPv4Address(value)
+
+
+def _is_local_address(address):
+    """Loopback, or the unspecified address, which reaches this machine too."""
+    mapped = getattr(address, "ipv4_mapped", None)
+    if mapped is not None:
+        address = mapped
+    return address.is_loopback or address.is_unspecified
+
+
 def _is_loopback_host(host):
+    """True when a browser would deliver `host` to this device, or when this
+    function cannot tell: the unreadable case must not be the lenient one.
+
+    A name that only RESOLVES to loopback (a public DNS record for 127.0.0.1)
+    is not seen here; that needs the allowlist.
+    """
     host = (host or "").strip().lower().rstrip(".")
+    if not host:
+        return True
     if host == "localhost" or host.endswith(".localhost"):
         return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
+    if ":" in host:
+        try:
+            return _is_local_address(ipaddress.ip_address(host))
+        except ValueError:
+            return True
+    # Percent-escapes and non-ASCII characters are folded by a browser before
+    # it reads the host (`127.0.0.%31`, full-width digits). Not folded here.
+    if not _HOST_PLAIN_RE.match(host):
+        return True
+    if _HOST_NUMBER_RE.match(host.rsplit(".", 1)[-1]):
+        address = _parse_browser_ipv4(host)
+        return True if address is None else _is_local_address(address)
+    return False
 
 
 def is_app_destination(destination):
     """True when a code for `destination` is delivered to an app on the device.
 
     False ONLY for http or https on a host that is not loopback. A custom
-    scheme, `127.0.0.1`, `[::1]`, `localhost`, an absent destination and one
-    that does not parse are all True: each is somewhere another local program
-    can also receive the code (RFC 8252 sections 7.1, 7.3 and 8.1), or somewhere
-    this function cannot read, and the unreadable case must not be the lenient
-    one.
+    scheme, `127.0.0.1` in any spelling a browser accepts, `[::1]`,
+    `localhost`, an absent destination and one that does not parse are all
+    True: each is somewhere another local program can also receive the code
+    (RFC 8252 sections 7.1, 7.3 and 8.1), or somewhere this function cannot
+    read, and the unreadable case must not be the lenient one.
     """
     from mojo.apps.account.services import redirect_allowlist
     if not destination or not isinstance(destination, str):
+        return True
+    # A browser reads a backslash as a slash in a web URL and urlsplit does
+    # not, so the two can disagree on which part is the host.
+    if "\\" in destination:
         return True
     try:
         parts = urlsplit(destination.strip())
@@ -108,8 +177,15 @@ def pkce_required(destination):
     return get_pkce_mode() == PKCE_NATIVE and is_app_destination(destination)
 
 
-def check_exchange(data, code_verifier):
+# "The request carried no such field", as distinct from a field sent as null.
+NOT_SENT = object()
+
+
+def check_exchange(data, code_verifier=NOT_SENT):
     """True when `code_verifier` is what the consumed record `data` calls for.
+
+    Pass `NOT_SENT` when the request has no `code_verifier` field at all. A
+    field that is present, whatever its value (null included), was sent.
 
     * no challenge stored, no verifier sent — a pre-PKCE client: True.
     * no challenge stored, a verifier sent — False. Accepting it would let an
@@ -122,7 +198,7 @@ def check_exchange(data, code_verifier):
     from mojo.apps.account.services.oauth_server import codes as oauth_codes
     challenge = data.get("cc") if isinstance(data, dict) else None
     if challenge is None:
-        return code_verifier is None
+        return code_verifier is NOT_SENT
     return oauth_codes.verify_pkce(challenge, code_verifier)
 
 
@@ -145,7 +221,8 @@ def report_pkce_missing(destination, request=None, refused=False):
     `refused=False` (mode `off`): the code was minted anyway. These incidents
     list who still signs in without a challenge, so the requirement can be
     turned on once the feed goes quiet. `refused=True` (mode `native`): no code
-    was minted. One per destination per hour, budgeted. Never raises.
+    was minted. One per destination per hour, budgeted; dropped when the
+    suppression store is unreachable. Never raises.
     """
     from mojo.apps import incident
     host = _destination_host(destination) or "none"
@@ -164,18 +241,45 @@ def report_pkce_missing(destination, request=None, refused=False):
             f"code_challenge. Any app on the device that claims the same link "
             f"can exchange a code it catches. Setting AUTH_HANDOFF_REQUIRE_PKCE "
             f"to 'native' would refuse this request.")
+    # No `request=`: the reporter would store its query string, and a caller
+    # may send the challenge there. Only these named facts are kept.
     incident.report_event_suppressed(
         body,
         key=host,
         title=title,
         category=category,
         level=level,
-        request=request,
         scope="account",
         window=_PKCE_RENOTIFY_SEC,
         budget=_PKCE_REPORT_BUDGET,
+        # The destination is the caller's: with Redis down, drop the event
+        # rather than file one per request.
+        fail_open=False,
         redirect_uri=str(destination or "")[:200],
-        redirect_host=host)
+        redirect_host=host,
+        **request_facts(request))
+
+
+def request_facts(request):
+    """The facts of `request` a handoff incident keeps: who and from where.
+
+    Deliberately NOT the query string or the body. Passing the request itself
+    to the incident reporter stores `QUERY_STRING`, and both handoff endpoints
+    accept their fields there: the code, the challenge and the verifier.
+    """
+    if request is None:
+        return {}
+    facts = {"source_ip": getattr(request, "ip", None)}
+    try:
+        facts["http_path"] = request.path
+        facts["http_method"] = request.method
+        facts["http_user_agent"] = request.META.get("HTTP_USER_AGENT", "")
+        user = getattr(request, "user", None)
+        if user is not None and user.is_authenticated:
+            facts["uid"] = user.id
+    except Exception:
+        pass
+    return facts
 
 
 def create_handoff_code(user, destination=None, ip=None, group_id=None, code_challenge=None):

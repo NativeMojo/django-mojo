@@ -321,8 +321,8 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
 - `AUTH_HANDOFF_REQUIRE_PKCE` — **file-only** (`settings.get_static`). `"off"`
   (default) or `"native"`. With `"native"`, `POST /api/auth/handoff` refuses to
   mint a code without a PKCE `code_challenge` when the code is going to an app
-  on the device: a custom-scheme link, a loopback address, `localhost`, or no
-  `redirect_uri`. An `https://` web destination is unaffected, so the sign-in
+  on the device: a custom-scheme link, a loopback address in any spelling a
+  browser accepts, `localhost`, or no `redirect_uri`. An `https://` web destination is unaffected, so the sign-in
   pages keep working. An unknown value is logged and treated as `"native"`.
   A code minted **with** a challenge needs its `code_verifier` at exchange in
   either mode. File-only so a `Setting` row cannot switch the protection off.

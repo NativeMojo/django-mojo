@@ -512,14 +512,79 @@ def test_pkce_service_layer(opts):
     assert_eq(data.get("cc"), PKCE_CHALLENGE, "the record must store the challenge as cc")
     assert_true(auth_handoff.check_exchange(data, PKCE_VERIFIER), "the pre-image must pass")
     assert_true(not auth_handoff.check_exchange(data, PKCE_OTHER_VERIFIER), "another secret must fail")
-    assert_true(not auth_handoff.check_exchange(data, None), "no secret must fail")
+    assert_true(not auth_handoff.check_exchange(data), "no secret must fail")
+    assert_true(not auth_handoff.check_exchange(data, None), "a null secret must fail")
     assert_true(not auth_handoff.check_exchange(data, ["x"]), "a non-string must fail, not raise")
 
     plain = auth_handoff.consume_handoff_code(auth_handoff.create_handoff_code(user))
     assert_true("cc" not in plain, "a code minted without a challenge stores no cc key")
-    assert_true(auth_handoff.check_exchange(plain, None), "no challenge and no secret passes, as before")
+    assert_true(auth_handoff.check_exchange(plain), "no challenge and no secret passes, as before")
+    for sent in (None, "", ["x"], 12345):
+        assert_true(not auth_handoff.check_exchange(plain, sent),
+                    f"a code_verifier field sent as {sent!r} for a record with no "
+                    f"challenge was sent, and must fail")
     assert_true(not auth_handoff.check_exchange(plain, PKCE_VERIFIER),
                 "a secret for a record with no challenge must fail")
+
+
+@th.unit_test("#7397: a challenge field sent as null is malformed, not absent")
+def test_pkce_null_challenge_is_refused(opts):
+    """A null field was sent. Reading it as absent minted an unbound code for a
+    caller who believed it had asked for a bound one."""
+    _clear_handoff_limits()
+    refused = [
+        ({"code_challenge": None}, "a null challenge"),
+        ({"code_challenge": None, "code_challenge_method": None}, "a null challenge and method"),
+        ({"code_challenge_method": None}, "a null method"),
+        ({"code_challenge": None, "code_challenge_method": "S256"}, "a null challenge with S256"),
+    ]
+    for extra, why in refused:
+        resp = _mint_with_challenge(opts, **extra)
+        assert_eq(resp.status_code, 400,
+                  f"a handoff with {why} must answer 400, got {resp.status_code}: {resp.response}")
+        assert_true(_minted_code(resp) is None,
+                    f"a handoff with {why} must not return a code, got {resp.response}")
+
+
+@th.unit_test("#7397: a code_verifier field sent for a code with no challenge is refused, null included")
+def test_pkce_any_verifier_field_for_a_code_without_challenge(opts):
+    _clear_handoff_limits()
+    for sent in (None, "", ["x"], 12345):
+        resp = _mint_with_challenge(opts)
+        code = _minted_code(resp)
+        assert_true(bool(code), f"no code minted: {resp.response}")
+        resp = opts.client.post("/api/auth/exchange", {"code": code, "code_verifier": sent})
+        assert_eq(resp.status_code, 401,
+                  f"code_verifier={sent!r} for a code with no challenge must answer "
+                  f"401, got {resp.status_code}: {resp.response}")
+
+
+@th.unit_test("#7397: the failed-exchange incident stores neither the code nor the secret")
+def test_pkce_failed_incident_keeps_no_secret(opts):
+    """Both fields are accepted in the query string, and the incident reporter
+    stores the query string of any request it is handed."""
+    import json
+    from mojo.apps.incident.models import Event as IncidentEvent
+
+    _clear_handoff_limits()
+    code = _pkce_code(opts)
+    before = set(IncidentEvent.objects.filter(
+        category="auth:handoff_pkce_failed", uid=opts.user_id).values_list("pk", flat=True))
+    resp = opts.client.post(
+        f"/api/auth/exchange?code={code}&code_verifier={PKCE_OTHER_VERIFIER}", {})
+    assert_eq(resp.status_code, 401,
+              f"a wrong code_verifier in the query string must answer 401, "
+              f"got {resp.status_code}: {resp.response}")
+    events = [e for e in IncidentEvent.objects.filter(
+        category="auth:handoff_pkce_failed", uid=opts.user_id) if e.pk not in before]
+    assert_eq(len(events), 1, f"one auth:handoff_pkce_failed incident expected, got {len(events)}")
+    event = events[0]
+    stored = json.dumps(event.metadata, default=str) + str(event.details) + str(event.title)
+    assert_true(code not in stored, "the incident must not store the handoff code")
+    assert_true(PKCE_OTHER_VERIFIER not in stored, "the incident must not store the code_verifier")
+    assert_true("http_query_string" not in (event.metadata or {}),
+                "the incident must not keep the request's query string")
+    assert_true(bool(event.source_ip), "the incident must still record the caller's address")
 
 
 @th.tier("extended")  # per-IP rate-limit counter — cannot run in the parallel core/framework ring (#2789 -j sweep)
