@@ -101,7 +101,9 @@ itself through the Admin. See [Admin fleet overrides](../deploy/README.md#admin-
 - `ALLOW_EMAIL_CHANGE` — dynamic boolean, default `True`; Admin Settings can
   manage a global non-secret override.
 - `ALLOW_PHONE_CHANGE` — dynamic boolean, default `True`; Admin Settings can
-  manage a global non-secret override.
+  manage a global non-secret override. When `False`, the phone change flow is
+  off and someone who is not an admin can neither replace nor clear a number
+  on file through the account save. A first number, and an admin, still work.
 - `ALLOW_PHONE_LOGIN`
 - `ALLOW_SELF_DEACTIVATION` — dynamic boolean, default `True`; Admin Settings
   can manage a global non-secret override.
@@ -477,6 +479,25 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   `ChatRoom.group` is `on_delete=CASCADE` from `account.Group`, so deleting a
   Group destroys rooms and their messages with no REST layer involved. See
   [the deletion hook](../chat/services.md#deletion-hook).
+
+### CODE
+
+Per-account limits on one-time codes. See
+[Failed Login Protection](../account/auth.md#failed-login-protection).
+
+- `CODE_ATTEMPT_LIMIT` — int, default `5`. Tries at a one-time code per
+  account per window, for every kind of code. Never below `1`.
+- `CODE_ATTEMPT_WINDOW` — int seconds, default `900`. Window for the try
+  counter. **Keep it at or above the longest code lifetime you configure**
+  (`SMS_OTP_TTL`, `PASSWORD_RESET_CODE_TTL`, `PHONE_VERIFY_CODE_TTL`,
+  `EMAIL_VERIFY_CODE_TTL`, `EMAIL_CHANGE_CODE_TTL`,
+  `PHONE_REGISTER_SESSION_TTL`; all default `600`). A code that lives longer
+  than the window gets a window stretched to its own lifetime, so the value
+  here would no longer be the one in force for that code.
+- `CODE_SEND_LIMIT` — int, default `5`. One-time codes sent per account, or
+  per phone number at sign-up, per window. Never below `1`.
+- `CODE_SEND_WINDOW` — int seconds, default `900`. Window for the send
+  counter.
 
 ### DEACTIVATE
 
@@ -1229,6 +1250,9 @@ registered resource is enabled; until then every endpoint answers 404.
 
 ### TOTP
 
+- `TOTP_ATTEMPT_DAILY_LIMIT` — int, default `20`. Authenticator sign-in tries
+  per account per 24 hours, shared by `auth/totp/verify` and
+  `auth/totp/login`, on top of `CODE_ATTEMPT_LIMIT`. Never below `1`.
 - `TOTP_ISSUER`
 - `TOTP_RECOVERY_BCRYPT_ROUNDS` — **file-only** (`settings.get_static`), default
   `12`. bcrypt cost factor for hashing TOTP recovery codes

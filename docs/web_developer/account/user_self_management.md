@@ -237,6 +237,12 @@ The user is already logged in and knows their current password.
 Omitting it returns a 400. An incorrect `old_password` returns a 401 and
 logs a security incident.
 
+Tries at the current password are limited to 10 per 15 minutes per account,
+here and on the email-change and phone-change requests. At the limit the
+answer is `429` with a `Retry-After` header and a `retry_after` field
+(seconds), and a correct password is refused too until the wait is over. A
+correct password inside the limit clears the count.
+
 ---
 
 ### Reset password (forgot password)
@@ -280,6 +286,12 @@ account exists — prevents enumeration.
 
 Both paths log the user in and return a JWT on success — no separate login
 step is needed after a password reset.
+
+The code flow allows 5 tries at the code per 15 minutes per account; the
+sixth returns `429` with `retry_after`. A repeat `forgot` request while the
+code is still live re-sends the same code, and at most 5 codes are sent per
+account per 15 minutes. See
+[Too many attempts](authentication.md#too-many-attempts-on-a-code-or-a-current-password).
 
 ---
 
@@ -436,6 +448,7 @@ Immediately kills any outstanding confirmation link or code. Idempotent.
 | Condition | Status | Error |
 |---|---|---|
 | `current_password` provided but incorrect | 401 | `"Incorrect password"` |
+| Too many tries at `current_password` (10 per 15 minutes) | 429 | `"Rate limit exceeded"`, with `retry_after` |
 | `current_password` omitted | *(allowed — request proceeds)* | |
 | New address already in use | 400 | `"Email already in use"` |
 | New address same as current | 400 | `"New email must be different..."` |
@@ -551,8 +564,13 @@ POST /api/user/me
 { "phone_number": null }
 ```
 
-Clearing is always permitted. `is_phone_verified` is automatically reset
-to `false` whenever the phone number changes.
+Clearing is permitted while the server's `ALLOW_PHONE_CHANGE` setting is on
+(the default). With it off the request returns 403
+`"Phone number change is not allowed"`. `is_phone_verified` is automatically
+reset to `false` whenever the phone number changes.
+
+When the number removed was verified, the account's email address receives a
+security notice naming the number by its last four digits.
 
 ---
 

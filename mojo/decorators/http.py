@@ -204,6 +204,18 @@ def dispatch_error_handler(func):
                     return JsonResponse(resp, status=resp.get("code", 200))
                 return JsonResponse({"status": True, "code": 200, "data": resp})
             return resp
+        except mojo.errors.RateLimitException as err:
+            # The same 429 the rate-limit decorators return, plus the wait in
+            # the body. The limiter that raised has already recorded its metric
+            # and incident, gated to once a minute — no error incident here, or
+            # a retry storm would turn every refused request into an Event.
+            # Never folded to 200: the decorators' 429 is not either.
+            resp = JsonResponse(
+                {"error": err.reason, "code": err.code, "status": False,
+                 "retry_after": err.retry_after},
+                status=err.status)
+            resp["Retry-After"] = str(err.retry_after)
+            return resp
         except mojo.errors.MojoException as err:
             is_perm_denied = isinstance(err, mojo.errors.PermissionDeniedException)
             # A step-up (440) is an expected access gate, not a server error: count

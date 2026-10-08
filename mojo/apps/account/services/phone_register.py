@@ -31,6 +31,7 @@ import json
 import uuid
 
 from mojo import errors as merrors
+from mojo.decorators.limits import check_code_attempt, clear_code_attempts
 from mojo.helpers import crypto, dates, test_mode as _tm
 from mojo.helpers.redis import get_connection
 from mojo.helpers.settings import settings
@@ -121,7 +122,9 @@ def verify_code(session_token, code, request=None):
     the session is deleted only when the code matches, so a wrong code leaves
     the session intact and the user can retry the correct code on the same
     session_token until it succeeds or the TTL expires. Brute force is bounded
-    by the endpoint rate limit (phone_register_verify, 10/60s) plus the TTL.
+    by the per-phone try limit (five per 15 minutes, counted across sessions
+    for the same number, since no account exists yet), the endpoint rate limit
+    (phone_register_verify, 10/60s) and the TTL.
 
     Honors the AUTH_PHONE_VERIFY_DEV_BYPASS_CODE setting: when configured,
     the bypass code is accepted in addition to the real generated code. That
@@ -139,19 +142,21 @@ def verify_code(session_token, code, request=None):
         data = json.loads(raw)
     except (TypeError, ValueError):
         raise merrors.ValueException("Invalid or expired verification session")
-    stored_code = data.get("code")
-    submitted = str(code).strip()
-    bypass = _dev_bypass_code(request=request)
-    real_match = stored_code and _ct_eq(submitted, stored_code)
-    # Constant-time compare both branches so wrong-code timing does not
-    # disclose which path matched. Use str() guards because settings may
-    # return non-string types in pathological configs.
-    bypass_match = bypass is not None and _ct_eq(submitted, str(bypass))
-    if not (real_match or bypass_match):
-        raise merrors.ValueException("Invalid code")
     phone = data.get("phone")
     if not phone:
         raise merrors.ValueException("Invalid or expired verification session")
+    # Counted before the compare; a refused try raises the 429 here.
+    check_code_attempt("phone_register", phone, request, ttl=session_ttl())
+    stored_code = data.get("code")
+    submitted = str(code).strip()
+    bypass = _dev_bypass_code(request=request)
+    real_match = crypto.codes_match(submitted, stored_code)
+    # Constant-time compare both branches so wrong-code timing does not
+    # disclose which path matched.
+    bypass_match = bypass is not None and crypto.codes_match(submitted, bypass)
+    if not (real_match or bypass_match):
+        raise merrors.ValueException("Invalid code")
+    clear_code_attempts("phone_register", phone)
     # Code verified — consume the session now (single-use ON SUCCESS only).
     # A wrong code above raised without deleting, so the user can retry the
     # correct code on the same session_token until it succeeds or the TTL expires.
@@ -203,14 +208,4 @@ def consume(verified_token, phone):
     stored_phone = data.get("phone")
     if not stored_phone or not phone:
         return False
-    return _ct_eq(str(stored_phone), str(phone))
-
-
-def _ct_eq(a, b):
-    """Constant-time equality for short strings. Bound length check first."""
-    if len(a) != len(b):
-        return False
-    result = 0
-    for x, y in zip(a, b):
-        result |= ord(x) ^ ord(y)
-    return result == 0
+    return crypto.codes_match(stored_phone, phone)

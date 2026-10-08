@@ -21,8 +21,10 @@ from mojo.apps.account.rest.user import jwt_login
 from mojo.apps.account.services import mfa as mfa_service
 from mojo.apps.account.services import auth_config
 from mojo.apps.account.services import sms_delivery
+from mojo.apps.account.utils import tokens
 from mojo.apps import phonehub
 from mojo.apps.phonehub.services.phonenumbers import normalize as normalize_phone
+from mojo.decorators.limits import allow_code_send, check_code_attempt, clear_code_attempts
 from mojo.helpers import crypto, dates, logit
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
@@ -39,7 +41,14 @@ def _otp_sms_body(code, request=None):
 
 
 def _send_otp(user, request=None, *, send=None):
-    """Generate a 6-digit code, store it on the user, and send via SMS.
+    """Send the user's SMS code: the live one if there is one, else a new
+    6-digit code stored on the user.
+
+    A repeat request inside a code's life re-sends that code and does not
+    extend its life. Minting a new one each time let anyone who knew a
+    username replace the code its owner was typing. Finding the live code and
+    storing a new one are one locked step (tokens.live_or_new_code), so two
+    requests arriving together send the same code.
 
     Acceptance is classified by `sms_delivery.was_accepted()`, not by
     `sms.status == "failed"`: a `None` result (the transport returned nothing)
@@ -53,10 +62,8 @@ def _send_otp(user, request=None, *, send=None):
     if not user.phone_number:
         raise merrors.ValueException("No phone number on file for this account")
 
-    code = crypto.random_string(6, allow_digits=True, allow_chars=False, allow_special=False)
-    user.set_secret("sms_otp_code", code)
-    user.set_secret("sms_otp_ts", int(dates.utcnow().timestamp()))
-    user.save()
+    code = tokens.live_or_new_code(
+        user, "sms_otp_code", "sms_otp_ts", settings.get("SMS_OTP_TTL", 600))
 
     sender = send if send is not None else phonehub.send_sms
     try:
@@ -76,9 +83,9 @@ def _verify_otp(user, code):
     now_ts = int(dates.utcnow().timestamp())
     sms_otp_ttl = settings.get("SMS_OTP_TTL", 600)  # 10 minutes
 
-    if not stored_code or now_ts - stored_ts > sms_otp_ttl:
+    if not stored_code or now_ts - stored_ts > int(sms_otp_ttl):
         return False
-    return code == stored_code
+    return crypto.codes_match(code, stored_code)
 
 
 def _clear_otp(user):
@@ -153,10 +160,14 @@ def on_sms_verify(request):
     if not user:
         raise merrors.PermissionDeniedException()
 
+    # Five tries per account, whatever address they come from. Counted before
+    # the compare; a refused try raises the 429 here.
+    check_code_attempt("sms", user.pk, request, ttl=settings.get("SMS_OTP_TTL", 600))
     if not _verify_otp(user, code):
         user.report_incident("Invalid SMS OTP code", "sms:otp_failed")
         raise merrors.PermissionDeniedException("Invalid or expired code", 401, 401)
 
+    clear_code_attempts("sms", user.pk)
     _clear_otp(user)
     # For standalone phone login, entering the OTP proves phone ownership.
     # We must check the gate BEFORE auto-verifying so the gate sees the
@@ -179,6 +190,7 @@ def on_sms_verify(request):
 @md.POST("auth/sms/login")
 @md.strict_rate_limit("sms_login", ip_limit=10, ip_window=60)
 @md.public_endpoint()
+@md.requires_bouncer_token('login')
 @md.requires_geofence(scope="auth")
 def on_sms_login(request, *, send=None):
     """Send an SMS OTP to start a passwordless login.
@@ -189,6 +201,10 @@ def on_sms_login(request, *, send=None):
     docs/django_developer/account/auth_pages.md), so the no-phone case is
     handled HERE rather than by relaxing `_send_otp`, whose other callers are
     authenticated and are entitled to a real error.
+
+    Carries the same bouncer check as password login: log-only unless the
+    deployment or the group requires a token, and then a request without a
+    valid `login` token is refused before anything is looked up or sent.
 
     `send` is a test seam, not part of the wire contract."""
     # UX-only per-group method gate (no-op without a resolving group_uuid).
@@ -215,7 +231,11 @@ def on_sms_login(request, *, send=None):
             "sms:login_no_phone", level=6, request=request)
         return JsonResponse({"status": True, "message": "If the account exists, a code was sent."})
 
-    _send_otp(user, request, send=send)
+    # At most five texts per account in 15 minutes, and none while the
+    # account's code entry is locked. Either way the caller gets the same
+    # answer: anyone who knows a username can reach this endpoint.
+    if allow_code_send("sms", user.pk, request, ttl=settings.get("SMS_OTP_TTL", 600)):
+        _send_otp(user, request, send=send)
     return JsonResponse({"status": True, "message": "If the account exists, a code was sent."})
 
 
@@ -258,6 +278,15 @@ def on_phone_register_start(request, *, send=None):
     # above, the same way `/auth/sms/login` is.
 
     session_token, code, ttl = phone_register.start(phone, ip=getattr(request, "ip", None))
+
+    # At most five texts per phone number in 15 minutes, and none while that
+    # number's code entry is locked. The answer is the usual one: the session
+    # exists, its code was simply never sent.
+    if not allow_code_send("phone_register", phone, request, ttl=ttl):
+        return JsonResponse({
+            "status": True,
+            "data": {"session_token": session_token, "expires_in": ttl},
+        })
 
     sender = send if send is not None else phonehub.send_sms
     try:

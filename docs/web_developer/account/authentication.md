@@ -74,6 +74,31 @@ With a `Retry-After` header indicating seconds until the window resets.
 
 MFA verify endpoints (`POST /api/auth/totp/verify`, `POST /api/auth/passkeys/login/complete`, etc.) have their own separate IP-level rate limit (10 requests per 60 seconds by default).
 
+### Too many attempts on a code or a current password
+
+Every endpoint that checks a one-time code also limits tries **per account**: 5 per 15 minutes, whatever address they come from. That covers the SMS code, the password reset code, the phone and email verification codes, the email-change code, the phone sign-up code (per phone number) and authenticator codes. Authenticator sign-in also has a cap of 20 tries per 24 hours. A signed-in user's `current_password` (password change, email-change request, phone-change request) gets 10 tries per 15 minutes.
+
+At the limit the answer is:
+
+```json
+{
+  "status": false,
+  "code": 429,
+  "error": "Rate limit exceeded",
+  "retry_after": 540
+}
+```
+
+with the same number in the `Retry-After` header. `retry_after` is the real wait in seconds until the next try will be accepted.
+
+- **A correct code or password is refused too while the limit is in force.** Do not keep submitting; show the wait.
+- **Retrying while locked does not extend the wait.** A refused try is not counted.
+- **A correct code or password inside the limit clears the count.**
+- Show "Too many attempts. Try again in N minutes", rounding the wait **up**. The hosted pages do this.
+- The lock ends on its own. An admin can end it sooner with [`POST /api/auth/manage/clear_rate_limit`](user.md#clear-login-throttle).
+
+**Code requests are capped as well.** `POST /api/auth/sms/login` and `POST /api/auth/forgot` (code method) send at most 5 codes per account per 15 minutes, `POST /api/auth/phone/register/start` at most 5 per phone number, and none of them sends while that account's code entry is locked. They answer exactly as usual in those cases — nothing tells the client that no message went out. Inside a code's lifetime, a repeat request to `sms/login` or `forgot` re-sends the **same** code and does not extend its lifetime, so a "resend" button never invalidates the code the user already has.
+
 ## Token Storage (UI Guidance)
 
 For this Bearer-token API, a practical default is:
@@ -532,6 +557,8 @@ Returns the profile of the authenticated user.
 
 The identifier can be supplied as `email`, `phone`, or `username`. A 6-digit code is dispatched via email by default. Pass `"channel": "sms"` to route the code via SMS instead; the server also routes via SMS automatically when the matched account has no email on file. Response always returns success (to prevent account enumeration).
 
+A repeat request while the code is still live (10 minutes) re-sends the same code. At most 5 codes are sent per account per 15 minutes, and none while the account's reset-code entry is locked; the response is the same success either way.
+
 **Step 2: Submit code and new password**
 
 **POST** `/api/auth/password/reset/code`
@@ -545,6 +572,8 @@ The identifier can be supplied as `email`, `phone`, or `username`. A 6-digit cod
 ```
 
 Returns a JWT on success (automatically logs the user in).
+
+A wrong code, and an identifier that matches no account, both return **400** `"Invalid code"`. Tries are limited to 5 per 15 minutes per account and per identifier as typed; the sixth returns **429** with `retry_after` — see [Too many attempts](#too-many-attempts-on-a-code-or-a-current-password). A correct code with a new password the server rejects as too weak does not use up a try: fix the password and resubmit the same code.
 
 ## Password Reset — Link Method
 
@@ -713,7 +742,7 @@ Response:
 { "status": true, "data": { "session_token": "<32-hex>", "expires_in": 600 } }
 ```
 
-The server sends a 6-digit code via SMS. Rate-limited per IP (5 requests / 300s).
+The server sends a 6-digit code via SMS. Rate-limited per IP (5 requests / 300s). A phone number is also texted at most 5 codes per 15 minutes, and none while its code entry is locked (below); the response is then the same `session_token` body, but no message went out.
 
 If the transport did not accept the message the call returns **503** with `{"status": false, "code": 503, "error": "Unable to send the text message right now. Please try again in a few minutes."}` (retryable); if the provider rejected the number itself it returns **400** with `{"status": false, "code": 400, "error": "This phone number cannot receive text messages."}` (retrying the same number will not help). Neither returns a `session_token` — restart at step 1. Provider error text and codes never reach the client.
 
@@ -731,7 +760,7 @@ Response:
 { "status": true, "data": { "verified_phone_token": "<32-hex>", "expires_in": 600 } }
 ```
 
-A wrong code returns **400** but does **not** invalidate the session — resubmit the correct code on the **same** `session_token` until it succeeds or the session expires (`expires_in`). Only a successful verification consumes the session; repeated attempts are bounded by the per-IP rate limit.
+A wrong code returns **400** but does **not** invalidate the session — resubmit the correct code on the **same** `session_token` until it succeeds or the session expires (`expires_in`). Only a successful verification consumes the session. Repeated attempts are bounded by the per-IP rate limit and by a limit of 5 tries per 15 minutes per phone number, counted across sessions for the same number; the sixth returns **429** with `retry_after` — see [Too many attempts](#too-many-attempts-on-a-code-or-a-current-password).
 
 The returned `verified_phone_token` is single-use on a successful registration. Include it (and the same `phone`) in the subsequent `/api/auth/register` POST. The server consumes the token, marks `is_phone_verified=True`, and creates the User row in a single transaction.
 

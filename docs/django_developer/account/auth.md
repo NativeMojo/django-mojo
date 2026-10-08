@@ -1468,10 +1468,86 @@ The login endpoint applies a layered, bypass-resistant throttle stack. Each tier
 | `LOGIN_USERNAME_WINDOW` | `900` | Window in seconds for per-account counter |
 | `MFA_VERIFY_IP_LIMIT` | `10` | Max TOTP/passkey verify attempts per IP per window |
 | `MFA_VERIFY_IP_WINDOW` | `60` | Window in seconds for MFA verify IP counter |
+| `CODE_ATTEMPT_LIMIT` | `5` | Max tries at a one-time code per account per window. Never below 1 |
+| `CODE_ATTEMPT_WINDOW` | `900` | Window in seconds for the code counter. Keep it at or above the longest code lifetime |
+| `TOTP_ATTEMPT_DAILY_LIMIT` | `20` | Max authenticator sign-in tries per account per 24 hours |
+| `CODE_SEND_LIMIT` | `5` | Max one-time codes sent per account (or per phone number at sign-up) per window |
+| `CODE_SEND_WINDOW` | `900` | Window in seconds for the send counter |
+
+### One-time codes — per-account try limit
+
+The per-IP limits on the code endpoints do nothing against a guesser who rotates addresses, so every check of a one-time code is also counted against the **account** the code belongs to: five tries per 15 minutes, whatever address they come from. Password sign-in keeps its own ten.
+
+| Code | Checked by | Counter |
+|---|---|---|
+| SMS sign-in / SMS second factor | `POST /api/auth/sms/verify` | `code:sms` |
+| Password reset code | `POST /api/auth/password/reset/code` | `code:reset` |
+| Phone verification | `POST /api/auth/verify/phone/confirm` | `code:phone_verify` |
+| Email verification | `POST /api/auth/verify/email/confirm` | `code:email_verify` |
+| Email change (code method) | `POST /api/auth/email/change/confirm` | `code:email_change` |
+| Phone sign-up | `POST /api/auth/phone/register/verify` | `code:phone_register`, keyed on the normalised phone number — no account exists yet |
+| Authenticator second factor | `POST /api/auth/totp/verify` | `code:totp` |
+| Authenticator passwordless sign-in | `POST /api/auth/totp/login` | `code:totp_login` |
+| Authenticator set-up checks (confirm, regenerate recovery codes) | `POST /api/account/totp/confirm`, `POST /api/account/totp/recovery-codes/regenerate` and the matching `User` actions (`confirm_totp`, `regenerate_totp_codes`) | `code:totp_manage` |
+
+How a try is handled, in `mojo.decorators.limits.check_code_attempt`:
+
+- **Refused tries are not counted.** When the account already has its five tries in the window, the try is refused before the compare and leaves the counter alone. Retrying while locked does not extend the wait.
+- **Otherwise the try is counted before the compare**, in one Redis script, so two tries arriving together are both counted and no sixth compare happens in a window.
+- **The refusal is the standard 429**, with `Retry-After` and a `retry_after` field in the body. Both carry the real wait in seconds: the time until the oldest counted try ages out. The hosted pages show it as "Too many attempts. Try again in N minutes."
+- **A right code clears the counter at once**, before anything else can fail. A right reset code with a weak new password is not a guess.
+- **The window is never shorter than the code's own lifetime.** A deployment that lengthens `SMS_OTP_TTL` beyond `CODE_ATTEMPT_WINDOW` gets a window stretched to match for that code. Keep `CODE_ATTEMPT_WINDOW` at or above the longest code lifetime you configure, so the number in the settings is the number in force.
+- **Fail-open on Redis errors**, like the password counter. The codes still expire.
+- Each wrong guess still files its incident, as before. The counter itself writes nothing to the database.
+
+`totp_login` is no longer the password `login` bucket, so wrong authenticator codes cannot lock password sign-in. `totp_manage` is separate from both sign-in checks, so set-up typos cannot lock sign-in either.
+
+**Authenticator daily cap.** Three authenticator codes are valid at any moment and the secret never expires, so `totp` and `totp_login` also share a cap of `TOTP_ATTEMPT_DAILY_LIMIT` (20) tries per 24 hours, in the counter `code:totp_daily`. When both the 15-minute and the daily counter are full, the wait reported is the longer one.
+
+**The phone-change code has no counter.** Its session token is consumed before the compare, so each request already gets one guess.
+
+**Reset codes are counted per identifier as typed.** `POST /api/auth/password/reset/code` answers "Invalid code" for an unknown account and for a wrong code alike. So that the 429 cannot tell them apart either, each try is counted against every identifier sent, whether or not an account was found, and against the account when there is one. Each value is counted in every form the account lookup can match it in: as typed (lowercased and trimmed), and also in its normalised phone form when it reads as a phone number. **The field a value is sent in makes no difference to its counters**: the lookup accepts an email under `email` or `username` and a phone number under `phone_number` or `username`, so a counter that followed the field name would give one string a fresh set of tries under each name. The try is refused when any of those counters is full, and is then counted against none. A right code and an admin release clear both forms. One case is left open on purpose: someone who already holds two different identifiers of the same account, say its username and its email, sees them share that account's counter.
+
+A cost of counting the phone form: two unrelated values that hold the same ten digits, such as a username `5551234567` and an email `jo_5551234567@example.com`, share one counter.
+
+**What this costs.** Someone who knows a username can lock that account's code entry for 15 minutes at a time with five wrong tries. Password sign-in has the same property at ten. The lock ends on its own, or an admin releases it (below).
+
+### One-time codes — sends
+
+`POST /api/auth/sms/login`, `POST /api/auth/forgot` (code mode) and `POST /api/auth/phone/register/start` are open to anyone who knows a username or a phone number. Three rules apply to them (`limits.allow_code_send`, `tokens.live_or_new_code`):
+
+- **A repeat request inside a code's life re-sends the same code** (`sms/login` and `forgot`). Its life is not extended. A stranger can no longer replace the code a user is typing. Finding the live code and storing a new one are one step under a lock on the account row, so two requests arriving together send the same code. `POST /api/auth/sms/send` (the second-factor send) re-sends the live code in the same way. `phone/register/start` is different and unchanged: every call opens its own session with its own code, and an earlier session stays valid until it expires.
+- **At most `CODE_SEND_LIMIT` (5) sends per account, or per phone number at sign-up, per `CODE_SEND_WINDOW` (900 s).** Over the cap nothing is sent.
+- **Nothing is sent while the account's code entry is locked.** A code sent then could expire before the lock ends.
+
+In the last two cases the endpoint answers exactly as if the code had been sent. `phone/register/start` still returns its `session_token`; the code for that session was simply never texted.
+
+### Current-password checks by a signed-in caller
+
+A signed-in session must not be a way to guess the account's password. Every check of `current_password` is counted per account in the counter `password_check`, with the password sign-in numbers (`LOGIN_USERNAME_LIMIT` per `LOGIN_USERNAME_WINDOW`, ten per 900 s):
+
+- the password change on the account save (`new_password` + `current_password`, `User.set_new_password`),
+- `POST /api/auth/email/change/request`,
+- `POST /api/auth/phone/change/request`.
+
+It works like the code counter (`limits.check_password_attempt`): counted before the compare, refused uncounted at the limit with the 429 above, cleared by a right password. A right password sent while the counter is full is refused too. The counter is its own, so these tries cannot lock password sign-in. A request that sends no `current_password` is not counted.
+
+The 429 is raised from inside the model setter as `mojo.errors.RateLimitException(retry_after)`; the REST dispatcher turns it into the response. Use it for any limit reached below the view.
+
+### Per-address limits added with the above
+
+| Endpoint | Limit |
+|---|---|
+| `POST /api/auth/verify/phone/confirm` | 10 requests / 300 s per IP |
+| `POST /api/auth/verify/email/confirm` | 10 requests / 300 s per IP |
+
+### SMS sign-in and the bouncer token
+
+`POST /api/auth/sms/login` carries `@md.requires_bouncer_token('login')`, the same check as password sign-in. With enforcement off (`BOUNCER_REQUIRE_TOKEN=False`, the default) a missing or invalid token is only logged and nothing changes. With enforcement on, a request without a valid `login` token gets 403 before anything is looked up or sent, so every client that calls this endpoint must send one. The hosted sign-in page does. See [Bouncer](bouncer.md).
 
 ### Admin — releasing a stuck account
 
-When a user is locked out by tier 3, an admin with `manage_users` can clear the counter. This endpoint (and `GET /api/auth/manage/throttle`) is gated with `@md.requires_global_perms` — the grant must be global on the User, not a group/member-scoped permission:
+When a user is locked out by tier 3, by a code counter or by the current-password counter, an admin with `manage_users` can release them. This endpoint (and `GET /api/auth/manage/throttle`) is gated with `@md.requires_global_perms` — the grant must be global on the User, not a group/member-scoped permission:
 
 ```
 POST /api/auth/manage/clear_rate_limit
@@ -1489,7 +1565,7 @@ POST /api/auth/manage/clear_rate_limit
 }
 ```
 
-When `username` or `user_id` is provided without an explicit `key`, the key defaults to `"login"`. To clear a specific bucket:
+**An account-scope clear releases every per-account counter for that user, whatever `key` is sent**: the password counter, `password_check`, each code counter, the authenticator daily cap and the send counters (`limits.clear_account_limits`, the names in `limits.ACCOUNT_BUCKETS`). It also clears the reset-code counters for the account's own username, email and phone as typed. Support tooling that sends `"key": "login"` therefore releases a user locked out of code entry unchanged:
 
 ```
 POST /api/auth/manage/clear_rate_limit
@@ -1499,7 +1575,11 @@ POST /api/auth/manage/clear_rate_limit
 }
 ```
 
-The endpoint also accepts `ip`, `duid`, and `muid` to clear other tiers independently.
+A phone sign-up lock has no account. It is not released here and ends on its own after the window.
+
+The endpoint also accepts `ip`, `duid`, and `muid` to clear other tiers independently. `duid` and `muid` need a `key`.
+
+`GET /api/auth/manage/throttle` reads one counter. `key` defaults to `login` and may be any name in `limits.ACCOUNT_BUCKETS`: `login`, `password_check`, `code:sms`, `code:reset`, `code:phone_verify`, `code:email_verify`, `code:email_change`, `code:totp`, `code:totp_login`, `code:totp_manage`, `code:totp_daily`, `code_send:sms`, `code_send:reset`. The `limit` and `window` in the answer are those of the counter asked for. Any other key is a 400.
 
 ## Incident Reporting
 

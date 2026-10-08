@@ -157,15 +157,23 @@ The body key (`disable` / `reactivate`) IS the action name — the model's
 
 ### Throttle read endpoint
 
-Returns `{count, limit, window, retry_after_seconds}` from the per-account login
-sliding-window in Redis. Pure read — does not modify Redis state. Pairs with
+Returns `{count, limit, window, retry_after_seconds}` from one per-account
+sliding-window counter in Redis. Pure read — does not modify Redis state. Pairs with
 `POST /api/auth/manage/clear_rate_limit` for the reset operation. Unlike the
 disable/reactivate actions above (RestMeta `SAVE_PERMS`, which allow the usual
 group/member fallback), both throttle endpoints are gated with
 `@md.requires_global_perms` — `manage_users` must be a global grant on the User.
 
-Only `key="login"` is supported in v1. Unsupported keys return 400. Lookup by
+`key` defaults to `login` and may be any counter in
+`mojo.decorators.limits.ACCOUNT_BUCKETS`: `login`, `password_check`, a
+one-time-code counter such as `code:sms` or `code:reset`, `code:totp_daily`,
+or a send counter such as `code_send:sms`. The `limit` and `window` returned
+are those of the counter asked for. Any other key returns 400. Lookup by
 `user_id` or `username`.
+
+An account-scope `clear_rate_limit` releases **every** one of those counters
+for the user, whatever `key` it is sent. See
+[Failed Login Protection](auth.md#failed-login-protection).
 
 ---
 
