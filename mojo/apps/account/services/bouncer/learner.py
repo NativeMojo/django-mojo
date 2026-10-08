@@ -2,8 +2,15 @@
 BotLearner — background job that registers bot signatures after confirmed blocks.
 
 Published by on_bouncer_assess when risk_score >= BOUNCER_LEARN_MIN_SCORE.
-Checks subnet/campaign escalation thresholds and writes BotSignature entries
-+ updates the Redis signature cache used by pre-screen.
+Counts reports per /24 and per signal set, records an event when a /24
+reaches its threshold, writes a `signal_set` BotSignature for a campaign and
+updates the Redis signature cache used by pre-screen.
+
+The learner never blocks a network: every report it counts is sent by the
+caller, so a `subnet_24` signature written from them lets five requests lock
+out everyone behind a shared address. A `subnet_24` row an older release
+learned is no longer enforced either. It also never changes a signature a
+person made or switched off.
 
 The learner never writes, and the cache never enforces, an automatic
 `user_agent` or `fingerprint` signature: the caller chooses both values, so a
@@ -22,12 +29,15 @@ logger = logit.get_logger('bouncer', 'bouncer.log')
 
 _SUBNET_PREFIX = 'bouncer:learn:subnet24:'
 _CAMPAIGN_PREFIX = 'bouncer:learn:campaign:'
-# v2: the cache no longer holds automatic user_agent/fingerprint signatures. A
-# job worker still running older code rebuilds the old key, which is not read.
-SIG_CACHE_KEY = 'bouncer:sigs:active:v2'
+# v2: the cache no longer holds automatic user_agent/fingerprint signatures.
+# v3: nor a learned subnet_24 one. A job worker still running older code
+# rebuilds an older key, which is not read.
+SIG_CACHE_KEY = 'bouncer:sigs:active:v3'
 # Signature types whose value the caller chooses: never learned, and a row of
 # either type with source='auto' is never enforced.
 CALLER_CHOSEN_SIG_TYPES = ('user_agent', 'fingerprint')
+# Distinct /24 networks that may record a threshold event in one hour.
+SUBNET_EVENT_BUDGET = 20
 
 
 def learn_from_block(job):
@@ -85,13 +95,37 @@ def _check_subnet(ip, redis, window):
     if not subnet:
         return
     threshold = settings.get_static('BOUNCER_LEARN_SUBNET_THRESHOLD', 5)
-    ttl = settings.get_static('BOUNCER_LEARN_SUBNET_TTL', 86400)
     key = f"{_SUBNET_PREFIX}{subnet}"
     count = redis.incr(key)
     if count == 1:
         redis.expire(key, window)
-    if count >= threshold:
-        _upsert_signature('subnet_24', subnet, 'auto', min(count * 10, 90), ttl)
+    # No signature: the reports are the caller's own word. A person decides.
+    if count == threshold:
+        _report_subnet(subnet, count, window)
+
+
+def _report_subnet(subnet, count, window):
+    """Record that a /24 reached the report threshold, for an operator to list.
+
+    Level 5, below the level that opens an incident, and with no address: no
+    rule blocks on it and no automatic triage runs on it. Suppressed per
+    subnet and capped per hour, failing closed, since a caller who can choose
+    the address the server sees could otherwise file one per network.
+    """
+    from mojo.apps.incident.reporter import report_event_suppressed
+    report_event_suppressed(
+        f"Bouncer: {count} high-score reports from {subnet} within an hour. "
+        "No block was added.",
+        subnet,
+        category='security:bouncer:subnet',
+        scope='account',
+        level=5,
+        window=window,
+        budget=SUBNET_EVENT_BUDGET,
+        fail_open=False,
+        subnet=subnet,
+        report_count=count,
+    )
 
 
 def _check_campaign(triggered_signals, redis):
@@ -111,12 +145,9 @@ def _check_campaign(triggered_signals, redis):
 
 
 def _upsert_signature(sig_type, value, source, confidence, ttl_seconds):
+    from django.db.models import F
+    from django.db.models.functions import Greatest
     from mojo.apps.account.models.bot_signature import BotSignature
-    try:
-        from mojo.apps import metrics
-        metrics.record("bouncer:signatures_learned", category="bouncer")
-    except Exception:
-        pass
     expires_at = dates.utcnow() + timedelta(seconds=ttl_seconds)
     sig, created = BotSignature.objects.get_or_create(
         sig_type=sig_type,
@@ -130,11 +161,24 @@ def _upsert_signature(sig_type, value, source, confidence, ttl_seconds):
         },
     )
     if not created:
-        sig.block_count += 1
-        sig.confidence = max(sig.confidence, confidence)
-        sig.expires_at = expires_at  # extend TTL on repeated blocks
-        sig.is_active = True
-        sig.save(update_fields=['block_count', 'confidence', 'expires_at', 'is_active', 'modified'])
+        # A row a person made, or switched off, is theirs: left as it is. The
+        # condition is part of the write, not a check on the row as it was
+        # read: an operator's edit that lands in between is not written over.
+        updated = BotSignature.objects.filter(
+            pk=sig.pk, source='auto', is_active=True,
+        ).update(
+            block_count=F('block_count') + 1,
+            confidence=Greatest(F('confidence'), confidence),
+            expires_at=expires_at,  # extend TTL on repeated blocks
+            modified=dates.utcnow(),
+        )
+        if not updated:
+            return
+    try:
+        from mojo.apps import metrics
+        metrics.record("bouncer:signatures_learned", category="bouncer")
+    except Exception:
+        pass
 
 
 def _fire_campaign_incident(sig_hash, count):
@@ -157,21 +201,29 @@ def _fire_campaign_incident(sig_hash, count):
 def refresh_sig_cache():
     """
     Rebuild the Redis cache of active signatures for fast pre-screen lookup.
-    Called after every signature upsert. Also safe to call on a schedule.
+    Called at the end of every learn job and every 15 minutes by the
+    `refresh_bouncer_sig_cache` cron job, so a manual signature outlives the
+    one-hour life of the key on a quiet site.
 
-    Automatic (source='auto') user_agent and fingerprint rows are left out, so
-    one an older release learned is no longer enforced. Rows of those types
-    with any other source load.
+    Left out, so that one an older release learned is no longer enforced:
+    automatic (source='auto') user_agent and fingerprint rows, and a
+    subnet_24 row the learner wrote, which is source='auto' with an expiry.
+    Everything else loads: every `ip` row (the learner never wrote one), and a
+    subnet_24 row with another source or with no expiry, which only a person
+    can have made.
     """
     from mojo.apps.account.models.bot_signature import BotSignature
     now = dates.utcnow()
     active = BotSignature.objects.filter(is_active=True).exclude(
         expires_at__lt=now
-    ).values('sig_type', 'value', 'source')
+    ).values('sig_type', 'value', 'source', 'expires_at')
 
     sigs_by_type = {}
     for sig in active:
         if sig['sig_type'] in CALLER_CHOSEN_SIG_TYPES and sig['source'] == 'auto':
+            continue
+        if sig['sig_type'] == 'subnet_24' and sig['source'] == 'auto' \
+                and sig['expires_at'] is not None:
             continue
         sigs_by_type.setdefault(sig['sig_type'], []).append(sig['value'])
 
