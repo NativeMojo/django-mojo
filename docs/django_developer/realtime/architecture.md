@@ -86,7 +86,9 @@ uvicorn project.asgi:application --host 0.0.0.0 --port 8000
    removed first, then one Redis script counts and adds the new connection, so
    simultaneous connects cannot pass the cap between them. A Redis error here
    fails open. See [Presence and the connection cap](#presence-and-the-connection-cap).
-6. Registers connection and user online status in Redis
+6. Registers connection and user online status in Redis. The registration
+   goes through the same admission script: a connection that lost its place
+   since step 5 is refused here, before anything is announced for it
 7. The dedicated Redis pub/sub connection (`start_redis_messages`) is created
    here, **after** successful authentication — an unauthenticated socket
    never holds a pub/sub connection or its delivery task (DM-042; see
@@ -295,6 +297,9 @@ socket open (#4567). So:
   if there is room, and if the set is full by then it is over the cap and is
   closed with `Too many connections` (the client reconnects). The set never
   holds more members than the cap.
+  The same holds between a connection's admission and its registration a
+  moment later: registration goes through the admission script too, and a
+  connection that lost its place in between is refused.
 - **Admission** removes record-less members, then counts and adds in one
   script (`mojo/apps/realtime/presence.py`).
 - A handler that is closing refreshes nothing, so a late heartbeat cannot bring

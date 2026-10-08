@@ -333,21 +333,38 @@ class WebSocketHandler:
             self._log_exception("update failed")
 
     async def register_user_online(self):
-        """Register user as online in Redis"""
+        """Register user as online in Redis.
+
+        The connection was admitted a moment ago, so normally it is already a
+        member and this only renews the set's expiry. It still goes through
+        the admission script: a prune can have removed this connection since
+        its admission, and another may hold its place by now (#4567). Returns
+        False when the set is full without it; the caller refuses the socket.
+        A Redis error stays fail-open: when the script itself fails, the
+        plain add, so the socket is still registered.
+        """
         if not self.user or not self.user_type:
-            return
+            return True
 
         key = self.user_online_key()
+        max_connections = getattr(self, "max_connections", WS_MAX_CONNECTIONS)
 
         def get_and_update():
+            try:
+                return presence.admit(
+                    self.redis_client, key, self.connection_id,
+                    max_connections, ONLINE_TTL_SECONDS)
+            except Exception:
+                self._log_exception("ws connection admission failed at registration — failing open")
             try:
                 # Add this connection to the user's online set and refresh TTL
                 self.redis_client.sadd(key, self.connection_id)
                 self.redis_client.expire(key, ONLINE_TTL_SECONDS)
             except Exception:
                 self._log_exception("Failed to register user online")
+            return True
 
-        await asyncio.get_event_loop().run_in_executor(None, get_and_update)
+        return await asyncio.get_event_loop().run_in_executor(None, get_and_update)
 
     def _activity_threshold(self):
         return self.idle_timeout if self.authenticated else self.unauth_timeout
@@ -542,9 +559,20 @@ class WebSocketHandler:
                 self._log_exception("ws connection admission failed — failing open")
                 return True, 0
         admitted, current = await asyncio.get_event_loop().run_in_executor(None, admit_connection)
+        if admitted:
+            self._online_key = online_key
+            # Update Redis state. Still before `authenticated`: a prune can
+            # remove this connection between its admission above and its
+            # registration here, and another may hold its place by then. So
+            # registration is a second admission, and a connection refused
+            # there was never announced as connected.
+            await self.update_connection_auth()
+            if not await self.register_user_online():
+                admitted, current = False, max_connections
         if not admitted:
             self.user = None
             self.user_type = None
+            self._online_key = None
             # One incident event per identity per minute — never one per
             # rejected attempt.
             def report_once():
@@ -562,13 +590,8 @@ class WebSocketHandler:
             await self.close_connection()
             return
 
-        self._online_key = online_key
         self.bearer_prefix = str(prefix or "").strip().lower()
         self.authenticated = True
-
-        # Update Redis state
-        await self.update_connection_auth()
-        await self.register_user_online()
 
         # Start pub/sub delivery now that the socket is authenticated —
         # must happen before any topic subscription.
