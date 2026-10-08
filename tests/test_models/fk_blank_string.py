@@ -11,8 +11,10 @@ form that submits an unset optional FK as "" (the common case) would
 
 Exercised in-process via `on_rest_save` with a fake request — the
 relevant branch is `on_rest_save_related_field`, reachable for any
-relation field. `Setting.group` is a nullable FK and a convenient
-target.
+relation field. `Group.parent` is a nullable FK and a convenient
+target. (`Setting.group` was the target until #7149 made a setting's
+scope immutable; that refusal is covered in
+test_account.test_setting_scope.)
 """
 from testit import helpers as th
 
@@ -22,6 +24,7 @@ TESTIT_TIER = "bug"  # #2792 tier curation
 TEST_USER = "fk_blank_user"
 TEST_PWORD = "testit##mojo"
 TEST_GROUP_NAME = "fk-blank-target-group"
+CHILD_PREFIX = "fk-blank-test-"
 
 
 @th.django_unit_setup()
@@ -29,7 +32,6 @@ def setup_fk_blank(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.models.group import Group
     from mojo.apps.account.models.member import GroupMember
-    from mojo.apps.account.models.setting import Setting
 
     user = User.objects.filter(username=TEST_USER).last()
     if user is None:
@@ -42,18 +44,18 @@ def setup_fk_blank(opts):
     user.is_email_verified = True
     user.save_password(TEST_PWORD)
     user.remove_all_permissions()
-    user.add_permission("manage_settings")
+    user.add_permission("manage_groups")
     user.save()
     GroupMember.objects.filter(user=user).delete()
     opts.user_id = user.id
 
+    # Setup must clean up before creating — tests run on a long-lived DB.
+    # Children first: Group.parent cascades, but be explicit.
+    Group.objects.filter(name__startswith=CHILD_PREFIX).delete()
     Group.objects.filter(name=TEST_GROUP_NAME).delete()
     target = Group(name=TEST_GROUP_NAME, kind="default")
     target.save()
     opts.target_group_id = target.id
-
-    # Setup must clean up before creating — tests run on a long-lived DB.
-    Setting.objects.filter(key__startswith="fk-blank-test-").delete()
 
 
 def _fake_request(user):
@@ -67,7 +69,7 @@ def _fake_request(user):
     req.group = None
     req.bearer = None
     req.ip = "127.0.0.1"
-    req.path = "/api/settings/x"
+    req.path = "/api/group/x"
     req.META = {}
     req.api_key = None
     return req
@@ -78,48 +80,53 @@ def test_blank_string_fk_clears_to_none(opts):
     """An empty-string FK on update clears the relation to None and does
     not raise; non-FK fields in the same save still update."""
     from mojo.apps.account.models import User
-    from mojo.apps.account.models.setting import Setting
+    from mojo.apps.account.models.group import Group
 
-    Setting.objects.filter(key="fk-blank-test-1").delete()
-    setting = Setting.objects.create(
-        key="fk-blank-test-1", value="v1", group_id=opts.target_group_id,
+    Group.objects.filter(name__startswith=f"{CHILD_PREFIX}1").delete()
+    child = Group(
+        name=f"{CHILD_PREFIX}1", kind="default",
+        parent_id=opts.target_group_id,
     )
-    assert setting.group_id == opts.target_group_id, (
-        f"precondition: FK should start set; got group_id={setting.group_id!r}"
+    child.save()
+    assert child.parent_id == opts.target_group_id, (
+        f"precondition: FK should start set; got parent_id={child.parent_id!r}"
     )
 
     user = User.objects.filter(pk=opts.user_id).last()
-    setting.on_rest_save(_fake_request(user), {"group": "", "value": "v2"})
+    child.on_rest_save(
+        _fake_request(user), {"parent": "", "name": f"{CHILD_PREFIX}1-v2"})
 
-    setting.refresh_from_db()
-    assert setting.group_id is None, (
-        f"blank-string FK must coerce to None; got group_id={setting.group_id!r}"
+    child.refresh_from_db()
+    assert child.parent_id is None, (
+        f"blank-string FK must coerce to None; got parent_id={child.parent_id!r}"
     )
-    assert setting.value == "v2", (
+    assert child.name == f"{CHILD_PREFIX}1-v2", (
         f"non-FK fields must still update alongside the cleared FK; "
-        f"value={setting.value!r}"
+        f"name={child.name!r}"
     )
 
-    Setting.objects.filter(pk=setting.pk).delete()
+    Group.objects.filter(pk=child.pk).delete()
 
 
 @th.django_unit_test()
 def test_whitespace_string_fk_clears_to_none(opts):
     """A whitespace-only FK string is also treated as 'not provided'."""
     from mojo.apps.account.models import User
-    from mojo.apps.account.models.setting import Setting
+    from mojo.apps.account.models.group import Group
 
-    Setting.objects.filter(key="fk-blank-test-2").delete()
-    setting = Setting.objects.create(
-        key="fk-blank-test-2", value="v1", group_id=opts.target_group_id,
+    Group.objects.filter(name__startswith=f"{CHILD_PREFIX}2").delete()
+    child = Group(
+        name=f"{CHILD_PREFIX}2", kind="default",
+        parent_id=opts.target_group_id,
     )
+    child.save()
 
     user = User.objects.filter(pk=opts.user_id).last()
-    setting.on_rest_save(_fake_request(user), {"group": "   "})
+    child.on_rest_save(_fake_request(user), {"parent": "   "})
 
-    setting.refresh_from_db()
-    assert setting.group_id is None, (
-        f"whitespace-only FK must coerce to None; got group_id={setting.group_id!r}"
+    child.refresh_from_db()
+    assert child.parent_id is None, (
+        f"whitespace-only FK must coerce to None; got parent_id={child.parent_id!r}"
     )
 
-    Setting.objects.filter(pk=setting.pk).delete()
+    Group.objects.filter(pk=child.pk).delete()
