@@ -454,10 +454,11 @@ refresh_sig_cache()
 
 Signature types: `ip`, `subnet_24`, `subnet_16`, `user_agent`, `fingerprint`, `signal_set`
 
-`user_agent` and `fingerprint` signatures are enforced only with
-`source='manual'`. The field default is `'auto'`, so a row created in a shell
-or through the ORM without `source` is treated as learned and is not enforced.
-A create through the REST API with no `source` is stored as `manual`.
+`user_agent` and `fingerprint` signatures with `source='auto'` are not
+enforced; a row of either type with any other source is. The field default is
+`'auto'`, so a row created in a shell or through the ORM without `source` is
+treated as learned and is not enforced. A create through the REST API with no
+`source`, or an empty one, is stored as `manual`.
 
 ---
 

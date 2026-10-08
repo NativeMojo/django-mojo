@@ -41,10 +41,30 @@ class _Job:
         self.payload = payload
 
 
+# The learner counters the running test has incremented. They carry no marker,
+# so each is remembered here and removed by _cleanup.
+_counter_keys = set()
+
+
+def _own_counters(ip='', triggered_signals=None):
+    """Remember the subnet and campaign counters one report increments. The
+    key names are the learner's own."""
+    import hashlib
+    import json
+    from mojo.apps.account.services.bouncer import learner
+    subnet = learner._subnet24(ip) if ip else None
+    if subnet:
+        _counter_keys.add(f'{learner._SUBNET_PREFIX}{subnet}')
+    if triggered_signals:
+        sig_hash = hashlib.sha256(json.dumps(sorted(triggered_signals)).encode()).hexdigest()[:16]
+        _counter_keys.add(f'{learner._CAMPAIGN_PREFIX}{sig_hash}')
+
+
 def _report(count, user_agent='', fingerprint_id='', triggered_signals=None):
     """Run the learner `count` times with the payload the public check publishes."""
     from mojo.apps.account.services.bouncer.learner import learn_from_block
     for ip in _addresses(count):
+        _own_counters(ip, triggered_signals)
         learn_from_block(_Job({
             'muid': '',
             'duid': 'duid-' + uuid.uuid4().hex[:12],
@@ -68,8 +88,14 @@ def _matches(user_agent='', fingerprint_id=''):
 
 
 def _cleanup(marker):
+    """Remove what the test made: its signature rows and the learner counters
+    it incremented. Only its own keys; the shared Redis is not flushed."""
     from mojo.apps.account.services.bouncer.learner import refresh_sig_cache
+    from mojo.helpers.redis import get_connection
     _rows(marker).delete()
+    if _counter_keys:
+        get_connection().delete(*_counter_keys)
+        _counter_keys.clear()
     refresh_sig_cache()
 
 
@@ -144,6 +170,64 @@ def test_manual_signature_is_still_enforced(opts):
         assert_true(_matches(user_agent=user_agent), "an operator's User-Agent signature must still match")
         assert_true(_matches(fingerprint_id=fingerprint), "an operator's fingerprint signature must still match")
     finally:
+        _cleanup(marker)
+
+
+@th.django_unit_test('#5569: a User-Agent or fingerprint signature with another source is still enforced')
+def test_signature_with_another_source_is_still_enforced(opts):
+    """Only source='auto' is left out. `source` is free text, and a row an
+    operator stored with a value of their own was enforced before."""
+    from mojo.apps.account.models import BotSignature
+    from mojo.apps.account.services.bouncer.learner import refresh_sig_cache
+    marker = _marker()
+    user_agent = _iphone_ua(marker)
+    fingerprint = 'fp-' + marker
+    try:
+        for sig_type, value in (('user_agent', user_agent), ('fingerprint', fingerprint)):
+            BotSignature.objects.create(sig_type=sig_type, value=value, source='imported',
+                                        confidence=100, is_active=True, block_count=1)
+        refresh_sig_cache()
+        assert_true(_matches(user_agent=user_agent), "a User-Agent signature with source 'imported' must still match")
+        assert_true(_matches(fingerprint_id=fingerprint), "a fingerprint signature with source 'imported' must still match")
+    finally:
+        _cleanup(marker)
+
+
+@th.django_unit_test('#5569: a signature created over REST with an empty source is manual')
+def test_rest_created_signature_with_empty_source_is_manual(opts):
+    from testit.client import RestClient
+    from mojo.apps.account.models import BotSignature, User
+    from mojo.apps.account.services.bouncer.learner import refresh_sig_cache
+    marker = _marker()
+    name = f'{marker}@example.test'
+    user = User.objects.create_user(username=name, email=name, password=PWORD)
+    user.is_active = user.is_email_verified = True
+    user.permissions = {'manage_security': True}
+    user.save()
+    client = RestClient(opts.client.host)
+    try:
+        assert_true(client.login(name, PWORD), 'the security operator must authenticate')
+        for label, source in (('empty', ''), ('null', None)):
+            value = f'fp-{label}-{marker}'
+            resp = client.post('/api/account/bouncer/signature',
+                               {'sig_type': 'fingerprint', 'value': value, 'source': source})
+            assert_eq(resp.status_code, 200, f'a create with a {label} source is accepted, got {resp.status_code}')
+            assert_eq(BotSignature.objects.get(sig_type='fingerprint', value=value).source, 'manual',
+                      f'a {label} source is stored as manual')
+            refresh_sig_cache()
+            assert_true(_matches(fingerprint_id=value), f'and the signature made with a {label} source is enforced')
+
+        value = f'fp-named-{marker}'
+        resp = client.post('/api/account/bouncer/signature',
+                           {'sig_type': 'fingerprint', 'value': value, 'source': 'imported'})
+        assert_eq(resp.status_code, 200, f'a create that names another source is accepted, got {resp.status_code}')
+        assert_eq(BotSignature.objects.get(sig_type='fingerprint', value=value).source, 'imported',
+                  'a source the request names is kept as sent')
+        refresh_sig_cache()
+        assert_true(_matches(fingerprint_id=value), 'and it is enforced')
+    finally:
+        client.session.close()
+        user.delete()
         _cleanup(marker)
 
 
@@ -231,6 +315,8 @@ def test_public_check_cannot_poison_a_user_agent(opts):
             assert_eq(resp.status_code, 200, f'the public check answers, got {resp.status_code}')
             assert_eq(resp.json.data.decision, 'block', 'three asserted automation signals are a block')
         assert_eq(mine.count(), 5, 'each blocked report publishes one learn job carrying the User-Agent')
+        for payload in mine.values_list('payload', flat=True):
+            _own_counters(payload.get('ip', ''), payload.get('triggered_signals'))
         ran = th.run_pending_jobs(func=LEARN_FUNC, payload={'user_agent': user_agent})
         assert_eq(ran, 5, 'the five learn jobs run')
         assert_eq(mine.filter(status='completed').count(), 5, 'and all five complete')
@@ -238,4 +324,5 @@ def test_public_check_cannot_poison_a_user_agent(opts):
         assert_true(not _matches(user_agent=user_agent), 'a visitor sending that User-Agent must not match a signature')
     finally:
         client.session.close()
+        mine.delete()
         _cleanup(marker)

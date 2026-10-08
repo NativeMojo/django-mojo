@@ -25,8 +25,8 @@ _CAMPAIGN_PREFIX = 'bouncer:learn:campaign:'
 # v2: the cache no longer holds automatic user_agent/fingerprint signatures. A
 # job worker still running older code rebuilds the old key, which is not read.
 SIG_CACHE_KEY = 'bouncer:sigs:active:v2'
-# Signature types whose value the caller chooses: never learned, and enforced
-# only when an operator created the row (source='manual').
+# Signature types whose value the caller chooses: never learned, and a row of
+# either type with source='auto' is never enforced.
 CALLER_CHOSEN_SIG_TYPES = ('user_agent', 'fingerprint')
 
 
@@ -159,8 +159,9 @@ def refresh_sig_cache():
     Rebuild the Redis cache of active signatures for fast pre-screen lookup.
     Called after every signature upsert. Also safe to call on a schedule.
 
-    Automatic user_agent and fingerprint rows are left out, so one an older
-    release learned is no longer enforced. Manual rows of those types load.
+    Automatic (source='auto') user_agent and fingerprint rows are left out, so
+    one an older release learned is no longer enforced. Rows of those types
+    with any other source load.
     """
     from mojo.apps.account.models.bot_signature import BotSignature
     now = dates.utcnow()
@@ -170,7 +171,7 @@ def refresh_sig_cache():
 
     sigs_by_type = {}
     for sig in active:
-        if sig['sig_type'] in CALLER_CHOSEN_SIG_TYPES and sig['source'] != 'manual':
+        if sig['sig_type'] in CALLER_CHOSEN_SIG_TYPES and sig['source'] == 'auto':
             continue
         sigs_by_type.setdefault(sig['sig_type'], []).append(sig['value'])
 
