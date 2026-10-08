@@ -782,7 +782,7 @@ Response:
 { "status": true, "data": { "session_token": "<32-hex>", "expires_in": 600 } }
 ```
 
-The server sends a 6-digit code via SMS. Rate-limited per IP (5 requests / 300s). A phone number is also texted at most 5 codes per 15 minutes, and none while its code entry is locked (below); the response is then the same `session_token` body, but no message went out.
+The server sends a 6-digit code via SMS (longer, up to 10 digits, where the deployment sets `SMS_OTP_LENGTH`; accept 6 to 10 digits in your code field). Rate-limited per IP (5 requests / 300s). A phone number is also texted at most 5 codes per 15 minutes, and none while its code entry is locked (below); the response is then the same `session_token` body, but no message went out.
 
 If the transport did not accept the message the call returns **503** with `{"status": false, "code": 503, "error": "Unable to send the text message right now. Please try again in a few minutes."}` (retryable); if the provider rejected the number itself it returns **400** with `{"status": false, "code": 400, "error": "This phone number cannot receive text messages."}` (retrying the same number will not help). Neither returns a `session_token` — restart at step 1. Provider error text and codes never reach the client.
 

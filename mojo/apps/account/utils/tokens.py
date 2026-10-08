@@ -594,6 +594,34 @@ def validate_token(hex_token):
     return verify_password_reset_token(hex_token)
 
 
+SMS_OTP_LENGTH_MIN = 6
+SMS_OTP_LENGTH_MAX = 10
+
+
+def sms_otp_length(value=None):
+    """How many digits an SMS sign-in code has: SMS_OTP_LENGTH, 6 to 10.
+
+    The two codes that can sign someone in by SMS use it: the SMS sign-in /
+    second-factor code and the phone sign-up code. Six is the floor, not just
+    the default: the setting is DB-backed, and a value that could shorten the
+    code would let a settings write weaken sign-in. Anything below 6 reads as
+    6, anything above 10 as 10, and a value that is not a finite number as 6.
+
+    Reading the setting is inside the guard too: a stored or configured
+    infinity makes the typed read itself raise, and a bad value here must
+    never stop a code being sent or a sign-in page being drawn.
+
+    `value` is a test seam, not a second way to configure it.
+    """
+    try:
+        if value is None:
+            value = settings.get("SMS_OTP_LENGTH", SMS_OTP_LENGTH_MIN, kind="int")
+        value = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return SMS_OTP_LENGTH_MIN
+    return max(SMS_OTP_LENGTH_MIN, min(SMS_OTP_LENGTH_MAX, value))
+
+
 def live_or_new_code(user, code_key, ts_key, ttl, length=6):
     """The account's live one-time code, or a new one stored on it.
 

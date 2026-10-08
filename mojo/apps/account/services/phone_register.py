@@ -57,15 +57,25 @@ def _valid_token_hex(token):
     )
 
 
-def start(phone, ip=None):
+def start(phone, ip=None, *, length=None):
     """Mint a session token and code for a phone number.
 
     Returns (session_token, code, ttl). Caller dispatches the SMS.
+
+    The code has SMS_OTP_LENGTH digits (6 to 10, default 6): a verified phone
+    that already has an account signs that account in, so this code is as
+    much a sign-in code as the one `auth/sms/login` sends.
+
+    `length` is a test seam, not part of the service contract.
     """
+    from mojo.apps.account.utils import tokens
+
     if not phone:
         raise merrors.ValueException("phone is required")
     session_token = uuid.uuid4().hex
-    code = crypto.random_string(6, allow_digits=True, allow_chars=False, allow_special=False)
+    code = crypto.random_string(
+        tokens.sms_otp_length(length),
+        allow_digits=True, allow_chars=False, allow_special=False)
     payload = {
         "phone": phone,
         "code": code,

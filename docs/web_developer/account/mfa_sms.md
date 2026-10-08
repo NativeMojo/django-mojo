@@ -2,6 +2,8 @@
 
 SMS OTP sends a 6-digit code to the user's verified phone number via SMS.
 
+**Code length.** Six digits is the default. A deployment can lengthen the SMS sign-in code, and the phone sign-up code, to up to 10 digits with the `SMS_OTP_LENGTH` setting; it can never be shorter than 6. Do not hard-code six in a client: accept 6 to 10 digits in the code field and send what the user typed. The hosted sign-in and register pages already size their code box from the setting.
+
 Supports two modes:
 - **2FA** — required second step after password login
 - **Standalone** — passwordless login with username + SMS code only
