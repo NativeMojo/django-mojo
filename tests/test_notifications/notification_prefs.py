@@ -16,6 +16,12 @@ Coverage:
   - send_template_email without kind is never suppressed (transactional)
   - push_notification with kind is suppressed when push preference is False
   - Unauthenticated GET/POST returns 403
+  - "*" master switch: off suppresses every kind on that channel (even an
+    explicit per-kind on); per-kind off still suppresses under master on;
+    master only affects its own channel
+  - Kinds registry: default "general", re-register replaces, "*" and bad
+    slugs rejected
+  - GET carries "kinds" and "channels"; POST {"*": {...}} persists
 """
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
@@ -306,3 +312,189 @@ def test_push_suppressed_with_kind(opts):
 
     result = user.push_notification(title="Test", body="promo", kind="marketing")
     assert_eq(result, [], "push_notification should return empty list when push preference is False for the kind")
+
+
+# ===========================================================================
+# "*" master switch
+# ===========================================================================
+
+def _set_prefs(user_id, prefs):
+    from mojo.apps.account.models import User
+    user = User.objects.get(pk=user_id)
+    user.metadata = {"notification_preferences": prefs}
+    user.save(update_fields=["metadata", "modified"])
+    return user
+
+
+@th.django_unit_test("master switch: email off suppresses general with no explicit entry")
+def test_master_off_suppresses_unset_kind(opts):
+    from mojo.apps.account.services.notification_prefs import is_notification_allowed
+
+    user = _set_prefs(opts.user_id, {"*": {"email": False}})
+    assert_true(not is_notification_allowed(user, "general", "email"),
+                "master email off should suppress 'general' email with no per-kind entry")
+
+
+@th.django_unit_test("master switch: email off beats an explicit per-kind on")
+def test_master_off_beats_kind_on(opts):
+    from mojo.apps.account.services.notification_prefs import is_notification_allowed
+
+    user = _set_prefs(opts.user_id, {"*": {"email": False}, "billing": {"email": True}})
+    assert_true(not is_notification_allowed(user, "billing", "email"),
+                "master email off should suppress 'billing' email even though billing.email is True")
+
+
+@th.django_unit_test("master switch: master on + kind off still suppresses")
+def test_master_on_kind_off(opts):
+    from mojo.apps.account.services.notification_prefs import is_notification_allowed
+
+    user = _set_prefs(opts.user_id, {"*": {"email": True}, "marketing": {"email": False}})
+    assert_true(not is_notification_allowed(user, "marketing", "email"),
+                "per-kind email off should still suppress when master email is on")
+    assert_true(is_notification_allowed(user, "general", "email"),
+                "master email on with no per-kind entry should allow 'general' email")
+
+
+@th.django_unit_test("master switch: only affects its own channel")
+def test_master_channel_scoped(opts):
+    from mojo.apps.account.services.notification_prefs import is_notification_allowed
+
+    user = _set_prefs(opts.user_id, {"*": {"email": False}})
+    assert_true(is_notification_allowed(user, "general", "in_app"),
+                "master email off must not suppress in_app")
+    assert_true(is_notification_allowed(user, "general", "push"),
+                "master email off must not suppress push")
+
+
+@th.django_unit_test("master switch: kind=None (transactional) is never suppressed")
+def test_master_does_not_touch_transactional(opts):
+    from mojo.apps.account.services.notification_prefs import is_notification_allowed
+
+    user = _set_prefs(opts.user_id, {"*": {"email": False}})
+    assert_true(is_notification_allowed(user, None, "email"),
+                "kind=None (transactional) must stay allowed even with master email off")
+
+
+# ===========================================================================
+# Kinds registry
+# ===========================================================================
+
+@th.django_unit_test("kinds registry: general is pre-registered")
+def test_registry_default_general(opts):
+    from mojo.apps.account.services.notification_kinds import list_notification_kinds
+
+    kinds = list_notification_kinds()
+    assert_true(len(kinds) >= 1, "registry should not be empty")
+    first = kinds[0]
+    assert_eq(first.get("kind"), "general", f"first registered kind should be 'general', got {first}")
+    assert_eq(first.get("label"), "General", f"general label should be 'General', got {first}")
+    assert_eq(first.get("description"), "Messages from this service",
+              f"general description mismatch: {first}")
+    assert_true(first.get("channels") is None, f"general channels should default to None, got {first}")
+
+
+@th.django_unit_test("kinds registry: re-registering replaces in place; order is registration order")
+def test_registry_replace(opts):
+    from mojo.apps.account.services import notification_kinds as nk
+
+    snapshot = dict(nk._REGISTRY)
+    try:
+        nk.register_notification_kinds([
+            {"kind": "testit.alpha", "label": "Alpha"},
+            {"kind": "testit.beta", "label": "Beta", "channels": ["email"]},
+        ])
+        nk.register_notification_kinds([
+            {"kind": "testit.alpha", "label": "Alpha 2", "description": "replaced"},
+        ])
+        kinds = nk.list_notification_kinds()
+        names = [k["kind"] for k in kinds]
+        assert_eq(names.count("testit.alpha"), 1, f"re-registered kind should appear once: {names}")
+        assert_true(names.index("testit.alpha") < names.index("testit.beta"),
+                    f"replacement should keep the original position: {names}")
+        alpha = [k for k in kinds if k["kind"] == "testit.alpha"][0]
+        assert_eq(alpha["label"], "Alpha 2", f"label should be replaced: {alpha}")
+        assert_eq(alpha["description"], "replaced", f"description should be replaced: {alpha}")
+        beta = [k for k in kinds if k["kind"] == "testit.beta"][0]
+        assert_eq(beta["channels"], ["email"], f"channels should round-trip: {beta}")
+    finally:
+        nk._REGISTRY.clear()
+        nk._REGISTRY.update(snapshot)
+
+
+@th.django_unit_test("kinds registry: '*' and bad slugs are rejected without partial writes")
+def test_registry_rejects_bad_kinds(opts):
+    from mojo.apps.account.services import notification_kinds as nk
+
+    snapshot = dict(nk._REGISTRY)
+    try:
+        for bad in ["*", "Billing", "has space", "", "a/b", "x" * 65]:
+            raised = False
+            try:
+                nk.register_notification_kinds([{"kind": bad, "label": "Bad"}])
+            except ValueError:
+                raised = True
+            assert_true(raised, f"register_notification_kinds should reject kind {bad!r}")
+
+        raised = False
+        try:
+            nk.register_notification_kinds([
+                {"kind": "testit.ok", "label": "Ok"},
+                {"kind": "*", "label": "Master"},
+            ])
+        except ValueError:
+            raised = True
+        assert_true(raised, "a batch containing '*' should raise")
+        names = [k["kind"] for k in nk.list_notification_kinds()]
+        assert_true("testit.ok" not in names, f"a rejected batch must not register any kind: {names}")
+    finally:
+        nk._REGISTRY.clear()
+        nk._REGISTRY.update(snapshot)
+
+
+# ===========================================================================
+# REST shape for the master switch + registry
+# ===========================================================================
+
+@th.django_unit_test("GET preferences: carries kinds and channels")
+def test_get_kinds_and_channels(opts):
+    _set_prefs(opts.user_id, {"marketing": {"email": False}})
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.get("/api/account/notification/preferences")
+    opts.client.logout()
+    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
+    data = resp.json.get("data", {})
+    assert_eq(data.get("preferences"), {"marketing": {"email": False}},
+              f"preferences should be unchanged by the additive fields: {data.get('preferences')}")
+    assert_eq(data.get("channels"), ["email", "in_app", "push"],
+              f"channels should be the sorted valid channels, got {data.get('channels')}")
+    kinds = data.get("kinds")
+    assert_true(isinstance(kinds, list) and kinds, f"kinds should be a non-empty list, got {kinds}")
+    general = [k for k in kinds if k.get("kind") == "general"]
+    assert_true(general, f"kinds should include 'general': {kinds}")
+    assert_eq(general[0].get("label"), "General", f"general label mismatch: {general[0]}")
+
+
+@th.django_unit_test("POST preferences: '*' master switch persists and GET reflects it")
+def test_post_master_switch(opts):
+    _set_prefs(opts.user_id, {})
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/account/notification/preferences", {
+        "preferences": {"*": {"email": False}}
+    })
+    assert_eq(resp.status_code, 200, f"POST expected 200, got {resp.status_code}")
+    prefs = resp.json.get("data", {}).get("preferences", {})
+    assert_eq(prefs.get("*"), {"email": False}, f"POST response should carry the master switch: {prefs}")
+
+    resp2 = opts.client.get("/api/account/notification/preferences")
+    opts.client.logout()
+    assert_eq(resp2.status_code, 200, f"GET expected 200, got {resp2.status_code}")
+    prefs2 = resp2.json.get("data", {}).get("preferences", {})
+    assert_eq(prefs2.get("*"), {"email": False}, f"GET should reflect the master switch: {prefs2}")
+
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services.notification_prefs import is_notification_allowed
+    user = User.objects.get(pk=opts.user_id)
+    assert_true(not is_notification_allowed(user, "general", "email"),
+                "stored master email off should suppress general email")

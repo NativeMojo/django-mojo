@@ -410,6 +410,12 @@ Rules that follow from the design:
   every save; without it, populating `MEMBER_PERMS_PROTECTION` at all would
   return a bare 403 on unrelated member edits. Real grants and revocations are
   still gated.
+  The map is the settings-file value with the platform-wide `Setting` row
+  merged under it: a row can add protected keys but never remove or loosen one
+  the file names, and a blank row adds nothing. A malformed map in either
+  source refuses every member-level change (global managers excepted) rather
+  than reading as empty — see
+  [`MEMBER_PERMS_PROTECTION`](../helpers/settings_reference.md#member).
 - **Reserved keys on upgrade**: `guest` and `full_member` now carry framework
   meaning inside `GroupMember.permissions`. Deployments upgrading past this
   version should audit existing rows for either key — a pre-existing

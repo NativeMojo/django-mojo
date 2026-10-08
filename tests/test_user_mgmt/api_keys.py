@@ -1,6 +1,5 @@
 from testit import helpers as th
 from testit import faker
-from unittest import mock
 
 TEST_USER = "apikey_user"
 TEST_PWORD = "apikey##mojo99"
@@ -182,14 +181,16 @@ def test_dnsman_acme_federation_protection_floor(opts):
         "geoip_sync": "groups",
         "deployment_sensitive": "sys.deployment_sensitive",
     }
-    with mock.patch.object(api_key.settings, "get", return_value=configured):
-        protection = api_key._apikey_perms_protection()
-    assert protection["dnsman_acme_federation"] == "sys.dnsman_acme_federation", \
-        f"configuration must not relax the ACME floor, got {protection}"
-    assert protection["geoip_sync"] == "sys.geoip_sync", \
-        f"configuration must not relax the GeoIP floor, got {protection}"
-    assert protection["deployment_sensitive"] == "sys.deployment_sensitive", \
-        "configuration should still be able to add deployment-specific floors"
+    # The same map from either source: the settings file, then the Setting row.
+    for source, protection in (
+            ("settings file", api_key.resolve_apikey_perms_protection(configured, None)),
+            ("Setting row", api_key.resolve_apikey_perms_protection(None, configured))):
+        assert protection["dnsman_acme_federation"] == "sys.dnsman_acme_federation", \
+            f"the {source} must not relax the ACME floor, got {protection}"
+        assert protection["geoip_sync"] == "sys.geoip_sync", \
+            f"the {source} must not relax the GeoIP floor, got {protection}"
+        assert protection["deployment_sensitive"] == "sys.deployment_sensitive", \
+            f"the {source} should still be able to add deployment-specific floors"
 
 
 @th.unit_test("apikey_is_group_allowed")
