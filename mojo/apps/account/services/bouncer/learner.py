@@ -2,8 +2,13 @@
 BotLearner — background job that registers bot signatures after confirmed blocks.
 
 Published by on_bouncer_assess when risk_score >= BOUNCER_LEARN_MIN_SCORE.
-Checks subnet/UA/fingerprint/campaign escalation thresholds and writes
-BotSignature entries + updates the Redis signature cache used by pre-screen.
+Checks subnet/campaign escalation thresholds and writes BotSignature entries
++ updates the Redis signature cache used by pre-screen.
+
+The learner never writes, and the cache never enforces, an automatic
+`user_agent` or `fingerprint` signature: the caller chooses both values, so a
+learned one lets any caller block everyone who shares them. Only an operator's
+(source='manual') signature of those two types is enforced.
 """
 import hashlib
 import json
@@ -16,10 +21,13 @@ from mojo.helpers.settings import settings
 logger = logit.get_logger('bouncer', 'bouncer.log')
 
 _SUBNET_PREFIX = 'bouncer:learn:subnet24:'
-_UA_PREFIX = 'bouncer:learn:ua:'
-_FP_PREFIX = 'bouncer:learn:fp:'
 _CAMPAIGN_PREFIX = 'bouncer:learn:campaign:'
-SIG_CACHE_KEY = 'bouncer:sigs:active'
+# v2: the cache no longer holds automatic user_agent/fingerprint signatures. A
+# job worker still running older code rebuilds the old key, which is not read.
+SIG_CACHE_KEY = 'bouncer:sigs:active:v2'
+# Signature types whose value the caller chooses: never learned, and enforced
+# only when an operator created the row (source='manual').
+CALLER_CHOSEN_SIG_TYPES = ('user_agent', 'fingerprint')
 
 
 def learn_from_block(job):
@@ -27,6 +35,9 @@ def learn_from_block(job):
     Background job: register bot signatures after a confirmed high-confidence block.
 
     Payload keys: duid, ip, fingerprint_id, risk_score, triggered_signals, user_agent
+
+    The payload's user_agent and fingerprint_id are not learned from: both are
+    chosen by the caller (see CALLER_CHOSEN_SIG_TYPES).
     """
     if not settings.get_static('BOUNCER_LEARN_ENABLED', True):
         return
@@ -35,10 +46,8 @@ def learn_from_block(job):
     muid = p.get('muid', '')
     duid = p.get('duid', '')
     ip = p.get('ip', '')
-    fingerprint_id = p.get('fingerprint_id', '')
     risk_score = p.get('risk_score', 0)
     triggered_signals = p.get('triggered_signals', [])
-    user_agent = p.get('user_agent', '')
 
     min_score = settings.get_static('BOUNCER_LEARN_MIN_SCORE', 80)
     if risk_score < min_score:
@@ -50,25 +59,17 @@ def learn_from_block(job):
         BouncerDevice.objects.filter(muid=muid).update(risk_tier='blocked')
 
     redis = get_connection()
-    window = 3600  # 1-hour rolling window for subnet/UA escalation
+    window = 3600  # 1-hour rolling window for subnet escalation
 
     # 2. Subnet /24 escalation
     if ip:
         _check_subnet(ip, redis, window)
 
-    # 3. UA escalation
-    if user_agent:
-        _check_user_agent(user_agent, redis, window)
-
-    # 4. Fingerprint escalation
-    if fingerprint_id:
-        _check_fingerprint(fingerprint_id, redis)
-
-    # 5. Campaign (signal_set) detection
+    # 3. Campaign (signal_set) detection
     if triggered_signals:
         _check_campaign(triggered_signals, redis)
 
-    # 6. Refresh Redis signature cache
+    # 4. Refresh Redis signature cache
     refresh_sig_cache()
 
 
@@ -91,28 +92,6 @@ def _check_subnet(ip, redis, window):
         redis.expire(key, window)
     if count >= threshold:
         _upsert_signature('subnet_24', subnet, 'auto', min(count * 10, 90), ttl)
-
-
-def _check_user_agent(ua, redis, window):
-    threshold = settings.get_static('BOUNCER_LEARN_UA_THRESHOLD', 5)
-    ttl = settings.get_static('BOUNCER_LEARN_UA_TTL', 604800)
-    ua_hash = hashlib.md5(ua.encode()).hexdigest()
-    key = f"{_UA_PREFIX}{ua_hash}"
-    count = redis.incr(key)
-    if count == 1:
-        redis.expire(key, window)
-    if count >= threshold:
-        _upsert_signature('user_agent', ua[:512], 'auto', min(count * 10, 90), ttl)
-
-
-def _check_fingerprint(fingerprint_id, redis):
-    threshold = settings.get_static('BOUNCER_LEARN_FP_THRESHOLD', 3)
-    ttl = settings.get_static('BOUNCER_LEARN_UA_TTL', 604800)
-    key = f"{_FP_PREFIX}{fingerprint_id}"
-    count = redis.incr(key)
-    redis.expire(key, 86400 * 30)
-    if count >= threshold:
-        _upsert_signature('fingerprint', fingerprint_id, 'auto', min(count * 15, 95), ttl)
 
 
 def _check_campaign(triggered_signals, redis):
@@ -179,15 +158,20 @@ def refresh_sig_cache():
     """
     Rebuild the Redis cache of active signatures for fast pre-screen lookup.
     Called after every signature upsert. Also safe to call on a schedule.
+
+    Automatic user_agent and fingerprint rows are left out, so one an older
+    release learned is no longer enforced. Manual rows of those types load.
     """
     from mojo.apps.account.models.bot_signature import BotSignature
     now = dates.utcnow()
     active = BotSignature.objects.filter(is_active=True).exclude(
         expires_at__lt=now
-    ).values('sig_type', 'value')
+    ).values('sig_type', 'value', 'source')
 
     sigs_by_type = {}
     for sig in active:
+        if sig['sig_type'] in CALLER_CHOSEN_SIG_TYPES and sig['source'] != 'manual':
+            continue
         sigs_by_type.setdefault(sig['sig_type'], []).append(sig['value'])
 
     redis = get_connection()

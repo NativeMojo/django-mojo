@@ -22,6 +22,9 @@ class BotSignature(models.Model, MojoModel):
     Auto-registered entries always have an expires_at TTL.
     Manual entries (source='manual') may have expires_at=None (permanent).
 
+    The learner writes only network and campaign rows. An automatic `user_agent`
+    or `fingerprint` row is never enforced; a manual one is.
+
     Pre-screen checks a Redis cache of active signatures before running full scoring,
     so matched entries are caught at the gate with no scoring overhead.
     """
@@ -64,6 +67,17 @@ class BotSignature(models.Model, MojoModel):
 
     def __str__(self):
         return f"BotSignature<{self.sig_type}:{self.value[:40]}>"
+
+    def on_rest_pre_save(self, changed_fields, created):
+        """A signature created over REST with no `source` is an operator's own:
+        store it as manual. The learner creates its rows through the ORM, so the
+        field default stays 'auto'. An automatic user_agent or fingerprint row
+        is never enforced (see learner.refresh_sig_cache)."""
+        if not created:
+            return
+        request = self.active_request
+        if request is not None and request.DATA.get('source', None) is None:
+            self.source = 'manual'
 
     @property
     def is_expired(self):
