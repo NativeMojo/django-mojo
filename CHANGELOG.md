@@ -14,6 +14,26 @@
 
 ## Unreleased
 
+### jobs, edge: Deploys start while ordinary work fills the workers; a lost lease is a failure, not "superseded" (#4857)
+
+**Behaviour change on upgrade:** a job engine now holds worker slots back for
+the `priority` channel and its own box-direct channel. Unset,
+`JOBS_ENGINE_RESERVED_WORKERS` is `min(2, max_workers // 4)`: a pool of 8 or
+more reserves two, 4 to 7 one, smaller pools none, so ordinary work gets 8 of
+10 workers by default. Set it to `0` to restore the old behaviour. An engine
+that consumes neither reserved channel reserves nothing. Claim order is
+`priority`, the box-direct channel, then the rest.
+
+The deploy orchestrator is published on `priority` when a live engine consumes
+it, otherwise on `default` as before. It renews its coordination lease, and the
+target key with it, while it waits on the canary. A lease that expires with no
+successor now ends the deployment `failed` (`lease_expired_before_start` or
+`lease_expired_mid_canary`) with an incident; `superseded` is kept for a
+deployment a newer one really replaced. A deployment that was never
+orchestrated still ends `unknown` (`coordination_lease_expired`) through the
+stale sweep, now with an incident. A silent canary's failure detail says
+whether its node job never started or started and went quiet.
+
 ### account: Preserve brand context through hosted login (#4622)
 
 Passkey begin/complete and SMS verification accept optional `options.group_uuid`
