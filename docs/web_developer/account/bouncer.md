@@ -890,7 +890,7 @@ GET /api/account/bouncer/signal?stage=assess&sort=-created
 
 ### Bot Signatures — `/api/account/bouncer/signature`
 
-Bot signatures are patterns the bouncer uses for **pre-screening** — matching known bots before running the full scoring pipeline. Signatures are auto-learned from confirmed blocks and can also be created manually.
+Bot signatures are patterns the bouncer uses for **pre-screening** — matching known bots before running the full scoring pipeline. Network (`subnet_24`) and campaign (`signal_set`) signatures are auto-learned from confirmed blocks; any type can be created manually. `user_agent` and `fingerprint` signatures are manual only: one with `source: "auto"` is never enforced.
 
 Active signature matches and existing blocked devices produce honest
 operator-recovery guidance on hosted pages. Device history alone is not evidence
@@ -948,6 +948,9 @@ POST /api/account/bouncer/signature
 }
 ```
 
+A create with no `source` is stored as `manual`. An edit never changes a
+signature's `source` unless the request names it.
+
 #### Update a Signature
 
 ```
@@ -977,7 +980,7 @@ DELETE /api/account/bouncer/signature/10
 | `confidence` | 0–100 confidence score |
 | `hit_count` | Pre-screen cache hits (how many times this signature matched) |
 | `block_count` | How many of those hits resulted in blocks |
-| `is_active` | Active signatures are loaded into the pre-screen cache |
+| `is_active` | Active signatures are loaded into the pre-screen cache, except `user_agent` and `fingerprint` rows with `source` `auto` |
 | `expires_at` | Auto-learned signatures expire (null = permanent) |
 
 #### Signature Types
@@ -987,8 +990,8 @@ DELETE /api/account/bouncer/signature/10
 | `ip` | Exact IP address | Direct match |
 | `subnet_24` | /24 subnet (e.g. `203.0.113.0/24`) | 5+ blocks from same /24 |
 | `subnet_16` | /16 subnet | Manual only |
-| `user_agent` | Exact User-Agent string | 5+ blocks with same UA |
-| `fingerprint` | Browser fingerprint hash | 3+ blocks with same fingerprint |
+| `user_agent` | Exact User-Agent string | Manual only |
+| `fingerprint` | Browser fingerprint hash | Manual only |
 | `signal_set` | Hash of triggered signal combination | 5+ blocks with same signal pattern (campaign) |
 
 #### Useful Queries
@@ -999,6 +1002,10 @@ GET /api/account/bouncer/signature?sig_type=subnet_24&is_active=true&sort=-hit_c
 
 # Auto-learned signatures
 GET /api/account/bouncer/signature?source=auto&sort=-modified
+
+# User-Agent and fingerprint signatures an older release learned (no longer enforced)
+GET /api/account/bouncer/signature?source=auto&sig_type=user_agent
+GET /api/account/bouncer/signature?source=auto&sig_type=fingerprint
 
 # Most effective signatures (highest hit count)
 GET /api/account/bouncer/signature?is_active=true&sort=-hit_count&size=20

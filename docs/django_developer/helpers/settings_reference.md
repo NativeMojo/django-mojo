@@ -428,13 +428,13 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
 - `BOUNCER_CONTACT_PATH`
 - `BOUNCER_LEARN_CAMPAIGN_THRESHOLD`
 - `BOUNCER_LEARN_ENABLED`
-- `BOUNCER_LEARN_FP_THRESHOLD`
+- `BOUNCER_LEARN_FP_THRESHOLD` — no longer read: the Bouncer does not learn User-Agent or fingerprint signatures
 - `BOUNCER_LEARN_MIN_SCORE`
 - `BOUNCER_LEARN_SIGNAL_SET_TTL`
 - `BOUNCER_LEARN_SUBNET_THRESHOLD`
 - `BOUNCER_LEARN_SUBNET_TTL`
-- `BOUNCER_LEARN_UA_THRESHOLD`
-- `BOUNCER_LEARN_UA_TTL`
+- `BOUNCER_LEARN_UA_THRESHOLD` — no longer read: the Bouncer does not learn User-Agent or fingerprint signatures
+- `BOUNCER_LEARN_UA_TTL` — no longer read: the Bouncer does not learn User-Agent or fingerprint signatures
 - `BOUNCER_LOGIN_PATH`
 - `BOUNCER_LOGO_URL`
 - `BOUNCER_PASS_COOKIE_DOMAIN` — `Domain` attribute for the `mbp` pass cookie

@@ -1055,11 +1055,13 @@ After a high-confidence block (score >= `BOUNCER_LEARN_MIN_SCORE`, default 80), 
 | Signature Type | Threshold | TTL | Description |
 |---------------|-----------|-----|-------------|
 | Subnet /24 | 5 blocks from same /24 | 1 day | Blocks entire subnet |
-| User Agent | 5 blocks with same UA | 7 days | Blocks matching UA string |
-| Fingerprint | 3 blocks with same fingerprint | 30 days | Blocks browser fingerprint |
+| User Agent | Never learned | — | Manual only (`source='manual'`) |
+| Fingerprint | Never learned | — | Manual only (`source='manual'`) |
 | Signal Set (Campaign) | 5 blocks with same signal pattern | 30 days | Blocks coordinated attacks |
 
 Signatures are cached in Redis for pre-screen checks. When a request matches a cached signature, it is blocked immediately without running full scoring.
+
+User-Agent and fingerprint values are chosen by the caller, so the learner does not write them and the cache leaves out any such row with `source='auto'`, including rows an older release learned. See [Bouncer Architecture](../account/bouncer.md#adaptive-bot-signature-learning).
 
 ## 9. OSSEC Integration
 
@@ -1214,9 +1216,9 @@ Single-server job functions follow the engine's calling convention: `func(job)` 
 | `BOUNCER_LEARN_MIN_SCORE` | `80` | Min risk score to trigger learning |
 | `BOUNCER_LEARN_SUBNET_THRESHOLD` | `5` | Blocks from /24 before subnet signature |
 | `BOUNCER_LEARN_SUBNET_TTL` | `86400` | Subnet signature TTL (1 day) |
-| `BOUNCER_LEARN_UA_THRESHOLD` | `5` | Blocks with same UA before UA signature |
-| `BOUNCER_LEARN_UA_TTL` | `604800` | UA signature TTL (7 days) |
-| `BOUNCER_LEARN_FP_THRESHOLD` | `3` | Blocks with same fingerprint before FP signature |
+| `BOUNCER_LEARN_UA_THRESHOLD` | `5` | Unused: User-Agent signatures are no longer learned |
+| `BOUNCER_LEARN_UA_TTL` | `604800` | Unused |
+| `BOUNCER_LEARN_FP_THRESHOLD` | `3` | Unused: fingerprint signatures are no longer learned |
 | `BOUNCER_LEARN_CAMPAIGN_THRESHOLD` | `5` | Blocks with same signals before campaign detection |
 | `BOUNCER_LEARN_SIGNAL_SET_TTL` | `2592000` | Campaign signature TTL (30 days) |
 
