@@ -151,6 +151,52 @@ group.metadata["feature_flags"] = {"new_ui": True}
 group.save()
 ```
 
+### Keys that need a global permission
+
+Two metadata keys decide where a tenant's sign-in, password-reset and invite
+links land: `webapp_base_url` and `webapp_auth_path` (see
+[auth.md](auth.md)). Setting, changing or clearing either one over REST needs a
+signed-in person holding **global** `manage_groups` or `groups`, or a
+superuser. A member-level `manage_group` (or a member-level grant named
+`manage_groups`) is refused with a `403`, and so is every group API key and
+group token. An unchanged value in the payload is fine: a manager editing
+another key, or resending the whole metadata as it is, still gets `200`.
+A per-user API key is the person's own session and passes when that person
+holds the global permission. `geofence_strict` has its own global gate
+(`manage_geofence` / `security`).
+
+**A save does not write back a link setting it did not change.** A `Group`
+instance remembers the two keys and the parent it was loaded with. `save()`
+locks the row, and for each of the three that this instance left as loaded it
+takes the stored value instead of the loaded one. So a request, a `touch()` or
+a job holding a row loaded before an operator's change cannot put the old
+address or the old parent back; its other edits are still stored. A value the
+instance did change is written as before, and for a REST save the permission
+is judged again on the locked row. This covers a full `save()` and any
+`save(update_fields=...)` that names `metadata` or `parent`. Other metadata
+keys are not merged: the last full save still wins for those.
+
+What the instance remembers follows what it really read and wrote, the two
+keys and the parent separately:
+
+- `refresh_from_db(fields=[...])`, and a field left out by `defer()` or
+  `only()` that loads later, count as reading only the fields named. A value
+  read this way is not an edit, and an edit of the other one is still pending.
+- `save(update_fields=[...])` counts as writing only the fields named. An
+  address or parent assigned before a partial save that leaves it out is
+  stored by the later save that names it.
+- A field that was never loaded is not compared and not written.
+- An instance built with an existing `pk`, rather than loaded, is written as
+  built: it has nothing remembered.
+
+One limit. If a save is rolled back with its transaction and the same
+instance is saved again without being reloaded, the address or parent it
+assigned is treated as already stored and the stored value is kept. Django
+does not revert an instance when a transaction rolls back
+([Controlling transactions explicitly](https://docs.djangoproject.com/en/5.2/topics/db/transactions/#controlling-transactions-explicitly));
+call `refresh_from_db()` and assign again. A write that skips `save()`
+(`QuerySet.update()`, `bulk_update()`) is a plain ORM write and is not covered.
+
 ### Protected Metadata
 
 The reserved root key `"protected"` in `metadata` is write-protected at the framework level. Only a superuser or a user with a permission listed in `PROTECTED_JSON_PERMS` (for Group: `"admin_compliance"` or `"admin_verify"`) can set or update it via the REST API. Any attempt by an unprivileged user raises a `403 PermissionDeniedException`. The gate cannot be bypassed with `"__replace": true` or a non-dict overwrite — a wholesale replace that would rewrite **or drop** the existing `protected` subtree is denied the same as a merge that touches it.
@@ -430,6 +476,17 @@ Each Group's active webhook delivery targets are managed through the `WebhookSub
 ```python
 group.touch()   # updates last_activity (rate-limited by GROUP_LAST_ACTIVITY_FREQ)
 ```
+
+## Moving a group between trees
+
+A change of `parent` that changes the **top of the tree** the group sits under
+— attaching a top-level group beneath another tree, detaching a sub-group, or
+moving it from one tree to another — needs the same global `manage_groups` or
+`groups` permission (or a superuser) as the two link-address keys above, and a
+group API key or group token never passes. The link resolver trusts a group by
+the top of its tree, so a group moved into a tenant could otherwise bring an
+address with it. Moving a sub-group to another parent **inside the same tree**
+needs only the ordinary write grant.
 
 ## Hierarchy integrity
 
