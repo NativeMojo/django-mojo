@@ -328,13 +328,12 @@ admission), the connection record, the id from every topic set, and the
 set's other members that have no record (the topic sets include a topic
 whose Redis add finished before the handler recorded it). It then closes the
 pub/sub connection. Cancelling a task does not stop a Redis call already
-running in the executor thread, so every write that adds this connection
-(its record, its admission and registration, a topic add) runs under the
-same per-handler lock as the heartbeat and cleanup, and writes nothing once
-`_closing` is set. Such a write therefore either finishes before cleanup's
-removals, which then remove it, or runs after them and does nothing; cleanup
-waits for one that is in flight. A write skipped this way raises no client
-error and no incident. A killed
+running in the executor thread, so a write of this connection's own state
+(its record, its admission or registration, a topic add) can finish after
+those removals: each such write checks `_closing` once it has returned and
+removes what it wrote. `_closing` is set before cleanup removes anything, so
+a write that does not see it is removed by cleanup. If that late removal
+itself fails, the state expires or is pruned like a killed worker's. A killed
 worker runs none of this: its records expire within
 300 s and the next admission or any sibling's heartbeat removes its members.
 
