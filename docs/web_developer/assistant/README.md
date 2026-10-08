@@ -203,14 +203,18 @@ shape when it has one, otherwise its `default` shape — not the wider
 `?graph=detail` view a detail screen may be showing. A field that appears on
 your detail view may therefore be absent from the assistant's context.
 
-**Permission**: `view_admin` + the model's own `VIEW_PERMS`
+**Permission**: global `view_admin` or `assistant`, plus the right to read that record. The record is checked the way `GET` on it is checked: its owner, its own tenant and your grants there. An API key or group token is refused.
 
 **Request body**:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `model` | string | Yes | Model identifier in `app_label.ModelName` format (e.g. `incident.Ticket`, `incident.Incident`) |
-| `pk` | integer | Yes | Primary key of the instance |
+| `pk` | integer or string | Yes | Primary key of the instance. `7` and `"7"` are the same record |
+
+Do not send `graph`. The server chooses the shape, and a request that carries `graph` is refused with `400`. For a record you may only see in a reduced shape (a group you are a plain member of), the context is built from that reduced shape.
+
+The conversation is filed under the **record's** tenant. A `group` sent with the request does not change that, and a record that belongs to no tenant gives a conversation with no group.
 
 **Response** (success — new conversation):
 
@@ -235,15 +239,17 @@ your detail view may therefore be absent from the assistant's context.
 }
 ```
 
-**Duplicate prevention**: If the same user has already opened an assistant conversation for the same model + pk, the existing conversation is returned instead of creating a new one.
+**Duplicate prevention**: If the same user has already opened an assistant conversation for the same record, the existing conversation is returned instead of creating a new one. Your right to read the record is checked on every call, so a retry after you lose access gets the `404` below, not the old conversation.
 
 **Errors**:
 
-| Status | Condition |
-|---|---|
-| 400 | Invalid model format or model not found |
-| 403 | User lacks `view_admin` or model `VIEW_PERMS` |
-| 404 | Instance with given pk not found |
+| Status | Condition | Body |
+|---|---|---|
+| 400 | `graph` sent; `model` or `pk` missing, malformed or of the wrong type; unknown model; a model with no REST interface | A short fixed sentence. Nothing you sent is repeated |
+| 403 | You lack global `view_admin` / `assistant`, or you are using an API key or group token, or the model is closed to the assistant | For a closed model: `"<app>.<Model> is not available to the assistant"` |
+| 404 | The record does not exist, **or** you may not read it | Always `{"status": false, "error": "Context source not found"}` |
+
+A missing record and one you may not read give the same `404`, with no model name and no id in it. Treat `404` as "nothing to open here"; it does not tell you which of the two it was. Before this change an unreadable record answered `403`.
 
 **Example — open assistant from a ticket detail view**:
 

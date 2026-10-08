@@ -1111,7 +1111,9 @@ Create a conversation pre-loaded with the full context of any MojoModel instance
 
 ### Endpoint
 
-`POST /api/assistant/context` — requires `view_admin` + the model's own `VIEW_PERMS`. Like `POST /api/assistant`, this is gated with `@md.requires_global_perms('view_admin', 'assistant')` — the grant must be global on the User, not a group/member-scoped permission.
+`POST /api/assistant/context` — requires `view_admin` or `assistant`, plus the right to read that one row. Like `POST /api/assistant`, this is gated with `@md.requires_global_perms('view_admin', 'assistant')` — that grant must be global on the User, not a group/member-scoped permission. A key-backed session (API key, group token) is refused.
+
+The row itself is checked the way a REST read of it is: `model.rest_check_permission(request, "VIEW_PERMS", instance)`. So the owner match, the row's own tenant and the instance's `check_view_permission` hook all apply. A grant held in one tenant opens that tenant's rows only, an owner-only row opens for its owner, and a global grant opens what it opens over REST. One difference from REST: a model that declares no `VIEW_PERMS` is refused here.
 
 ```json
 {"model": "incident.Ticket", "pk": 123}
@@ -1124,14 +1126,37 @@ Returns:
 
 ### How It Works
 
-1. Resolves the model via `apps.get_model(app_label, ModelName)`
-2. Checks the user has at least one of the model's `VIEW_PERMS`
-3. Checks for duplicate: same user + same model + same pk returns the existing conversation (with `"existing": true`)
-4. Builds a context message — rich builders for Ticket and Incident; everything else is serialized through the assistant's graph (`ai`, else `default`)
-5. Creates a Conversation with `metadata: {"source_model": "incident.ticket", "source_pk": 123}`
-6. Stores the context as the first `user` message
+The endpoint is thin; the work is `open_context(request)` in `services/context.py`, in this order:
+
+1. Refuses a request that carries `graph`. The graph is the server's choice.
+2. Resolves the model via `apps.get_model(app_label, ModelName)` and applies model policy (`NO_REST`, `DENY_AI*`) before any row is read
+3. Turns `pk` into the model's own key type and reads the row **once**
+4. Checks the caller may read that row (`authorize_source`)
+5. Checks for a duplicate: same user + same row returns the existing conversation (with `"existing": true`). This is after step 4, so a retry is checked again
+6. Builds a context message from the row already read — rich builders for Ticket and Incident; everything else is serialized through the assistant's graph (`ai`, else `default`)
+7. Stores the Conversation and its first `user` message in one transaction, with `metadata: {"source_model": "incident.ticket", "source_pk": 123}`
 
 The admin then sends their first real message and the assistant responds with full tool access.
+
+### What It Answers
+
+| Status | When | Body |
+|---|---|---|
+| 200 | Created, or an existing conversation found | `{"status": true, "data": {"conversation_id": 789}}`, plus `"existing": true` when found |
+| 400 | `graph` sent; `model` or `pk` missing, malformed or of the wrong type; unknown model; a model that is not a MojoModel, has no `RestMeta`, or is `NO_REST` | A fixed sentence. Nothing the caller sent is repeated |
+| 403 | No global `view_admin` / `assistant`; a key-backed session; a model closed by `DENY_AI` / `DENY_AI_VIEW` | `"<app>.<Model> is not available to the assistant"` for the policy case |
+| 404 | The row does not exist, **or** the caller may not read it, or no context could be built for it | Always `{"status": false, "error": "Context source not found"}` |
+
+A missing row and a row the caller may not read give the same status and the same body, with no model name and no id, so the answer does not say whether a row exists. A whole number that no row has is a missing row. Timing is not equalized. A refused read emits a level-4 `assistant_context_denied` incident event with no group stamp, at most one an hour for one caller and model (`report_event_suppressed`); every refusal is written to `assistant.log`. A missing row is not reported.
+
+### The Source Row Decides, Not the Request
+
+- **Tenant.** `Conversation.group` is the row's own tenant, `model._instance_group(instance)` (`RestMeta.GROUP_FIELD`, else the row's `group`). A `group` sent with the request is never used for it. A row with no tenant gives a conversation with no group; so does an `account.Group` row, which has no owning group of its own.
+- **Identity.** `source_model` is the row's own lowercase label and `source_pk` its own key, so `"7"` and `7`, or `incident.Ticket` and `incident.TICKET`, find the same conversation.
+- **Graph.** The permission check may select a narrower graph: `account.Group.check_view_permission` sets `basic` for a plain member. That exact graph is used, through the `graph_override` seam of the [assistant's serialization graph](#the-assistants-serialization-graph-ai-else-default). If the check selects something the model does not declare as an explicit mapping, the read is refused with the 404; it never falls back to a wider graph. A row with a selected graph always takes the generic path, because a rich builder reads the row directly and cannot honor it.
+- **Request state.** The permission check re-points `request.group` and may set `request.DATA["graph"]`. `authorize_source` puts both back on every path.
+
+Duplicate detection is not a lock: two first requests at the same instant can each create a conversation.
 
 ### Rich Context Builders
 
@@ -1156,6 +1181,12 @@ def build_order_context(instance):
 
 register_context_builder("myapp.Order", build_order_context)
 ```
+
+A builder is called only with a row the caller has been authorized to read, and it must not look the row up again. **That authorization covers the row, not what the builder adds.** The Ticket and Incident builders add notes, history, events and linked tickets, all of which belong to the row. A custom builder that adds child or related rows must check that the caller may read those, or add only what belongs to the row; write down which in the builder.
+
+A builder that returns no title gets `<Model> #<pk>`. One that returns an error or no text gives the 404 above and stores nothing.
+
+`build_context(model_string, instance, request=None, graph_override=None)` takes the row, not a pk. Before this it took a pk and read the row itself.
 
 ### Key Files
 
