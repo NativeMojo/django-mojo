@@ -62,6 +62,10 @@ JOBS_ENGINE_MAX_WORKERS = settings.get_static('JOBS_ENGINE_MAX_WORKERS', 10)
 # the value is clamped below max_workers so an ordinary slot always remains.
 JOBS_ENGINE_RESERVED_WORKERS = settings.get_static('JOBS_ENGINE_RESERVED_WORKERS', None)
 RESERVED_CHANNELS = ('priority',)
+# BRPOP wait while only the reserved channels are on offer. A full second there
+# would leave a freed ordinary slot idle for up to a second per claim; this is
+# the same tenth the full-pool sleep uses.
+RESERVED_ONLY_POP_TIMEOUT = 0.1
 
 
 def reserved_worker_count(max_workers, configured=None):
@@ -70,6 +74,21 @@ def reserved_worker_count(max_workers, configured=None):
     if configured is None:
         return min(2, max_workers // 4)
     return max(0, min(int(configured), max_workers - 1))
+
+
+def engine_reserve(channels, runner_id, max_workers, configured=None):
+    """(reserved_channels, reserved_workers) for one engine.
+
+    The reserved channels are `priority` and the engine's box-direct channel,
+    but only those it actually consumes. An engine that consumes neither holds
+    nothing back: the slots could never be used.
+    """
+    reserved_channels = (set(RESERVED_CHANNELS) | {runner_id}) & set(channels)
+    if not reserved_channels:
+        return reserved_channels, 0
+    return reserved_channels, reserved_worker_count(max_workers, configured)
+
+
 JOBS_ENGINE_CLAIM_BUFFER = settings.get_static('JOBS_ENGINE_CLAIM_BUFFER', 2)
 JOBS_RUNNER_HEARTBEAT_SEC = settings.get_static('JOBS_RUNNER_HEARTBEAT_SEC', 5)
 JOBS_VISIBILITY_TIMEOUT_MS = settings.get_static('JOBS_VISIBILITY_TIMEOUT_MS', 30000)
@@ -156,9 +175,9 @@ class JobEngine:
         # Reserved slots: ordinary channels stop claiming at
         # max_claimed - reserved_workers; the reserved channels claim to the
         # ceiling. At least one ordinary slot always remains.
-        self.reserved_workers = reserved_worker_count(
-            self.max_claimed, JOBS_ENGINE_RESERVED_WORKERS)
-        self.reserved_channels = set(RESERVED_CHANNELS) | {self.runner_id}
+        self.reserved_channels, self.reserved_workers = engine_reserve(
+            self.channels, self.runner_id, self.max_claimed,
+            JOBS_ENGINE_RESERVED_WORKERS)
 
         # Control flags
         self.running = False
@@ -780,7 +799,8 @@ class JobEngine:
                     continue
 
                 # Claim one job at a time to avoid over-claiming
-                popped = self.redis.brpop(queue_keys, timeout=1)
+                popped = self.redis.brpop(
+                    queue_keys, timeout=self.claim_pop_timeout(active_count))
                 if not popped:
                     continue
 
@@ -823,7 +843,9 @@ class JobEngine:
     def claimable_queues(self, active_count):
         """The queue keys this engine may BRPOP at ``active_count`` in flight.
 
-        Priority first, as before. Empty when every slot is taken. Once the
+        Priority first, then this engine's box-direct channel (a node update
+        must not sit behind every queued ordinary job), then the rest in
+        configured order. Empty when every slot is taken. Once the
         ordinary slots (max_claimed - reserved_workers) are full, only the
         reserved channels — `priority` and this engine's box-direct channel —
         are offered, so a saturated queue of ordinary work leaves a deploy
@@ -831,12 +853,25 @@ class JobEngine:
         """
         if active_count >= self.max_claimed:
             return []
-        channels_ordered = list(self.channels)
-        if 'priority' in channels_ordered:
-            channels_ordered = ['priority'] + [c for c in channels_ordered if c != 'priority']
-        if active_count >= self.max_claimed - self.reserved_workers:
+        first = [c for c in ('priority', self.runner_id) if c in self.channels]
+        channels_ordered = first + [c for c in self.channels if c not in first]
+        if self.reserved_only(active_count):
             channels_ordered = [c for c in channels_ordered if c in self.reserved_channels]
         return [self.keys.queue(ch) for ch in channels_ordered]
+
+    def reserved_only(self, active_count):
+        """True when the ordinary slots are full and reserved ones remain."""
+        return (self.reserved_workers > 0
+                and self.max_claimed - self.reserved_workers <= active_count < self.max_claimed)
+
+    def claim_pop_timeout(self, active_count):
+        """Seconds the claim BRPOP may block at ``active_count`` in flight.
+
+        While only reserved channels are offered the loop must come back
+        quickly: an ordinary slot that frees during the wait is not seen until
+        the pop returns.
+        """
+        return RESERVED_ONLY_POP_TIMEOUT if self.reserved_only(active_count) else 1
 
     def claim_jobs_by_channel(self, channel: str, count: int) -> List[Tuple[str, str, str]]:
         """Plan B: not used. Kept for compatibility."""

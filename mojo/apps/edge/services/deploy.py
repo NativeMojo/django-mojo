@@ -118,6 +118,10 @@ _NODE_FAILURE_PHASES = {
 # On 2026-09-18 a push sat 9 minutes behind ten file renditions per node,
 # the canary never got a worker, and the lease expired mid-canary (item #4857).
 DEPLOY_CHANNEL = "priority"
+# Used instead when no live engine consumes `priority` — a deployment whose
+# JOBS_CHANNELS omits it, or a fleet still on engines from before the reserve.
+# A deploy published where nobody listens would never start, and say nothing.
+DEPLOY_FALLBACK_CHANNEL = "default"
 DEPLOY_ORCHESTRATE_JOB = "mojo.apps.edge.asyncjobs.deploy_orchestrate"
 DEPLOY_NODE_JOB = "mojo.apps.edge.asyncjobs.deploy_node"
 
@@ -196,6 +200,10 @@ local ok, cur = pcall(cjson.decode, raw)
 if not ok or type(cur) ~= 'table' then return 0 end
 if (cur['deployment'] or '') ~= ARGV[1] then return 0 end
 redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+-- The target shares the lease's lifetime. A push recorded onto this deploy
+-- lives only there; left alone it would expire under a long canary wait and
+-- the terminal's chain check would find nothing to chain.
+redis.call('EXPIRE', KEYS[2], tonumber(ARGV[2]))
 return 1
 """
 
@@ -387,10 +395,30 @@ def touch_status(deployment_id=None):
     Returns True when the lease still belongs to ``deployment_id`` and its
     expiry was pushed out by a full ``status_ttl()``; False when the lease is
     gone (expired, flushed) or names another deploy. Never creates a lease.
+    The target key, when present, is extended with it — whichever deployment
+    it names — and is never created either.
     """
     deployment_id = str(deployment_id) if deployment_id else ""
     return bool(get_client().eval(
-        _TOUCH_STATUS_LUA, 1, STATUS_KEY, deployment_id, status_ttl()))
+        _TOUCH_STATUS_LUA, 2, STATUS_KEY, TARGET_KEY, deployment_id, status_ttl()))
+
+
+def orchestrate_channel():
+    """The channel a deploy orchestration is published on, decided per publish.
+
+    `priority` when a live engine consumes it, so the job can claim a reserved
+    worker slot; otherwise `default`, as before the reserve existed. Reading
+    live engines (not settings) keeps a fleet mid-rollout, and a deployment
+    that never listed `priority`, deploying. A roster that cannot be read is
+    treated as "nobody on priority": the old channel is the safe one.
+    """
+    from mojo.apps.edge.services import platform_deploy
+    try:
+        if platform_deploy._channel_roster(DEPLOY_CHANNEL):
+            return DEPLOY_CHANNEL
+    except Exception:
+        pass
+    return DEPLOY_FALLBACK_CHANNEL
 
 
 def clear_status(deployment_id=None):
@@ -526,7 +554,7 @@ def request_deploy(sha, actor=None, source="external", created_by=None,
         jobs.publish(
             func=DEPLOY_ORCHESTRATE_JOB,
             payload=dict(sha=sha, deployment=str(row.pk)),
-            channel=DEPLOY_CHANNEL,
+            channel=orchestrate_channel(),
             max_retries=0,
             expires_in=canary_timeout())
     except Exception:
@@ -587,7 +615,7 @@ def resume_stranded_target():
         jobs.publish(
             func=DEPLOY_ORCHESTRATE_JOB,
             payload=dict(sha=sha, deployment=str(row.pk)),
-            channel=DEPLOY_CHANNEL,
+            channel=orchestrate_channel(),
             max_retries=0,
             expires_in=canary_timeout())
     except Exception:

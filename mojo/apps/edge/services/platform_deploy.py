@@ -1081,7 +1081,35 @@ def reconcile_stale(verify_fleet=None):
                 # it — closing it `unknown` here would erase the only record
                 # of what the fleet is supposed to converge onto.
                 continue
-            changed += int(transition(
+            never_orchestrated = row.status == PlatformDeployment.STATUS_REQUESTED
+            aged_out = transition(
                 row.pk, PlatformDeployment.STATUS_UNKNOWN,
-                {"reason": "coordination_lease_expired"}))
+                {"reason": "coordination_lease_expired"})
+            changed += int(aged_out)
+            if aged_out and never_orchestrated:
+                _report_never_orchestrated(row)
     return changed
+
+
+def _report_never_orchestrated(row):
+    """One incident for a deployment that aged out without ever being driven.
+
+    Its orchestrate job never ran: it expired in the queue behind other work,
+    or was never published. The orchestrator's own lease-expiry reports cannot
+    cover this, because that code never executed. Called only on the row's
+    transition to ``unknown``, so a later sweep cannot file it twice. Never
+    raises: the sweep closes other rows after this one.
+    """
+    from mojo.helpers import logit
+    try:
+        from mojo.apps.incident import reporter
+        event = reporter.report_event(
+            f"deploy {row.sha}: the deployment was requested but never "
+            f"orchestrated — its coordination lease expired with no "
+            f"orchestrator running, so no node was told to update; check that "
+            f"the job engines have a free worker, then retry the deployment",
+            title="Edge deploy was never orchestrated",
+            category="edge_deploy", level=7)
+        add_link(row.pk, "incident_events", event.pk)
+    except Exception as exc:
+        logit.error(f"edge deploy {row.sha}: failed to report never-orchestrated: {exc}")

@@ -665,7 +665,8 @@ reasoning: [edge README](../edge/README.md#settings),
   backstop that stops a canary dying hard from wedging every future deploy.
   The orchestrator renews the status lease while it drives the deploy, so
   this is a crash backstop, not a deadline; a lease that expires with no
-  successor fails the attempt (`coordination_lease_expired`) with an incident.
+  successor fails the attempt (`lease_expired_before_start` or
+  `lease_expired_mid_canary`) with an incident.
 - `EDGE_PYPI_VERSION_TTL` — **file-only** (`settings.get_static`), int seconds,
   default `21600` (6 hours). How long a successful PyPI lookup for the newest
   published `django-mojo` is cached by `edge.services.framework_version`. The
@@ -913,7 +914,8 @@ restart. See
 - `JOBS_ENGINE_READ_TIMEOUT`
 - `JOBS_ENGINE_RESERVED_WORKERS` — worker slots only the `priority` channel
   and the engine's box-direct channel may claim; unset means
-  `min(2, max_workers // 4)`. See [Jobs — Engine Configuration](../jobs/settings.md#engine-configuration).
+  `min(2, max_workers // 4)`, so a pool under four reserves nothing. An engine
+  that consumes neither channel reserves nothing whatever the value. See [Jobs — Engine Configuration](../jobs/settings.md#engine-configuration).
 - `JOBS_HOSTNAME_CHANNEL` — when `True` (default), each engine also consumes
   its box-direct channel, named after its runner id (default
   `<hostname>-engine`), so a publisher can address one specific engine with

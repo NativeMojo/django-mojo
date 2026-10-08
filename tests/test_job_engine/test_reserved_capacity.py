@@ -33,8 +33,19 @@ def quick_job(job):
     return "ok"
 
 
+GATES = {}
+
+
+def gated_job(job):
+    marker = job.payload.get("marker")
+    STARTED.append(marker)
+    GATES[marker].wait(timeout=15)
+    return "released"
+
+
 BLOCKING = f"{__name__}.blocking_job"
 QUICK = f"{__name__}.quick_job"
+GATED = f"{__name__}.gated_job"
 ORDINARY = "default"
 RUNNER_ID = "t4857-reserved-engine"
 
@@ -45,7 +56,8 @@ def setup_reserved(opts):
     from mojo.apps.jobs.keys import JobKeys
     from mojo.apps.jobs.models import Job
 
-    Job.objects.filter(func__in=[BLOCKING, QUICK]).delete()
+    Job.objects.filter(func__in=[BLOCKING, QUICK, GATED]).delete()
+    GATES.clear()
     keys = JobKeys()
     redis = get_adapter()
     for channel in (ORDINARY, RUNNER_ID):
@@ -86,9 +98,10 @@ def test_claimable_queues(opts):
     def channels_at(active):
         return [key.rsplit(":", 1)[-1] for key in engine.claimable_queues(active)]
 
-    th.assert_eq(channels_at(0), ["priority", ORDINARY, "renditions", RUNNER_ID],
-                 f"an idle engine claims from every channel, priority first, got {channels_at(0)}")
-    th.assert_eq(channels_at(5), ["priority", ORDINARY, "renditions", RUNNER_ID],
+    th.assert_eq(channels_at(0), ["priority", RUNNER_ID, ORDINARY, "renditions"],
+                 f"an idle engine claims from every channel, priority then "
+                 f"box-direct first, got {channels_at(0)}")
+    th.assert_eq(channels_at(5), ["priority", RUNNER_ID, ORDINARY, "renditions"],
                  f"below the reserved line every channel is offered, got {channels_at(5)}")
     th.assert_eq(channels_at(6), ["priority", RUNNER_ID],
                  f"with the ordinary slots full only reserved channels are offered, got {channels_at(6)}")
@@ -101,7 +114,7 @@ def test_claimable_queues(opts):
     th.assert_eq(small.reserved_workers, 0,
                  f"a two-worker pool reserves nothing by default, got {small.reserved_workers}")
     th.assert_eq([k.rsplit(":", 1)[-1] for k in small.claimable_queues(1)],
-                 [ORDINARY, RUNNER_ID],
+                 [RUNNER_ID, ORDINARY],
                  "with no reservation the last slot is open to ordinary work")
 
 
@@ -153,3 +166,103 @@ def test_direct_job_runs_through_saturation(opts):
                  f"once released, the queued ordinary jobs must all run, got {STARTED}")
     th.assert_true(not loop.is_alive(), "the main loop must exit on stop()")
     Job.objects.filter(func__in=[BLOCKING, QUICK]).delete()
+
+
+@th.django_unit_test("box-direct is claimed before ordinary channels even without a priority channel")
+def test_direct_claimed_before_ordinary(opts):
+    from mojo.apps.jobs.job_engine import JobEngine
+
+    engine = JobEngine(channels=["renditions", ORDINARY], runner_id=RUNNER_ID, max_workers=3)
+    got = [key.rsplit(":", 1)[-1] for key in engine.claimable_queues(0)]
+    th.assert_eq(got, [RUNNER_ID, "renditions", ORDINARY],
+                 f"a node update must not sit behind every queued ordinary job, got {got}")
+
+
+@th.django_unit_test("an engine that consumes no reserved channel reserves nothing")
+def test_no_reserved_channel_reserves_nothing(opts):
+    from mojo.apps.jobs.job_engine import engine_reserve
+
+    cases = [
+        # channels, expected reserved channels, expected reserved workers (10-worker pool)
+        (["renditions"], set(), 0),
+        (["renditions", "priority"], {"priority"}, 2),
+        (["renditions", RUNNER_ID], {RUNNER_ID}, 2),
+        (["renditions", "priority", RUNNER_ID], {"priority", RUNNER_ID}, 2),
+    ]
+    for channels, want_channels, want_workers in cases:
+        got_channels, got_workers = engine_reserve(channels, RUNNER_ID, 10)
+        th.assert_eq(got_channels, want_channels,
+                     f"reserved channels for {channels} must be {want_channels}, got {got_channels}")
+        th.assert_eq(got_workers, want_workers,
+                     f"an engine on {channels} must reserve {want_workers} of 10, got {got_workers}")
+    th.assert_eq(engine_reserve(["renditions"], RUNNER_ID, 10, 5)[1], 0,
+                 "an explicit reserve is dead capacity too when nothing reserved is consumed")
+
+
+@th.django_unit_test("the claim pop waits a tenth of a second, not a second, while only reserved channels are offered")
+def test_claim_pop_timeout(opts):
+    from mojo.apps.jobs.job_engine import JobEngine
+
+    engine = JobEngine(channels=[ORDINARY, "priority"], runner_id=RUNNER_ID, max_workers=8)
+    for active, expected in ((0, 1), (5, 1), (6, 0.1), (7, 0.1)):
+        got = engine.claim_pop_timeout(active)
+        th.assert_eq(got, expected,
+                     f"at {active} of 8 in flight the pop may block {expected}s, got {got}")
+    small = JobEngine(channels=[ORDINARY], runner_id=RUNNER_ID, max_workers=2)
+    th.assert_eq(small.claim_pop_timeout(1), 1,
+                 "with nothing reserved the pop keeps its one-second wait")
+
+
+@th.django_unit_test("live engine: a freed ordinary slot is refilled within a fraction of a second while the reserve is in force")
+def test_freed_ordinary_slot_is_refilled_quickly(opts):
+    from mojo.apps import jobs
+    from mojo.apps.jobs.job_engine import JobEngine
+    from mojo.apps.jobs.models import Job
+
+    # 4 workers -> 1 reserved -> 3 ordinary slots, all held. Each round queues
+    # one more ordinary job, lets the loop settle into its reserved-only pop,
+    # frees one slot and times how long the queued job waits for it.
+    del STARTED[:]
+    GATES.clear()
+    for index in range(6):
+        GATES[f"gated-{index}"] = threading.Event()
+    for index in range(3):
+        jobs.publish(GATED, {"marker": f"gated-{index}"}, channel=ORDINARY)
+
+    engine = JobEngine(channels=[ORDINARY], runner_id=RUNNER_ID, max_workers=4)
+    engine.initialize()
+    loop = threading.Thread(target=engine._main_loop, name="t4857-refill", daemon=True)
+    loop.start()
+    waits = []
+    try:
+        deadline = time.time() + 10
+        while len(STARTED) < 3 and time.time() < deadline:
+            time.sleep(0.05)
+        th.assert_eq(len(STARTED), 3, f"three jobs fill the ordinary slots, got {STARTED}")
+        for round_index in range(3):
+            waiting = f"gated-{3 + round_index}"
+            jobs.publish(GATED, {"marker": waiting}, channel=ORDINARY)
+            time.sleep(0.3)
+            th.assert_true(waiting not in STARTED,
+                           f"{waiting} must wait: the only free slot is reserved, got {STARTED}")
+            freed = time.time()
+            GATES[f"gated-{round_index}"].set()
+            deadline = freed + 5
+            while waiting not in STARTED and time.time() < deadline:
+                time.sleep(0.01)
+            th.assert_true(waiting in STARTED, f"{waiting} never started, got {STARTED}")
+            waits.append(time.time() - freed)
+    finally:
+        for gate in GATES.values():
+            gate.set()
+        time.sleep(0.3)
+        engine.stop()
+        loop.join(timeout=10)
+
+    # Before the short pop each wait was up to a full second (the BRPOP on the
+    # reserved channels had to time out first); now it is the 0.1s pop plus
+    # the job's own completion bookkeeping.
+    th.assert_true(max(waits) < 0.5,
+                   f"a freed ordinary slot must be refilled within a fraction "
+                   f"of a second, waits were {[round(w, 2) for w in waits]}")
+    Job.objects.filter(func__in=[GATED]).delete()

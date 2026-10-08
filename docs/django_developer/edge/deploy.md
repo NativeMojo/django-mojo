@@ -135,35 +135,68 @@ convergence and independent observation remain outside release acceptance.
 
 ## Queue capacity and the coordination lease
 
-The deploy plane never competes with ordinary work for a worker. The
-orchestrator is published on the `priority` channel and every node update on
-that node's box-direct channel; both are **reserved channels** in the job
-engine, which keeps `JOBS_ENGINE_RESERVED_WORKERS` slots that only reserved
-channels may claim (see [jobs settings](../jobs/settings.md#engine-configuration)).
-A node whose other workers are all busy — ten file renditions per box was the
-2026-09-18 shape — still starts its deploy job. `priority` must therefore be in
-`JOBS_CHANNELS` on every node that can orchestrate (it is a framework default
-channel; a project that sets `JOBS_CHANNELS` explicitly must list it).
+On an engine with four or more workers, a deploy does not wait behind
+ordinary work for a worker. The orchestrator is published on the `priority`
+channel and every node update on that node's box-direct channel; both are
+**reserved channels** in the job engine, which keeps
+`JOBS_ENGINE_RESERVED_WORKERS` slots that only reserved channels may claim (see
+[jobs settings](../jobs/settings.md#engine-configuration)). A node whose other
+workers are all busy — ten file renditions per box was the 2026-09-18 shape —
+still starts its deploy job.
+
+Where this does **not** hold:
+
+- **Pools under four workers reserve nothing by default.** A deploy there can
+  still wait behind ordinary work. Set `JOBS_ENGINE_RESERVED_WORKERS=1` to
+  protect it.
+- **The deploy that delivers this change is not protected by it.** Engines
+  reserve nothing until they restart on the new code.
+- **Other work on `priority` or a box-direct channel shares the reserved
+  slots.** That is intended for per-node operational work; an application that
+  publishes long jobs to `priority` can still hold a deploy up.
+
+**No engine on `priority`.** The orchestrator's channel is chosen at each
+publish (`deploy.orchestrate_channel()`): `priority` when a live engine
+consumes it, otherwise `default`, as before. A project whose `JOBS_CHANNELS`
+omits `priority`, and a fleet partway through the upgrade, keep deploying; they
+just get no reserved slot for the orchestrator until an engine lists
+`priority`. Node updates are box-direct either way.
 
 The Redis status lease (`EDGE_DEPLOY_STATUS_TTL`) is a crash backstop, not a
 deadline on a deploy that is being driven. The orchestrator renews its own
 lease when it starts and on every canary poll (`deploy.touch_status`, an
 owner-gated Lua `EXPIRE`), so time the orchestrate job spent queued never
 counts against the canary window. The lease then only expires for an
-orchestrator that stopped touching it — exactly the crash it exists for.
+orchestrator that stopped touching it — exactly the crash it exists for. The
+same touch extends the target key, so a push recorded onto a long-running
+deploy is still there to be chained when that deploy ends.
 
 The orchestrator now tells two things apart that used to share one branch:
 
 | Lease state mid-canary | Recorded as | Incident |
 |---|---|---|
 | names **another** deployment | `superseded` / `lease_superseded` — a newer deploy took the plane; stand down quietly | none |
-| **absent** (expired or flushed, nobody armed) | `failed` / `coordination_lease_expired` — the fleet is still on the previous release and nothing will retry by itself | `Edge deploy lost its coordination lease`, naming the canary being waited on |
+| **absent** (expired or flushed, nobody armed) | `failed` / `lease_expired_mid_canary` — the canary was told to update and may still be doing so, no other node was released, and nothing will retry by itself | `Edge deploy lost its coordination lease`, naming the canary being waited on |
 
 The same distinction applies before the canary is dispatched: coordination
 keys that expired while the orchestrate job sat in the queue fail the attempt
-with the same reason and an incident saying the lease died *before the
-orchestrator ran*, instead of the old `target_moved_before_start`
-supersession. A genuinely moved target is still chained.
+with reason `lease_expired_before_start` and an incident saying the lease died
+*before the orchestrator ran* (no node was told to update), instead of the old
+`target_moved_before_start` supersession. A genuinely moved target is still
+chained.
+
+A third case never reaches the orchestrator at all: an orchestrate job that
+waited in the queue past its own lifetime is expired by the engine and never
+runs. The stale sweep (`platform_deploy.reconcile_stale`) closes that
+deployment as `unknown` / `coordination_lease_expired` and, when it had never
+left `requested`, files one `Edge deploy was never orchestrated` incident. The
+three reasons are deliberately distinct:
+
+| Reason | Status | Who writes it | Meaning |
+|---|---|---|---|
+| `lease_expired_before_start` | `failed` | orchestrator | it ran, and found the coordination keys gone |
+| `lease_expired_mid_canary` | `failed` | orchestrator | the lease vanished while it waited on the canary |
+| `coordination_lease_expired` | `unknown` | stale sweep | nobody was driving the deployment when it aged out |
 
 A canary that never reports is diagnosed from its own `Job` row and the
 verdict travels in both the incident and the row's failure detail

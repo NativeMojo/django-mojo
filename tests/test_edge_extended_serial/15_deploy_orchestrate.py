@@ -896,8 +896,11 @@ def test_lease_expired_without_successor_is_failure(opts):
                  f"an expired lease with no successor is a FAILED attempt, "
                  f"got {deployment.status!r}")
     last = _last_transition(deployment)
-    th.assert_eq(last["detail"].get("reason"), "coordination_lease_expired",
+    th.assert_eq(last["detail"].get("reason"), "lease_expired_mid_canary",
                  f"the failure must name the lease expiry, got {last!r}")
+    th.assert_in("may still be", incidents.call_args.args[0],
+                 f"mid-canary, the incident must not claim the whole fleet is "
+                 f"on the previous release, got {incidents.call_args!r}")
     th.assert_eq((last["detail"].get("diagnosis") or {}).get("waiting_on"), CANARY_ID,
                  f"the diagnosis must say which canary was being waited on, got {last!r}")
     th.assert_true(incidents.called,
@@ -1024,7 +1027,7 @@ def test_preflight_expired_coordination_is_failure(opts):
                  f"expired coordination with no successor is a failure, "
                  f"got {deployment.status!r}")
     th.assert_eq(_last_transition(deployment)["detail"].get("reason"),
-                 "coordination_lease_expired",
+                 "lease_expired_before_start",
                  f"the failure must name the expiry, got {_last_transition(deployment)!r}")
     th.assert_true(incidents.called, "expired coordination must file an incident")
     th.assert_in("before the orchestrator", incidents.call_args.args[0],
@@ -1056,3 +1059,114 @@ def test_touch_status_is_owner_gated(opts):
     th.assert_eq((status or {}).get("deployment"), str(deployment.pk),
                  f"renewing must not rewrite the lease body, got {status!r}")
     deploy.clear_status(deployment.pk)
+
+
+@th.django_unit_test("touch_status extends the target with the lease, and never creates one")
+def test_touch_status_extends_target(opts):
+    from mojo.apps.edge.services import deploy
+
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me])
+    client = deploy.get_client()
+    # A push recorded onto this running deploy: the target names another row.
+    deploy.set_target(SHA_B, actor="test", deployment_id=str(uuid.uuid4()))
+    client.expire(deploy.TARGET_KEY, 5)
+    th.assert_eq(deploy.touch_status("someone-else"), False,
+                 "a foreign deployment renews nothing")
+    th.assert_true(client.ttl(deploy.TARGET_KEY) <= 5,
+                   f"a refused touch must not move the target's expiry, ttl={client.ttl(deploy.TARGET_KEY)}")
+    th.assert_eq(deploy.touch_status(deployment.pk), True, "the owner renews")
+    th.assert_true(client.ttl(deploy.TARGET_KEY) > 5,
+                   f"the target must be extended with the lease, ttl={client.ttl(deploy.TARGET_KEY)}")
+    th.assert_eq((deploy.get_target() or {}).get("sha"), SHA_B,
+                 "extending must not rewrite the target")
+
+    client.delete(deploy.TARGET_KEY)
+    th.assert_eq(deploy.touch_status(deployment.pk), True,
+                 "a missing target does not stop the lease renewal")
+    th.assert_eq(deploy.get_target(), None, "a touch must never create a target")
+    deploy.clear_status(deployment.pk)
+
+
+@th.django_unit_test("orchestration is published on priority only when a live engine consumes it, else on default")
+def test_orchestrate_channel_falls_back_to_default(opts):
+    import contextlib
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    def resumed_channel(roster):
+        deployment = _arm(SHA_A, [CANARY_ID, opts.me])
+        deploy.get_client().delete(deploy.STATUS_KEY)  # stranded: target, no lease
+        with contextlib.ExitStack() as stack:
+            calls = stack.enter_context(th.capture_publishes(_deploy_publish))
+            stack.enter_context(mock.patch.object(platform_deploy, "_channel_roster", roster))
+            resumed = deploy.resume_stranded_target()
+        th.assert_eq(resumed, SHA_A, f"the stranded target must be resumed, got {resumed!r}")
+        th.assert_eq(len(calls), 1, f"exactly one orchestrate is published, got {calls!r}")
+        deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
+        deployment.delete()
+        return calls[0].get("channel")
+
+    seen = []
+
+    def nobody(channel):
+        seen.append(channel)
+        return []
+
+    th.assert_eq(resumed_channel(nobody), "default",
+                 "with no live engine on priority the deploy must still be "
+                 "published where engines listen")
+    th.assert_eq(seen, ["priority"], f"the roster asked about is priority's, got {seen}")
+    th.assert_eq(resumed_channel(lambda channel: ["some-engine"]), "priority",
+                 "with a live engine on priority the deploy rides the reserved channel")
+
+    def broken(channel):
+        raise RuntimeError("roster unavailable")
+
+    th.assert_eq(resumed_channel(broken), "default",
+                 "an unreadable roster must fall back to the channel that always worked")
+
+
+@th.django_unit_test("the stale sweep files one incident for a deployment that was never orchestrated, and none for one that was")
+def test_sweep_reports_never_orchestrated(opts):
+    import datetime
+    import mojo.apps.incident.reporter as reporter_module
+    from django.utils import timezone
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
+    old = timezone.now() - datetime.timedelta(seconds=deploy.status_ttl() + 600)
+
+    def aged(status):
+        row = PlatformDeployment.objects.create(
+            sha=SHA_A, actor="test", source="test", request_key=str(uuid.uuid4()),
+            frozen_roster=[CANARY_ID, opts.me], transitions=[], status=status)
+        PlatformDeployment.objects.filter(pk=row.pk).update(modified=old)
+        return row
+
+    never = aged(PlatformDeployment.STATUS_REQUESTED)
+    driven = aged(PlatformDeployment.STATUS_CANARY)
+
+    incidents = mock.Mock(return_value=mock.Mock(pk=4857))
+    with mock.patch.object(reporter_module, "report_event", incidents):
+        platform_deploy.reconcile_stale(verify_fleet=lambda *args, **kwargs: None)
+        first = incidents.call_count
+        platform_deploy.reconcile_stale(verify_fleet=lambda *args, **kwargs: None)
+
+    for row in (never, driven):
+        row.refresh_from_db()
+        th.assert_eq(row.status, "unknown",
+                     f"an aged-out deployment nobody drives ends unknown, got {row.status!r}")
+        th.assert_eq(_last_transition(row)["detail"].get("reason"),
+                     "coordination_lease_expired",
+                     f"the sweep keeps its own reason, got {_last_transition(row)!r}")
+    th.assert_eq(first, 1,
+                 f"exactly one incident: the never-orchestrated deployment, got {incidents.call_args_list!r}")
+    th.assert_eq(incidents.call_count, 1,
+                 "a second sweep must not report the same deployment again")
+    th.assert_in("never orchestrated", incidents.call_args.args[0],
+                 f"the incident must say no orchestrator ran, got {incidents.call_args!r}")
+    th.assert_in("4857", [str(v) for v in (never.links or {}).get("incident_events", [])],
+                 f"the incident must be linked on the deployment, got {never.links!r}")
+    th.assert_eq((driven.links or {}).get("incident_events", []), [],
+                 f"a deployment that reached its canary is not this incident, got {driven.links!r}")
+    PlatformDeployment.objects.filter(pk__in=[never.pk, driven.pk]).delete()

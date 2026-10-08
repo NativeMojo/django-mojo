@@ -142,7 +142,13 @@ Reserved slots are a floor for the reserved channels, not a cap: ordinary
 channels stop being polled once `max_workers - reserved` jobs are in flight,
 while `priority` and box-direct jobs may also use ordinary slots when they are
 free. A pool of 8 or more reserves two by default, 4–7 one, smaller pools
-nothing. The fleet deploy plane (orchestrator on `priority`, node updates
+nothing: set `JOBS_ENGINE_RESERVED_WORKERS=1` on a small pool that must not
+make a deploy wait. An engine that consumes neither `priority` nor a box-direct
+channel (`JOBS_HOSTNAME_CHANNEL = False`) reserves nothing, whatever the
+setting, because the slots could never be used. A dedicated engine that exists
+only to drain one ordinary channel, such as renditions, should set the reserve
+to `0` so all of its workers do that work. Claim order is `priority`, then the
+box-direct channel, then the remaining channels as configured. The fleet deploy plane (orchestrator on `priority`, node updates
 box-direct) is what this protects — see [Fleet code deploy](../edge/deploy.md#queue-capacity-and-the-coordination-lease).
 
 ## Redis Configuration
