@@ -413,6 +413,81 @@ def test_cap_disabled(opts):
         _reset(uid)
 
 
+@th.django_unit_test("#4567: a live connection removed from the set cannot pass the cap on its way back")
+def test_removed_connection_cannot_pass_the_cap(opts):
+    """Review 84761: a prune removes live A on a stale read, B takes the
+    place, and A's next heartbeat must not add A back over the cap."""
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        first = _Session(opts.pc_token, max_connections=1)
+        second = _Session(opts.pc_token, max_connections=1)
+        try:
+            assert await first.open() == "admitted", f"A must authenticate: {first.socket.sent}"
+            redis = _redis()
+            assert redis.exists(_record_key(first.connection_id)), "A is live: it has a record"
+            # What a prune working from a stale read does to a live member.
+            redis.srem(_online_key(uid), first.connection_id)
+            outcome = await second.open()
+            assert outcome == "admitted", f"B takes the free place: {outcome}"
+            await first.handler.refresh_presence(force=True)
+            after_refresh = _members(uid)
+            # A refused heartbeat closes the socket; only then is there a
+            # cleanup to wait for.
+            if first.socket.server_closed:
+                await asyncio.wait_for(first.task, timeout=15)
+            return {
+                "after_refresh": after_refresh,
+                "closing": first.handler._closing,
+                "errors": [frame.get("message") for frame in first.socket.frames("error")],
+                "members": _members(uid),
+                "first_record": redis.exists(_record_key(first.connection_id)),
+                "second_record": redis.exists(_record_key(second.connection_id)),
+                "second": second.connection_id,
+            }
+        finally:
+            await _close_all([first, second])
+
+    try:
+        seen = asyncio.run(scenario())
+        assert seen["after_refresh"] == {seen["second"]}, (
+            f"at a cap of 1 the set holds only B after A's heartbeat, got {seen['after_refresh']}")
+        assert seen["closing"], "A is over the cap and must be closing"
+        assert seen["errors"] == ["Too many connections"], f"A is told why: {seen['errors']}"
+        assert seen["members"] == {seen["second"]}, f"after A's cleanup the set is still only B: {seen['members']}"
+        assert seen["first_record"] == 0 and seen["second_record"] == 1, (
+            f"exactly one live record is left, B's: A {seen['first_record']}, B {seen['second_record']}")
+    finally:
+        _reset(uid)
+
+
+@th.django_unit_test("#4567: a live connection removed from the set is re-admitted when there is room")
+def test_removed_connection_is_readmitted_with_room(opts):
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        session = _Session(opts.pc_token, max_connections=2)
+        try:
+            assert await session.open() == "admitted", f"the socket must authenticate: {session.socket.sent}"
+            _redis().srem(_online_key(uid), session.connection_id)
+            assert _members(uid) == set(), "the connection was removed from the set"
+            await session.handler.refresh_presence(force=True)
+            return (_members(uid), session.connection_id, session.handler._closing,
+                    session.socket.frames("error"), session.task.done())
+        finally:
+            await _close_all([session])
+
+    try:
+        members, cid, closing, errors, done = asyncio.run(scenario())
+        assert members == {cid}, f"with room under the cap the heartbeat puts it back, got {members}"
+        assert not closing and not done and errors == [], (
+            f"and the connection stays open: closing {closing}, done {done}, errors {errors}")
+    finally:
+        _reset(uid)
+
+
 class _FailingRedis:
     """The checkout's Redis client with chosen commands made to raise."""
 
