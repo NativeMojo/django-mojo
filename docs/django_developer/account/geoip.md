@@ -24,9 +24,9 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 | `mobile_carrier` | Mobile carrier name (Verizon, AT&T, etc.) |
 | `connection_type` | `residential`, `business`, `hosting`, `cellular`, etc. |
 | `last_seen` | Last time this IP was encountered in the system |
-| `provider` | Source of the geolocation data |
+| `provider` | Source of the geolocation data. `"failed"` (`GeoLocatedIP.FAILED_PROVIDER`) marks a record whose lookup failed and that never resolved — see [Failed lookups](#failed-lookups). |
 | `data` | JSON bag for raw provider data and threat check results. `data.threat_data` holds `internal` (event stats), `blocklists` (per-source hits) and `is_blocklisted`. See [Threat Intelligence](#threat-intelligence). |
-| `expires_at` | Cache expiration (internal records never expire) |
+| `expires_at` | Cache expiration (internal records never expire). A failed lookup sets it `GEOIP_FAILURE_TTL` seconds ahead. |
 
 ### Blocking Fields
 
@@ -65,9 +65,9 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 
 | Method | Description |
 |---|---|
-| `GeoLocatedIP.geolocate(ip_address, auto_refresh=True)` | Get or create a record; refreshes if expired |
+| `GeoLocatedIP.geolocate(ip_address, auto_refresh=True)` | Get or create a record; refreshes if expired. An unexpired failed lookup is returned as cached, with no provider call. |
 | `GeoLocatedIP.lookup(ip_address)` | Alias for `geolocate()` |
-| `instance.refresh(check_threats=False)` | Re-fetch geolocation data from provider |
+| `instance.refresh(check_threats=False)` | Re-fetch geolocation data from provider. On failure it records the failure for `GEOIP_FAILURE_TTL` and returns `False`. |
 | `instance.check_threats(from_sync=False)` | Run threat intelligence checks. Pass `from_sync=True` to suppress outbound federation push. |
 | `instance.update_threat_from_incident(priority, block=False, from_sync=False)` | Escalate threat level from incident priority (0–15 scale). Pass `block=True` to allow auto-blocking when threat reaches `high`/`critical`. Pass `from_sync=True` to suppress outbound federation push. |
 | `instance.block_checked(reason, ttl, broadcast, from_sync=False)` | Write desired state and return the checked compatible-host result. Always escalates `threat_level` to at least `high`. |
@@ -77,6 +77,29 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 | `instance.whitelist(reason, ttl=None, until=None)` | Whitelist and prove fleet-wide block absence. `ttl` seconds or explicit `until` sets expiry (`until` wins; omit both for permanent). |
 | `instance.verify_absence_checked()` | For an active whitelist, create a fenced generation and prove exact compatible-host absence without changing whitelist policy. MojoSec uses this before a `whitelisted` target becomes terminal. |
 | `instance.unwhitelist()` | Remove whitelist status, advance the IP/permanent fences, checked-reconcile the desired state that becomes active, and return the checked result. Clears `whitelisted_until`. |
+
+### Failed lookups
+
+When every provider fails for an IP, `refresh()` remembers the failure instead
+of leaving the record expired: it sets `expires_at = now + GEOIP_FAILURE_TTL`
+(default one hour) and, if the record never resolved, `provider = "failed"`.
+Until that expiry `geolocate()` returns the cached record without calling any
+provider, so a misconfigured or refusing provider (a `401` from the `mojo`
+provider, say) costs one provider chain — and one set of log lines — per IP
+per hour rather than one per event.
+
+- The location fields of a failed record stay blank, exactly as they did
+  before; callers that read `country_code` and friends see no change.
+- A record that resolved earlier and fails to refresh keeps its provider and
+  data (a stale answer beats none, and a `mojo` record keeps its federation
+  semantics); only its expiry moves forward.
+- After the TTL the next `geolocate()` tries again. A success overwrites the
+  failed marker and caches for `GEOLOCATION_CACHE_DURATION_DAYS` as usual.
+- A subnet lookup (`subdomain_only=True`) never copies a failed record.
+- The `refresh` POST action always calls the providers, TTL or not.
+
+`refresh()` and `geolocate()` take a keyword-only `locator=` test seam that
+stands in for `geoip.geolocate_ip`; leave it unset in production.
 
 ---
 
@@ -751,6 +774,7 @@ URL or api key.
 |---|---|---|
 | `GEOLOCATION_ALLOW_SUBNET_LOOKUP` | `False` | Allow fallback to subnet match when exact IP not found |
 | `GEOLOCATION_CACHE_DURATION_DAYS` | `90` | Days before a cached record expires |
+| `GEOIP_FAILURE_TTL` | `3600` | Seconds a failed lookup is remembered before the provider chain is tried again for that IP. Read at import (restart to change). |
 | `GEOLOCATION_ENABLE_INTERNAL_THREAT_CHECK` | `True` | Run the internal incident-history analysis |
 | `GEOLOCATION_ENABLE_BLOCKLIST_CHECK` | `True` | Run the external blocklist checks |
 | `GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS` | `90` | **Display-only** stat window (`total_events`, `avg_level`, `top_categories`, `last_seen_event`). Drives no boolean. |

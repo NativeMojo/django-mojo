@@ -189,6 +189,30 @@ def on_realtime_connected(self):
     pass
 ```
 
+### Connection Signal
+
+The built-in account `User` defines neither `on_realtime_connected` nor
+`on_realtime_disconnected`: a socket connect or disconnect writes Redis only,
+never the user row. Online state is the Redis set behind `realtime.is_online()`
+and `User.is_online`. A product that needs the edge (e.g. to publish presence)
+listens for `realtime_connection_changed`, sent once per authenticated socket on
+connect and again on disconnect, after the presence set has changed:
+
+```python
+from mojo.apps.account.models import User
+from mojo.apps.realtime.signals import realtime_connection_changed
+
+def on_connection_changed(sender, user, connected, connection_id, **kwargs):
+    ...  # runs on an executor thread; keep it cheap, it sits in every connect
+
+realtime_connection_changed.connect(on_connection_changed, sender=User)
+```
+
+`sender` is the identity's model class. The signal is per socket — a second tab
+sends its own `connected=True` — so derive online/offline edges from
+`realtime.is_online()`. A receiver that raises is logged and never reaches the
+socket.
+
 ### Hook Response Contract
 
 All hooks share the same response processing:
@@ -300,6 +324,7 @@ channels above are prefixed as `{REDIS_PUBSUB_PREFIX}:{name}` via
 {"type": "subscribe", "topic": "user:123"}
 {"type": "unsubscribe", "topic": "user:123"}  
 {"type": "ping"}
+{"type": "pong", "ts": 1712345678}
 {"type": "response", "request_id": "...", "data": {...}}
 ```
 
@@ -307,16 +332,49 @@ Any other `type` is routed to `REALTIME_MESSAGE_HANDLERS` or the instance's `on_
 
 ### Server -> Client
 ```json
-{"type": "auth_required", "timeout": 30}
+{"type": "auth_required", "timeout": 10}
 {"type": "auth_success", "user_type": "user", "user_id": 123}
 {"type": "subscribed", "topic": "user:123"}
 {"type": "unsubscribed", "topic": "user:123"}
 {"type": "message", "data": {...}, "topic": "user:123"}
+{"type": "ping", "ts": 1712345678}
 {"type": "pong", "user_type": "user", "user_id": 123}
 {"type": "error", "message": "..."}
 ```
 
-Hook responses and `send_event_to_user` payloads arrive with their own `type` field (e.g., `{"type": "connected", ...}`).
+`auth_required.timeout` is `WS_UNAUTH_TIMEOUT` (default 10 s). Hook responses and `send_event_to_user` payloads arrive with their own `type` field (e.g., `{"type": "connected", ...}`).
+
+### Keepalive (ping/pong, both directions)
+
+An authenticated socket is closed after `WS_IDLE_TIMEOUT` seconds (default 90)
+with no frame **from the client**. Frames the server sends never count.
+
+- **Server -> client:** every `WS_SERVER_PING_SECONDS` (default 20; `0`
+  disables) the server sends `{"type": "ping", "ts": <epoch seconds>}`. Answer
+  it with `{"type": "pong"}` (echoing `ts` is optional). A pong resets the idle
+  clock, refreshes presence and gets **no reply**. A client that answers its
+  pings stays connected indefinitely, even if it never sends anything else.
+- **Client -> server:** a client may still send `{"type": "ping"}` on its own
+  schedule; the server answers `{"type": "pong", "user_type": ..., "user_id": ...}`.
+  Clients that already ping need no change.
+
+These are application frames: uvicorn answers protocol-level WebSocket pings
+itself, so those never reach the handler and cannot count as activity. Keep
+`WS_SERVER_PING_SECONDS` well under `WS_IDLE_TIMEOUT`.
+
+## Settings
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `WS_IDLE_TIMEOUT` | `90` | Seconds an authenticated socket may go without a client frame. |
+| `WS_SERVER_PING_SECONDS` | `20` | Server ping interval for authenticated sockets. `<= 0` disables. |
+| `WS_UNAUTH_TIMEOUT` | `10` | Seconds an unauthenticated socket may live (advertised in `auth_required`). |
+| `WS_CONNECT_RATE_LIMIT` | `30` | Connects per minute per IP, checked before accept. `<= 0` disables. |
+| `WS_MAX_CONNECTIONS` | `10` | Concurrent sockets per authenticated identity. `<= 0` disables. |
+
+All five are read **once**, from Django settings, when the handler module is
+first imported — never per connection, and never from a DB-backed `Setting`
+row. Change them in the settings file and restart the ASGI process.
 
 ## Requirements
 

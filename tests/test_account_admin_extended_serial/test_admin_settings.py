@@ -331,6 +331,30 @@ def test_settings_catalog_redaction(opts):
     Setting.objects.filter(key__in=(key, "BASE_URL")).delete()
 
 
+@th.django_unit_test("catalog never reports the settings cache's miss marker as a value")
+def test_settings_catalog_skips_cached_miss(opts):
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.models.setting import CACHE_MISS
+    from mojo.apps.account.services import admin_settings
+    key = "ALLOW_EMAIL_CHANGE"
+    Setting.objects.filter(key=key).delete()
+    # A stale miss in the hash beside a real row: the row must win, as the
+    # resolver's own reads would after the next push or TTL rebuild.
+    Setting.objects.bulk_create([Setting(key=key, value="false")])
+    redis = mock.Mock()
+    redis.hmget.side_effect = lambda redis_key, keys: [CACHE_MISS] * len(keys)
+    try:
+        with mock.patch.object(Setting, "_redis", return_value=redis):
+            report = admin_settings.catalog(capabilities={
+                "catalog_write": True, "owner_display": True, "owner_edit": False})
+        row = {item["key"]: item for item in report["entries"]}[key]
+        assert row["effective_value"] is False and row["source"] == "database", (
+            "the catalog reported the cached-miss marker instead of the "
+            f"database row: {row['effective_value']!r} from {row['source']!r}")
+    finally:
+        Setting.objects.filter(key=key).delete()
+
+
 @th.django_unit_test("provider setup publishes only typed delegated values with KMS")
 def test_provider_setup_publisher_contract(opts):
     from mojo.apps.account.models import User

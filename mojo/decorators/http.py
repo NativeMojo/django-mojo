@@ -73,6 +73,18 @@ def _return_real_error():
     return settings.get_static("LOGIT_RETURN_REAL_ERROR", True, kind="bool")
 
 
+def _defer_event(status):
+    """Whether this error's incident event may be written off the request thread.
+
+    A routine 4xx (a denial, a bad value) queues its Event to the jobs app
+    instead of paying the INSERT, geolocation and rule lookups before the
+    response (#6565); a 5xx always writes inline. The category veto
+    (INCIDENT_SYNC_CATEGORIES) and the jobs-unavailable fallback live in
+    incident.reporter.report_event.
+    """
+    return isinstance(status, int) and 400 <= status < 500
+
+
 _PERMISSION_DENIED_LEVELS = {
     "unauthenticated": 3,
     "feature_disabled": 3,
@@ -93,6 +105,7 @@ def _emit_permission_denied_event(err, request):
         model_name=err.model_name,
         instance=err.instance,
         request_path=getattr(request, "path", None),
+        defer=_defer_event(err.status),
     )
 
 
@@ -227,6 +240,7 @@ def dispatch_error_handler(func):
                         request_path=getattr(request, "path", None),
                         error_code=err.code,
                         stack_trace=_stack_trace(err, is_host_sensitive(request)),
+                        defer=_defer_event(err.status),
                     )
             wire_status = 200 if _status_200_on_error() else err.status
             # page_status is err.status, NOT wire_status: the 200-on-error shim
@@ -249,7 +263,8 @@ def dispatch_error_handler(func):
                     request_data=request.DATA,
                     request=request,
                     level=4,
-                    request_path=getattr(request, "path", None)
+                    request_path=getattr(request, "path", None),
+                    defer=True,
                 )
             return error_pages.error_response(
                 request, {"error": str(err), "code": 403, "status": False }, 403)
@@ -269,7 +284,8 @@ def dispatch_error_handler(func):
                     request=request,
                     level=4,
                     request_path=getattr(request, "path", None),
-                    stack_trace=_stack_trace(err, host_sensitive)
+                    stack_trace=_stack_trace(err, host_sensitive),
+                    defer=True,
                 )
             return error_pages.error_response(
                 request, {"error": str(err), "code": 400, "status": False  }, 400)

@@ -20,9 +20,11 @@ from mojo.helpers.async_db import database_thread_target
 from mojo.helpers.redis.client import get_async_connection, get_connection
 from mojo.helpers.request import normalize_ip
 from mojo.helpers.settings import settings
+from .access import TopicAccess, changes_access, is_chat_topic
 from .auth import async_validate_bearer_token
 from .channels import broadcast_channel, topic_channel, messages_channel
 from .permissions import can_access_group_topic, get_group_topic_permissions
+from .signals import realtime_connection_changed
 
 logger = logit.get_logger("realtime", "realtime.log")
 
@@ -31,8 +33,18 @@ CONNECTION_TTL_SECONDS = 300         # connection record TTL
 ONLINE_TTL_SECONDS = 300             # user online presence TTL
 TOPIC_TTL_SECONDS = 300              # topic membership TTL
 PRESENCE_REFRESH_MIN_INTERVAL = 30   # throttle presence refreshes
-AUTH_IDLE_TIMEOUT_SECONDS = 30       # authenticated idle timeout
+ACTIVITY_CHECK_SECONDS = 5           # longest gap between idle checks
 WS_CONNECT_WINDOW_SECONDS = 60       # fixed window for the pre-accept rate check
+
+# Deployment knobs, read ONCE when the handler is first imported (on the first
+# socket, after Django is set up) — never per connection (#6562). They come from
+# Django settings only; a DB-backed Setting row is not consulted, so change one
+# in the settings file and restart the ASGI process.
+WS_IDLE_TIMEOUT = settings.get_static("WS_IDLE_TIMEOUT", 90, kind="int")
+WS_SERVER_PING_SECONDS = settings.get_static("WS_SERVER_PING_SECONDS", 20, kind="int")
+WS_UNAUTH_TIMEOUT = settings.get_static("WS_UNAUTH_TIMEOUT", 10, kind="int")
+WS_CONNECT_RATE_LIMIT = settings.get_static("WS_CONNECT_RATE_LIMIT", 30, kind="int")
+WS_MAX_CONNECTIONS = settings.get_static("WS_MAX_CONNECTIONS", 10, kind="int")
 
 
 def resolve_scope_ip(scope):
@@ -57,12 +69,14 @@ def resolve_scope_ip(scope):
     return None
 
 
-def _connect_rate_check_sync(ip):
+def _connect_rate_check_sync(ip, limit=None):
     """Fixed-window per-IP connection-rate check (DM-042). Returns True when
     the connection may proceed. Disabled with WS_CONNECT_RATE_LIMIT <= 0.
-    Fail-open on Redis errors — an outage must never refuse all sockets."""
+    Fail-open on Redis errors — an outage must never refuse all sockets.
+    `limit` overrides WS_CONNECT_RATE_LIMIT (tests)."""
+    if limit is None:
+        limit = WS_CONNECT_RATE_LIMIT
     try:
-        limit = settings.get("WS_CONNECT_RATE_LIMIT", 30, kind="int")
         if limit <= 0 or not ip:
             return True
         r = get_connection()
@@ -103,7 +117,7 @@ async def check_connect_rate(scope):
 
 
 class WebSocketHandler:
-    def __init__(self, websocket, path):
+    def __init__(self, websocket, path, *, idle_timeout=None, ping_seconds=None):
         self.websocket = websocket
         self.path = path
         self.connection_id = str(uuid.uuid4())
@@ -114,6 +128,8 @@ class WebSocketHandler:
         # onto every message the user hook receives. See handle_custom_message.
         self.bearer_prefix = None
         self.subscribed_topics = set()
+        # Remembered chat access decisions, so delivery needs no SQL per frame.
+        self.topic_access = TopicAccess()
 
         # Capture remote IP and User-Agent from helpers (KISS)
         self.remote_ip = self.resolve_remote_ip()
@@ -128,12 +144,14 @@ class WebSocketHandler:
         self.redis_client = get_connection()
         self.pubsub = None
         self._redis_task = None
+        self._ping_task = None
 
-        # Unauthenticated sockets get a short window to send their token.
-        try:
-            self.unauth_timeout = settings.get("WS_UNAUTH_TIMEOUT", 10, kind="int")
-        except Exception:
-            self.unauth_timeout = 10
+        # Unauthenticated sockets get a short window to send their token;
+        # authenticated ones the idle timeout, kept alive by server pings.
+        # The keyword arguments override the settings (tests).
+        self.unauth_timeout = WS_UNAUTH_TIMEOUT
+        self.idle_timeout = WS_IDLE_TIMEOUT if idle_timeout is None else idle_timeout
+        self.ping_seconds = WS_SERVER_PING_SECONDS if ping_seconds is None else ping_seconds
 
         # Control flags
         self.running = True
@@ -317,16 +335,23 @@ class WebSocketHandler:
 
         await asyncio.get_event_loop().run_in_executor(None, get_and_update)
 
+    def _activity_threshold(self):
+        return self.idle_timeout if self.authenticated else self.unauth_timeout
+
     async def activity_timeout(self):
         """Handle both auth and activity timeouts. Unauthenticated sockets get
-        the short WS_UNAUTH_TIMEOUT window; authenticated ones the normal idle
-        timeout."""
+        the short WS_UNAUTH_TIMEOUT window; authenticated ones WS_IDLE_TIMEOUT.
+        Only an inbound frame counts as activity — a server ping the client
+        never answers does not keep its socket open."""
         while self.running:
-            await asyncio.sleep(5)  # Check every 5 seconds
+            # Every ACTIVITY_CHECK_SECONDS, or twice per window when either
+            # window is shorter than that (a socket can authenticate mid-sleep).
+            shortest = min(self.idle_timeout, self.unauth_timeout)
+            await asyncio.sleep(max(0.05, min(ACTIVITY_CHECK_SECONDS, shortest / 2)))
 
             time_since_activity = time.time() - self.last_activity
             connected_duration = time.time() - self.connected_at
-            threshold = AUTH_IDLE_TIMEOUT_SECONDS if self.authenticated else self.unauth_timeout
+            threshold = self._activity_threshold()
 
             if time_since_activity >= threshold:
                 if not self.authenticated:
@@ -382,6 +407,25 @@ class WebSocketHandler:
         self.pubsub = pubsub
         self._redis_task = asyncio.create_task(self.handle_redis_messages())
 
+    def start_server_pings(self):
+        """Start the server->client keepalive after authentication (#6562).
+        WS_SERVER_PING_SECONDS <= 0 disables it."""
+        if self.ping_seconds and self.ping_seconds > 0 and self._ping_task is None:
+            self._ping_task = asyncio.create_task(self.send_server_pings())
+
+    async def send_server_pings(self):
+        """Send `{"type": "ping", "ts": <epoch>}` every WS_SERVER_PING_SECONDS.
+
+        This is an application frame on purpose: uvicorn answers protocol-level
+        pings itself, so they never reach the app and cannot count as activity.
+        A client that echoes `{"type": "pong"}` (or sends any frame) resets
+        its idle clock, so a socket that only listens stays open."""
+        while self.running:
+            await asyncio.sleep(self.ping_seconds)
+            if not self.running:
+                break
+            await self.send_message({"type": "ping", "ts": int(time.time())})
+
     async def handle_redis_messages(self):
         """Handle messages from Redis pub/sub (started post-auth)"""
         try:
@@ -425,6 +469,8 @@ class WebSocketHandler:
             await self.handle_response(data)
         elif message_type == "ping":
             await self.handle_ping(data)
+        elif message_type == "pong":
+            await self.handle_pong(data)
         else:
             # Handle custom messages if authenticated
             if self.authenticated:
@@ -457,7 +503,7 @@ class WebSocketHandler:
         # Per-identity concurrency cap (DM-042): a reconnect loop that leaks
         # sockets (or an agent opening one per scrape) is bounded here. The
         # presence set is TTL'd (300s) so a stale overcount self-heals.
-        max_connections = settings.get("WS_MAX_CONNECTIONS", 10, kind="int")
+        max_connections = WS_MAX_CONNECTIONS
         if max_connections > 0:
             def count_connections():
                 try:
@@ -500,6 +546,10 @@ class WebSocketHandler:
         user_topic = f"{self.user_type}:{self.user.id}"
         await self.subscribe_to_topic(user_topic)
 
+        # Presence is the Redis set written above; products that need the
+        # edge listen for the signal instead of a User save (#6562).
+        await self.send_connection_changed(True)
+
         # Call user's connected hook if available
         if hasattr(self.user, 'on_realtime_connection'):
             connection_data = {
@@ -529,6 +579,7 @@ class WebSocketHandler:
             "user_type": self.user_type,
             "user_id": self.user.id
         })
+        self.start_server_pings()
 
     async def handle_subscribe(self, data):
         """Handle topic subscription"""
@@ -542,8 +593,14 @@ class WebSocketHandler:
             return
 
         # Topic authorization check
+        chat_topic = is_chat_topic(topic)
+        chat_checked = False
         if hasattr(self.user, 'on_realtime_can_subscribe'):
             def check_permission():
+                if chat_topic:
+                    # The same current-row check delivery runs: its answer is
+                    # remembered below, so it must not trust the connect-time User.
+                    return self._can_receive_chat(topic)
                 return self.user.on_realtime_can_subscribe(topic)
 
             try:
@@ -554,6 +611,7 @@ class WebSocketHandler:
                     await self.report_incident(f"access denied for topic {topic}", "permission_denied", 4)
                     await self.send_error(f"Access denied to topic: {topic}")
                     return
+                chat_checked = chat_topic
             except Exception as e:
                 self._log_exception(f"Error checking topic permission for {topic}: {e}")
                 await self.send_error("Authorization check failed")
@@ -561,6 +619,8 @@ class WebSocketHandler:
 
         if await self.subscribe_to_topic(topic) is False:
             return
+        if chat_checked:
+            self.topic_access.allow(topic)
 
         await self.send_message({
             "type": "subscribed",
@@ -599,6 +659,42 @@ class WebSocketHandler:
             "user_type": self.user_type,
             "user_id": self.user.id if self.user else None
         })
+
+    async def handle_pong(self, data):
+        """A client's answer to a server ping. The idle clock was already reset
+        in process_client_message; nothing is sent back and no user hook runs.
+        Presence is refreshed (throttled) so a socket whose only traffic is
+        pongs keeps its online TTL."""
+        if not self.authenticated:
+            await self.send_error("Authentication required")
+            return
+        await self.refresh_presence()
+
+    async def send_connection_changed(self, connected):
+        """Send `realtime_connection_changed` for this socket (#6562).
+
+        Runs off the event loop (receivers may use the ORM) and never raises
+        into the socket's auth or teardown; a receiver's exception is logged.
+        Skipped entirely when nothing is listening."""
+        if self.user is None:
+            return
+        sender = type(self.user)
+        if not realtime_connection_changed.has_listeners(sender):
+            return
+
+        def send():
+            results = realtime_connection_changed.send_robust(
+                sender=sender, user=self.user, connected=connected,
+                connection_id=self.connection_id)
+            for receiver, result in results:
+                if isinstance(result, Exception):
+                    self._log(f"realtime_connection_changed receiver {receiver!r} failed: {result!r}")
+
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, database_thread_target(send))
+        except Exception:
+            self._log_exception("realtime_connection_changed send failed")
 
     async def handle_response(self, data):
         """Handle client response to a request() call from Django."""
@@ -775,6 +871,8 @@ class WebSocketHandler:
 
     async def unsubscribe_from_topic(self, topic):
         """Unsubscribe connection from a topic"""
+        # A later hook-driven resubscribe must check again, not inherit this.
+        self.topic_access.forget(topic)
         if topic not in self.subscribed_topics:
             return
 
@@ -803,22 +901,31 @@ class WebSocketHandler:
                 await self.unsubscribe_from_topic(topic)
                 return
 
-        if message_type == "topic_message" and isinstance(topic, str) and topic.startswith("chat:"):
-            # Membership can change after subscribe, and disconnect is only
-            # best-effort. Recheck every chat frame before exposing its payload.
-            # Also drop queued frames after a successful local unsubscribe.
+        if message_type == "topic_message" and is_chat_topic(topic):
+            # Drop queued frames after a successful local unsubscribe.
             if topic not in self.subscribed_topics:
                 return
-            allowed = False
-            try:
-                if self.authenticated and callable(getattr(self.user, "on_realtime_can_subscribe", None)):
-                    allowed = await asyncio.get_event_loop().run_in_executor(
-                        None, database_thread_target(self._can_receive_chat), topic)
-            except Exception:
-                self._log_exception("Chat delivery authorization failed")
-            if not allowed:
-                await self.unsubscribe_from_topic(topic)
-                return
+            # Membership can change after subscribe, and disconnect is only
+            # best-effort. A remembered allow decision delivers without SQL; a
+            # frame announcing an access change for this user forgets it, so
+            # that very frame is re-checked (see realtime/access.py).
+            if changes_access(data.get("data"), self.user):
+                self.topic_access.forget(topic)
+            if not (self.authenticated and self.topic_access.allows(topic)):
+                allowed = False
+                try:
+                    if self.authenticated and callable(getattr(self.user, "on_realtime_can_subscribe", None)):
+                        allowed = await asyncio.get_event_loop().run_in_executor(
+                            None, database_thread_target(self._can_receive_chat), topic)
+                except Exception:
+                    self._log_exception("Chat delivery authorization failed")
+                if not allowed:
+                    self.topic_access.forget(topic)
+                    await self.unsubscribe_from_topic(topic)
+                    return
+                # The client may have unsubscribed while the check ran.
+                if topic in self.subscribed_topics:
+                    self.topic_access.allow(topic)
 
         if message_type in ["broadcast", "topic_message", "direct_message"]:
             # Forward to client wrapped in {"type": "message", "data": ...}
@@ -935,14 +1042,15 @@ class WebSocketHandler:
         """Clean up connection state in Redis"""
         self._log("disconnected")
 
-        # Stop the post-auth pub/sub task if it was started (it is not in
-        # handle_connection's task set, so it must be cancelled here).
-        if self._redis_task is not None and not self._redis_task.done():
-            self._redis_task.cancel()
-            try:
-                await self._redis_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        # Stop the post-auth pub/sub and ping tasks if they were started (they
+        # are not in handle_connection's task set, so they are cancelled here).
+        for task in (self._ping_task, self._redis_task):
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
         def cleanup():
             try:
                 # Remove connection record
@@ -966,6 +1074,9 @@ class WebSocketHandler:
                 self._log_exception("redis cleanup failed")
 
         await asyncio.get_event_loop().run_in_executor(None, cleanup)
+
+        if self.authenticated:
+            await self.send_connection_changed(False)
 
         # Call user's disconnected hook if available
         if self.authenticated and hasattr(self.user, 'on_realtime_disconnected'):

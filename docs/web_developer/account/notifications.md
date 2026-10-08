@@ -112,7 +112,7 @@ See [User Self-Management § Notification Preferences](user_self_management.md#1
 
 | Method | URL | Description |
 |---|---|---|
-| `GET` | `/api/account/notification/preferences` | Get current preferences |
+| `GET` | `/api/account/notification/preferences` | Get current preferences, the registered `kinds` and valid `channels` |
 | `POST` | `/api/account/notification/preferences` | Partial-update preferences |
 
 ### How it works
@@ -120,6 +120,8 @@ See [User Self-Management § Notification Preferences](user_self_management.md#1
 - Default is **allow** — notifications are sent unless the user explicitly opts out.
 - Preferences are stored per kind (e.g. `"marketing"`, `"message"`) and per channel (`in_app`, `email`, `push`).
 - Setting `{ "marketing": { "email": false, "push": false } }` suppresses marketing emails and push but still delivers in-app inbox notifications.
+- The reserved kind `"*"` is a per-channel master switch: `{ "*": { "email": false } }` suppresses email for every kind, even kinds set to `true`. A master that is `true` defers to each kind's own setting.
+- `GET` also returns `kinds` (the server's registered kinds, in display order, with `label`/`description`) so a preferences screen needs no hard-coded list.
 - System / transactional emails (password reset, email verification, magic login, deactivation confirmation) are **never suppressed** by preferences.
 
 ### Example: opt out of marketing emails

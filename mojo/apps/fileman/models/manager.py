@@ -1103,6 +1103,7 @@ class FileManager(MojoSecrets, MojoModel):
                             'backend_type': sys_manager.backend_type,
                             'backend_url': temp_manager.backend_url,
                             'is_active': True,
+                            'is_public': sys_manager.is_public,
                         }
                         if use:
                             defaults['use'] = use
