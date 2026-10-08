@@ -11,6 +11,15 @@ def prune_notifications():
     )
 
 
+@schedule(minutes="*/15")
+def refresh_bouncer_sig_cache():
+    jobs.publish(
+        func="mojo.apps.account.asyncjobs.refresh_bouncer_sig_cache",
+        channel="cleanup",
+        payload={},
+    )
+
+
 @schedule(minutes="0", hours="3")
 def inactive_sweep():
     jobs.publish(

@@ -312,8 +312,9 @@ For each request:
    `manage_security`, `security`, or `users`; preserve valid blocks and history.
 3. Have the backend operator call
    `mojo.apps.account.services.bouncer.learner.refresh_sig_cache()` after any
-   signature change. A REST edit alone can leave the old cache active for one
-   hour.
+   signature change. A REST edit alone applies at the next scheduled rebuild,
+   within 15 minutes where the cron runner and a `cleanup` job worker run, and
+   otherwise can leave the old cache active for one hour.
 4. Have the backend operator inspect and explicitly correct only an adjudicated
    Redis `bouncer:session_risk:<muid>` freeze and any application freeze-handler
    effects. Never blanket-flush Redis or all session-risk keys. Device/signature
@@ -890,7 +891,7 @@ GET /api/account/bouncer/signal?stage=assess&sort=-created
 
 ### Bot Signatures — `/api/account/bouncer/signature`
 
-Bot signatures are patterns the bouncer uses for **pre-screening** — matching known bots before running the full scoring pipeline. Network (`subnet_24`) and campaign (`signal_set`) signatures are auto-learned from confirmed blocks; any type can be created manually. `user_agent` and `fingerprint` signatures are manual only: one with `source: "auto"` is never enforced.
+Bot signatures are patterns the bouncer uses for **pre-screening** — matching known bots before running the full scoring pipeline. Only campaign (`signal_set`) signatures are still auto-learned, and they are recorded, not enforced; any type can be created manually. The Bouncer no longer blocks a network by itself: `subnet_24`, `user_agent` and `fingerprint` signatures are manual only. A `subnet_24` signature with `source: "auto"` and an expiry was learned by an older release and is never enforced, and neither is a `user_agent` or `fingerprint` one with `source: "auto"`. To keep a learned network signature, POST `{"source": "manual"}` to it; the Admin form cannot change `source`. The learner never changes a signature that is switched off or whose `source` is not `auto`.
 
 Active signature matches and existing blocked devices produce honest
 operator-recovery guidance on hosted pages. Device history alone is not evidence
@@ -980,7 +981,7 @@ DELETE /api/account/bouncer/signature/10
 | `confidence` | 0–100 confidence score |
 | `hit_count` | Pre-screen cache hits (how many times this signature matched) |
 | `block_count` | How many of those hits resulted in blocks |
-| `is_active` | Active signatures are loaded into the pre-screen cache, except `user_agent` and `fingerprint` rows with `source` `auto` |
+| `is_active` | Active signatures are loaded into the pre-screen cache, except `user_agent` and `fingerprint` rows with `source` `auto`, and `subnet_24` rows with `source` `auto` and an expiry |
 | `expires_at` | Auto-learned signatures expire (null = permanent) |
 
 #### Signature Types
@@ -988,7 +989,7 @@ DELETE /api/account/bouncer/signature/10
 | Type | What it matches | Auto-learn trigger |
 |------|----------------|-------------------|
 | `ip` | Exact IP address | Direct match |
-| `subnet_24` | /24 subnet (e.g. `203.0.113.0/24`) | 5+ blocks from same /24 |
+| `subnet_24` | /24 subnet (e.g. `203.0.113.0/24`) | Manual only (5 reports from one /24 in an hour record a `security:bouncer:subnet` event, no block) |
 | `subnet_16` | /16 subnet | Manual only |
 | `user_agent` | Exact User-Agent string | Manual only |
 | `fingerprint` | Browser fingerprint hash | Manual only |
@@ -1002,6 +1003,9 @@ GET /api/account/bouncer/signature?sig_type=subnet_24&is_active=true&sort=-hit_c
 
 # Auto-learned signatures
 GET /api/account/bouncer/signature?source=auto&sort=-modified
+
+# Network signatures an older release learned (no longer enforced when they carry an expiry)
+GET /api/account/bouncer/signature?source=auto&sig_type=subnet_24
 
 # User-Agent and fingerprint signatures an older release learned (no longer enforced)
 GET /api/account/bouncer/signature?source=auto&sig_type=user_agent
