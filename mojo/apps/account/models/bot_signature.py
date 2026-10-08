@@ -76,7 +76,7 @@ class BotSignature(models.Model, MojoModel):
         if not created:
             return
         request = self.active_request
-        if request is not None and request.DATA.get('source', None) is None:
+        if request is not None and not request.DATA.get('source', None):
             self.source = 'manual'
 
     @property
