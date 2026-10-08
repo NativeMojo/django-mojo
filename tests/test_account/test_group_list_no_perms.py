@@ -82,6 +82,18 @@ def setup_users(opts):
     opts.fixture_group_id = group.id
 
 
+def _drain_queued(**payload):
+    """Run queued incident writes matching ``payload`` (#6565).
+
+    A routine 4xx queues its Event to the jobs app instead of writing it on
+    the request thread. The no-event tests drain before counting so a denial
+    queued by mistake still fails them instead of passing vacuously.
+    """
+    from mojo.apps.incident.reporter import QUEUED_EVENT_JOB
+    return th.run_pending_jobs(
+        channel="incident_handlers", func=QUEUED_EVENT_JOB, payload=payload)
+
+
 @th.django_unit_test()
 def test_no_perms_no_memberships_returns_empty_no_events(opts):
     from mojo.apps.incident.models.event import Event
@@ -99,6 +111,7 @@ def test_no_perms_no_memberships_returns_empty_no_events(opts):
         f"Expected empty list for user with no memberships, got {data!r}"
     )
 
+    _drain_queued(uid=opts.noperm_user_id)
     bogus = list(
         Event.objects.filter(
             uid=opts.noperm_user_id, category__in=DENY_CATEGORIES,
@@ -127,6 +140,7 @@ def test_no_perms_with_membership_returns_groups_no_events(opts):
         f"Expected member's group {opts.fixture_group_id} in list, got ids={ids}"
     )
 
+    _drain_queued(uid=opts.member_user_id)
     bogus = list(
         Event.objects.filter(
             uid=opts.member_user_id, category__in=DENY_CATEGORIES,
@@ -151,6 +165,7 @@ def test_user_with_view_groups_perm_no_events(opts):
     data = resp.response["data"]
     assert isinstance(data, list), f"Expected list, got {data!r}"
 
+    _drain_queued(uid=opts.permed_user_id)
     bogus = list(
         Event.objects.filter(
             uid=opts.permed_user_id, category__in=DENY_CATEGORIES,
@@ -169,6 +184,7 @@ def test_anonymous_request_is_401_with_unauthenticated_event(opts):
 
     # Use a fresh client so we have no JWT cookie/header.
     anon = RestClient(host=opts.client.host, logger=opts.client.logger)
+    _drain_queued(category="unauthenticated", uid=None)
     pre_count = Event.objects.filter(
         category="unauthenticated", metadata__http_path="/api/group",
     ).count()
@@ -179,6 +195,7 @@ def test_anonymous_request_is_401_with_unauthenticated_event(opts):
         f"{resp.status_code}: {resp.response!r}"
     )
 
+    _drain_queued(category="unauthenticated", uid=None)
     post_count = Event.objects.filter(
         category="unauthenticated", metadata__http_path="/api/group",
     ).count()

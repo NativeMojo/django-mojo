@@ -158,6 +158,99 @@ def test_unlimited_apikey_accounting_reaches_concentration_detector(opts):
 
 
 @th.django_unit_test()
+def test_exempt_traffic_reaches_concentration_detector(opts):
+    """#6601: an exempt request is never counted against the identity, but it
+    still feeds the totals and top-talker sets, so a sustained exempt burst
+    still raises a concentration alert."""
+    from mojo.apps.incident.asyncjobs import run_concentration_check
+    from mojo.apps.incident.models import Event
+    from mojo.decorators import limits
+    from mojo.helpers.redis import get_connection
+
+    marker = 840_000_000 + int(_uuid.uuid4().int % 10_000_000)
+    member = f"user:{marker}"
+
+    class _User:
+        pk = marker
+        is_authenticated = True
+
+        def is_request_user(self):
+            return True
+
+    class _Request:
+        api_key = None
+        user = _User()
+        group = None
+        path = "/api/exempt-concentration-regression"
+        method = "POST"
+        ip = "203.0.113.89"
+        bearer = None
+        headers = {}
+        META = {"REMOTE_ADDR": ip}
+
+    r = get_connection()
+    cleanup_keys = (
+        f"traffic:top:{opts.b1}", f"traffic:top:{opts.b2}",
+        f"traffic:top_ip:{opts.b1}", f"traffic:top_ip:{opts.b2}",
+        f"traffic:total:{opts.b1}", f"traffic:total:{opts.b2}",
+        f"traffic:alerted:{member}",
+    )
+    r.delete(*cleanup_keys)
+    Event.objects.filter(
+        category="traffic:concentration", model_id=marker).delete()
+
+    config = {
+        "enabled": True,
+        "user_limit": 240,
+        "apikey_limit": 0,
+        "apikey_observe_limit": 600,
+        "window": 60,
+        "exempt_prefixes": ["POST:/api/exempt-concentration-regression"],
+        "report_floor": 60,
+        "config_ttl": 30,
+    }
+    try:
+        for bucket in (opts.b2, opts.b1):
+            for _ in range(750):
+                blocked = limits.check_api_throttle(
+                    _Request(), now=bucket + 1, config=config)
+                assert blocked is None, (
+                    "an exempt request is never refused, even 750 deep past a "
+                    f"limit of 240, got {blocked!r}"
+                )
+            assert not r.exists(f"rl:api:user:{marker}:{bucket}"), (
+                "exempt requests must not be counted against the identity"
+            )
+
+        for bucket in (opts.b2, opts.b1):
+            score = float(r.zscore(f"traffic:top:{bucket}", member) or 0)
+            assert score == 750, (
+                f"every exempt request must reach the top-talker set, got {score}"
+            )
+            total = int(r.get(f"traffic:total:{bucket}") or 0)
+            assert total == 750, (
+                f"every exempt request must reach the bucket total, got {total}"
+            )
+
+        alerts = run_concentration_check(now=opts.now)
+        ours = [alert for alert in alerts if alert["identity"] == member]
+        assert len(ours) == 1, (
+            "a sustained exempt-path burst must still reach the sustained-"
+            f"concentration alert, got {alerts}"
+        )
+        event = Event.objects.get(
+            category="traffic:concentration", model_id=marker)
+        assert event.metadata.get("identity") == member, (
+            f"the alert must name the identity, metadata={event.metadata!r}"
+        )
+    finally:
+        limits.clear_rate_limits(user_id=marker)
+        r.delete(*cleanup_keys)
+        Event.objects.filter(
+            category="traffic:concentration", model_id=marker).delete()
+
+
+@th.django_unit_test()
 def test_rotating_ips_cannot_crowd_identity_accounting(opts):
     from mojo.decorators import limits
     from mojo.helpers.redis import get_connection

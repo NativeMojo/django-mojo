@@ -7,6 +7,17 @@ REDIS_GLOBAL_KEY = "settings:global"
 REDIS_GROUP_PREFIX = "settings:g:"
 MAX_PARENT_DEPTH = 10
 
+# A scope's hash field holds this when the scope has NO row for the key, so an
+# unset key costs one Redis read instead of a SELECT on every request. A real
+# value can never equal it: PostgreSQL text cannot store a NUL byte.
+CACHE_MISS = "\x00unset"
+# Backstop for any write that bypasses push_to_cache/remove_from_cache (a
+# queryset update, raw SQL): the whole hash expires this long after it was
+# first written and is rebuilt from the database on demand. Set only when the
+# hash has no TTL, so a busy hash cannot keep postponing it forever.
+CACHE_TTL = 3600
+_POOL = object()
+
 
 class Setting(MojoSecrets, MojoModel):
     """
@@ -14,6 +25,8 @@ class Setting(MojoSecrets, MojoModel):
 
     Lookup chain (via SettingsHelper):
         Redis cache -> DB (group -> parent chain -> global) -> django.conf.settings
+    A scope with no row is cached as CACHE_MISS, so an unset key costs no SQL
+    after its first read (see resolve).
 
     Secret values are stored encrypted in mojo_secrets (via MojoSecrets mixin).
     Non-secret values are stored in the plain `value` field.
@@ -113,6 +126,9 @@ class Setting(MojoSecrets, MojoModel):
     def on_rest_pre_save(self, changed_fields, created):
         """Encrypt secret values before saving via REST."""
         self._reject_protected_write(rest=True)
+        self._reject_scope_change()
+        if created:
+            self._reject_create_outside_request_group()
         if self.is_secret and "value" in changed_fields:
             raw = self.value
             self.value = ""
@@ -121,6 +137,50 @@ class Setting(MojoSecrets, MojoModel):
 
     def on_rest_pre_delete(self):
         self._reject_protected_write(rest=True)
+
+    def _reject_scope_change(self):
+        """A setting's group is fixed when the row is created, for every writer.
+
+        The generic REST save authorizes an update against the group the row is
+        LEAVING, so a member holding `manage_settings` in one group could clear
+        `group` (a platform-wide row, which overrides the deployment's own
+        configuration for every tenant) or point it at a group they can only
+        view. Compared against the stored row rather than changed_fields:
+        `group`, `group_id`, null, blank and zero all end as a different
+        group_id, so one comparison covers every spelling. Runs in the REST
+        pre-save hook (readable 400 before side effects) AND in save() (so
+        Setting.set / programmatic / shell writes cannot move a row either).
+        """
+        if not self.pk:
+            return
+        stored = Setting.objects.filter(pk=self.pk).values_list(
+            "group_id", flat=True)
+        if not stored:
+            # An insert with an explicit pk: no stored row to move.
+            return
+        if stored[0] != self.group_id:
+            from mojo import errors as merrors
+            raise merrors.ValueException(
+                "a setting's group cannot be changed; "
+                "create it in the new scope instead")
+
+    def _reject_create_outside_request_group(self):
+        """A REST create authorized through a group lands in that group.
+
+        The create permission check runs against request.group, but the body
+        can name a second group (`{"group": A, "group_id": B}`) that is attached
+        after only a VIEW check on it. When request.group is None the generic
+        check already required the platform-wide permission, so the row may
+        land anywhere. No ambient request (an in-process create_from_dict):
+        nothing to compare with.
+        """
+        request = self.active_request
+        if request is None:
+            return
+        group = getattr(request, "group", None)
+        if group is not None and self.group_id != group.pk:
+            from mojo import errors as merrors
+            raise merrors.PermissionDeniedException()
 
     def _protected_keys_involved(self):
         from mojo.apps.account.services import system_settings
@@ -172,6 +232,15 @@ class Setting(MojoSecrets, MojoModel):
             # enforcement value ("******") from every other admin.
             raise merrors.ValueException(
                 f"{self.key} is a validated setting and cannot be secret")
+        if not isinstance(self.value, str):
+            # A non-string assigned straight to the field (Setting(value={...}),
+            # a JSON body value) would be persisted as its Python repr, which
+            # is not what was validated and not JSON. Store what set_value
+            # stores, so the value validated here is the value read back.
+            try:
+                self.value = json.dumps(self.value)
+            except (TypeError, ValueError):
+                raise merrors.ValueException(f"{self.key} must be valid JSON")
         parsed = self.value
         if isinstance(parsed, str):
             if not parsed.strip():
@@ -203,8 +272,28 @@ class Setting(MojoSecrets, MojoModel):
             return f"{REDIS_GROUP_PREFIX}{group_id}"
         return REDIS_GLOBAL_KEY
 
+    @staticmethod
+    def _cache_text(val):
+        return val if isinstance(val, str) else json.dumps(val)
+
+    @staticmethod
+    def _cache_write(r, rkey, name, text, only_if_absent=False):
+        """HSET (or HSETNX) one field and start the hash's TTL if it has none."""
+        pipe = r.pipeline(transaction=False)
+        if only_if_absent:
+            pipe.hsetnx(rkey, name, text)
+        else:
+            pipe.hset(rkey, name, text)
+        pipe.ttl(rkey)
+        if pipe.execute()[-1] == -1:
+            r.expire(rkey, CACHE_TTL)
+
     def push_to_cache(self):
-        """Write this setting into the Redis hash for its scope."""
+        """Write this setting into the Redis hash for its scope.
+
+        Overwrites a cached miss, so a key set after it was read as unset is
+        visible on the next read.
+        """
         r = self._redis()
         if not r:
             return
@@ -213,7 +302,7 @@ class Setting(MojoSecrets, MojoModel):
         if val is None:
             r.hdel(rkey, self.key)
         else:
-            r.hset(rkey, self.key, val if isinstance(val, str) else json.dumps(val))
+            self._cache_write(r, rkey, self.key, self._cache_text(val))
 
     def remove_from_cache(self):
         """Remove this setting from the Redis hash."""
@@ -235,40 +324,81 @@ class Setting(MojoSecrets, MojoModel):
         for s in qs:
             val = s.get_value()
             if val is not None:
-                pipe.hset(rkey, s.key, val if isinstance(val, str) else json.dumps(val))
+                pipe.hset(rkey, s.key, cls._cache_text(val))
+        pipe.expire(rkey, CACHE_TTL)
         pipe.execute()
+
+    @staticmethod
+    def _cache_read(r, rkey, name):
+        """HGET one field: the cached text, CACHE_MISS, or None. Raises when
+        Redis does."""
+        val = r.hget(rkey, name)
+        if isinstance(val, bytes):
+            val = val.decode("utf-8")
+        return val
 
     @classmethod
     def get_cached(cls, name, group_id=None):
-        """Read a single key from Redis cache. Returns (value, found)."""
+        """Read a single key from Redis cache. Returns (value, found).
+
+        A cached miss reads as not found, like an uncached key.
+        """
         r = cls._redis()
         if not r:
             return None, False
-        val = r.hget(cls._redis_key(group_id), name)
-        if val is None:
+        try:
+            val = cls._cache_read(r, cls._redis_key(group_id), name)
+        except Exception:
             return None, False
-        if isinstance(val, bytes):
-            val = val.decode("utf-8")
+        if val is None or val == CACHE_MISS:
+            return None, False
         return val, True
+
+    @classmethod
+    def _query_db(cls, name, group_id=None):
+        """Read a single key from DB. Returns (value, found); raises on error."""
+        s = cls.objects.filter(key=name, group_id=group_id).first()
+        if s is None:
+            return None, False
+        return s.get_value(), True
 
     @classmethod
     def get_from_db(cls, name, group_id=None):
         """Read a single key from DB. Returns (value, found)."""
         try:
-            s = cls.objects.filter(key=name, group_id=group_id).first()
-            if s is None:
-                return None, False
-            return s.get_value(), True
+            return cls._query_db(name, group_id=group_id)
         except Exception:
             return None, False
 
     @classmethod
-    def resolve(cls, name, group=None, default=None):
+    def resolve(cls, name, group=None, default=None, *, redis=_POOL):
         """
-        Full lookup chain: Redis -> DB -> parent chain -> global.
+        Full lookup chain: group -> parent chain -> global. Each scope is read
+        from Redis first and from the database only when Redis holds nothing.
         Returns the resolved value or default.
+
+        The database answer is cached either way — the value, or CACHE_MISS
+        when the scope has no row — so an unset key costs zero SQL after its
+        first read. Three rules keep that correct:
+
+        - The miss is cached per scope ("this scope has no row"), never as
+          "the whole chain resolved to nothing". Setting a key on a parent
+          after a child cached its miss therefore needs no descendant
+          invalidation: the child's miss is still true, and the walk goes on
+          to the parent's new value. (The alternative — hdel the name from
+          every descendant hash — is unbounded and has nothing to fix.)
+        - Reader writes use HSETNX. push_to_cache (every Setting.save) uses
+          HSET, so a reader that raced a writer can never overwrite the
+          value the writer just pushed with its stale miss.
+        - A database error is not a miss and is never cached.
+
+        Redis down (no client, or a command raises) means the database
+        answers every scope, uncached — never an exception.
+
+        `redis` is a test seam: pass a client, or None for "Redis is down".
         """
-        # Walk group + parent chain
+        r = cls._redis() if redis is _POOL else redis
+        scopes = []
         if group is not None:
             try:
                 from mojo.apps.account.services import group_hierarchy
@@ -276,30 +406,34 @@ class Setting(MojoSecrets, MojoModel):
                     group, include_self=True, max_depth=MAX_PARENT_DEPTH)
             except Exception:
                 return default
-            for current in chain:
-                val, found = cls.get_cached(name, group_id=current.pk)
-                if found:
-                    return val
-                val, found = cls.get_from_db(name, group_id=current.pk)
-                if found:
-                    # Backfill cache
-                    r = cls._redis()
-                    if r:
-                        r.hset(cls._redis_key(current.pk), name, val if isinstance(val, str) else json.dumps(val))
-                    return val
-
-        # Global scope
-        val, found = cls.get_cached(name)
-        if found:
-            return val
-        val, found = cls.get_from_db(name)
-        if found:
-            # Backfill global cache
-            r = cls._redis()
+            scopes = [current.pk for current in chain]
+        scopes.append(None)
+        for group_id in scopes:
+            rkey = cls._redis_key(group_id)
+            cached = None
             if r:
-                r.hset(REDIS_GLOBAL_KEY, name, val if isinstance(val, str) else json.dumps(val))
-            return val
-
+                try:
+                    cached = cls._cache_read(r, rkey, name)
+                except Exception:
+                    # Stop asking a Redis that failed; the rest of the walk
+                    # reads the database only.
+                    r = None
+            if cached == CACHE_MISS:
+                continue
+            if cached is not None:
+                return cached
+            try:
+                val, found = cls._query_db(name, group_id=group_id)
+            except Exception:
+                continue
+            if r:
+                text = cls._cache_text(val) if found else CACHE_MISS
+                try:
+                    cls._cache_write(r, rkey, name, text, only_if_absent=True)
+                except Exception:
+                    pass  # uncached; the next read asks the database again
+            if found:
+                return val
         return default
 
     # ------------------------------------------------------------------
@@ -353,6 +487,7 @@ class Setting(MojoSecrets, MojoModel):
         skip_cache = kwargs.pop("_skip_cache", False)
         if not self._dedicated_writer_owns_row(protected_writer):
             self._reject_protected_write()
+        self._reject_scope_change()
         self._validate_value()
         super().save(*args, **kwargs)
         if not skip_cache:
@@ -415,6 +550,19 @@ def _validate_scope_list(key, parsed):
         raise ValueError(f"{key} must be a JSON list of non-empty strings")
 
 
+def _validate_perms_protection(key, parsed):
+    # MEMBER_PERMS_PROTECTION and APIKEY_PERMS_PROTECTION share one shape. A
+    # malformed map refuses every permission change it gates at read time
+    # (GroupMember / ApiKey can_change_permission), so refuse to store one.
+    # The decoded value must itself be an object: a stored `null` decodes to
+    # None here but is read back as the string "null", which is malformed.
+    from mojo.apps.account.models.member import parse_member_perms_protection
+    if not isinstance(parsed, dict) or parse_member_perms_protection(parsed) is None:
+        raise ValueError(
+            f"{key} must be a JSON object mapping each permission to a "
+            "non-empty string or a non-empty list of non-empty strings")
+
+
 Setting.register_validator("GEOFENCE_SYSTEM_RULES", _validate_geofence_rule)
 Setting.register_validator("GEOFENCE_ALLOWLIST", _validate_geofence_allowlist)
 Setting.register_validator("GEOFENCE_STRICT_POSTURE", _validate_json_bool)
@@ -423,3 +571,5 @@ Setting.register_validator("GEOFENCE_FAIL_CLOSED", _validate_json_bool)
 Setting.register_validator("GEOFENCE_ALLOW_PRIVATE_IPS", _validate_json_bool)
 Setting.register_validator("GEOFENCE_CACHE_TTL", _validate_cache_ttl)
 Setting.register_validator("GEOFENCE_FAIL_CLOSED_SCOPES", _validate_scope_list)
+Setting.register_validator("MEMBER_PERMS_PROTECTION", _validate_perms_protection)
+Setting.register_validator("APIKEY_PERMS_PROTECTION", _validate_perms_protection)

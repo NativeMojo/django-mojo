@@ -62,8 +62,19 @@ def _invoke(req, exc):
     return http_decorators.dispatch_error_handler(fake_handler)(req)
 
 
+# A routine 4xx queues its Event to the jobs app instead of writing it on the
+# request thread (#6565); the 500 paths still write inline. The facts — and so
+# the masking this module asserts — are captured on the request thread either
+# way. Run the anonymous queued writes of each 4xx category before reading.
+QUEUED_CATEGORIES = ("api_denied", "mojo_rest_error", "rest_value_error")
+
+
 def _events(path):
     from mojo.apps.incident.models import Event
+    from mojo.apps.incident.reporter import QUEUED_EVENT_JOB
+    for category in QUEUED_CATEGORIES:
+        th.run_pending_jobs(channel="incident_handlers", func=QUEUED_EVENT_JOB,
+                            payload={"category": category, "uid": None})
     return list(Event.objects.filter(metadata__http_path=path).order_by("pk"))
 
 

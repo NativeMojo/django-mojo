@@ -302,6 +302,15 @@ deduplication, so row counts reflect true volume. The exception is the
 Redis-suppressed operational categories below, which file at most one event
 per unit per window.
 
+Events for a routine refused or malformed API request (any 4xx the REST
+dispatcher reports: `unauthenticated`, `user_permission_denied`,
+`view_permission_denied`, `mojo_rest_error`, `api_denied`,
+`rest_value_error`, …) are written by a background job a moment **after** the
+response, not before it. A client that triggers a 403 and immediately lists
+events may not see the row yet; its `created` is when it was written. 5xx
+events and security categories (failed logins, unknown accounts, invalid
+tokens, probes) are still written before the response.
+
 ### Account observability categories
 
 The account app files these suppressed operational categories (filterable by

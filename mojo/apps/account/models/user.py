@@ -1722,25 +1722,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 return None
             raise
 
-    def on_realtime_connected(self):
-        # The realtime server holds this instance for the lifetime of the
-        # socket — re-sync the whole object so we never write back a stale
-        # metadata snapshot over concurrent (e.g. REST) writes, and so
-        # permission/active state converges too. Best-effort: hooks must not
-        # raise.
-        try:
-            self.refresh_from_db()
-        except Exception:
-            pass
-        meta = self.metadata or {}
-        meta["realtime_connected"] = True
-        try:
-            meta["realtime_connected_at"] = dates.utcnow().isoformat()
-        except Exception:
-            # Fallback without timestamp if serialization fails
-            meta["realtime_connected_at"] = None
-        self.metadata = meta
-        self.save(update_fields=["metadata"])
+    # No on_realtime_connected / on_realtime_disconnected here (#6562): a socket
+    # connect or disconnect must not touch this row. Presence is the Redis set
+    # behind `is_online`, and products that need the edge listen for
+    # `mojo.apps.realtime.signals.realtime_connection_changed`.
 
     def on_realtime_message(self, data):
         # Every authenticated socket reaches this, so nothing here may write
@@ -1775,21 +1760,6 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
         # Default ack for unrecognized messages
         return {"response": {"type": "ack"}}
-
-    def on_realtime_disconnected(self):
-        # same stale-instance hazard as on_realtime_connected — re-sync first
-        try:
-            self.refresh_from_db()
-        except Exception:
-            pass
-        meta = self.metadata or {}
-        meta["realtime_connected"] = False
-        try:
-            meta["realtime_disconnected_at"] = dates.utcnow().isoformat()
-        except Exception:
-            meta["realtime_disconnected_at"] = None
-        self.metadata = meta
-        self.save(update_fields=["metadata"])
 
     def on_realtime_can_subscribe(self, topic):
         if topic.startswith("chat:"):
@@ -1938,10 +1908,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             # trusting the client-visible JWT claims.
             if request is not None:
                 request.user_api_key = key_record
-            try:
-                UserAPIKey.objects.filter(pk=key_record.pk).update(last_used=dates.utcnow())
-            except Exception:
-                pass
+            key_record.touch_last_used()
             return key_record.user, None
 
         if jwt_data.get("token_type") == "mcp":

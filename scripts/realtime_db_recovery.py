@@ -19,10 +19,11 @@ What it does:
    (skipped with ``--no-kill``, the latency control).
 5. Checks that the open sockets still receive a published message, and that a
    second batch of sockets logs in and subscribes.
-6. Closes everything. Checks that the disconnect hook saved for every user,
-   that the server log gained no "the connection is closed" errors, and that
-   the server's database connections return to the baseline (default mode) or
-   stay within the pool size (pool mode).
+6. Closes everything. Checks that every user's disconnect cleanup ran (each
+   is offline again — since #6562 a disconnect writes Redis only, never the
+   User row), that the server log gained no "the connection is closed"
+   errors, and that the server's database connections return to the
+   baseline (default mode) or stay within the pool size (pool mode).
 
 Before #5750 each authenticated socket polled pub/sub on a default-executor
 thread for up to a second at a time, so login latency grew with open sockets;
@@ -271,18 +272,14 @@ def main():
 
         second, second_errors = open_batch(url, users, args.sockets, args.concurrency)
 
-        # The disconnect hook saves realtime_disconnected_at on an executor
-        # thread, so every user whose sockets close after the kill must have a
-        # fresh value written.
-        User = type(users[0][0])
-        User.objects.filter(pk__in=[u.pk for u, _ in users]).update(metadata={})
+        # Every user whose sockets close after the kill must end offline: the
+        # disconnect cleanup ran to completion on every socket.
         for ws, *_ in first + second:
             ws.close(wait=0.5)
         time.sleep(3.0)
         after = len(server_backends())
         used = users[:min(len(users), args.sockets)]
-        hooks_ok = sum(1 for user, _ in used
-                       if (User.objects.get(pk=user.pk).metadata or {}).get("realtime_disconnected_at"))
+        cleaned = sum(1 for user, _ in used if not realtime.is_online("user", user.pk))
         with open(LOG) as log:
             log.seek(log_offset)
             closed_errors = log.read().count("the connection is closed")
@@ -299,7 +296,7 @@ def main():
             "backends_killed": len(killed),
             "open_sockets_received": f"{received}/{len(first)}",
             "after_kill": {"ok": len(second), "errors": second_errors[:5], "error_count": len(second_errors)},
-            "disconnect_hook_saved": f"{hooks_ok}/{len(used)}",
+            "disconnect_cleaned_up": f"{cleaned}/{len(used)}",
             "connection_closed_errors_in_log": closed_errors,
             "login_ms_before_kill": {"p50": pct(logins, 0.5), "p95": pct(logins, 0.95)},
             "login_ms_after_kill": {"p50": pct(logins_after, 0.5), "p95": pct(logins_after, 0.95)},
@@ -313,7 +310,7 @@ def main():
         checks = {
             "open_sockets_keep_receiving": received == len(first) and len(first) > 0,
             "new_sockets_log_in_after_kill": len(second) == args.sockets,
-            "disconnect_hooks_save_after_kill": hooks_ok == len(used),
+            "disconnects_clean_up_after_kill": cleaned == len(used),
             "no_dead_connection_errors": closed_errors == 0,
             "connections_back_to_baseline": after <= limit,
         }
