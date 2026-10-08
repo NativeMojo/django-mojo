@@ -485,8 +485,50 @@ moving it from one tree to another — needs the same global `manage_groups` or
 `groups` permission (or a superuser) as the two link-address keys above, and a
 group API key or group token never passes. The link resolver trusts a group by
 the top of its tree, so a group moved into a tenant could otherwise bring an
-address with it. Moving a sub-group to another parent **inside the same tree**
-needs only the ordinary write grant.
+address with it.
+
+## Moving a group inside its tree, and creating one under a parent
+
+A group's parent decides which settings, sign-in rules, administrators and API
+keys reach it, so a REST save may change it only for a caller with authority
+over both ends (`Group._guard_parent_change`):
+
+- **A move inside one tree** needs save rights (`SAVE_PERMS`) on the parent the
+  group leaves **and** the parent it joins.
+- **A new group with a parent** needs them on that parent.
+- The global `manage_groups` or `groups` permission (or a superuser) passes
+  both, as it does for a move between trees.
+
+"Save rights on a parent" (`Group._may_manage_tree_position`) means a member
+row on that parent or one of its ancestors that holds a `SAVE_PERMS` grant; for
+a group API key or group token, that the parent is inside the tree the
+identity is confined to and it holds the permission. Three things follow from
+how that is read:
+
+- **A `manage_group` on the user row does not count.** `user_has_permission`
+  accepts it for every group, so it says nothing about one parent; the helper
+  calls it with `check_user=False`. That holder can still save any group and
+  create a top-level one, but cannot place a group under a parent or move one
+  between parents without the member grant.
+- **The nearest member row decides.** `get_member_for_user` returns the first
+  row found walking up, so a tenant manager who also has a plain member row on
+  a branch is refused there. It fails closed; remove the plain row or put the
+  grant on it.
+- **A key cannot move its own group**: the parent it would leave is outside
+  the key's tree.
+
+The decision compares the stored `parent_id` with the new one, so a payload
+that repeats the current parent is not a move. It runs in `on_rest_pre_save`
+and again in `save()` under the row lock, where the new parent is read again
+by primary key: a parent that left the tree while the save was in flight is
+judged as it now stands.
+
+**Server code is not checked.** The guard belongs to the REST save. A plain
+`group.save()`, `Group.objects.create(parent=...)`, a queryset `.update()` and
+Django admin set a parent with no permission question, here and for a move
+between trees. `update_from_dict` runs the REST hooks, so outside a request it
+is refused like any caller with no rights. Code that moves groups on a user's
+behalf must check that user itself.
 
 ## Hierarchy integrity
 
