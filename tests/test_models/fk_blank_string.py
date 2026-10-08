@@ -15,6 +15,11 @@ relation field. `Group.parent` is a nullable FK and a convenient
 target. (`Setting.group` was the target until #7149 made a setting's
 scope immutable; that refusal is covered in
 test_account.test_setting_scope.)
+
+Clearing the parent moves the child out of its tree, which #6350 allows
+only to a person holding global manage_groups in the active request. The
+test user holds it, so the save runs with the fake request bound as the
+active one, as a real REST save has it.
 """
 from testit import helpers as th
 
@@ -75,6 +80,17 @@ def _fake_request(user):
     return req
 
 
+def _rest_save(instance, user, data):
+    from mojo.models import rest as mojo_rest
+
+    request = _fake_request(user)
+    token = mojo_rest.ACTIVE_REQUEST.set(request)
+    try:
+        instance.on_rest_save(request, data)
+    finally:
+        mojo_rest.ACTIVE_REQUEST.reset(token)
+
+
 @th.django_unit_test()
 def test_blank_string_fk_clears_to_none(opts):
     """An empty-string FK on update clears the relation to None and does
@@ -93,8 +109,7 @@ def test_blank_string_fk_clears_to_none(opts):
     )
 
     user = User.objects.filter(pk=opts.user_id).last()
-    child.on_rest_save(
-        _fake_request(user), {"parent": "", "name": f"{CHILD_PREFIX}1-v2"})
+    _rest_save(child, user, {"parent": "", "name": f"{CHILD_PREFIX}1-v2"})
 
     child.refresh_from_db()
     assert child.parent_id is None, (
@@ -122,7 +137,7 @@ def test_whitespace_string_fk_clears_to_none(opts):
     child.save()
 
     user = User.objects.filter(pk=opts.user_id).last()
-    child.on_rest_save(_fake_request(user), {"parent": "   "})
+    _rest_save(child, user, {"parent": "   "})
 
     child.refresh_from_db()
     assert child.parent_id is None, (
