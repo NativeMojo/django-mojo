@@ -1306,6 +1306,32 @@ group.metadata["webapp_auth_path"] = "/login"  # optional, default /auth
 group.save()
 ```
 
+**Who may set a tenant's address.** The address decides where every account
+of that tenant is sent with a sign-in token, so over REST only a signed-in
+person holding **global** `manage_groups` or `groups`, or a superuser, can
+set, change or clear either key. A member-level grant is not enough, whatever
+it is named, and a group API key or a group token never passes, even one that
+acts as a member who holds the permission. The same permission is needed to
+move a group into, out of or between group trees (a change of `parent` that
+changes the top of the tree), because a group is trusted by the tree it sits
+in. Moving a sub-group inside its own tree is not affected. An allowed change
+writes one `group:webapp_url_changed` log row with the old and new values.
+
+The guard is in `Group.on_rest_pre_save`, so it covers every save that goes
+through the REST machinery: a merge, a `"__replace": true` payload, a dotted
+key, `metadata` sent as a JSON string, a nested save through another row, and
+`update_from_dict` / `create_from_dict`. Called with no request (a job, a
+management command, a shell), those two are **refused** when they change either
+key or the tree: server code that sets a tenant's address assigns
+`group.metadata[...]` and calls `group.save()`, as above. A plain ORM write is
+not guarded.
+
+The decision that counts is made in `Group.save()`, on the locked row, so a
+save that overlaps an operator's change cannot undo it: a value the saving
+instance did not change is taken from the stored row, and a value it did
+change is judged against what is stored at that moment. See
+[group.md](group.md#keys-that-need-a-global-permission).
+
 List an operator frontend (file-only, so a database row cannot widen it):
 
 ```python
@@ -1344,6 +1370,30 @@ the link goes to the default frontend instead and an incident names the host:
 | A request `webapp_base_url` with a path | The path is dropped | Use `WEBAPP_AUTH_PATH` or the tenant's `webapp_auth_path` |
 | A custom-scheme (deep-link) base in a request or in tenant metadata | Not accepted | Use an `https` frontend origin |
 | A tenant `webapp_base_url` with a query, a fragment, credentials or no scheme (`//host`) | Skipped; the link goes to the next source | Store a plain `https://host[/path]` or a relative path such as `/portal` |
+
+**Upgrading to the release that carries #6350.** A stored address keeps
+working exactly as before, whoever stored it; nothing records who wrote it.
+Before this release anyone who could save a group could store one, so list
+every group that has one and check each:
+
+```python
+from mojo.apps.account.models import Group
+
+for key in ("webapp_base_url", "webapp_auth_path"):
+    for group in Group.objects.filter(metadata__has_key=key):
+        print(group.pk, group.name, group.parent_id, key, group.metadata.get(key))
+```
+
+An address on a **sub-group** deserves the closest look: the public send
+endpoints accept `?group=`, so any anonymous caller can select that sub-group's
+address for every account of its tenant. Remove any you did not put there.
+After the upgrade:
+
+| Before | Now | What to do |
+|---|---|---|
+| A tenant manager (member-level `manage_group`) or a group API key sets `webapp_base_url` / `webapp_auth_path` over REST | `403` | Set it as a holder of global `manage_groups` / `groups` |
+| The same caller moves a group to another tree, or detaches it from its tree | `403` | Same |
+| Server code calls `group.update_from_dict({"metadata": {"webapp_base_url": ...}})` outside a request | `PermissionDeniedException` | Assign `group.metadata[...]` and call `group.save()` |
 
 ## Failed Login Protection
 

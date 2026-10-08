@@ -518,7 +518,10 @@ parameter and the browser's `Origin` header can **select** one of those
 frontends; they cannot add a new one (1.31.4). A value that is not configured
 is ignored — the response is the same and the link goes to the default
 frontend. The same rule applies to magic login links and invites; see
-[Magic Login Links](magic_login.md).
+[Magic Login Links](magic_login.md). A tenant's own frontend address is set by
+the platform operator (a holder of the global `manage_groups` or `groups`
+permission), not by the tenant's own managers — see
+[Update Group](group.md#update-group).
 
 **Step 2: Submit token and new password**
 
