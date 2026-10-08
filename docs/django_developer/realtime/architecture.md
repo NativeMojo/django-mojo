@@ -325,8 +325,16 @@ child tasks in its `finally` and runs `cleanup_connection`, which stops the
 ping and pub/sub tasks and then removes, each on its own so that one failing
 Redis call skips nothing else: the id from the online set (the key saved at
 admission), the connection record, the id from every topic set, and the
-set's other members that have no record. It then closes the pub/sub
-connection. A killed worker runs none of this: its records expire within
+set's other members that have no record (the topic sets include a topic
+whose Redis add finished before the handler recorded it). It then closes the
+pub/sub connection. Cancelling a task does not stop a Redis call already
+running in the executor thread, so a write of this connection's own state
+(its record, its admission or registration, a topic add) can finish after
+those removals: each such write checks `_closing` once it has returned and
+removes what it wrote. `_closing` is set before cleanup removes anything, so
+a write that does not see it is removed by cleanup. If that late removal
+itself fails, the state expires or is pruned like a killed worker's. A killed
+worker runs none of this: its records expire within
 300 s and the next admission or any sibling's heartbeat removes its members.
 
 There is also a Pub/Sub channel per topic, `realtime:topic:{name}` — same
