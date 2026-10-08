@@ -19,7 +19,7 @@ import uuid
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
-TESTIT_TIER = "core"
+TESTIT_TIER = "framework"
 
 PWORD = "pg##mojo99Guard"
 OWNER_PHONE = "+15550006235"
