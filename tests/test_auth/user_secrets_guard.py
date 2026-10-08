@@ -180,7 +180,7 @@ def test_secret_stores_are_not_rest_writable(opts):
         for key in ("secrets", "mojo_secrets", "secret"):
             assert_true(key in no_save,
                         f"`{key}` must be in {model.__name__}.RestMeta.NO_SAVE_FIELDS")
-    # A declared list replaces the framework default, so ApiKey restates it.
+    # A declared list adds to the framework's own names; ApiKey also restates them.
     for key in ("id", "pk", "created", "uuid"):
         assert_true(key in ApiKey.get_rest_meta_prop("NO_SAVE_FIELDS", []),
                     f"`{key}` must stay in ApiKey.RestMeta.NO_SAVE_FIELDS")

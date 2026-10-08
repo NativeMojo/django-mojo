@@ -255,3 +255,20 @@ def test_group_uuid_stays_writable(opts):
     assert_eq(str(after.uuid).replace("-", ""), new_uuid, "a groups admin must still be able to set a group's uuid")
     assert_eq(after.created, before.created, "a group's `created` must stay protected")
     assert_true("uuid" not in Group.get_no_save_fields(), "Group declares `uuid` writable")
+
+
+@th.django_unit_test("#7189: the permissions report and the assistant's audit list show the effective list")
+def test_other_readers_use_the_effective_list(opts):
+    from mojo.apps.account.models import RegisteredDevice
+    from mojo.apps.assistant.services.tools.models import _changed_field_names
+    from mojo.rest.model_permissions import extract_model_info
+
+    info = extract_model_info(RegisteredDevice, "account", verbose=True)
+    assert_eq(list(info["no_save_fields"]), list(RegisteredDevice.get_no_save_fields()),
+              "the permissions report must show what the save enforces")
+    for key in ("id", "pk", "created", "uuid", "user"):
+        assert_true(key in info["no_save_fields"], f"`{key}` must be in the reported list")
+
+    audited = _changed_field_names(RegisteredDevice, {
+        "id": 1, "created": "2000-01-01", "user": 2, "device_name": "phone"})
+    assert_eq(audited, ["device_name"], "the audit list must leave out every name the save ignores")

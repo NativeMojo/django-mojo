@@ -764,18 +764,14 @@ def _tool_delete_model_instance(params, user, *, request_meta=None, conversation
 # Save (create or update) a model instance
 # ---------------------------------------------------------------------------
 
-# Field names the underlying on_rest_save loop ignores; we use the same default
-# to compute the audited field list.
-_DEFAULT_NO_SAVE_FIELDS = {"id", "pk", "created", "uuid"}
-
-
 def _changed_field_names(model, data):
     """Return the field names from `data` that on_rest_save will actually consider.
 
-    Strips the model's NO_SAVE_FIELDS (or the framework default). Names only —
-    values are never recorded in audit metadata.
+    Strips the names on_rest_save ignores: the framework's own plus the
+    model's NO_SAVE_FIELDS. Names only — values are never recorded in audit
+    metadata.
     """
-    no_save = set(model.get_rest_meta_prop("NO_SAVE_FIELDS", list(_DEFAULT_NO_SAVE_FIELDS)))
+    no_save = set(model.get_no_save_fields())
     return [k for k in data.keys() if k not in no_save]
 
 
