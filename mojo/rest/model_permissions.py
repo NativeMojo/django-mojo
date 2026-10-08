@@ -67,7 +67,8 @@ def extract_model_info(model, app_label, verbose=False):
         info['owner_field'] = getattr(rest_meta, 'OWNER_FIELD', 'user')
         info['group_field'] = getattr(rest_meta, 'GROUP_FIELD', 'group')
         info['search_fields'] = getattr(rest_meta, 'SEARCH_FIELDS', None)
-        info['no_save_fields'] = getattr(rest_meta, 'NO_SAVE_FIELDS', [])
+        # The effective list: the framework's own names plus the model's.
+        info['no_save_fields'] = model.get_no_save_fields()
         info['no_show_fields'] = getattr(rest_meta, 'NO_SHOW_FIELDS', [])
 
         # Check if model has user or group fields
