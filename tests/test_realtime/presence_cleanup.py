@@ -462,6 +462,129 @@ def test_removed_connection_cannot_pass_the_cap(opts):
         _reset(uid)
 
 
+class _ConnectionSignals:
+    """Record `realtime_connection_changed` for the test's user while open."""
+
+    def __init__(self):
+        self.seen = []
+
+    def _receive(self, sender, user=None, connected=None, connection_id=None, **kwargs):
+        self.seen.append((connection_id, connected))
+
+    def __enter__(self):
+        from mojo.apps.account.models import User
+        from mojo.apps.realtime.signals import realtime_connection_changed
+        realtime_connection_changed.connect(self._receive, sender=User, weak=False)
+        return self
+
+    def __exit__(self, *exc):
+        from mojo.apps.account.models import User
+        from mojo.apps.realtime.signals import realtime_connection_changed
+        realtime_connection_changed.disconnect(self._receive, sender=User)
+
+    def of(self, connection_id):
+        return [connected for cid, connected in self.seen if cid == connection_id]
+
+
+def _removed_mid_authentication(first, uid, then=None):
+    """Wrap A's own record update, which runs between its admission and its
+    registration: once it returns, remove A from the set as a prune working
+    from a stale read does, then run `then`. Ordered steps, no timing."""
+    update_connection_auth = first.handler.update_connection_auth
+    seen = {}
+
+    async def admitted_then_removed():
+        await update_connection_auth()
+        seen["admitted"] = _members(uid)
+        _redis().srem(_online_key(uid), first.connection_id)
+        if then is not None:
+            seen["then"] = await then()
+
+    first.handler.update_connection_auth = admitted_then_removed
+    return seen
+
+
+@th.django_unit_test("#4567: a connection removed between its admission and its registration cannot pass the cap")
+def test_removed_before_registration_cannot_pass_the_cap(opts):
+    """Review 85061: A is admitted, a prune removes it before A registers, B
+    takes the place, and A's registration must not add A back over the cap.
+    A was never announced as connected, so nothing is announced on its way
+    out either."""
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        first = _Session(opts.pc_token, max_connections=1)
+        second = _Session(opts.pc_token, max_connections=1)
+        seen = _removed_mid_authentication(first, uid, then=second.open)
+        try:
+            seen["first"] = await first.open()
+            seen["members"] = _members(uid)
+            seen["closed"] = first.socket.server_closed
+            if seen["closed"]:
+                await asyncio.wait_for(first.task, timeout=15)
+            redis = _redis()
+            seen["auth_success"] = first.socket.frames("auth_success")
+            seen["first_record"] = redis.exists(_record_key(first.connection_id))
+            seen["second_record"] = redis.exists(_record_key(second.connection_id))
+            seen["members_after_cleanup"] = _members(uid)
+            seen["first_id"], seen["second_id"] = first.connection_id, second.connection_id
+            return seen
+        finally:
+            await _close_all([first, second])
+
+    try:
+        with _ConnectionSignals() as signals:
+            seen = asyncio.run(scenario())
+        assert seen["admitted"] == {seen["first_id"]}, f"A was admitted first: {seen['admitted']}"
+        assert seen["then"] == "admitted", f"B takes the place a prune freed: {seen['then']}"
+        assert seen["members"] == {seen["second_id"]}, (
+            f"at a cap of 1 the set holds one member and it is B, got {seen['members']}")
+        assert seen["first"] == "Too many connections", f"A is refused after all: {seen['first']}"
+        assert seen["closed"], "and A's socket is closed"
+        assert seen["auth_success"] == [], f"A is never told it authenticated: {seen['auth_success']}"
+        assert signals.of(seen["first_id"]) == [], (
+            f"no connected or disconnected signal for A, got {signals.of(seen['first_id'])}")
+        assert seen["first_record"] == 0 and seen["second_record"] == 1, (
+            f"after A's cleanup one record is left, B's: A {seen['first_record']}, B {seen['second_record']}")
+        assert seen["members_after_cleanup"] == {seen["second_id"]}, (
+            f"and the set is still only B: {seen['members_after_cleanup']}")
+        assert _refusals(uid).count() == 1, "the refusal is reported once, like any other"
+    finally:
+        _reset(uid)
+
+
+@th.django_unit_test("#4567: a connection removed between its admission and its registration is added back when there is room")
+def test_removed_before_registration_is_added_back_with_room(opts):
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        session = _Session(opts.pc_token, max_connections=2)
+        seen = _removed_mid_authentication(session, uid)
+        try:
+            seen["outcome"] = await session.open()
+            seen["members"] = _members(uid)
+            seen["id"] = session.connection_id
+            seen["done"] = session.task.done()
+            return seen
+        finally:
+            await _close_all([session])
+
+    try:
+        with _ConnectionSignals() as signals:
+            seen = asyncio.run(scenario())
+        assert seen["admitted"] == {seen["id"]}, f"the connection was admitted first: {seen['admitted']}"
+        assert seen["outcome"] == "admitted", f"with room under the cap it authenticates: {seen['outcome']}"
+        assert seen["members"] == {seen["id"]}, f"and its registration puts it back, got {seen['members']}"
+        assert not seen["done"], "and the connection stays open"
+        assert signals.of(seen["id"]) == [True, False], (
+            f"announced connected once, then disconnected at the close: {signals.of(seen['id'])}")
+        assert _refusals(uid).count() == 0, "nothing is refused"
+    finally:
+        _reset(uid)
+
+
 @th.django_unit_test("#4567: a live connection removed from the set is re-admitted when there is room")
 def test_removed_connection_is_readmitted_with_room(opts):
     uid = opts.pc_uid
