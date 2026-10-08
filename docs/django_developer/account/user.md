@@ -59,7 +59,13 @@ class RestMeta:
     SAVE_PERMS = ["manage_users", "users", "owner"]
     OWNER_FIELD = "self"           # owner = user is themselves
     NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
-    NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified", "requires_password_change"]
+    # Added to the framework's always-protected id, pk, created, uuid.
+    NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified",
+                      "requires_password_change",
+                      "secrets", "mojo_secrets", "secret",
+                      "permanent_password", "protected_metadata",
+                      "unusable_password", "totp",
+                      "date_joined", "last_login", "onetime_code", "modified"]
     SEARCH_FIELDS = ["username", "email", "display_name", "phone_number"]
     POST_SAVE_ACTIONS = ["send_invite", "disable", "reactivate"]
     GRAPHS = {

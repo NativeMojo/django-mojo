@@ -36,6 +36,12 @@ COMMON_GRAPH_NAMES = frozenset(settings.get_static(
 # Sentinel: the request carried no `graph` key (see on_rest_save).
 _GRAPH_UNSET = object()
 
+# Names the REST save never takes from a request body, on every model. A
+# model's RestMeta.NO_SAVE_FIELDS adds to these (see get_no_save_fields).
+DEFAULT_NO_SAVE_FIELDS = ("id", "pk", "created", "uuid")
+# The only framework names RestMeta.ALLOW_SAVE_FIELDS can hand back.
+ALLOWABLE_SAVE_FIELDS = ("created", "uuid")
+
 
 def _restore_request_graph(request, graph):
     """Put request.DATA["graph"] back to the caller's value (or remove a key a
@@ -245,6 +251,35 @@ class MojoModel:
                     return res
             return default
         return getattr(cls.RestMeta, name, default)
+
+    @classmethod
+    def get_no_save_fields(cls):
+        """
+        Names the REST save never takes from a request body.
+
+        The framework's own names (DEFAULT_NO_SAVE_FIELDS) are always in the
+        list; a model's RestMeta.NO_SAVE_FIELDS ADDS to them. A declared list
+        used to replace the default, so a model that pinned one field of its
+        own silently made `id` writable: a posted `id` was assigned to the
+        loaded row and the save updated the row with that id, after the
+        permission check had passed on the caller's own row.
+
+        RestMeta.ALLOW_SAVE_FIELDS hands a framework name back, and only
+        `created` and `uuid` (ALLOWABLE_SAVE_FIELDS). `id`, `pk` and a model's
+        own declared names cannot be allowed back.
+
+        Returns:
+            list: the framework names, then the model's own, no repeats.
+        """
+        declared = cls.get_rest_meta_prop("NO_SAVE_FIELDS", None) or []
+        allowed = cls.get_rest_meta_prop("ALLOW_SAVE_FIELDS", None) or []
+        allowed = [name for name in allowed
+                   if name in ALLOWABLE_SAVE_FIELDS and name not in declared]
+        fields = []
+        for name in (*DEFAULT_NO_SAVE_FIELDS, *declared):
+            if name not in allowed and name not in fields:
+                fields.append(name)
+        return fields
 
     @classmethod
     def get_rest_meta_graph(cls, graph_name):
@@ -1933,7 +1968,7 @@ class MojoModel:
         """
         self.__changed_fields__ = objict.objict()
         # Get fields that should not be saved
-        no_save_fields = self.get_rest_meta_prop("NO_SAVE_FIELDS", ["id", "pk", "created", "uuid"])
+        no_save_fields = self.get_no_save_fields()
         post_save_actions = self.get_rest_meta_prop("POST_SAVE_ACTIONS", ['action'])
         post_save_data = {}
         action_resp = None  # an action may have a specific response
