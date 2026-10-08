@@ -257,6 +257,56 @@ def on_user_login(request):
 # Cross-origin auth handoff (authorization-code style)
 # -----------------------------------------------------------------
 
+def _handoff_code_challenge(request, destination):
+    """Return the PKCE challenge this handoff code is bound to, else None.
+
+    A challenge that is sent must be a well-formed S256 one with the method
+    named: `plain` would make a caught challenge the secret, and RFC 7636 reads
+    a missing method as `plain`. None sent is refused only where
+    `AUTH_HANDOFF_REQUIRE_PKCE` requires one for this destination.
+    """
+    from mojo.apps.account.services import auth_handoff
+    from mojo.apps.account.services.oauth_server import codes as oauth_codes
+
+    # Presence, not value: a field sent as null was sent, and is malformed.
+    if "code_challenge" in request.DATA or "code_challenge_method" in request.DATA:
+        try:
+            return oauth_codes.validate_pkce_challenge(
+                request.DATA.get("code_challenge_method"),
+                request.DATA.get("code_challenge"))
+        except ValueError as exc:
+            raise merrors.ValueException(str(exc))
+    if not auth_handoff.is_app_destination(destination):
+        return None
+    if auth_handoff.pkce_required(destination):
+        auth_handoff.report_pkce_missing(destination, request=request, refused=True)
+        raise merrors.ValueException("code_challenge is required for this destination")
+    auth_handoff.report_pkce_missing(destination, request=request, refused=False)
+    return None
+
+
+def _report_handoff_pkce_failed(request, data):
+    """File the incident for a failed exchange check. Never raises: the caller
+    is about to answer 401 and a reporting fault must not turn that into a 500."""
+    try:
+        from mojo.apps import incident
+        from mojo.apps.account.services import auth_handoff
+        incident.report_event(
+            "A handoff code was presented with a missing or wrong code_verifier. "
+            "The code is spent. Either the app is broken or someone else holds "
+            "the code.",
+            title="Auth handoff exchange failed its PKCE check",
+            category="auth:handoff_pkce_failed",
+            scope="account",
+            level=6,
+            # No `request=`: the reporter would store its query string, which
+            # can carry the code and the verifier.
+            redirect_uri=str(data.get("dest") or "")[:200],
+            **{**auth_handoff.request_facts(request), "uid": data.get("uid")})
+    except Exception as exc:
+        logit.error("account.auth_handoff", f"failed to file auth:handoff_pkce_failed: {exc}")
+
+
 def _gate_handoff_destination(request, destination):
     """Return the group pk this handoff code must be confined to, else None.
 
@@ -357,6 +407,11 @@ def on_auth_handoff(request):
     (`AUTH_HANDOFF_GROUP_TOKEN_MODE`, off by default): a code minted for one
     exchanges into a group-scoped token instead of a JWT pair. See
     `mojo.apps.account.services.handoff_group`.
+
+    `code_challenge` + `code_challenge_method: "S256"` bind the code to the
+    party that asked for it (PKCE): the exchange then needs the matching
+    `code_verifier`. `AUTH_HANDOFF_REQUIRE_PKCE = "native"` refuses to mint
+    without one for an app on the device. See `auth_handoff`.
     """
     from mojo.apps.account.services import auth_handoff, handoff_group, redirect_allowlist
 
@@ -392,9 +447,11 @@ def on_auth_handoff(request):
         # destination, so the feed builds the allowlist before anyone opts in.
         redirect_allowlist.report_unlisted_destination(
             destination, request=request, enforced=False)
+    code_challenge = _handoff_code_challenge(request, destination)
     group_id = _gate_handoff_destination(request, destination)
     code = auth_handoff.create_handoff_code(
-        request.user, destination=destination, ip=request.ip, group_id=group_id)
+        request.user, destination=destination, ip=request.ip, group_id=group_id,
+        code_challenge=code_challenge)
     return JsonResponse({
         "status": True,
         "data": {
@@ -419,10 +476,21 @@ def on_auth_exchange(request):
     decision is READ here, never re-taken: neither the mode nor the destination
     is consulted again, so a resolver that breaks inside the code's TTL cannot
     turn a gated code back into a platform JWT.
+
+    A code minted with a PKCE challenge needs `code_verifier`; one minted
+    without must not be sent one. Either failure is the same 401 as an unknown
+    code, and the code is spent.
     """
     from mojo.apps.account.services import auth_handoff
     data = auth_handoff.consume_handoff_code(request.DATA.get("code"))
     if not data:
+        raise merrors.PermissionDeniedException("Invalid or expired handoff code", 401, 401)
+    # Before the user lookup, so a caller without the secret cannot tell a
+    # disabled account (403) from a bad code (401). The code is already spent.
+    verifier = (request.DATA.get("code_verifier") if "code_verifier" in request.DATA
+                else auth_handoff.NOT_SENT)
+    if not auth_handoff.check_exchange(data, verifier):
+        _report_handoff_pkce_failed(request, data)
         raise merrors.PermissionDeniedException("Invalid or expired handoff code", 401, 401)
     user = User.objects.filter(pk=data.get("uid")).first()
     if user is None:
