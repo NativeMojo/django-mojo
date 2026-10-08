@@ -319,6 +319,25 @@ socket open (#4567). So:
   connected but uncounted and unreachable by `send_to_user` until the older
   processes restart.
 
+**Disconnect.** However a connection ends (a clean close, a dead transport,
+or the handler task being cancelled), `handle_connection` cancels its two
+child tasks in its `finally` and runs `cleanup_connection`, which stops the
+ping and pub/sub tasks and then removes, each on its own so that one failing
+Redis call skips nothing else: the id from the online set (the key saved at
+admission), the connection record, the id from every topic set, and the
+set's other members that have no record (the topic sets include a topic
+whose Redis add finished before the handler recorded it). It then closes the
+pub/sub connection. Cancelling a task does not stop a Redis call already
+running in the executor thread, so every write that adds this connection
+(its record, its admission and registration, a topic add) runs under the
+same per-handler lock as the heartbeat and cleanup, and writes nothing once
+`_closing` is set. Such a write therefore either finishes before cleanup's
+removals, which then remove it, or runs after them and does nothing; cleanup
+waits for one that is in flight. A write skipped this way raises no client
+error and no incident. A killed
+worker runs none of this: its records expire within
+300 s and the next admission or any sibling's heartbeat removes its members.
+
 There is also a Pub/Sub channel per topic, `realtime:topic:{name}` — same
 string as the membership SET above, different Redis namespace.
 

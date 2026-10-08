@@ -370,6 +370,13 @@ handler refreshes its own connection record and online-set membership and
 removes the identity's dead connection ids, whatever the client sends. Do not
 turn the server ping off in production.
 
+A disconnect of any kind, including a cancelled handler task, cancels the
+handler's tasks, closes its pub/sub connection and removes its Redis state.
+Each removal is separate, so one failing Redis call does not leave the rest
+behind (#4567). A Redis write of the connection's own state that was already
+running when the handler was cancelled finishes before cleanup removes that
+state; one that starts later writes nothing.
+
 ## Settings
 
 | Setting | Default | Meaning |

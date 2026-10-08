@@ -191,13 +191,13 @@ def test_ws_manager_online_status(opts):
     finally:
         ws.close()
 
-        # Give a moment for cleanup
+        # After disconnect, user should be offline. Cleanup runs on the
+        # server after the close, so wait for it, with a bound.
         import time
-        time.sleep(0.1)
-
-        # After disconnect, user should be offline
-        # Note: This might be flaky due to cleanup timing, but should work most of the time
-        # assert not realtime.is_online("user", uid), "user should be offline after disconnect"
+        deadline = time.monotonic() + 5.0
+        while realtime.is_online("user", uid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not realtime.is_online("user", uid), "user should be offline after disconnect"
 
 
 @th.django_unit_test("ws_manager_multiple_connections")

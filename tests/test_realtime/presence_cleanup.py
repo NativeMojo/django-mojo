@@ -95,11 +95,17 @@ class _ClientSocket:
     def client_hang_up(self):
         self.inbound.put_nowait(None)
 
+    def client_reset(self):
+        """The transport dies under the handler: no close frame, an error."""
+        self.inbound.put_nowait(ConnectionResetError("connection reset by peer (simulated)"))
+
     async def __aiter__(self):
         while True:
             message = await self.inbound.get()
             if message is None:
                 return
+            if isinstance(message, Exception):
+                raise message
             yield message
 
     async def send(self, message):
@@ -714,5 +720,391 @@ def test_non_set_key_is_left_alone(opts):
         value = redis.get(key)
         value = value.decode() if isinstance(value, bytes) else value
         assert value == "legacy", f"and is not rewritten or removed, got {value!r}"
+    finally:
+        _reset(uid)
+
+
+# ---------------------------------------------------------------------------
+# Part B: the lifecycle
+# ---------------------------------------------------------------------------
+
+def _topic_key(topic):
+    return f"realtime:topic:{topic}"
+
+
+def _text(value):
+    return value.decode() if isinstance(value, bytes) else value
+
+
+async def _open_live(token, **seams):
+    """An authenticated session with its server ping timer running, plus the
+    names of what it holds: its topics, its pub/sub and its background tasks."""
+    seams.setdefault("ping_seconds", 0.2)
+    session = _Session(token, answer_pings=True, **seams)
+    outcome = await session.open()
+    assert outcome == "admitted", f"the socket must authenticate: {outcome}"
+    handler = session.handler
+    topics = set(handler.subscribed_topics)
+    assert topics, "an authenticated socket is subscribed to its own topic"
+    assert handler.pubsub is not None and handler._redis_task is not None, "pub/sub must be running"
+    assert handler._ping_task is not None, "the server ping timer must be running"
+    return session, topics
+
+
+async def _leftovers(session, topics, uid, own_tasks):
+    """Everything a finished handler may still hold, as a list of findings.
+    Empty means released. `own_tasks` are the scenario's tasks that are
+    allowed to be alive."""
+    handler = session.handler
+    cid = session.connection_id
+    redis = _redis()
+
+    def redis_state():
+        found = []
+        if redis.exists(_record_key(cid)):
+            found.append("the connection record still exists")
+        if redis.sismember(_online_key(uid), cid):
+            found.append("the id is still in the online set")
+        for topic in sorted(topics):
+            if redis.sismember(_topic_key(topic), cid):
+                found.append(f"the id is still in the topic set of {topic}")
+        return found
+
+    found = await asyncio.to_thread(redis_state)
+    if not handler._ping_task.done():
+        found.append("the ping task is still running")
+    if not handler._redis_task.done():
+        found.append("the pub/sub task is still running")
+    if handler.pubsub.connection is not None:
+        found.append("the pub/sub connection is still open")
+    # The two child tasks of handle_connection, and anything else the handler
+    # started: after it returns, no task but the scenario's own may be alive.
+    await asyncio.sleep(0.05)
+    alive = [task for task in asyncio.all_tasks()
+             if task not in own_tasks and not task.done()]
+    for task in alive:
+        found.append(f"a task is still running: {task.get_coro().__qualname__}")
+        task.cancel()
+    return found
+
+
+@th.django_unit_test("#4567: a clean disconnect releases the record, the memberships, the tasks and pub/sub")
+def test_clean_disconnect_releases_everything(opts):
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        session, topics = await _open_live(opts.pc_token)
+        session.socket.client_hang_up()
+        await asyncio.wait_for(session.task, timeout=15)
+        return await _leftovers(session, topics, uid, {asyncio.current_task()})
+
+    try:
+        found = asyncio.run(scenario())
+        assert found == [], f"a clean disconnect must release everything, left: {found}"
+    finally:
+        _reset(uid)
+
+
+@th.django_unit_test("#4567: an abrupt disconnect releases the record, the memberships, the tasks and pub/sub")
+def test_abrupt_disconnect_releases_everything(opts):
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        session, topics = await _open_live(opts.pc_token)
+        session.socket.client_reset()
+        await asyncio.wait_for(session.task, timeout=15)
+        return await _leftovers(session, topics, uid, {asyncio.current_task()})
+
+    try:
+        found = asyncio.run(scenario())
+        assert found == [], f"a reset transport must release everything, left: {found}"
+    finally:
+        _reset(uid)
+
+
+@th.django_unit_test("#4567: a cancelled handler releases the record, the memberships, the tasks and pub/sub")
+def test_cancelled_handler_releases_everything(opts):
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        session, topics = await _open_live(opts.pc_token)
+        session.task.cancel()
+        try:
+            await asyncio.wait_for(session.task, timeout=15)
+        except asyncio.CancelledError:
+            pass
+        assert session.task.done(), "the cancelled handler must finish"
+        return await _leftovers(session, topics, uid, {asyncio.current_task()})
+
+    try:
+        found = asyncio.run(scenario())
+        assert found == [], f"a cancelled handler must release everything, left: {found}"
+    finally:
+        _reset(uid)
+
+
+@th.django_unit_test("#4567: one failing Redis call at cleanup does not skip the others")
+def test_one_failed_redis_call_does_not_skip_the_rest(opts):
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        redis = _FailingRedis("delete")
+        session, topics = await _open_live(opts.pc_token, redis_client=redis)
+        session.socket.client_hang_up()
+        await asyncio.wait_for(session.task, timeout=15)
+        found = await _leftovers(session, topics, uid, {asyncio.current_task()})
+        return found, redis.failed, session.connection_id
+
+    cid = None
+    try:
+        found, failed, cid = asyncio.run(scenario())
+        assert "delete" in failed, f"the record removal must have been attempted and failed: {failed}"
+        assert found == ["the connection record still exists"], (
+            f"only the record, whose removal failed, may be left (it expires): {found}")
+    finally:
+        if cid:
+            _redis().delete(_record_key(cid))
+        _reset(uid)
+
+
+@th.django_unit_test("#4567: a dead worker leaves only state that expires or is pruned")
+def test_worker_death_leaves_only_expiring_state(opts):
+    from mojo.apps.realtime import presence
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        session, topics = await _open_live(opts.pc_token)
+        cid = session.connection_id
+        redis = _redis()
+        keys = [_record_key(cid), _online_key(uid)] + [_topic_key(topic) for topic in sorted(topics)]
+
+        def expiries():
+            return {key: redis.ttl(key) for key in keys}
+
+        def record_expired_then_pruned():
+            # The worker died: no cleanup ran, and the record ran out.
+            redis.delete(_record_key(cid))
+            left = presence.prune(redis, _online_key(uid))
+            return left, redis.sismember(_online_key(uid), cid)
+
+        try:
+            ttls = await asyncio.to_thread(expiries)
+            # Stop the handler's own heartbeat without any cleanup, as a
+            # killed process would.
+            session.handler._closing = True
+            left, still_member = await asyncio.to_thread(record_expired_then_pruned)
+            return ttls, left, still_member
+        finally:
+            await _close_all([session])
+
+    try:
+        ttls, left, still_member = asyncio.run(scenario())
+        without = {key: ttl for key, ttl in ttls.items() if ttl <= 0}
+        assert not without, f"every key of a live socket must carry an expiry, without one: {without}"
+        assert left == 0 and not still_member, (
+            f"once the record is gone a prune removes the member, left {left}, member {still_member}")
+    finally:
+        _reset(uid)
+
+
+# ---------------------------------------------------------------------------
+# Part B: a Redis write still running when the handler is cancelled
+# ---------------------------------------------------------------------------
+class _HoldingRedis:
+    """The checkout's Redis client with one chosen command held in the
+    executor thread: `entered` is set when the handler reaches it, the real
+    command runs once `release` is set, and `done` is set when it returned."""
+
+    def __init__(self, name, chosen):
+        import threading
+        self._client = _redis()
+        self._name = name
+        self._chosen = chosen
+        self._seen = 0
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.done = threading.Event()
+
+    def __getattr__(self, name):
+        real = getattr(self._client, name)
+        if name != self._name:
+            return real
+
+        def held(*args, **kwargs):
+            self._seen += 1
+            if self.entered.is_set() or not self._chosen(self._seen, args):
+                return real(*args, **kwargs)
+            self.entered.set()
+            assert self.release.wait(30), "the held command was never released"
+            try:
+                return real(*args, **kwargs)
+            finally:
+                self.done.set()
+        return held
+
+
+def _late_write_state(cid, uid):
+    """What Redis still holds for this connection id."""
+    redis = _redis()
+    found = []
+    if redis.exists(_record_key(cid)):
+        found.append("the connection record exists")
+    if redis.sismember(_online_key(uid), cid):
+        found.append("the id is in the online set")
+    if redis.sismember(_topic_key(f"{USER_TYPE}:{uid}"), cid):
+        found.append("the id is in its own topic set")
+    return found
+
+
+class _WatchedLock:
+    """The handler's presence lock, telling the test when someone has to
+    wait for it: cleanup, behind a write that is still running."""
+
+    def __init__(self):
+        import threading
+        self._lock = threading.Lock()
+        self.waited_for = threading.Event()
+
+    def __enter__(self):
+        if not self._lock.acquire(blocking=False):
+            self.waited_for.set()
+            self._lock.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self._lock.release()
+
+
+def _cancelled_with_a_write_in_flight(opts, name, chosen):
+    """Cancel the handler while one Redis command of its own is still running
+    in the executor, and release the command only once cleanup has either
+    finished or is waiting behind it. Returns what Redis holds for the
+    connection after the handler and the late command have both finished."""
+    uid = opts.pc_uid
+
+    async def scenario():
+        redis = _HoldingRedis(name, chosen)
+        session = _Session(opts.pc_token, redis_client=redis)
+        lock = session.handler._presence_lock = _WatchedLock()
+        session.socket.client_send({"type": "authenticate", "token": opts.pc_token, "prefix": "bearer"})
+        session.task = asyncio.create_task(session.handler.handle_connection())
+        waiting = None
+        try:
+            assert await asyncio.to_thread(redis.entered.wait, 10), f"the handler never reached the held {name}"
+            session.task.cancel()
+            # Either cleanup runs to its end while the command is held, or it
+            # waits for the lock the command's write holds. Not before one of
+            # the two may the command finish.
+            waiting = asyncio.create_task(asyncio.to_thread(lock.waited_for.wait, 30))
+            await asyncio.wait({session.task, waiting}, timeout=30, return_when=asyncio.FIRST_COMPLETED)
+            assert session.task.done() or lock.waited_for.is_set(), (
+                "cleanup neither finished nor waited for the held command")
+            assert not redis.done.is_set(), "the held command must still be running at this point"
+            redis.release.set()
+            try:
+                await asyncio.wait_for(session.task, timeout=15)
+            except asyncio.CancelledError:
+                pass
+            assert session.task.done(), "the cancelled handler must finish"
+            assert await asyncio.to_thread(redis.done.wait, 10), "the held command must finish once released"
+            return await asyncio.to_thread(_late_write_state, session.connection_id, uid)
+        finally:
+            redis.release.set()
+            lock.waited_for.set()
+            if waiting is not None:
+                await waiting
+            if not session.task.done():
+                session.task.cancel()
+            cleaner = _redis()
+            cleaner.delete(_record_key(session.connection_id))
+            cleaner.srem(_topic_key(f"{USER_TYPE}:{uid}"), session.connection_id)
+
+    _reset(uid)
+    try:
+        return asyncio.run(scenario())
+    finally:
+        _reset(uid)
+
+
+@th.django_unit_test("#4567: a record write still running when the handler is cancelled leaves no record")
+def test_record_write_in_flight_at_cancel_leaves_no_record(opts):
+    found = _cancelled_with_a_write_in_flight(
+        opts, "setex", lambda seen, args: seen == 1)
+    assert found == [], f"the first record write was still running at the cancel and its record stayed: {found}"
+
+
+@th.django_unit_test("#4567: a registration still running when the handler is cancelled leaves no online member")
+def test_registration_in_flight_at_cancel_leaves_no_member(opts):
+    # The second script call is the registration; the first is the admission.
+    found = _cancelled_with_a_write_in_flight(
+        opts, "eval", lambda seen, args: seen == 2)
+    assert found == [], f"the registration was still running at the cancel and its member stayed: {found}"
+
+
+@th.django_unit_test("#4567: an admission still running when the handler is cancelled leaves no online member")
+def test_admission_in_flight_at_cancel_leaves_no_member(opts):
+    found = _cancelled_with_a_write_in_flight(
+        opts, "eval", lambda seen, args: seen == 1)
+    assert found == [], f"the admission was still running at the cancel and its member stayed: {found}"
+
+
+@th.django_unit_test("#4567: a topic add still running when the handler is cancelled leaves no topic member")
+def test_topic_add_in_flight_at_cancel_leaves_no_member(opts):
+    found = _cancelled_with_a_write_in_flight(
+        opts, "sadd", lambda seen, args: str(_text(args[0])).startswith("realtime:topic:"))
+    assert found == [], f"the topic add was still running at the cancel and its member stayed: {found}"
+
+
+@th.django_unit_test("#4567: a handler cancelled between a topic's Redis add and its bookkeeping leaves no membership")
+def test_topic_added_but_not_yet_recorded_is_removed(opts):
+    """The Redis add has finished and the handler is cancelled while it waits
+    for the pub/sub subscribe: the topic is not in `subscribed_topics` yet."""
+    uid = opts.pc_uid
+    topic = f"{USER_TYPE}:{uid}"
+    _reset(uid)
+
+    async def scenario():
+        session = _Session(opts.pc_token)
+        handler = session.handler
+        waiting = asyncio.Event()
+        start = handler.start_redis_messages
+
+        async def start_then_stall():
+            await start()
+            subscribe = handler.pubsub.subscribe
+
+            async def stall(channel, *args, **kwargs):
+                waiting.set()
+                await asyncio.Event().wait()
+                return await subscribe(channel, *args, **kwargs)
+            handler.pubsub.subscribe = stall
+        handler.start_redis_messages = start_then_stall
+
+        session.socket.client_send({"type": "authenticate", "token": opts.pc_token, "prefix": "bearer"})
+        session.task = asyncio.create_task(handler.handle_connection())
+        try:
+            await asyncio.wait_for(waiting.wait(), timeout=10)
+            member = await asyncio.to_thread(_redis().sismember, _topic_key(topic), session.connection_id)
+            assert member, "the Redis add must have finished before the cancel"
+            assert topic not in handler.subscribed_topics, "the topic must not be recorded yet"
+            session.task.cancel()
+            try:
+                await asyncio.wait_for(session.task, timeout=15)
+            except asyncio.CancelledError:
+                pass
+            return await asyncio.to_thread(_late_write_state, session.connection_id, uid)
+        finally:
+            if not session.task.done():
+                session.task.cancel()
+            _redis().srem(_topic_key(topic), session.connection_id)
+
+    try:
+        found = asyncio.run(scenario())
+        assert found == [], f"a topic added but not yet recorded must be removed by cleanup: {found}"
     finally:
         _reset(uid)
