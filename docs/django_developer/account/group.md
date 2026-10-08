@@ -18,7 +18,7 @@ class Group(MojoSecrets, MojoModel):
 | `kind` | CharField | Type: `"group"`, `"organization"`, custom |
 | `parent` | FK → Group (self) | Parent group for hierarchy |
 | `is_active` | BooleanField | Active flag |
-| `uuid` | CharField | Unique identifier |
+| `uuid` | CharField | Unique identifier. Writable over REST by a caller with the group's `SAVE_PERMS`, by declaration: `RestMeta.ALLOW_SAVE_FIELDS = ["uuid"]` (every other model has `uuid` protected by the framework) |
 | `metadata` | JSONField | Arbitrary group metadata (includes `timezone`, `short_name`) |
 | `avatar` | FK → fileman.File | Group image |
 | `last_activity` | DateTimeField | Last group activity |

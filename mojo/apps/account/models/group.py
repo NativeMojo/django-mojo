@@ -62,6 +62,10 @@ class Group(MojoSecrets, MojoModel):
         SAVE_PERMS = ["manage_groups", "manage_group", "groups"]
         PROTECTED_JSON_PERMS = ["admin_compliance", "admin_verify"]
         NO_SAVE_FIELDS = ["id", "pk", "created"]
+        # `uuid` is one of the framework's always-protected names. A groups
+        # admin sets a group's uuid on purpose (commit fc07d333, "expose uuid
+        # for group"), so it is handed back here.
+        ALLOW_SAVE_FIELDS = ["uuid"]
         POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate',
                              'revoke_group_tokens']
         GRAPHS = {
