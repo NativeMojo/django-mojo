@@ -24,6 +24,9 @@ PLAIN_PERM = "itest_akx_unlisted"
 NEVER = "sys.itest_akx_never_held_by_anyone"
 FILE_MAP = {FILE_PERM: NEVER}
 PWORD = "Akx##floor99"
+# A list where a map belongs: the shape a settings file gets by mistake.
+MALFORMED_FILE = [FILE_PERM]
+MALFORMED_LOG = "APIKEY_PERMS_PROTECTION is malformed"
 
 
 def _clear_row():
@@ -92,6 +95,58 @@ def _use_minter_key(opts):
     opts.client.bearer = "apikey"
     opts.client.access_token = opts.minter_token
     opts.client.is_authenticated = True
+
+
+def _use_key(opts, token):
+    opts.client.logout()
+    opts.client.bearer = "apikey"
+    opts.client.access_token = token
+    opts.client.is_authenticated = True
+
+
+def _error_log_size():
+    """Where the server's error.log ends now. The server is another process,
+    so its log file is the only place a test can see what it logged."""
+    from mojo.helpers import paths
+    path = paths.VAR_ROOT / "logs" / "error.log"
+    return path.stat().st_size if path.exists() else 0
+
+
+def _malformed_logged_since(offset):
+    """How many malformed-map errors the server logged after `offset`."""
+    from mojo.helpers import paths
+    path = paths.VAR_ROOT / "logs" / "error.log"
+    if not path.exists():
+        return 0
+    with open(path, "rb") as handle:
+        handle.seek(offset)
+        return handle.read().decode("utf-8", "replace").count(MALFORMED_LOG)
+
+
+def _change(opts, perm, grant):
+    """Grant `perm` on a new key, or revoke it from a key that holds it.
+    Returns (status, changed); removes only the key it made."""
+    from mojo.apps.account.models import ApiKey
+    name = f"akx_chg_{_uuid.uuid4().hex[:8]}"
+    target = None
+    try:
+        if grant:
+            resp = opts.client.post("/api/group/apikey", {
+                "group": opts.group.pk, "name": name, "permissions": {perm: True}})
+            changed = ApiKey.objects.filter(
+                group=opts.group, name=name, permissions__contains={perm: True}).exists()
+        else:
+            # Made by a trusted internal call, so it holds the permission
+            # whatever the map says.
+            target, _tok = ApiKey.create_for_group(
+                opts.group, name, permissions={perm: True})
+            resp = opts.client.post(f"/api/group/apikey/{target.pk}", {
+                "permissions": {perm: False}})
+            target.refresh_from_db()
+            changed = not target.permissions.get(perm)
+        return resp.status_code, changed
+    finally:
+        ApiKey.objects.filter(group=opts.group, name=name).delete()
 
 
 def _grant(opts, perm):
@@ -246,6 +301,64 @@ def test_malformed_row_refuses_grants(opts):
 
             _login(opts, opts.global_email)
             _assert_allowed(opts, PLAIN_PERM, "malformed row, global manage_groups holder")
+    finally:
+        opts.client.logout()
+        ApiKey.objects.filter(group=opts.group).exclude(pk=opts.minter_pk).delete()
+        _clear_row()
+
+
+@th.django_unit_test("apikey protection floor: a malformed settings-file value refuses and logs, with a valid row and with none")
+def test_malformed_file_refuses_and_logs(opts):
+    """(h) The file side of (e), and the error log on both refusal branches:
+    the key-backed one and the one below a global manager. On main 8b22829d the
+    file value is coerced to {} and every one of these changes is a 200."""
+    from mojo.apps.account.models import ApiKey, GroupMember
+    from mojo.apps.account.models.setting import Setting
+    _clear_row()
+    # An override key ASSUMES its member, so request.user is a real global
+    # manager — and the session is still key-backed, so it is refused. The
+    # REST layer admits an override key on what its member holds in the group.
+    acting = _make_user(
+        f"akx_acting_{_uuid.uuid4().hex[:8]}@globalperms.test", perms=["manage_groups"])
+    member, _ = GroupMember.objects.get_or_create(user=acting, group=opts.group)
+    member.permissions = {"manage_group": True}
+    member.save()
+    override, override_token = ApiKey.create_for_group(
+        opts.group, f"akx_override_{opts.suffix}", permissions={"groups": True},
+        user=acting, override_user=True)
+    actors = (
+        ("a group admin", lambda: _login(opts, opts.admin_email), False),
+        ("a global manage_groups holder", lambda: _login(opts, opts.global_email), True),
+        ("a reference key", lambda: _use_minter_key(opts), False),
+        ("an override key acting as a global manager",
+         lambda: _use_key(opts, override_token), False),
+    )
+    try:
+        with th.server_settings(APIKEY_PERMS_PROTECTION=MALFORMED_FILE):
+            for row_label, row in (("no row", None), ("a valid row", {ROW_PERM: NEVER})):
+                _clear_row()
+                if row is not None:
+                    Setting.set(KEY, row)
+                for who, become, allowed in actors:
+                    become()
+                    for grant in (True, False):
+                        why = (f"malformed file value with {row_label}: {who} "
+                               f"{'granting' if grant else 'revoking'} an unlisted permission")
+                        mark = _error_log_size()
+                        status, changed = _change(opts, PLAIN_PERM, grant)
+                        logged = _malformed_logged_since(mark)
+                        if allowed:
+                            assert status == 200 and changed, (
+                                f"{why} must still work, got {status}: "
+                                f"{opts.client.last_response.body}")
+                            assert logged == 0, \
+                                f"{why} is allowed and must log no malformed-map error, found {logged}"
+                        else:
+                            assert status == 403 and not changed, (
+                                f"{why} must be refused, got {status}: "
+                                f"{opts.client.last_response.body}")
+                            assert logged == 1, \
+                                f"{why} must log exactly one malformed-map error, found {logged}"
     finally:
         opts.client.logout()
         ApiKey.objects.filter(group=opts.group).exclude(pk=opts.minter_pk).delete()
