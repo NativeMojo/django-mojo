@@ -288,19 +288,26 @@ socket open (#4567). So:
   gone), keeps its id in the online set, and removes that set's members that
   have no record. A dead member is gone within one heartbeat of any live
   sibling, with no new connection needed.
+- **A live connection that was removed from the set goes back in through the
+  cap.** Removing record-less members is not atomic, so a connection that
+  writes its record again at that moment can be removed while it is live. Its
+  next heartbeat re-admits it with the admission script: it is counted again
+  if there is room, and if the set is full by then it is over the cap and is
+  closed with `Too many connections` (the client reconnects). The set never
+  holds more members than the cap.
 - **Admission** removes record-less members, then counts and adds in one
   script (`mojo/apps/realtime/presence.py`).
 - A handler that is closing refreshes nothing, so a late heartbeat cannot bring
   a closed connection back.
 - With `WS_SERVER_PING_SECONDS <= 0` there is no server heartbeat: only a
-  client `ping` or `pong` refreshes a connection's record (throttled to once
-  per 30 s), and admission is the only time dead members are removed. Keep the
-  server ping on.
+  client `ping` or `pong` refreshes a connection's record and removes dead
+  members (throttled to once per 30 s), besides admission. Keep the server
+  ping on.
 - **Clustered Redis reading from replicas** (`REDIS_READ_FROM_REPLICAS`, the
   cluster default): a member registered a moment ago can look record-less on a
-  lagging replica and be removed. It adds itself back on its next heartbeat;
-  until then `send_to_user` can miss that connection and the cap undercounts
-  by one.
+  lagging replica and be removed. Its next heartbeat re-admits it through the
+  cap, as above; until then `send_to_user` can miss that connection and the
+  cap undercounts by one.
 - **Rolling deploy:** a socket still served by an older process refreshes its
   record only on a client `ping`/`pong`. If it sends neither for 300 s, a newer
   process removes it from the set and it does not add itself back: it stays

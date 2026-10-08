@@ -37,10 +37,12 @@ def prune(redis, online_key, keep=None):
     """Remove the members of `online_key` that have no connection record and
     return how many members are left. `keep` is never removed.
 
-    Not atomic, and it does not need to be: it only removes an id with no
-    record, and a live connection wrongly removed (a lagging replica read)
-    adds itself back on its next heartbeat. A key that is not a set is left
-    untouched and counts as 0.
+    Not atomic: a connection that writes its record again between the read
+    and the removal (or one read from a lagging replica) can be removed while
+    it is live. The cap still holds, because that connection's next heartbeat
+    goes back in through `admit`: it is counted again if there is room and
+    closed if there is not. A key that is not a set is left untouched and
+    counts as 0.
     """
     key_type = _text(redis.type(online_key))
     if key_type != "set":

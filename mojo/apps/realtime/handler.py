@@ -1019,6 +1019,11 @@ class WebSocketHandler:
         Extends this connection's record, writing it again if it is gone, keeps
         this connection in its identity's online set, and prunes that set of
         members with no record. Does nothing once the handler is closing.
+
+        A connection that is no longer in the set (a prune removed it) goes
+        back in through the admission script, so the set never passes the
+        cap. If the set is full by then, this connection is over the cap and
+        is closed with "Too many connections".
         """
         if getattr(self, "_closing", False):
             return
@@ -1033,19 +1038,25 @@ class WebSocketHandler:
         # the topic set while the loop changes it.
         record = json.dumps(self._connection_record())
         lock = getattr(self, "_presence_lock", None) or threading.Lock()
+        max_connections = getattr(self, "max_connections", WS_MAX_CONNECTIONS)
 
         def do_refresh():
+            """Returns True when this connection was refused its place in the
+            online set."""
             with lock:
                 if getattr(self, "_closing", False):
-                    return
+                    return False
                 try:
                     # Extend the connection record, or write it again
                     if not self.redis_client.expire(conn_key, CONNECTION_TTL_SECONDS):
                         self.redis_client.setex(conn_key, CONNECTION_TTL_SECONDS, record)
-                    # Stay in the online set and extend it, if authenticated
-                    if online_key:
-                        self.redis_client.sadd(online_key, self.connection_id)
-                        self.redis_client.expire(online_key, ONLINE_TTL_SECONDS)
+                    # Stay in the online set and extend it, if authenticated.
+                    # Through the admission script: a member stays one, a
+                    # removed connection is counted against the cap again.
+                    if online_key and not presence.admit(
+                            self.redis_client, online_key, self.connection_id,
+                            max_connections, ONLINE_TTL_SECONDS):
+                        return True
                 except Exception:
                     # Keep presence refresh best-effort
                     pass
@@ -1054,8 +1065,14 @@ class WebSocketHandler:
                     presence.prune(self.redis_client, online_key, keep=self.connection_id)
                 except Exception:
                     self._log_exception("presence prune failed")
+            return False
 
-        await asyncio.get_event_loop().run_in_executor(None, do_refresh)
+        refused = await asyncio.get_event_loop().run_in_executor(None, do_refresh)
+        # Decided here, on the event loop, not in the executor thread.
+        if refused and not getattr(self, "_closing", False):
+            self._log("removed from the online set and the cap is full: closing")
+            await self.send_error("Too many connections")
+            await self.close_connection()
 
     async def report_incident(self, details, event_type="info", level=1, scope="realtime", **context):
         """
