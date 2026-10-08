@@ -98,6 +98,7 @@ Fields **not** writable by the account owner:
 | `email` | Use the change flow — `POST /api/auth/email/change/request` |
 | `username` | Use `POST /api/auth/username/change` — see [Username Change](#12-username-change) |
 | `is_email_verified` | Internal token flows only |
+| `id`, `uuid`, `created`, `date_joined`, `last_login` | Read-only, set by the server — a posted value is ignored and the save still answers `200` |
 | `is_phone_verified` | Internal token flows only |
 | `dob` (change, clear or re-set once stored) | Admin tier (`users` / `manage_users` / superuser). Date of birth is an eligibility record on age-gated deployments, not a preference — a correction is a support operation and is audit-logged. Re-posting the **unchanged** value is a `200` no-op, so round-tripping the user object is safe |
 | `is_dob_verified` | System-only — never REST-writable; reset automatically when `dob` changes |
@@ -1055,14 +1056,45 @@ Authorization: Bearer <access_token>
   "status": true,
   "data": {
     "preferences": {
+      "*":         { "email": false },
       "message":   { "in_app": true, "email": true,  "push": true  },
       "marketing": { "in_app": true, "email": false, "push": false }
-    }
+    },
+    "kinds": [
+      { "kind": "general", "label": "General", "description": "Messages from this service", "channels": null },
+      { "kind": "billing", "label": "Billing", "description": "Invoices and receipts", "channels": ["email", "in_app"] }
+    ],
+    "channels": ["email", "in_app", "push"]
   }
 }
 ```
 
 An empty `preferences` dict means everything is on (default).
+
+| Field | Description |
+|---|---|
+| `preferences` | The user's stored opt-outs, `{kind: {channel: bool}}`. Only explicitly set values appear. |
+| `kinds` | The kinds the server registered, **in registration order** (render them in this order). `channels: null` means the kind can be sent on every channel; a list names the channels it is sent on. `general` is always present. |
+| `channels` | The valid channel names, sorted alphabetically. |
+
+`preferences` may contain kinds that are not in `kinds` (older or
+project-specific kinds) — they are still enforced.
+
+### Master switch — the `"*"` kind
+
+`"*"` is a reserved kind meaning **all kinds** on a channel:
+
+- `"*": { "email": false }` turns email off for **every** kind, including kinds
+  set to `true` individually. Master off always wins.
+- `"*": { "email": true }` (or no `"*"` entry) turns nothing on by itself — each
+  kind's own setting still applies, so a kind set to `false` stays off.
+- It only affects the channels it names; `{"*": {"email": false}}` leaves
+  in-app and push untouched.
+- Transactional mail (password reset, verification, etc.) is never suppressed.
+
+Turning the master back on does not erase per-kind choices: send
+`{"*": {"email": true}}` and the user's previous per-kind settings take effect
+again.
 
 ### Update preferences
 
@@ -1088,6 +1120,11 @@ Response returns the full current preferences after merging.
 - Each kind value must be a dict of channel booleans — 400 if not
 - Valid channels: `in_app`, `email`, `push` — unknown channels are ignored
 - Kind keys are free-form strings (projects define their own kinds, max 64 chars)
+- `"*"` is accepted as a kind and stored as the master switch (see above)
+
+```json
+{ "preferences": { "*": { "email": false } } }
+```
 
 ### Enforcement
 

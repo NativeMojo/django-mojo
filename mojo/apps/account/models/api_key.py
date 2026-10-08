@@ -42,20 +42,38 @@ APIKEY_PERMS_PROTECTION_DEFAULTS = {
 }
 
 
+def resolve_apikey_perms_protection(file_value, db_value):
+    """Merge the three APIKEY_PERMS_PROTECTION layers, or None if malformed.
+
+    The platform-wide Setting row sits UNDER the settings-file map, and the
+    framework floor sits on top of both: a row can add protected permissions
+    but never remove or change one the file names, and neither can relax the
+    built-ins, which protect cross-tenant/system operations. Returns None when
+    either source is malformed — the caller refuses rather than reading an
+    unreadable map as empty. Same value shape, parser and merge as
+    MEMBER_PERMS_PROTECTION.
+    """
+    from mojo.apps.account.models.member import resolve_member_perms_protection
+    merged = resolve_member_perms_protection(file_value, db_value)
+    if merged is None:
+        return None
+    return {**merged, **APIKEY_PERMS_PROTECTION_DEFAULTS}
+
+
 def _apikey_perms_protection():
-    # kind="dict" so a DB-backed Setting (stored as a JSON string) parses into a
-    # dict — otherwise `perm in <str>` would silently degrade to substring matching.
-    configured = settings.get("APIKEY_PERMS_PROTECTION", {}, kind="dict") or {}
-    # MERGED, not defaulted. settings.get returns a configured value WHOLESALE —
-    # the `{}` above is consulted only when the setting is absent entirely. So a
-    # deployment that sets APIKEY_PERMS_PROTECTION to protect its own perms would
-    # otherwise silently drop the floor along with it, which is the failure this
-    # merge exists to prevent.
-    #
-    # Deployments may add protected permissions, but the framework floor wins
-    # for its own keys.  Those entries protect cross-tenant/system operations
-    # and must not be relaxable by configuration.
-    return {**configured, **APIKEY_PERMS_PROTECTION_DEFAULTS}
+    # Read the two sources separately — settings.get would return a DB row
+    # WHOLESALE in place of the file value. No kind= on the file read, so a
+    # wrong type is seen as malformed rather than coerced to {}.
+    from mojo.apps.account.models.setting import Setting
+    return resolve_apikey_perms_protection(
+        settings.get_static("APIKEY_PERMS_PROTECTION", None),
+        Setting.resolve("APIKEY_PERMS_PROTECTION"))
+
+
+def _log_malformed_apikey_protection():
+    logit.error(
+        "APIKEY_PERMS_PROTECTION is malformed; refusing API-key permission "
+        "changes until it is fixed")
 
 
 class ApiKey(MojoSecrets, MojoModel):
@@ -298,7 +316,13 @@ class ApiKey(MojoSecrets, MojoModel):
         # credential must not be able to mint a successor with authority it
         # does not itself legitimately hold. Scoped to PROTECTED perms so
         # ordinary key-provisions-key flows keep working.
-        if is_key_backed_session(request) and perm in _apikey_perms_protection():
+        #
+        # A malformed map (None) means nobody knows which permissions were
+        # meant to be protected, so a key-backed session can grant nothing.
+        protection = _apikey_perms_protection()
+        if is_key_backed_session(request) and (protection is None or perm in protection):
+            if protection is None:
+                _log_malformed_apikey_protection()
             return False
         # Skipped for a session that ASSUMES a member (override ApiKey /
         # GroupScopedToken) — see GroupMember.can_change_permission for the
@@ -307,6 +331,11 @@ class ApiKey(MojoSecrets, MojoModel):
         if not is_override_user_session(request) and user.has_permission(
                 ["manage_groups", "manage_users"]):
             return True
+        if protection is None:
+            # Refuse every change below a global manager, who returned above
+            # and keeps key administration working until the map is repaired.
+            _log_malformed_apikey_protection()
+            return False
         # On REST create the group FK is auto-stamped AFTER the field loop, so
         # self.group may still be None while set_permissions runs — fall back to
         # the request's group (set by the dispatcher from the group param).
@@ -315,7 +344,6 @@ class ApiKey(MojoSecrets, MojoModel):
             return False
         req_member = group.get_member_for_user(user, check_parents=True)
         if req_member is not None:
-            protection = _apikey_perms_protection()
             if perm in protection:
                 return req_member.has_permission(protection[perm])
             return req_member.has_permission(
