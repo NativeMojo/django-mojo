@@ -5,6 +5,9 @@ description = "A REST framework for Django with secure DB-backed settings, REST/
 authors = [{ name = "MOJO Dev Team", email = "gotmojo@mojo.com" }]
 readme = "README.md"
 license = "MIT"
+# Named, not globbed: the default packs every root file matching LICENSE*,
+# NOTICE*, COPYING* or AUTHORS*, tracked or not (maestro #6348).
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10,<4.0"
 dependencies = [
     "django>=5.2.14,<6.0.0",
@@ -72,6 +75,12 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["mojo", "testit"]
+
+# A release never builds or uploads a source archive (maestro #6348). This
+# keeps one built by hand clean anyway: without it, hatchling packs every file
+# `.gitignore` does not name, including each agent worktree.
+[tool.hatch.build.targets.sdist]
+only-include = ["mojo", "testit"]
 
 [build-system]
 requires = ["hatchling"]

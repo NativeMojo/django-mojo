@@ -1,14 +1,14 @@
 #!/usr/bin/env python
-"""Leave only this version's wheel in dist/, and prove it holds tracked files only.
+"""Prove the build folder holds this version's wheel alone, of tracked files only.
 
-`uv publish` uploads everything in dist/, and an upload cannot be taken back.
-The source archive is built because the packaging check compares it with the
-wheel, but it is never uploaded: hatchling packs every file `.gitignore` does
-not name, so it carried each agent worktree under `.worktrees/` and local
-session files, and at 109.5 MiB the index refused it AFTER the wheel had gone
-up (maestro #6348). A wheel names its packages, so it cannot pick those up; the
-checks here cover what is left: a file inside a package that git does not
-track, and a root file the build copies into the metadata as a license.
+An upload cannot be taken back. A release uploads one file, the wheel; no
+source archive is built, because hatchling packs every file `.gitignore` does
+not name into one. That carried each agent worktree under `.worktrees/` and
+local session files to the index, and at 109.5 MiB the index refused the
+archive AFTER the wheel had gone up (maestro #6348). A wheel names its
+packages, so it cannot pick those up; the checks here cover what is left: a
+second file in the folder, a file inside a package that git does not track,
+and a root file the build copies into the metadata as a license.
 
 Run by publish.py after the build and before anything is pushed or uploaded.
 Imports nothing from `mojo`, for the same reason publish.py does not.
@@ -26,7 +26,6 @@ PACKAGES = ("mojo", "testit")
 # else there is a file it copied from the checkout.
 GENERATED_METADATA = ("METADATA", "WHEEL", "RECORD", "entry_points.txt")
 LICENSES_DIR = "licenses/"
-SOURCE_ARCHIVE_GLOB = "django_mojo-*.tar.gz"
 
 
 class ReleaseWheelError(Exception):
@@ -35,13 +34,6 @@ class ReleaseWheelError(Exception):
 
 def wheel_name(version):
     return f"django_mojo-{version}-py3-none-any.whl"
-
-
-def remove_source_archives(dist):
-    removed = sorted(Path(dist).glob(SOURCE_ARCHIVE_GLOB))
-    for path in removed:
-        path.unlink()
-    return [path.name for path in removed]
 
 
 def _sample(names):
@@ -58,11 +50,12 @@ def check(dist, version, tracked, max_bytes=MAX_FILE_BYTES):
     """
     dist = Path(dist)
     expected = wheel_name(version)
-    # uv writes a dist/.gitignore; it is not a distribution and is not uploaded.
+    # uv writes a .gitignore beside what it builds; it is not a distribution
+    # and is not uploaded.
     found = sorted(path.name for path in dist.iterdir() if not path.name.startswith("."))
     if found != [expected]:
         raise ReleaseWheelError(
-            f"dist/ must hold exactly {expected}; found: {_sample(found) or 'nothing'}")
+            f"{dist} must hold exactly {expected}; found: {_sample(found) or 'nothing'}")
     wheel = dist / expected
     size = wheel.stat().st_size
     if size > max_bytes:
@@ -120,13 +113,10 @@ def main():
     parser.add_argument("--version", required=True)
     args = parser.parse_args()
     try:
-        removed = remove_source_archives(args.dist)
         wheel = check(args.dist, args.version, tracked_files())
     except (ReleaseWheelError, OSError, zipfile.BadZipFile) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
-    for name in removed:
-        print(f"removed {name}: source archives are not uploaded")
     print(f"{wheel.name}: {wheel.stat().st_size} bytes, tracked files only")
     return 0
 

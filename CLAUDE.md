@@ -47,7 +47,11 @@ Django-mojo is a Django backend framework providing models, REST, auth, jobs, me
   version from the changes, delegates the note to `/maestro-release-note`,
   bumps the three version files and runs `publish.py`. Do not run `publish.py`
   by hand: it refuses to publish a version that has no release note, and the
-  skill is what writes one.
+  skill is what writes one. Releases are wheel-only: no source archive is
+  built or uploaded. The note check is the script's own in a person's session;
+  from an agent session, which has no maestro login in a file, the agent
+  confirms and publishes the note itself and runs the script with
+  `--note-by-agent` (see the skill).
 - **Agents** are in `.claude/agents/` — spawned automatically by
   `/maestro-build` (and by the fallback `/build`).
 - See `AI_DEV.md` for the full developer workflow.

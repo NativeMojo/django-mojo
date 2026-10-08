@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove the Admin artifact survives wheel/sdist packaging, without Django."""
+"""Prove the Admin artifact survives wheel packaging, without Django."""
 
 import argparse
 import importlib.util
@@ -76,30 +76,25 @@ def verify(dist, expected, build_smoke=False):
     tree = artifact.validate(REPO / PREFIX, expected)
     wheels = sorted(Path(dist).glob("django_mojo-*.whl"))
     sources = sorted(Path(dist).glob("django_mojo-*.tar.gz"))
-    if len(wheels) != 1 or len(sources) != 1:
-        raise artifact.ArtifactError("dist must contain exactly one django-mojo wheel and sdist")
+    # A release uploads the wheel alone; a source archive is never built
+    # (maestro #6348), so one here means the wrong folder or a stale build.
+    if len(wheels) != 1 or sources:
+        raise artifact.ArtifactError("dist must contain exactly one django-mojo wheel and no source archive")
+    # Absolute: the smoke commands below run from a temporary directory.
+    wheel = wheels[0].resolve()
     with tempfile.TemporaryDirectory(prefix="mojo-admin-package-") as directory:
         # macOS may return /var, an alias of /private/var. Only this freshly
         # created, verifier-owned root is canonicalized; artifact/source paths
         # continue through the validator's strict symlink-ancestry checks.
         root = Path(directory).resolve()
-        for name, path in (("wheel", wheels[0]), ("sdist", sources[0])):
-            result, package_root = inspect_archive(path, expected, root / name)
-            if result["inventory"] != tree["inventory"]:
-                raise artifact.ArtifactError(f"{name} inventory differs from committed tree")
-            if name == "sdist":
-                sdist_root = package_root
+        result, _ = inspect_archive(wheel, expected, root / "wheel")
+        if result["inventory"] != tree["inventory"]:
+            raise artifact.ArtifactError("wheel inventory differs from committed tree")
         if build_smoke:
-            output = root / "rebuilt"
-            run(["uv", "build", "--wheel", "--out-dir", str(output)], sdist_root)
-            rebuilt = list(output.glob("*.whl"))
-            if len(rebuilt) != 1:
-                raise artifact.ArtifactError("sdist did not build exactly one wheel")
-            inspect_archive(rebuilt[0], expected, root / "rebuilt-proof")
             environment = root / "venv"
             run(["uv", "venv", str(environment)], root)
             python = environment / "bin/python"
-            run(["uv", "pip", "install", "--python", str(python), "--no-deps", str(rebuilt[0])], root)
+            run(["uv", "pip", "install", "--python", str(python), "--no-deps", str(wheel)], root)
             code = ("import importlib.util,pathlib,sysconfig;"
                     "p=pathlib.Path(sysconfig.get_path('purelib'))/'mojo/apps/account';"
                     "s=importlib.util.spec_from_file_location('artifact',p/'services/admin_artifact.py');"
@@ -117,7 +112,7 @@ def main():
     args = parser.parse_args()
     try:
         result = verify(args.dist, args.expected_manifest_sha256, args.build_smoke)
-        print(f"Tree, wheel and sdist: {result['manifest_sha256']} ({len(result['inventory'])} files)")
+        print(f"Tree and wheel: {result['manifest_sha256']} ({len(result['inventory'])} files)")
     except (artifact.ArtifactError, OSError, ValueError, tarfile.TarError, zipfile.BadZipFile) as error:
         print(f"Admin package proof: {error}", file=sys.stderr)
         return 1
