@@ -1020,11 +1020,7 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
     keys = dict(uid=user.id, ip=request.ip, auth_time=int(time.time()))
     if request.device:
         keys['device'] = request.device.id
-    access_token_expiry = settings.get("JWT_TOKEN_EXPIRY", 21600, kind="int")
-    refresh_token_expiry = settings.get("JWT_REFRESH_TOKEN_EXPIRY", 604800, kind="int")
-    if user.org:
-        access_token_expiry = user.org.metadata.get("access_token_expiry", access_token_expiry)
-        refresh_token_expiry = user.org.metadata.get("refresh_token_expiry", refresh_token_expiry)
+    access_token_expiry, refresh_token_expiry = User.session_token_expiries(user)
     if legacy:
         keys.update(dict(user_id=user.id, device_id=request.DATA.get(["device_id", "deviceID"], request.device.id)))
     token_package = JWToken(
@@ -1384,10 +1380,16 @@ def on_user_password_reset_code(request):
     # password is not a guess.
     for counter in try_ids:
         clear_code_attempts("reset", counter)
-    user.set_permanent_password(new_password)
-    user.set_secret("password_reset_code", None)
-    user.set_secret("password_reset_code_ts", None)
-    user.save()
+    # The new password and the end of every other session are one step: a
+    # reset that left the old sessions alive would not have fixed the account
+    # (maestro #6226). The tokens below are signed with the new key, so the
+    # device doing the reset stays signed in.
+    with transaction.atomic():
+        user.set_permanent_password(new_password)
+        user.set_secret("password_reset_code", None)
+        user.set_secret("password_reset_code_ts", None)
+        user.save()
+        user.end_sessions("password_reset", request=request)
     return jwt_login(request, user, source="password_reset")
 
 
@@ -1435,6 +1437,10 @@ def on_user_password_reset_token(request):
         # would write the stale secrets back and un-burn the token.
         locked.save(update_fields=[
             "password", "requires_password_change", "is_email_verified", "modified"])
+        # Every other session ends in the same transaction as the new
+        # password (maestro #6226). It reads the stored secrets under the
+        # lock, so the consumed token stays consumed.
+        locked.end_sessions("password_reset", request=request)
     return jwt_login(request, locked, source="password_reset")
 
 
@@ -1469,9 +1475,10 @@ def on_user_password_forced(request):
         locked.save(update_fields=[
             "password", "requires_password_change", "auth_key", "modified"])
         locked.log("Temporary password replaced", "password:forced_completed")
-
-    from mojo.apps.account.services.disable import disconnect_realtime
-    disconnect_realtime(locked, request=request)
+        # The key went out with the password above. The shared helper does the
+        # rest of a sign-out: the account's OAuth-server grants, the cached
+        # invite and its live websockets (maestro #6226).
+        locked.end_sessions("password_reset", request=request, key_rotated=True)
     return jwt_login(request, locked, source="forced_password")
 
 
@@ -2528,13 +2535,11 @@ def on_sessions_revoke(request):
     Ownership is proven by the authenticated session; freshness is enforced by
     the step-up gate (no current_password — passwordless accounts must work too).
     """
-    import uuid
-
     user = request.user
 
-    # Rotate auth_key — immediately invalidates every other JWT
-    user.auth_key = uuid.uuid4().hex
-    user.save(update_fields=["auth_key", "modified"])
+    # A new auth_key ends every other session; the same helper revokes the
+    # account's OAuth-server grants and drops its live websockets.
+    user.end_sessions("sessions_revoked", request=request, actor=user)
 
     user.report_incident(f"{user.username} revoked all sessions", "sessions:revoked")
 

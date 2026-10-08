@@ -516,6 +516,7 @@ See [User Self-Management § Record a browser sign-out](user_self_management.md#
   - dependency hygiene
 - **Revoke all sessions:** `POST /api/auth/sessions/revoke` rotates `auth_key`, immediately invalidating every outstanding JWT. No `current_password` required — ownership is the authenticated session; when `FRESH_AUTH_WINDOW` is enabled a recent login is required instead (see [Step-Up Auth](step_up_auth.md)). Returns a fresh JWT for the calling session so the user stays logged in. See [User Self-Management § Sessions & Devices](user_self_management.md#8-sessions--devices).
 - **Email change also rotates `auth_key`** — after a successful email change confirm, all other sessions are invalidated as a side effect.
+- **A new password signs the account out everywhere else.** A password reset (by code or by link) and a password change both end every other session: old access and refresh tokens are refused, connected apps authorised through the OAuth server must be authorised again, and any unopened emailed link for the account (reset, magic login, email verify, invite) stops working. The device that did it stays signed in with the tokens in the response. See [A new password ends other sessions](#a-new-password-ends-other-sessions).
 - **Security events feed:** `GET /api/account/security-events` returns auth-relevant audit events (logins, failed passwords, MFA events, email/phone changes, session revokes, etc.) scoped to the authenticated user. No special permission required. See [User Self-Management § Security Events](user_self_management.md#15-security-events).
 - **`login`** — written for every real authentication, for the account whose credentials were verified. A blocked, unfinished or refused attempt writes nothing, and neither does a silent refresh or a re-issue from session revoke / email change.
 - **`sessions:logout`** — written only when a client posts `/api/account/security-events/logout`. It is a note in the history, not a revocation.
@@ -571,7 +572,7 @@ A repeat request while the code is still live (10 minutes) re-sends the same cod
 }
 ```
 
-Returns a JWT on success (automatically logs the user in).
+Returns a JWT on success (automatically logs the user in). Every other session of the account is ended; see [A new password ends other sessions](#a-new-password-ends-other-sessions).
 
 A wrong code, and an identifier that matches no account, both return **400** `"Invalid code"`. Tries are limited to 5 per 15 minutes per account and per identifier as typed; the sixth returns **429** with `retry_after` — see [Too many attempts](#too-many-attempts-on-a-code-or-a-current-password). A correct code with a new password the server rejects as too weak does not use up a try: fix the password and resubmit the same code.
 
@@ -613,7 +614,44 @@ permission), not by the tenant's own managers — see
 }
 ```
 
-Returns a JWT on success.
+Returns a JWT on success. Every other session of the account is ended.
+
+A reset link works once. Opened a second time it returns **400** `"Invalid token signature"` (it used to answer `"Token already used"`): the first use replaced the account's signing key.
+
+## A new password ends other sessions
+
+Whenever an account's password is set, every session that existed before is ended.
+
+| What sets the password | Other devices | The device that did it |
+|---|---|---|
+| `POST /api/auth/password/reset/code` | signed out | signed in: the response is a token pair, as before |
+| `POST /api/auth/password/reset/token` (reset link or invite link) | signed out | signed in: the response is a token pair, as before |
+| `POST /api/user/me` with `new_password` (own password) | signed out | signed in **only if you store the new tokens**: the response carries `tokens` beside `data` |
+| `POST /api/user/<id>` with `new_password` (an admin, for someone else) | that person is signed out everywhere | the admin's session is untouched; no tokens are returned |
+
+**What "signed out" covers**
+
+- Access and refresh tokens issued before: refused with 401. A refresh attempt fails, so the app must send the user to sign in.
+- Group tokens the account holds: refused.
+- Apps authorised through the OAuth server (for example an MCP connector): their access is revoked and they must be authorised again.
+- Emailed links not yet opened (reset, magic login, email verify, invite): they stop working. Request a new one.
+- Open websockets: closed. A client that reconnects with a new token is back on.
+
+Per-user API keys and passkeys are not affected.
+
+**Changing your own password: store the new tokens.** The response to `POST /api/user/me` is the account, as always, with one more top-level field:
+
+```json
+{
+  "status": true,
+  "data": {"id": 42, "username": "alice"},
+  "tokens": {"access_token": "eyJ...", "refresh_token": "eyJ..."}
+}
+```
+
+Replace your stored access and refresh tokens with these before the next request. The tokens you sent the request with are dead as soon as it returns, and your websocket is closed; reconnect it with the new access token. A client that ignores `tokens` sends its user to the sign-in page once. `tokens` appears only on a save that changed the caller's own password.
+
+The new pair keeps the sign-in time of the session that asked (`auth_time`). A password change does not count as a new sign-in for [step-up auth](step_up_auth.md).
 
 ## Admin Password Reset (for another user)
 
@@ -628,6 +666,8 @@ Admins with `manage_users` can set any user's password directly:
 ```
 
 No `current_password` needed. No forgot-password email is sent — the password is changed immediately. Password strength validation still applies.
+
+The target is signed out everywhere (see above). The response carries no `tokens`, unless the admin set their own password.
 
 See also [User API — Admin Password Reset](user.md#admin-password-reset-for-another-user).
 

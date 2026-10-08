@@ -889,6 +889,8 @@ POST /api/user/<target_id>
 
 No forgot-password email is sent — the password is changed immediately. Password strength validation still applies.
 
+The target is signed out on every device. When an admin sets **their own** password this way, the response carries a `tokens` object beside `data`, and the portal must store that pair or the admin is sent to the sign-in page. See [A new password ends other sessions](authentication.md#a-new-password-ends-other-sessions).
+
 ---
 
 ## Example: Permission-Aware Frontend

@@ -13,7 +13,7 @@
 | POST | `/api/user/<id>` body `{"disable": {...}}` | `manage_users` | Disable user (block) — see [Disable Lifecycle](#disable-lifecycle) |
 | POST | `/api/user/<id>` body `{"reactivate": {...}}` | `manage_users` | Reactivate a disabled user |
 | POST | `/api/user/me` body `{"change_username": {...}}` | self | Self-service username change (recommended over `/api/auth/username/change`) |
-| POST | `/api/user/me` body `{"revoke_sessions": {...}}` | self | Self-service global logout (recommended over `/api/auth/sessions/revoke`) |
+| POST | `/api/user/me` body `{"revoke_sessions": {...}}` | self | Self-service global logout (recommended over `/api/auth/sessions/revoke`). Also revokes apps authorised through the OAuth server |
 | POST | `/api/user/me` body `{"confirm_totp": {"code":"..."}}` | self | TOTP enrolment confirm (recommended over `/api/account/totp/confirm`) |
 | POST | `/api/user/me` body `{"regenerate_totp_codes": {"code":"..."}}` | self | Regenerate TOTP recovery codes (recommended over `/api/account/totp/recovery-codes/regenerate`) |
 | POST | `/api/user/me` body `{"disable_totp": true}` | self | Disable TOTP (recommended over `DELETE /api/account/totp`) |
@@ -359,7 +359,7 @@ Admins with `manage_users` can reset any user's password without knowing the cur
 }
 ```
 
-No `current_password` field needed. Password strength validation still applies.
+No `current_password` field needed. Password strength validation still applies. The target is signed out on every device. The response carries no `tokens` (below), unless the admin set their own password.
 
 For self-service password change, the user must include `current_password`:
 
@@ -369,6 +369,18 @@ For self-service password change, the user must include `current_password`:
   "current_password": "OldPass##456"
 }
 ```
+
+A changed password signs the account out on every other device. The response is the account with a `tokens` object beside `data`:
+
+```json
+{
+  "status": true,
+  "data": {"id": 42, "username": "alice"},
+  "tokens": {"access_token": "eyJ...", "refresh_token": "eyJ..."}
+}
+```
+
+Store the new pair before the next request: the tokens the request was sent with are dead, and the websocket is closed. See [A new password ends other sessions](authentication.md#a-new-password-ends-other-sessions).
 
 Tries at `current_password` are limited to 10 per 15 minutes per account. At the limit the answer is `429` with a `Retry-After` header and a `retry_after` field (seconds), and a correct password is refused too until the wait is over. A correct password inside the limit clears the count. See [Too many attempts](authentication.md#too-many-attempts-on-a-code-or-a-current-password).
 

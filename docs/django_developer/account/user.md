@@ -362,6 +362,18 @@ POST /api/user/<own_id>
 
 `current_password` is required for self-service changes.
 
+A changed password ends every other session of the account (`User.end_sessions`, see [Authentication — Sessions End When the Password Changes](auth.md#sessions-end-when-the-password-changes)). The new `auth_key` is written in the same row write as the password, and the grants are revoked in that write's transaction (`User.atomic_save`): if the revocation fails, the password is not changed. So that the device making the change stays signed in, the response carries a `tokens` object **beside** `data`, signed with the new key:
+
+```json
+{
+  "status": true,
+  "data": {"id": 42, "username": "alice"},
+  "tokens": {"access_token": "eyJ...", "refresh_token": "eyJ..."}
+}
+```
+
+The new pair carries the claims of the token that made the request, `auth_time` included: a password change is not a new sign-in and does not renew step-up freshness. A client must store the pair; its old tokens are dead. `tokens` is present only when the caller changed their **own** password with a session JWT. A key-backed caller gets none.
+
 ### Admin password reset (for another user)
 
 Admins with `manage_users` can set any user's password without knowing the current one:
@@ -373,12 +385,15 @@ POST /api/user/<target_id>
 
 No `current_password` needed. The `can_change_password()` method allows this for superusers and callers with `users` or `manage_users`. Password strength validation still applies.
 
+The target's sessions are ended the same way. The response carries no `tokens`: an admin is never handed another person's tokens, and the admin's own session is untouched. An admin who sets their **own** password this way does get `tokens`, and must store them.
+
 ## Password Reset Flow (Forgot Password)
 
 1. Call `POST /api/auth/forgot` with `email` and `method=code` or `method=link`
 2. For `method=code`: a 6-digit code is stored in secrets and emailed
 3. For `method=link`: a signed token is emailed
 4. Reset via `POST /api/auth/password/reset/code` or `POST /api/auth/password/reset/token`
+5. The reset ends every other session of the account and answers with a new token pair for the device that did it
 
 ## Email Verification Flow
 
@@ -434,7 +449,7 @@ The old number is notified only **after** the classification returns: a change t
 | `disable` | `{"disable": {"reason": "admin\|abuse", "note": "..."}}` | Flips `is_active=False`, writes `metadata.protected.disable.*`, emits incident event | `manage_users` |
 | `reactivate` | `{"reactivate": {"note": "..."}}` | Flips `is_active=True`, appends to `disable.history` (FIFO cap 20) | `manage_users` |
 | `change_username` | `{"change_username": {"username": "new"}}` | Self-service username change. Mirrors `POST /api/auth/username/change`. No `current_password` — see step-up auth. | self only |
-| `revoke_sessions` | `{"revoke_sessions": {}}` | Self-service global logout — rotates `auth_key`. Mirrors `POST /api/auth/sessions/revoke`. No `current_password` — see step-up auth. NOTE: returns a status only, not a fresh JWT — caller must re-authenticate. | self only |
+| `revoke_sessions` | `{"revoke_sessions": {}}` | Self-service global logout — rotates `auth_key`, revokes the account's OAuth-server grants and drops its live websockets (`User.end_sessions`). Mirrors `POST /api/auth/sessions/revoke`. No `current_password` — see step-up auth. NOTE: returns a status only, not a fresh JWT — caller must re-authenticate. | self only |
 | `confirm_totp` | `{"confirm_totp": {"code": "123456"}}` | Self-service TOTP enrolment confirm. Mirrors `POST /api/account/totp/confirm`. Sets `requires_mfa=True` and returns recovery codes. | self only |
 | `regenerate_totp_codes` | `{"regenerate_totp_codes": {"code": "123456"}}` | Self-service regenerate of recovery codes (requires valid TOTP code). Mirrors `POST /api/account/totp/recovery-codes/regenerate`. | self only |
 | `disable_totp` | `{"disable_totp": true}` | Self-service TOTP disable. Mirrors `DELETE /api/account/totp`. | self only |

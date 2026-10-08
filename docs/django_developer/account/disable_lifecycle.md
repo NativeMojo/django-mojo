@@ -122,7 +122,9 @@ disable itself). Consequences:
   deliberate for the abuse case (see
   [Authenticated-Abuse Hardening](../security/abuse_hardening.md#3-the-account-kill-switch)).
 - `User.revoke_sessions` (rotate `auth_key` without disabling) also drops
-  live websockets via the same `disconnect_realtime` call.
+  live websockets via the same `disconnect_realtime` call. So do a password
+  reset and a password change: all three go through `User.end_sessions`,
+  which also revokes the account's OAuth-server grants.
 
 **`auth_key` rotation is the guarantee, not the socket drop.** `disconnect_realtime`
 is hygiene: WS auth happens once at connect, so a disabled user may keep a live
