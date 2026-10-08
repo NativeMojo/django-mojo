@@ -202,7 +202,7 @@ with a TTL, after checking CGNAT collateral across all properties).
 | Setting | Default | Meaning |
 |---|---|---|
 | `WS_CONNECT_RATE_LIMIT` | `30` | Connects per minute per IP, checked **before** `websocket.accept`. `<= 0` disables. |
-| `WS_MAX_CONNECTIONS` | `10` | Concurrent sockets per authenticated identity, checked at auth. `<= 0` disables. |
+| `WS_MAX_CONNECTIONS` | `10` | Concurrent sockets per authenticated identity, checked at auth. Counts live connections only: ids with no connection record are removed first, and the count-and-add is one atomic step (#4567). `<= 0` disables. |
 | `WS_UNAUTH_TIMEOUT` | `10` | Seconds an unauthenticated socket may live (advertised in `auth_required`). |
 
 These are read once per process, from Django settings, when the realtime

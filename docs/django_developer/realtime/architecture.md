@@ -81,7 +81,11 @@ uvicorn project.asgi:application --host 0.0.0.0 --port 8000
 4. Server validates token via `AUTH_BEARER_HANDLERS`
 5. Per-identity concurrency cap (`WS_MAX_CONNECTIONS`, default 10) is checked
    against `realtime:online:{user_type}:{user_id}`; over the cap sends an
-   error and closes the connection.
+   error and closes the connection. The cap counts **live** connections
+   (#4567): members of the set with no `realtime:connections:{id}` record are
+   removed first, then one Redis script counts and adds the new connection, so
+   simultaneous connects cannot pass the cap between them. A Redis error here
+   fails open. See [Presence and the connection cap](#presence-and-the-connection-cap).
 6. Registers connection and user online status in Redis
 7. The dedicated Redis pub/sub connection (`start_redis_messages`) is created
    here, **after** successful authentication — an unauthenticated socket
@@ -246,7 +250,8 @@ and a client that answers
 
 resets its idle clock — so a socket that only listens to server pushes stays up
 for as long as it answers. A `pong` gets no reply, refreshes presence
-(throttled) and never reaches `on_realtime_message`. Clients may also keep
+(throttled) and never reaches `on_realtime_message`. The server's ping timer
+refreshes presence too, on every tick, whatever the client sends (#4567). Clients may also keep
 sending their own `{"type": "ping"}`, which the server answers with
 `{"type": "pong", ...}` as before.
 
@@ -269,6 +274,38 @@ All connection state lives in Redis, making workers stateless and horizontally s
 | `realtime:waiters:{user_type}:{user_id}` | SET | Active event waiter IDs |
 
 All keys have automatic TTL (default 300 seconds, refreshed on activity).
+
+### Presence and the connection cap
+
+A connection is alive while its `realtime:connections:{id}` record exists. The
+online set's own expiry cannot say that: every live connection of the identity
+renews it, so a member whose cleanup was missed (a killed worker, a failed
+Redis call) would otherwise be counted for as long as the identity keeps any
+socket open (#4567). So:
+
+- **The heartbeat is the server's ping timer.** Every `WS_SERVER_PING_SECONDS`
+  an authenticated handler extends its own record (writing it again if it is
+  gone), keeps its id in the online set, and removes that set's members that
+  have no record. A dead member is gone within one heartbeat of any live
+  sibling, with no new connection needed.
+- **Admission** removes record-less members, then counts and adds in one
+  script (`mojo/apps/realtime/presence.py`).
+- A handler that is closing refreshes nothing, so a late heartbeat cannot bring
+  a closed connection back.
+- With `WS_SERVER_PING_SECONDS <= 0` there is no server heartbeat: only a
+  client `ping` or `pong` refreshes a connection's record (throttled to once
+  per 30 s), and admission is the only time dead members are removed. Keep the
+  server ping on.
+- **Clustered Redis reading from replicas** (`REDIS_READ_FROM_REPLICAS`, the
+  cluster default): a member registered a moment ago can look record-less on a
+  lagging replica and be removed. It adds itself back on its next heartbeat;
+  until then `send_to_user` can miss that connection and the cap undercounts
+  by one.
+- **Rolling deploy:** a socket still served by an older process refreshes its
+  record only on a client `ping`/`pong`. If it sends neither for 300 s, a newer
+  process removes it from the set and it does not add itself back: it stays
+  connected but uncounted and unreachable by `send_to_user` until the older
+  processes restart.
 
 There is also a Pub/Sub channel per topic, `realtime:topic:{name}` — same
 string as the membership SET above, different Redis namespace.
