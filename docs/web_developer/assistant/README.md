@@ -622,7 +622,10 @@ Returns a model's fields, the shape its rows are returned in, permissions, and s
 
 **Required permission**: `view_admin`
 
-Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secret`) are never included in the output. Only models with a `RestMeta` definition are available.
+`fields` lists what a request may filter, sort, group or total by. Fields that
+hold secrets are left out of it, and so are free-form JSON fields (such as
+`metadata`): the assistant cannot search inside those. Only models with a
+`RestMeta` definition are available.
 
 **Example response shape**:
 
@@ -660,7 +663,14 @@ Query a MojoModel and return results inline as JSON. Best for small result sets 
 
 **Required permission**: `view_admin` plus any permissions the model's `RestMeta` `VIEW_PERMS` requires.
 
-Filtering on sensitive fields is blocked and logged as a security event. Max 200 rows. Each row carries exactly the keys in `describe_model`'s `serialization.fields`.
+Filtering or sorting on a field that holds a secret is refused and logged as a
+security event. The same goes for a secret field on a related record, and for
+free-form JSON fields such as `metadata`. This is separate from what a row
+shows: a row still carries every key in `serialization.fields`, including a
+JSON field listed there. The log entry names the field, never the value that
+was tried. `search` follows the same rule: on a model whose search would look
+inside a secret field, every search is refused and logged, and `describe_model`
+shows an empty `search_fields` for it. Max 200 rows. Each row carries exactly the keys in `describe_model`'s `serialization.fields`.
 
 **Example response shape**:
 
@@ -738,6 +748,11 @@ Run aggregate queries (count, sum, avg, min, max, count_distinct) on any MojoMod
 
 `ordering` must reference a `group_by` column or an aggregation alias.
 
+A field that holds a secret, or a free-form JSON field, cannot be counted,
+totalled, grouped by or filtered on. The request is refused and logged as a
+security event, the same as in `query_model`. The names you give your own
+results (`alias`) are not affected.
+
 ### `export_data`
 
 Export query results to a downloadable CSV file stored in file storage. Data is written directly to storage — not returned inline. The assistant responds with a `file` block containing the download URL.
@@ -749,8 +764,9 @@ for that model, in that order, and each cell holds the same value `query_model`
 would return for it. A request can ask for fewer columns or a different order;
 it cannot add a column the model does not publish to the assistant. Asking for
 a column outside that set, the same column twice, or no columns at all is
-refused and no file is created. An export with no matching rows still produces
-a file with the header row.
+refused and no file is created. A column that holds a secret cannot be asked
+for by name, and filters, sorting and `search` follow the same rule as `query_model`. An
+export with no matching rows still produces a file with the header row.
 
 **Example queries that trigger this tool**:
 
