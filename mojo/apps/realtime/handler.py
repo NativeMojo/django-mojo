@@ -148,6 +148,9 @@ class WebSocketHandler:
         self.pubsub = None
         self._redis_task = None
         self._ping_task = None
+        # handle_connection's two child tasks, kept so its finally can cancel
+        # them when the handler itself is cancelled (#4567).
+        self._child_tasks = ()
 
         # Unauthenticated sockets get a short window to send their token;
         # authenticated ones the idle timeout, kept alive by server pings.
@@ -262,28 +265,27 @@ class WebSocketHandler:
             # Start background tasks. handle_redis_messages (the dedicated
             # pub/sub connection) starts only after successful auth — see
             # start_redis_messages() called from handle_authenticate.
-            tasks = [
+            self._child_tasks = (
                 asyncio.create_task(self.activity_timeout()),
                 asyncio.create_task(self.handle_client_messages())
-            ]
-
-            # Wait for any task to complete (usually means connection ended)
-            done, pending = await asyncio.wait(
-                tasks,
-                return_when=asyncio.FIRST_COMPLETED
             )
 
-            # Cancel remaining tasks
-            for task in pending:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+            # Wait for any task to complete (usually means connection ended)
+            await asyncio.wait(
+                self._child_tasks,
+                return_when=asyncio.FIRST_COMPLETED
+            )
 
         except Exception as e:
             self._log_exception("connection error")
         finally:
+            # Cancel the remaining child tasks here, not after the wait: a
+            # cancelled handler never reaches the line after it (#4567).
+            pending = [task for task in getattr(self, "_child_tasks", ()) if not task.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
             await self.cleanup_connection()
 
     async def register_connection(self):
@@ -1134,30 +1136,45 @@ class WebSocketHandler:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+
+        # The key saved at admission; the identity covers a handler stopped
+        # between admission and saving it. Not gated on `authenticated`.
+        online_key = getattr(self, "_online_key", None)
+        if not online_key and self.user and self.user_type:
+            online_key = self.user_online_key()
+        # Snapshot on the event loop: the executor thread must not iterate
+        # the topic set.
+        topics = list(self.subscribed_topics)
+        record_key = f"realtime:connections:{self.connection_id}"
+
         def cleanup():
             # Under the presence lock: a refresh already in the executor has
             # either finished its writes or will see _closing and write nothing.
+            # Each removal in its own try, so one failure skips nothing else
+            # (#4567). The online set first: it is what the cap counts.
             with getattr(self, "_presence_lock", None) or threading.Lock():
+                if online_key:
+                    try:
+                        self.redis_client.srem(online_key, self.connection_id)
+                    except Exception:
+                        self._log_exception("redis cleanup failed: online set")
                 try:
-                    # Remove connection record
-                    self.redis_client.delete(f"realtime:connections:{self.connection_id}")
-
-                    # Remove from all subscribed topics
-                    for topic in self.subscribed_topics:
+                    self.redis_client.delete(record_key)
+                except Exception:
+                    self._log_exception("redis cleanup failed: connection record")
+                for topic in topics:
+                    try:
                         self.redis_client.srem(f"realtime:topic:{topic}", self.connection_id)
-
-                    # Update user online status
-                    if self.user and self.user_type:
-                        key = self.user_online_key()
-                        # Remove this connection from the online set
-                        self.redis_client.srem(key, self.connection_id)
-                        # If set is empty, delete; otherwise refresh TTL
-                        if self.redis_client.scard(key) == 0:
-                            self.redis_client.delete(key)
-                        else:
-                            self.redis_client.expire(key, ONLINE_TTL_SECONDS)
-                except Exception as e:
-                    self._log_exception("redis cleanup failed")
+                    except Exception:
+                        self._log_exception(f"redis cleanup failed: topic {topic}")
+                if online_key:
+                    try:
+                        # Drop siblings with no record too. Redis removes
+                        # the set itself with its last member, so an identity
+                        # with nobody live left is offline without a delete.
+                        presence.prune(self.redis_client, online_key)
+                    except Exception:
+                        self._log_exception("redis cleanup failed: online set prune")
 
         await asyncio.get_event_loop().run_in_executor(None, cleanup)
 
