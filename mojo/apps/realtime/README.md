@@ -301,7 +301,10 @@ ws.onmessage = (event) => {
 The system uses these Redis key patterns:
 
 - `realtime:connections:{connection_id}` - Connection metadata (STRING, JSON)
-- `realtime:online:{user_type}:{user_id}` - User's active connection IDs (SET)
+- `realtime:online:{user_type}:{user_id}` - User's active connection IDs (SET).
+  A member is alive while its `realtime:connections:{id}` record exists;
+  members without one are removed at admission and on every live sibling's
+  server ping, and `WS_MAX_CONNECTIONS` counts what is left (#4567)
 - `realtime:topic:{topic_name}` - Topic subscriber connection IDs (SET)
 - `realtime:messages:{connection_id}` - Direct message channel (PUB/SUB)
 - `realtime:broadcast` - Global broadcast channel (PUB/SUB)
@@ -361,6 +364,11 @@ with no frame **from the client**. Frames the server sends never count.
 These are application frames: uvicorn answers protocol-level WebSocket pings
 itself, so those never reach the handler and cannot count as activity. Keep
 `WS_SERVER_PING_SECONDS` well under `WS_IDLE_TIMEOUT`.
+
+The server ping timer is also the presence heartbeat (#4567): on every tick the
+handler refreshes its own connection record and online-set membership and
+removes the identity's dead connection ids, whatever the client sends. Do not
+turn the server ping off in production.
 
 ## Settings
 
