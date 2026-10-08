@@ -70,7 +70,9 @@ class BotSignature(models.Model, MojoModel):
 
     def on_rest_pre_save(self, changed_fields, created):
         """A signature created over REST with no `source` is an operator's own:
-        store it as manual. The learner creates its rows through the ORM, so the
+        store it as manual. No source means the key is missing or its value is
+        empty (an empty string, null); any other value the request names is
+        kept as sent. The learner creates its rows through the ORM, so the
         field default stays 'auto'. An automatic user_agent or fingerprint row
         is never enforced (see learner.refresh_sig_cache)."""
         if not created:
