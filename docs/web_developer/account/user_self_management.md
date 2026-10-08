@@ -98,6 +98,7 @@ Fields **not** writable by the account owner:
 | `email` | Use the change flow — `POST /api/auth/email/change/request` |
 | `username` | Use `POST /api/auth/username/change` — see [Username Change](#12-username-change) |
 | `is_email_verified` | Internal token flows only |
+| `id`, `uuid`, `created`, `date_joined`, `last_login` | Read-only, set by the server — a posted value is ignored and the save still answers `200` |
 | `is_phone_verified` | Internal token flows only |
 | `dob` (change, clear or re-set once stored) | Admin tier (`users` / `manage_users` / superuser). Date of birth is an eligibility record on age-gated deployments, not a preference — a correction is a support operation and is audit-logged. Re-posting the **unchanged** value is a `200` no-op, so round-tripping the user object is safe |
 | `is_dob_verified` | System-only — never REST-writable; reset automatically when `dob` changes |

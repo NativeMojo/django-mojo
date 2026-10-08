@@ -62,13 +62,30 @@ class Book(models.Model, MojoModel):
 | `LIST_DEFAULT_FILTERS` | dict | `{}` | Baseline filters applied to **list** requests only, overridable per field by the caller (see [Default list filters](#default-list-filters)) |
 | `GRAPHS` | dict | `{}` | Serialization shapes (see [Graphs](graphs.md)) |
 | `GRAPH_PERMISSIONS` | dict | `{}` | Per-graph required permissions, additive to `VIEW_PERMS` (see [Per-graph permissions](graphs.md#per-graph-permissions-graph_permissions)) |
-| `NO_SAVE_FIELDS` | list | `["id","pk","created","uuid"]` | Fields the REST body can never set (see note below) |
+| `NO_SAVE_FIELDS` | list | `[]` | Extra fields the REST body can never set, **added to** the always-protected `id`, `pk`, `created`, `uuid` (see notes below) |
+| `ALLOW_SAVE_FIELDS` | list | `[]` | Hands `created` and/or `uuid` back to the REST body. Any other name here is ignored |
 | `NO_SHOW_FIELDS` | list | `[]` | Fields never included in responses |
 | `SENSITIVE_FIELDS` | list | `[]` | Columns that may never be filtered, searched, sorted or aggregated on (see [Sensitive fields](#sensitive-fields)) |
 | `LOG_CHANGES` | bool | `False` | Auto-log field changes via logit |
 | `LOG_META_CHANGES` | bool | `False` | Auto-log key-level changes to all JSONFields via logit |
 | `PROTECTED_JSON_PERMS` | list | `[]` | Permissions required to modify the `"protected"` root key in any JSONField |
 | `OWNER_FIELD` | str | `"user"` | Field name for owner permission check |
+
+> **`id`, `pk`, `created` and `uuid` are always protected, on every model.**
+> A declared `NO_SAVE_FIELDS` list adds to those four; it does not replace
+> them, and `NO_SAVE_FIELDS = []` still protects them. (Before maestro item
+> 7189 a declared list replaced the default, so a model that pinned one field
+> of its own made `id` writable: a posted `id` was assigned to the loaded row
+> and the save updated the row with that id — another user's row.) A posted
+> protected name is skipped silently and the save answers `200`; a body that
+> holds only protected names plus a `POST_SAVE_ACTIONS` key runs the action and
+> does not save the row. `MyModel.get_no_save_fields()` returns the effective
+> list.
+>
+> A model that really does take `created` or `uuid` from the client declares
+> it: `ALLOW_SAVE_FIELDS = ["uuid"]`. Only those two names can be handed back.
+> `id`, `pk` and anything the model lists in its own `NO_SAVE_FIELDS` cannot.
+> `Group` is the one framework model that declares it (`uuid`).
 
 > **`NO_SAVE_FIELDS` does not disable the create-time auto-stamps.** It only
 > filters the request-body field loop. On create, the framework still stamps
