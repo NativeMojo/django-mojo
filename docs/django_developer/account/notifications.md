@@ -115,3 +115,81 @@ If you need a silent push with no DB record (e.g. background data refresh):
 ```python
 user.push_notification(title="Refresh", data={"type": "refresh"})
 ```
+
+## Notification preferences
+
+Users opt out per kind and per channel (`in_app`, `email`, `push`). Every
+delivery path calls the same check before sending:
+
+```python
+from mojo.apps.account.services.notification_prefs import is_notification_allowed
+
+is_notification_allowed(user, "marketing", "email")  # -> bool
+```
+
+Preferences live in `user.metadata["notification_preferences"]` as
+`{kind: {channel: bool}}`. Default is **allow**. The decision order is:
+
+1. `user` is `None`, or no preferences are stored → allowed.
+2. `kind` is falsy (transactional — password reset, verification, …) → allowed.
+3. **Master switch** — the reserved kind `"*"`: if `prefs["*"][channel]` is
+   present and false → **suppressed**, whatever the per-kind entry says.
+4. `prefs[kind][channel]` present → that value; absent → allowed.
+
+```python
+{
+    "*":         {"email": False},   # no email of any kind
+    "billing":   {"email": True},    # still suppressed: master off wins
+    "marketing": {"push": False},    # per-kind opt-out on push
+}
+```
+
+A master switch that is `true` (or absent) adds nothing — it defers to the
+per-kind entries, so `{"*": {"email": True}, "marketing": {"email": False}}`
+still suppresses marketing email. `"*"` is reserved: never use it as a real
+notification kind.
+
+`get_preferences(user)` returns the stored dict; `set_preferences(user, incoming)`
+partial-merges `{kind: {channel: bool}}` (including `"*"`) and saves.
+
+### Kinds registry
+
+Register the kinds your project sends so clients can render a preferences
+screen without hard-coding them. Call it once at startup (e.g. in your app's
+`AppConfig.ready()`) so every process sees the same catalogue:
+
+```python
+from mojo.apps.account.services.notification_kinds import (
+    register_notification_kinds, list_notification_kinds,
+)
+
+register_notification_kinds([
+    {"kind": "billing", "label": "Billing", "description": "Invoices and receipts",
+     "channels": ["email", "in_app"]},
+    {"kind": "marketing", "label": "News & offers"},
+])
+
+list_notification_kinds()
+# [{"kind": "general", "label": "General", "description": "Messages from this service", "channels": None},
+#  {"kind": "billing", ...}, {"kind": "marketing", ...}]
+```
+
+| Key | Required | Notes |
+|---|---|---|
+| `kind` | yes | Lowercase slug `[a-z0-9_.-]+`, max 64 chars. `"*"` is rejected (reserved). |
+| `label` | yes | Non-empty display name. |
+| `description` | no | Defaults to `""`. |
+| `channels` | no | `None` (all channels) or a list of channel names the kind is sent on. |
+
+- `general` (the default `kind` of `user.notify()` / `Notification.send()`) is
+  pre-registered as "General" / "Messages from this service". Re-register it
+  to change its label.
+- Re-registering a kind replaces its entry but keeps its original position;
+  `list_notification_kinds()` returns entries in registration order.
+- A batch is validated as a whole — on any bad entry `ValueError` is raised
+  and nothing is registered.
+- The registry is descriptive only. It does not gate delivery: preferences for
+  unregistered kinds are still stored and enforced.
+
+The REST surface (`GET`/`POST /api/account/notification/preferences`) is
+documented in [User Self-Management § Notification Preferences](../../web_developer/account/user_self_management.md#11-notification-preferences).

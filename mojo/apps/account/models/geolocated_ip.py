@@ -12,6 +12,10 @@ import ujson
 GEOLOCATION_ALLOW_SUBNET_LOOKUP = settings.get_static('GEOLOCATION_ALLOW_SUBNET_LOOKUP', False, kind='bool')
 GEOLOCATION_CACHE_DURATION_DAYS = settings.get_static('GEOLOCATION_CACHE_DURATION_DAYS', 90, kind='int')
 GEOLOCATION_LAST_SEEN_AGE = settings.get_static('GEOLOCATION_IP_LAST_SEEN_AGE', 300)
+# How long a failed lookup is remembered before the provider chain is tried
+# again for that IP (seconds). Without it every event from an unresolvable
+# address re-ran the whole chain, timeouts and log lines included (#6564).
+GEOIP_FAILURE_TTL = settings.get_static('GEOIP_FAILURE_TTL', 3600, kind='int')
 
 
 class GeoLocatedIP(models.Model, MojoModel):
@@ -21,6 +25,10 @@ class GeoLocatedIP(models.Model, MojoModel):
 
     This model also tracks security-relevant metadata like VPN, Tor, proxy, and cloud platform detection.
     """
+    # `provider` value of a record whose lookup failed and that holds no earlier
+    # provider result. Served from cache until `expires_at` (GEOIP_FAILURE_TTL).
+    FAILED_PROVIDER = "failed"
+
     created = models.DateTimeField(auto_now_add=True, editable=False)
     modified = models.DateTimeField(auto_now=True, db_index=True)
     last_seen = models.DateTimeField(auto_now=True, db_index=True, help_text="Last time this IP was encountered in the system")
@@ -242,19 +250,28 @@ class GeoLocatedIP(models.Model, MojoModel):
         # Cap at 100
         return min(score, 100)
 
-    def refresh(self, check_threats=False):
+    def refresh(self, check_threats=False, *, locator=None):
         """
         Refreshes the geolocation data for this IP by calling the geolocation
         helper and updating the model instance with the returned data.
 
+        A failed lookup is remembered for GEOIP_FAILURE_TTL seconds (see
+        _remember_failed_lookup), so `geolocate()` does not re-run the provider
+        chain for this IP until it expires.
+
         Args:
             check_threats: If True, also perform threat intelligence checks
+
+        `locator` is a keyword-only test seam standing in for
+        `geoip.geolocate_ip`; the default keeps production behavior unchanged.
         """
         from mojo.helpers import geoip
 
-        geo_data = geoip.geolocate_ip(self.ip_address, check_threats=check_threats)
+        geo_data = (locator or geoip.geolocate_ip)(
+            self.ip_address, check_threats=check_threats)
 
         if not geo_data or not geo_data.get("provider"):
+            self._remember_failed_lookup()
             return False
 
         # Update self with new data
@@ -271,6 +288,27 @@ class GeoLocatedIP(models.Model, MojoModel):
 
         self.save()
         return True
+
+    def _remember_failed_lookup(self):
+        """
+        Cache a failed lookup for GEOIP_FAILURE_TTL seconds, so the provider
+        chain — and the warnings it logs — runs at most once per TTL per IP
+        instead of on every event that carries the address (#6564).
+
+        A record that never resolved is marked provider=FAILED_PROVIDER. One
+        that holds an earlier provider result keeps it and its data: a stale
+        answer beats none, and a 'mojo'-sourced record keeps its federation
+        semantics. The next successful refresh() overwrites both.
+        """
+        if not self.provider:
+            self.provider = self.FAILED_PROVIDER
+        self.expires_at = dates.utcnow() + timedelta(seconds=GEOIP_FAILURE_TTL)
+        if self.pk:
+            # Only the cache fields: the lookup can take seconds, and a full
+            # save would revert block/whitelist state written meanwhile.
+            self.save(update_fields=["provider", "expires_at", "modified"])
+        else:
+            self.save()
 
     def check_threats(self, from_sync=False, skip_external=False, *,
                       check_internal=None, check_external=None,
@@ -993,7 +1031,8 @@ class GeoLocatedIP(models.Model, MojoModel):
         return cls.geolocate(ip_address, auto_refresh, subdomain_only)
 
     @classmethod
-    def geolocate(cls, ip_address, auto_refresh=True, subdomain_only=GEOLOCATION_ALLOW_SUBNET_LOOKUP):
+    def geolocate(cls, ip_address, auto_refresh=True, subdomain_only=GEOLOCATION_ALLOW_SUBNET_LOOKUP,
+                  *, locator=None):
         """
         Get or create a GeoLocatedIP record for the given IP address.
 
@@ -1001,6 +1040,10 @@ class GeoLocatedIP(models.Model, MojoModel):
             ip_address: The IP address to geolocate
             auto_refresh: If True, refresh expired records immediately
             subdomain_only: If True, only look up subnet matches
+
+        An unexpired failed lookup (provider=FAILED_PROVIDER) is returned as
+        cached, without calling any provider. `locator` is the keyword-only
+        test seam forwarded to refresh().
 
         Returns:
             GeoLocatedIP instance
@@ -1017,7 +1060,9 @@ class GeoLocatedIP(models.Model, MojoModel):
         geo_ip = cls.objects.filter(ip_address=ip_address).first()
 
         if not geo_ip and subdomain_only:
-            subnet_match = cls.objects.filter(subnet=subnet).last()
+            # A failed lookup holds no location to share with its neighbours.
+            subnet_match = cls.objects.filter(subnet=subnet).exclude(
+                provider=cls.FAILED_PROVIDER).last()
             if subnet_match:
                 provider = subnet_match.provider
                 if provider and "subnet" not in provider:
@@ -1046,6 +1091,6 @@ class GeoLocatedIP(models.Model, MojoModel):
                 geo_ip.save(update_fields=['last_seen'])
 
         if auto_refresh and geo_ip.is_expired:
-            geo_ip.refresh()
+            geo_ip.refresh(locator=locator)
 
         return geo_ip

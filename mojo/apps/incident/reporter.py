@@ -1,19 +1,189 @@
+import json
 import socket
 import time
+import uuid
 
 
 def record_event(details, title=None, category="api_error", level=1, request=None, scope="global", **kwargs):
-    from .models import Event
     event_data = _create_event_dict(details, title, category, level, request, scope, **kwargs)
-    event = Event(**event_data)
-    event.sync_metadata()
-    event.save()
+    return _save_event(event_data)
+
+
+def report_event(details, title=None, category="api_error", level=1, request=None,
+                 scope="global", defer=False, **kwargs):
+    """File an incident Event and run the rules engine on it. Returns the Event.
+
+    ``defer=True`` is the request thread saying the write may happen later
+    (#6565): the request facts are captured NOW (``_create_event_dict`` reads
+    only the request object) and parked in Redis, then the INSERT, the
+    geolocation and the rule lookups run in a job on the ``incident_handlers``
+    channel, and the call returns ``None``. It stays inline — today's path —
+    when the category is in ``sync_categories()`` (the security list, which
+    always lands before the response), when the jobs app is not installed, or
+    when queueing fails. Callers pass it only for a routine 4xx; a 5xx never
+    defers.
+    """
+    event_data = _create_event_dict(details, title, category, level, request, scope, **kwargs)
+    if defer and _may_defer(category) and _queue_event(event_data):
+        return None
+    event = _save_event(event_data)
+    event.publish()
     return event
 
 
-def report_event(details, title=None, category="api_error", level=1, request=None, scope="global", **kwargs):
-    event = record_event(details, title, category, level, request, scope, **kwargs)
+# The job a deferred report_event publishes. Lives with the other incident
+# jobs; it calls write_queued_event below.
+QUEUED_EVENT_JOB = "mojo.apps.incident.asyncjobs.record_queued_event"
+
+# How long a queued event waits for its job before it is dropped: a day, not
+# the jobs default of 15 minutes, so a backed-up queue delays the row instead
+# of losing it. Applies to the job row and to the Redis copy of the facts.
+QUEUED_EVENT_TTL = 86400
+
+# Security categories that never defer, whatever a caller asks. These rows are
+# evidence the threat-intel tiers (mojo/helpers/geoip/threat_intel.py) and the
+# auth-failure counters (Event.AUTH_FAILURE_CATEGORIES) count, so they must be
+# in the table before the response goes out. INCIDENT_SYNC_CATEGORIES ADDS to
+# this list; it cannot remove from it.
+SYNC_CATEGORIES = frozenset({
+    "sensitive_field_probe",
+    "security:bouncer:honeypot_post",
+    "security:bouncer:campaign",
+    "invalid_password",
+    "login:unknown",
+    "reset:unknown",
+    "magic:unknown",
+    "token:unknown",
+    "totp:login_unknown",
+    "totp:login_failed",
+    "sms:login_unknown",
+    "passkey:login_failed",
+    "invalid_token",
+    "expired_token",
+})
+
+
+def sync_categories():
+    """Categories that always write inline: SYNC_CATEGORIES + INCIDENT_SYNC_CATEGORIES.
+
+    Read with get_static (the settings file) — this runs on every deferred
+    4xx, and a per-request Redis round-trip is the cost #6565 removes.
+    """
+    from mojo.helpers.settings import settings
+    configured = settings.get_static("INCIDENT_SYNC_CATEGORIES", None) or ()
+    if isinstance(configured, str):
+        configured = (configured,)
+    return SYNC_CATEGORIES.union(configured)
+
+
+def _may_defer(category):
+    if category in sync_categories():
+        return False
+    from django.apps import apps
+    return apps.is_installed("mojo.apps.jobs")
+
+
+def queued_event_key():
+    """A fresh Redis key for one queued event's captured facts."""
+    return f"incident:queued:{uuid.uuid4().hex}"
+
+
+def _queue_event(event_data, redis=None):
+    """Hand the captured event to a job. True when queued, never raises.
+
+    The facts go to Redis under a one-off key with a TTL; the job row carries
+    only that key plus the category and uid. Job payloads are readable by
+    anyone holding view_jobs, and incident metadata (emails, request bodies,
+    stack traces) is view_security data — the queue gets a reference, never
+    the data, the same rule publish_webhook follows for its secret.
+
+    Any failure — facts not JSON, Redis down, the channel refused, the job
+    row not written — returns False and the caller writes inline exactly as
+    before. The Redis copy is deleted on a failed publish, so a job row jobs
+    committed but could not confirm (its own documented edge) finds nothing
+    if an operator requeues it: the inline write is the only one.
+
+    ``redis`` is a keyword test seam; None resolves the shared connection.
+    """
+    key = None
+    try:
+        from mojo.apps import jobs
+        data = dict(event_data)
+        group = data.pop("group", None)
+        data["group_id"] = getattr(group, "pk", None)
+        raw = json.dumps(data)
+        if redis is None:
+            from mojo.helpers.redis import get_connection
+            redis = get_connection()
+        key = queued_event_key()
+        redis.set(key, raw, ex=QUEUED_EVENT_TTL)
+        jobs.publish(
+            QUEUED_EVENT_JOB,
+            {"key": key, "category": data.get("category"), "uid": data.get("uid")},
+            channel="incident_handlers",
+            expires_in=QUEUED_EVENT_TTL)
+        return True
+    except Exception as exc:
+        from mojo.helpers import logit
+        if key is not None:
+            try:
+                redis.delete(key)
+            except Exception:
+                pass
+        logit.warning(
+            "incident.report_event",
+            f"could not queue {event_data.get('category')!r} event, "
+            f"writing inline: {exc}")
+        return False
+
+
+def _claim_queued(key, redis=None):
+    """Read and delete one queued event's facts atomically. None when gone.
+
+    MULTI get+delete rather than GETDEL so pre-6.2 Redis works; either way a
+    job that runs twice writes the event once.
+    """
+    if redis is None:
+        from mojo.helpers.redis import get_connection
+        redis = get_connection()
+    pipe = redis.pipeline(transaction=True)
+    pipe.get(key)
+    pipe.delete(key)
+    raw, _deleted = pipe.execute()
+    return json.loads(raw) if raw else None
+
+
+def write_queued_event(payload, redis=None):
+    """The job half of a deferred report_event: save + rules, as inline does.
+
+    ``payload`` is the job's ``{"key", "category", "uid"}``; the facts
+    ``_create_event_dict`` captured on the request thread are read back from
+    Redis. Missing facts (expired, or a second run of the same job) write
+    nothing. A group deleted while the job waited is dropped to None — the
+    metadata snapshot still names it.
+    """
+    key = payload.get("key")
+    event_data = _claim_queued(key, redis=redis) if key else None
+    if event_data is None:
+        from mojo.helpers import logit
+        logit.warning(
+            "incident.write_queued_event",
+            f"queued {payload.get('category')!r} event {key} has no stored "
+            f"facts (expired or already written); nothing to write")
+        return None
+    from mojo.apps.account.models import Group
+    group_id = event_data.pop("group_id", None)
+    event_data["group"] = Group.objects.filter(pk=group_id).first() if group_id else None
+    event = _save_event(event_data)
     event.publish()
+    return event
+
+
+def _save_event(event_data):
+    from .models import Event
+    event = Event(**event_data)
+    event.sync_metadata()
+    event.save()
     return event
 
 

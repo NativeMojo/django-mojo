@@ -6,13 +6,24 @@ whether a notification should be sent to a user on a given channel.
 
 Storage lives in ``user.metadata["notification_preferences"]``.
 Default is **allow** — only suppress when the user has explicitly opted out.
+
+The kind ``"*"`` is reserved as a per-channel master switch:
+``{"*": {"email": False}}`` suppresses every kind on email, including kinds
+explicitly set on. A master switch that is on (or absent) defers to the
+per-kind entry. Transactional sends (``kind`` falsy) are never suppressed.
 """
+
+MASTER_KIND = "*"
 
 
 def is_notification_allowed(user, kind, channel):
     """
     Returns True if the user has not opted out of this kind/channel combination.
     Default (no stored preference) is True — only suppress on explicit opt-out.
+
+    Order: a falsy ``kind`` (transactional) is always allowed; then a master
+    switch ``prefs["*"][channel]`` that is falsy suppresses; then the per-kind
+    entry ``prefs[kind][channel]`` decides.
 
     Args:
         user: User instance (or None)
@@ -30,6 +41,11 @@ def is_notification_allowed(user, kind, channel):
     prefs = metadata.get("notification_preferences")
     if not prefs or not isinstance(prefs, dict):
         return True
+    if not kind:
+        return True
+    master = prefs.get(MASTER_KIND)
+    if isinstance(master, dict) and channel in master and not master[channel]:
+        return False
     kind_prefs = prefs.get(kind)
     if not kind_prefs or not isinstance(kind_prefs, dict):
         return True
@@ -60,7 +76,8 @@ def set_preferences(user, incoming):
 
     Args:
         user: User instance
-        incoming: dict of ``{kind: {channel: bool, ...}, ...}``
+        incoming: dict of ``{kind: {channel: bool, ...}, ...}``; the kind
+            ``"*"`` is the per-channel master switch and merges like any other.
 
     Returns:
         The full preferences dict after merging.
