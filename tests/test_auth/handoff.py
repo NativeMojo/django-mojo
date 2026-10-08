@@ -353,6 +353,175 @@ def test_full_round_trip(opts):
     assert_eq(me.response.data.id, opts.user_id, "JWT should resolve to the original user")
 
 
+# ---------------------------------------------------------------------------
+# PKCE (#7397): a code minted with a challenge exchanges only with its secret
+# ---------------------------------------------------------------------------
+
+# RFC 7636 appendix B test vector.
+PKCE_VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+PKCE_CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+PKCE_OTHER_VERIFIER = "aBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+
+
+def _clear_handoff_limits():
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1", key="auth_handoff")
+    clear_rate_limits(ip="127.0.0.1", key="auth_exchange")
+
+
+def _mint_with_challenge(opts, **extra):
+    """Mint a code as the test user and sign out. Returns the handoff response."""
+    assert_true(opts.client.login(TEST_USER, TEST_PWORD), "login should succeed")
+    body = {"redirect_uri": ALLOWED_DEST}
+    body.update(extra)
+    resp = opts.client.post("/api/auth/handoff", body)
+    opts.client.logout()
+    return resp
+
+
+def _pkce_code(opts):
+    resp = _mint_with_challenge(
+        opts, code_challenge=PKCE_CHALLENGE, code_challenge_method="S256")
+    assert_eq(resp.status_code, 200,
+              f"a handoff with a valid S256 challenge must mint, "
+              f"got {resp.status_code}: {resp.response}")
+    code = _minted_code(resp)
+    assert_true(bool(code), f"no code minted: {resp.response}")
+    return code
+
+
+@th.unit_test("#7397: a code minted with a challenge does not exchange without the secret")
+def test_pkce_code_needs_the_secret(opts):
+    """The regression. Before #7397 the challenge was ignored and the bare code
+    returned an access and refresh token pair to whoever held it."""
+    _clear_handoff_limits()
+    code = _pkce_code(opts)
+
+    resp = opts.client.post("/api/auth/exchange", {"code": code})
+    assert_eq(resp.status_code, 401,
+              f"a code minted with a challenge must NOT exchange without the "
+              f"code_verifier, got {resp.status_code}: {resp.response}")
+
+    resp = opts.client.post(
+        "/api/auth/exchange", {"code": code, "code_verifier": PKCE_VERIFIER})
+    assert_eq(resp.status_code, 401,
+              f"the failed attempt must have spent the code, so the right "
+              f"secret afterwards also answers 401, got {resp.status_code}: {resp.response}")
+
+
+@th.unit_test("#7397: the matching secret exchanges; a wrong one is refused and spends the code")
+def test_pkce_right_and_wrong_secret(opts):
+    _clear_handoff_limits()
+    code = _pkce_code(opts)
+    resp = opts.client.post(
+        "/api/auth/exchange", {"code": code, "code_verifier": PKCE_VERIFIER})
+    assert_eq(resp.status_code, 200,
+              f"the matching code_verifier must exchange, got {resp.status_code}: {resp.response}")
+    data = resp.response.data
+    assert_true(bool(data.access_token) and bool(data.refresh_token),
+                "the exchange must return an access and refresh token pair")
+    assert_true(data.user.id == opts.user_id, f"user.id should match, got {data.user.id}")
+
+    code = _pkce_code(opts)
+    resp = opts.client.post(
+        "/api/auth/exchange", {"code": code, "code_verifier": PKCE_OTHER_VERIFIER})
+    assert_eq(resp.status_code, 401,
+              f"a wrong code_verifier must answer 401, got {resp.status_code}: {resp.response}")
+    resp = opts.client.post(
+        "/api/auth/exchange", {"code": code, "code_verifier": PKCE_VERIFIER})
+    assert_eq(resp.status_code, 401,
+              f"a wrong code_verifier must spend the code, got {resp.status_code}: {resp.response}")
+
+
+@th.unit_test("#7397: a secret sent for a code that has no challenge is refused")
+def test_pkce_secret_for_a_code_without_challenge(opts):
+    """Otherwise an attacker mints a code for their OWN account and feeds it to
+    the real app, which believes it is completing the flow it started."""
+    _clear_handoff_limits()
+    resp = _mint_with_challenge(opts)
+    code = _minted_code(resp)
+    assert_true(bool(code), f"no code minted: {resp.response}")
+
+    resp = opts.client.post(
+        "/api/auth/exchange", {"code": code, "code_verifier": PKCE_VERIFIER})
+    assert_eq(resp.status_code, 401,
+              f"a code_verifier for a code with no challenge must answer 401, "
+              f"got {resp.status_code}: {resp.response}")
+    resp = opts.client.post("/api/auth/exchange", {"code": code})
+    assert_eq(resp.status_code, 401,
+              f"that attempt must have spent the code, got {resp.status_code}: {resp.response}")
+
+
+@th.unit_test("#7397: a malformed challenge is refused and no code is minted")
+def test_pkce_malformed_challenge_is_refused(opts):
+    _clear_handoff_limits()
+    refused = [
+        ({"code_challenge": PKCE_CHALLENGE, "code_challenge_method": "plain"}, "method plain"),
+        ({"code_challenge": PKCE_CHALLENGE}, "no method"),
+        ({"code_challenge": PKCE_CHALLENGE[:42], "code_challenge_method": "S256"},
+         "a 42-character challenge"),
+        ({"code_challenge": "", "code_challenge_method": "S256"}, "an empty challenge"),
+        ({"code_challenge": ["x"], "code_challenge_method": "S256"}, "a list"),
+        ({"code_challenge": 12345, "code_challenge_method": "S256"}, "a number"),
+        ({"code_challenge_method": "S256"}, "a method with no challenge"),
+    ]
+    for extra, why in refused:
+        resp = _mint_with_challenge(opts, **extra)
+        assert_eq(resp.status_code, 400,
+                  f"a handoff with {why} must answer 400, got {resp.status_code}: {resp.response}")
+        assert_true(_minted_code(resp) is None,
+                    f"a handoff with {why} must not return a code, got {resp.response}")
+
+
+@th.unit_test("#7397: a non-string code_verifier is a 401, never a 500")
+def test_pkce_non_string_verifier(opts):
+    _clear_handoff_limits()
+    for bad in (["x"], {"a": 1}, 12345, ""):
+        code = _pkce_code(opts)
+        resp = opts.client.post("/api/auth/exchange", {"code": code, "code_verifier": bad})
+        assert_eq(resp.status_code, 401,
+                  f"code_verifier={bad!r} must answer 401, got {resp.status_code}: {resp.response}")
+
+
+@th.unit_test("#7397: a wrong secret cannot tell a disabled account from a bad code")
+def test_pkce_check_runs_before_the_account_lookup(opts):
+    from mojo.apps.account.models import User
+
+    _clear_handoff_limits()
+    code = _pkce_code(opts)
+    User.objects.filter(pk=opts.user_id).update(is_active=False)
+    try:
+        resp = opts.client.post(
+            "/api/auth/exchange", {"code": code, "code_verifier": PKCE_OTHER_VERIFIER})
+        assert_eq(resp.status_code, 401,
+                  f"a wrong code_verifier for a disabled account must answer 401, "
+                  f"not 403, got {resp.status_code}: {resp.response}")
+    finally:
+        User.objects.filter(pk=opts.user_id).update(is_active=True)
+
+
+@th.django_unit_test("#7397: the stored record carries the challenge and check_exchange reads it")
+def test_pkce_service_layer(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import auth_handoff
+
+    user = User.objects.get(pk=opts.user_id)
+    code = auth_handoff.create_handoff_code(
+        user, destination="myapp://auth", code_challenge=PKCE_CHALLENGE)
+    data = auth_handoff.consume_handoff_code(code)
+    assert_eq(data.get("cc"), PKCE_CHALLENGE, "the record must store the challenge as cc")
+    assert_true(auth_handoff.check_exchange(data, PKCE_VERIFIER), "the pre-image must pass")
+    assert_true(not auth_handoff.check_exchange(data, PKCE_OTHER_VERIFIER), "another secret must fail")
+    assert_true(not auth_handoff.check_exchange(data, None), "no secret must fail")
+    assert_true(not auth_handoff.check_exchange(data, ["x"]), "a non-string must fail, not raise")
+
+    plain = auth_handoff.consume_handoff_code(auth_handoff.create_handoff_code(user))
+    assert_true("cc" not in plain, "a code minted without a challenge stores no cc key")
+    assert_true(auth_handoff.check_exchange(plain, None), "no challenge and no secret passes, as before")
+    assert_true(not auth_handoff.check_exchange(plain, PKCE_VERIFIER),
+                "a secret for a record with no challenge must fail")
+
+
 @th.tier("extended")  # per-IP rate-limit counter — cannot run in the parallel core/framework ring (#2789 -j sweep)
 @th.unit_test("auth/exchange is rate-limited (20/min/IP)")
 def test_exchange_rate_limit(opts):

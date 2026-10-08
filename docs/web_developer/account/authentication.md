@@ -301,6 +301,8 @@ minted at the auth origin. The handoff is an authorization-code flow:
 | Field | Required | Notes |
 |---|---|---|
 | `redirect_uri` | **optional by default, required where the server enforces** | The absolute URL the code will be handed to. **Always send it.** |
+| `code_challenge` | **required for an app on the device where the server requires it**, otherwise optional | PKCE challenge: base64url of the SHA-256 of your `code_verifier`, no padding. 43 to 128 characters. |
+| `code_challenge_method` | required whenever `code_challenge` is sent | Must be `"S256"`. `plain` and a missing method are refused. |
 
 **Response:**
 
@@ -330,9 +332,56 @@ error and **does not navigate**. Rate-limited to 30 requests/IP.
 }
 ```
 
+| Field | Required | Notes |
+|---|---|---|
+| `code` | yes | The code from step 1. |
+| `code_verifier` | **yes when the code was minted with a `code_challenge`**, otherwise must not be sent | The secret the challenge was made from: 43 to 128 characters of letters, digits and `-._~`. |
+
 Returns the same `data` shape as `/api/login` (access/refresh tokens, user
 dict). Codes are single-use and expire after `AUTH_HANDOFF_CODE_TTL` seconds
 (default 60). Rate-limited to 20 attempts/min/IP.
+
+### Apps on the device: bind the code to the app (PKCE)
+
+A code handed to a custom-scheme link (`myapp://auth`) or to a loopback listener
+(`http://127.0.0.1:<port>/`) can be received by any other app on the same device
+that claims the same link. PKCE ([RFC 7636](https://www.rfc-editor.org/rfc/rfc7636),
+as [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252) asks of native apps) makes
+a caught code useless on its own:
+
+1. **Before opening the sign-in page**, the app makes a random `code_verifier`
+   (32 random bytes, base64url, no padding) and keeps it in memory. It never
+   goes in a URL.
+2. The app computes `code_challenge = base64url(sha256(code_verifier))`, no
+   padding, and gives it to the page that will call `/api/auth/handoff`.
+3. That page sends `code_challenge` and `code_challenge_method: "S256"` with
+   the handoff request.
+4. The app receives the code on its link and posts `code` **and**
+   `code_verifier` to `/api/auth/exchange`.
+
+The rules the server applies:
+
+- A code minted with a challenge exchanges **only** with the matching
+  `code_verifier`. A missing or wrong one answers `401` *"Invalid or expired
+  handoff code"*, and the code is spent.
+- A `code_verifier` sent for a code that was minted **without** a challenge is
+  also `401`. So the page and the app must switch together: both send, or
+  neither.
+- A malformed challenge, `plain`, or a missing method answers `400` and no code
+  is minted.
+- Where the server sets `AUTH_HANDOFF_REQUIRE_PKCE = "native"`, a handoff with
+  no challenge answers `400` *"code_challenge is required for this
+  destination"* for a custom scheme, a loopback address, `localhost`, or no
+  `redirect_uri`. An `https://` web destination is unaffected.
+
+**What this does not protect against.** PKCE stops another app from using a
+code it *caught*. It does not stop a hostile app from *starting* the sign-in
+itself: that app supplies its own challenge and holds the secret. If your
+sign-in page mints a code for whoever opens it while the person is already
+signed in, the page must ask the person first ("Sign in to *App* as *name*?").
+Prefer verified `https://` app links over custom schemes where the platform
+offers them. The social sign-in return (`/api/auth/oauth/...`) is not covered
+by this either.
 
 **Bootstrap helper**
 
