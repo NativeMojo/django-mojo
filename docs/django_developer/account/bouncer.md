@@ -341,11 +341,11 @@ BOUNCER_REQUIRE_TOKEN = False
 BOUNCER_LEARN_ENABLED = True
 BOUNCER_LEARN_MIN_SCORE = 80        # minimum score to learn from
 BOUNCER_LEARN_SUBNET_THRESHOLD = 5  # blocks per /24 per hour to flag subnet
-BOUNCER_LEARN_UA_THRESHOLD = 5      # blocks per UA per hour to flag UA
-BOUNCER_LEARN_FP_THRESHOLD = 3      # blocks per fingerprint to flag it
+BOUNCER_LEARN_UA_THRESHOLD = 5      # unused: User-Agents are no longer learned
+BOUNCER_LEARN_FP_THRESHOLD = 3      # unused: fingerprints are no longer learned
 BOUNCER_LEARN_CAMPAIGN_THRESHOLD = 5  # cross-IP signal_set matches to detect campaign
 BOUNCER_LEARN_SUBNET_TTL = 86400    # 24h auto-block TTL for subnets
-BOUNCER_LEARN_UA_TTL = 604800       # 7d auto-block TTL for UAs
+BOUNCER_LEARN_UA_TTL = 604800       # unused: no automatic UA/fingerprint signature
 BOUNCER_LEARN_SIGNAL_SET_TTL = 2592000  # 30d campaign signature TTL
 
 # Score weights per signal (any signal missing from this dict contributes 0)
@@ -433,7 +433,8 @@ Audit log. One row per assess/submit/event API call. Read-only via REST.
 ### `BotSignature`
 
 Adaptive learning registry. Auto-populated by `BotLearner` after confirmed
-high-confidence blocks. Fully manageable via the operator portal.
+high-confidence blocks (network and campaign rows only). Fully manageable via
+the operator portal.
 
 ```python
 from mojo.apps.account.models import BotSignature
@@ -452,6 +453,11 @@ refresh_sig_cache()
 ```
 
 Signature types: `ip`, `subnet_24`, `subnet_16`, `user_agent`, `fingerprint`, `signal_set`
+
+`user_agent` and `fingerprint` signatures are enforced only with
+`source='manual'`. The field default is `'auto'`, so a row created in a shell
+or through the ORM without `source` is treated as learned and is not enforced.
+A create through the REST API with no `source` is stored as `manual`.
 
 ---
 
@@ -536,13 +542,37 @@ After a legacy assessment block with `risk_score >= BOUNCER_LEARN_MIN_SCORE`, th
 
 1. Marks the `BouncerDevice` as `risk_tier='blocked'`
 2. Increments subnet /24 counter in Redis; creates `BotSignature` when threshold hit
-3. Increments UA counter; creates `BotSignature` for repeated identical UAs
-4. Increments fingerprint counter; creates `BotSignature` for repeat fingerprints
-5. Hashes triggered signal set; detects coordinated campaigns across IPs
-6. Rebuilds the Redis signature cache used by pre-screen
+3. Hashes triggered signal set; detects coordinated campaigns across IPs
+4. Rebuilds the Redis signature cache used by pre-screen
 
-The Redis cache is also rebuilt by the scheduled `refresh_bouncer_sig_cache` job.
-Hosted recovery outcomes do not invoke this job.
+**The learner never writes, and the cache never enforces, an automatic
+`user_agent` or `fingerprint` signature.** The caller chooses both values, and
+the public assess endpoint scores signals the caller asserts, so a learned
+signature of either type let any anonymous caller block every visitor sharing
+that User-Agent or fingerprint. An operator who wants one blocked creates it
+with `source='manual'`.
+
+- **Rows an older release learned are ignored.** `refresh_sig_cache()` leaves
+  out rows with `source='auto'` and `sig_type` `user_agent` or `fingerprint`.
+  They stay in the table and still read `is_active=True`, but match nothing.
+  List them with:
+
+  ```python
+  BotSignature.objects.filter(source='auto', sig_type__in=['user_agent', 'fingerprint'])
+  ```
+
+- **After deploying this change, restart the job workers and run
+  `refresh_sig_cache()` once.** The cache moved to the Redis key
+  `bouncer:sigs:active:v2`, so a job worker still on older code rebuilds a key
+  nothing reads. The new key does not exist until the first learn job or a
+  manual refresh; until then no signature matches, manual ones included.
+- `BOUNCER_LEARN_UA_THRESHOLD`, `BOUNCER_LEARN_UA_TTL` and
+  `BOUNCER_LEARN_FP_THRESHOLD` are no longer read.
+
+The cache lives one hour and is rebuilt only at the end of a learn job or by
+an explicit refresh. The `refresh_bouncer_sig_cache` job exists but nothing
+schedules it; see "Refreshing the Signature Cache" below.
+Hosted recovery outcomes do not invoke the learn job.
 
 ---
 
@@ -999,7 +1029,7 @@ from mojo.apps.account.services.bouncer.learner import refresh_sig_cache
 refresh_sig_cache()
 ```
 
-Or publish the scheduled job:
+Or publish the refresh job (it is not scheduled by the framework):
 
 ```python
 from mojo.apps import jobs
