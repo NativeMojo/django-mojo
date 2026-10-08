@@ -186,21 +186,37 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
 
 ### APIKEY
 
-- `APIKEY_PERMS_PROTECTION` — dict, **merged over a framework floor** (read with
-  `kind="dict"`, so a DB-backed `Setting` JSON string is honored). Maps a
-  permission key → the permission(s) the granter must hold to assign it to an
-  `ApiKey`, gating `ApiKey.set_permissions` on REST write. The effective map is
-  `{**configured, **ApiKey.APIKEY_PERMS_PROTECTION_DEFAULTS}` — currently the
-  floor protects `geoip_sync`, `dnsman_acme_federation`, `edge_node`, and
-  `mojosec_ingest` with their matching global `sys.*` grants. Deployments may
-  add protected permissions, but cannot override or relax a framework-floor
-  entry. It is a merge rather than a plain default because `settings.get`
-  returns a configured value wholesale, which would otherwise drop the floor
-  the moment a deployment set this at all.
-  Mirrors
-  [`MEMBER_PERMS_PROTECTION`](#member); `sys.`-prefixed requirements escalate to
-  a global grant. Stops a group admin from self-minting a key with permissions
-  they aren't entitled to grant.
+- `APIKEY_PERMS_PROTECTION` — dict. Maps a permission key → the permission(s)
+  the granter must hold to assign it to an `ApiKey`, gating
+  `ApiKey.set_permissions` on REST write. `sys.`-prefixed requirements escalate
+  to a global grant. Stops a group admin from self-minting a key with
+  permissions they aren't entitled to grant.
+  **Three layers, merged.** The effective map is the platform-wide `Setting`
+  row (a JSON object string), with the settings-file value merged *over* it,
+  with `ApiKey.APIKEY_PERMS_PROTECTION_DEFAULTS` merged over both. The
+  framework floor currently protects `geoip_sync`, `dnsman_acme_federation`,
+  `edge_node`, and `mojosec_ingest` with their matching global `sys.*` grants,
+  and neither the file nor a row can override or relax one of its entries.
+  **The settings file wins over a row, in both directions.** A database row can
+  **add** protected permissions, but it can neither loosen nor tighten one the
+  file names: a row's entry for a file key is ignored. To change a permission
+  the file names, edit the file. A group-scoped row is never read. A blank row
+  (empty or whitespace-only) adds nothing. Row additions are best-effort — if
+  the database and Redis cannot be read, only the file map and the floor apply
+  — so put anything that must always hold in the settings file.
+  **Malformed refuses.** The value shape is
+  [`MEMBER_PERMS_PROTECTION`](#member)'s: each value a non-empty string or a
+  non-empty list (in the file also a tuple or set) of non-empty strings, keyed
+  by a non-empty string. If either source is anything else — a list, a number,
+  a non-JSON string, an object with one bad entry — nobody below a global
+  `manage_groups`/`manage_users` holder can change any API-key permission, a
+  key-backed session can grant none, and an error is logged on each refusal. A
+  save that changes no permission still works. `None`, `""` and `{}` read as
+  empty. A malformed row is repaired through the settings API by a
+  `manage_settings` holder; a malformed settings-file value needs a file edit
+  and a restart. Saving a malformed row — including a JSON `null` — is refused
+  with a 400 (`/api/settings`, `Setting.set`, any `save()`), and the key can
+  be neither secret nor group-scoped.
 
 ### APPLE
 

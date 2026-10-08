@@ -502,9 +502,10 @@ def _validate_scope_list(key, parsed):
         raise ValueError(f"{key} must be a JSON list of non-empty strings")
 
 
-def _validate_member_perms_protection(key, parsed):
-    # A malformed map refuses every member-level permission change at read
-    # time (GroupMember.can_change_permission), so refuse to store one.
+def _validate_perms_protection(key, parsed):
+    # MEMBER_PERMS_PROTECTION and APIKEY_PERMS_PROTECTION share one shape. A
+    # malformed map refuses every permission change it gates at read time
+    # (GroupMember / ApiKey can_change_permission), so refuse to store one.
     # The decoded value must itself be an object: a stored `null` decodes to
     # None here but is read back as the string "null", which is malformed.
     from mojo.apps.account.models.member import parse_member_perms_protection
@@ -522,4 +523,5 @@ Setting.register_validator("GEOFENCE_FAIL_CLOSED", _validate_json_bool)
 Setting.register_validator("GEOFENCE_ALLOW_PRIVATE_IPS", _validate_json_bool)
 Setting.register_validator("GEOFENCE_CACHE_TTL", _validate_cache_ttl)
 Setting.register_validator("GEOFENCE_FAIL_CLOSED_SCOPES", _validate_scope_list)
-Setting.register_validator("MEMBER_PERMS_PROTECTION", _validate_member_perms_protection)
+Setting.register_validator("MEMBER_PERMS_PROTECTION", _validate_perms_protection)
+Setting.register_validator("APIKEY_PERMS_PROTECTION", _validate_perms_protection)
