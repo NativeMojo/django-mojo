@@ -651,6 +651,56 @@ def test_admit_failure_fails_open(opts):
         _reset(uid)
 
 
+class _ScriptFailsAfter(_FailingRedis):
+    """The admission script works `allowed` times, then raises."""
+
+    def __init__(self, allowed):
+        super().__init__()
+        self._allowed = allowed
+        self.calls = 0
+
+    def eval(self, *args, **kwargs):
+        self.calls += 1
+        if self.calls > self._allowed:
+            self.failed.append("eval")
+            raise RuntimeError("redis eval failed (simulated)")
+        return self._client.eval(*args, **kwargs)
+
+
+@th.django_unit_test("#4567: a failing script at registration still registers the connection")
+def test_script_failure_at_registration_fails_open(opts):
+    """The admission succeeds, the connection is removed from the set, and
+    the script raises at registration: the socket is not refused, and the
+    plain add puts it in the set."""
+    uid = opts.pc_uid
+    _reset(uid)
+
+    async def scenario():
+        redis = _ScriptFailsAfter(1)
+        session = _Session(opts.pc_token, max_connections=1, redis_client=redis)
+        seen = _removed_mid_authentication(session, uid)
+        try:
+            seen["outcome"] = await session.open()
+            seen["members"] = _members(uid)
+            seen["id"] = session.connection_id
+            seen["calls"], seen["failed"] = redis.calls, list(redis.failed)
+            seen["authenticated"] = session.handler.authenticated
+            return seen
+        finally:
+            await _close_all([session])
+
+    try:
+        seen = asyncio.run(scenario())
+        assert seen["admitted"] == {seen["id"]}, f"the admission itself worked: {seen['admitted']}"
+        assert seen["calls"] == 2 and seen["failed"] == ["eval"], (
+            f"the script ran at admission and raised at registration: {seen['calls']} calls, failed {seen['failed']}")
+        assert seen["outcome"] == "admitted" and seen["authenticated"], (
+            f"a Redis error at registration must not refuse the socket, got {seen['outcome']}")
+        assert seen["members"] == {seen["id"]}, f"and the socket is registered online, got {seen['members']}"
+    finally:
+        _reset(uid)
+
+
 @th.django_unit_test("#4567: an online key that is not a set is left alone")
 def test_non_set_key_is_left_alone(opts):
     from mojo.apps.realtime import presence
