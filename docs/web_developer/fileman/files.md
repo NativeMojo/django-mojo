@@ -111,6 +111,21 @@ GET /api/fileman/file?search=report
 }
 ```
 
+Who may save: the file's owner, a member of the file's group holding `files`, or a user with `manage_files`.
+
+`metadata` must be a JSON object. It is **merged** into the stored metadata: keys you do not send are kept, and a key sent as `null` is removed. Send `"__replace": true` inside the object to replace the stored metadata instead. The `protected` key can only be written by callers allowed to edit protected metadata; others get a `403`.
+
+```json
+{"metadata": {"reviewed": true, "old_tag": null}}
+```
+
+`metadata.expires_at` marks the file for automatic deletion. Over the API it must be an ISO 8601 time **with a timezone**, for example `2026-10-01T00:00:00+00:00` or `2026-10-01T00:00:00Z`. A time with no timezone, or a date alone such as `2026-10-01`, is refused: the server will not guess the zone, because a deleted file cannot be recovered. Send `"expires_at": null` to remove the expiry.
+
+| Status | When |
+|--------|------|
+| `400` | `metadata` is not an object, or `expires_at` is not a time with a timezone. Nothing from the request is saved, including other fields sent with it. |
+| `403` | The caller may not save this file, or tried to write `protected` without that right. |
+
 ## Delete a File
 
 **DELETE** `/api/fileman/file/123`
