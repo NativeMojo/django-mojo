@@ -230,7 +230,14 @@ permission or switches `is_superuser` or `is_active` off; `GroupMember.save()`
 when it removes a permission or deactivates the member, and
 `GroupMember.delete()` always. The comparison is against what the instance
 read from the database; a grant, or a save that writes none of those fields
-(`update_fields`), publishes nothing. Other code can call it directly:
+(`update_fields`), publishes nothing. When the instance cannot know what is
+stored, a save that writes `permissions` publishes: an instance built with the
+key of an existing row and never read, or one read or saved inside a
+transaction that was since rolled back, wholly or to a savepoint. Only a
+certain insert (no primary key yet, or `force_insert`) is exempt. A check that
+was already running when the announcement arrived, such as a repeated
+subscribe, is not remembered; the next frame checks again. Other code can
+call it directly:
 
 ```python
 from mojo.apps.realtime import manager

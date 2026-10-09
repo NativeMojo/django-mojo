@@ -17,6 +17,10 @@ fresh check, and serves later frames from memory until one of these happens:
   user or one of their group members.
 - the socket unsubscribes from the topic.
 
+A check that was already running when one of those arrived must not put its
+older answer back: ``allow`` takes the ``epoch`` read before the check began
+and remembers nothing when a decision has been forgotten since.
+
 Only allow decisions are remembered. A denial unsubscribes the topic, so
 there is nothing left to deliver. An access-change frame can only force a
 re-check, never grant access, so a forged one costs a query and nothing more.
@@ -28,6 +32,8 @@ announcement that Redis lost.
 """
 
 import time
+
+from django.db import DEFAULT_DB_ALIAS, connections
 
 from mojo.helpers.settings import settings
 
@@ -76,6 +82,10 @@ def changes_access(payload, user):
 class TopicAccess:
     """Topic -> expiry of the last allow decision, for one connection.
 
+    ``epoch`` counts the times a decision was forgotten. A caller reads it
+    before it starts a check and hands it to ``allow``; the answer of a check
+    that an access change overtook is then not remembered.
+
     ``clock`` and ``recheck`` are test seams; production uses
     ``time.monotonic`` and ``recheck_seconds``.
     """
@@ -84,6 +94,7 @@ class TopicAccess:
         self._clock = clock or time.monotonic
         self._recheck = recheck or recheck_seconds
         self._expires = {}
+        self.epoch = 0
 
     def allows(self, topic):
         expires = self._expires.get(topic)
@@ -94,7 +105,11 @@ class TopicAccess:
         del self._expires[topic]
         return False
 
-    def allow(self, topic, ttl=None):
+    def allow(self, topic, ttl=None, epoch=None):
+        if epoch is not None and epoch != self.epoch:
+            # Something was forgotten while this check ran: its answer may
+            # predate the change, so the next frame checks again.
+            return
         if ttl is None:
             ttl = self._recheck()
         if ttl <= 0:
@@ -103,9 +118,11 @@ class TopicAccess:
         self._expires[topic] = self._clock() + ttl
 
     def forget(self, topic):
+        self.epoch += 1
         self._expires.pop(topic, None)
 
     def forget_all(self):
+        self.epoch += 1
         self._expires.clear()
 
 
@@ -140,11 +157,89 @@ def access_snapshot(instance, before=None, fields=None):
     return kept
 
 
+class _Scope:
+    """The open transaction a snapshot was taken in.
+
+    A snapshot read or written inside a transaction describes rows that a
+    rollback takes back, and Django does not undo Python state on rollback.
+    ``hooks`` is the connection's on-commit list at that moment: Django
+    replaces that list on every rollback, savepoint rollback and commit, so
+    the scope is still open only while the connection holds the same list.
+    """
+
+    __slots__ = ("hooks", "committed")
+
+    def __init__(self, hooks):
+        self.hooks = hooks
+        self.committed = False
+
+    def commit(self):
+        self.committed = True
+        self.hooks = None
+
+
+def _connection(using):
+    return connections[using or DEFAULT_DB_ALIAS]
+
+
+def _open_scope(using):
+    """The scope of the transaction open on ``using``, None outside one."""
+    conn = _connection(using)
+    if not conn.in_atomic_block:
+        return None
+    hooks = getattr(conn, "run_on_commit", None)
+    scope = getattr(conn, "_mojo_access_scope", None)
+    if scope is None or hooks is None or scope.hooks is not hooks:
+        scope = _Scope(hooks)
+        if hooks is not None:
+            conn.on_commit(scope.commit)
+        conn._mojo_access_scope = scope
+    return scope
+
+
+def _scope_holds(scope, using):
+    if scope is None or scope.committed:
+        return True
+    conn = _connection(using)
+    return (
+        scope.hooks is not None and conn.in_atomic_block
+        and scope.hooks is getattr(conn, "run_on_commit", None))
+
+
+def access_before(instance):
+    """What ``instance`` last saw stored, or None when that is not known:
+    it was never read, or it was read or saved inside a transaction that has
+    since been rolled back (wholly or to a savepoint)."""
+    state = instance.__dict__
+    seen = state.get("_access_seen")
+    if seen is None:
+        return None
+    if not _scope_holds(state.get("_access_scope"), instance._state.db):
+        return None
+    return seen
+
+
+def remember_access(instance, fields=None):
+    """Note what ``instance`` now knows the row to store. Called after a
+    read, a refresh or a save; ``fields`` names the ones a partial refresh
+    or save just synced."""
+    state = instance.__dict__
+    state["_access_seen"] = access_snapshot(instance, access_before(instance), fields)
+    state["_access_scope"] = _open_scope(instance._state.db)
+
+
+def save_is_insert(instance, force_insert=False):
+    """Whether a save is certain to add a row. An instance built with the
+    primary key of an existing row updates that row without having read it,
+    so only a missing key or a forced insert is certain."""
+    return instance._state.adding and bool(instance.pk is None or force_insert)
+
+
 def save_removes_access(before, instance, update_fields=None):
     """Whether saving ``instance`` can take access away from its user.
 
-    ``before`` is the ``access_snapshot`` taken when the row was read, or
-    None. Granting is never an answer of True. A value this instance never
+    ``before`` is ``access_before(instance)``: what the row was last known
+    to store, or None when that is not known. Granting is never an answer of True. A value this instance never
     read counts as removed when it is written without one: when unsure, the
     sockets re-check.
     """

@@ -142,10 +142,15 @@ class GroupMember(models.Model, MojoModel):
         # websockets re-check chat access once this commits (maestro #7498).
         # Registered after the row and its signal cleanup are written, so the
         # re-check reads all of it.
-        from mojo.apps.realtime.access import save_removes_access
+        from mojo.apps.realtime.access import (
+            access_before, save_is_insert, save_removes_access)
         update_fields = kwargs.get("update_fields", args[3] if len(args) > 3 else None)
-        announce = not self._state.adding and save_removes_access(
-            self.__dict__.get("_access_seen"), self, update_fields)
+        force_insert = kwargs.get("force_insert", args[0] if args else False)
+        # Only a certain insert is exempt. A row this instance never read, or
+        # read inside a transaction since rolled back, announces: when
+        # unsure, the sockets re-check.
+        announce = not save_is_insert(self, force_insert) and save_removes_access(
+            access_before(self), self, update_fields)
         with transaction.atomic(using=using):
             result = super().save(*args, **kwargs)
             self._remember_access(update_fields)
@@ -175,9 +180,8 @@ class GroupMember(models.Model, MojoModel):
         """Note what this instance last saw stored for the fields that grant
         access, so a save can tell a removal from a value it only carried.
         `fields` names the ones a partial save or refresh just synced."""
-        from mojo.apps.realtime.access import access_snapshot
-        self.__dict__["_access_seen"] = access_snapshot(
-            self, self.__dict__.get("_access_seen"), fields)
+        from mojo.apps.realtime.access import remember_access
+        remember_access(self, fields)
 
     def _announce_access_change(self, using, user_id=None):
         from mojo.apps.realtime import manager

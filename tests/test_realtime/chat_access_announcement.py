@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from testit import helpers as th
 
 from tests.test_realtime.chat_delivery import (
-    _count_queries, _deliver, _delivered, _handler, _member, _room,
+    _count_queries, _deliver, _delivered, _handler, _member, _room, _run,
     _socket_user, _subscribe,
 )
 
@@ -384,3 +384,211 @@ def test_recheck_seconds_zero_checks_every_frame(opts):
             assert len(_delivered(handler)) == 3, \
                 f"with {seconds} seconds the very next frame after a silent removal must be withheld"
             assert handler.removed == [fx.topic], "the denied check must unsubscribe the room"
+
+
+def _grant(fx, kind):
+    """Give the fixture user chat through the account row or a group member
+    row. Returns the model and the key of the row that holds the permission."""
+    from mojo.apps.account.models import GroupMember, User
+
+    if kind == "user":
+        fx.user.add_permission("chat")
+        return User, fx.user.pk
+    member = fx.group.add_member(fx.user)
+    member.add_permission("chat")
+    return GroupMember, member.pk
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.chat")
+def test_a_check_overtaken_by_an_announcement_is_not_remembered(opts):
+    # Review 86781, finding 1. A subscribe whose database check has answered
+    # yes is held; the permission is removed and the announcement processed;
+    # the subscribe then finishes. Its older yes must not be remembered.
+    import threading
+
+    from mojo.apps.account.models import User
+
+    with _room("ann-overtaken", group=True) as fx:
+        fx.user.add_permission("chat")
+        handler = _open_socket(fx)
+        checked, release = threading.Event(), threading.Event()
+        check = handler._can_receive_chat
+
+        def held(topic):
+            allowed = check(topic)
+            checked.set()
+            release.wait(5)
+            return allowed
+
+        def revoke():
+            User.objects.get(pk=fx.user.pk).remove_permission("chat")
+
+        with _announcements(fx.user.pk) as pump:
+            async def overlap():
+                handler._can_receive_chat = held
+                subscribing = asyncio.create_task(handler.handle_subscribe({"topic": fx.topic}))
+                assert await asyncio.to_thread(checked.wait, 5), \
+                    "control: the subscribe check must reach the hold"
+                await asyncio.to_thread(revoke)
+                count = await asyncio.to_thread(pump, None)
+                await handler.process_redis_message({"type": "access_changed"})
+                release.set()
+                await subscribing
+                handler._can_receive_chat = check
+                return count
+
+            try:
+                count = _run(overlap())
+            finally:
+                release.set()
+                handler._can_receive_chat = check
+        assert count == 1, f"the removal must publish one announcement, got {count}"
+        assert not handler.topic_access.allows(fx.topic), \
+            "a check that began before the announcement must not be remembered after it"
+        _assert_stopped(handler, fx, "subscribe overlapping the announcement")
+
+
+@th.django_unit_test()
+def test_topic_access_epoch_guards_allow(opts):
+    from mojo.apps.realtime.access import TopicAccess
+
+    access = TopicAccess(recheck=lambda: 300)
+    epoch = access.epoch
+    access.allow("chat:1", epoch=epoch)
+    assert access.allows("chat:1"), "control: an answer nothing overtook is remembered"
+    access.forget_all()
+    access.allow("chat:1", epoch=epoch)
+    assert not access.allows("chat:1"), "forget_all must void a check that began before it"
+    epoch = access.epoch
+    access.forget("chat:2")
+    access.allow("chat:1", epoch=epoch)
+    assert not access.allows("chat:1"), "forget must void a check that began before it"
+    access.allow("chat:1", epoch=access.epoch)
+    assert access.allows("chat:1"), "a check that began after the change is remembered"
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.chat")
+def test_removal_retried_after_a_rollback_is_announced(opts):
+    # Review 86781, finding 2. Django does not undo Python state on rollback,
+    # so what the instance noted inside the rolled-back block is not trusted.
+    from django.db import transaction
+
+    for kind in ("user", "member"):
+        with _room(f"ann-rollback-{kind}", group=True) as fx:
+            model, pk = _grant(fx, kind)
+            handler = _open_socket(fx)
+            with _announcements(fx.user.pk) as pump:
+                row = model.objects.get(pk=pk)
+                row.permissions = {}
+                try:
+                    with transaction.atomic():
+                        row.save(update_fields=["permissions"])
+                        raise RuntimeError("rolled back on purpose")
+                except RuntimeError:
+                    pass
+                assert model.objects.get(pk=pk).permissions.get("chat"), \
+                    f"control ({kind}): the rollback must keep the stored permission"
+                assert pump(seconds=0.4) == 0, \
+                    f"{kind}: a rolled-back removal must publish nothing"
+                row.save(update_fields=["permissions"])
+                assert pump(handler) == 1, \
+                    f"{kind}: the retry that commits the removal must publish one announcement"
+            _assert_stopped(handler, fx, f"{kind} removal retried after a rollback")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.chat")
+def test_removal_after_a_savepoint_rollback_or_a_rolled_back_read_is_announced(opts):
+    from django.db import transaction
+
+    for kind in ("user", "member"):
+        # The removal is rolled back to a savepoint, then saved again in the
+        # same outer transaction, which commits.
+        with _room(f"ann-savepoint-{kind}", group=True) as fx:
+            model, pk = _grant(fx, kind)
+            handler = _open_socket(fx)
+            with _announcements(fx.user.pk) as pump:
+                row = model.objects.get(pk=pk)
+                row.permissions = {}
+                with transaction.atomic():
+                    try:
+                        with transaction.atomic():
+                            row.save(update_fields=["permissions"])
+                            raise RuntimeError("rolled back on purpose")
+                    except RuntimeError:
+                        pass
+                    row.save(update_fields=["permissions"])
+                    assert pump(seconds=0.4) == 0, \
+                        f"{kind}: nothing may be published before the commit"
+                assert pump(handler) >= 1, \
+                    f"{kind}: the removal saved after a savepoint rollback must be announced"
+            _assert_stopped(handler, fx, f"{kind} removal after a savepoint rollback")
+
+        # The instance is read inside a transaction that sees an uncommitted
+        # removal and is then rolled back. Saving it afterwards is a removal.
+        with _room(f"ann-rolled-read-{kind}", group=True) as fx:
+            model, pk = _grant(fx, kind)
+            handler = _open_socket(fx)
+            with _announcements(fx.user.pk) as pump:
+                try:
+                    with transaction.atomic():
+                        model.objects.filter(pk=pk).update(permissions={})
+                        row = model.objects.get(pk=pk)
+                        raise RuntimeError("rolled back on purpose")
+                except RuntimeError:
+                    pass
+                assert row.permissions == {}, "control: the instance carries the rolled-back value"
+                row.save(update_fields=["permissions"])
+                assert pump(handler) == 1, \
+                    f"{kind}: saving a value read in a rolled-back transaction must be announced"
+            _assert_stopped(handler, fx, f"{kind} removal through a rolled-back read")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.chat")
+def test_instance_built_with_an_existing_key_is_announced(opts):
+    # Review 86781, finding 3. Such an instance updates the row without ever
+    # having read it: when unsure, the sockets re-check.
+    for kind in ("user", "member"):
+        for partial in (True, False):
+            label = f"{kind}, {'partial' if partial else 'full'} save"
+            with _room(f"ann-built-{kind}-{int(partial)}", group=True) as fx:
+                model, pk = _grant(fx, kind)
+                handler = _open_socket(fx)
+                row = model.objects.get(pk=pk)
+                built = model(**{
+                    f.attname: getattr(row, f.attname) for f in model._meta.concrete_fields})
+                built.permissions = {}
+                with _announcements(fx.user.pk) as pump:
+                    if partial:
+                        built.save(update_fields=["permissions"])
+                    else:
+                        built.save()
+                    assert pump(handler) == 1, \
+                        f"{label}: an instance built with an existing key must publish one announcement"
+                assert not model.objects.get(pk=pk).permissions.get("chat"), \
+                    f"control ({label}): the save must have updated the existing row"
+                _assert_stopped(handler, fx, label)
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.chat")
+def test_committed_transaction_keeps_what_the_instance_saw(opts):
+    # The other side of the rollback rule: after a commit the instance's
+    # note is trusted again, so grants and plain saves stay silent.
+    from django.db import transaction
+    from mojo.apps.account.models import User
+
+    with _room("ann-committed") as fx:
+        with _announcements(fx.user.pk) as pump:
+            with transaction.atomic():
+                user = User.objects.get(pk=fx.user.pk)
+                user.add_permission("chat")
+            user.display_name = "After Commit"
+            user.save()
+            assert pump(seconds=0.6) == 0, \
+                "a grant in a committed transaction and a plain save after it must publish nothing"
+            user.remove_permission("chat")
+            assert pump() == 1, "the removal after the commit must publish once"

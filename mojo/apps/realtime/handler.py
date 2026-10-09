@@ -696,6 +696,9 @@ class WebSocketHandler:
         # Topic authorization check
         chat_topic = is_chat_topic(topic)
         chat_checked = False
+        # Read before the check starts: an access change that arrives while
+        # it runs must not be overwritten by its older answer.
+        access_epoch = self.topic_access.epoch
         if hasattr(self.user, 'on_realtime_can_subscribe'):
             def check_permission():
                 if chat_topic:
@@ -721,7 +724,7 @@ class WebSocketHandler:
         if await self.subscribe_to_topic(topic) is False:
             return
         if chat_checked:
-            self.topic_access.allow(topic)
+            self.topic_access.allow(topic, epoch=access_epoch)
 
         await self.send_message({
             "type": "subscribed",
@@ -1032,6 +1035,7 @@ class WebSocketHandler:
                 self.topic_access.forget(topic)
             if not (self.authenticated and self.topic_access.allows(topic)):
                 allowed = False
+                access_epoch = self.topic_access.epoch
                 try:
                     if self.authenticated and callable(getattr(self.user, "on_realtime_can_subscribe", None)):
                         allowed = await asyncio.get_event_loop().run_in_executor(
@@ -1044,7 +1048,7 @@ class WebSocketHandler:
                     return
                 # The client may have unsubscribed while the check ran.
                 if topic in self.subscribed_topics:
-                    self.topic_access.allow(topic)
+                    self.topic_access.allow(topic, epoch=access_epoch)
 
         if message_type in ["broadcast", "topic_message", "direct_message"]:
             # Forward to client wrapped in {"type": "message", "data": ...}

@@ -859,9 +859,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         """Note what this instance last saw stored for the fields that grant
         access, so a save can tell a removal from a value it only carried.
         `fields` names the ones a partial save or refresh just synced."""
-        from mojo.apps.realtime.access import access_snapshot
-        self.__dict__["_access_seen"] = access_snapshot(
-            self, self.__dict__.get("_access_seen"), fields)
+        from mojo.apps.realtime.access import remember_access
+        remember_access(self, fields)
 
     def save(self, *args, **kwargs):
         """The row save. A save that takes access away (a permission removed,
@@ -869,10 +868,15 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         websockets once it commits, so chat delivery re-checks at once instead
         of at the next periodic re-check (maestro #7498). Granting, and a save
         that writes none of those fields, announces nothing."""
-        from mojo.apps.realtime.access import save_removes_access
+        from mojo.apps.realtime.access import (
+            access_before, save_is_insert, save_removes_access)
         update_fields = kwargs.get("update_fields", args[3] if len(args) > 3 else None)
-        announce = not self._state.adding and save_removes_access(
-            self.__dict__.get("_access_seen"), self, update_fields)
+        force_insert = kwargs.get("force_insert", args[0] if args else False)
+        # Only a certain insert is exempt. A row this instance never read, or
+        # read inside a transaction since rolled back, announces: when
+        # unsure, the sockets re-check.
+        announce = not save_is_insert(self, force_insert) and save_removes_access(
+            access_before(self), self, update_fields)
         super().save(*args, **kwargs)
         self._remember_access(update_fields)
         if announce:
