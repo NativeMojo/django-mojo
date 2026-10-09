@@ -77,7 +77,7 @@ deployment added there.
 
 ## Group Scoping
 
-Every API key belongs to one group. The key can access that group and any of its **effectively active** descendants. If a request passes `group=<id>` in the request data and that group is not the key's group or a descendant, the dispatcher returns 403; an **inactive** group's id never resolves at all (same as a nonexistent id).
+Every API key belongs to one group. The key can access that group and any of its **effectively active** descendants. If a request passes `group=<id>` in the request data and that group is not the key's group or a descendant, the dispatcher returns 403 before the endpoint runs. The answer is the same status and body (`Group not accessible with this API key`) whether the group belongs to someone else, is inactive or does not exist, so a key cannot learn which ids exist, and a refused request does not update the other group's `last_activity`. The same holds for a `GroupScopedToken`. A non-integer `group` is still a 400.
 
 **Deactivating a group suspends its keys instantly (DM-037), and deactivating an ancestor suspends the whole subtree's keys (DM-048).** "Active" on every surface below means *effectively* active — the group **and every ancestor** (`Group.is_effectively_active`). The check is enforced at request time, so keys are never mutated — reactivating the group (or the ancestor) restores them immediately. It holds on every surface a key derives group context from:
 
