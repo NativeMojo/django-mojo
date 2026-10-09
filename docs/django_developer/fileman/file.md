@@ -257,6 +257,8 @@ file_instance.save()
 
 The cleanup job (`mojo.apps.fileman.asyncjobs.cleanup_expired_files`) runs daily at 04:00 UTC. It finds all active files with an `expires_at` key and deletes any whose timestamp has passed. Deletion calls `on_rest_pre_delete()` before removing the record — which cleans up the storage backend file.
 
+A value with no timezone, or a date alone, is read as UTC, and a date alone means the start of that day. A value the job cannot read is skipped.
+
 This pattern is used by the assistant `export_data` tool. You can use it for any time-limited generated file.
 
 ## Cleanup Job
