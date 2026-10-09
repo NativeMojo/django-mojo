@@ -26,7 +26,7 @@ The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 `614987622428d2d29b6317ce5ec921879d841422190144a4d5c13407f553748e`
 
 This pin comes from the clean local canonical build for item #7493. The
-source revision is 41 merges past the npm 0.2.8 release and carries the same
+source revision is later than the npm 0.2.8 release and carries the same
 version number, because no portal-mojo release was cut for it. The sidebar
 therefore shows 0.2.8 for both; tell two bundles apart by source revision and
 manifest SHA-256, never by version. portal-mojo promises identical bytes on one
@@ -80,10 +80,14 @@ This artifact (revision `9eb3d5ee`) adds, over the previously packaged bundle:
 
 Two changes reach every screen:
 
-- A flat reply with HTTP 200 whose body says `status: false` is treated as a
-  failure, not a success (#5922).
-- Calls on one record (`/api/<model>/<id>`) and record actions no longer send a
-  `group` parameter; create calls still do (#5923, #5918).
+- A flat reply with HTTP 200 whose top-level body says `success: false` is now
+  treated as a refusal, not a success (#5922). A call that passes
+  `refusal: 'return'` gets the body back instead. `status: false` was already a
+  failure; a `success: false` nested under `data` stays ordinary data.
+- Model record operations (read, update, delete and actions on
+  `/api/<model>/<id>`) no longer inherit the active group. Scoped lists and
+  creates, and custom calls on a record path, keep the scope they declare
+  (#5923, #5918).
 
 A group switch and the sign-in code scrub keep the browser history entry's
 state (#5925). These are frontend updates against the existing APIs; no

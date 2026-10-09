@@ -1,7 +1,13 @@
 # Packaged Admin Security client
 
-The packaged Portal is **portal-mojo 0.2.8** (build `9eb3d5e`, 41 merges past
-the npm 0.2.8 release; the build revision, not the version, identifies it).
+The packaged Portal is **portal-mojo 0.2.8**, source revision
+`9eb3d5ee8f4989d009ba8bfd08fa3e16bba3c860`. That revision is later than the npm
+0.2.8 release and carries the same version number, so the revision and the
+manifest hash identify the build, not the version.
+
+- Manifest SHA-256: `614987622428d2d29b6317ce5ec921879d841422190144a4d5c13407f553748e`
+- Lockfile SHA-256: `1db3a5c22924025e0c7add39835f8aeb2f7c3e5fdfb98bc8c3bb18ff34879f86`
+- Inventory: 125 files
 
 New in this build:
 
@@ -10,9 +16,12 @@ New in this build:
   "Sign out everywhere else".
 - **Edge** pages for vhosts, routes, upstreams and the blocklist.
 - **Personal API Keys** shows only the signed-in user's own keys.
-- A flat reply with HTTP 200 and `status: false` is shown as a failure on every
-  screen.
-- Calls on a single record no longer send `group`; create calls do.
+- A flat reply with HTTP 200 and a top-level `success: false` is now shown as a
+  refusal on every screen, unless the call passes `refusal: 'return'`.
+  `status: false` was already a failure.
+- Model record operations (read, update, delete, actions) no longer inherit the
+  active group. Scoped lists and creates, and custom calls on a record path,
+  keep the scope they declare.
 
 Identity & Access → **Sign-in** configures the platform login page and its Google, Apple and GitHub sign-in — see [Sign-in Setup API](signin_setup.md). Toast notifications remain visible
 and interactive above modal backdrops, including nested dialogs. Phone Hub
