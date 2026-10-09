@@ -22,8 +22,9 @@ caller (request thread, sync)
                                             • for each sub:
                                                  try jobs.publish_webhook(url=sub.url, data=data, group=g)
                                                  except → incident.report_event(category="webhook:fanout:error"); continue
-                                            • record metadata: matched_count, published_count, failed_count
-                                            • return 'success'
+                                            • record metadata: result, matched_count, published_count, failed_count
+                                            • any receiver failed → one incident.report_event(category="webhook:fanout:incomplete")
+                                            • return 'success' or 'incomplete' (informational; the job ends `completed`)
                                                             │
                                           (worker)──────────┘
                                                             ▼
@@ -80,7 +81,23 @@ def on_verification_complete(verification):
 
 `dispatch()` runs in the caller's thread, queues exactly one fan-out job, and returns instantly with the fan-out job id (or `None` if `group is None`). The fan-out runs on the `webhook_fanout` channel; per-receiver delivery happens on the `webhooks` channel.
 
-**Idempotency key suffixing**: if you pass `idempotency_key="x"`, each per-receiver job gets `idempotency_key="x_<sub_id>"`. This is what makes retries safe — the job layer dedupes per receiver, so a retried fan-out cannot deliver twice to the same subscriber.
+**Idempotency key suffixing**: if you pass `idempotency_key="x"`, each per-receiver job gets `idempotency_key="x_<sub_id>"`. This is what makes retries safe — the job layer dedupes per receiver, so a retried fan-out cannot deliver twice to the same subscriber. Subscription ids are unique across Groups, so two Groups never share a delivery key.
+
+**Key length**: the job key column holds 64 characters. The suffix is an underscore plus the subscription id, which is a 64-bit number of up to 19 digits, so the suffix is at most 20 characters.
+
+- A key of **44 characters or fewer** always gives the exact form `x_<sub_id>`, whatever the subscription id.
+- When `x_<sub_id>` is longer than 64 characters, the delivery job is stored under the SHA-256 hex digest of that same text (64 characters). De-duplication works the same way: the same key and the same subscription always give the same digest. To find the delivery job for a long key, recompute it:
+
+  ```python
+  import hashlib
+  hashlib.sha256(f"{idempotency_key}_{sub_id}".encode("utf-8")).hexdigest()
+  # or: mojo.apps.account.services.webhooks.child_idempotency_key(idempotency_key, sub_id)
+  ```
+
+  The caller's own key is on the fan-out job's payload (`payload["idempotency_key"]`).
+- A key **longer than 255 characters is refused**: `dispatch()` raises `ValueError` in the caller's thread, before anything is queued. The message names the limit and the length received, not the key.
+
+A publication with **no** `idempotency_key` has no de-duplication: its delivery jobs carry no key, so running the same fan-out again sends again.
 
 ## Designing your event vocabulary
 
@@ -122,10 +139,26 @@ Per-row failures during fan-out are reported to the incident app, never to log f
 |---|---|---|
 | Group deleted between dispatch and fan-out | `webhook:fanout:group_missing` | 4 |
 | `publish_webhook` raises for one subscription | `webhook:fanout:error` | 6 |
+| At least one subscription could not be queued (one per publication) | `webhook:fanout:incomplete` | 6 |
 
-The incident events carry `subscription_id` (where applicable), `group_id`, `event_type`, and `error_repr` so post-incident triage has the full context.
+The per-row and group-missing events carry `subscription_id` (where applicable), `group_id`, `event_type`, and `error_repr` so post-incident triage has the full context.
 
-The fan-out job itself records `matched_count`, `published_count`, `failed_count`, and a capped list of `published_job_ids` in its `Job.metadata` — useful for debugging "did this event fire for everyone it should have?".
+The `webhook:fanout:incomplete` event is the summary of one publication: the Group, `event_type`, `failed_count`, `matched_count`, `published_count` and `fanout_job_id`. It carries no payload and no receiver URL. The per-row events are still filed, one per failed subscription; they are what names the subscription.
+
+### What a publication came to
+
+The fan-out job ends `completed` whenever the handler returns, including when a receiver could not be queued — the job engine ignores the handler's return string, and the fan-out does not raise for a receiver failure, so it is never re-run for one. **An incomplete publication does not show among failed jobs.** The recorded result is in the fan-out job's `Job.metadata`:
+
+| Key | Meaning |
+|---|---|
+| `result` | `success` — every matching subscription was queued (or none matched). `incomplete` — at least one could not be queued. `failed` — the Group no longer exists. |
+| `matched_count` | Subscriptions that matched: `published_count + failed_count`. |
+| `published_count` | Delivery jobs queued. The real total, not the sample size. |
+| `failed_count` | Subscriptions whose delivery job could not be queued. |
+| `published_job_ids` | A sample of at most 50 delivery job ids. |
+| `published_job_ids_truncated` | `True` when the sample was cut short, that is when `published_count` is larger than the sample. |
+
+Where an operator looks: the incident list under category `webhook:fanout:incomplete`, then the fan-out job it names (`fanout_job_id`) on the `webhook_fanout` channel for the counts, then the `webhook:fanout:error` events for the subscriptions that failed.
 
 ## REST endpoints
 
