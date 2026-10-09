@@ -216,10 +216,10 @@ def cleanup_old_records(job: Job) -> str:
     batch_size = job.payload.get('batch_size', 100)
     dry_run = job.payload.get('dry_run', False)
 
-    from django.utils import timezone
+    from django.utils import timezone as dj_timezone
     from datetime import timedelta
 
-    cutoff_date = timezone.now() - timedelta(days=days_old)
+    cutoff_date = dj_timezone.now() - timedelta(days=days_old)
 
     job.metadata['started_at'] = datetime.now(timezone.utc).isoformat()
     job.metadata['cutoff_date'] = cutoff_date.isoformat()

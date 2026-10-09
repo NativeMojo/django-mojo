@@ -1,5 +1,7 @@
 # File upload utility functions
 
+from datetime import datetime
+
 # from .upload import (
 #     get_file_manager,
 #     validate_file_request,
@@ -41,3 +43,16 @@ def get_file_category(content_type: str) -> str:
         return "text"
     else:
         return "other"
+
+
+def parse_expires_at(value):
+    """Parse an ISO 8601 expires_at value into a datetime. Returns None on failure."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        # Handle both +00:00 and Z suffixes
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        return datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
