@@ -2,6 +2,7 @@ from django.db import models, transaction
 from mojo.models import MojoModel
 from objict import objict
 import io
+import json
 import uuid
 import hashlib
 import base64
@@ -15,6 +16,9 @@ from mojo import errors as me
 from mojo.helpers import logit
 
 logger = logit.get_logger("fileman", "fileman.log")
+
+# Marks a one-argument File.set_metadata call (the REST save hook).
+_NO_VALUE = object()
 
 
 # --- shortlink integration helpers -------------------------------------------
@@ -571,9 +575,44 @@ class File(models.Model, MojoModel):
         """Get a specific metadata value"""
         return self.metadata.get(key, default)
 
-    def set_metadata(self, key, value):
-        """Set a specific metadata value"""
+    def set_metadata(self, key, value=_NO_VALUE):
+        """Set a specific metadata value.
+
+        Two uses share this name:
+        - Python: `set_metadata(key, value)` sets one key in place.
+        - REST: the save path calls `set_<field>(value)` with one argument for
+          a `metadata` key in the body, so a one-argument call is an API save.
+          It is validated and then saved by the framework's own JSON-field
+          save (#7391).
+        """
+        if value is _NO_VALUE:
+            self._save_metadata_from_api(key)
+            return
         self.metadata[key] = value
+
+    def _save_metadata_from_api(self, value):
+        """Validate a `metadata` value from the API, then merge it.
+
+        Raises before anything is stored: metadata must be an object, and a
+        non-null `expires_at` must be an ISO 8601 time with a timezone that the
+        expired-file clean-up's own reader accepts. The merge, `__replace` and
+        the guard on the `protected` key are the framework's.
+        """
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        if not isinstance(value, dict):
+            raise me.ValueException("metadata must be an object")
+        expires_at = value.get("expires_at")
+        if expires_at is not None:
+            parsed = utils.parse_expires_at(expires_at)
+            if parsed is None or parsed.utcoffset() is None:
+                raise me.ValueException(
+                    "metadata.expires_at must be an ISO 8601 time with a timezone, "
+                    "for example 2026-10-01T00:00:00+00:00")
+        self.on_rest_update_jsonfield("metadata", value, self.active_request)
 
     _renditions = None
     @property
