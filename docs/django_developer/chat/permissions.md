@@ -71,7 +71,9 @@ reaches an open socket:
 - **At the next re-check** (`WS_SUBSCRIPTION_RECHECK_SECONDS`, default 300)
   for everything else: a row changed with a queryset `update()` or `delete()`
   or raw SQL, a `ChatMembership` row changed outside these endpoints, a group
-  deactivated or deleted with its rooms.
+  deactivated or deleted with its rooms. So is a model save committed directly
+  on the database driver (`connection.connection.commit()`), outside Django's
+  transaction handling: it is not announced.
 
 Code that removes access some other way and needs it to take effect at once
 should call `publish_access_change` for a room (see
