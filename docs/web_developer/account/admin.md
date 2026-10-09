@@ -1,6 +1,20 @@
 # Packaged Admin Security client
 
-The packaged Portal is **portal-mojo 0.2.4** (build `0ba74c2`). Identity & Access → **Sign-in** configures the platform login page and its Google, Apple and GitHub sign-in — see [Sign-in Setup API](signin_setup.md). Toast notifications remain visible
+The packaged Portal is **portal-mojo 0.2.8** (build `9eb3d5e`, 41 merges past
+the npm 0.2.8 release; the build revision, not the version, identifies it).
+
+New in this build:
+
+- **My account** in the avatar menu: password, email, passkeys and
+  authenticator. An own password change keeps the user signed in and offers
+  "Sign out everywhere else".
+- **Edge** pages for vhosts, routes, upstreams and the blocklist.
+- **Personal API Keys** shows only the signed-in user's own keys.
+- A flat reply with HTTP 200 and `status: false` is shown as a failure on every
+  screen.
+- Calls on a single record no longer send `group`; create calls do.
+
+Identity & Access → **Sign-in** configures the platform login page and its Google, Apple and GitHub sign-in — see [Sign-in Setup API](signin_setup.md). Toast notifications remain visible
 and interactive above modal backdrops, including nested dialogs. Phone Hub
 connection tests read the provider's `success` verdict, retain the result in
 Overview and Connection, and distinguish test mode from verified connectivity.
