@@ -174,6 +174,10 @@ class _Scope:
     surviving callbacks were copied to a new list and ``hooks`` was left as
     it was: the entry is still in it, and the scope stays untrusted. An outer
     commit therefore cannot vouch for what a rolled-back inner block wrote.
+
+    With autocommit switched off (``transaction.set_autocommit(False)``) a
+    snapshot taken outside an atomic block gets a scope with no hook list,
+    which is never trusted: its transaction ends by hand, unseen from here.
     """
 
     __slots__ = ("hooks", "entry", "committed")
@@ -195,11 +199,26 @@ def _connection(using):
     return connections[using or DEFAULT_DB_ALIAS]
 
 
+def _autocommits(conn):
+    """Whether a statement outside an atomic block is committed at once."""
+    try:
+        return bool(conn.get_autocommit())
+    except Exception:
+        return False
+
+
 def _open_scope(using):
-    """The scope of the transaction open on ``using``, None outside one."""
+    """The scope of the transaction open on ``using``, None when a statement
+    there is committed as it runs."""
     conn = _connection(using)
     if not conn.in_atomic_block:
-        return None
+        if _autocommits(conn):
+            return None
+        # Autocommit is switched off and no atomic block is open: the
+        # statement sits in a transaction the caller ends by hand, and
+        # nothing here can tell its commit from its rollback. A scope
+        # without a hook list never becomes trusted.
+        return _Scope(None)
     hooks = getattr(conn, "run_on_commit", None)
     scope = getattr(conn, "_mojo_access_scope", None)
     if scope is None or hooks is None or scope.hooks is not hooks:
@@ -227,8 +246,9 @@ def _scope_holds(scope, using):
 
 def access_before(instance):
     """What ``instance`` last saw stored, or None when that is not known:
-    it was never read, or it was read or saved inside a transaction in which
-    something was rolled back afterwards (wholly or to a savepoint)."""
+    it was never read, it was read or saved inside a transaction in which
+    something was rolled back afterwards (wholly or to a savepoint), or it
+    was read or saved outside an atomic block with autocommit switched off."""
     state = instance.__dict__
     seen = state.get("_access_seen")
     if seen is None:

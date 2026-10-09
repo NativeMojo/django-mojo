@@ -325,6 +325,16 @@ def publish_access_changed(user_type, user_id, using=None, *, publisher=None):
             logit.get_logger("realtime", "realtime.log").exception(
                 f"realtime: could not publish access_changed for {user_type}:{user_id}")
 
+    connection = transaction.get_connection(using)
+    if not connection.in_atomic_block and not connection.get_autocommit():
+        # Autocommit is switched off and the caller ends the transaction by
+        # hand. Django refuses on_commit there, so register inside an atomic
+        # block (a savepoint in this mode): the callback then runs when the
+        # caller commits and switches autocommit back on, and is dropped by
+        # a rollback.
+        with transaction.atomic(using=using):
+            transaction.on_commit(send, using=using)
+        return
     transaction.on_commit(send, using=using)
 
 

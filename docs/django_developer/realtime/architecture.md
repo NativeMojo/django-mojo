@@ -234,7 +234,11 @@ read from the database; a grant, or a save that writes none of those fields
 stored, a save that writes `permissions` publishes: an instance built with the
 key of an existing row and never read, or one read or saved inside a
 transaction in which anything was rolled back afterwards, wholly or to a
-savepoint. A later commit of the outer transaction does not change that. Only a
+savepoint. A later commit of the outer transaction does not change that. The
+same holds for an instance read or saved outside `transaction.atomic()` while
+autocommit is switched off (`transaction.set_autocommit(False)`); there the
+announcement goes out when the caller commits and switches autocommit back on,
+and a rollback drops it. Only a
 certain insert (no primary key yet, or `force_insert`) is exempt. A check that
 was already running when the announcement arrived, such as a repeated
 subscribe, is not remembered; the next frame checks again. Other code can

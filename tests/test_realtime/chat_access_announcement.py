@@ -661,3 +661,104 @@ def test_clean_nested_commit_keeps_what_the_instance_saw(opts):
                 "a grant in a committed inner block and a plain save after it must publish nothing"
             user.remove_permission("chat")
             assert pump() == 1, "the removal after the commit must publish once"
+
+
+@contextmanager
+def _autocommit_off():
+    """Manual transaction management, as transaction.set_autocommit(False)
+    gives it. Unless the caller switched autocommit back on, the open
+    transaction is rolled back on the way out and autocommit restored."""
+    from django.db import transaction
+
+    transaction.set_autocommit(False)
+    try:
+        yield
+    finally:
+        if not transaction.get_autocommit():
+            transaction.rollback()
+            transaction.set_autocommit(True)
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.chat")
+def test_read_with_autocommit_off_is_not_trusted_after_a_rollback(opts):
+    # Review 86881. With autocommit switched off, a row read outside an
+    # atomic block sits in a transaction the caller ends by hand. After a
+    # rollback the instance still carries the rolled-back value, so saving
+    # it is a removal and must be announced.
+    from django.db import transaction
+
+    for kind in ("user", "member"):
+        with _room(f"ann-manual-read-{kind}", group=True) as fx:
+            model, pk = _grant(fx, kind)
+            handler = _open_socket(fx)
+            with _announcements(fx.user.pk) as pump:
+                with _autocommit_off():
+                    with transaction.atomic():
+                        row = model.objects.get(pk=pk)
+                        row.permissions = {}
+                        row.save(update_fields=["permissions"])
+                    row = model.objects.get(pk=pk)
+                    assert row.permissions == {}, \
+                        "control: the instance is read with the uncommitted removal"
+                    transaction.rollback()
+                assert model.objects.get(pk=pk).permissions.get("chat"), \
+                    f"control ({kind}): the rollback must keep the stored permission"
+                assert pump(seconds=0.4) == 0, \
+                    f"{kind}: a rolled-back removal must publish nothing"
+                row.save(update_fields=["permissions"])
+                assert pump(handler) == 1, \
+                    f"{kind}: saving a value read in a rolled-back manual transaction must be announced"
+            _assert_stopped(handler, fx, f"{kind} removal through a read with autocommit off")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.chat")
+def test_save_with_autocommit_off_announces_on_commit_and_not_on_rollback(opts):
+    # Review 86881, supporting evidence: User.save outside an atomic block
+    # with autocommit switched off raised after it had saved, because Django
+    # refuses on_commit there. The save must not raise; the announcement
+    # follows the caller's commit and a rollback drops it.
+    from django.db import transaction
+
+    for kind in ("user", "member"):
+        # Rolled back, then retried in autocommit mode.
+        with _room(f"ann-manual-rollback-{kind}", group=True) as fx:
+            model, pk = _grant(fx, kind)
+            handler = _open_socket(fx)
+            with _announcements(fx.user.pk) as pump:
+                row = model.objects.get(pk=pk)
+                row.permissions = {}
+                with _autocommit_off():
+                    row.save(update_fields=["permissions"])
+                    transaction.rollback()
+                assert model.objects.get(pk=pk).permissions.get("chat"), \
+                    f"control ({kind}): the rollback must keep the stored permission"
+                assert pump(seconds=0.4) == 0, \
+                    f"{kind}: a rolled-back removal must publish nothing"
+                row.save(update_fields=["permissions"])
+                assert pump(handler) == 1, \
+                    f"{kind}: the retry that commits the removal must publish one announcement"
+            _assert_stopped(handler, fx, f"{kind} removal retried after a manual rollback")
+
+        # Committed by hand.
+        with _room(f"ann-manual-commit-{kind}", group=True) as fx:
+            model, pk = _grant(fx, kind)
+            handler = _open_socket(fx)
+            with _announcements(fx.user.pk) as pump:
+                row = model.objects.get(pk=pk)
+                row.permissions = {}
+                with _autocommit_off():
+                    row.save(update_fields=["permissions"])
+                    assert pump(seconds=0.4) == 0, \
+                        f"{kind}: nothing may be published before the commit"
+                    transaction.commit()
+                    # Django runs a manual commit's callbacks when autocommit
+                    # is switched back on.
+                    transaction.set_autocommit(True)
+                assert not model.objects.get(pk=pk).permissions.get("chat"), \
+                    f"control ({kind}): the commit must store the removal"
+                assert pump(handler) == 1, \
+                    f"{kind}: a removal committed by hand must publish one announcement"
+            _assert_stopped(handler, fx, f"{kind} removal committed with autocommit off")
+
