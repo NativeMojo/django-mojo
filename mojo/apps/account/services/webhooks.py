@@ -85,10 +85,12 @@ def dispatch(group, event_type, data, *, idempotency_key=None, channel="webhooks
     """
     if group is None:
         return None
-    if idempotency_key is not None and len(idempotency_key) > IDEMPOTENCY_KEY_MAX_LEN:
+    # Measured as text: a key that is not a string (an integer id, say) is
+    # accepted, and the fan-out formats it into the per-receiver key.
+    if idempotency_key is not None and len(str(idempotency_key)) > IDEMPOTENCY_KEY_MAX_LEN:
         raise ValueError(
             f"idempotency_key must be at most {IDEMPOTENCY_KEY_MAX_LEN} characters, "
-            f"got {len(idempotency_key)}"
+            f"got {len(str(idempotency_key))}"
         )
     return jobs.publish(
         FANOUT_FUNC,

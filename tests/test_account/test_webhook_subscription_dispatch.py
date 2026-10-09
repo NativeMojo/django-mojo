@@ -594,6 +594,40 @@ def test_dispatch_refuses_overlong_key_in_caller_thread(opts):
 
 
 @th.django_unit_test()
+def test_dispatch_accepts_non_string_key(opts):
+    """An integer idempotency key worked before the length check and must keep
+    working: dispatch accepts it and the delivery key is '<key>_<subscription id>'.
+    """
+    from mojo.apps.account.models import Group, WebhookSubscription
+    from mojo.apps.account.services.webhooks import dispatch, handle_fanout
+    from mojo.apps.jobs.models import Job
+
+    g = Group.objects.get(pk=opts.group_id)
+    WebhookSubscription.objects.filter(group=g).delete()
+    sub = _make_sub(g, "/int-key", events=["evt.intkey"])
+    int_key = 72700012345
+
+    job_id = dispatch(g, "evt.intkey", {"v": 1}, idempotency_key=int_key)
+    assert job_id, "dispatch must accept an integer idempotency key and return a fan-out job id"
+    stored_payload_key = Job.objects.get(id=job_id).payload.get("idempotency_key")
+    Job.objects.filter(id=job_id).delete()
+    assert stored_payload_key == int_key, (
+        f"the fan-out payload must carry the integer key unchanged, got {stored_payload_key!r}"
+    )
+
+    publisher = _RecordingPublisher()
+    job = _fanout_job(g.pk, "evt.intkey", idempotency_key=int_key)
+    result = handle_fanout(job, publisher=publisher)
+    assert result == "success", f"the fan-out must succeed with an integer key, got {result!r}"
+    keys = [call.get("idempotency_key") for call in publisher.calls]
+    assert keys == [f"{int_key}_{sub.pk}"], (
+        f"an integer key must give the delivery key '<key>_<subscription id>', got {keys!r}"
+    )
+
+    WebhookSubscription.objects.filter(group=g).delete()
+
+
+@th.django_unit_test()
 def test_child_keys_distinct_per_receiver_and_group(opts):
     from mojo.apps.account.models import Group, WebhookSubscription
     from mojo.apps.account.services.webhooks import handle_fanout
