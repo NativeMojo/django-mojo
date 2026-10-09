@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import timezone as dt_timezone
 from mojo.helpers import logit
+from mojo.apps.fileman.utils import parse_expires_at
 
 logger = logit.get_logger("fileman", "fileman.log")
 
@@ -87,19 +88,6 @@ def regenerate_renditions(job):
     return f"completed:created={len(created)}"
 
 
-def _parse_expires_at(value):
-    """Parse an ISO 8601 expires_at value into a datetime. Returns None on failure."""
-    if not value or not isinstance(value, str):
-        return None
-    try:
-        # Handle both +00:00 and Z suffixes
-        if value.endswith("Z"):
-            value = value[:-1] + "+00:00"
-        return datetime.fromisoformat(value)
-    except (ValueError, TypeError):
-        return None
-
-
 def cleanup_expired_files(job):
     """Delete files whose metadata.expires_at has passed.
 
@@ -120,25 +108,28 @@ def cleanup_expired_files(job):
     )
 
     deleted = 0
+    failed = 0
     for f in candidates.iterator():
-        raw = f.metadata.get("expires_at", "") if isinstance(f.metadata, dict) else ""
-        expires_at = _parse_expires_at(raw)
-        if expires_at is None:
-            continue
-        # Make naive datetimes UTC-aware for comparison
-        if expires_at.tzinfo is None:
-            from django.utils.timezone import utc
-            expires_at = expires_at.replace(tzinfo=utc)
-        if expires_at < now:
-            source = f.metadata.get("source", "unknown") if isinstance(f.metadata, dict) else "unknown"
-            try:
+        # One file that cannot be handled must not end the run for the rest.
+        try:
+            raw = f.metadata.get("expires_at", "") if isinstance(f.metadata, dict) else ""
+            expires_at = parse_expires_at(raw)
+            if expires_at is None:
+                continue
+            # A value with no timezone (or a date alone) is read as UTC
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=dt_timezone.utc)
+            if expires_at < now:
                 f.on_rest_pre_delete()
                 f.delete()
                 deleted += 1
-            except Exception as e:
-                logger.warning("cleanup_expired_files: failed to delete file %s (source=%s): %s",
-                               f.pk, source, str(e))
+        except Exception as e:
+            failed += 1
+            logger.warning("cleanup_expired_files: failed on file %s: %s", f.pk, str(e))
 
     if deleted > 0:
         logger.info("cleanup_expired_files: deleted %d expired files", deleted)
+    if failed > 0:
+        logger.warning("cleanup_expired_files: %d files failed and were kept", failed)
+        return f"completed:deleted={deleted},failed={failed}"
     return f"completed:deleted={deleted}"
