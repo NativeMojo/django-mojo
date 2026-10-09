@@ -162,20 +162,33 @@ class _Scope:
 
     A snapshot read or written inside a transaction describes rows that a
     rollback takes back, and Django does not undo Python state on rollback.
-    ``hooks`` is the connection's on-commit list at that moment: Django
-    replaces that list on every rollback, savepoint rollback and commit, so
-    the scope is still open only while the connection holds the same list.
+    ``hooks`` is the connection's on-commit list at that moment and ``entry``
+    this scope's own item in it. Django replaces that list on every rollback,
+    savepoint rollback and commit, so the scope is still open only while the
+    connection holds the same list.
+
+    A commit is trusted only when it is clean. Django runs the callbacks of a
+    commit by taking them off the list they were registered in, so this
+    scope's entry is gone from ``hooks`` when ``commit`` runs. After any
+    rollback in between, to a savepoint of any depth or one made by hand, the
+    surviving callbacks were copied to a new list and ``hooks`` was left as
+    it was: the entry is still in it, and the scope stays untrusted. An outer
+    commit therefore cannot vouch for what a rolled-back inner block wrote.
     """
 
-    __slots__ = ("hooks", "committed")
+    __slots__ = ("hooks", "entry", "committed")
 
     def __init__(self, hooks):
         self.hooks = hooks
+        self.entry = None
         self.committed = False
 
     def commit(self):
-        self.committed = True
-        self.hooks = None
+        hooks, entry = self.hooks, self.entry
+        self.hooks = self.entry = None
+        if hooks is None or entry is None:
+            return
+        self.committed = not any(item is entry for item in hooks)
 
 
 def _connection(using):
@@ -193,6 +206,12 @@ def _open_scope(using):
         scope = _Scope(hooks)
         if hooks is not None:
             conn.on_commit(scope.commit)
+            # The item Django just appended for this scope. Anything else
+            # there means on_commit works differently from what this relies
+            # on, and the scope then never becomes trusted.
+            last = hooks[-1] if hooks else None
+            if isinstance(last, tuple) and len(last) > 1 and last[1] == scope.commit:
+                scope.entry = last
         conn._mojo_access_scope = scope
     return scope
 
@@ -208,8 +227,8 @@ def _scope_holds(scope, using):
 
 def access_before(instance):
     """What ``instance`` last saw stored, or None when that is not known:
-    it was never read, or it was read or saved inside a transaction that has
-    since been rolled back (wholly or to a savepoint)."""
+    it was never read, or it was read or saved inside a transaction in which
+    something was rolled back afterwards (wholly or to a savepoint)."""
     state = instance.__dict__
     seen = state.get("_access_seen")
     if seen is None:

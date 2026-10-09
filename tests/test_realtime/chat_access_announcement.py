@@ -592,3 +592,72 @@ def test_committed_transaction_keeps_what_the_instance_saw(opts):
                 "a grant in a committed transaction and a plain save after it must publish nothing"
             user.remove_permission("chat")
             assert pump() == 1, "the removal after the commit must publish once"
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.chat")
+def test_outer_commit_does_not_vouch_for_a_rolled_back_inner_save(opts):
+    # Review 86820. The instance is read in the outer transaction, the removal
+    # is saved and rolled back in an inner block (an atomic block, or a
+    # savepoint made by hand), and the outer transaction commits. The retry
+    # after that commit is the removal, and must be announced.
+    from django.db import transaction
+
+    def atomic_block(row):
+        try:
+            with transaction.atomic():
+                row.save(update_fields=["permissions"])
+                raise RuntimeError("rolled back on purpose")
+        except RuntimeError:
+            pass
+
+    def manual_savepoint(row):
+        sid = transaction.savepoint()
+        row.save(update_fields=["permissions"])
+        transaction.savepoint_rollback(sid)
+
+    for kind in ("user", "member"):
+        for label, inner in (("atomic", atomic_block), ("manual", manual_savepoint)):
+            what = f"{kind}, {label} savepoint"
+            with _room(f"ann-outer-{kind}-{label}", group=True) as fx:
+                model, pk = _grant(fx, kind)
+                handler = _open_socket(fx)
+                with _announcements(fx.user.pk) as pump:
+                    with transaction.atomic():
+                        row = model.objects.get(pk=pk)
+                        row.permissions = {}
+                        inner(row)
+                    assert model.objects.get(pk=pk).permissions.get("chat"), \
+                        f"control ({what}): the inner rollback must keep the stored permission"
+                    early = pump(seconds=0.4)
+                    # Django keeps a callback registered after a savepoint
+                    # made by hand, so that rollback may still announce. An
+                    # extra announcement only costs a check.
+                    assert early == 0 or label == "manual", \
+                        f"{what}: a rolled-back removal must publish nothing, got {early}"
+                    row.save(update_fields=["permissions"])
+                    assert pump(handler) == 1, \
+                        f"{what}: the retry after the outer commit must publish one announcement"
+                _assert_stopped(handler, fx, f"{what}, retried after the outer commit")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.chat")
+def test_clean_nested_commit_keeps_what_the_instance_saw(opts):
+    # The other side: nested blocks that all commit leave the instance's note
+    # trusted, so a grant made in an inner block and a plain save stay silent.
+    from django.db import transaction
+    from mojo.apps.account.models import User
+
+    with _room("ann-nested-clean") as fx:
+        with _announcements(fx.user.pk) as pump:
+            with transaction.atomic():
+                user = User.objects.get(pk=fx.user.pk)
+                with transaction.atomic():
+                    user.add_permission("chat")
+            user.display_name = "After Nested Commit"
+            user.save()
+            assert pump(seconds=0.6) == 0, \
+                "a grant in a committed inner block and a plain save after it must publish nothing"
+            user.remove_permission("chat")
+            assert pump() == 1, "the removal after the commit must publish once"
