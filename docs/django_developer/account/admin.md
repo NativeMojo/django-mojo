@@ -16,18 +16,21 @@ Compiled assets use a relative base; Portal API requests always use same-origin
 
 ## Pinned identity and offline replacement
 
-The current artifact is portal-mojo **0.2.4**, source revision
-`0ba74c28aa92b79764fa4506a84915aca24d7a2e` (portal-mojo `main` on GitHub),
+The current artifact is portal-mojo **0.2.8**, source revision
+`9eb3d5ee8f4989d009ba8bfd08fa3e16bba3c860` (portal-mojo `main` on GitHub),
 built clean with Node **24.21.0** / npm **11.19.0** and lockfile SHA-256
-`6323902f528efcccd2a8fb636ae67d928e21ad8b812b166175cd13335c40ca01`.
-Its 119-file inventory includes the Vite manifest and lazy chunks.
+`1db3a5c22924025e0c7add39835f8aeb2f7c3e5fdfb98bc8c3bb18ff34879f86`.
+Its 125-file inventory includes the Vite manifest and lazy chunks.
 The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 
-`db3d83fe453aaf290dea777501a8c2ace288e46e90b8ee2dce96e7276aa0d730`
+`614987622428d2d29b6317ce5ec921879d841422190144a4d5c13407f553748e`
 
-This pin comes from the clean local canonical build for item #5547. It carries
-Fleet Configuration (#4769) and the Sign-in page (Identity & Access → Sign-in,
-backed by `/api/account/admin/signin`).
+This pin comes from the clean local canonical build for item #7493. The
+source revision is later than the npm 0.2.8 release and carries the same
+version number, because no portal-mojo release was cut for it. The sidebar
+therefore shows 0.2.8 for both; tell two bundles apart by source revision and
+manifest SHA-256, never by version. portal-mojo promises identical bytes on one
+platform only, so a CI build of the same revision may carry a different hash.
 The complete artifact includes hidden `.vite` content; verify the manifest
 digest before vendoring it. This build has not been released to npm or deployed.
 
@@ -36,7 +39,7 @@ Stop processes serving/importing the checkout before replacing the artifact:
 ```bash
 uv run python scripts/vendor_admin_portal.py \
   --source /absolute/path/to/verified/dist/admin \
-  --expected-manifest-sha256 db3d83fe453aaf290dea777501a8c2ace288e46e90b8ee2dce96e7276aa0d730
+  --expected-manifest-sha256 614987622428d2d29b6317ce5ec921879d841422190144a4d5c13407f553748e
 uv run python scripts/vendor_admin_portal.py --check
 ```
 
@@ -63,7 +66,36 @@ startup and delivers only its validated allowlist. Provenance and
 
 ## Included Portal behavior
 
-Portal 0.2.4 keeps toast notifications visible and interactive above native
+This artifact (revision `9eb3d5ee`) adds, over the previously packaged bundle:
+
+- **My account** in the avatar menu: password, email, passkeys and
+  authenticator (TOTP) for the signed-in user. After an own password change the
+  Portal stores the replacement tokens the save returns, stays signed in, and
+  offers "Sign out everywhere else" (#6226).
+- **Edge** pages: vhosts with a wizard and detail, routes, upstreams and the
+  blocklist (#1616).
+- **Personal API Keys** lists only the signed-in user's own keys (#7190).
+- Fleet Configuration and the Sign-in page (Identity & Access → Sign-in,
+  backed by `/api/account/admin/signin`) remain.
+
+Two changes reach every screen:
+
+- A flat reply with HTTP 200 whose top-level body says `success: false` is now
+  treated as a refusal, not a success (#5922). A call that passes
+  `refusal: 'return'` gets the body back instead. `status: false` was already a
+  failure; a `success: false` nested under `data` stays ordinary data.
+- Model record operations (read, update, delete and actions on
+  `/api/<model>/<id>`) no longer inherit the active group. Scoped lists and
+  creates, and custom calls on a record path, keep the scope they declare
+  (#5923, #5918).
+
+A group switch and the sign-in code scrub keep the browser history entry's
+state (#5925). These are frontend updates against the existing APIs; no
+database migration is needed. A browser tab left open across an upgrade asks
+for the old hashed file names and gets 404; Admin replies are sent uncached,
+so a reload fixes it.
+
+The Portal keeps toast notifications visible and interactive above native
 modal backdrops, including nested dialogs. Phone Hub connection tests use the
 provider's `success` result: a successful REST envelope alone no longer means
 the connection worked. Results remain visible in Overview and Connection,
