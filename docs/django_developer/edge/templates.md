@@ -93,7 +93,11 @@ Per generation:
 
 ```
 generations/<gen>/
-  http.d/00_base.conf       mime include, log_format + $loggable + access_log,
+  http.d/00_base.conf       mime include + a one-entry `types` block adding
+                            webmanifest → application/manifest+json (stock
+                            nginx mime.types lacks it; unknown extensions still
+                            fall to the bootstrap's default_type),
+                            log_format + $loggable + access_log,
                             sendfile/keepalive/server_tokens/gzip,
                             blocklist maps + watch log, flag-gated catch-alls
                             (NOT $connection_upgrade — bootstrap owns it,

@@ -918,6 +918,13 @@ def render_http_base(knobs=None, security=None, vhosts=None,
     parts = [
         "# edge http base — rendered per generation, never hand-edited",
         f"include {knobs['mime_types']};",
+        # nginx's stock mime.types has no web manifest entry, and that file
+        # is the host's, not ours. A second `types` block at the same level
+        # ADDS to the included table; on a host whose file already maps the
+        # extension nginx warns ("duplicate extension") and still exits 0.
+        "types {",
+        "    application/manifest+json webmanifest;",
+        "}",
         "",
         "log_format main '$remote_addr - - [$time_local] '",
         "                '\"$request_method $scheme://$host$request_uri "
@@ -969,7 +976,8 @@ def render_http_base(knobs=None, security=None, vhosts=None,
         "gzip_min_length 256;",
         "gzip_proxied any;",
         "gzip_types text/plain text/css application/json "
-        "application/javascript text/xml application/xml image/svg+xml;",
+        "application/manifest+json application/javascript text/xml "
+        "application/xml image/svg+xml;",
         "",
     ])
     parts.extend(_blocklist_section(knobs, security))
