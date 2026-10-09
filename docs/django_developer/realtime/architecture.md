@@ -209,6 +209,7 @@ topic are then delivered without SQL until one of these happens:
 |---|---|
 | The decision is older than `WS_SUBSCRIPTION_RECHECK_SECONDS` | The next frame re-runs the check. |
 | A `chat_member_left`, `chat_member_removed` or `chat_member_banned` frame whose `user_id` is this socket's user, or any `chat_room_deleted` frame | That frame is re-checked before delivery. |
+| An `access_changed` announcement for this socket's identity | Every remembered decision is forgotten, so the next frame on each chat topic is re-checked. Nothing is sent to the client. |
 | The socket unsubscribes | The decision is forgotten. A later subscribe, including one returned by a hook, checks again. |
 
 A topic subscribed through a hook response, without a client `subscribe`,
@@ -219,10 +220,34 @@ force a check, never grant access.
 
 The chat REST endpoints publish the access-change frames after the write
 commits (`mojo/apps/chat/services/access.py`): leave, member remove, member
-ban, and REST room delete. Changes that publish nothing are bounded by the
-re-check window instead: a platform or group permission removed, an account
-deactivated without the disable service (which force-disconnects its sockets),
-or a group deleted together with its rooms.
+ban, and REST room delete.
+
+Changes to the account publish `access_changed` instead. Every authenticated
+socket listens on `realtime:access:<user_type>:<id>` beside its own message
+channel. It is not a topic, so a client cannot subscribe to it or leave it.
+`User.save()` publishes there, after the commit, when the save removes a
+permission or switches `is_superuser` or `is_active` off; `GroupMember.save()`
+when it removes a permission or deactivates the member, and
+`GroupMember.delete()` always. The comparison is against what the instance
+read from the database; a grant, or a save that writes none of those fields
+(`update_fields`), publishes nothing. Other code can call it directly:
+
+```python
+from mojo.apps.realtime import manager
+
+manager.publish_access_changed("user", user.pk)
+```
+
+Unlike `disconnect_user`, this needs no connection registry and closes nothing:
+the user keeps the socket and every topic they may still read. An announcement
+can only force a check, never grant access.
+
+Changes that publish nothing are bounded by the re-check window: a row changed
+with a queryset `update()` / `delete()` or raw SQL, a chat membership row
+changed outside the chat endpoints, a group deactivated or deleted together
+with its rooms. So is an announcement that Redis lost: a failed publish is
+logged, never raised and not retried. Where nothing may be delivered after a
+revocation in any failure, set the window to `0` or to a few seconds.
 
 | Setting | Default | Meaning |
 |---|---|---|

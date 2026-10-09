@@ -10,15 +10,21 @@ fresh check, and serves later frames from memory until one of these happens:
   every frame checks, which is how chat delivery behaved before.
 - a frame in ``ACCESS_CHANGE_FRAMES`` names this socket's user, or deletes the
   room. That frame itself is re-checked before it is delivered.
+- an ``access_changed`` announcement arrives on the identity's access channel
+  (``publish_access_changed`` in manager.py). Every remembered decision is
+  forgotten, so the next frame on each chat topic is re-checked. The account
+  models publish one when a save takes a permission away or deactivates the
+  user or one of their group members.
 - the socket unsubscribes from the topic.
 
 Only allow decisions are remembered. A denial unsubscribes the topic, so
 there is nothing left to deliver. An access-change frame can only force a
 re-check, never grant access, so a forged one costs a query and nothing more.
 
-The expiry is the only bound on changes that publish no frame: a staff or
-group permission removed, an account deactivated outside the disable service
-(which force-disconnects), a group deleted with its rooms.
+The expiry is the only bound on changes that publish nothing: rows changed
+with a bulk ``update()`` or raw SQL, membership rows changed outside the chat
+endpoints, a group deactivated or deleted with its rooms. It also bounds an
+announcement that Redis lost.
 """
 
 import time
@@ -70,11 +76,13 @@ def changes_access(payload, user):
 class TopicAccess:
     """Topic -> expiry of the last allow decision, for one connection.
 
-    ``clock`` is a test seam; production uses ``time.monotonic``.
+    ``clock`` and ``recheck`` are test seams; production uses
+    ``time.monotonic`` and ``recheck_seconds``.
     """
 
-    def __init__(self, clock=None):
+    def __init__(self, clock=None, recheck=None):
         self._clock = clock or time.monotonic
+        self._recheck = recheck or recheck_seconds
         self._expires = {}
 
     def allows(self, topic):
@@ -88,7 +96,7 @@ class TopicAccess:
 
     def allow(self, topic, ttl=None):
         if ttl is None:
-            ttl = recheck_seconds()
+            ttl = self._recheck()
         if ttl <= 0:
             self._expires.pop(topic, None)
             return
@@ -96,3 +104,58 @@ class TopicAccess:
 
     def forget(self, topic):
         self._expires.pop(topic, None)
+
+    def forget_all(self):
+        self._expires.clear()
+
+
+ACCESS_FIELDS = ("permissions", "is_active", "is_superuser")
+
+
+def access_snapshot(instance, before=None, fields=None):
+    """What an account or member row grants, as far as this instance has
+    loaded it. A deferred field is left out: nothing is known about it.
+
+    ``fields`` limits the answer to the fields a partial save or refresh just
+    brought in line with the database; the others keep what ``before``, the
+    earlier snapshot, last saw stored.
+    """
+    state = instance.__dict__
+    seen = {}
+    if "permissions" in state:
+        perms = state["permissions"]
+        perms = perms if isinstance(perms, dict) else {}
+        seen["permissions"] = frozenset(key for key, value in perms.items() if value)
+    for name in ACCESS_FIELDS[1:]:
+        if name in state:
+            seen[name] = bool(state[name])
+    if fields is None:
+        return seen
+    kept = dict(before or {})
+    for name in ACCESS_FIELDS:
+        if name in fields:
+            kept.pop(name, None)
+            if name in seen:
+                kept[name] = seen[name]
+    return kept
+
+
+def save_removes_access(before, instance, update_fields=None):
+    """Whether saving ``instance`` can take access away from its user.
+
+    ``before`` is the ``access_snapshot`` taken when the row was read, or
+    None. Granting is never an answer of True. A value this instance never
+    read counts as removed when it is written without one: when unsure, the
+    sockets re-check.
+    """
+    before = before or {}
+    written = None if update_fields is None else set(update_fields)
+    for name, value in access_snapshot(instance).items():
+        if written is not None and name not in written:
+            continue
+        if name == "permissions":
+            if name not in before or before[name] - value:
+                return True
+        elif not value and before.get(name, True):
+            return True
+    return False

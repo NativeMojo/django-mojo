@@ -59,13 +59,32 @@ reaches an open socket:
   `room/member/remove` (`chat_member_removed`), `room/member/ban`
   (`chat_member_banned`) and REST room delete (`chat_room_deleted`). The
   affected socket re-checks that frame, drops it, and unsubscribes.
+- **On the next frame** for a change to the account or to a group member that
+  takes access away: a permission removed from the `User` or the `GroupMember`
+  (any permission, not only `chat` / `manage_chat`), `is_superuser` or
+  `is_active` switched off on the user, a group member deactivated or deleted.
+  Saving the row publishes `access_changed` to the user's own sockets after the
+  commit; each socket forgets what it remembered and re-checks the next frame
+  on every chat topic. It must be a model save or an instance `delete()`:
+  `add_permission` / `remove_permission`, `set_permissions`, the REST and admin
+  paths all are.
 - **At the next re-check** (`WS_SUBSCRIPTION_RECHECK_SECONDS`, default 300)
-  for everything else: a `chat` / `manage_chat` permission removed from the
-  user or the group member, a membership row changed outside these endpoints,
-  a group deleted with its rooms.
+  for everything else: a row changed with a queryset `update()` or `delete()`
+  or raw SQL, a `ChatMembership` row changed outside these endpoints, a group
+  deactivated or deleted with its rooms.
 
 Code that removes access some other way and needs it to take effect at once
-should call `publish_access_change` (see [Services](services.md#access-change-frames)).
+should call `publish_access_change` for a room (see
+[Services](services.md#access-change-frames)) or
+`mojo.apps.realtime.manager.publish_access_changed("user", user_id)` for
+everything the user is subscribed to.
+
+Both announcements travel on the same Redis pub/sub as chat itself, and a
+failed publish is logged, not retried. If one is lost while later chat frames
+still arrive, the socket keeps reading until the re-check. An application that
+must deliver nothing after a revocation in every failure sets
+`WS_SUBSCRIPTION_RECHECK_SECONDS = 0` (a check on every frame, about three
+queries per frame per socket) or a short window.
 See [realtime architecture](../realtime/architecture.md#chat-topic-delivery-chatroom_id)
 for the mechanism.
 

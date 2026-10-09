@@ -1,7 +1,8 @@
 """
 Realtime Pub/Sub channel names, with the opt-in isolation prefix.
 
-Every realtime CHANNEL (broadcast, per-topic, per-connection messages) is
+Every realtime CHANNEL (broadcast, per-topic, per-connection messages,
+per-identity access announcements) is
 built here so REDIS_PUBSUB_PREFIX namespaces all of them consistently on
 publish, subscribe, and unsubscribe — see mojo/helpers/redis/channels.py.
 Storage keys (realtime:online:*, the realtime:topic:* member sets,
@@ -32,3 +33,9 @@ def topic_channel(topic, prefix=None):
 def messages_channel(connection_id, prefix=None):
     """The direct-message channel for one connection."""
     return _channel_name(f"realtime:messages:{connection_id}", prefix)
+
+
+def access_channel(user_type, user_id, prefix=None):
+    """The access-announcement channel for one identity. Not a topic: a
+    client can neither subscribe to it nor leave it."""
+    return _channel_name(f"realtime:access:{user_type}:{user_id}", prefix)

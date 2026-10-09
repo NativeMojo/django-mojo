@@ -138,8 +138,50 @@ class GroupMember(models.Model, MojoModel):
             args = (*args[:2], using, *args[3:])
         else:
             kwargs["using"] = using
+        # A permission removed or the member deactivated: the user's open
+        # websockets re-check chat access once this commits (maestro #7498).
+        # Registered after the row and its signal cleanup are written, so the
+        # re-check reads all of it.
+        from mojo.apps.realtime.access import save_removes_access
+        update_fields = kwargs.get("update_fields", args[3] if len(args) > 3 else None)
+        announce = not self._state.adding and save_removes_access(
+            self.__dict__.get("_access_seen"), self, update_fields)
         with transaction.atomic(using=using):
-            return super().save(*args, **kwargs)
+            result = super().save(*args, **kwargs)
+            self._remember_access(update_fields)
+            if announce:
+                self._announce_access_change(using)
+            return result
+
+    def delete(self, *args, **kwargs):
+        user_id = self.user_id
+        using = kwargs.get("using") or (args[0] if args else None)
+        using = using or router.db_for_write(type(self), instance=self)
+        result = super().delete(*args, **kwargs)
+        self._announce_access_change(using, user_id)
+        return result
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+        instance._remember_access()
+        return instance
+
+    def refresh_from_db(self, *args, **kwargs):
+        super().refresh_from_db(*args, **kwargs)
+        self._remember_access(kwargs.get("fields", args[1] if len(args) > 1 else None))
+
+    def _remember_access(self, fields=None):
+        """Note what this instance last saw stored for the fields that grant
+        access, so a save can tell a removal from a value it only carried.
+        `fields` names the ones a partial save or refresh just synced."""
+        from mojo.apps.realtime.access import access_snapshot
+        self.__dict__["_access_seen"] = access_snapshot(
+            self, self.__dict__.get("_access_seen"), fields)
+
+    def _announce_access_change(self, using, user_id=None):
+        from mojo.apps.realtime import manager
+        manager.publish_access_changed("user", user_id or self.user_id, using=using)
 
     @property
     def username(self):

@@ -10,7 +10,7 @@ import json
 import time
 import uuid
 
-from .channels import broadcast_channel, topic_channel, messages_channel
+from .channels import access_channel, broadcast_channel, topic_channel, messages_channel
 
 def get_redis():
     from mojo.helpers.redis.client import get_connection
@@ -290,6 +290,42 @@ def disconnect_user(user_type, user_id):
     message = json.dumps({"type": "disconnect", "reason": "forced_disconnect"})
     for conn_id in connections:
         redis_client.publish(messages_channel(conn_id), message)
+
+
+def publish_access_changed(user_type, user_id, using=None, *, publisher=None):
+    """
+    Tell an identity's open connections that its access may have been
+    reduced, once the write commits.
+
+    Each connection forgets its remembered chat decisions and re-checks the
+    next frame per topic (see access.py). Published after the commit so that
+    re-check reads the new rows. Unlike disconnect_user this needs no
+    connection registry: every authenticated connection listens on the
+    channel itself. A publish failure is logged, never raised: the write has
+    happened, and the periodic re-check still bounds a missed announcement.
+
+    Args:
+        user_type: Type of user (e.g., "user")
+        user_id: User's ID
+        using: Database alias of the write, when it is not the default
+        publisher: Test seam; production leaves it unset and Redis is used
+    """
+    from django.db import transaction
+
+    def send():
+        try:
+            publish = publisher
+            if publish is None:
+                publish = get_redis().publish
+            publish(
+                access_channel(user_type, user_id),
+                json.dumps({"type": "access_changed"}))
+        except Exception:
+            from mojo.helpers import logit
+            logit.get_logger("realtime", "realtime.log").exception(
+                f"realtime: could not publish access_changed for {user_type}:{user_id}")
+
+    transaction.on_commit(send, using=using)
 
 
 def request(user_type, user_id, data, timeout=30):

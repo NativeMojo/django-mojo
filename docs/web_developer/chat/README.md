@@ -323,9 +323,11 @@ deleted room; every socket on the topic is unsubscribed instead.
 
 Losing access is silent on the socket: no error frame, no `unsubscribed` frame,
 and the connection and its other topics stay open. Access removed by these
-events stops delivery immediately; access removed any other way (a group or
-platform `chat` / `manage_chat` permission revoked, for example) stops it within
-the server's re-check window, 300 seconds by default. Subscribe again once
+events stops delivery immediately. So does a permission removed from your
+account or your group member, and your account or group member being
+deactivated: the server re-checks your access on the next event. Access removed
+any other way stops within the server's re-check window, 300 seconds by
+default. Subscribe again once
 access is restored; dropped events are not replayed.
 
 ## Advisory moderation and display

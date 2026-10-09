@@ -300,6 +300,12 @@ commit could be re-checked against the old rows and re-arm the stale decision.
 A publish failure is logged, not raised; the socket's periodic re-check still
 bounds it. `publisher` is a test seam.
 
+These frames are per room. When a user loses access through the account
+instead (a permission removed, the user or a group member deactivated), the
+`User` and `GroupMember` models publish one announcement for all of that
+user's sockets; see
+[realtime architecture](../realtime/architecture.md#chat-topic-delivery-chatroom_id).
+
 `kind` must be one the realtime handler acts on: `chat_member_left`,
 `chat_member_removed`, `chat_member_banned` or `chat_room_deleted`
 (`mojo.apps.realtime.access.ACCESS_CHANGE_FRAMES`). The REST leave, member

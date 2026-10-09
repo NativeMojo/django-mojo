@@ -23,7 +23,7 @@ from mojo.helpers.request import normalize_ip
 from mojo.helpers.settings import settings
 from .access import TopicAccess, changes_access, is_chat_topic
 from .auth import async_validate_bearer_token
-from .channels import broadcast_channel, topic_channel, messages_channel
+from .channels import access_channel, broadcast_channel, topic_channel, messages_channel
 from .permissions import can_access_group_topic, get_group_topic_permissions
 from .signals import realtime_connection_changed
 from . import presence
@@ -445,21 +445,29 @@ class WebSocketHandler:
         finally:
             self.running = False
 
-    async def start_redis_messages(self):
+    async def start_redis_messages(self, *, pubsub=None):
         """Create the pub/sub connection and start the delivery task.
 
         Called from handle_authenticate AFTER a successful auth (and before
         any topic subscription — subscribe_to_topic needs self.pubsub). The
         pub/sub connection is subscribed before this returns so there is no
-        race between auth completing and the first topic subscribe."""
+        race between auth completing and the first topic subscribe.
+
+        `pubsub` is a test seam; production leaves it unset."""
         if self.pubsub is not None:
             return
 
-        pubsub = get_async_connection().pubsub()
+        if pubsub is None:
+            pubsub = get_async_connection().pubsub()
         try:
             # Subscribe to connection-specific channel
             await pubsub.subscribe(messages_channel(self.connection_id))
             await pubsub.subscribe(broadcast_channel())
+            # Access announcements for this identity. Subscribed here and not
+            # as a topic, so the client cannot unsubscribe from it.
+            user_id = getattr(self.user, "id", None)
+            if self.user_type and user_id is not None:
+                await pubsub.subscribe(access_channel(self.user_type, user_id))
         except BaseException:
             await pubsub.aclose()
             raise
@@ -998,6 +1006,13 @@ class WebSocketHandler:
     async def process_redis_message(self, data):
         """Process message from Redis pub/sub"""
         message_type = data.get("type")
+
+        if message_type == "access_changed":
+            # This identity may have lost access (a permission removed, the
+            # account or a group member deactivated). Nothing is sent to the
+            # client; the next frame on each chat topic is re-checked.
+            self.topic_access.forget_all()
+            return
 
         topic = data.get("topic")
         if message_type == "topic_message":

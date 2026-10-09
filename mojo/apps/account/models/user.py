@@ -845,6 +845,40 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         self.permissions = {}
         self.save()
 
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+        instance._remember_access()
+        return instance
+
+    def refresh_from_db(self, *args, **kwargs):
+        super().refresh_from_db(*args, **kwargs)
+        self._remember_access(kwargs.get("fields", args[1] if len(args) > 1 else None))
+
+    def _remember_access(self, fields=None):
+        """Note what this instance last saw stored for the fields that grant
+        access, so a save can tell a removal from a value it only carried.
+        `fields` names the ones a partial save or refresh just synced."""
+        from mojo.apps.realtime.access import access_snapshot
+        self.__dict__["_access_seen"] = access_snapshot(
+            self, self.__dict__.get("_access_seen"), fields)
+
+    def save(self, *args, **kwargs):
+        """The row save. A save that takes access away (a permission removed,
+        is_superuser or is_active switched off) tells the user's open
+        websockets once it commits, so chat delivery re-checks at once instead
+        of at the next periodic re-check (maestro #7498). Granting, and a save
+        that writes none of those fields, announces nothing."""
+        from mojo.apps.realtime.access import save_removes_access
+        update_fields = kwargs.get("update_fields", args[3] if len(args) > 3 else None)
+        announce = not self._state.adding and save_removes_access(
+            self.__dict__.get("_access_seen"), self, update_fields)
+        super().save(*args, **kwargs)
+        self._remember_access(update_fields)
+        if announce:
+            from mojo.apps.realtime import manager
+            manager.publish_access_changed("user", self.pk, using=self._state.db)
+
     def save_password(self, value):
         self.set_permanent_password(value)
         self.save()
