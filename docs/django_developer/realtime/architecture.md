@@ -257,10 +257,10 @@ can only force a check, never grant access.
 Changes that publish nothing are bounded by the re-check window: a row changed
 with a queryset `update()` / `delete()` or raw SQL, a chat membership row
 changed outside the chat endpoints, a group deactivated or deleted together
-with its rooms. A change committed directly on the database driver
-(`connection.connection.commit()`), outside Django's transaction handling, is
-not announced either and waits for the re-check; the framework itself never
-commits that way. So is an announcement that Redis lost: a failed publish is
+with its rooms. So is a change committed directly on the database driver
+(`connection.connection.commit()`), outside Django's transaction handling: it
+is not announced. The framework itself never commits that way. An announcement
+that Redis lost is bounded the same way: a failed publish is
 logged, never raised and not retried. Where nothing may be delivered after a
 revocation in any failure, set the window to `0` or to a few seconds.
 
