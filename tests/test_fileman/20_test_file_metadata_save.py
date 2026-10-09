@@ -270,3 +270,55 @@ def test_bad_expires_at_is_refused_on_create(opts):
     assert_eq(resp.status_code, 400, f"a create with a bad expires_at must be a 400: {resp.response}")
     assert_true(not File.objects.filter(filename="mdsave_created.csv").exists(),
                 "a refused create must not leave a file row")
+
+
+@th.django_unit_test()
+def test_refused_metadata_stores_nothing_on_a_related_object(opts):
+    """A bad `metadata` is refused before any other key of the request is
+    applied, whatever the key order: a `user` object in the same body is not
+    saved, and neither is the filename.
+    """
+    from mojo.apps.account.models import User
+
+    _login(opts, OWNER)
+    bad_values = (
+        ("bad_expiry", {"expires_at": "not-a-time"}),
+        ("not_an_object", ["a", "list"]),
+    )
+    for bad_name, bad_metadata in bad_values:
+        for order in ("user_first", "metadata_first"):
+            name = f"rel_{bad_name}_{order}"
+            User.objects.filter(pk=opts.owner_id).update(display_name="mdsave before")
+            f = _new_file(opts, name)
+            user_part = {"display_name": f"changed by refused request {name}"}
+            if order == "user_first":
+                payload = {"filename": f"mdsave_renamed_{name}.csv", "user": user_part,
+                           "metadata": bad_metadata}
+            else:
+                payload = {"metadata": bad_metadata, "user": user_part,
+                           "filename": f"mdsave_renamed_{name}.csv"}
+            resp = _save(opts, f, payload)
+            assert_eq(resp.status_code, 400, f"{name}: bad metadata must be a 400: {resp.response}")
+            assert_eq(User.objects.get(pk=opts.owner_id).display_name, "mdsave before",
+                      f"{name}: the user in a refused request must not be saved")
+            stored = _stored(f)
+            assert_eq(stored.filename, f"mdsave_{name}.csv",
+                      f"{name}: the filename in a refused request must not be saved")
+            assert_eq(stored.metadata, {"source": "mdsave"},
+                      f"{name}: a refused request must leave metadata unchanged")
+
+    # Control: with good metadata the same request saves all three.
+    f = _new_file(opts, "rel_good")
+    resp = _save(opts, f, {
+        "filename": "mdsave_renamed_rel_good.csv",
+        "user": {"display_name": "mdsave after"},
+        "metadata": {"expires_at": "2027-01-01T00:00:00+00:00"},
+    })
+    assert_eq(resp.status_code, 200, f"a good request must save: {resp.response}")
+    assert_eq(User.objects.get(pk=opts.owner_id).display_name, "mdsave after",
+              "the user in an accepted request must be saved")
+    stored = _stored(f)
+    assert_eq(stored.metadata.get("expires_at"), "2027-01-01T00:00:00+00:00",
+              "the expiry in an accepted request must be stored")
+    File = type(stored)
+    File.objects.filter(pk=f.pk).delete()

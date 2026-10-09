@@ -590,13 +590,28 @@ class File(models.Model, MojoModel):
             return
         self.metadata[key] = value
 
-    def _save_metadata_from_api(self, value):
-        """Validate a `metadata` value from the API, then merge it.
+    def on_rest_save(self, request, data_dict):
+        # Refuse a bad `metadata` before the field loop starts. The loop saves
+        # a related object in the body (a `user` dict, say) as it reaches that
+        # key, so the check in set_metadata alone comes too late for any key
+        # ahead of `metadata` (#7391).
+        if "metadata" in data_dict:
+            self._validate_api_metadata(data_dict["metadata"])
+        return super().on_rest_save(request, data_dict)
 
-        Raises before anything is stored: metadata must be an object, and a
-        non-null `expires_at` must be an ISO 8601 time with a timezone that the
-        expired-file clean-up's own reader accepts. The merge, `__replace` and
-        the guard on the `protected` key are the framework's.
+    def _save_metadata_from_api(self, value):
+        """Validate a `metadata` value from the API, then merge it. The merge,
+        `__replace` and the guard on the `protected` key are the framework's.
+        """
+        value = self._validate_api_metadata(value)
+        self.on_rest_update_jsonfield("metadata", value, self.active_request)
+
+    def _validate_api_metadata(self, value):
+        """Return a `metadata` value from the API as a dict, or raise.
+
+        Metadata must be an object, and a non-null `expires_at` must be an
+        ISO 8601 time with a timezone that the expired-file clean-up's own
+        reader accepts.
         """
         if isinstance(value, str):
             try:
@@ -612,7 +627,7 @@ class File(models.Model, MojoModel):
                 raise me.ValueException(
                     "metadata.expires_at must be an ISO 8601 time with a timezone, "
                     "for example 2026-10-01T00:00:00+00:00")
-        self.on_rest_update_jsonfield("metadata", value, self.active_request)
+        return value
 
     _renditions = None
     @property
