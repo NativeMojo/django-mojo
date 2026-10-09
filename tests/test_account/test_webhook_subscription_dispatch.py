@@ -298,6 +298,9 @@ def test_fanout_missing_group_fails_no_retry_and_reports_incident(opts):
     assert job.metadata.get("error_type") == "webhook_fanout_group_missing", (
         f"error_type must be set, got {job.metadata.get('error_type')!r}"
     )
+    assert job.metadata.get("result") == "failed", (
+        f"the recorded result must be 'failed', got {job.metadata.get('result')!r}"
+    )
     assert len(incident_calls) == 1, (
         f"exactly one incident must be reported, got {len(incident_calls)}"
     )
@@ -348,15 +351,21 @@ def test_fanout_per_row_failure_reports_incident_and_continues(opts):
     result = handle_fanout(
         job, publisher=failing_publish_webhook, reporter=fake_report_event)
 
-    assert result == "success", f"fan-out must succeed (skip-and-continue), got {result!r}"
+    assert result == "incomplete", (
+        f"fan-out must continue past the failing row and report 'incomplete', got {result!r}"
+    )
     assert job.metadata["published_count"] == 2, (
         f"the two OK rows must publish, got published_count={job.metadata.get('published_count')}"
     )
     assert job.metadata["failed_count"] == 1, (
         f"exactly the one failing row must be counted, got failed_count={job.metadata.get('failed_count')}"
     )
-    assert len(incident_calls) == 1, (
-        f"exactly one incident must be reported for the failing row, got {len(incident_calls)}"
+    assert len(incident_calls) == 2, (
+        f"one incident for the failing row plus one summary must be reported, got {len(incident_calls)}"
+    )
+    _, summary_kwargs = incident_calls[1]
+    assert summary_kwargs.get("category") == "webhook:fanout:incomplete", (
+        f"the second incident must be the summary, got {summary_kwargs.get('category')!r}"
     )
     _, ic_kwargs = incident_calls[0]
     assert ic_kwargs.get("category") == "webhook:fanout:error", (
@@ -396,3 +405,362 @@ def test_fanout_does_not_publish_for_other_groups(opts):
     )
 
     WebhookSubscription.objects.filter(group__in=[a, b]).delete()
+
+
+# ---------------------------------------------------------------------------
+# Delivery key length, real counts and the recorded result (maestro #7270)
+# ---------------------------------------------------------------------------
+
+JOB_KEY_COLUMN_LEN = 64
+MAX_SUBSCRIPTION_ID = 9223372036854775807  # BigAutoField upper bound, 19 digits
+
+
+def _sha256_hex(text):
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _fanout_job(group_id, event_type, idempotency_key=None, data=None):
+    return _StubJob(payload={
+        "group_id": group_id,
+        "event_type": event_type,
+        "data": data if data is not None else {},
+        "idempotency_key": idempotency_key,
+        "channel": "webhooks",
+    })
+
+
+def _key_for_combined_length(sub_id, length, fill="k"):
+    """A caller key whose combined '<key>_<sub_id>' text is exactly `length` long."""
+    return fill * (length - 1 - len(str(sub_id)))
+
+
+class _RecordingPublisher:
+    """Local stand-in for jobs.publish_webhook: records each call's kwargs and
+    returns a made-up job id. `fail_suffix` makes one receiver raise.
+    """
+    def __init__(self, fail_suffix=None):
+        self.calls = []
+        self.fail_suffix = fail_suffix
+
+    def __call__(self, **kwargs):
+        if self.fail_suffix and kwargs.get("url", "").endswith(self.fail_suffix):
+            raise RuntimeError("forced failure for testing")
+        self.calls.append(kwargs)
+        return f"fake-job-{len(self.calls)}"
+
+
+@th.django_unit_test()
+def test_fanout_counts_are_real_totals_above_sample_cap(opts):
+    from mojo.apps.account.models import Group, WebhookSubscription
+    from mojo.apps.account.services.webhooks import handle_fanout, PUBLISHED_JOB_ID_CAP
+
+    g = Group.objects.get(pk=opts.group_id)
+    WebhookSubscription.objects.filter(group=g).delete()
+    total = PUBLISHED_JOB_ID_CAP + 10
+    for n in range(total):
+        _make_sub(g, f"/many-{n}", events=["evt.many"])
+
+    publisher = _RecordingPublisher()
+    job = _fanout_job(g.pk, "evt.many")
+    handle_fanout(job, publisher=publisher)
+
+    assert len(publisher.calls) == total, (
+        f"every one of the {total} subscriptions must be published to, got {len(publisher.calls)}"
+    )
+    assert job.metadata["published_count"] == total, (
+        f"published_count must be the real total {total}, not the sample size; "
+        f"got {job.metadata.get('published_count')}"
+    )
+    assert job.metadata["matched_count"] == total, (
+        f"matched_count must be the real total {total}, got {job.metadata.get('matched_count')}"
+    )
+    assert len(job.metadata["published_job_ids"]) == PUBLISHED_JOB_ID_CAP, (
+        f"the id sample must hold {PUBLISHED_JOB_ID_CAP} ids, got {len(job.metadata['published_job_ids'])}"
+    )
+    assert job.metadata.get("published_job_ids_truncated") is True, (
+        f"the sample must be flagged as cut short, got {job.metadata.get('published_job_ids_truncated')!r}"
+    )
+
+    WebhookSubscription.objects.filter(group=g).delete()
+
+
+@th.django_unit_test()
+def test_fanout_key_at_64_character_boundary(opts):
+    from mojo.apps.account.models import Group, WebhookSubscription
+    from mojo.apps.account.services.webhooks import handle_fanout
+    from mojo.apps.jobs.models import Job
+
+    g = Group.objects.get(pk=opts.group_id)
+    WebhookSubscription.objects.filter(group=g).delete()
+    sub = _make_sub(g, "/boundary", events=["evt.boundary"])
+
+    exact_key = _key_for_combined_length(sub.pk, JOB_KEY_COLUMN_LEN, fill="e")
+    over_key = _key_for_combined_length(sub.pk, JOB_KEY_COLUMN_LEN + 1, fill="o")
+    exact_combined = f"{exact_key}_{sub.pk}"
+    over_combined = f"{over_key}_{sub.pk}"
+    expected_over = _sha256_hex(over_combined)
+    Job.objects.filter(idempotency_key__in=[exact_combined, expected_over]).delete()
+
+    created_ids = []
+    try:
+        job = _fanout_job(g.pk, "evt.boundary", idempotency_key=exact_key)
+        handle_fanout(job)
+        created_ids += job.metadata["published_job_ids"]
+        assert job.metadata["failed_count"] == 0 and job.metadata["published_count"] == 1, (
+            f"a combined key of exactly {JOB_KEY_COLUMN_LEN} characters must publish, got {job.metadata}"
+        )
+        stored = Job.objects.get(id=job.metadata["published_job_ids"][0]).idempotency_key
+        assert stored == exact_combined, (
+            f"a combined key of exactly {JOB_KEY_COLUMN_LEN} characters must be stored as its "
+            f"exact text, got {stored!r}"
+        )
+
+        job = _fanout_job(g.pk, "evt.boundary", idempotency_key=over_key)
+        handle_fanout(job)
+        created_ids += job.metadata["published_job_ids"]
+        assert job.metadata["failed_count"] == 0 and job.metadata["published_count"] == 1, (
+            f"a combined key of {JOB_KEY_COLUMN_LEN + 1} characters must still publish its "
+            f"delivery, got {job.metadata}"
+        )
+        stored = Job.objects.get(id=job.metadata["published_job_ids"][0]).idempotency_key
+        assert stored == expected_over, (
+            f"a combined key one character too long must be stored as the SHA-256 hex digest "
+            f"of the combined text, got {stored!r}"
+        )
+        assert len(stored) == JOB_KEY_COLUMN_LEN, (
+            f"the stored digest must be {JOB_KEY_COLUMN_LEN} characters, got {len(stored)}"
+        )
+    finally:
+        Job.objects.filter(id__in=created_ids).delete()
+        WebhookSubscription.objects.filter(group=g).delete()
+
+
+@th.django_unit_test()
+def test_child_key_fits_at_maximum_subscription_id(opts):
+    from mojo.apps.account.services.webhooks import child_idempotency_key
+
+    key_44 = "a" * 44
+    exact = child_idempotency_key(key_44, MAX_SUBSCRIPTION_ID)
+    assert exact == f"{key_44}_{MAX_SUBSCRIPTION_ID}", (
+        f"a 44-character key with the largest subscription id must keep its exact form, got {exact!r}"
+    )
+    assert len(exact) == JOB_KEY_COLUMN_LEN, (
+        f"that exact form is {JOB_KEY_COLUMN_LEN} characters, got {len(exact)}"
+    )
+    for length in (45, 255):
+        key = "b" * length
+        child = child_idempotency_key(key, MAX_SUBSCRIPTION_ID)
+        assert child == _sha256_hex(f"{key}_{MAX_SUBSCRIPTION_ID}"), (
+            f"a {length}-character key with the largest subscription id must become the SHA-256 "
+            f"hex digest of the combined text, got {child!r}"
+        )
+        assert len(child) == JOB_KEY_COLUMN_LEN, (
+            f"the digest for a {length}-character key must be {JOB_KEY_COLUMN_LEN} characters, "
+            f"got {len(child)}"
+        )
+
+
+@th.django_unit_test()
+def test_dispatch_refuses_overlong_key_in_caller_thread(opts):
+    from mojo.apps.account.models import Group
+    from mojo.apps.account.services.webhooks import dispatch, FANOUT_FUNC
+    from mojo.apps.jobs.models import Job
+
+    g = Group.objects.get(pk=opts.group_id)
+    long_key = "refuse7270" + "x" * 246
+    assert len(long_key) == 256, f"test key must be 256 characters, got {len(long_key)}"
+    queued = Job.objects.filter(func=FANOUT_FUNC, payload__idempotency_key=long_key)
+    queued.delete()
+
+    raised = None
+    try:
+        dispatch(g, "evt.refuse", {"v": 1}, idempotency_key=long_key)
+    except ValueError as err:
+        raised = err
+    job_exists = queued.exists()
+    queued.delete()
+
+    assert raised is not None, "dispatch must raise ValueError for a 256-character idempotency key"
+    assert "255" in str(raised) and "256" in str(raised), (
+        f"the error must name the limit and the length received, got {str(raised)!r}"
+    )
+    assert long_key not in str(raised), "the error must not repeat the caller's key"
+    assert not job_exists, "no fan-out job may be queued for a refused key"
+
+    job_id = dispatch(g, "evt.refuse", {"v": 1}, idempotency_key=long_key[:255])
+    assert job_id, "a 255-character idempotency key must be accepted"
+    Job.objects.filter(id=job_id).delete()
+
+
+@th.django_unit_test()
+def test_child_keys_distinct_per_receiver_and_group(opts):
+    from mojo.apps.account.models import Group, WebhookSubscription
+    from mojo.apps.account.services.webhooks import handle_fanout
+
+    a = Group.objects.get(pk=opts.group_id)
+    b = Group.objects.get(pk=opts.other_group_id)
+    WebhookSubscription.objects.filter(group__in=[a, b]).delete()
+    _make_sub(a, "/a1", events=["evt.distinct"])
+    _make_sub(a, "/a2", events=["evt.distinct"])
+    _make_sub(b, "/b1", events=["evt.distinct"])
+
+    long_key = "d" * 100
+    publisher = _RecordingPublisher()
+    handle_fanout(_fanout_job(a.pk, "evt.distinct", idempotency_key=long_key), publisher=publisher)
+    handle_fanout(_fanout_job(b.pk, "evt.distinct", idempotency_key=long_key), publisher=publisher)
+
+    keys = [call.get("idempotency_key") for call in publisher.calls]
+    assert len(keys) == 3, f"three receivers must be published to, got {len(keys)}"
+    assert len(set(keys)) == 3, (
+        f"one caller key must give three different delivery keys across receivers and groups, got {keys!r}"
+    )
+    for key in keys:
+        assert key and len(key) <= JOB_KEY_COLUMN_LEN, (
+            f"every delivery key must fit the {JOB_KEY_COLUMN_LEN}-character job key column, "
+            f"got {len(key or '')} characters"
+        )
+
+    WebhookSubscription.objects.filter(group__in=[a, b]).delete()
+
+
+@th.django_unit_test()
+def test_repeat_publication_deduplicates_per_receiver(opts):
+    from mojo.apps.account.models import Group, WebhookSubscription
+    from mojo.apps.account.services.webhooks import handle_fanout
+    from mojo.apps.jobs.models import Job
+
+    g = Group.objects.get(pk=opts.group_id)
+    WebhookSubscription.objects.filter(group=g).delete()
+    s1 = _make_sub(g, "/rep-1", events=["evt.repeat"])
+    s2 = _make_sub(g, "/rep-2", events=["evt.repeat"])
+
+    created_ids = set()
+    try:
+        for label, caller_key in (("short", "repeat7270"), ("overlong", "repeat7270" + "r" * 90)):
+            combined = [f"{caller_key}_{s.pk}" for s in (s1, s2)]
+            stored_keys = [c if len(c) <= JOB_KEY_COLUMN_LEN else _sha256_hex(c) for c in combined]
+            Job.objects.filter(idempotency_key__in=stored_keys).delete()
+
+            first = _fanout_job(g.pk, "evt.repeat", idempotency_key=caller_key)
+            handle_fanout(first)
+            created_ids.update(first.metadata["published_job_ids"])
+            second = _fanout_job(g.pk, "evt.repeat", idempotency_key=caller_key)
+            handle_fanout(second)
+            created_ids.update(second.metadata["published_job_ids"])
+
+            assert first.metadata["failed_count"] == 0 and first.metadata["published_count"] == 2, (
+                f"{label} key: the first publication must reach both receivers, got {first.metadata}"
+            )
+            assert second.metadata["failed_count"] == 0, (
+                f"{label} key: the repeat must not fail, got {second.metadata}"
+            )
+            assert sorted(first.metadata["published_job_ids"]) == sorted(second.metadata["published_job_ids"]), (
+                f"{label} key: the repeat must return the same delivery jobs, got "
+                f"{first.metadata['published_job_ids']!r} then {second.metadata['published_job_ids']!r}"
+            )
+            for stored in stored_keys:
+                count = Job.objects.filter(idempotency_key=stored).count()
+                assert count == 1, (
+                    f"{label} key: exactly one delivery row per receiver must exist, got {count}"
+                )
+    finally:
+        Job.objects.filter(id__in=created_ids).delete()
+        WebhookSubscription.objects.filter(group=g).delete()
+
+
+@th.django_unit_test()
+def test_fanout_incomplete_result_and_single_summary_incident(opts):
+    from mojo.apps.account.models import Group, WebhookSubscription
+    from mojo.apps.account.services.webhooks import handle_fanout
+
+    g = Group.objects.get(pk=opts.group_id)
+    WebhookSubscription.objects.filter(group=g).delete()
+    _make_sub(g, "/inc-ok-a", events=["evt.incomplete"])
+    failing = _make_sub(g, "/inc-will-fail", events=["evt.incomplete"])
+    _make_sub(g, "/inc-ok-b", events=["evt.incomplete"])
+
+    incident_calls = []
+
+    def fake_report_event(*args, **kwargs):
+        incident_calls.append((args, kwargs))
+
+    job = _fanout_job(g.pk, "evt.incomplete", data={"secret_marker": "payload-7270-do-not-report"})
+    result = handle_fanout(
+        job, publisher=_RecordingPublisher(fail_suffix="/inc-will-fail"), reporter=fake_report_event)
+
+    assert result == "incomplete", f"a failed receiver must make the fan-out 'incomplete', got {result!r}"
+    assert job.metadata.get("result") == "incomplete", (
+        f"the recorded result must be 'incomplete', got {job.metadata.get('result')!r}"
+    )
+    assert job.metadata["failed_count"] == 1, f"one receiver failed, got {job.metadata.get('failed_count')}"
+    assert job.metadata["published_count"] == 2, (
+        f"two receivers were published, got {job.metadata.get('published_count')}"
+    )
+    assert job.metadata["matched_count"] == 3, (
+        f"three receivers matched, got {job.metadata.get('matched_count')}"
+    )
+
+    per_row = [kw for _, kw in incident_calls if kw.get("category") == "webhook:fanout:error"]
+    summary = [kw for _, kw in incident_calls if kw.get("category") == "webhook:fanout:incomplete"]
+    assert len(per_row) == 1, f"the per-receiver incident must stay, one per failed receiver; got {len(per_row)}"
+    assert per_row[0].get("subscription_id") == failing.pk, (
+        f"the per-receiver incident must name subscription {failing.pk}, got {per_row[0].get('subscription_id')!r}"
+    )
+    assert len(summary) == 1, (
+        f"exactly one summary incident per incomplete publication, got {len(summary)}"
+    )
+    assert len(incident_calls) == 2, f"no other incident is expected, got {len(incident_calls)}"
+
+    kw = summary[0]
+    assert kw.get("level") == 6, f"the summary incident must be level 6, got {kw.get('level')!r}"
+    assert kw.get("event_type") == "evt.incomplete", (
+        f"the summary must carry the event type, got {kw.get('event_type')!r}"
+    )
+    assert kw.get("group") == g, f"the summary must carry the group, got {kw.get('group')!r}"
+    assert kw.get("failed_count") == 1, f"summary failed_count must be 1, got {kw.get('failed_count')!r}"
+    assert kw.get("matched_count") == 3, f"summary matched_count must be 3, got {kw.get('matched_count')!r}"
+    assert kw.get("published_count") == 2, (
+        f"summary published_count must be 2, got {kw.get('published_count')!r}"
+    )
+    assert kw.get("fanout_job_id") == job.id, (
+        f"the summary must carry the fan-out job id, got {kw.get('fanout_job_id')!r}"
+    )
+    summary_text = repr(kw)
+    assert "payload-7270-do-not-report" not in summary_text, "the summary incident must not carry the payload"
+    assert "dispatch.example.test" not in summary_text, (
+        "the summary incident must not carry a receiver address"
+    )
+
+    WebhookSubscription.objects.filter(group=g).delete()
+
+
+@th.django_unit_test()
+def test_fanout_success_records_result(opts):
+    from mojo.apps.account.models import Group, WebhookSubscription
+    from mojo.apps.account.services.webhooks import handle_fanout
+
+    g = Group.objects.get(pk=opts.group_id)
+    WebhookSubscription.objects.filter(group=g).delete()
+    _make_sub(g, "/all-ok-a", events=["evt.allok"])
+    _make_sub(g, "/all-ok-b", events=["evt.allok"])
+
+    incident_calls = []
+
+    def fake_report_event(*args, **kwargs):
+        incident_calls.append((args, kwargs))
+
+    job = _fanout_job(g.pk, "evt.allok")
+    result = handle_fanout(job, publisher=_RecordingPublisher(), reporter=fake_report_event)
+
+    assert result == "success", f"full success must return 'success', got {result!r}"
+    assert job.metadata.get("result") == "success", (
+        f"the recorded result must be 'success', got {job.metadata.get('result')!r}"
+    )
+    assert job.metadata.get("published_job_ids_truncated") is False, (
+        f"a sample that holds every id must not be flagged as cut short, "
+        f"got {job.metadata.get('published_job_ids_truncated')!r}"
+    )
+    assert incident_calls == [], f"a full success must raise no incident, got {incident_calls!r}"
+
+    WebhookSubscription.objects.filter(group=g).delete()
