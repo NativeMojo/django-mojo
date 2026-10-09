@@ -326,16 +326,63 @@ def publish_access_changed(user_type, user_id, using=None, *, publisher=None):
                 f"realtime: could not publish access_changed for {user_type}:{user_id}")
 
     connection = transaction.get_connection(using)
-    if not connection.in_atomic_block and not connection.get_autocommit():
-        # Autocommit is switched off and the caller ends the transaction by
-        # hand. Django refuses on_commit there, so register inside an atomic
-        # block (a savepoint in this mode): the callback then runs when the
-        # caller commits and switches autocommit back on, and is dropped by
-        # a rollback.
-        with transaction.atomic(using=using):
-            transaction.on_commit(send, using=using)
+    if _ends_by_hand(connection):
+        _after_manual_commit(connection).append(send)
         return
     transaction.on_commit(send, using=using)
+
+
+def _ends_by_hand(connection):
+    """Whether the open transaction is one the caller commits by hand:
+    autocommit is switched off (``transaction.set_autocommit(False)``) and
+    no atomic block that commits on exit is open.
+
+    Django's on_commit is no use there. Outside an atomic block it raises.
+    Inside one it keeps the callback past ``commit()`` until autocommit is
+    switched back on, and a rollback of a later transaction in between
+    drops it. The announcement would then be late or lost although the
+    removal is committed.
+    """
+    if connection.get_autocommit():
+        return False
+    if not connection.in_atomic_block:
+        return True
+    # An outermost atomic block entered with autocommit off does not commit
+    # on exit; Django notes that here.
+    return not getattr(connection, "commit_on_exit", True)
+
+
+def _after_manual_commit(connection):
+    """The callbacks to run right after the next ``commit()`` on this
+    connection. ``rollback()`` drops them.
+
+    Django has no hook for a commit made by hand, so the connection's own
+    ``commit`` and ``rollback`` are wrapped, once, the first time an
+    announcement is made in this mode. A savepoint rollback does not drop a
+    callback, and neither does a connection closed without either call: it
+    then runs after a later commit. That is an announcement too many, which
+    only costs a re-check.
+    """
+    pending = getattr(connection, "_mojo_after_manual_commit", None)
+    if pending is not None:
+        return pending
+    pending = connection._mojo_after_manual_commit = []
+    commit, rollback = connection.commit, connection.rollback
+
+    def commit_then_run():
+        commit()
+        callbacks = pending[:]
+        del pending[:]
+        for callback in callbacks:
+            callback()
+
+    def rollback_then_drop():
+        rollback()
+        del pending[:]
+
+    connection.commit = commit_then_run
+    connection.rollback = rollback_then_drop
+    return pending
 
 
 def request(user_type, user_id, data, timeout=30):

@@ -719,6 +719,9 @@ def test_save_with_autocommit_off_announces_on_commit_and_not_on_rollback(opts):
     # with autocommit switched off raised after it had saved, because Django
     # refuses on_commit there. The save must not raise; the announcement
     # follows the caller's commit and a rollback drops it.
+    # Review 86920: the announcement must go out at the commit itself, not
+    # when autocommit is switched back on, and a later transaction that is
+    # rolled back before that must not take it away.
     from django.db import transaction
 
     for kind in ("user", "member"):
@@ -753,12 +756,35 @@ def test_save_with_autocommit_off_announces_on_commit_and_not_on_rollback(opts):
                     assert pump(seconds=0.4) == 0, \
                         f"{kind}: nothing may be published before the commit"
                     transaction.commit()
-                    # Django runs a manual commit's callbacks when autocommit
-                    # is switched back on.
-                    transaction.set_autocommit(True)
+                    # Autocommit is still off here.
+                    assert pump(handler) == 1, \
+                        f"{kind}: a removal committed by hand must be announced at the commit"
+                    _assert_stopped(handler, fx, f"{kind} removal committed with autocommit off")
+                assert not model.objects.get(pk=pk).permissions.get("chat"), \
+                    f"control ({kind}): the commit must store the removal"
+                assert pump(seconds=0.4) == 0, \
+                    f"{kind}: switching autocommit back on must not announce again"
+
+        # Committed by hand inside an atomic block, which is only a savepoint
+        # in this mode; then a later transaction is rolled back before
+        # autocommit is switched back on.
+        with _room(f"ann-manual-atomic-{kind}", group=True) as fx:
+            model, pk = _grant(fx, kind)
+            handler = _open_socket(fx)
+            with _announcements(fx.user.pk) as pump:
+                with _autocommit_off():
+                    with transaction.atomic():
+                        row = model.objects.get(pk=pk)
+                        row.permissions = {}
+                        row.save(update_fields=["permissions"])
+                    assert pump(seconds=0.4) == 0, \
+                        f"{kind}: nothing may be published before the commit"
+                    transaction.commit()
+                    model.objects.get(pk=pk)
+                    transaction.rollback()
                 assert not model.objects.get(pk=pk).permissions.get("chat"), \
                     f"control ({kind}): the commit must store the removal"
                 assert pump(handler) == 1, \
-                    f"{kind}: a removal committed by hand must publish one announcement"
-            _assert_stopped(handler, fx, f"{kind} removal committed with autocommit off")
+                    f"{kind}: a later rollback must not take a committed removal's announcement away"
+            _assert_stopped(handler, fx, f"{kind} removal committed by hand, then a later rollback")
 
