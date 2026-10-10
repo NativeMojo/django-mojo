@@ -2,10 +2,11 @@
 
 ``on_rest_save_field`` dispatches ``set_<key>`` for any key in the payload and
 ``FileManager.RestMeta.SAVE_PERMS`` is the group-level ``files`` permission, so
-an ungated ``set_assume_role_arn`` would let any file admin point the platform's
-own credentials at a role of their choosing — a confused deputy. Writing the
-role settings therefore requires a superuser, and the external ID reads back
-only as a boolean.
+an unchecked role would let any file admin point the platform's own credentials
+at a role of their choosing — a confused deputy. ``on_rest_pre_save`` therefore
+refuses a non-superuser who leaves a role on a store that runs on platform
+credentials (21_test_manager_role_generic_keys.py covers the REST routes), and
+the external ID reads back only as a boolean.
 """
 import json
 
@@ -99,27 +100,28 @@ def test_non_superuser_cannot_set_assume_role_arn(opts):
     fm.set_assume_role_arn(ROLE_ARN)
     fm.save()
 
+    def refused(setter, value):
+        candidate = _fm(opts.s3_fm_id)
+        getattr(candidate, setter)(value)
+        try:
+            candidate.on_rest_pre_save({}, False)
+        except me.PermissionDeniedException:
+            return True
+        return False
+
     context, token = _as_request_user(opts.member)
-    denied = False
     try:
-        try:
-            fm.set_assume_role_arn(OTHER_ROLE_ARN)
-        except me.PermissionDeniedException:
-            denied = True
-        external_denied = False
-        try:
-            fm.set_external_id("attacker-external-id")
-        except me.PermissionDeniedException:
-            external_denied = True
+        denied = refused("set_assume_role_arn", OTHER_ROLE_ARN)
+        external_denied = refused("set_external_id", "attacker-external-id")
     finally:
         context.reset(token)
 
     assert_true(denied,
                 "A user holding only the group-level files permission must not be able "
-                "to set assume_role_arn — that would repoint the platform's own AWS "
-                "identity at a role they control")
+                "to set assume_role_arn on a store that runs on platform credentials — "
+                "that would repoint the platform's own AWS identity at a role they control")
     assert_true(external_denied,
-                "set_external_id must be gated the same way as set_assume_role_arn")
+                "a changed external_id must be refused the same way as a changed role")
     assert_eq(_fm(opts.s3_fm_id).assume_role_arn, ROLE_ARN,
               "The denied write must not have changed the stored role")
 
