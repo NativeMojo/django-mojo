@@ -52,9 +52,11 @@ Payload: `{"file_id": <int>}`
 - No-op if file is not in `completed` status.
 - Calls `renderer.create_all_renditions(file)` which iterates the matching
   renderer's automatic roles and skips completed roles that already exist.
-  Video uploads automatically create their two thumbnails and 10-second
-  preview. The full MP4 and WebM transcodes remain declared roles, but must be
-  requested explicitly.
+  Video uploads automatically create their two thumbnails, the 10-second
+  preview and the full `video_mp4` transcode (H.265). `video_webm` is a
+  declared role that must be requested explicitly. The jobs engine runs at
+  most one rendition job at a time per engine (`JOBS_CHANNEL_LIMITS`), which
+  is what keeps the full transcode from crowding out ordinary jobs.
 
 ### `regenerate_renditions(job)`
 
@@ -70,15 +72,15 @@ POST /api/fileman/file/123
 {"regenerate_renditions": ["thumbnail"]}
 ```
 
-Request a full video transcode explicitly when an application needs one:
+Request the WebM transcode explicitly when an application needs one:
 
 ```json
 POST /api/fileman/file/123
-{"regenerate_renditions": ["video_mp4"]}
+{"regenerate_renditions": ["video_webm"]}
 ```
 
-Regenerate all automatic roles. For video files this still excludes MP4 and
-WebM; request either role explicitly as shown above:
+Regenerate all automatic roles (for video: thumbnails, preview and the mp4;
+WebM is still only built on explicit request):
 
 ```json
 POST /api/fileman/file/123
@@ -91,8 +93,8 @@ POST /api/fileman/file/123
 
 - `image.py` — Pillow-based thumbnails and resizes.
 - `vector.py` — SVG rasterized to PNG, then handed to the image path. See [SVG rasterization](#svg-rasterization) below.
-- `video.py` — ffmpeg-based thumbnails and transcodes. Full MP4 and WebM
-  transcodes are opt-in roles.
+- `video.py` — ffmpeg-based thumbnails and transcodes. The mp4 (H.265) runs
+  on upload; WebM is an opt-in role.
 - `audio.py` — ffmpeg-based waveform/transcode.
 - `document.py` — PDF page previews via poppler/ImageMagick.
 
@@ -216,7 +218,7 @@ one per media category:
 | Key | Renderer | Roles |
 |---|---|---|
 | `FILEMAN_RENDITIONS_IMAGE` | `ImageRenderer` (and SVG via `VectorRenderer`) | `thumbnail`, `thumbnail_sm`, `thumbnail_md`, `thumbnail_lg`, `square_sm` |
-| `FILEMAN_RENDITIONS_VIDEO` | `VideoRenderer` | `thumbnail`, `video_thumbnail`, `video_preview`, `video_mp4`, `video_webm`, `video_hevc` |
+| `FILEMAN_RENDITIONS_VIDEO` | `VideoRenderer` | `thumbnail`, `video_thumbnail`, `video_preview`, `video_mp4`, `video_webm` |
 | `FILEMAN_RENDITIONS_DOCUMENT` | `DocumentRenderer` | `thumbnail`, `document_thumbnail`, `document_preview`, `document_pdf` |
 
 The value is an object keyed by role, plus an optional `_automatic` list:
@@ -224,8 +226,8 @@ The value is an object keyed by role, plus an optional `_automatic` list:
 ```json
 {
   "thumbnail": {"width": 200, "height": 200},
-  "video_hevc": {"crf": 24, "preset": "fast"},
-  "_automatic": ["thumbnail", "video_thumbnail", "video_preview", "video_hevc"]
+  "video_mp4": {"crf": 24, "preset": "fast"},
+  "_automatic": ["thumbnail", "video_thumbnail", "video_preview", "video_mp4", "video_webm"]
 }
 ```
 
@@ -263,7 +265,7 @@ fall back to the default. Group rows are validated the same way.
 |---|---|---|
 | image | all | `width`, `height` 1–4096 · `mode` contain / crop / stretch · `format` jpeg / jpg / png / webp / gif · `quality` 1–100 (JPEG and WEBP only; PNG and GIF are lossless and ignore it) |
 | video · thumbnail | `thumbnail`, `video_thumbnail` | `width`, `height` · `time_offset` `HH:MM:SS` · `format` jpg / png |
-| video · transcode | `video_preview`, `video_mp4`, `video_webm`, `video_hevc` | `width`, `height` · `format` mp4 / webm · `codec` h264 / h265 · `bitrate` (`2000k`, `2M`) · `crf` 18–51 · `preset` ultrafast … slow · `duration` 1–60 s · `audio` bool |
+| video · transcode | `video_preview`, `video_mp4`, `video_webm` | `width`, `height` · `format` mp4 / webm · `codec` h264 / h265 · `bitrate` (`2000k`, `2M`) · `crf` 18–51 · `preset` ultrafast … slow · `duration` 1–60 s · `audio` bool |
 | document · thumbnail | `thumbnail`, `document_thumbnail` | `width`, `height` · `page` 1–500 · `format` jpg / png |
 | document · pdf | `document_preview`, `document_pdf` | `quality` low / medium / high · `max_pages` 1–200 |
 
@@ -285,15 +287,14 @@ fallback returns the untruncated PDF.
 
 | codec | Encoder | Driven by | Notes |
 |---|---|---|---|
-| `h264` (default) | libx264 | `bitrate` | Today's behavior, unchanged. Plays everywhere. |
-| `h265` | libx265 | `crf` + `preset` (`bitrate` ignored) | Tagged `hvc1` for Apple players, `yuv420p`. About half the bytes of H.264 at the same quality and **3–10× the encode time**. Plays in Safari and in Chrome/Edge with hardware decode; Firefox support is spotty. |
+| `h265` (default for `video_mp4`) | libx265 | `crf` + `preset` (`bitrate` ignored) | Tagged `hvc1` for Apple players, `yuv420p`. About half the bytes of H.264 at the same quality and **3–10× the encode time**. Plays in Safari and in Chrome/Edge with hardware decode. Firefox is not a supported player. |
+| `h264` (default for `video_preview`) | libx264 | `bitrate` | The pre-1.34 `video_mp4` behavior. Plays everywhere. |
 
-`video_hevc` is the declared H.265 role (1280×720, CRF 28, preset medium). It
-is **not** automatic — adding it to `_automatic` multiplies the CPU every
-video upload costs, so keep `video_mp4` as the compatibility rendition and
-request HEVC where the players are known. A host whose ffmpeg lacks
-`libx265` fails the role with a bounded `failed` rendition row; there is no
-encoder probe.
+`video_mp4` defaults to H.265 (1280×720, CRF 28, preset medium) and runs on
+upload. A deployment that must serve Firefox, or that cannot afford the
+encode time, sets `{"video_mp4": {"codec": "h264", "bitrate": "2000k"}}` or
+adds `video_webm` to `_automatic`. A host whose ffmpeg lacks `libx265` fails
+the role with a bounded `failed` rendition row; there is no encoder probe.
 
 Scaling fits the frame into the `width`×`height` box, keeps the aspect
 ratio, **never upscales** (the same semantics as the image renderer's

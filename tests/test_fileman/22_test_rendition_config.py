@@ -115,18 +115,21 @@ def test_merge_semantics(opts):
     assert_eq(automatic, (), "an empty _automatic list means nothing runs on upload")
 
 
-@th.unit_test("Rendition config: video automatic roles default to #4909's opt-in set")
-def test_video_automatic_default_unchanged(opts):
+@th.unit_test("Rendition config: the mp4 rendition is H.265 and runs on upload; webm stays opt-in")
+def test_video_automatic_default(opts):
     from mojo.apps.fileman.renderer.base import RenditionRole
     from mojo.apps.fileman.renderer.video import VideoRenderer
 
     assert_eq(
         set(VideoRenderer.default_automatic_roles()),
-        {RenditionRole.VIDEO_THUMBNAIL, RenditionRole.THUMBNAIL, RenditionRole.VIDEO_PREVIEW},
-        "full transcodes (mp4/webm/hevc) must stay opt-in by default",
+        {RenditionRole.VIDEO_THUMBNAIL, RenditionRole.THUMBNAIL,
+         RenditionRole.VIDEO_PREVIEW, RenditionRole.VIDEO_MP4},
+        "the full mp4 transcode must run on upload; webm must stay opt-in",
     )
-    assert_eq(VideoRenderer.default_renditions[RenditionRole.VIDEO_HEVC]["codec"], "h265",
-              "video_hevc must be declared as an H.265 role")
+    mp4 = VideoRenderer.default_renditions[RenditionRole.VIDEO_MP4]
+    assert_eq(mp4["codec"], "h265", "video_mp4 must default to H.265")
+    assert_true("bitrate" not in mp4 and mp4["crf"] == 28,
+                "an H.265 default must be CRF-driven, not bitrate-driven")
 
 
 @th.unit_test("Rendition config: every configurable renderer applies its own settings key")
@@ -227,8 +230,8 @@ def test_validators_refuse_bad_values(opts):
         ("FILEMAN_RENDITIONS_IMAGE", {"_automatic": ["thumbnail", "ghost"]}, "_automatic: unknown role ghost"),
         ("FILEMAN_RENDITIONS_IMAGE", ["thumbnail"], "must be a JSON object"),
         ("FILEMAN_RENDITIONS_VIDEO", {"video_webm": {"codec": "h265"}}, "video_webm.codec: only valid when format is mp4"),
-        ("FILEMAN_RENDITIONS_VIDEO", {"video_hevc": {"crf": 99}}, "video_hevc.crf: must be between 18 and 51"),
-        ("FILEMAN_RENDITIONS_VIDEO", {"video_hevc": {"preset": "veryslow"}}, "video_hevc.preset: must be one of"),
+        ("FILEMAN_RENDITIONS_VIDEO", {"video_mp4": {"crf": 99}}, "video_mp4.crf: must be between 18 and 51"),
+        ("FILEMAN_RENDITIONS_VIDEO", {"video_mp4": {"preset": "veryslow"}}, "video_mp4.preset: must be one of"),
         ("FILEMAN_RENDITIONS_VIDEO", {"video_mp4": {"bitrate": "fast"}}, "video_mp4.bitrate: must look like"),
         ("FILEMAN_RENDITIONS_VIDEO", {"thumbnail": {"time_offset": "3s"}}, "thumbnail.time_offset: must look like"),
         ("FILEMAN_RENDITIONS_VIDEO", {"thumbnail": {"codec": "h265"}}, "thumbnail.codec: unknown option"),
@@ -246,16 +249,16 @@ def test_validators_refuse_bad_values(opts):
 def test_validators_accept_valid_rows(opts):
     from mojo.apps.account.models import Setting
     try:
-        # video_mp4 carries codec: h264 in its class default; switching the
+        # video_mp4 carries codec: h265 in its class default; switching the
         # format to webm must still be accepted (the codec is simply ignored).
         assert_eq(_refused("FILEMAN_RENDITIONS_VIDEO", {"video_mp4": {"format": "webm"}}, opts.group),
                   None, "changing a role's format to webm must not be refused for its default codec")
         # The accepted row persisted; clear it before the next valid write.
         Setting.remove("FILEMAN_RENDITIONS_VIDEO", group=opts.group)
         assert_eq(_refused("FILEMAN_RENDITIONS_VIDEO",
-                           {"video_mp4": {"codec": "h265", "crf": 24, "preset": "fast"},
-                            "_automatic": ["thumbnail", "video_hevc"]}, opts.group),
-                  None, "a complete, in-range h265 override must be accepted")
+                           {"video_mp4": {"codec": "h264", "bitrate": "2000k"},
+                            "_automatic": ["thumbnail", "video_mp4", "video_webm"]}, opts.group),
+                  None, "switching the mp4 back to H.264 with webm on upload must be accepted")
         assert_eq(_refused("FILEMAN_RENDITIONS_IMAGE", {}, opts.group), None,
                   "an empty object means defaults and must be accepted")
     finally:
@@ -340,9 +343,10 @@ def test_describe_shape(opts):
     report = config.describe()
     video = report["categories"]["video"]
     assert_eq(video["key"], "FILEMAN_RENDITIONS_VIDEO", "each category must name its setting key")
-    assert_eq(video["defaults"]["video_hevc"]["codec"], "h265",
+    assert_eq(video["defaults"]["video_mp4"]["codec"], "h265",
               "defaults must come from the renderer's class dict")
-    assert_true("video_hevc" not in video["automatic_default"],
+    assert_true("video_mp4" in video["automatic_default"]
+                and "video_webm" not in video["automatic_default"],
                 "automatic_default must mirror the renderer")
     assert_eq(video["role_kinds"]["thumbnail"], "thumbnail", "roles must be classified by kind")
     assert_eq(video["choices"]["transcode"]["codec"], ["h264", "h265"],
@@ -362,7 +366,7 @@ def test_options_endpoint(opts):
     resp = opts.client.get("/api/fileman/renditions/options")
     assert_eq(resp.status_code, 200, "manage_settings must read the options: %r" % resp.response)
     data = resp.json.get("data") or {}
-    assert_eq(data["categories"]["video"]["defaults"]["video_hevc"]["codec"], "h265",
+    assert_eq(data["categories"]["video"]["defaults"]["video_mp4"]["codec"], "h265",
               "the endpoint must expose the renderer defaults")
     assert_true(set(data["categories"]) == {"image", "video", "document"},
                 "all three categories must be described")

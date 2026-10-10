@@ -40,8 +40,8 @@ def setup_renderer_processes(opts):
     opts.renderer_file_id = original.pk
 
 
-@th.unit_test("Video uploads automatically build only thumbnails and the short preview")
-def test_video_automatic_roles_exclude_full_transcodes(opts):
+@th.unit_test("Video uploads automatically build thumbnails, the short preview and the mp4")
+def test_video_automatic_roles(opts):
     from mojo.apps.fileman.renderer.base import RenditionRole
     from mojo.apps.fileman.renderer.video import VideoRenderer
 
@@ -49,20 +49,14 @@ def test_video_automatic_roles_exclude_full_transcodes(opts):
     assert_eq(
         automatic,
         {RenditionRole.VIDEO_THUMBNAIL, RenditionRole.THUMBNAIL,
-         RenditionRole.VIDEO_PREVIEW},
-        "automatic video renditions must keep thumbnails and the short preview only",
+         RenditionRole.VIDEO_PREVIEW, RenditionRole.VIDEO_MP4},
+        "automatic video renditions must be the thumbnails, the short preview and the mp4; "
+        "the jobs engine's per-channel cap is what makes the full transcode safe on upload",
     )
     assert_true(
-        RenditionRole.VIDEO_HEVC not in automatic,
-        "the H.265 transcode must stay opt-in: it is several times the encode cost",
-    )
-    assert_true(
-        RenditionRole.VIDEO_MP4 in VideoRenderer.default_renditions,
-        "MP4 must remain available through an explicit role request",
-    )
-    assert_true(
-        RenditionRole.VIDEO_WEBM in VideoRenderer.default_renditions,
-        "WebM must remain available through an explicit role request",
+        RenditionRole.VIDEO_WEBM in VideoRenderer.default_renditions
+        and RenditionRole.VIDEO_WEBM not in automatic,
+        "WebM must remain available through an explicit role request but not run on upload",
     )
 
 

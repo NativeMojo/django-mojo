@@ -30,7 +30,6 @@ class RenditionRole:
     VIDEO_PREVIEW = 'video_preview'
     VIDEO_MP4 = 'video_mp4'
     VIDEO_WEBM = 'video_webm'
-    VIDEO_HEVC = 'video_hevc'
     
     # Document-specific roles
     DOCUMENT_THUMBNAIL = 'document_thumbnail'

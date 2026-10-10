@@ -29,11 +29,10 @@ the server validates them on save.
         "defaults": {
           "thumbnail": {"width": 300, "height": 169, "time_offset": "00:00:03", "format": "jpg"},
           "video_preview": {"width": 640, "height": 360, "bitrate": "500k", "duration": 10, "format": "mp4", "codec": "h264", "audio": true},
-          "video_mp4": {"width": 1280, "height": 720, "bitrate": "2000k", "format": "mp4", "codec": "h264", "audio": true},
-          "video_webm": {"width": 1280, "height": 720, "bitrate": "2000k", "format": "webm", "audio": true},
-          "video_hevc": {"width": 1280, "height": 720, "format": "mp4", "codec": "h265", "crf": 28, "preset": "medium", "audio": true}
+          "video_mp4": {"width": 1280, "height": 720, "format": "mp4", "codec": "h265", "crf": 28, "preset": "medium", "audio": true},
+          "video_webm": {"width": 1280, "height": 720, "bitrate": "2000k", "format": "webm", "audio": true}
         },
-        "automatic_default": ["video_thumbnail", "thumbnail", "video_preview"],
+        "automatic_default": ["video_thumbnail", "thumbnail", "video_preview", "video_mp4"],
         "override": null,
         "effective": {
           "roles": {"...": "defaults with the override applied"},
@@ -86,8 +85,8 @@ optional `_automatic` list replaces the set of roles that run after an upload.
 {
   "key": "FILEMAN_RENDITIONS_VIDEO",
   "value": {
-    "video_hevc": {"crf": 24, "preset": "fast"},
-    "_automatic": ["thumbnail", "video_thumbnail", "video_preview", "video_hevc"]
+    "video_mp4": {"crf": 24, "preset": "fast"},
+    "_automatic": ["thumbnail", "video_thumbnail", "video_preview", "video_mp4", "video_webm"]
   }
 }
 ```
@@ -99,7 +98,7 @@ string.
 A bad value is refused with HTTP 400 and a message that names the field:
 
 ```json
-{"status": false, "error": "video_hevc.crf: must be between 18 and 51"}
+{"status": false, "error": "video_mp4.crf: must be between 18 and 51"}
 ```
 
 Refused: an unknown role; an unknown option for that role's kind; a number
@@ -109,7 +108,7 @@ value that is not a JSON object. Render the message next to the field it
 names rather than as a generic toast.
 
 **Format wins over codec.** Changing a role's `format` to `webm` is accepted
-even though its default carries `codec: "h264"`; the codec is simply ignored
+even though its default carries `codec: "h265"`; the codec is simply ignored
 for VP8. Setting `codec: "h265"` on a role whose format is `webm` is refused.
 
 To clear an override, save `{}` as the row's value (settings rows cannot be
@@ -122,7 +121,7 @@ object means "defaults", and the options endpoint reports it as
 Changing the options does not touch existing files. Re-render one file with
 the `regenerate_renditions` action on it — see
 [Regenerating renditions](files.md#regenerating-renditions) — and read back
-its `renditions` map. An H.265 transcode (`video_hevc`) is never automatic
-unless `_automatic` names it; it costs several times the encode time of
-H.264 and does not play in every browser, so keep `video_mp4` as the
-compatibility rendition.
+its `renditions` map. `video_mp4` is H.265 by default and runs on upload; it
+plays in Safari, Chrome and Edge but not Firefox. A deployment that needs an
+H.264 file sets `{"video_mp4": {"codec": "h264", "bitrate": "2000k"}}`; one
+that needs a Firefox fallback adds `video_webm` to `_automatic`.

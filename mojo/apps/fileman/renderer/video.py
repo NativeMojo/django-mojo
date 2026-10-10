@@ -125,12 +125,18 @@ class VideoRenderer(BaseRenderer):
             'codec': 'h264',
             'audio': True,
         },
+        # The main playable rendition is H.265/HEVC in mp4: about half the
+        # bytes of H.264 at the same quality, tagged hvc1 for Safari and
+        # played by Chrome/Edge with hardware decode. Firefox is not a
+        # supported player. A deployment that needs H.264 sets
+        # {"video_mp4": {"codec": "h264", "bitrate": "2000k"}}.
         RenditionRole.VIDEO_MP4: {
             'width': 1280,
             'height': 720,
-            'bitrate': '2000k',
             'format': 'mp4',
-            'codec': 'h264',
+            'codec': 'h265',
+            'crf': 28,
+            'preset': 'medium',
             'audio': True,
         },
         RenditionRole.VIDEO_WEBM: {
@@ -140,24 +146,16 @@ class VideoRenderer(BaseRenderer):
             'format': 'webm',
             'audio': True,
         },
-        # H.265/HEVC: roughly half the bytes of H.264 at the same quality,
-        # several times the encode time, and no Firefox playback — so it is
-        # an opt-in role beside video_mp4, never a replacement for it.
-        RenditionRole.VIDEO_HEVC: {
-            'width': 1280,
-            'height': 720,
-            'format': 'mp4',
-            'codec': 'h265',
-            'crf': 28,
-            'preset': 'medium',
-            'audio': True,
-        },
     }
 
+    # The full transcode runs on upload again: the jobs engine caps rendition
+    # jobs to one at a time per engine (JOBS_CHANNEL_LIMITS), which was the
+    # reason it was ever opt-in. WebM stays declared but opt-in.
     automatic_rendition_roles = (
         RenditionRole.VIDEO_THUMBNAIL,
         RenditionRole.THUMBNAIL,
         RenditionRole.VIDEO_PREVIEW,
+        RenditionRole.VIDEO_MP4,
     )
     
     def __init__(self, file: File):
