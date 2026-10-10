@@ -129,6 +129,20 @@ def test_video_automatic_default_unchanged(opts):
               "video_hevc must be declared as an H.265 role")
 
 
+@th.unit_test("Rendition config: every configurable renderer applies its own settings key")
+def test_every_category_renderer_declares_its_config_category(opts):
+    # Regression: DocumentRenderer shipped without config_category, so
+    # FILEMAN_RENDITIONS_DOCUMENT was validated and described but never
+    # applied. A validated key that no renderer reads is a silent lie to the
+    # admin who set it.
+    from mojo.apps.fileman.renderer import config
+
+    for category in config.CATEGORY_KEYS:
+        renderer = config.renderer_for_category(category)
+        assert_eq(renderer.config_category, category,
+                  "%s must read %s" % (renderer.__name__, config.CATEGORY_KEYS[category]))
+
+
 # ---------------------------------------------------------------------------
 # Instance resolution through a group-scoped row
 # ---------------------------------------------------------------------------

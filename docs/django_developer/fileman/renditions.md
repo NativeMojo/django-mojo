@@ -229,6 +229,11 @@ The value is an object keyed by role, plus an optional `_automatic` list:
 }
 ```
 
+Each renderer names the key it reads in `config_category` (`"image"`,
+`"video"`, `"document"`); a renderer without one keeps its class defaults
+(audio today). Clearing an override means saving `{}` — `Setting` rows are
+not deletable through the REST API.
+
 - Per-role options **shallow-merge** over the class defaults: name only the
   keys you change. An absent role, key or setting means the class default,
   so an empty object `{}` is valid and changes nothing.

@@ -112,8 +112,10 @@ names rather than as a generic toast.
 even though its default carries `codec: "h264"`; the codec is simply ignored
 for VP8. Setting `codec: "h265"` on a role whose format is `webm` is refused.
 
-To clear an override, delete its settings row (`DELETE /api/settings/<id>`).
-The next upload or re-render uses the defaults again.
+To clear an override, save `{}` as the row's value (settings rows cannot be
+deleted through the API; `DELETE /api/settings/<id>` is refused). An empty
+object means "defaults", and the options endpoint reports it as
+`"override": null`. The next upload or re-render uses the defaults again.
 
 ## Seeing the result
 

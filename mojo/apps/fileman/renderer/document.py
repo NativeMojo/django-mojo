@@ -23,7 +23,8 @@ class DocumentRenderer(BaseRenderer):
     
     # Document file categories
     supported_categories = ['document', 'pdf', 'spreadsheet', 'presentation']
-    
+    config_category = 'document'
+
     # Default rendition definitions with options
     default_renditions = {
         RenditionRole.DOCUMENT_THUMBNAIL: {
