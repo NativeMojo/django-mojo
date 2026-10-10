@@ -218,6 +218,158 @@ def test_real_nginx_accepts_every_kind(opts):
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _free_port():
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def _serve_base_and_read_types(binary, mime_types):
+    """Serve three files through the rendered http base under a real nginx.
+
+    Returns (`nginx -t` output, {file name: Content-Type}). The surrounding
+    nginx.conf stands in for the node bootstrap, so it — not the base —
+    declares `default_type`, exactly as on a node.
+    """
+    import socket
+    import time
+
+    from mojo.apps.edge.services import render
+    from mojo.deploy import nginx_runtime
+
+    root = tempfile.mkdtemp(prefix="edge-types-")
+    process = None
+    try:
+        mime_path = os.path.join(root, "mime.types")
+        with open(mime_path, "w") as handle:
+            handle.write(mime_types)
+        www = os.path.join(root, "www")
+        os.makedirs(www)
+        names = ("site.webmanifest", "index.html", "blob.edgeunknown")
+        for name in names:
+            with open(os.path.join(www, name), "w") as handle:
+                handle.write("{}")
+        runtime_root = os.path.join(root, "runtime")
+        for _directive, leaf in nginx_runtime.TEMP_PATHS:
+            os.makedirs(os.path.join(runtime_root, leaf), mode=0o700,
+                        exist_ok=True)
+        # Through the `knobs` seam, not a patch: only the host paths change,
+        # every other knob is the resolved default a node would render from.
+        log_dir = os.path.join(root, "log")
+        os.makedirs(log_dir)
+        knobs = dict(render.http_knobs(), mime_types=mime_path,
+                     log_dir=log_dir, default_server=False,
+                     mojosec_mode="off")
+        base = render.render_http_base(knobs, security=[])
+        port = _free_port()
+        config = os.path.join(root, "nginx.conf")
+        with open(config, "w") as handle:
+            handle.write("\n".join([
+                f"pid {root}/nginx.pid;",
+                f"error_log {root}/error.log notice;",
+                "events { worker_connections 32; }",
+                "http {",
+                "    default_type application/octet-stream;",
+                nginx_runtime.render_http_fragment(
+                    runtime_root, indent="    ").rstrip(),
+                base,
+                "    server {",
+                f"        listen 127.0.0.1:{port};",
+                f"        root {www};",
+                "    }",
+                "}",
+                "",
+            ]))
+        checked = subprocess.run(
+            [binary, "-e", "stderr", "-t", "-c", config, "-p", root],
+            capture_output=True, text=True, timeout=60)
+        output = f"{checked.stdout}{checked.stderr}"
+        assert checked.returncode == 0, (
+            f"nginx refused the http base:\n{output}")
+
+        process = subprocess.Popen(
+            [binary, "-c", config, "-p", root, "-g", "daemon off;"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _attempt in range(100):
+            if process.poll() is not None:
+                break
+            try:
+                with socket.create_connection(
+                        ("127.0.0.1", port), timeout=0.1):
+                    break
+            except OSError:
+                time.sleep(0.05)
+        served = {}
+        for name in names:
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/{name}", timeout=10) as response:
+                served[name] = response.headers.get("Content-Type")
+        return output, served
+    finally:
+        if process is not None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        shutil.rmtree(root, ignore_errors=True)
+
+
+STOCK_MIME_TYPES = (
+    "types {\n"
+    "    text/html html;\n"
+    "    text/css css;\n"
+    "    application/json json;\n"
+    "}\n")
+
+EXPECTED_TYPES = {
+    "site.webmanifest": "application/manifest+json",
+    # The base's `types` block must ADD to the included table. If it replaced
+    # it, every other extension would fall to octet-stream — worse than the bug.
+    "index.html": "text/html",
+    "blob.edgeunknown": "application/octet-stream",
+}
+
+
+@th.requires_extra("extended")
+@th.django_unit_test("a real nginx serves web manifests with the manifest type")
+def test_real_nginx_serves_webmanifest_type(opts):
+    binary = _nginx_binary()
+    if not binary:
+        raise TestitSkip(
+            "nginx is not installed — skipping the served content-type check")
+
+    _output, served = _serve_base_and_read_types(binary, STOCK_MIME_TYPES)
+    assert served == EXPECTED_TYPES, (
+        f"wrong content types through the rendered base: {served!r}")
+
+
+@th.requires_extra("extended")
+@th.django_unit_test("a host mime table that already maps webmanifest still passes nginx -t")
+def test_real_nginx_accepts_a_host_table_with_webmanifest(opts):
+    """A newer or hand-extended host mime.types may already carry the entry.
+    nginx then warns `duplicate extension "webmanifest"` and exits 0; the
+    installer fails a check only on a non-zero exit or "conflicting server
+    name" (services/installer.py), so the warning must stay a warning."""
+    binary = _nginx_binary()
+    if not binary:
+        raise TestitSkip(
+            "nginx is not installed — skipping the duplicate-extension check")
+
+    mime_types = STOCK_MIME_TYPES.replace(
+        "}\n", "    application/manifest+json webmanifest;\n}\n")
+    output, served = _serve_base_and_read_types(binary, mime_types)
+    assert "[emerg]" not in output and "conflicting server name" not in output, (
+        f"nginx objected to the duplicate mapping:\n{output}")
+    assert served == EXPECTED_TYPES, (
+        f"wrong content types with a host table that maps it too: {served!r}")
+
+
 @th.requires_extra("extended")
 @th.django_unit_test("the production spill contract accepts a body larger than memory")
 def test_production_temp_contract_spills_request_body(opts):

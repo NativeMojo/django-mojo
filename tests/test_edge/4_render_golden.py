@@ -385,6 +385,39 @@ def test_bootstrap_owned_directives_appear_in_the_harness(opts):
             f"pre-filter validates a graph the real node would not have")
 
 
+@th.django_unit_test("the base maps web manifests after the host's mime include")
+def test_http_base_maps_webmanifest_after_the_mime_include(opts):
+    """nginx's stock mime.types has no `webmanifest` entry, and the host's
+    table is the only type source a generation includes — so a manifest fell
+    through to the bootstrap's `default_type` (application/octet-stream).
+
+    The base adds the one mapping in its own `types` block. Order matters to
+    the reader, not to nginx: the block sits directly after the include it
+    extends. A second `types` block at the same level ADDS to the first (the
+    real-nginx module serves through both to prove it).
+    """
+    from mojo.apps.edge.services import render
+
+    lines = render.render_http_base(security=[]).splitlines()
+    include = f"include {render.mime_types_path()};"
+    assert include in lines, "the base no longer includes the host mime table"
+    at = lines.index(include)
+    assert lines[at + 1:at + 4] == [
+        "types {",
+        "    application/manifest+json webmanifest;",
+        "}",
+    ], (
+        "the web manifest mapping must directly follow the mime include, got "
+        f"{lines[at + 1:at + 4]!r}")
+    gzip_types = [line for line in lines if line.startswith("gzip_types ")]
+    assert len(gzip_types) == 1 and "application/manifest+json" in gzip_types[0], (
+        f"manifests must compress like JSON, got {gzip_types!r}")
+    # Unknown extensions keep the bootstrap's fallback: the base must not
+    # start declaring one of its own (a duplicate-directive [emerg]).
+    assert not any(line.strip().startswith("default_type") for line in lines), (
+        "the base rendered a default_type — the bootstrap owns it")
+
+
 @th.django_unit_test("a carried upgrade map moves from the harness into the base")
 def test_carry_upgrade_map_swaps_declaration_sides(opts):
     """Regression for the api-wmwx-stage wedge's second population: a node
