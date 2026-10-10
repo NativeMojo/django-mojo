@@ -83,15 +83,33 @@ settings, not model columns — send them as ordinary fields.
 | `aws_key` | `manage_files` / `files` | `aws_key` |
 | `aws_secret` | `manage_files` / `files` | `aws_secret_masked` (last 4 chars) |
 | `aws_region` | `manage_files` / `files` | `aws_region` |
-| `assume_role_arn` | **superuser only** | `assume_role_arn` |
-| `external_id` | **superuser only** | `has_external_id` (boolean) |
-| `role_session_name` | **superuser only** | *(not serialized)* |
-| `assume_role_duration` | **superuser only** | *(not serialized)* |
+| `assume_role_arn` | `manage_files` / `files` on a store with its own AWS key; otherwise **superuser only** | `assume_role_arn` |
+| `external_id` | `manage_files` / `files` on a store with its own AWS key; otherwise **superuser only** | `has_external_id` (boolean) |
+| `role_session_name` | `manage_files` / `files` on a store with its own AWS key; otherwise **superuser only** | *(not serialized)* |
+| `assume_role_duration` | `manage_files` / `files` on a store with its own AWS key; otherwise **superuser only** | *(not serialized)* |
 
-- **Sending any of the four role fields as a non-superuser returns 403**, even
-  with `manage_files`. Those fields decide which AWS identity the platform acts
-  as, so redirecting them is a privilege escalation rather than a storage
-  setting.
+- **A role on platform credentials is superuser only.** A role is assumed with
+  the store's AWS key. A store *runs on platform credentials* when it has no
+  `aws_key` or no `aws_secret` of its own (a parent's does not count), when its
+  `aws_key` is the platform's `AWS_KEY` or a system-scoped manager's key, or
+  when it is itself system-scoped. A store created without a key is given the
+  platform's, so it is in this group until it is given its own.
+  - A save that would leave such a store with `assume_role_arn` set returns
+    **403** for a non-superuser, and stores nothing from the request, when the
+    request changes any of the four role fields, `aws_key` or `aws_secret`.
+    That covers adding or changing the role, and removing the store's own key
+    or replacing it with the platform's while a role is set.
+  - The rule looks at the store as the request leaves it, so it is the same
+    whether the values are sent as flat fields or inside `secrets` or
+    `settings`, on update and on create. Send the store's own key and the role
+    in one request to set both.
+  - On a store with its own key, `manage_files` / `files` is enough: the role
+    is assumed with the group's key and reaches only what that key can.
+  - Other fields stay editable on a store that already has a role on platform
+    credentials, as long as the request leaves the role fields and the key as
+    they are. Removing the role is always allowed.
+- **`mojo_secrets`, `secret` and `setting` are not accepted** in a request body.
+  They are skipped.
 - **`external_id` is write-only.** It is never returned in any form — not even
   masked — because it is short and its whole purpose is to be unguessable by
   someone who already knows the role ARN. The `default` and `list` graphs expose
