@@ -13,6 +13,11 @@ JOBS_ENGINE_MAX_WORKERS = 10          # Thread pool size per engine
 JOBS_ENGINE_CLAIM_BUFFER = 2          # Claim up to buffer * max_workers jobs
 JOBS_ENGINE_CLAIM_BATCH = 5           # Max jobs to claim in one request
 JOBS_ENGINE_READ_TIMEOUT = 100        # Redis XREADGROUP timeout in ms
+# Max concurrent jobs per channel on ONE engine. An explicit dict REPLACES this
+# default (no merge); a channel at 0 or absent is uncapped. Jobs over a cap
+# wait on their queue while every other channel keeps flowing. Per-process
+# override: `engine start --channel-limits '{"renditions": 0}'`.
+JOBS_CHANNEL_LIMITS = {"renditions": 1}
 
 # Job Defaults
 JOBS_DEFAULT_CHANNEL = "default"
@@ -139,6 +144,19 @@ JOBS_ENGINE_READ_TIMEOUT
     Timeout in milliseconds for XREADGROUP blocking reads.
     Lower values = more responsive to shutdown, higher = less CPU.
     Default: 100
+
+JOBS_CHANNEL_LIMITS
+    Per-channel concurrency caps on one engine: a dict of channel -> max
+    concurrent jobs. A channel at its cap is left out of the claim until one
+    of its jobs finishes, so its queue waits while the other channels keep
+    being claimed. An explicit dict REPLACES the default — it does not merge
+    — so {"webhooks": 3} also uncaps renditions; a channel at 0, or absent
+    from an explicit dict, is uncapped ({} lifts every cap). Only channels
+    the engine consumes count. The CLI's --channel-limits (JSON) overrides
+    this for one process. The engine warns at start when an explicit dict
+    drops a default cap it would otherwise apply, and when every ordinary
+    channel it consumes is capped so part of its pool can never be used.
+    Default: {"renditions": 1} (mojo.apps.jobs.DEFAULT_CHANNEL_LIMITS)
 
 JOBS_DEFAULT_CHANNEL
     Default channel for jobs if not specified.

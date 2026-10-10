@@ -34,7 +34,9 @@ Rapid re-posts of `{"action": "mark_as_completed"}` (double-click, client retry)
 
 ### Why a dedicated channel
 
-ffmpeg/Pillow work can be long and memory-heavy. Running it on the `renditions` channel lets ops point a specialized worker pool at it (e.g., `python -m mojo.apps.jobs.cli engine start --channels renditions`) without slowing the default channel.
+ffmpeg/Pillow work can be long and memory-heavy. Putting it on its own channel is what lets the engine bound it: every engine runs **one rendition job at a time by default** (`JOBS_CHANNEL_LIMITS = {"renditions": 1}`), so a burst of uploads queues on the `renditions` channel instead of taking every worker from email, webhooks and scheduled work. Raise the cap on a bigger pool (`JOBS_CHANNEL_LIMITS = {"renditions": 3}`) or lift it (`{}`); an explicit dict replaces the default, so keep `renditions` in it when capping other channels. See [Jobs settings — Per-channel caps](../jobs/settings.md#per-channel-caps-jobs_channel_limits).
+
+The heavier option is a dedicated engine for the channel (e.g., `python -m mojo.apps.jobs.cli engine start --channels renditions --runner-id renditions-engine --channel-limits '{"renditions": 0}'`): a second managed process per box, uncapped by the `--channel-limits` flag — without it the default pins that engine to one job and idles the rest of its workers.
 
 `renditions` is in `JOBS_CHANNELS`' default list, so it is consumed out of the box. If you set `JOBS_CHANNELS` explicitly, include `renditions` in some engine's list — the job stays on the `renditions` queue rather than falling back to `default`, and an unconsumed queue raises a `jobs:unconsumed_channel` incident. See [Jobs — Channels](../jobs/publishing.md#channels).
 

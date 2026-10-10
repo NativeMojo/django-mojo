@@ -894,7 +894,8 @@ GET /api/jobs/runners?channel=email
     {
       "id": "runner-host1-abc123",
       "runner_id": "runner-host1-abc123",
-      "channels": ["default", "email"],
+      "channels": ["default", "email", "renditions"],
+      "channel_limits": {"renditions": 1},
       "jobs_processed": 4821,
       "jobs_failed": 12,
       "started": "2024-01-15T08:00:00Z",
@@ -916,6 +917,8 @@ GET /api/jobs/runners?channel=email
 ```
 
 `alive` is `false` when the runner's last heartbeat is older than 3× the heartbeat interval (default: 15 seconds). Dead runners remain visible until their heartbeat key expires in Redis.
+
+`channel_limits` is the engine's effective per-channel concurrency caps (channel → max jobs it runs at once; default `{"renditions": 1}`). A channel at its cap keeps its queue waiting while the engine claims from the others, so a backlog on a capped channel with idle workers is the cap at work, not a stuck runner.
 
 Runner ids may be explicit safe names; they are not required to end in
 `-engine`. When the engine's direct-channel feature is enabled, its live

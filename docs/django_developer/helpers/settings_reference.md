@@ -933,6 +933,10 @@ restart. See
 - `JOBS_ENGINE_LOGFILE`
 - `JOBS_ENGINE_MAX_WORKERS`
 - `JOBS_ENGINE_READ_TIMEOUT`
+- `JOBS_CHANNEL_LIMITS` — max concurrent jobs per channel on one engine; a
+  channel at its cap waits on its queue while the others keep flowing. Default
+  `{"renditions": 1}`; an explicit dict replaces it (no merge) and `0` uncaps.
+  See [Jobs — Per-channel caps](../jobs/settings.md#per-channel-caps-jobs_channel_limits).
 - `JOBS_ENGINE_RESERVED_WORKERS` — worker slots only the `priority` channel
   and the engine's box-direct channel may claim; unset means
   `min(2, max_workers // 4)`, so a pool under four reserves nothing. An engine

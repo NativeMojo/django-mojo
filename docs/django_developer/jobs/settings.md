@@ -134,6 +134,7 @@ Controls the job engine (runner) behavior.
 |---------|---------|-------------|
 | `JOBS_ENGINE_MAX_WORKERS` | `10` | Thread pool size per engine instance |
 | `JOBS_ENGINE_RESERVED_WORKERS` | unset → `min(2, max_workers // 4)` | Slots ordinary channels may never fill; only `priority` and the engine's own box-direct channel claim into them, so a deploy starts on a node whose other workers are all busy. Set explicitly to override (`0` disables; clamped below `max_workers`). |
+| `JOBS_CHANNEL_LIMITS` | `{"renditions": 1}` | Max concurrent jobs per channel on one engine. A channel at its cap is left out of the claim until one of its jobs finishes; its queue waits while every other channel keeps flowing. An explicit dict **replaces** the default (no merge); a channel at `0` or absent is uncapped. |
 | `JOBS_ENGINE_CLAIM_BUFFER` | `2` | Claim multiplier (can claim up to `max_workers * buffer` jobs) |
 | `JOBS_ENGINE_CLAIM_BATCH` | `5` | Max jobs to claim in one request |
 | `JOBS_ENGINE_READ_TIMEOUT` | `100` | Redis XREADGROUP timeout in milliseconds |
@@ -150,6 +151,60 @@ only to drain one ordinary channel, such as renditions, should set the reserve
 to `0` so all of its workers do that work. Claim order is `priority`, then the
 box-direct channel, then the remaining channels as configured. The fleet deploy plane (orchestrator on `priority`, node updates
 box-direct) is what this protects — see [Fleet code deploy](../edge/deploy.md#queue-capacity-and-the-coordination-lease).
+
+### Per-channel caps (`JOBS_CHANNEL_LIMITS`)
+
+A cap bounds how many of one engine's workers a single channel may hold at
+once. The engine counts its in-flight jobs per channel and leaves a channel
+that has reached its cap **out of the claim** until one of its jobs finishes,
+so the channel's jobs wait on their queue in Redis while every other channel
+keeps being claimed. Claim order is unchanged (`priority`, box-direct, then
+configured order); a capped channel is simply absent while it is at its cap.
+
+Out of the box every engine runs **one rendition job at a time**
+(`{"renditions": 1}`), so a burst of uploads can never take every worker from
+email, webhooks and scheduled work. The trade is throughput: a shared
+10-worker engine used to run up to eight renditions at once and now runs one,
+so an upload burst drains more slowly in exchange for ordinary work never
+waiting behind it.
+
+```python
+JOBS_CHANNEL_LIMITS = {"renditions": 2, "webhooks": 4}   # replaces the default
+JOBS_CHANNEL_LIMITS = {}                                  # no caps at all
+JOBS_CHANNEL_LIMITS = {"renditions": 0}                   # same thing, spelled out
+```
+
+- **An explicit dict replaces the default — it does not merge.** `{"webhooks":
+  3}` caps webhooks *and uncaps renditions*; write `{"renditions": 1,
+  "webhooks": 3}` to keep the default. The engine logs a warning at start
+  when an explicit dict omits a default-capped channel it consumes.
+- **`0`, or a channel missing from an explicit dict, means uncapped.** A
+  negative or non-integer value is a warning and falls back to the default's
+  value for that channel; a value that is not a dict at all is a warning and
+  the default. Only channels the engine consumes count, so the heartbeat's
+  `channel_limits` shows this engine's effective caps.
+- **Caps compose with the reserve.** The reserve keeps slots *for* `priority`
+  and the box-direct channel; a cap bounds *how many* any channel takes. A
+  cap at or above `max_workers` is inert.
+- **A dedicated engine needs the escape.** The default applies to every engine,
+  including one started with `--channels renditions` — which would then idle
+  all but one worker (the engine warns: "only N of M ordinary worker slots can
+  ever be used"). Start it with
+  `python -m mojo.apps.jobs.cli engine start --channels renditions --channel-limits '{"renditions": 0}'`;
+  `--channel-limits` (a JSON object) replaces the setting for that one process,
+  which is how a box can run a capped general engine and an uncapped renditions
+  engine side by side.
+- **Known shape: a hung capped job holds its cap.** The engine enforces no
+  per-job deadline (`max_exec_seconds` is advisory) and keeps a running job's
+  lease alive, so with a cap of `1` one stuck rendition stalls renditions on
+  that engine until the process restarts, while every other channel stays
+  healthy. `FILEMAN_RENDER_TIMEOUT` bounds the converter subprocesses, not the
+  job.
+- **Cost.** While any capped channel is at its cap the claim `BRPOP` waits
+  0.1 s instead of 1 s, so a freed capped slot is refilled within a fraction
+  of a second — ten O(1) pops a second per engine for as long as a rendition
+  runs. Broadcast and checked executions run on the control thread and are
+  outside the caps.
 
 ## Redis Configuration
 
@@ -231,6 +286,9 @@ JOBS_ALLOWED_CHANNELS = ['emails']
 JOBS_DEFAULT_MAX_RETRIES = 3
 JOBS_DEFAULT_EXPIRES_SEC = 1800  # 30 minutes
 JOBS_ENGINE_MAX_WORKERS = 20
+# Two renditions at a time on a 20-worker pool; keep "renditions" in the dict
+# when adding other caps — an explicit value replaces the default.
+JOBS_CHANNEL_LIMITS = {"renditions": 2}
 ```
 
 ### High Throughput

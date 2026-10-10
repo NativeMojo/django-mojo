@@ -94,7 +94,8 @@ Available graphs: `default`, `detail`, `status`, `admin`.
 
 ### GET /api/jobs/runners
 
-List active runners with heartbeat data.
+List active runners with heartbeat data. Each row carries the engine's
+`channel_limits` — its effective per-channel caps (default `{"renditions": 1}`).
 
 **Query params**: `channel` (optional filter).
 

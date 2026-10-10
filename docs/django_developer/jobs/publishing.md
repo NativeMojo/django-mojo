@@ -465,6 +465,17 @@ python -m mojo.apps.jobs.cli engine start --channels heavy --runner-id heavy-eng
 consume a narrower set than it publishes to. `--runner-id` gives a second engine
 on the same host its own identity and pidfile.
 
+### Capping a channel's share of an engine
+
+A channel decides *which* queue a job waits on, not how many workers it may
+hold. `JOBS_CHANNEL_LIMITS` adds that bound per engine: a channel at its cap
+is left out of the claim until one of its jobs finishes, so its queue waits
+while every other channel keeps flowing. The default is `{"renditions": 1}` —
+one file rendition at a time per engine — and an explicit dict replaces it
+(`0` uncaps a channel). `--channel-limits '{"renditions": 0}'` overrides it
+for one process, which is what a dedicated renditions engine wants. See
+[Settings — Per-channel caps](settings.md#per-channel-caps-jobs_channel_limits).
+
 ### Cross-box routing
 
 An API box that also runs an engine, handing deploys to a dedicated worker box.

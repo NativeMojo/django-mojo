@@ -14,6 +14,7 @@ import threading
 import random
 import traceback
 import uuid
+from collections import Counter
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -45,6 +46,7 @@ logger = logit.get_logger("jobs", "jobs.log", debug=True)
 
 from . import (
     DEFAULT_CHANNELS,
+    DEFAULT_CHANNEL_LIMITS,
     ENGINE_CHANNEL_SUFFIX,
     get_startup_hooks,
     register_sched_channel,
@@ -66,6 +68,56 @@ RESERVED_CHANNELS = ('priority',)
 # would leave a freed ordinary slot idle for up to a second per claim; this is
 # the same tenth the full-pool sleep uses.
 RESERVED_ONLY_POP_TIMEOUT = 0.1
+# Per-channel concurrency caps on this engine (item #7407). Unset: the
+# framework default, DEFAULT_CHANNEL_LIMITS ({'renditions': 1}), so a burst of
+# uploads can never hold every worker. An explicit dict REPLACES the default —
+# it does not merge — and a channel at 0 (or absent from the dict) is
+# uncapped. A capped channel's jobs wait on their queue in Redis while every
+# other channel keeps being claimed. The jobs CLI's --channel-limits overrides
+# this for one process.
+JOBS_CHANNEL_LIMITS = settings.get_static('JOBS_CHANNEL_LIMITS', None)
+
+
+def channel_limits_for(channels, configured=None):
+    """{channel: cap} for the channels this engine consumes.
+
+    ``configured`` None → DEFAULT_CHANNEL_LIMITS. Not a dict → warning and the
+    default (a typo must never uncap). ``0`` → that channel is uncapped and
+    dropped. Negative or not an integer → warning and the default's value for
+    that channel, if it has one. Channels the engine does not consume are
+    dropped so the result is this engine's effective caps. Caps are not
+    clamped to the pool: a cap at or above max_workers is simply inert.
+    """
+    if configured is None:
+        configured = DEFAULT_CHANNEL_LIMITS
+    elif not isinstance(configured, dict):
+        logger.warning(
+            f"JOBS_CHANNEL_LIMITS must be a dict of channel -> max concurrent "
+            f"jobs, got {type(configured).__name__}; using the default "
+            f"{DEFAULT_CHANNEL_LIMITS}")
+        configured = DEFAULT_CHANNEL_LIMITS
+    consumed = set(channels)
+    limits = {}
+    for channel, value in configured.items():
+        if channel not in consumed:
+            continue
+        try:
+            cap = int(value)
+        except (TypeError, ValueError):
+            cap = -1
+        if cap < 0:
+            fallback = DEFAULT_CHANNEL_LIMITS.get(channel)
+            logger.warning(
+                f"JOBS_CHANNEL_LIMITS[{channel!r}] must be a whole number "
+                f"(0 = uncapped), got {value!r}; using "
+                f"{fallback if fallback else 'no cap'}")
+            if not fallback:
+                continue
+            cap = fallback
+        if cap == 0:
+            continue
+        limits[channel] = cap
+    return limits
 
 
 def reserved_worker_count(max_workers, configured=None):
@@ -134,7 +186,8 @@ class JobEngine:
 
     def __init__(self, channels: Optional[List[str]] = None,
                  runner_id: Optional[str] = None,
-                 max_workers: Optional[int] = None):
+                 max_workers: Optional[int] = None,
+                 channel_limits=None):
         """
         Initialize the job engine.
 
@@ -147,6 +200,10 @@ class JobEngine:
                 "<hostname>-engine" if not provided). Doubles as the engine's
                 box-direct channel name.
             max_workers: Maximum thread pool workers (default from settings)
+            channel_limits: Per-channel concurrency caps for this engine
+                (default from settings.JOBS_CHANNEL_LIMITS, itself defaulting
+                to DEFAULT_CHANNEL_LIMITS). An explicit dict replaces the
+                default; 0 means uncapped. See channel_limits_for().
         """
         self.runner_id = runner_id or self._generate_runner_id()
         # list() matters: appending the direct channel to the module-level
@@ -178,6 +235,12 @@ class JobEngine:
         self.reserved_channels, self.reserved_workers = engine_reserve(
             self.channels, self.runner_id, self.max_claimed,
             JOBS_ENGINE_RESERVED_WORKERS)
+        # Per-channel caps: a channel at its cap is left out of the claim
+        # BRPOP until one of its jobs finishes (item #7407).
+        configured_limits = (JOBS_CHANNEL_LIMITS if channel_limits is None
+                             else channel_limits)
+        self.channel_limits = channel_limits_for(self.channels, configured_limits)
+        self._warn_channel_limits(configured_limits)
 
         # Control flags
         self.running = False
@@ -205,7 +268,36 @@ class JobEngine:
         self.start_time = None
 
         logger.info(f"JobEngine initialized: runner_id={self.runner_id}, "
-                  f"channels={self.channels}")
+                  f"channels={self.channels}, channel_limits={self.channel_limits}")
+
+    def _warn_channel_limits(self, configured):
+        """Two loud-but-harmless configuration warnings, never a refusal.
+
+        An explicit dict REPLACES the default, so one that omits a default-
+        capped channel this engine consumes has uncapped it — say so, because
+        `{"webhooks": 3}` reads like an addition. And an engine whose every
+        ordinary channel is capped can never use the rest of its pool.
+        """
+        if isinstance(configured, dict):
+            dropped = [ch for ch in DEFAULT_CHANNEL_LIMITS
+                       if ch in self.channels and ch not in configured]
+            if dropped:
+                logger.warning(
+                    f"JOBS_CHANNEL_LIMITS is explicit and omits {dropped}: "
+                    f"those channels are now uncapped on {self.runner_id} "
+                    f"(the default {DEFAULT_CHANNEL_LIMITS} is replaced, not "
+                    f"merged); add them to keep the default cap")
+        ordinary = [ch for ch in self.channels if ch not in self.reserved_channels]
+        if ordinary and all(ch in self.channel_limits for ch in ordinary):
+            usable = sum(self.channel_limits[ch] for ch in ordinary)
+            ordinary_slots = self.max_claimed - self.reserved_workers
+            if usable < ordinary_slots:
+                logger.warning(
+                    f"{self.runner_id}: every ordinary channel it consumes is "
+                    f"capped ({self.channel_limits}), so only {usable} of its "
+                    f"{ordinary_slots} ordinary worker slots can ever be used; "
+                    f"pass --channel-limits or set JOBS_CHANNEL_LIMITS to raise "
+                    f"or lift the cap")
 
     def _generate_runner_id(self) -> str:
         """Generate a consistent runner ID based on hostname. The '-engine'
@@ -529,6 +621,7 @@ class JobEngine:
             'started': self.start_time.isoformat(),
             'last_heartbeat': dates.utcnow().isoformat(),
             'draining': self.shutdown_requested.is_set(),
+            'channel_limits': self.channel_limits,
             'capabilities': {'execute_checked': CHECKED_EXECUTE_PROTOCOL,
                              **self.capability_cache.snapshot()},
         }), ex=self.heartbeat_interval * 3)  # TTL = 3x interval
@@ -789,18 +882,23 @@ class JobEngine:
         while (self.running and not self.stop_event.is_set()
                and not self.shutdown_requested.is_set()):
             try:
-                # Check available capacity
+                # Check available capacity, globally and per channel
                 with self.active_lock:
                     active_count = len(self.active_jobs)
+                    active_by_channel = Counter(
+                        meta.get('channel') for meta in self.active_jobs.values())
 
-                queue_keys = self.claimable_queues(active_count)
+                queue_keys = self.claimable_queues(active_count, active_by_channel)
                 if not queue_keys:
+                    # Every offered channel is withheld (full pool, reserve,
+                    # or caps) — wait for a completion rather than spin.
                     time.sleep(0.1)
                     continue
 
                 # Claim one job at a time to avoid over-claiming
                 popped = self.redis.brpop(
-                    queue_keys, timeout=self.claim_pop_timeout(active_count))
+                    queue_keys,
+                    timeout=self.claim_pop_timeout(active_count, active_by_channel))
                 if not popped:
                     continue
 
@@ -840,7 +938,7 @@ class JobEngine:
                 logger.error(f"Error in main loop: {e}")
                 time.sleep(0.5)
 
-    def claimable_queues(self, active_count):
+    def claimable_queues(self, active_count, active_by_channel=None):
         """The queue keys this engine may BRPOP at ``active_count`` in flight.
 
         Priority first, then this engine's box-direct channel (a node update
@@ -850,6 +948,12 @@ class JobEngine:
         reserved channels — `priority` and this engine's box-direct channel —
         are offered, so a saturated queue of ordinary work leaves a deploy
         somewhere to start. Reserved-channel jobs may also use ordinary slots.
+
+        ``active_by_channel`` is the per-channel count of in-flight jobs; a
+        channel at its cap (see channel_limits) is left out, so its jobs wait
+        on their queue while the others keep flowing. ``None`` means the
+        caller did not count and applies no cap — `_main_loop` is the only
+        production caller and always passes it.
         """
         if active_count >= self.max_claimed:
             return []
@@ -857,21 +961,42 @@ class JobEngine:
         channels_ordered = first + [c for c in self.channels if c not in first]
         if self.reserved_only(active_count):
             channels_ordered = [c for c in channels_ordered if c in self.reserved_channels]
+        capped = self.capped_channels(active_by_channel)
+        if capped:
+            channels_ordered = [c for c in channels_ordered if c not in capped]
         return [self.keys.queue(ch) for ch in channels_ordered]
+
+    def capped_channels(self, active_by_channel):
+        """Consumed channels whose in-flight count has reached their cap.
+
+        ``active_by_channel`` is the per-channel count of ``active_jobs``
+        taken under ``active_lock``; ``None`` (or empty) means nothing is
+        capped. ``active_jobs`` is keyed by job id, so a duplicate delivery
+        of one id (a reaper retry after a lapsed lease) under-counts by one —
+        the same pre-existing quirk as the global count.
+        """
+        if not active_by_channel or not self.channel_limits:
+            return set()
+        return {ch for ch, cap in self.channel_limits.items()
+                if active_by_channel.get(ch, 0) >= cap}
 
     def reserved_only(self, active_count):
         """True when the ordinary slots are full and reserved ones remain."""
         return (self.reserved_workers > 0
                 and self.max_claimed - self.reserved_workers <= active_count < self.max_claimed)
 
-    def claim_pop_timeout(self, active_count):
+    def claim_pop_timeout(self, active_count, active_by_channel=None):
         """Seconds the claim BRPOP may block at ``active_count`` in flight.
 
-        While only reserved channels are offered the loop must come back
-        quickly: an ordinary slot that frees during the wait is not seen until
-        the pop returns.
+        While only reserved channels are offered, or any channel is withheld
+        by its cap, the loop must come back quickly: a slot that frees during
+        the wait is not seen until the pop returns. The cost is ten O(1)
+        BRPOPs a second for as long as a capped channel is at its cap — with
+        the default cap, for the whole of every rendition job.
         """
-        return RESERVED_ONLY_POP_TIMEOUT if self.reserved_only(active_count) else 1
+        if self.reserved_only(active_count) or self.capped_channels(active_by_channel):
+            return RESERVED_ONLY_POP_TIMEOUT
+        return 1
 
     def claim_jobs_by_channel(self, channel: str, count: int) -> List[Tuple[str, str, str]]:
         """Plan B: not used. Kept for compatibility."""

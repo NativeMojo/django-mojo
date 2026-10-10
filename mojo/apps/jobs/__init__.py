@@ -44,6 +44,14 @@ DEFAULT_CHANNELS = [
     'firewall',
 ]
 
+# Per-channel concurrency caps the engine applies when JOBS_CHANNEL_LIMITS is
+# unset (item #7407): one rendition job at a time per engine, so a burst of
+# uploads can never hold every worker. An explicit JOBS_CHANNEL_LIMITS REPLACES
+# this dict (it does not merge); a channel at 0, or absent, is uncapped.
+DEFAULT_CHANNEL_LIMITS = {
+    'renditions': 1,
+}
+
 # Module-level settings for readability. JOB_CHANNELS is the box's CONSUME
 # list; JOBS_ALLOWED_CHANNELS is the deployment's declared user channels.
 # The setting doubles as the enforcement switch: None (unset — the default)

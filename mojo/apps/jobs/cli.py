@@ -88,6 +88,32 @@ def parse_runner_id_arg(value):
     return value
 
 
+def parse_channel_limits_arg(value):
+    """
+    Turn a --channel-limits value into a dict, or None when absent.
+
+    None means "the engine decides" — it reads JOBS_CHANNEL_LIMITS, which
+    itself defaults to DEFAULT_CHANNEL_LIMITS. The value is a JSON object of
+    channel -> max concurrent jobs; 0 uncaps a channel. It replaces the
+    setting for this one process, which is how a dedicated renditions engine
+    on a box that also runs the general engine escapes the default cap.
+    """
+    if not value:
+        return None
+    import json
+    try:
+        limits = json.loads(value)
+    except ValueError as e:
+        raise ValueError(
+            f"Invalid --channel-limits {value!r}: not JSON ({e}); expected an "
+            f"object such as '{{\"renditions\": 0}}'")
+    if not isinstance(limits, dict):
+        raise ValueError(
+            f"Invalid --channel-limits {value!r}: expected a JSON object of "
+            f"channel -> max concurrent jobs, got {type(limits).__name__}")
+    return limits
+
+
 def is_engine_running(runner_id=None):
     """
     Check if a job engine is currently running.
@@ -178,7 +204,7 @@ def setup_signal_handlers(engine=None, scheduler=None):
 
 
 def start_engine_daemon(verbose=False, logfile_override: Optional[str] = None,
-                        channels=None, runner_id=None):
+                        channels=None, runner_id=None, channel_limits=None):
     """Start engine as daemon process."""
     if is_engine_running(runner_id):
         if verbose:
@@ -189,8 +215,10 @@ def start_engine_daemon(verbose=False, logfile_override: Optional[str] = None,
     from mojo.apps.jobs.daemon import DaemonRunner
     from mojo.helpers import paths
 
-    # channels=None → the engine falls back to JOBS_CHANNELS itself.
-    engine = JobEngine(channels=channels, runner_id=runner_id)
+    # channels=None → the engine falls back to JOBS_CHANNELS itself;
+    # channel_limits=None → JOBS_CHANNEL_LIMITS, then the framework default.
+    engine = JobEngine(channels=channels, runner_id=runner_id,
+                       channel_limits=channel_limits)
 
     # Auto-generate pidfile
     pidfile = f"/tmp/job-engine-{engine.runner_id}.pid"
@@ -264,16 +292,20 @@ def start_scheduler_daemon(verbose=False, channels=None):
         return False
 
 
-def start_engine_foreground(verbose=False, channels=None, runner_id=None):
+def start_engine_foreground(verbose=False, channels=None, runner_id=None,
+                            channel_limits=None):
     """Start engine in foreground mode."""
     from mojo.apps.jobs.job_engine import JobEngine
 
-    # channels=None → the engine falls back to JOBS_CHANNELS itself.
-    engine = JobEngine(channels=channels, runner_id=runner_id)
+    # channels=None → the engine falls back to JOBS_CHANNELS itself;
+    # channel_limits=None → JOBS_CHANNEL_LIMITS, then the framework default.
+    engine = JobEngine(channels=channels, runner_id=runner_id,
+                       channel_limits=channel_limits)
 
     if verbose:
         print(f"🚀 Starting engine in foreground mode")
         print(f"   Channels: {engine.channels}")
+        print(f"   Channel limits: {engine.channel_limits}")
         print(f"   Runner ID: {engine.runner_id}")
         print(f"   Press Ctrl+C to stop")
         print()
@@ -590,6 +622,15 @@ Channel options (engine/scheduler start & foreground):
              'distinct id to run a second engine on this box alongside the first.'
     )
     parser.add_argument(
+        '--channel-limits',
+        type=str,
+        default=None,
+        help='JSON object of channel -> max concurrent jobs for this engine, '
+             'e.g. --channel-limits \'{"renditions": 0}\'. Replaces '
+             'JOBS_CHANNEL_LIMITS (default {"renditions": 1}) for this process; '
+             '0 uncaps a channel.'
+    )
+    parser.add_argument(
         'action',
         nargs='?',
         choices=['start', 'foreground', 'stop'],
@@ -633,6 +674,7 @@ Channel options (engine/scheduler start & foreground):
         channels = parse_channels_arg(parsed_args.channels)
         try:
             runner_id = parse_runner_id_arg(parsed_args.runner_id)
+            channel_limits = parse_channel_limits_arg(parsed_args.channel_limits)
         except ValueError as e:
             print(f"❌ {e}")
             return False
@@ -641,10 +683,12 @@ Channel options (engine/scheduler start & foreground):
             if action == 'start':
                 return start_engine_daemon(
                     verbose, logfile_override=parsed_args.logfile,
-                    channels=channels, runner_id=runner_id)
+                    channels=channels, runner_id=runner_id,
+                    channel_limits=channel_limits)
             elif action == 'foreground':
                 return start_engine_foreground(
-                    verbose, channels=channels, runner_id=runner_id)
+                    verbose, channels=channels, runner_id=runner_id,
+                    channel_limits=channel_limits)
             elif action == 'stop':
                 return stop_engine_daemon(verbose, runner_id=runner_id)
             else:
