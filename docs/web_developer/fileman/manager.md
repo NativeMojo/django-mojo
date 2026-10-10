@@ -103,8 +103,15 @@ settings, not model columns — send them as ordinary fields.
     whether the values are sent as flat fields or inside `secrets` or
     `settings`, on update and on create. Send the store's own key and the role
     in one request to set both.
-  - On a store with its own key, `manage_files` / `files` is enough: the role
-    is assumed with the group's key and reaches only what that key can.
+  - On a store with its own key, `manage_files` / `files` is enough to store
+    the role.
+  - **Storing a value is not the same as using it.** Storage calls read the
+    key and the role from the *root* manager only (the top of the `parent`
+    chain). On a manager with no parent, its own key assumes its own role and
+    reaches only what that key can. On a child manager the values are saved
+    and have no effect: configure the root.
+  - A refused save is refused whole. Nothing in the request is stored,
+    including a nested record such as `parent: {...}`.
   - Other fields stay editable on a store that already has a role on platform
     credentials, as long as the request leaves the role fields and the key as
     they are. Removing the role is always allowed.

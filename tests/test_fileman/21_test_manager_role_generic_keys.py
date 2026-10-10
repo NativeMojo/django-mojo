@@ -253,6 +253,42 @@ def test_mixed_body_refused_whole(opts):
 
 
 @th.tier("core")
+@th.django_unit_test("platform credentials: a refused body stores nothing on a related store either")
+def test_refused_body_does_not_save_related_parent(opts):
+    from mojo.apps.fileman.models import FileManager
+
+    _login(opts, MEMBER)
+    role = {"assume_role_arn": POSTED_ARN}
+    nested = {"parent": {"description": "persisted-from-refused-request"}}
+    for form, payload in _forms(role):
+        for order, body in (("parent first", {**nested, **payload}),
+                            ("role first", {**payload, **nested})):
+            parent = _new_manager(opts, f"nested_parent_{form}", key="own")
+            child = _new_manager(opts, f"nested_child_{form}", key=None)
+            FileManager.objects.filter(pk=child.pk).update(parent=parent)
+            who = f"group file manager ({form}, {order})"
+            _assert_refused(opts, child, body, who)
+            assert_eq(FileManager.objects.get(pk=parent.pk).description, "",
+                      f"{who}: a refused save must not store the nested parent's fields")
+            assert_eq(_stored(parent), {"aws_key": OWN_KEY, "aws_secret": OWN_SECRET},
+                      f"{who}: the parent's settings must be untouched")
+
+
+@th.django_unit_test("own key: a nested parent field is still saved with an accepted body")
+def test_accepted_body_saves_related_parent(opts):
+    from mojo.apps.fileman.models import FileManager
+
+    _login(opts, MEMBER)
+    parent = _new_manager(opts, "nested_ok_parent", key="own")
+    child = _new_manager(opts, "nested_ok_child", key="own")
+    FileManager.objects.filter(pk=child.pk).update(parent=parent)
+    body = {"parent": {"description": "rolegen nested accepted"}, "assume_role_arn": POSTED_ARN}
+    _assert_stored(opts, child, body, {"assume_role_arn": POSTED_ARN}, "group file manager")
+    assert_eq(FileManager.objects.get(pk=parent.pk).description, "rolegen nested accepted",
+              "an accepted body must still save the nested parent's field")
+
+
+@th.tier("core")
 @th.django_unit_test("platform credentials: the key cannot be taken away from a store that has a role")
 def test_key_removed_from_role_store_refused(opts):
     _login(opts, MEMBER)

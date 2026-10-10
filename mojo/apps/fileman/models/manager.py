@@ -6,6 +6,7 @@ from botocore.exceptions import ClientError
 from django.db import models
 from django.utils import timezone
 from mojo.models import MojoModel, MojoSecrets
+from mojo.models.rest import _GRAPH_UNSET, _restore_request_graph
 from urllib.parse import urlparse
 from mojo.helpers.settings import settings
 from mojo import errors as me
@@ -609,6 +610,34 @@ class FileManager(MojoSecrets, MojoModel):
 
     def on_rest_created(self):
         self._update_default()
+
+    def on_rest_save(self, request, data_dict):
+        # on_rest_pre_save can only refuse after every posted field has been
+        # dispatched, and a related dict (`parent: {...}`) saves that record
+        # as it is dispatched. Hold those back until this store has saved, so
+        # a refused request stores nothing.
+        nested = {}
+        for key, value in data_dict.items():
+            field = self.get_model_field(key) if isinstance(value, dict) else None
+            if field is not None and field.is_relation:
+                nested[key] = field
+        if not nested:
+            return super().on_rest_save(request, data_dict)
+        own = {key: value for key, value in data_dict.items() if key not in nested}
+        response = super().on_rest_save(request, own)
+        # Same restore as the framework's field loop: a related permission
+        # check may re-bind request.group and the response graph.
+        caller_group = getattr(request, "group", None)
+        request_data = getattr(request, "DATA", None)
+        caller_graph = (request_data.get("graph", _GRAPH_UNSET)
+                        if hasattr(request_data, "get") else _GRAPH_UNSET)
+        for key, field in nested.items():
+            try:
+                self.on_rest_save_related_field(field, data_dict[key], request)
+            finally:
+                request.group = caller_group
+                _restore_request_graph(request, caller_graph)
+        return response
 
     def on_rest_pre_save(self, changed_fields, created):
         if created and self.user is None and self.group is None:
