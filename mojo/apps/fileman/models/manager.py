@@ -6,7 +6,6 @@ from botocore.exceptions import ClientError
 from django.db import models
 from django.utils import timezone
 from mojo.models import MojoModel, MojoSecrets
-from mojo.models.rest import _GRAPH_UNSET, _restore_request_graph
 from urllib.parse import urlparse
 from mojo.helpers.settings import settings
 from mojo import errors as me
@@ -611,49 +610,6 @@ class FileManager(MojoSecrets, MojoModel):
     def on_rest_created(self):
         self._update_default()
 
-    _held_related = None
-
-    def on_rest_save(self, request, data_dict):
-        # A related dict (`parent: {...}`) saves that record as the framework
-        # dispatches it, before on_rest_pre_save can refuse this one; and the
-        # related record can refuse too. Hold those dicts back and apply them
-        # from on_rest_pre_save, after this store's own check and before its
-        # first write, so whichever of the two refuses, nothing is stored.
-        held = {}
-        for key, value in data_dict.items():
-            field = self.get_model_field(key) if isinstance(value, dict) else None
-            if field is not None and field.is_relation:
-                held[key] = (field, value)
-        if not held:
-            return super().on_rest_save(request, data_dict)
-        own = {key: value for key, value in data_dict.items() if key not in held}
-        self._held_related = (request, held)
-        try:
-            response = super().on_rest_save(request, own)
-            # A body of related dicts alone never reaches on_rest_pre_save.
-            self._save_held_related()
-        finally:
-            self._held_related = None
-        return response
-
-    def _save_held_related(self):
-        if not self._held_related:
-            return
-        request, held = self._held_related
-        self._held_related = None
-        # Same restore as the framework's field loop: a related permission
-        # check may re-bind request.group and the response graph.
-        caller_group = getattr(request, "group", None)
-        request_data = getattr(request, "DATA", None)
-        caller_graph = (request_data.get("graph", _GRAPH_UNSET)
-                        if hasattr(request_data, "get") else _GRAPH_UNSET)
-        for field, value in held.values():
-            try:
-                self.on_rest_save_related_field(field, value, request)
-            finally:
-                request.group = caller_group
-                _restore_request_graph(request, caller_graph)
-
     def on_rest_pre_save(self, changed_fields, created):
         if created and self.user is None and self.group is None:
             # A manager with no user and no group is system-scoped — it can
@@ -672,7 +628,6 @@ class FileManager(MojoSecrets, MojoModel):
         # defaults below cannot change the answer — a created store with no
         # key of its own is on platform credentials either way.
         self._require_superuser_for_platform_role(created)
-        self._save_held_related()
         self._update_default()
         if not self.name:
             self.name = self.generate_name()

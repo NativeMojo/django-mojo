@@ -253,75 +253,44 @@ def test_mixed_body_refused_whole(opts):
 
 
 @th.tier("core")
-@th.django_unit_test("platform credentials: a refused body stores nothing on a related store either")
-def test_refused_body_does_not_save_related_parent(opts):
+@th.django_unit_test("platform credentials: a refusal leaves the refusing store unchanged and the role on neither store")
+def test_nested_refusal_keeps_refusing_store_and_role_out(opts):
     from mojo.apps.fileman.models import FileManager
 
+    def role_of(manager):
+        return _stored(manager).get("assume_role_arn")
+
     _login(opts, MEMBER)
-    role = {"assume_role_arn": POSTED_ARN}
-    nested = {"parent": {"description": "persisted-from-refused-request"}}
-    for form, payload in _forms(role):
-        for order, body in (("parent first", {**nested, **payload}),
-                            ("role first", {**payload, **nested})):
+    for form, role in _forms({"assume_role_arn": POSTED_ARN}):
+        # The posted store refuses; its parent arrives as a nested object.
+        nested = {"parent": {"description": "rolegen nested"}}
+        for order, body in (("parent first", {**nested, **role, "description": "rolegen own"}),
+                            ("role first", {**role, "description": "rolegen own", **nested})):
             parent = _new_manager(opts, f"nested_parent_{form}", key="own")
             child = _new_manager(opts, f"nested_child_{form}", key=None)
             FileManager.objects.filter(pk=child.pk).update(parent=parent)
-            who = f"group file manager ({form}, {order})"
+            who = f"group file manager ({form}, {order}, posted store refuses)"
+            child_before = _stored(child)
             _assert_refused(opts, child, body, who)
-            assert_eq(FileManager.objects.get(pk=parent.pk).description, "",
-                      f"{who}: a refused save must not store the nested parent's fields")
-            assert_eq(_stored(parent), {"aws_key": OWN_KEY, "aws_secret": OWN_SECRET},
-                      f"{who}: the parent's settings must be untouched")
+            assert_eq(_stored(child), child_before, f"{who}: the refusing store must be unchanged")
+            assert_eq(FileManager.objects.get(pk=child.pk).description, "",
+                      f"{who}: the refusing store's ordinary field must not be stored")
+            assert_eq((role_of(child), role_of(parent)), (None, None),
+                      f"{who}: the refused role must be on neither store")
 
-
-@th.tier("core")
-@th.django_unit_test("platform credentials: a refusal by the related store stores nothing on this one either")
-def test_related_parent_refusal_does_not_save_child(opts):
-    from mojo.apps.fileman.models import FileManager
-
-    _login(opts, MEMBER)
-    for form, nested_role in _forms({"assume_role_arn": POSTED_ARN}):
-        own = {"description": "persisted-from-refused-request", "aws_region": "eu-west-1"}
-        for order, body in (("parent first", {"parent": nested_role, **own}),
-                            ("own fields first", {**own, "parent": nested_role})):
+        # The nested parent refuses; the posted store carries ordinary fields.
+        own = {"description": "rolegen own"}
+        for order, body in (("parent first", {"parent": role, **own}),
+                            ("own fields first", {**own, "parent": role})):
             parent = _new_manager(opts, f"nested_rev_parent_{form}", key="platform")
             child = _new_manager(opts, f"nested_rev_child_{form}", key="own")
             FileManager.objects.filter(pk=child.pk).update(parent=parent)
-            who = f"group file manager ({form}, {order})"
+            who = f"group file manager ({form}, {order}, nested parent refuses)"
             parent_before = _stored(parent)
             _assert_refused(opts, child, body, who)
-            assert_eq(FileManager.objects.get(pk=child.pk).description, "",
-                      f"{who}: the child's own field must not be stored when the parent refuses")
-            assert_eq(_stored(parent), parent_before,
-                      f"{who}: the refusing parent must be unchanged")
-
-
-@th.django_unit_test("a body of nested parent fields alone is still saved")
-def test_nested_only_body_saves_related_parent(opts):
-    from mojo.apps.fileman.models import FileManager
-
-    _login(opts, MEMBER)
-    parent = _new_manager(opts, "nested_only_parent", key="own")
-    child = _new_manager(opts, "nested_only_child", key="own")
-    FileManager.objects.filter(pk=child.pk).update(parent=parent)
-    resp = _post(opts, child, {"parent": {"description": "rolegen nested only"}})
-    assert_eq(resp.status_code, 200, f"a nested-only body must be accepted, got HTTP {resp.status_code}")
-    assert_eq(FileManager.objects.get(pk=parent.pk).description, "rolegen nested only",
-              "a nested-only body must still save the parent's field")
-
-
-@th.django_unit_test("own key: a nested parent field is still saved with an accepted body")
-def test_accepted_body_saves_related_parent(opts):
-    from mojo.apps.fileman.models import FileManager
-
-    _login(opts, MEMBER)
-    parent = _new_manager(opts, "nested_ok_parent", key="own")
-    child = _new_manager(opts, "nested_ok_child", key="own")
-    FileManager.objects.filter(pk=child.pk).update(parent=parent)
-    body = {"parent": {"description": "rolegen nested accepted"}, "assume_role_arn": POSTED_ARN}
-    _assert_stored(opts, child, body, {"assume_role_arn": POSTED_ARN}, "group file manager")
-    assert_eq(FileManager.objects.get(pk=parent.pk).description, "rolegen nested accepted",
-              "an accepted body must still save the nested parent's field")
+            assert_eq(_stored(parent), parent_before, f"{who}: the refusing parent must be unchanged")
+            assert_eq((role_of(child), role_of(parent)), (None, None),
+                      f"{who}: the refused role must be on neither store")
 
 
 @th.tier("core")

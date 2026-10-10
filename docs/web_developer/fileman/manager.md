@@ -110,8 +110,9 @@ settings, not model columns — send them as ordinary fields.
     chain). On a manager with no parent, its own key assumes its own role and
     reaches only what that key can. On a child manager the values are saved
     and have no effect: configure the root.
-  - A refused save is refused whole. Nothing in the request is stored,
-    including a nested record such as `parent: {...}`.
+  - A refused save stores nothing on the store that refuses, and the refused
+    role is stored on no store. A different record changed in the same request
+    through a nested object such as `parent: {...}` may still be saved.
   - Other fields stay editable on a store that already has a role on platform
     credentials, as long as the request leaves the role fields and the key as
     they are. Removing the role is always allowed.
