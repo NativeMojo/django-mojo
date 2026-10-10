@@ -103,7 +103,10 @@ def test_owner_detail_and_foreign_denial(opts):
     context = opts.client.post("/api/assistant/context", {
         "model": "assistant.Conversation", "pk": opts.privacy_foreign.pk,
     })
-    assert context.status_code == 403, "assistant access must not import another user's conversation through context"
+    # #1553: a row the caller may not read answers like a missing one
+    assert context.status_code == 404 and context.json.get("error") == "Context source not found", (
+        "assistant access must not import another user's conversation through context, got "
+        f"{context.status_code}: {context.json}")
     _assert_no_foreign(opts, context)
 
 

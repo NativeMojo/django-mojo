@@ -98,6 +98,7 @@ Fields **not** writable by the account owner:
 | `email` | Use the change flow — `POST /api/auth/email/change/request` |
 | `username` | Use `POST /api/auth/username/change` — see [Username Change](#12-username-change) |
 | `is_email_verified` | Internal token flows only |
+| `id`, `uuid`, `created`, `date_joined`, `last_login` | Read-only, set by the server — a posted value is ignored and the save still answers `200` |
 | `is_phone_verified` | Internal token flows only |
 | `dob` (change, clear or re-set once stored) | Admin tier (`users` / `manage_users` / superuser). Date of birth is an eligibility record on age-gated deployments, not a preference — a correction is a support operation and is audit-logged. Re-posting the **unchanged** value is a `200` no-op, so round-tripping the user object is safe |
 | `is_dob_verified` | System-only — never REST-writable; reset automatically when `dob` changes |
@@ -227,14 +228,36 @@ The user is already logged in and knows their current password.
 
 ```json
 {
-  "old_password": "currentpassword",
-  "password": "newpassword123!"
+  "current_password": "currentpassword",
+  "new_password": "newpassword123!"
 }
 ```
 
-`old_password` is required when changing password via the profile endpoint.
-Omitting it returns a 400. An incorrect `old_password` returns a 401 and
-logs a security incident.
+`current_password` is required when changing password via the profile
+endpoint. Omitting it returns a 400. An incorrect `current_password` returns a
+400 `"Incorrect current password"` and logs a security incident.
+
+**The change signs the account out on every other device.** The response is
+the account, with a `tokens` object beside `data`:
+
+```json
+{
+  "status": true,
+  "data": {"id": 42, "username": "alice"},
+  "tokens": {"access_token": "eyJ...", "refresh_token": "eyJ..."}
+}
+```
+
+Replace your stored access and refresh tokens with these before the next
+request, and reconnect your websocket with the new access token. The tokens
+the request was sent with are dead. See
+[A new password ends other sessions](authentication.md#a-new-password-ends-other-sessions).
+
+Tries at the current password are limited to 10 per 15 minutes per account,
+here and on the email-change and phone-change requests. At the limit the
+answer is `429` with a `Retry-After` header and a `retry_after` field
+(seconds), and a correct password is refused too until the wait is over. A
+correct password inside the limit clears the count.
 
 ---
 
@@ -279,6 +302,12 @@ account exists — prevents enumeration.
 
 Both paths log the user in and return a JWT on success — no separate login
 step is needed after a password reset.
+
+The code flow allows 5 tries at the code per 15 minutes per account; the
+sixth returns `429` with `retry_after`. A repeat `forgot` request while the
+code is still live re-sends the same code, and at most 5 codes are sent per
+account per 15 minutes. See
+[Too many attempts](authentication.md#too-many-attempts-on-a-code-or-a-current-password).
 
 ---
 
@@ -435,6 +464,7 @@ Immediately kills any outstanding confirmation link or code. Idempotent.
 | Condition | Status | Error |
 |---|---|---|
 | `current_password` provided but incorrect | 401 | `"Incorrect password"` |
+| Too many tries at `current_password` (10 per 15 minutes) | 429 | `"Rate limit exceeded"`, with `retry_after` |
 | `current_password` omitted | *(allowed — request proceeds)* | |
 | New address already in use | 400 | `"Email already in use"` |
 | New address same as current | 400 | `"New email must be different..."` |
@@ -550,8 +580,13 @@ POST /api/user/me
 { "phone_number": null }
 ```
 
-Clearing is always permitted. `is_phone_verified` is automatically reset
-to `false` whenever the phone number changes.
+Clearing is permitted while the server's `ALLOW_PHONE_CHANGE` setting is on
+(the default). With it off the request returns 403
+`"Phone number change is not allowed"`. `is_phone_verified` is automatically
+reset to `false` whenever the phone number changes.
+
+When the number removed was verified, the account's email address receives a
+security notice naming the number by its last four digits.
 
 ---
 
@@ -899,8 +934,10 @@ is required (see [Step-Up Auth](step_up_auth.md)).
 
 1. `auth_key` is rotated — every outstanding JWT signed with the old key is
    immediately invalid.
-2. A fresh JWT is issued with the new key and returned in the response.
-3. An incident `sessions:revoked` is logged.
+2. Apps the account authorised through the OAuth server are revoked, and its
+   open websockets are closed.
+3. A fresh JWT is issued with the new key and returned in the response.
+4. An incident `sessions:revoked` is logged.
 
 **Important:** Replace your stored access and refresh tokens with the ones
 from this response. The old ones are dead.
@@ -913,8 +950,8 @@ from this response. The old ones are dead.
 Rate-limited: 5 requests per IP per 5 minutes.
 
 > **Note:** Per-device revocation is not supported. This endpoint is
-> all-or-nothing. Email change confirm and password change also rotate
-> `auth_key` as a side effect, which has the same "log out everywhere" result.
+> all-or-nothing. Email change confirm, a password change and a password
+> reset also rotate `auth_key`, which has the same "log out everywhere" result.
 
 ---
 

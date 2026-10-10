@@ -1050,16 +1050,20 @@ count = result["data"]["auth:failures"]
 
 ### Signature Learning
 
-After a high-confidence block (score >= `BOUNCER_LEARN_MIN_SCORE`, default 80), the learner background job analyzes the block and may create escalation signatures:
+After a high-confidence block (score >= `BOUNCER_LEARN_MIN_SCORE`, default 80), the learner background job analyzes the block. It no longer creates a signature that blocks anything:
 
 | Signature Type | Threshold | TTL | Description |
 |---------------|-----------|-----|-------------|
-| Subnet /24 | 5 blocks from same /24 | 1 day | Blocks entire subnet |
-| User Agent | 5 blocks with same UA | 7 days | Blocks matching UA string |
-| Fingerprint | 3 blocks with same fingerprint | 30 days | Blocks browser fingerprint |
-| Signal Set (Campaign) | 5 blocks with same signal pattern | 30 days | Blocks coordinated attacks |
+| Subnet /24 | Never learned | — | Manual only. 5 reports from one /24 in an hour record one `security:bouncer:subnet` event (level 5, no address, no block) |
+| User Agent | Never learned | — | Created by an operator; a row with `source='auto'` is not enforced |
+| Fingerprint | Never learned | — | Created by an operator; a row with `source='auto'` is not enforced |
+| Signal Set (Campaign) | 5 blocks with same signal pattern | 30 days | Recorded with a campaign incident; not matched by pre-screen |
 
-Signatures are cached in Redis for pre-screen checks. When a request matches a cached signature, it is blocked immediately without running full scoring.
+Signatures are cached in Redis for pre-screen checks. When a request matches a cached signature, it is blocked immediately without running full scoring. The cache is rebuilt after every learn job and every 15 minutes by the scheduled `refresh_bouncer_sig_cache` job.
+
+The reports the learner counts are sent by the caller, so a network signature learned from them let five anonymous requests block everyone behind a shared address. The learner does not write one, the cache leaves out a `subnet_24` row with `source='auto'` and an expiry (what an older release learned), and the learner never changes a row that is switched off or whose `source` is not `auto`.
+
+User-Agent and fingerprint values are chosen by the caller, so the learner does not write them and the cache leaves out any such row with `source='auto'`, including rows an older release learned. See [Bouncer Architecture](../account/bouncer.md#adaptive-bot-signature-learning).
 
 ## 9. OSSEC Integration
 
@@ -1212,11 +1216,11 @@ Single-server job functions follow the engine's calling convention: `func(job)` 
 |---------|---------|-------------|
 | `BOUNCER_LEARN_ENABLED` | `True` | Enable signature learning after blocks |
 | `BOUNCER_LEARN_MIN_SCORE` | `80` | Min risk score to trigger learning |
-| `BOUNCER_LEARN_SUBNET_THRESHOLD` | `5` | Blocks from /24 before subnet signature |
-| `BOUNCER_LEARN_SUBNET_TTL` | `86400` | Subnet signature TTL (1 day) |
-| `BOUNCER_LEARN_UA_THRESHOLD` | `5` | Blocks with same UA before UA signature |
-| `BOUNCER_LEARN_UA_TTL` | `604800` | UA signature TTL (7 days) |
-| `BOUNCER_LEARN_FP_THRESHOLD` | `3` | Blocks with same fingerprint before FP signature |
+| `BOUNCER_LEARN_SUBNET_THRESHOLD` | `5` | Reports from one /24 in an hour that record a `security:bouncer:subnet` event |
+| `BOUNCER_LEARN_SUBNET_TTL` | `86400` | Unused: network signatures are no longer learned |
+| `BOUNCER_LEARN_UA_THRESHOLD` | `5` | Unused: User-Agent signatures are no longer learned |
+| `BOUNCER_LEARN_UA_TTL` | `604800` | Unused |
+| `BOUNCER_LEARN_FP_THRESHOLD` | `3` | Unused: fingerprint signatures are no longer learned |
 | `BOUNCER_LEARN_CAMPAIGN_THRESHOLD` | `5` | Blocks with same signals before campaign detection |
 | `BOUNCER_LEARN_SIGNAL_SET_TTL` | `2592000` | Campaign signature TTL (30 days) |
 

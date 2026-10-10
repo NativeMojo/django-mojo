@@ -35,7 +35,7 @@ Which methods are shown depends on the resolved auth config's `login.methods`.
 Default set: `password`, `sms`, `passkey`, `magic`, `google`, `apple`, `github`.
 
 - **password** — email/password sign in
-- **sms** — phone number + 6-digit SMS code sign in
+- **sms** — phone number + SMS code sign in (6 digits by default; up to 10 where the deployment sets `SMS_OTP_LENGTH`; the code box always takes up to 10)
 - **google** — redirects to Google, returns to `/auth?code=...&state=...`
 - **apple** — same flow
 - **github** — same flow
@@ -62,6 +62,13 @@ nothing about whether the number has an account. When the resolved auth config
 sets `registration.enabled` to `false`, both this SMS sign-up link and the main
 "Create one" switcher are omitted so invite-only groups do not advertise a
 disabled registration path.
+
+The page fetches a fresh bouncer token for each SMS code request, as it does for
+password sign-in, so SMS sign-in keeps working on a deployment that enforces
+bouncer tokens. "Resend code" sends the same code again while it is still live.
+After five wrong codes in 15 minutes the page shows "Too many attempts. Try
+again in N minutes."; see
+[Too many attempts](authentication.md#too-many-attempts-on-a-code-or-a-current-password).
 
 ### URL Parameters
 

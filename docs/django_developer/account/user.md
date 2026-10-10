@@ -59,7 +59,13 @@ class RestMeta:
     SAVE_PERMS = ["manage_users", "users", "owner"]
     OWNER_FIELD = "self"           # owner = user is themselves
     NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
-    NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified", "requires_password_change"]
+    # Added to the framework's always-protected id, pk, created, uuid.
+    NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified",
+                      "requires_password_change",
+                      "secrets", "mojo_secrets", "secret",
+                      "permanent_password", "protected_metadata",
+                      "unusable_password", "totp",
+                      "date_joined", "last_login", "onetime_code", "modified"]
     SEARCH_FIELDS = ["username", "email", "display_name", "phone_number"]
     POST_SAVE_ACTIONS = ["send_invite", "disable", "reactivate"]
     GRAPHS = {
@@ -202,8 +208,22 @@ Gated by `_handle_existing_user_pre_save`:
 - **Allowed** for any admin tier (`users` / `manage_users` / `is_superuser`).
 - **Blocked** for self-acting users with only `owner` perm — they must use the dedicated change flows (`POST /api/auth/email/change/{request,confirm}` etc.) which verify ownership of the new channel via OTP/link.
 
-Phone clear (setting `null`) and first-set (when the user has none) are
-allowed for anyone with edit access.
+Phone first-set (when the user has none) is allowed for anyone with edit
+access. Phone clear (setting `null`) is allowed for anyone with edit access
+**while `ALLOW_PHONE_CHANGE` is on** (the default). With it off, someone who
+is not an admin can neither replace nor clear a number on file — the save
+answers 403 `"Phone number change is not allowed"` — because clear-then-set
+would be a change with no check at all. The rule is
+`User.check_phone_number_change(old_phone, admin_caller)`.
+
+**Removing a verified number is announced.** When a save clears a number that
+was verified, `User.notify_phone_removed(old_phone)` runs after the save has
+gone through: it files a `phone:removed` event on the account and sends the
+`phone_removed_notify` email to the account's address, naming the number by
+its last four digits only. It is best effort and never fails the save. The
+event and the email are tried separately, so a failure to record the event
+does not stop the email. An account with no email gets the event only. An admin removing the number
+triggers it as well. Removing an unverified number sends nothing.
 
 ### Date of Birth (`dob`) — immutable to the account holder once set
 
@@ -342,6 +362,18 @@ POST /api/user/<own_id>
 
 `current_password` is required for self-service changes.
 
+A changed password ends every other session of the account (`User.end_sessions`, see [Authentication — Sessions End When the Password Changes](auth.md#sessions-end-when-the-password-changes)). The new `auth_key` is written in the same row write as the password, and the grants are revoked in that write's transaction (`User.atomic_save`): if the revocation fails, the password is not changed. So that the device making the change stays signed in, the response carries a `tokens` object **beside** `data`, signed with the new key:
+
+```json
+{
+  "status": true,
+  "data": {"id": 42, "username": "alice"},
+  "tokens": {"access_token": "eyJ...", "refresh_token": "eyJ..."}
+}
+```
+
+The new pair carries the claims of the token that made the request, `auth_time` included: a password change is not a new sign-in and does not renew step-up freshness. A client must store the pair; its old tokens are dead. `tokens` is present only when the caller changed their **own** password with a session JWT. A key-backed caller gets none.
+
 ### Admin password reset (for another user)
 
 Admins with `manage_users` can set any user's password without knowing the current one:
@@ -353,12 +385,15 @@ POST /api/user/<target_id>
 
 No `current_password` needed. The `can_change_password()` method allows this for superusers and callers with `users` or `manage_users`. Password strength validation still applies.
 
+The target's sessions are ended the same way. The response carries no `tokens`: an admin is never handed another person's tokens, and the admin's own session is untouched. An admin who sets their **own** password this way does get `tokens`, and must store them.
+
 ## Password Reset Flow (Forgot Password)
 
 1. Call `POST /api/auth/forgot` with `email` and `method=code` or `method=link`
 2. For `method=code`: a 6-digit code is stored in secrets and emailed
 3. For `method=link`: a signed token is emailed
 4. Reset via `POST /api/auth/password/reset/code` or `POST /api/auth/password/reset/token`
+5. The reset ends every other session of the account and answers with a new token pair for the device that did it
 
 ## Email Verification Flow
 
@@ -414,7 +449,7 @@ The old number is notified only **after** the classification returns: a change t
 | `disable` | `{"disable": {"reason": "admin\|abuse", "note": "..."}}` | Flips `is_active=False`, writes `metadata.protected.disable.*`, emits incident event | `manage_users` |
 | `reactivate` | `{"reactivate": {"note": "..."}}` | Flips `is_active=True`, appends to `disable.history` (FIFO cap 20) | `manage_users` |
 | `change_username` | `{"change_username": {"username": "new"}}` | Self-service username change. Mirrors `POST /api/auth/username/change`. No `current_password` — see step-up auth. | self only |
-| `revoke_sessions` | `{"revoke_sessions": {}}` | Self-service global logout — rotates `auth_key`. Mirrors `POST /api/auth/sessions/revoke`. No `current_password` — see step-up auth. NOTE: returns a status only, not a fresh JWT — caller must re-authenticate. | self only |
+| `revoke_sessions` | `{"revoke_sessions": {}}` | Self-service global logout — rotates `auth_key`, revokes the account's OAuth-server grants and drops its live websockets (`User.end_sessions`). Mirrors `POST /api/auth/sessions/revoke`. No `current_password` — see step-up auth. NOTE: returns a status only, not a fresh JWT — caller must re-authenticate. | self only |
 | `confirm_totp` | `{"confirm_totp": {"code": "123456"}}` | Self-service TOTP enrolment confirm. Mirrors `POST /api/account/totp/confirm`. Sets `requires_mfa=True` and returns recovery codes. | self only |
 | `regenerate_totp_codes` | `{"regenerate_totp_codes": {"code": "123456"}}` | Self-service regenerate of recovery codes (requires valid TOTP code). Mirrors `POST /api/account/totp/recovery-codes/regenerate`. | self only |
 | `disable_totp` | `{"disable_totp": true}` | Self-service TOTP disable. Mirrors `DELETE /api/account/totp`. | self only |

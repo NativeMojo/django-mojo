@@ -56,7 +56,7 @@ Located at `mojo/apps/assistant/`, the Admin Assistant is a conversational Claud
 
 - **Reusable skills.** Stored multi-step procedures with trigger phrases. Teach it once (*"nightly user audit = query X, export Y, notify Z"*) and it replays on demand — discoverable via `find_skill`, listable via `list_skills`.
 
-- **Safe by construction.** Uses `request.DATA` input guards. ORM objects serialize through `MojoModel.to_dict()` so RestMeta graphs automatically strip sensitive fields (password hashes, tokens). Mutating calls require explicit confirmation blocks. Every error path reports a structured `incident.report_event` — nothing fails silently.
+- **Safe by construction.** Uses `request.DATA` input guards. Model rows reach the assistant only through a graph the server selects — the model's `ai` graph when it declares one, otherwise `default` — so the model author, not the conversation, decides what the assistant can read; a wider graph cannot be requested. Mutating calls require explicit confirmation blocks. Every error path reports a structured `incident.report_event` — nothing fails silently.
 
 - **WebSocket-native reliability contract.** The handler guarantees either `assistant_response` or `assistant_error` — no hangs, no silent drops. The UI streams `thinking → tool_call → plan → plan_update → response` for a fluid real-time feel.
 
@@ -83,7 +83,7 @@ Located at `mojo/apps/assistant/`, the Admin Assistant is a conversational Claud
 - Claude-powered tool-use loop (`mojo.helpers.llm`)
 - Permission-gated action model (`user.has_permission`)
 - Structured incident reporting (`incident.report_event`)
-- `MojoModel.to_dict()` serialization with RestMeta graph filtering
+- Server-selected RestMeta graph serialization (`ai`, else `default`) for every model row the assistant reads
 - Logit-based structured logging for full audit trails
 
 ### The combined story

@@ -22,6 +22,9 @@ class FileManager(MojoSecrets, MojoModel):
         CREATED_BY_OWNER_FIELD = None
         CAN_CREATE = True
         CAN_DELETE = True
+        # The encrypted column, and two names that would dispatch to the
+        # two-argument set_secret/set_setting.
+        NO_SAVE_FIELDS = ["mojo_secrets", "secret", "setting"]
         DEFAULT_SORT = "-id"
         POST_SAVE_ACTIONS = ["test_connection", "fix_cors", "clone", "check_cors"]
         VIEW_PERMS = ["view_fileman", "manage_files", "files"]
@@ -331,41 +334,74 @@ class FileManager(MojoSecrets, MojoModel):
     def assume_role_duration(self):
         return self.get_secret('assume_role_duration')
 
-    def _require_superuser_for_role_setting(self, name):
-        """Guard the settings that redirect which AWS identity we act as.
-
-        on_rest_save_field dispatches set_<key> for any key in the payload, and
-        SAVE_PERMS is the group-level "files"/"manage_files" permission — so
-        without this an ordinary file admin could point the platform's own
-        credentials at a role of their choosing (confused deputy). Direct ORM
-        use (bootstrap, migrations, tests) has no active request and is trusted.
-        """
-        if self.active_request is None:
-            return
-        actor = self.active_user
-        if actor is None or not getattr(actor, "is_superuser", False):
-            raise me.PermissionDeniedException(
-                reason=f"Only superusers can change the FileManager '{name}' setting",
-                model_name="FileManager",
-                event_type="user_permission_denied",
-                branch="fileman_assume_role_setting",
-            )
+    ROLE_SETTING_KEYS = ("assume_role_arn", "external_id", "role_session_name", "assume_role_duration")
 
     def set_assume_role_arn(self, value):
-        self._require_superuser_for_role_setting('assume_role_arn')
         self.set_secret('assume_role_arn', value)
 
     def set_external_id(self, value):
-        self._require_superuser_for_role_setting('external_id')
         self.set_secret('external_id', value)
 
     def set_role_session_name(self, value):
-        self._require_superuser_for_role_setting('role_session_name')
         self.set_secret('role_session_name', value)
 
     def set_assume_role_duration(self, value):
-        self._require_superuser_for_role_setting('assume_role_duration')
         self.set_secret('assume_role_duration', value)
+
+    def uses_platform_credentials(self):
+        """True when a role on this store would be assumed with the platform's AWS identity.
+
+        Only the store's own secrets count, never a parent's: with no key
+        the session falls through to the server's ambient identity. A key
+        copied from the platform (the AWS_KEY setting, or a system-scoped
+        store) is the platform's too — created and derived stores are seeded
+        with it.
+        """
+        if self.user_id is None and self.group_id is None:
+            return True
+        key = self.get_secret('aws_key')
+        if not key or not self.get_secret('aws_secret'):
+            return True
+        if key == settings.get("AWS_KEY", None):
+            return True
+        for manager in FileManager.objects.filter(user=None, group=None):
+            if manager.get_secret('aws_key') == key:
+                return True
+        return False
+
+    def _require_superuser_for_platform_role(self, created):
+        """One rule for every route a role or key can arrive by.
+
+        on_rest_save_field dispatches set_<key> for any key in the payload —
+        the flat fields, `secrets` and `settings` all land in the same store —
+        and SAVE_PERMS is the group-level "files"/"manage_files" permission. So
+        this checks the store as the request leaves it: a non-superuser may not
+        leave a role on a store that runs on platform credentials (confused
+        deputy), whether they added the role or took the store's own key away.
+        A store on its own key reaches only what that key already reaches.
+        Direct ORM use (bootstrap, clone, get_for_*) does not come through here.
+        """
+        if not self.assume_role_arn:
+            return
+        actor = self.active_user
+        if actor is not None and getattr(actor, "is_superuser", False):
+            return
+        if not self.uses_platform_credentials():
+            return
+        if not created:
+            # An untouched role/key pair is not this request's doing: a file
+            # admin can still edit the other settings of such a store.
+            stored = FileManager.objects.filter(pk=self.pk).first()
+            watched = (*self.ROLE_SETTING_KEYS, "aws_key", "aws_secret")
+            if stored is not None and all(
+                    self.get_secret(key) == stored.get_secret(key) for key in watched):
+                return
+        raise me.PermissionDeniedException(
+            reason="Only superusers can set an AWS role on a FileManager that runs on platform credentials",
+            model_name="FileManager",
+            event_type="user_permission_denied",
+            branch="fileman_assume_role_setting",
+        )
 
     def set_allowed_origins(self, origins):
         if isinstance(origins, str) and "," in origins:
@@ -588,6 +624,10 @@ class FileManager(MojoSecrets, MojoModel):
                     event_type="user_permission_denied",
                     branch="fileman_system_scope_create",
                 )
+        # Before _update_default: a refused save must write nothing. The key
+        # defaults below cannot change the answer — a created store with no
+        # key of its own is on platform credentials either way.
+        self._require_superuser_for_platform_role(created)
         self._update_default()
         if not self.name:
             self.name = self.generate_name()

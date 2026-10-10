@@ -195,16 +195,26 @@ route uses the admin key.
 POST /api/assistant/context
 ```
 
-Create a conversation pre-loaded with the full context of any model instance. Use this for "Open in Assistant" buttons on detail views.
+Create a conversation pre-loaded with the context of any model instance. Use this for "Open in Assistant" buttons on detail views.
 
-**Permission**: `view_admin` + the model's own `VIEW_PERMS`
+Tickets and incidents get a purpose-built summary. Every other model is
+pre-loaded in the shape that model publishes for the assistant — its `ai`
+shape when it has one, otherwise its `default` shape — not the wider
+`?graph=detail` view a detail screen may be showing. A field that appears on
+your detail view may therefore be absent from the assistant's context.
+
+**Permission**: global `view_admin` or `assistant`, plus the right to read that record. The record is checked the way `GET` on it is checked: its owner, its own tenant and your grants there. An API key or group token is refused.
 
 **Request body**:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `model` | string | Yes | Model identifier in `app_label.ModelName` format (e.g. `incident.Ticket`, `incident.Incident`) |
-| `pk` | integer | Yes | Primary key of the instance |
+| `pk` | integer or string | Yes | Primary key of the instance. `7` and `"7"` are the same record |
+
+Do not send `graph`. The server chooses the shape, and a request that carries `graph` is refused with `400`. For a record you may only see in a reduced shape (a group you are a plain member of), the context is built from that reduced shape.
+
+The conversation is filed under the **record's** tenant. A `group` sent with the request does not change that, and a record that belongs to no tenant gives a conversation with no group.
 
 **Response** (success — new conversation):
 
@@ -229,15 +239,17 @@ Create a conversation pre-loaded with the full context of any model instance. Us
 }
 ```
 
-**Duplicate prevention**: If the same user has already opened an assistant conversation for the same model + pk, the existing conversation is returned instead of creating a new one.
+**Duplicate prevention**: If the same user has already opened an assistant conversation for the same record, the existing conversation is returned instead of creating a new one. Your right to read the record is checked on every call, so a retry after you lose access gets the `404` below, not the old conversation.
 
 **Errors**:
 
-| Status | Condition |
-|---|---|
-| 400 | Invalid model format or model not found |
-| 403 | User lacks `view_admin` or model `VIEW_PERMS` |
-| 404 | Instance with given pk not found |
+| Status | Condition | Body |
+|---|---|---|
+| 400 | `graph` sent; `model` or `pk` missing, malformed or of the wrong type; unknown model; a model with no REST interface | A short fixed sentence. Nothing you sent is repeated |
+| 403 | You lack global `view_admin` / `assistant`, or you are using an API key or group token, or the model is closed to the assistant | For a closed model: `"<app>.<Model> is not available to the assistant"` |
+| 404 | The record does not exist, **or** you may not read it | Always `{"status": false, "error": "Context source not found"}` |
+
+A missing record and one you may not read give the same `404`, with no model name and no id in it. Treat `404` as "nothing to open here"; it does not tell you which of the two it was. Before this change an unreadable record answered `403`.
 
 **Example — open assistant from a ticket detail view**:
 
@@ -612,11 +624,14 @@ Users with `view_admin` can ask the assistant to introspect and query any MojoMo
 
 ### `describe_model`
 
-Returns a model's fields, available graphs, permissions, and search fields. Useful for discovery before querying.
+Returns a model's fields, the shape its rows are returned in, permissions, and search fields. Useful for discovery before querying.
 
 **Required permission**: `view_admin`
 
-Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secret`) are never included in the output. Only models with a `RestMeta` definition are available.
+`fields` lists what a request may filter, sort, group or total by. Fields that
+hold secrets are left out of it, and so are free-form JSON fields (such as
+`metadata`): the assistant cannot search inside those. Only models with a
+`RestMeta` definition are available.
 
 **Example response shape**:
 
@@ -628,9 +643,9 @@ Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secre
         {"name": "email", "type": "email", "nullable": false},
         {"name": "is_active", "type": "boolean", "nullable": false}
     ],
-    "graphs": {
-        "default": ["id", "email", "username", "is_active", "created"],
-        "detail": ["id", "email", "username", "first_name", "last_name", "is_active", "created"]
+    "serialization": {
+        "graph": "default",
+        "fields": ["id", "email", "username", "is_active", "created"]
     },
     "permissions": {
         "view": ["view_admin"],
@@ -640,13 +655,28 @@ Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secre
 }
 ```
 
+`serialization` names the one shape the assistant reads this model in, and
+`serialization.fields` lists the keys each row will carry. `graph` is `"ai"`
+when the model publishes an assistant-specific shape and `"default"` otherwise.
+The shape is chosen by the model, not by the conversation: there is no `graph`
+input on any model tool, and a request that includes one is refused. Asking the
+assistant for "the detail view" or "all fields" of a record does not widen what
+it can read.
+
 ### `query_model`
 
 Query a MojoModel and return results inline as JSON. Best for small result sets (detail lookups, spot-checking records). Respects the same `RestMeta` permissions and owner/group scoping as the REST API.
 
 **Required permission**: `view_admin` plus any permissions the model's `RestMeta` `VIEW_PERMS` requires.
 
-Filtering on sensitive fields is blocked and logged as a security event. Max 200 rows.
+Filtering or sorting on a field that holds a secret is refused and logged as a
+security event. The same goes for a secret field on a related record, and for
+free-form JSON fields such as `metadata`. This is separate from what a row
+shows: a row still carries every key in `serialization.fields`, including a
+JSON field listed there. The log entry names the field, never the value that
+was tried. `search` follows the same rule: on a model whose search would look
+inside a secret field, every search is refused and logged, and `describe_model`
+shows an empty `search_fields` for it. Max 200 rows. Each row carries exactly the keys in `describe_model`'s `serialization.fields`.
 
 **Example response shape**:
 
@@ -724,11 +754,25 @@ Run aggregate queries (count, sum, avg, min, max, count_distinct) on any MojoMod
 
 `ordering` must reference a `group_by` column or an aggregation alias.
 
+A field that holds a secret, or a free-form JSON field, cannot be counted,
+totalled, grouped by or filtered on. The request is refused and logged as a
+security event, the same as in `query_model`. The names you give your own
+results (`alias`) are not affected.
+
 ### `export_data`
 
 Export query results to a downloadable CSV file stored in file storage. Data is written directly to storage — not returned inline. The assistant responds with a `file` block containing the download URL.
 
 **Required permission**: `view_admin` plus model `VIEW_PERMS`. Requires `fileman` with a configured `FileManager` for the user/group.
+
+The file's columns are the keys in `describe_model`'s `serialization.fields`
+for that model, in that order, and each cell holds the same value `query_model`
+would return for it. A request can ask for fewer columns or a different order;
+it cannot add a column the model does not publish to the assistant. Asking for
+a column outside that set, the same column twice, or no columns at all is
+refused and no file is created. A column that holds a secret cannot be asked
+for by name, and filters, sorting and `search` follow the same rule as `query_model`. An
+export with no matching rows still produces a file with the header row.
 
 **Example queries that trigger this tool**:
 

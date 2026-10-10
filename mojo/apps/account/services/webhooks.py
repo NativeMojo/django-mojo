@@ -12,7 +12,14 @@ one flaky row cannot poison the fan-out.
 Signing, retries, backoff, dead-letter, and `X-Mojo-Signature` injection are
 all inherited from the existing `publish_webhook(group=...)` path. This module
 adds only storage + fan-out + per-receiver idempotency.
+
+The fan-out job always ends `completed` unless the handler raises; the job
+engine discards the handler's return string. What a publication came to is
+recorded in the fan-out job's metadata (`result`, the counts) and, when a
+receiver could not be queued, in one `webhook:fanout:incomplete` incident.
 """
+import hashlib
+
 from mojo.apps import jobs
 from mojo.helpers import logit
 
@@ -29,6 +36,14 @@ PUBLISHED_JOB_ID_CAP = 50
 # other sensitive content from inner libraries; bound the surface area.
 ERROR_REPR_MAX_LEN = 500
 
+# Job.idempotency_key is varchar(64) and unique. A per-receiver key longer than
+# this is stored as its SHA-256 hex digest, which is exactly this long.
+JOB_KEY_MAX_LEN = 64
+
+# Longest idempotency_key dispatch() accepts. A sanity bound, not a fit bound:
+# with the digest any length fits the job key column.
+IDEMPOTENCY_KEY_MAX_LEN = 255
+
 
 def _safe_error_repr(err):
     """Bounded repr() of an exception for incident reporting. Truncates to
@@ -41,6 +56,21 @@ def _safe_error_repr(err):
     return text
 
 
+def child_idempotency_key(idempotency_key, subscription_id):
+    """The job key for one receiver's delivery: `<idempotency_key>_<subscription_id>`.
+
+    Returned unchanged when it fits the 64-character job key column, so a key
+    that produced a delivery before still names the same row. When it is
+    longer, the SHA-256 hex digest of that same text is returned instead
+    (64 characters). A caller key of 44 characters or fewer always keeps the
+    exact form: a subscription id is at most 19 digits.
+    """
+    combined = f"{idempotency_key}_{subscription_id}"
+    if len(combined) <= JOB_KEY_MAX_LEN:
+        return combined
+    return hashlib.sha256(combined.encode("utf-8")).hexdigest()
+
+
 def dispatch(group, event_type, data, *, idempotency_key=None, channel="webhooks"):
     """Queue a fan-out job for `event_type` against `group`'s active subscriptions.
 
@@ -49,9 +79,19 @@ def dispatch(group, event_type, data, *, idempotency_key=None, channel="webhooks
 
     The fan-out itself happens asynchronously on the `webhook_fanout` channel —
     `handle_fanout` does the actual queryset + per-receiver publish loop.
+
+    Raises ValueError, before anything is queued, when `idempotency_key` is
+    longer than IDEMPOTENCY_KEY_MAX_LEN characters.
     """
     if group is None:
         return None
+    # Measured as text: a key that is not a string (an integer id, say) is
+    # accepted, and the fan-out formats it into the per-receiver key.
+    if idempotency_key is not None and len(str(idempotency_key)) > IDEMPOTENCY_KEY_MAX_LEN:
+        raise ValueError(
+            f"idempotency_key must be at most {IDEMPOTENCY_KEY_MAX_LEN} characters, "
+            f"got {len(str(idempotency_key))}"
+        )
     return jobs.publish(
         FANOUT_FUNC,
         {
@@ -68,8 +108,14 @@ def dispatch(group, event_type, data, *, idempotency_key=None, channel="webhooks
 def handle_fanout(job, *, publisher=None, reporter=None):
     """Worker handler: load the Group, query matching active subscriptions,
     publish one signed webhook job per row. Per-row failures are reported to
-    the incident app and skipped. Returns 'success' or 'failed' (no retry on
-    'failed' — group_missing is not recoverable).
+    the incident app and skipped.
+
+    Returns 'success', 'incomplete' (at least one receiver could not be
+    queued) or 'failed' (the group is missing). The return string is
+    informational: the job engine discards it and marks the job `completed`.
+    The recorded result is `job.metadata["result"]`, with the counts beside
+    it. The handler does not raise for a receiver failure, so the engine never
+    re-runs the fan-out for one.
 
     `publisher` and `reporter` default to the production callables
     (jobs.publish_webhook and incident.report_event). They exist so a test
@@ -102,6 +148,7 @@ def handle_fanout(job, *, publisher=None, reporter=None):
             event_type=event_type,
         )
         job.metadata["error_type"] = "webhook_fanout_group_missing"
+        job.metadata["result"] = "failed"
         return "failed"
 
     # Postgres-native JSONField containment: pushes the "events contains
@@ -113,6 +160,7 @@ def handle_fanout(job, *, publisher=None, reporter=None):
     )
 
     published_job_ids = []
+    published_count = 0
     failed_count = 0
     for sub in rows:
         try:
@@ -123,8 +171,9 @@ def handle_fanout(job, *, publisher=None, reporter=None):
                 channel=channel,
             )
             if idempotency_key:
-                kwargs["idempotency_key"] = f"{idempotency_key}_{sub.id}"
+                kwargs["idempotency_key"] = child_idempotency_key(idempotency_key, sub.id)
             jid = publisher(**kwargs)
+            published_count += 1
             if len(published_job_ids) < PUBLISHED_JOB_ID_CAP:
                 published_job_ids.append(jid)
         except Exception as e:
@@ -150,10 +199,41 @@ def handle_fanout(job, *, publisher=None, reporter=None):
                     f"incident.report_event failed inside webhook fan-out: {ie!r} (original error: {e!r})"
                 )
 
+    matched_count = published_count + failed_count
+    result = "incomplete" if failed_count else "success"
     job.metadata["event_type"] = event_type
     job.metadata["group_id"] = group.id
-    job.metadata["matched_count"] = len(published_job_ids) + failed_count
-    job.metadata["published_count"] = len(published_job_ids)
+    job.metadata["matched_count"] = matched_count
+    job.metadata["published_count"] = published_count
     job.metadata["failed_count"] = failed_count
-    job.metadata["published_job_ids"] = published_job_ids  # capped at PUBLISHED_JOB_ID_CAP
-    return "success"
+    # A sample of at most PUBLISHED_JOB_ID_CAP ids; the counts above are the totals.
+    job.metadata["published_job_ids"] = published_job_ids
+    job.metadata["published_job_ids_truncated"] = published_count > len(published_job_ids)
+    job.metadata["result"] = result
+
+    if failed_count:
+        # One summary per incomplete publication, beside the per-receiver
+        # incidents above. No payload and no receiver address.
+        try:
+            reporter(
+                details=(
+                    f"webhook fan-out incomplete: {failed_count} of {matched_count} receivers "
+                    f"could not be queued (group={group.id}, event_type={event_type}, "
+                    f"published={published_count}, fanout_job={job.id})"
+                ),
+                category="webhook:fanout:incomplete",
+                scope="account",
+                level=6,
+                group=group,
+                event_type=event_type,
+                failed_count=failed_count,
+                matched_count=matched_count,
+                published_count=published_count,
+                fanout_job_id=job.id,
+            )
+        except Exception as ie:
+            # Never let incident reporting crash the fan-out itself.
+            logit.error(
+                f"incident.report_event failed for the webhook fan-out summary: {ie!r}"
+            )
+    return result

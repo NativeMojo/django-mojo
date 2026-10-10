@@ -23,10 +23,13 @@ to live in somebody's head:
 | **This skill** | read what shipped, pick the version, write the note, bump the files, commit |
 | **`publish.py`** | verify, build, push, upload, tag, publish the note |
 
-**Only the wheel is uploaded.** The source archive is built for the packaging
-check and then removed, and the wheel is refused if it holds anything git does
-not track (`scripts/release_wheel_only.py`). A source archive packs every file
-`.gitignore` does not name, which is how agent worktrees reached PyPI.
+**Only the wheel is uploaded, and no source archive is built.** `publish.py`
+builds the wheel in a private temporary folder, checks it there, and uploads
+that one file by its path; `dist/` in the checkout is not used. The wheel is
+refused if it holds anything git does not track
+(`scripts/release_wheel_only.py`). A source archive packs every file
+`.gitignore` does not name, which is how agent worktrees reached PyPI. Never
+run `uv build` or `uv publish` by hand to release.
 
 Do not reimplement the script's steps here, and do not let the script grow this
 skill's judgement. A PyPI version can never be reused, so the irreversible half
@@ -117,6 +120,11 @@ Use `$maestro-release-note` for the mechanics — it owns the
 version you decided **and the house format below**, which overrides that
 skill's generic voice.
 
+**From an agent session** (see 5a), write the note and get the yes here, but
+**do not file it yet**: tell `$maestro-release-note` to stop before its
+`create_release` call. The draft is filed once, in 5a, when the release commit
+exists to anchor it.
+
 #### House format — this is a CHANGELOG, not a "what's new"
 
 These notes replaced `CHANGELOG.md`. The audience is a developer who pins this
@@ -171,22 +179,95 @@ git add pyproject.toml mojo/__init__.py uv.lock
 git commit -m "Release <version>" -- pyproject.toml mojo/__init__.py uv.lock
 ```
 
-Then hand off:
+Then rehearse, and hand off. From an agent session, stop here and run the
+commands in 5a instead of these two:
 
 ```bash
+python publish.py --dry-run
 python publish.py
 ```
 
-It re-checks everything, finds the note the gate requires, and flips that note
-from draft to published once the tag is pushed. **Pushing is inside the script**
-— running it is the user's authorization to push, so never run it without an
-explicit instruction to release.
+The dry run is not a printout: it runs every check and the real build, in the
+same temporary folder the release uses, and stops short of the push, the upload
+and the tag. A rehearsal that passes has built and checked the wheel the
+release would upload. Run it first, every time.
+
+The real run re-checks everything, finds the note the gate requires, and flips
+that note from draft to published once the tag is pushed. **Pushing is inside
+the script** — running it is the user's authorization to push, so never run it
+without an explicit instruction to release.
+
+### 5a. From an agent session: `--note-by-agent`
+
+`publish.py` reads a maestro login from `~/.claude.json` or
+`~/.claude/settings.json`. An agent session has neither: its maestro connection
+is handed to it at launch and stored in no file. So from an agent session the
+two note steps are **yours**, done with your own maestro tools, and the script
+is told so. It verifies neither. That is the cost of this path — do not skip a
+step because nothing will catch it.
+
+1. **File the draft once, after the release commit:**
+   `create_release(project, version, title, tldr, body, commit_ref=<the release
+   commit>)`, with the note the user approved in step 4. That step did not file
+   it. `create_release` needs the whole note every time, so do not re-send it
+   to add the commit later — file it once, here.
+2. **Confirm it:** `get_release(project, version)` returns the draft you filed.
+3. **Rehearse, then release:**
+
+   ```bash
+   python publish.py --dry-run --note-by-agent
+   python publish.py --note-by-agent
+   ```
+
+4. **Publish the note only for a release that shipped.** A real run that
+   finishes prints, as its last line:
+
+   ```
+   NEXT: publish_release(project=<id>, version="<version>")
+   ```
+
+   Check that the index shows the version, then make that call. A dry run never
+   prints it, and neither does a run that failed.
+
+**If the real run fails after the upload** it prints no `NEXT` line, and a
+rerun is refused because the version is already on PyPI. Do not bump the
+version to get past that. Finish by hand, doing only what is missing. The
+script makes the tag locally and then pushes it, so either half may already be
+done. This is what happened for 1.31.4.
+
+1. Confirm the index has the version. If it does not, nothing shipped: stop and
+   report the failure instead.
+2. Name the release commit: `git rev-parse HEAD`, on the branch you released
+   from. It must be the `Release <version>` commit, and
+   `git ls-remote origin <branch>` must show the same hash — the script pushes
+   the source before it uploads.
+3. The local tag: `git rev-parse -q --verify "refs/tags/v<version>^{commit}"`.
+   - Prints nothing: create it at that commit,
+     `git tag -a v<version> -m "Release v<version>" <release commit>`.
+   - Prints the release commit: it exists, do not create it again.
+   - Prints any other commit: stop and ask the user. Do not move a tag.
+4. The remote tag, asked for by both of its names:
+   `git ls-remote origin "refs/tags/v<version>" "refs/tags/v<version>^{}"`.
+   The commit it points at is the hash on the line ending in `^{}`. A plain
+   tag has no such line, only the first one, and then that line's hash is the
+   commit.
+   - Prints nothing: the tag is not on the remote, `git push origin v<version>`.
+   - The commit is the release commit: it is already pushed.
+   - The commit is any other: stop and ask the user. Do not move a tag.
+5. Then publish the note: `publish_release(project, version)`.
+
+`--note-by-agent` and `--skip-notes` cannot be combined, and they are not the
+same thing: `--skip-notes` means no note at all, and is for maestro being down.
 
 ## When the gate fires
 
 `publish.py` refuses with *"no maestro release note for X"* only when this flow
 was bypassed. The fix is to write the note, not to reach for `--skip-notes` —
 that flag exists for maestro being unreachable, not for being in a hurry.
+
+It refuses with *"no maestro credential found"* when it runs from a session
+with no maestro login in a file — an agent session. The fix is step 5a, not
+`--skip-notes`.
 
 ## Report
 

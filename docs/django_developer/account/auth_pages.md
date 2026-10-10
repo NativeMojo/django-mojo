@@ -445,7 +445,7 @@ Methods rendered are those listed in the resolved auth config's
 `google`, `apple`, `github`.
 
 - `password` — email/password sign in
-- `sms` — phone number + 6-digit SMS code sign in
+- `sms` — phone number + SMS code sign in (6 digits unless `SMS_OTP_LENGTH` says more; the wording follows the setting and the code box always takes up to 10)
 - `google` — Google OAuth redirect flow
 - `apple` — Apple OAuth redirect flow
 - `github` — GitHub OAuth redirect flow
@@ -867,7 +867,8 @@ The real page receives a 30-minute form descriptor in `hosted_bouncer`.
 `bouncerTokenProvider` to `MojoAuth.init()`. Template overrides must preserve
 the inert `json_script` config block and this initialization.
 
-`MojoAuth.getBouncerToken(purpose, context)` returns a Promise. `login`, `register`, and
+`MojoAuth.getBouncerToken(purpose, context)` returns a Promise. `login`,
+`startSmsLogin` (with the `login` purpose), `register`, and
 `startPhoneRegister` await the provider before posting; contact awaits it with
 `public_message`. A new single-use token is acquired for each protected attempt,
 including wrong-password retries and phone-start followed by registration.
@@ -877,10 +878,18 @@ No hosted token is transported through localStorage.
 Providers receive the optional `context.duid` for the protected request's device
 binding; it does not override the descriptor's purpose or group.
 
-For `login`, `register`, and `startPhoneRegister`, only the exact `403` error
-`Invalid bouncer token` triggers one automatic fresh-token retry, before
-credential/action processing. Network errors, uncertain outcomes, and credential
-failures are never automatically replayed. Contact retains its explicit flow.
+For `login`, `startSmsLogin`, `register`, and `startPhoneRegister`, only the
+exact `403` error `Invalid bouncer token` triggers one automatic fresh-token
+retry, before credential/action processing. Network errors, uncertain outcomes,
+and credential failures are never automatically replayed. Contact retains its
+explicit flow.
+
+`startSmsLogin` can therefore reject when verification is unavailable, where it
+used to always resolve. The sign-in page shows that error like any other.
+
+A `429` from any call is shown as "Too many attempts. Try again in N minutes."
+when the response carries `retry_after` (seconds, rounded up to whole minutes),
+and as "Too many attempts. Try again later." when it does not.
 
 Without a provider, MojoAuth retains the existing request/token lookup behavior.
 The public `mojo-bouncer.js` SDK and legacy assess requests are unchanged. Hosted

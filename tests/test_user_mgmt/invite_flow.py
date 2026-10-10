@@ -224,8 +224,14 @@ def test_token_single_use_after_success(opts):
     })
     assert_eq(second.status_code, 400,
               f"a consumed token must be refused, got {second.status_code}: {second.response.data}")
-    assert_eq(second.response.error, "Token already used",
-              f"expected 'Token already used', got '{second.response.error}'")
+    # The successful set ended every session by replacing the account's
+    # signing key (maestro #6226), so the spent link no longer even verifies:
+    # the signature check refuses it before the single-use check is reached.
+    assert_eq(second.response.error, "Invalid token signature",
+              f"expected 'Invalid token signature', got '{second.response.error}'")
+    user.refresh_from_db()
+    assert_eq(user.get_secret("password_reset_jti"), None,
+              "the link must also stay consumed: ending the sessions must not write the old secrets back")
 
 
 @th.django_unit_test("invite_flow: unknown token prefix rejected with 400")

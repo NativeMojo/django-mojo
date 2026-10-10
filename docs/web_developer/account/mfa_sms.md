@@ -2,6 +2,8 @@
 
 SMS OTP sends a 6-digit code to the user's verified phone number via SMS.
 
+**Code length.** Six digits is the default. A deployment can lengthen the SMS sign-in code, and the phone sign-up code, to up to 10 digits with the `SMS_OTP_LENGTH` setting; it can never be shorter than 6. Do not hard-code six in a client: accept 6 to 10 digits in the code field and send what the user typed. The hosted sign-in and register pages already size their code box from the setting.
+
 Supports two modes:
 - **2FA** — required second step after password login
 - **Standalone** — passwordless login with username + SMS code only
@@ -49,7 +51,7 @@ When SMS MFA is active, password login returns an `mfa_token` instead of a JWT.
 }
 ```
 
-Sends a 6-digit code to the user's phone number. Returns a fresh `mfa_token` (the original is consumed).
+Sends a 6-digit code to the user's phone number. Returns a fresh `mfa_token` (the original is consumed). If a code sent earlier is still live, the same code is sent again and its 10 minutes are not restarted.
 
 **Response:**
 
@@ -116,6 +118,10 @@ The hosted sign-in page (`/auth`) mirrors this honestly in its UX: it tells the 
 
 **This endpoint deliberately never reports the send outcome.** An unknown identifier, a real account with no phone number on file, and an account whose SMS send failed all return the byte-identical body above. Any difference would be an account-existence oracle, so there is nothing here for a client to branch on — the operator gets the signal through incident events instead.
 
+**A repeat request re-sends the same code.** While a code is live (10 minutes) a second request sends that code again and does not restart its 10 minutes, so a "resend" never invalidates the code the user is typing. An account is texted at most 5 codes per 15 minutes, and none while its code entry is locked (see [Rate Limits](#rate-limits)). The body above is returned in those cases too.
+
+**Bouncer token.** This endpoint takes a `bouncer_token` for the `login` page type, exactly as `POST /api/login` does (see [Bouncer](bouncer.md)). On a deployment or group that enforces bouncer tokens, a request without a valid one returns `403` and nothing is sent. Where enforcement is off (the default) the token is optional. The hosted sign-in page fetches a fresh token for each SMS request.
+
 ### Step 2 — Submit SMS Code
 
 **POST** `/api/auth/sms/verify`
@@ -174,6 +180,17 @@ Each endpoint has its own per-IP bucket. They used to share a single 60/minute b
 | `POST /api/auth/phone/register/verify` | 10 requests / 60s per IP |
 
 Exceeding a bucket returns `429` with a `Retry-After` header.
+
+**Per account, whatever the address:**
+
+| What | Limit |
+|---|---|
+| Tries at an SMS code (`/api/auth/sms/verify`) | 5 per 15 minutes per account |
+| Tries at a sign-up code (`/api/auth/phone/register/verify`) | 5 per 15 minutes per phone number |
+| Codes sent by `/api/auth/sms/login` | 5 per 15 minutes per account |
+| Codes sent by `/api/auth/phone/register/start` | 5 per 15 minutes per phone number |
+
+The sixth try returns `429` with `Retry-After` and a `retry_after` field in the body (seconds). A correct code is refused too until the wait is over, and retrying does not extend it. A correct code inside the limit clears the count. Over the send limit nothing is sent and the endpoint answers as usual. See [Too many attempts](authentication.md#too-many-attempts-on-a-code-or-a-current-password).
 
 ---
 

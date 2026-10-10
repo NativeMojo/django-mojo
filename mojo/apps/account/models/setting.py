@@ -126,6 +126,9 @@ class Setting(MojoSecrets, MojoModel):
     def on_rest_pre_save(self, changed_fields, created):
         """Encrypt secret values before saving via REST."""
         self._reject_protected_write(rest=True)
+        self._reject_scope_change()
+        if created:
+            self._reject_create_outside_request_group()
         if self.is_secret and "value" in changed_fields:
             raw = self.value
             self.value = ""
@@ -134,6 +137,50 @@ class Setting(MojoSecrets, MojoModel):
 
     def on_rest_pre_delete(self):
         self._reject_protected_write(rest=True)
+
+    def _reject_scope_change(self):
+        """A setting's group is fixed when the row is created, for every writer.
+
+        The generic REST save authorizes an update against the group the row is
+        LEAVING, so a member holding `manage_settings` in one group could clear
+        `group` (a platform-wide row, which overrides the deployment's own
+        configuration for every tenant) or point it at a group they can only
+        view. Compared against the stored row rather than changed_fields:
+        `group`, `group_id`, null, blank and zero all end as a different
+        group_id, so one comparison covers every spelling. Runs in the REST
+        pre-save hook (readable 400 before side effects) AND in save() (so
+        Setting.set / programmatic / shell writes cannot move a row either).
+        """
+        if not self.pk:
+            return
+        stored = Setting.objects.filter(pk=self.pk).values_list(
+            "group_id", flat=True)
+        if not stored:
+            # An insert with an explicit pk: no stored row to move.
+            return
+        if stored[0] != self.group_id:
+            from mojo import errors as merrors
+            raise merrors.ValueException(
+                "a setting's group cannot be changed; "
+                "create it in the new scope instead")
+
+    def _reject_create_outside_request_group(self):
+        """A REST create authorized through a group lands in that group.
+
+        The create permission check runs against request.group, but the body
+        can name a second group (`{"group": A, "group_id": B}`) that is attached
+        after only a VIEW check on it. When request.group is None the generic
+        check already required the platform-wide permission, so the row may
+        land anywhere. No ambient request (an in-process create_from_dict):
+        nothing to compare with.
+        """
+        request = self.active_request
+        if request is None:
+            return
+        group = getattr(request, "group", None)
+        if group is not None and self.group_id != group.pk:
+            from mojo import errors as merrors
+            raise merrors.PermissionDeniedException()
 
     def _protected_keys_involved(self):
         from mojo.apps.account.services import system_settings
@@ -440,6 +487,7 @@ class Setting(MojoSecrets, MojoModel):
         skip_cache = kwargs.pop("_skip_cache", False)
         if not self._dedicated_writer_owns_row(protected_writer):
             self._reject_protected_write()
+        self._reject_scope_change()
         self._validate_value()
         super().save(*args, **kwargs)
         if not skip_cache:
@@ -502,9 +550,10 @@ def _validate_scope_list(key, parsed):
         raise ValueError(f"{key} must be a JSON list of non-empty strings")
 
 
-def _validate_member_perms_protection(key, parsed):
-    # A malformed map refuses every member-level permission change at read
-    # time (GroupMember.can_change_permission), so refuse to store one.
+def _validate_perms_protection(key, parsed):
+    # MEMBER_PERMS_PROTECTION and APIKEY_PERMS_PROTECTION share one shape. A
+    # malformed map refuses every permission change it gates at read time
+    # (GroupMember / ApiKey can_change_permission), so refuse to store one.
     # The decoded value must itself be an object: a stored `null` decodes to
     # None here but is read back as the string "null", which is malformed.
     from mojo.apps.account.models.member import parse_member_perms_protection
@@ -522,4 +571,5 @@ Setting.register_validator("GEOFENCE_FAIL_CLOSED", _validate_json_bool)
 Setting.register_validator("GEOFENCE_ALLOW_PRIVATE_IPS", _validate_json_bool)
 Setting.register_validator("GEOFENCE_CACHE_TTL", _validate_cache_ttl)
 Setting.register_validator("GEOFENCE_FAIL_CLOSED_SCOPES", _validate_scope_list)
-Setting.register_validator("MEMBER_PERMS_PROTECTION", _validate_member_perms_protection)
+Setting.register_validator("MEMBER_PERMS_PROTECTION", _validate_perms_protection)
+Setting.register_validator("APIKEY_PERMS_PROTECTION", _validate_perms_protection)

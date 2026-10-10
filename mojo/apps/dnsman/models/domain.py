@@ -107,8 +107,8 @@ class Domain(models.Model, MojoModel):
         SAVE_PERMS = ["manage_dns", "security"]
         DELETE_PERMS = ["manage_dns", "security"]
         SEARCH_FIELDS = ["name", "provider", "status"]
-        # A declared NO_SAVE_FIELDS list REPLACES the framework default
-        # (["id", "pk", "created", "uuid"]), so those have to be re-included.
+        # A declared NO_SAVE_FIELDS list ADDS to the framework's always-protected
+        # names (id, pk, created, uuid); restating them here is harmless.
         NO_SAVE_FIELDS = [
             "id", "pk", "created", "name", "provider", "status",
             "hosted_zone_id", "registered_on", "expires", "verified",

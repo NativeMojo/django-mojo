@@ -13,12 +13,12 @@
 | POST | `/api/user/<id>` body `{"disable": {...}}` | `manage_users` | Disable user (block) — see [Disable Lifecycle](#disable-lifecycle) |
 | POST | `/api/user/<id>` body `{"reactivate": {...}}` | `manage_users` | Reactivate a disabled user |
 | POST | `/api/user/me` body `{"change_username": {...}}` | self | Self-service username change (recommended over `/api/auth/username/change`) |
-| POST | `/api/user/me` body `{"revoke_sessions": {...}}` | self | Self-service global logout (recommended over `/api/auth/sessions/revoke`) |
+| POST | `/api/user/me` body `{"revoke_sessions": {...}}` | self | Self-service global logout (recommended over `/api/auth/sessions/revoke`). Also revokes apps authorised through the OAuth server |
 | POST | `/api/user/me` body `{"confirm_totp": {"code":"..."}}` | self | TOTP enrolment confirm (recommended over `/api/account/totp/confirm`) |
 | POST | `/api/user/me` body `{"regenerate_totp_codes": {"code":"..."}}` | self | Regenerate TOTP recovery codes (recommended over `/api/account/totp/recovery-codes/regenerate`) |
 | POST | `/api/user/me` body `{"disable_totp": true}` | self | Disable TOTP (recommended over `DELETE /api/account/totp`) |
-| GET | `/api/auth/manage/throttle?user_id=N` | `manage_users` | Read login attempt counter |
-| POST | `/api/auth/manage/clear_rate_limit` | `manage_users` | Clear login throttle for a user |
+| GET | `/api/auth/manage/throttle?user_id=N` | `manage_users` | Read one per-account attempt counter |
+| POST | `/api/auth/manage/clear_rate_limit` | `manage_users` | Release a user from every per-account limit |
 | POST | `/api/auth/verify/email/send` | required | Send email verification link |
 | GET | `/api/auth/verify/email/confirm` | public | Confirmation **page** the emailed link opens — renders only, verifies nothing |
 | POST | `/api/auth/email/verify/confirm` | public (token) | Verify-only confirm — sets `is_email_verified`, issues no session |
@@ -119,7 +119,8 @@ detaches the relation without deleting the File.
 | `is_email_verified`, `is_phone_verified` | Admin tier (force-verify / unverify) |
 | `requires_mfa` | Admin tier |
 | `email`, `username`, `phone_number` (replace) | Admin tier |
-| `phone_number` (clear or first-set) | Anyone with edit access |
+| `phone_number` (first-set) | Anyone with edit access |
+| `phone_number` (clear) | Anyone with edit access while `ALLOW_PHONE_CHANGE` is on (the default); admin tier only when it is off |
 | `dob` (change, clear or re-set once stored) | Admin tier — audit-logged as `dob:changed`; re-posting the unchanged value is a `200` no-op |
 | `dob` (first set, when none is stored) | Anyone with edit access |
 | `is_active`, `org`, `org_id` | Admin tier |
@@ -358,7 +359,7 @@ Admins with `manage_users` can reset any user's password without knowing the cur
 }
 ```
 
-No `current_password` field needed. Password strength validation still applies.
+No `current_password` field needed. Password strength validation still applies. The target is signed out on every device. The response carries no `tokens` (below), unless the admin set their own password.
 
 For self-service password change, the user must include `current_password`:
 
@@ -368,6 +369,20 @@ For self-service password change, the user must include `current_password`:
   "current_password": "OldPass##456"
 }
 ```
+
+A changed password signs the account out on every other device. The response is the account with a `tokens` object beside `data`:
+
+```json
+{
+  "status": true,
+  "data": {"id": 42, "username": "alice"},
+  "tokens": {"access_token": "eyJ...", "refresh_token": "eyJ..."}
+}
+```
+
+Store the new pair before the next request: the tokens the request was sent with are dead, and the websocket is closed. See [A new password ends other sessions](authentication.md#a-new-password-ends-other-sessions).
+
+Tries at `current_password` are limited to 10 per 15 minutes per account. At the limit the answer is `429` with a `Retry-After` header and a `retry_after` field (seconds), and a correct password is refused too until the wait is over. A correct password inside the limit clears the count. See [Too many attempts](authentication.md#too-many-attempts-on-a-code-or-a-current-password).
 
 ---
 
@@ -446,7 +461,20 @@ reactivation — the user must log in again to get a working token.
 }
 ```
 
-`count` is the number of failed-login attempts in the current sliding window. `retry_after_seconds > 0` means the user is currently locked out. Pure read — does not modify the counter. Pass `key=login` (default; only `login` is supported in v1).
+`count` is the number of attempts in the current sliding window. `retry_after_seconds > 0` means the user is currently locked out. Pure read — does not modify the counter.
+
+`key` picks the counter and defaults to `login`. `limit` and `window` in the answer are those of the counter asked for. An unknown key returns `400`.
+
+| `key` | Counts | Default limit |
+|---|---|---|
+| `login` | Failed password sign-ins | 10 per 900 s |
+| `password_check` | Tries at `current_password` by a signed-in user | 10 per 900 s |
+| `code:sms` | Tries at an SMS code | 5 per 900 s |
+| `code:reset` | Tries at a password reset code | 5 per 900 s |
+| `code:phone_verify`, `code:email_verify`, `code:email_change` | Tries at a verification or email-change code | 5 per 900 s |
+| `code:totp`, `code:totp_login`, `code:totp_manage` | Tries at an authenticator code: second factor, passwordless sign-in, set-up checks | 5 per 900 s |
+| `code:totp_daily` | Authenticator sign-in tries per day | 20 per 86,400 s |
+| `code_send:sms`, `code_send:reset` | Codes sent to the account | 5 per 900 s |
 
 ### Clear login throttle
 
@@ -456,4 +484,4 @@ reactivation — the user must log in again to get a working token.
 {"key": "login", "user_id": 42}
 ```
 
-Use this to manually unlock a user after a failed-login lockout.
+Use this to manually unlock a user. A clear by `user_id` or `username` releases **every** counter in the table above for that user, whatever `key` is sent, so one call unlocks a user who is locked out of password sign-in, of code entry, or of both. `key` may be omitted.

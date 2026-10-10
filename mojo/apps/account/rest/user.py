@@ -45,13 +45,18 @@ def on_clear_rate_limit(request):
 
     Optional body params:
       ip       — clear all srl/rl keys for this IP (optionally scoped via key)
-      key      — limit bucket name (e.g. "login"); required for duid/muid/account
+      key      — limit bucket name (e.g. "login"); required for duid/muid
       duid     — clear the device counter (requires key)
       muid     — clear the client cookie counter (requires key)
-      user_id  — clear the per-account counter for this user (requires key)
-      username — resolve to user_id and clear the per-account counter (requires key)
+      user_id  — clear every per-account counter for this user
+      username — resolve to user_id and clear every per-account counter
+
+    An account-scope clear releases the user from every per-account limit —
+    the password counter and each one-time-code counter — whatever key is
+    sent. Support tooling sends key="login"; the same button must release a
+    user locked out of code entry.
     """
-    from mojo.decorators.limits import clear_rate_limits
+    from mojo.decorators.limits import clear_rate_limits, clear_account_limits
     ip = request.DATA.get("ip")
     key = request.DATA.get("key")
     duid = request.DATA.get("duid")
@@ -76,27 +81,41 @@ def on_clear_rate_limit(request):
         key = "login"
 
     deleted = clear_rate_limits(ip=ip, key=key, duid=duid, muid=muid, account_id=account_id)
+    if account_id is not None:
+        deleted += clear_account_limits(account_id)
+        # Reset-code tries are also counted against the identifier as typed.
+        target = User.objects.filter(pk=account_id).first()
+        if target is not None:
+            from mojo.decorators.limits import clear_code_attempts
+            for counter in _typed_identifier_ids(target.username, target.email, target.phone_number):
+                clear_code_attempts("reset", counter)
     return JsonResponse({"status": True, "data": {"deleted": deleted}})
 
 
 @md.GET('auth/manage/throttle')
 @md.requires_global_perms("users", "manage_users")
 def on_read_throttle(request):
-    """Read the per-account login attempt counter for support tooling.
+    """Read one per-account attempt counter for support tooling.
 
     Query params:
       user_id  — resolve by user id
       username — resolve by username (alternative to user_id)
-      key      — limit bucket name (default "login"; only "login" supported in v1)
+      key      — counter name (default "login"). One of
+                 mojo.decorators.limits.ACCOUNT_BUCKETS: "login",
+                 "password_check", a one-time code counter such as "code:sms"
+                 or "code:reset", or "code:totp_daily".
 
-    Returns: {count, limit, window, retry_after_seconds}.
+    Returns: {count, limit, window, retry_after_seconds}, with the limit and
+    window of the counter asked for.
     Reading does not affect the counter — use clear_rate_limit to reset.
     """
-    from mojo.decorators.limits import read_account_attempt
+    from mojo.decorators.limits import read_account_attempt, account_bucket_numbers
 
     key = request.DATA.get("key", "login")
-    if key != "login":
-        raise merrors.ValueException("only key='login' is supported")
+    numbers = account_bucket_numbers(key)
+    if numbers is None:
+        raise merrors.ValueException("unknown key")
+    limit, window = numbers
 
     user_id = request.DATA.get("user_id")
     username = request.DATA.get("username")
@@ -116,8 +135,6 @@ def on_read_throttle(request):
     else:
         raise merrors.ValueException("user_id or username is required")
 
-    limit = settings.get("LOGIN_USERNAME_LIMIT", 10, kind="int")
-    window = settings.get("LOGIN_USERNAME_WINDOW", 900, kind="int")
     data = read_account_attempt(key, account_id, limit=limit, window=window)
     return JsonResponse({"status": True, "data": data})
 
@@ -240,6 +257,56 @@ def on_user_login(request):
 # Cross-origin auth handoff (authorization-code style)
 # -----------------------------------------------------------------
 
+def _handoff_code_challenge(request, destination):
+    """Return the PKCE challenge this handoff code is bound to, else None.
+
+    A challenge that is sent must be a well-formed S256 one with the method
+    named: `plain` would make a caught challenge the secret, and RFC 7636 reads
+    a missing method as `plain`. None sent is refused only where
+    `AUTH_HANDOFF_REQUIRE_PKCE` requires one for this destination.
+    """
+    from mojo.apps.account.services import auth_handoff
+    from mojo.apps.account.services.oauth_server import codes as oauth_codes
+
+    # Presence, not value: a field sent as null was sent, and is malformed.
+    if "code_challenge" in request.DATA or "code_challenge_method" in request.DATA:
+        try:
+            return oauth_codes.validate_pkce_challenge(
+                request.DATA.get("code_challenge_method"),
+                request.DATA.get("code_challenge"))
+        except ValueError as exc:
+            raise merrors.ValueException(str(exc))
+    if not auth_handoff.is_app_destination(destination):
+        return None
+    if auth_handoff.pkce_required(destination):
+        auth_handoff.report_pkce_missing(destination, request=request, refused=True)
+        raise merrors.ValueException("code_challenge is required for this destination")
+    auth_handoff.report_pkce_missing(destination, request=request, refused=False)
+    return None
+
+
+def _report_handoff_pkce_failed(request, data):
+    """File the incident for a failed exchange check. Never raises: the caller
+    is about to answer 401 and a reporting fault must not turn that into a 500."""
+    try:
+        from mojo.apps import incident
+        from mojo.apps.account.services import auth_handoff
+        incident.report_event(
+            "A handoff code was presented with a missing or wrong code_verifier. "
+            "The code is spent. Either the app is broken or someone else holds "
+            "the code.",
+            title="Auth handoff exchange failed its PKCE check",
+            category="auth:handoff_pkce_failed",
+            scope="account",
+            level=6,
+            # No `request=`: the reporter would store its query string, which
+            # can carry the code and the verifier.
+            redirect_uri=str(data.get("dest") or "")[:200],
+            **{**auth_handoff.request_facts(request), "uid": data.get("uid")})
+    except Exception as exc:
+        logit.error("account.auth_handoff", f"failed to file auth:handoff_pkce_failed: {exc}")
+
+
 def _gate_handoff_destination(request, destination):
     """Return the group pk this handoff code must be confined to, else None.
 
@@ -340,6 +407,11 @@ def on_auth_handoff(request):
     (`AUTH_HANDOFF_GROUP_TOKEN_MODE`, off by default): a code minted for one
     exchanges into a group-scoped token instead of a JWT pair. See
     `mojo.apps.account.services.handoff_group`.
+
+    `code_challenge` + `code_challenge_method: "S256"` bind the code to the
+    party that asked for it (PKCE): the exchange then needs the matching
+    `code_verifier`. `AUTH_HANDOFF_REQUIRE_PKCE = "native"` refuses to mint
+    without one for an app on the device. See `auth_handoff`.
     """
     from mojo.apps.account.services import auth_handoff, handoff_group, redirect_allowlist
 
@@ -375,9 +447,11 @@ def on_auth_handoff(request):
         # destination, so the feed builds the allowlist before anyone opts in.
         redirect_allowlist.report_unlisted_destination(
             destination, request=request, enforced=False)
+    code_challenge = _handoff_code_challenge(request, destination)
     group_id = _gate_handoff_destination(request, destination)
     code = auth_handoff.create_handoff_code(
-        request.user, destination=destination, ip=request.ip, group_id=group_id)
+        request.user, destination=destination, ip=request.ip, group_id=group_id,
+        code_challenge=code_challenge)
     return JsonResponse({
         "status": True,
         "data": {
@@ -402,10 +476,21 @@ def on_auth_exchange(request):
     decision is READ here, never re-taken: neither the mode nor the destination
     is consulted again, so a resolver that breaks inside the code's TTL cannot
     turn a gated code back into a platform JWT.
+
+    A code minted with a PKCE challenge needs `code_verifier`; one minted
+    without must not be sent one. Either failure is the same 401 as an unknown
+    code, and the code is spent.
     """
     from mojo.apps.account.services import auth_handoff
     data = auth_handoff.consume_handoff_code(request.DATA.get("code"))
     if not data:
+        raise merrors.PermissionDeniedException("Invalid or expired handoff code", 401, 401)
+    # Before the user lookup, so a caller without the secret cannot tell a
+    # disabled account (403) from a bad code (401). The code is already spent.
+    verifier = (request.DATA.get("code_verifier") if "code_verifier" in request.DATA
+                else auth_handoff.NOT_SENT)
+    if not auth_handoff.check_exchange(data, verifier):
+        _report_handoff_pkce_failed(request, data)
         raise merrors.PermissionDeniedException("Invalid or expired handoff code", 401, 401)
     user = User.objects.filter(pk=data.get("uid")).first()
     if user is None:
@@ -935,11 +1020,7 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
     keys = dict(uid=user.id, ip=request.ip, auth_time=int(time.time()))
     if request.device:
         keys['device'] = request.device.id
-    access_token_expiry = settings.get("JWT_TOKEN_EXPIRY", 21600, kind="int")
-    refresh_token_expiry = settings.get("JWT_REFRESH_TOKEN_EXPIRY", 604800, kind="int")
-    if user.org:
-        access_token_expiry = user.org.metadata.get("access_token_expiry", access_token_expiry)
-        refresh_token_expiry = user.org.metadata.get("refresh_token_expiry", refresh_token_expiry)
+    access_token_expiry, refresh_token_expiry = User.session_token_expiries(user)
     if legacy:
         keys.update(dict(user_id=user.id, device_id=request.DATA.get(["device_id", "deviceID"], request.device.id)))
     token_package = JWToken(
@@ -1099,11 +1180,72 @@ def group_token_login(request, user, group):
     })
 
 
+def _reset_code_for(user):
+    """The user's live reset code, or a new one stored on the user.
+
+    A repeat request inside a code's life re-sends that code and does not
+    extend its life. Minting a new one each time let anyone who knew a
+    username replace the code its owner was typing. Finding the live code and
+    storing a new one are one locked step, so two requests arriving together
+    are given the same code.
+    """
+    return tokens.live_or_new_code(
+        user, "password_reset_code", "password_reset_code_ts",
+        settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int"))
+
+
+def _typed_identifier_ids(*values):
+    """Reset-code counter ids for identifiers as typed.
+
+    Every value is counted in each form the account lookup can match it in:
+    as typed (lowercased and trimmed, as User.lookup_from_request does), and
+    as a phone number when it reads as one, so one number typed five ways is
+    one counter, as it is one account.
+
+    The ids depend on the values alone, never on the field a value was sent
+    in. The lookup accepts one string under several field names — an email is
+    matched from `email` or from `username`, a phone from `phone_number` or
+    from `username` — and a counter that followed the field name gave the
+    same string a fresh set of tries under each name.
+    """
+    from mojo.decorators.limits import unknown_account_id
+    ids = []
+    for value in values:
+        value = str(value or "").lower().strip()
+        if not value:
+            continue
+        for form in (value, User.normalize_phone(value)):
+            if not form:
+                continue
+            counter = unknown_account_id(form)
+            if counter not in ids:
+                ids.append(counter)
+    return ids
+
+
+def _reset_try_ids(request, user):
+    """Every counter one reset-code try is counted against.
+
+    The endpoint answers "Invalid code" for an unknown account and a wrong
+    code alike, so what is counted must not depend on whether an account was
+    found: each identifier sent is counted as typed, always, whatever field
+    it was sent in. A real account is counted too, so its username, email and
+    phone can't each be given five tries. A try is refused when any of them
+    is full.
+    """
+    ids = [user.pk] if user is not None else []
+    for counter in _typed_identifier_ids(request.DATA.get("username"), request.DATA.get("email"),
+                                         request.DATA.get("phone_number")):
+        if counter not in ids:
+            ids.append(counter)
+    return ids
+
+
 @md.POST("auth/forgot")
 @md.strict_rate_limit("auth_forgot", ip_limit=5, ip_window=300)
 @md.public_endpoint()
 @md.requires_geofence(scope="auth")
-def on_user_forgot(request):
+def on_user_forgot(request, *, send_sms=None, send_email=None):
     """
     Start a password-reset flow. Accepts an identifier via either the
     `email` or `phone` body field (`username` is also accepted and routed
@@ -1114,8 +1256,15 @@ def on_user_forgot(request):
       method=code  (default)                            → email the 6-digit code
       method=link / email                               → email a reset link
                                                           (link mode is email-only)
+
+    Code mode sends at most five codes per account in 15 minutes, and none
+    while the account's reset-code entry is locked. A repeat request inside a
+    code's life re-sends the same code. The answer is the same in every case.
+
+    `send_sms` and `send_email` are test seams, not part of the wire contract.
     """
     from mojo.apps import phonehub
+    from mojo.decorators.limits import allow_code_send
 
     user = User.lookup_from_request(request, phone_as_username=True)
     method = (request.DATA.get("method") or "code").lower().strip()
@@ -1135,10 +1284,16 @@ def on_user_forgot(request):
             method == "code"
             and (channel == "sms" or (not user.email and bool(user.phone_number)))
         )
-        if wants_sms:
-            # Always perform the DB writes regardless of phone presence so the
-            # response timing for "user has phone" vs "user has no phone" is
-            # dominated by the same set_secret + save work — closes a
+        if method == "code" and not allow_code_send(
+                "reset", user.pk, request,
+                ttl=settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int")):
+            # Over the send cap, or reset-code entry is locked: nothing is
+            # minted or sent, and the answer below is the usual one.
+            pass
+        elif wants_sms:
+            # The code is minted the same way whether or not there is a phone
+            # on file, so the response timing for "user has phone" vs "user
+            # has no phone" is dominated by the same work — closes a
             # latency-based attribute-enumeration side channel.
             #
             # Residual gap: phonehub.send_sms is a network call only made when
@@ -1146,13 +1301,11 @@ def on_user_forgot(request):
             # response latency could still distinguish has-phone from
             # no-phone in the tail. Move the SMS dispatch onto the jobs
             # channel to fully close this; tracked separately.
-            code = crypto.random_string(6, True, False, False)
-            user.set_secret("password_reset_code", code)
-            user.set_secret("password_reset_code_ts", int(dates.utcnow().timestamp()))
-            user.save()
+            code = _reset_code_for(user)
             if user.phone_number:
                 try:
-                    phonehub.send_sms(
+                    sender = send_sms if send_sms is not None else phonehub.send_sms
+                    sender(
                         user.phone_number,
                         f"Your password reset code is: {code}")
                 except Exception as exc:
@@ -1164,11 +1317,9 @@ def on_user_forgot(request):
                     f"{user.username} requested SMS reset but has no phone on file",
                     "password_reset:no_phone", level=4)
         elif method == "code":
-            code = crypto.random_string(6, True, False, False)
-            user.set_secret("password_reset_code", code)
-            user.set_secret("password_reset_code_ts", int(dates.utcnow().timestamp()))
-            user.save()
-            user.send_template_email("password_reset_code", dict(code=code))
+            code = _reset_code_for(user)
+            sender = send_email if send_email is not None else user.send_template_email
+            sender("password_reset_code", dict(code=code))
         elif method in ("link", "email"):
             token = tokens.generate_password_reset_token(user)
             token_url = build_token_url("password_reset", token, request=request, user=user, group=getattr(request, "group", None))
@@ -1185,8 +1336,11 @@ def on_user_forgot(request):
 @md.requires_geofence(scope="auth", after_auth=True)
 @md.requires_params("code", "new_password")
 def on_user_password_reset_code(request):
+    from mojo.decorators.limits import check_code_attempt, clear_code_attempts
+
     code = request.DATA.get("code")
     new_password = request.DATA.get("new_password")
+    code_ttl = settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int")
     user = User.lookup_from_request(request, phone_as_username=True)
     if user is None:
         User.class_report_incident(
@@ -1194,21 +1348,48 @@ def on_user_password_reset_code(request):
             event_type="reset:unknown",
             level=8,
             request=request)
+        # Counted like a try against a real account: this endpoint answers
+        # "Invalid code" for an unknown account and a wrong code alike, and
+        # the 429 at the limit must not be what tells them apart.
+        try_ids = _reset_try_ids(request, None)
+        if try_ids:
+            check_code_attempt("reset", try_ids[0], request, ttl=code_ttl, also=try_ids[1:])
         raise merrors.ValueException("Invalid code")
+
+    # Five tries per account, whatever address they come from, and five per
+    # identifier as typed. Counted before the compare; a refused try raises
+    # the 429 here.
+    try_ids = _reset_try_ids(request, user)
+    check_code_attempt("reset", try_ids[0], request, ttl=code_ttl, also=try_ids[1:])
 
     sec_code = user.get_secret("password_reset_code")
     code_ts = int(user.get_secret("password_reset_code_ts") or 0)
     now_ts = int(dates.utcnow().timestamp())
-    if len(code or "") != 6 or code != (sec_code or ""):
+    # Expiry is decided before the compare: an expired code can never reset a
+    # password. The answers are unchanged — "Expired code" only for the code
+    # that was sent, "Invalid code" for any other guess, as for an unknown
+    # account. A wrong guess must not learn that a stale code is on file.
+    expired = now_ts - code_ts > code_ttl
+    if len(str(code or "")) != 6 or not crypto.codes_match(code, sec_code):
         user.report_incident(f"{user.username} invalid password reset code", "password_reset")
         raise merrors.ValueException("Invalid code")
-    if now_ts - code_ts > settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int"):
+    if expired:
         user.report_incident(f"{user.username} expired password reset code", "password_reset")
         raise merrors.ValueException("Expired code")
-    user.set_permanent_password(new_password)
-    user.set_secret("password_reset_code", None)
-    user.set_secret("password_reset_code_ts", None)
-    user.save()
+    # Cleared as soon as the code matches: a right code with a weak new
+    # password is not a guess.
+    for counter in try_ids:
+        clear_code_attempts("reset", counter)
+    # The new password and the end of every other session are one step: a
+    # reset that left the old sessions alive would not have fixed the account
+    # (maestro #6226). The tokens below are signed with the new key, so the
+    # device doing the reset stays signed in.
+    with transaction.atomic():
+        user.set_permanent_password(new_password)
+        user.set_secret("password_reset_code", None)
+        user.set_secret("password_reset_code_ts", None)
+        user.save()
+        user.end_sessions("password_reset", request=request)
     return jwt_login(request, user, source="password_reset")
 
 
@@ -1256,6 +1437,10 @@ def on_user_password_reset_token(request):
         # would write the stale secrets back and un-burn the token.
         locked.save(update_fields=[
             "password", "requires_password_change", "is_email_verified", "modified"])
+        # Every other session ends in the same transaction as the new
+        # password (maestro #6226). It reads the stored secrets under the
+        # lock, so the consumed token stays consumed.
+        locked.end_sessions("password_reset", request=request)
     return jwt_login(request, locked, source="password_reset")
 
 
@@ -1290,9 +1475,10 @@ def on_user_password_forced(request):
         locked.save(update_fields=[
             "password", "requires_password_change", "auth_key", "modified"])
         locked.log("Temporary password replaced", "password:forced_completed")
-
-    from mojo.apps.account.services.disable import disconnect_realtime
-    disconnect_realtime(locked, request=request)
+        # The key went out with the password above. The shared helper does the
+        # rest of a sign-out: the account's OAuth-server grants, the cached
+        # invite and its live websockets (maestro #6226).
+        locked.end_sessions("password_reset", request=request, key_rotated=True)
     return jwt_login(request, locked, source="forced_password")
 
 
@@ -1661,9 +1847,12 @@ def on_email_change_request(request, *, send=None, notify_send=None):
     current_password = request.DATA.get("current_password", "")
 
     if current_password:
+        from mojo.decorators.limits import check_password_attempt, clear_password_attempts
+        check_password_attempt(user.pk, request)
         if not user.check_password(current_password):
             user.report_incident("Invalid password on email change request", "email_change:bad_password")
             raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
+        clear_password_attempts(user.pk)
     if not new_email or not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
         raise merrors.ValueException("Invalid email address")
     if new_email == str(user.email).lower():
@@ -1984,6 +2173,8 @@ def on_email_change_confirm(request):
         if not request.user or not request.user.is_authenticated:
             raise merrors.PermissionDeniedException("Authentication required", 401, 401)
         user = request.user
+        from mojo.decorators.limits import check_code_attempt
+        check_code_attempt("email_change", user.pk, request, ttl=tok_utils.email_change_code_ttl())
         new_email = tok_utils.verify_email_change_otp(user, code)
     else:
         # Link/token path — token is the credential; no active session required
@@ -2153,9 +2344,12 @@ def on_phone_change_request(request, *, send=None):
     user = request.user
     current_password = request.DATA.get("current_password")
     if current_password:
+        from mojo.decorators.limits import check_password_attempt, clear_password_attempts
+        check_password_attempt(user.pk, request)
         if not user.check_password(current_password):
             user.report_incident("Invalid password on phone change request", "phone_change:bad_password")
             raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
+        clear_password_attempts(user.pk)
 
     new_phone_raw = request.DATA.get("phone_number", "").strip()
     normalized = user.normalize_phone(new_phone_raw)
@@ -2341,13 +2535,11 @@ def on_sessions_revoke(request):
     Ownership is proven by the authenticated session; freshness is enforced by
     the step-up gate (no current_password — passwordless accounts must work too).
     """
-    import uuid
-
     user = request.user
 
-    # Rotate auth_key — immediately invalidates every other JWT
-    user.auth_key = uuid.uuid4().hex
-    user.save(update_fields=["auth_key", "modified"])
+    # A new auth_key ends every other session; the same helper revokes the
+    # account's OAuth-server grants and drops its live websockets.
+    user.end_sessions("sessions_revoked", request=request, actor=user)
 
     user.report_incident(f"{user.username} revoked all sessions", "sessions:revoked")
 

@@ -45,6 +45,7 @@ Requires authentication (Bearer token). Rate limited.
 |---|---|---|
 | Step-up auth required (stale session, `FRESH_AUTH_WINDOW` enabled) | 440 | `"error": "reauth_required"` |
 | `current_password` provided but incorrect | 401 | `"error": "Incorrect password"` |
+| Too many tries at `current_password` (10 per 15 minutes per account) | 429 | `"error": "Rate limit exceeded"`, with `Retry-After` and a `retry_after` field (seconds). A correct password is refused too until the wait is over |
 | `email` has an invalid format | 400 | `"error": "Invalid email address"` |
 | `email` is the same as the current address | 400 | `"error": "New email must be different from current email"` |
 | `email` is already in use by another account | 400 | `"error": "Email already in use"` |
@@ -141,6 +142,7 @@ Replace all stored tokens with the new JWT immediately. Previously stored tokens
 |---|---|
 | `"error": "Invalid code"` | Code does not match |
 | `"error": "Expired code"` | Code is older than 10 minutes |
+| 429, `"error": "Rate limit exceeded"` | More than 5 tries at the code in 15 minutes for this account. Carries `Retry-After` and a `retry_after` field (seconds); a correct code is refused too until the wait is over |
 | `"error": "No pending email change"` | No code-flow change was initiated |
 | `"error": "Email address is no longer available"` | Another account claimed the address in the window |
 | 401 | No valid Bearer token — authentication is required for the code path |

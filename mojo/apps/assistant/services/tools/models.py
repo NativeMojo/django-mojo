@@ -4,6 +4,7 @@ import objict
 from django.apps import apps
 
 from mojo.apps.assistant import tool
+from mojo.apps.assistant.services import model_serialization
 from mojo.helpers import logit
 from mojo import errors as me
 
@@ -55,6 +56,116 @@ def _is_sensitive_field(name):
     """Check if a field name contains sensitive substrings."""
     name_lower = name.lower()
     return any(s in name_lower for s in SENSITIVE_SUBSTRINGS)
+
+
+def _fk_spellings(model, path):
+    """``path`` spelled twice: each foreign-key segment by its relation name,
+    and by its column name.
+
+    ``user`` and ``user_id`` are one column, and a model's SENSITIVE_FIELDS
+    names only one of them. The shared helper compares a segment as written,
+    so it is asked about both spellings. This walk only respells; it decides
+    nothing about sensitivity.
+    """
+    by_name, by_column = [], []
+    current = model
+    for part in path.split("__"):
+        field = None
+        if current is not None:
+            try:
+                field = current._meta.get_field(part)
+            except Exception:
+                field = None
+        if field is None:
+            by_name.append(part)
+            by_column.append(part)
+            current = None
+            continue
+        by_name.append(field.name)
+        by_column.append(getattr(field, "attname", None) or field.name)
+        current = field.related_model if field.is_relation else None
+    return "__".join(by_name), "__".join(by_column)
+
+
+def _is_sensitive_input(model, path, lookup=True):
+    """The one rule for what a caller may ask the model tools BY.
+
+    The name heuristic above, unioned with the model's own declaration:
+    ``mojo.models.rest.is_sensitive_filter_path`` walks relations, so a path
+    is judged by the model each segment lands on, and it carries the
+    ``mojo_secrets`` baseline and refuses JSON columns. Row OUTPUT is not
+    decided here — that is the server-selected graph's.
+
+    ``lookup=False`` is for export ``fields``: those are output names, not ORM
+    lookups, so only a name the model declares counts and the JSON rule does
+    not apply.
+    """
+    from mojo.models.rest import is_sensitive_filter_path, _model_sensitive_fields
+
+    if any(_is_sensitive_field(segment) for segment in path.split("__")):
+        return True
+    spellings = {path, *_fk_spellings(model, path)}
+    if not lookup:
+        return not _model_sensitive_fields(model).isdisjoint(spellings)
+    return any(is_sensitive_filter_path(model, spelling) for spelling in spellings)
+
+
+def _deny_sensitive_input(model_label, path, surface, user, message):
+    """Report one refused probe and return its error dict.
+
+    The event names the model, the path and the surface. It never carries the
+    value the caller tried: that value is the guess being tested.
+    """
+    details = f"Sensitive field {surface} attempt: {path} on {model_label} by user {user.id}"
+    logger.warning(details)
+    _report_security_event(
+        "assistant_sensitive_field",
+        7,
+        details,
+        user,
+        model_name=model_label,
+    )
+    return {"error": message}
+
+
+def _blocked_search_fields(model):
+    """The fields a search on ``model`` compares against that the input rule
+    refuses.
+
+    ``on_rest_list_search`` matches the search text against the model's
+    SEARCH_FIELDS — every text column when none are declared — after dropping
+    what the shared helper calls sensitive. It drops by that helper alone, so
+    a field only this module's rule refuses (a foreign key under its other
+    spelling, a name the heuristic catches) is still compared, and a search
+    then answers "which rows match this text" about it.
+    """
+    from mojo.models.rest import is_sensitive_filter_path
+
+    fields = getattr(model.RestMeta, "SEARCH_FIELDS", None)
+    if fields is None:
+        fields = [
+            f.name for f in model._meta.get_fields()
+            if hasattr(f, "get_internal_type") and f.get_internal_type() in ("CharField", "TextField")
+        ]
+    return [
+        f for f in fields
+        if not is_sensitive_filter_path(model, f) and _is_sensitive_input(model, f)
+    ]
+
+
+def _validate_search(model, user, model_label):
+    """Refuse a search the shared search would run against a sensitive field.
+
+    The whole search is refused, targeted or not: the shared method takes no
+    field list, so it cannot be told to leave one field out. Returns error
+    dict or None.
+    """
+    blocked = _blocked_search_fields(model)
+    if not blocked:
+        return None
+    return _deny_sensitive_input(
+        model_label, ", ".join(blocked), "search", user,
+        f"Search on {model_label} is not allowed: it compares against a sensitive field")
 
 
 def _resolve_model(app_name, model_name):
@@ -237,12 +348,16 @@ def _build_request(user, filters=None, method="GET", path="/assistant/query_mode
 
 
 def _get_field_info(model):
-    """Extract field metadata from a model, excluding sensitive fields."""
+    """Extract field metadata from a model: the fields it may be asked by.
+
+    A field the input rule refuses is left out, so nothing is advertised as
+    queryable that a query would then be refused for.
+    """
     fields = []
     for field in model._meta.get_fields():
         if not hasattr(field, "name"):
             continue
-        if _is_sensitive_field(field.name):
+        if _is_sensitive_input(model, field.name):
             continue
 
         internal_type = getattr(field, "get_internal_type", lambda: "unknown")()
@@ -310,7 +425,7 @@ def _resolve_group_by_field(model, name):
     return field.name
 
 
-def _validate_filter_keys(filters, valid_fields, user, model_label):
+def _validate_filter_keys(model, filters, valid_fields, user, model_label):
     """Validate filter keys against model fields. Returns error dict or None."""
     # ORM lookup suffixes that are not field names
     ORM_SUFFIXES = {"in", "not", "not_in", "isnull", "gte", "gt", "lte", "lt",
@@ -323,21 +438,14 @@ def _validate_filter_keys(filters, valid_fields, user, model_label):
         parts = key.split("__")
         base = parts[0]
 
-        # Check every segment for sensitive content (blocks relational traversal)
-        for segment in parts:
-            if segment in ORM_SUFFIXES:
-                continue
-            if _is_sensitive_field(segment):
-                details = f"Sensitive field filter attempt: {key} on {model_label} by user {user.id}"
-                logger.warning(details)
-                _report_security_event(
-                    "assistant_sensitive_field",
-                    7,
-                    details,
-                    user,
-                    model_name=model_label,
-                )
-                return {"error": f"Filtering on '{segment}' is not allowed"}
+        # The whole path, relations included: a segment is judged by the
+        # model it lands on, not only by its name.
+        if _is_sensitive_input(model, key):
+            named = next((s for s in parts
+                          if s not in ORM_SUFFIXES and _is_sensitive_field(s)), key)
+            return _deny_sensitive_input(
+                model_label, key, "filter", user,
+                f"Filtering on '{named}' is not allowed")
 
         if base not in valid_fields:
             return {"error": f"Unknown field '{base}' on {model_label}"}
@@ -402,6 +510,49 @@ def _apply_owner_group_filter(model, request, queryset):
 
 
 # ---------------------------------------------------------------------------
+# Serialization graph — chosen by the server, never by the caller
+# ---------------------------------------------------------------------------
+
+_GRAPH_PARAM_ERROR = (
+    "The 'graph' parameter is not supported. Each model chooses the shape the "
+    "assistant reads: its 'ai' graph when it declares one, otherwise 'default'."
+)
+
+
+def _reject_caller_graph(params):
+    """Refuse a caller-supplied ``graph`` key outright. Returns error dict or None.
+
+    The schemas do not advertise one. A handler that receives it anyway must
+    not ignore it (the caller would believe it was honored) and must never
+    serialize through it.
+    """
+    if "graph" in params:
+        return {"error": _GRAPH_PARAM_ERROR}
+    return None
+
+
+def _resolve_assistant_graph(model, request, user, model_label, tool_name):
+    """Select the assistant graph for ``model`` and check the caller may see it.
+
+    Returns ``(graph_name, error_dict)``. Nothing in ``params`` reaches this:
+    the override seam on the serialization helper is left unset on every model
+    tool.
+    """
+    try:
+        return model_serialization.resolve_graph(model, request=request), None
+    except me.PermissionDeniedException as pe:
+        details = f"Graph permission denied: {tool_name} on {model_label} by user {user.id}"
+        logger.warning(details)
+        _report_security_event(
+            "assistant_permission_denied", 5, details, user,
+            model_name=model_label,
+        )
+        return None, {"error": pe.reason}
+    except me.MojoException as ge:
+        return None, {"error": ge.reason}
+
+
+# ---------------------------------------------------------------------------
 # Tool handlers
 # ---------------------------------------------------------------------------
 
@@ -411,8 +562,11 @@ def _apply_owner_group_filter(model, request, queryset):
     permission="view_admin",
     core=True,
     description=(
-        "Describe a MojoModel's fields, available graphs, permissions, and search fields. "
+        "Describe a MojoModel's fields, the shape its rows are returned in, "
+        "permissions, and search fields. "
         "Use this to discover what data is available before querying. "
+        "The model owns the shape the assistant reads (its RestMeta.GRAPHS['ai'], "
+        "else 'default'); it cannot be chosen per call. "
         "Example: describe_model(app_name='account', model_name='User')"
     ),
     input_schema={
@@ -431,7 +585,11 @@ def _apply_owner_group_filter(model, request, queryset):
     },
 )
 def _tool_describe_model(params, user):
-    """Describe a model's fields, graphs, and permissions."""
+    """Describe a model's fields, assistant serialization shape, and permissions."""
+    err = _reject_caller_graph(params)
+    if err:
+        return err
+
     app_name = params.get("app_name", "").strip()
     model_name = params.get("model_name", "").strip()
 
@@ -450,26 +608,34 @@ def _tool_describe_model(params, user):
 
     fields = _get_field_info(model)
 
-    # Graphs
-    graphs = {}
-    raw_graphs = model.get_rest_meta_prop("GRAPHS", {})
-    for name, graph in raw_graphs.items():
-        graph_fields = graph.get("fields", [])
-        # Filter out sensitive fields from graph info
-        safe_fields = [f for f in graph_fields if not _is_sensitive_field(f)]
-        graphs[name] = safe_fields
+    # The one graph the assistant reads this model through, and the keys it
+    # produces. Other graph names are not advertised: they cannot be requested.
+    try:
+        graph = model_serialization.select_graph(model)
+    except me.MojoException as ge:
+        return {"error": ge.reason}
+    serialization = {
+        "graph": graph,
+        "fields": model_serialization.output_fields(model, graph),
+    }
 
     # Permissions
     view_perms = model.get_rest_meta_prop("VIEW_PERMS", [])
     save_perms = model.get_rest_meta_prop("SAVE_PERMS", [])
 
-    # Search fields
-    search_fields = getattr(model.RestMeta, "SEARCH_FIELDS", None) or []
+    # Search fields — what a search compares against, and nothing a search
+    # is refused for
+    search_fields = []
+    if not _blocked_search_fields(model):
+        search_fields = [
+            f for f in getattr(model.RestMeta, "SEARCH_FIELDS", None) or []
+            if not _is_sensitive_input(model, f)
+        ]
 
     return {
         "model": f"{app_name}.{model_name}",
         "fields": fields,
-        "graphs": graphs,
+        "serialization": serialization,
         "permissions": {
             "view": view_perms,
             "save": save_perms,
@@ -489,7 +655,9 @@ def _tool_describe_model(params, user):
         "Respects RestMeta permissions and owner/group filtering. Max 200 rows. "
         "For CSV/file exports use export_data instead. "
         "For counts, sums, averages use aggregate_model instead. "
-        "Use describe_model first to discover available fields and graphs. "
+        "Use describe_model first to discover available fields and the keys each row returns. "
+        "The model owns the row shape (its RestMeta.GRAPHS['ai'], else 'default'); "
+        "it cannot be chosen per call. "
         "Example: query_model(app_name='account', model_name='User', "
         "filters={'is_active': true}, ordering='-created', limit=10)"
     ),
@@ -520,10 +688,6 @@ def _tool_describe_model(params, user):
                 "type": "integer",
                 "description": "Max results to return (default 50, max 200)",
             },
-            "graph": {
-                "type": "string",
-                "description": "Serialization graph name (default 'default')",
-            },
             "count_only": {
                 "type": "boolean",
                 "description": "If true, return only the count (no data)",
@@ -534,6 +698,10 @@ def _tool_describe_model(params, user):
 )
 def _tool_query_model(params, user):
     """Query a model with filters, search, ordering, and format options."""
+    err = _reject_caller_graph(params)
+    if err:
+        return err
+
     app_name = params.get("app_name", "").strip()
     model_name = params.get("model_name", "").strip()
 
@@ -569,7 +737,7 @@ def _tool_query_model(params, user):
 
     # Validate filter keys
     valid_fields = _get_valid_field_names(model)
-    filter_err = _validate_filter_keys(filters, valid_fields, user, model_label)
+    filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label)
     if filter_err:
         return filter_err
 
@@ -579,10 +747,19 @@ def _tool_query_model(params, user):
         order_field = ordering.lstrip("-")
         if "__" in order_field:
             return {"error": f"Relational ordering is not supported"}
-        if _is_sensitive_field(order_field):
-            return {"error": f"Ordering on '{order_field}' is not allowed"}
+        if _is_sensitive_input(model, order_field):
+            return _deny_sensitive_input(
+                model_label, order_field, "ordering", user,
+                f"Ordering on '{order_field}' is not allowed")
         if order_field not in valid_fields:
             return {"error": f"Unknown ordering field '{order_field}' on {model_label}"}
+
+    # Validate search
+    search = params.get("search", "").strip()
+    if search:
+        search_err = _validate_search(model, user, model_label)
+        if search_err:
+            return search_err
 
     # Build queryset
     queryset = model.objects.all()
@@ -591,7 +768,6 @@ def _tool_query_model(params, user):
     queryset = _apply_owner_group_filter(model, request, queryset)
 
     # Apply search if provided
-    search = params.get("search", "").strip()
     if search:
         request.DATA["search"] = search
         queryset = model.on_rest_list_search(request, queryset)
@@ -622,25 +798,13 @@ def _tool_query_model(params, user):
         logger.info("query_model", model_label, f"count_only={count}", f"user={user.id}")
         return {"model": model_label, "count": count}
 
-    # Serialization
-    graph = params.get("graph", "default").strip()
-    # Gate the caller-supplied graph exactly as the REST boundary does. This
-    # tool serializes OUTSIDE the REST read sites, so without this an assistant
-    # user could pull a permission-gated graph (e.g. a deployment's raw
-    # evidence) that the REST layer would refuse, and could probe unknown graph
-    # names for a 200.
-    try:
-        model.rest_resolve_graph_or_raise(request, graph)
-    except me.PermissionDeniedException as pe:
-        details = f"Graph permission denied: {model_label} graph={graph!r} by user {user.id}"
-        logger.warning(details)
-        _report_security_event(
-            "assistant_permission_denied", 5, details, user,
-            model_name=model_label,
-        )
-        return {"error": pe.reason}
-    except me.MojoException as ge:
-        return {"error": ge.reason}
+    # Serialization — through the graph the SERVER selects ('ai', else
+    # 'default'). This tool serializes outside the REST read sites, so a
+    # caller-named graph would reach any graph whose author never added a
+    # GRAPH_PERMISSIONS entry. The gate still runs, on the selected name.
+    graph, err = _resolve_assistant_graph(model, request, user, model_label, "query_model")
+    if err:
+        return err
     results = model.queryset_to_dict(queryset[:limit], graph=graph)
     total = queryset.count()
 
@@ -764,18 +928,14 @@ def _tool_delete_model_instance(params, user, *, request_meta=None, conversation
 # Save (create or update) a model instance
 # ---------------------------------------------------------------------------
 
-# Field names the underlying on_rest_save loop ignores; we use the same default
-# to compute the audited field list.
-_DEFAULT_NO_SAVE_FIELDS = {"id", "pk", "created", "uuid"}
-
-
 def _changed_field_names(model, data):
     """Return the field names from `data` that on_rest_save will actually consider.
 
-    Strips the model's NO_SAVE_FIELDS (or the framework default). Names only —
-    values are never recorded in audit metadata.
+    Strips the names on_rest_save ignores: the framework's own plus the
+    model's NO_SAVE_FIELDS. Names only — values are never recorded in audit
+    metadata.
     """
-    no_save = set(model.get_rest_meta_prop("NO_SAVE_FIELDS", list(_DEFAULT_NO_SAVE_FIELDS)))
+    no_save = set(model.get_no_save_fields())
     return [k for k in data.keys() if k not in no_save]
 
 
@@ -1079,6 +1239,10 @@ def _tool_aggregate_model(params, user):
     """Run aggregate queries on a model."""
     from django.db.models import Count, Sum, Avg, Min, Max
 
+    err = _reject_caller_graph(params)
+    if err:
+        return err
+
     app_name = params.get("app_name", "").strip()
     model_name = params.get("model_name", "").strip()
 
@@ -1108,7 +1272,7 @@ def _tool_aggregate_model(params, user):
     # Validate filters
     valid_fields = _get_valid_field_names(model)
     if filters:
-        filter_err = _validate_filter_keys(filters, valid_fields, user, model_label)
+        filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label)
         if filter_err:
             return filter_err
 
@@ -1141,8 +1305,10 @@ def _tool_aggregate_model(params, user):
         if not _ALIAS_RE.match(alias):
             return {"error": f"Invalid alias '{alias}' — use letters, digits, underscores only"}
 
-        if _is_sensitive_field(field):
-            return {"error": f"Aggregation on '{field}' is not allowed"}
+        if _is_sensitive_input(model, field):
+            return _deny_sensitive_input(
+                model_label, field, "aggregation", user,
+                f"Aggregation on '{field}' is not allowed")
 
         if field not in valid_fields:
             return {"error": f"Unknown field '{field}' on {model_label}"}
@@ -1160,8 +1326,10 @@ def _tool_aggregate_model(params, user):
     group_by = params.get("group_by") or []
     resolved_group_by = []
     for gb_field in group_by:
-        if _is_sensitive_field(gb_field):
-            return {"error": f"Cannot group by sensitive field '{gb_field}'"}
+        if _is_sensitive_input(model, gb_field):
+            return _deny_sensitive_input(
+                model_label, gb_field, "group_by", user,
+                f"Cannot group by sensitive field '{gb_field}'")
         resolved = _resolve_group_by_field(model, gb_field)
         if resolved is None:
             return {"error": f"Unknown group_by field '{gb_field}' on {model_label}"}
@@ -1200,8 +1368,16 @@ def _tool_aggregate_model(params, user):
             order_field = ordering.lstrip("-")
             if "__" in order_field:
                 return {"error": "Relational ordering is not supported"}
-            if _is_sensitive_field(order_field):
-                return {"error": f"Ordering on '{order_field}' is not allowed"}
+            # An alias is an output name, not a model path: only the name
+            # heuristic applies to it. A group_by column is a model path.
+            if order_field in aggs:
+                sensitive = _is_sensitive_field(order_field)
+            else:
+                sensitive = _is_sensitive_input(model, order_field)
+            if sensitive:
+                return _deny_sensitive_input(
+                    model_label, order_field, "ordering", user,
+                    f"Ordering on '{order_field}' is not allowed")
             if order_field not in valid_order_fields:
                 return {"error": (
                     f"Ordering field '{order_field}' must match a group_by "
@@ -1272,6 +1448,65 @@ DEFAULT_EXPORT_LIMIT = 5000
 MAX_EXPORT_LIMIT = 50000
 
 
+def _validate_export_fields(model, fields, columns, user, model_label):
+    """Validate export_data's optional ``fields``. Returns error dict or None.
+
+    ``fields`` narrows the selected graph's output and reorders it; it never
+    widens it. An empty list is refused rather than read as "everything". A
+    name the model declares sensitive is refused even where the graph shows
+    it: the graph decides the row, not what a caller may single out.
+    """
+    if not isinstance(fields, (list, tuple)) or not fields:
+        return {"error": "'fields' must be a non-empty list of column names"}
+    seen = set()
+    for name in fields:
+        if not isinstance(name, str):
+            return {"error": "'fields' must be a non-empty list of column names"}
+        if _is_sensitive_input(model, name, lookup=False):
+            return _deny_sensitive_input(
+                model_label, name, "export field", user,
+                f"Field '{name}' is not allowed in exports")
+        if name not in columns:
+            return {"error": (
+                f"Field '{name}' is not exported for {model_label}. "
+                f"Available: {columns}"
+            )}
+        if name in seen:
+            return {"error": f"Field '{name}' is listed more than once"}
+        seen.add(name)
+    return None
+
+
+def _rows_to_csv(rows, columns):
+    """Render graph-serialized row dicts as CSV text with exactly ``columns``.
+
+    The header is written from ``columns`` whether or not there are rows, so an
+    empty export still names its columns and never names any others.
+    """
+    import csv
+    import io
+    from types import SimpleNamespace
+    from mojo.serializers.core.manager import get_serializer_manager
+
+    headers = [c.replace("_", " ").replace(".", " ").title() for c in columns]
+    if not rows:
+        output = io.StringIO()
+        csv.writer(output).writerow(headers)
+        return output.getvalue()
+
+    # The formatter resolves a column NAME: it walks a dotted one as a path,
+    # and it tries hasattr() before a dict key, so 'items' would return the
+    # dict method. A public key is neither, so the formatter is never given
+    # one: each row is handed over under positional names, read by exact key.
+    names = [f"c{index}" for index in range(len(columns))]
+    formatter = get_serializer_manager().get_format_serializer("csv")
+    response = formatter.serialize_data(
+        [SimpleNamespace(**{name: row.get(column) for name, column in zip(names, columns)})
+         for row in rows],
+        fields=names, headers=headers)
+    return response.content.decode("utf-8")
+
+
 @tool(
     name="export_data",
     domain="models",
@@ -1281,7 +1516,9 @@ MAX_EXPORT_LIMIT = 50000
         "Export query results to a downloadable CSV file stored in file storage (S3). "
         "Data is written directly to a file — NOT returned inline. "
         "Returns a download URL for the user. Use for any export request. "
-        "For summaries (counts, sums, averages) use aggregate_model instead."
+        "For summaries (counts, sums, averages) use aggregate_model instead. "
+        "The model owns the exported columns (its RestMeta.GRAPHS['ai'], else 'default'); "
+        "'fields' can only narrow them — see describe_model's serialization.fields."
     ),
     input_schema={
         "type": "object",
@@ -1313,11 +1550,10 @@ MAX_EXPORT_LIMIT = 50000
             "fields": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Specific fields to include (optional, defaults to model's graph config)",
-            },
-            "graph": {
-                "type": "string",
-                "description": "Serialization graph name for field config (default 'default')",
+                "description": (
+                    "Columns to keep, in this order (optional). Each must be one of "
+                    "describe_model's serialization.fields; it cannot add columns."
+                ),
             },
         },
         "required": ["app_name", "model_name"],
@@ -1330,6 +1566,10 @@ def _tool_export_data(params, user):
     from datetime import timedelta
     from django.utils import timezone
     from mojo.helpers.settings import settings
+
+    err = _reject_caller_graph(params)
+    if err:
+        return err
 
     app_name = params.get("app_name", "").strip()
     model_name = params.get("model_name", "").strip()
@@ -1360,7 +1600,7 @@ def _tool_export_data(params, user):
     # Validate filters
     valid_fields = _get_valid_field_names(model)
     if filters:
-        filter_err = _validate_filter_keys(filters, valid_fields, user, model_label)
+        filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label)
         if filter_err:
             return filter_err
 
@@ -1370,17 +1610,25 @@ def _tool_export_data(params, user):
         order_field = ordering.lstrip("-")
         if "__" in order_field:
             return {"error": "Relational ordering is not supported"}
-        if _is_sensitive_field(order_field):
-            return {"error": f"Ordering on '{order_field}' is not allowed"}
+        if _is_sensitive_input(model, order_field):
+            return _deny_sensitive_input(
+                model_label, order_field, "ordering", user,
+                f"Ordering on '{order_field}' is not allowed")
         if order_field not in valid_fields:
             return {"error": f"Unknown ordering field '{order_field}' on {model_label}"}
+
+    # Validate search
+    search = params.get("search", "").strip()
+    if search:
+        search_err = _validate_search(model, user, model_label)
+        if search_err:
+            return search_err
 
     # Build queryset
     queryset = model.objects.all()
     queryset = _apply_owner_group_filter(model, request, queryset)
 
     # Search
-    search = params.get("search", "").strip()
     if search:
         request.DATA["search"] = search
         queryset = model.on_rest_list_search(request, queryset)
@@ -1405,6 +1653,19 @@ def _tool_export_data(params, user):
     limit = min(params.get("limit", DEFAULT_EXPORT_LIMIT), MAX_EXPORT_LIMIT)
     export_qs = queryset[:limit]
 
+    # Columns — the server-selected graph is the ceiling. 'fields' may only
+    # narrow it. Settled before the FileManager lookup so that a refusal never
+    # leaves a File row behind.
+    graph, err = _resolve_assistant_graph(model, request, user, model_label, "export_data")
+    if err:
+        return err
+    columns = model_serialization.output_fields(model, graph)
+    if params.get("fields") is not None:
+        err = _validate_export_fields(model, params["fields"], columns, user, model_label)
+        if err:
+            return err
+        columns = list(params["fields"])
+
     # Resolve FileManager
     from mojo.apps.fileman.models import FileManager
     group = getattr(user, "group", None)
@@ -1421,31 +1682,17 @@ def _tool_export_data(params, user):
     if not fm:
         return {"error": "No file storage configured. Contact your administrator."}
 
-    # Generate CSV
-    custom_fields = params.get("fields")
-    if custom_fields:
-        for f in custom_fields:
-            if _is_sensitive_field(f):
-                return {"error": f"Field '{f}' is not allowed in exports"}
+    # Generate CSV — every row goes through the selected graph first, so its
+    # excludes, extras and nested shapes are already applied. The formatter
+    # only ever sees those dictionaries, never a model instance.
     try:
-        if custom_fields:
-            # Use CsvFormatter directly with custom fields
-            from mojo.serializers.core.manager import get_serializer_manager
-            manager = get_serializer_manager()
-            serializer = manager.get_format_serializer("csv")
-            csv_data = serializer.serialize_queryset(
-                export_qs, fields=custom_fields, raw_data=True,
-            )
-        else:
-            csv_data = model.to_csv(export_qs, format="csv")
+        rows = model.queryset_to_dict(export_qs, graph=graph)
+        csv_data = _rows_to_csv(rows, columns)
     except Exception as e:
         logger.warning("export_data csv error", model_label, str(e))
         return {"error": "CSV generation failed"}
 
-    # Count rows (header line excluded)
-    row_count = csv_data.count("\n") - 1 if csv_data.strip() else 0
-    if row_count < 0:
-        row_count = 0
+    row_count = len(rows)
 
     # Build file-like object
     date_str = timezone.now().strftime("%Y-%m-%d")

@@ -340,12 +340,12 @@ BOUNCER_REQUIRE_TOKEN = False
 # Adaptive learning settings
 BOUNCER_LEARN_ENABLED = True
 BOUNCER_LEARN_MIN_SCORE = 80        # minimum score to learn from
-BOUNCER_LEARN_SUBNET_THRESHOLD = 5  # blocks per /24 per hour to flag subnet
-BOUNCER_LEARN_UA_THRESHOLD = 5      # blocks per UA per hour to flag UA
-BOUNCER_LEARN_FP_THRESHOLD = 3      # blocks per fingerprint to flag it
+BOUNCER_LEARN_SUBNET_THRESHOLD = 5  # reports per /24 per hour that record an event (no block)
+BOUNCER_LEARN_UA_THRESHOLD = 5      # unused: User-Agents are no longer learned
+BOUNCER_LEARN_FP_THRESHOLD = 3      # unused: fingerprints are no longer learned
 BOUNCER_LEARN_CAMPAIGN_THRESHOLD = 5  # cross-IP signal_set matches to detect campaign
-BOUNCER_LEARN_SUBNET_TTL = 86400    # 24h auto-block TTL for subnets
-BOUNCER_LEARN_UA_TTL = 604800       # 7d auto-block TTL for UAs
+BOUNCER_LEARN_SUBNET_TTL = 86400    # unused: networks are no longer blocked automatically
+BOUNCER_LEARN_UA_TTL = 604800       # unused: no automatic UA/fingerprint signature
 BOUNCER_LEARN_SIGNAL_SET_TTL = 2592000  # 30d campaign signature TTL
 
 # Score weights per signal (any signal missing from this dict contributes 0)
@@ -433,7 +433,8 @@ Audit log. One row per assess/submit/event API call. Read-only via REST.
 ### `BotSignature`
 
 Adaptive learning registry. Auto-populated by `BotLearner` after confirmed
-high-confidence blocks. Fully manageable via the operator portal.
+high-confidence blocks (network and campaign rows only). Fully manageable via
+the operator portal.
 
 ```python
 from mojo.apps.account.models import BotSignature
@@ -452,6 +453,12 @@ refresh_sig_cache()
 ```
 
 Signature types: `ip`, `subnet_24`, `subnet_16`, `user_agent`, `fingerprint`, `signal_set`
+
+`user_agent` and `fingerprint` signatures with `source='auto'` are not
+enforced; a row of either type with any other source is. The field default is
+`'auto'`, so a row created in a shell or through the ORM without `source` is
+treated as learned and is not enforced. A create through the REST API with no
+`source`, or an empty one, is stored as `manual`.
 
 ---
 
@@ -535,14 +542,79 @@ After a legacy assessment block with `risk_score >= BOUNCER_LEARN_MIN_SCORE`, th
 `learn_from_block` background job:
 
 1. Marks the `BouncerDevice` as `risk_tier='blocked'`
-2. Increments subnet /24 counter in Redis; creates `BotSignature` when threshold hit
-3. Increments UA counter; creates `BotSignature` for repeated identical UAs
-4. Increments fingerprint counter; creates `BotSignature` for repeat fingerprints
-5. Hashes triggered signal set; detects coordinated campaigns across IPs
-6. Rebuilds the Redis signature cache used by pre-screen
+2. Increments subnet /24 counter in Redis; records one event when the threshold is hit
+3. Hashes triggered signal set; detects coordinated campaigns across IPs
+4. Rebuilds the Redis signature cache used by pre-screen
 
-The Redis cache is also rebuilt by the scheduled `refresh_bouncer_sig_cache` job.
-Hosted recovery outcomes do not invoke this job.
+**The learner never writes, and the cache never enforces, an automatic
+`user_agent` or `fingerprint` signature.** The caller chooses both values, and
+the public assess endpoint scores signals the caller asserts, so a learned
+signature of either type let any anonymous caller block every visitor sharing
+that User-Agent or fingerprint. An operator who wants one blocked creates it
+with `source='manual'`.
+
+**The learner never blocks a network.** Every report it counts is sent by the
+caller, so the `subnet_24` signature it used to write after five reports from
+one /24 let five anonymous requests lock out everyone behind a shared address
+(a mobile carrier, a campus, an office, a VPN exit) for a day. With this and
+the rule above, the Bouncer blocks nothing it learned by itself. The score for
+each visit, the per-device block, the firewall rule for a single reporting
+address and every signature a person adds are unchanged.
+
+- **What happens at the threshold instead.** When a /24 reaches
+  `BOUNCER_LEARN_SUBNET_THRESHOLD` reports in an hour, one event is recorded:
+  category `security:bouncer:subnet`, level 5, metadata `subnet` and
+  `report_count`, no `source_ip`. Level 5 is below the level that opens an
+  incident, so nothing blocks on it, no automatic triage runs on it and
+  **nobody is notified** unless the deployment adds a rule for the category.
+  At most one is recorded per /24 per hour and 20 per hour in all; past that a
+  single "budget exhausted" event is recorded and the rest are dropped. To
+  block the network, an operator adds a `subnet_24` signature by hand.
+- **Learned network rows are ignored.** `refresh_sig_cache()` leaves out a
+  `subnet_24` row with `source='auto'` **and** an expiry: that is what the
+  learner wrote. Such a row stays in the table and still reads
+  `is_active=True`, but matches nothing. To keep one, set its `source` to
+  `manual` (or clear its expiry) over REST; the Admin form cannot change
+  `source`. Rows a person made stay enforced: every `ip` row whatever its
+  `source`, a `subnet_24` row with any other `source`, and a `subnet_24` row
+  with `source='auto'` and no expiry (`auto` is the model default, so a row
+  made through the ORM or a shell carries it).
+- **The learner leaves a person's row alone.** On a row that already exists it
+  changes nothing when the row's `source` is not `auto` or the row is switched
+  off. It used to set `is_active=True` and a new expiry on any existing row,
+  which switched a signature an operator had turned off back on and put an
+  expiry on a permanent manual block. The condition is part of the write
+  itself, so an operator's edit that lands while a learn job is running is
+  not written over. Only `signal_set` rows are still written, and they are
+  never enforced.
+- `BOUNCER_LEARN_SUBNET_TTL` is no longer read.
+
+For the two caller-chosen types:
+
+- **Rows an older release learned are ignored.** `refresh_sig_cache()` leaves
+  out rows with `source='auto'` and `sig_type` `user_agent` or `fingerprint`.
+  They stay in the table and still read `is_active=True`, but match nothing.
+  List them with:
+
+  ```python
+  BotSignature.objects.filter(source='auto', sig_type__in=['user_agent', 'fingerprint'])
+  ```
+
+- **After deploying this change, restart the job workers and run
+  `refresh_sig_cache()` once.** The cache moved to the Redis key
+  `bouncer:sigs:active:v3` (`v2` when automatic User-Agent and fingerprint
+  rows left it, `v3` when learned network rows did), so a job worker still on
+  older code rebuilds a key nothing reads. The new key does not exist until
+  the first learn job, the next scheduled refresh (within 15 minutes) or a
+  manual refresh; until then no signature matches, manual ones included.
+- `BOUNCER_LEARN_UA_THRESHOLD`, `BOUNCER_LEARN_UA_TTL` and
+  `BOUNCER_LEARN_FP_THRESHOLD` are no longer read.
+
+The cache lives one hour. It is rebuilt at the end of every learn job and
+every 15 minutes by the scheduled `refresh_bouncer_sig_cache` job, so a manual
+signature stays enforced on a site with no learn jobs; see "Refreshing the
+Signature Cache" below.
+Hosted recovery outcomes do not invoke the learn job.
 
 ---
 
@@ -999,7 +1071,13 @@ from mojo.apps.account.services.bouncer.learner import refresh_sig_cache
 refresh_sig_cache()
 ```
 
-Or publish the scheduled job:
+The framework also rebuilds it every 15 minutes: the account app's cron
+function `refresh_bouncer_sig_cache` publishes the job below on the `cleanup`
+channel. That needs the cron runner and a job worker on `cleanup`; without
+them the cache is rebuilt only by learn jobs and explicit refreshes, and a
+manual signature stops matching an hour after the last rebuild. So an edit
+made over REST applies within 15 minutes, or at once if you publish the job
+yourself:
 
 ```python
 from mojo.apps import jobs

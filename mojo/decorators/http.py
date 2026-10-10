@@ -126,17 +126,22 @@ def dispatcher(request, *args, **kwargs):
         # nonexistent one (no touch side effect, no existence oracle).
         from mojo.apps.account.models.group import Group
         try:
-            request.group = Group.get_active(int(request.DATA.group))
-            if request.group is not None:
-                request.group.touch()
+            group = Group.get_active(int(request.DATA.group))
             # A confined credential (ApiKey or GroupScopedToken) may not rebind
-            # request.group outside its own scope. Keep the truthiness
-            # structure: `ident and request.group and ...` — calling
-            # is_group_allowed unconditionally would 500 every ?group= request
-            # from an ordinary JWT user (ident is None there).
+            # request.group outside its own scope, and must not learn from the
+            # answer whether an id exists: another tenant's group, an inactive
+            # one and an unused id all get this one response (maestro #6986).
+            # is_group_allowed is only called on a real group and a real
+            # identity: an ordinary JWT user has no ident, and falls through
+            # with whatever was resolved, as before.
             ident = restricted_identity(request)
-            if ident and request.group and not ident.is_group_allowed(request.group):
+            if ident and (group is None or not ident.is_group_allowed(group)):
                 return JsonResponse({"error": "Group not accessible with this API key", "code": 403}, status=403)
+            request.group = group
+            # Stamp activity only on a group the caller may use: a refused
+            # request must not write to another tenant's row.
+            if group is not None:
+                group.touch()
         except (TypeError, ValueError):
             # TypeError: int() on a non-scalar (client sent a list/dict/null).
             # This block runs BEFORE dispatch_error_handler wraps the view, so
@@ -168,11 +173,15 @@ def dispatcher(request, *args, **kwargs):
             if grp is not None and not grp.is_effectively_active():
                 grp = None
             if grp is not None:
-                request.group = grp
-                grp.touch()
+                # Check before the activity stamp, as in the `group` branch: a
+                # refused request must not write to another tenant's row
+                # (maestro #6986). An unknown or inactive uuid still falls
+                # through to the handler; a uuid cannot be walked like an id.
                 ident = restricted_identity(request)
                 if ident and not ident.is_group_allowed(grp):
                     return JsonResponse({"error": "Group not accessible with this API key", "code": 403}, status=403)
+                request.group = grp
+                grp.touch()
     method_key = f"{key}__{request.method}"
     if method_key not in URLPATTERN_METHODS:
         method_key = f"{key}__ALL"
@@ -203,6 +212,18 @@ def dispatch_error_handler(func):
                 if isinstance(resp.get("status"), bool) and ("data" in resp or "error" in resp or "message" in resp):
                     return JsonResponse(resp, status=resp.get("code", 200))
                 return JsonResponse({"status": True, "code": 200, "data": resp})
+            return resp
+        except mojo.errors.RateLimitException as err:
+            # The same 429 the rate-limit decorators return, plus the wait in
+            # the body. The limiter that raised has already recorded its metric
+            # and incident, gated to once a minute — no error incident here, or
+            # a retry storm would turn every refused request into an Event.
+            # Never folded to 200: the decorators' 429 is not either.
+            resp = JsonResponse(
+                {"error": err.reason, "code": err.code, "status": False,
+                 "retry_after": err.retry_after},
+                status=err.status)
+            resp["Retry-After"] = str(err.retry_after)
             return resp
         except mojo.errors.MojoException as err:
             is_perm_denied = isinstance(err, mojo.errors.PermissionDeniedException)

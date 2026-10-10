@@ -87,6 +87,17 @@ the **global** `manage_geofence`/`security` perm — a tenant admin with
 `manage_group` cannot flip it. The member-reachable `realtime_message`
 POST_SAVE_ACTION also requires `manage_group`.
 
+Note: `metadata.webapp_base_url` and `metadata.webapp_auth_path` (where the
+tenant's sign-in, password-reset and invite links land) can be set, changed or
+cleared only by a signed-in user holding the **global** `manage_groups` or
+`groups` permission. A tenant admin with `manage_group`, and any group API key
+or group token, receives a `403` and nothing is stored. A per-user API key is
+that person's own session: it passes when the person holds the global
+permission. Sending the stored value back unchanged is fine, so a form that
+resubmits the whole `metadata` keeps working. If an operator changes the
+address while your save is on its way, your save keeps the operator's value and
+still stores your other edits.
+
 Note: `metadata.protected.*` requires `admin_compliance` or `admin_verify` — a
 write grant alone is not enough. Any update that would touch it (a merge
 carrying `"protected"`, a `"__replace": true` payload, or a non-dict `metadata`
@@ -213,6 +224,30 @@ validation rejects the group itself, a descendant, and any already-corrupt or
 over-depth candidate ancestry. The write is serialized server-side; excluding
 the current id in a relationship picker is only a convenience, not the safety
 boundary.
+
+Moving a group to a **different tree** — giving a top-level group a parent,
+setting `parent` to `null`, or choosing a parent under another top-level group
+— needs the global `manage_groups` or `groups` permission and returns a `403`
+without it.
+
+Moving a sub-group to another parent **inside the same tree** needs
+`manage_group` (or `manage_groups`/`groups`) held **as a member** of both the
+parent it leaves and the parent it joins. A grant on a group higher up covers
+the parents below it, so a manager of the top group can move any sub-group in
+the tree. A manager of the sub-group alone, or of only one of the two parents,
+gets a `403` and the parent is unchanged. Creating a group with a `parent`
+needs the same grant on that parent. Three details:
+
+- A global `manage_group` on the user's own record lets them save any group,
+  but it is not a grant on a parent: such a user needs the member grant too,
+  or the global `manage_groups`/`groups`, which passes everywhere.
+- The **nearest** membership decides. A manager of the top group who also has
+  a plain member row, with no grant, on one of the two parents is refused.
+- A group API key may move a group only between parents inside its own tree,
+  and can never move the group it belongs to.
+
+Posting the `parent` a group already has is not a move and is never refused,
+so a form that sends every field on save keeps working.
 
 ---
 

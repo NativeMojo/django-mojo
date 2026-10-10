@@ -265,6 +265,16 @@
         if (typeof DOMException !== 'undefined' && err instanceof DOMException) {
             return WEBAUTHN_LOGIN_COPY[err.name] || WEBAUTHN_LOGIN_COPY._default;
         }
+        // A rate-limit refusal: say what happened and, when the backend sent
+        // the wait (retry_after, in seconds), how long. Rounded up, so the
+        // user is never told to come back before the limit has lifted.
+        if (err.code === 429) {
+            var wait = Number(err.retry_after);
+            if (!(wait > 0)) return 'Too many attempts. Try again later.';
+            var minutes = Math.ceil(wait / 60);
+            return 'Too many attempts. Try again in ' + minutes +
+                (minutes === 1 ? ' minute.' : ' minutes.');
+        }
         var msg = err.message || err.error ||
             (Array.isArray(err.errors) && err.errors[0] && err.errors[0].message) ||
             '';
@@ -742,8 +752,9 @@
 
         /**
          * Start a passwordless SMS-code login — sends a 6-digit code to the
-         * phone on file. Always resolves (the server returns a generic
-         * success even for unknown accounts, to avoid user enumeration).
+         * phone on file. The server returns a generic success even for
+         * unknown accounts, to avoid user enumeration. Carries a bouncer
+         * token like login(), so it rejects when verification is unavailable.
          * @param {string} phone - phone number / username
          * @param {object} [options] - { group_uuid }
          * @returns {Promise<object>}
@@ -751,7 +762,7 @@
         startSmsLogin: function (phone, options) {
             var payload = { username: phone };
             if (options && options.group_uuid) payload.group_uuid = options.group_uuid;
-            return post(ep('smsLogin'), _withDevice(payload));
+            return protectedPost(ep('smsLogin'), payload, 'login');
         },
 
         /**

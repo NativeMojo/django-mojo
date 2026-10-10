@@ -329,10 +329,14 @@ def test_write_preflight_no_mutation(opts):
 
 
 @th.django_unit_test(
-    "the assistant query_model tool gates the caller-supplied graph too")
+    "the assistant query_model tool never serves a caller-named graph")
 def test_assistant_query_model_graph_gate(opts):
-    """query_model serializes outside the REST read sites, so it must gate the
-    graph itself or become the bypass for GRAPH_PERMISSIONS."""
+    """query_model serializes outside the REST read sites, so it must not become
+    the bypass for GRAPH_PERMISSIONS. It takes no graph from the caller at all:
+    the gated `admin` graph is refused by name for everyone, including a holder
+    of its permission, and a plain query serves the server-selected `default`
+    graph, which carries no raw evidence. (The gate on the selected graph itself
+    is covered in tests/test_assistant/7_test_model_tools.py.)"""
     from mojo.apps.edge.models import PlatformDeployment
     from mojo.apps.assistant.services.tools.models import _tool_query_model
 
@@ -344,22 +348,26 @@ def test_assistant_query_model_graph_gate(opts):
     PlatformDeployment.RestMeta.GRAPH_PERMISSIONS = {
         "admin": ["manage_platform", "admin"]}
     try:
-        params = {"app_name": "edge", "model_name": "PlatformDeployment",
-                  "graph": "admin"}
-        denied = _tool_query_model(dict(params), viewer)
-        th.assert_true("error" in denied,
-                       f"view_platform user must be refused the admin graph: {denied}")
+        params = {"app_name": "edge", "model_name": "PlatformDeployment"}
+        for label, user in (("view_platform", viewer), ("manage_platform", admin)):
+            named = _tool_query_model(dict(params, graph="admin"), user)
+            th.assert_true(
+                "error" in named and "results" not in named,
+                f"{label} user must be refused a caller-named graph: {named}")
 
-        served = _tool_query_model(dict(params), admin)
-        th.assert_true("error" not in served,
-                       f"manage_platform user must be served: {served}")
+            # An unknown special graph is an error too, not a silent 200.
+            bad = _tool_query_model(dict(params, graph="no_such_view"), user)
+            th.assert_true("error" in bad,
+                           "an unknown graph name must be an error, not served")
 
-        # An unknown special graph is a 400-shaped error, not a silent 200.
-        bad = _tool_query_model(
-            {"app_name": "edge", "model_name": "PlatformDeployment",
-             "graph": "no_such_view"}, admin)
-        th.assert_true("error" in bad,
-                       "an unknown special graph must be an error, not served")
+            served = _tool_query_model(dict(params), user)
+            th.assert_true("error" not in served,
+                           f"{label} user must be served the default graph: {served}")
+            th.assert_true(served["results"], "the fixture row should be returned")
+            for row in served["results"]:
+                th.assert_true(
+                    "node_evidence" not in row,
+                    "the gated admin graph's raw evidence must not be served")
     finally:
         if original is None:
             if hasattr(PlatformDeployment.RestMeta, "GRAPH_PERMISSIONS"):

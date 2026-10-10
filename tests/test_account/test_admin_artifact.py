@@ -173,7 +173,6 @@ def test_archive_boundaries(opts):
 def test_verifier_owned_temporary_alias(opts):
     from contextlib import nullcontext
     from types import SimpleNamespace
-    import tarfile
     import zipfile
     module = load("scripts/verify_admin_portal_package.py")
     with tempfile.TemporaryDirectory() as directory:
@@ -188,8 +187,6 @@ def test_verifier_owned_temporary_alias(opts):
             for path in source.rglob("*"):
                 if path.is_file():
                     output.write(path, path.relative_to(repo).as_posix())
-        with tarfile.open(dist / "django_mojo-fixture.tar.gz", "w:gz") as output:
-            output.add(source, arcname="django_mojo-fixture/" + module.PREFIX)
         owned = root / "owned-temporary-directory"
         owned.mkdir()
         alias = root / "temporary-alias"
@@ -205,6 +202,41 @@ def test_verifier_owned_temporary_alias(opts):
         user_alias.symlink_to(source, target_is_directory=True)
         with th.assert_raises(module.artifact.ArtifactError):
             module.artifact.validate(user_alias, digest)
+
+
+@th.unit_test("package verifier takes one wheel alone: a second wheel or a source archive is refused")
+def test_verifier_is_wheel_only(opts):
+    import zipfile
+    module = load("scripts/verify_admin_portal_package.py")
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        repo = root / "repo"
+        source = repo / module.PREFIX
+        fixture(source)
+        digest = module.artifact.validate(source)["manifest_sha256"]
+        dist = root / "dist"
+        dist.mkdir()
+        wheel = dist / "django_mojo-fixture.whl"
+        with zipfile.ZipFile(wheel, "w") as output:
+            for path in source.rglob("*"):
+                if path.is_file():
+                    output.write(path, path.relative_to(repo).as_posix())
+        # This binding belongs only to this directly loaded verifier instance.
+        module.REPO = repo
+        result = module.verify(dist, digest)
+        assert result["manifest_sha256"] == digest, "one wheel alone must pass the proof"
+        archive = dist / "django_mojo-fixture.tar.gz"
+        archive.write_bytes(b"a source archive")
+        with th.assert_raises(module.artifact.ArtifactError):
+            module.verify(dist, digest)
+        archive.unlink()
+        shutil.copy(wheel, dist / "django_mojo-second.whl")
+        with th.assert_raises(module.artifact.ArtifactError):
+            module.verify(dist, digest)
+        (dist / "django_mojo-second.whl").unlink()
+        wheel.unlink()
+        with th.assert_raises(module.artifact.ArtifactError):
+            module.verify(dist, digest)
 
 
 @th.django_unit_test("source session expiry is bounded by both JWT and deployment TTL")

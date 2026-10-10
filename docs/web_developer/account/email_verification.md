@@ -149,6 +149,7 @@ Requires authentication (Bearer token). Submits the 6-digit code received via em
 | Status | `error` | Meaning |
 |---|---|---|
 | 400 | `Value Error` | Invalid or expired code |
+| 429 | `Rate limit exceeded` | Too many tries: 5 per 15 minutes per account, or 10 requests per 300 seconds per IP. The per-account refusal carries `Retry-After` and a `retry_after` field (seconds); a correct code is refused too until the wait is over. See [Too many attempts](authentication.md#too-many-attempts-on-a-code-or-a-current-password) |
 
 Codes expire after `EMAIL_VERIFY_CODE_TTL` seconds (default 10 minutes) and are single-use. Codes and links are mutually exclusive — generating one via `/send` clears any outstanding token of the other type.
 
@@ -331,6 +332,7 @@ Requires authentication. Submits the 6-digit code received via SMS. On success, 
 | Status | `error` | Meaning |
 |---|---|---|
 | 400 | `Value Error` | Invalid or expired code |
+| 429 | `Rate limit exceeded` | Too many tries: 5 per 15 minutes per account, or 10 requests per 300 seconds per IP. The per-account refusal carries `Retry-After` and a `retry_after` field (seconds); a correct code is refused too until the wait is over. See [Too many attempts](authentication.md#too-many-attempts-on-a-code-or-a-current-password) |
 
 Codes expire after `PHONE_VERIFY_CODE_TTL` seconds (default 10 minutes) and are single-use.
 

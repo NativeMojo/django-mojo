@@ -101,7 +101,9 @@ itself through the Admin. See [Admin fleet overrides](../deploy/README.md#admin-
 - `ALLOW_EMAIL_CHANGE` — dynamic boolean, default `True`; Admin Settings can
   manage a global non-secret override.
 - `ALLOW_PHONE_CHANGE` — dynamic boolean, default `True`; Admin Settings can
-  manage a global non-secret override.
+  manage a global non-secret override. When `False`, the phone change flow is
+  off and someone who is not an admin can neither replace nor clear a number
+  on file through the account save. A first number, and an admin, still work.
 - `ALLOW_PHONE_LOGIN`
 - `ALLOW_SELF_DEACTIVATION` — dynamic boolean, default `True`; Admin Settings
   can manage a global non-secret override.
@@ -186,21 +188,37 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
 
 ### APIKEY
 
-- `APIKEY_PERMS_PROTECTION` — dict, **merged over a framework floor** (read with
-  `kind="dict"`, so a DB-backed `Setting` JSON string is honored). Maps a
-  permission key → the permission(s) the granter must hold to assign it to an
-  `ApiKey`, gating `ApiKey.set_permissions` on REST write. The effective map is
-  `{**configured, **ApiKey.APIKEY_PERMS_PROTECTION_DEFAULTS}` — currently the
-  floor protects `geoip_sync`, `dnsman_acme_federation`, `edge_node`, and
-  `mojosec_ingest` with their matching global `sys.*` grants. Deployments may
-  add protected permissions, but cannot override or relax a framework-floor
-  entry. It is a merge rather than a plain default because `settings.get`
-  returns a configured value wholesale, which would otherwise drop the floor
-  the moment a deployment set this at all.
-  Mirrors
-  [`MEMBER_PERMS_PROTECTION`](#member); `sys.`-prefixed requirements escalate to
-  a global grant. Stops a group admin from self-minting a key with permissions
-  they aren't entitled to grant.
+- `APIKEY_PERMS_PROTECTION` — dict. Maps a permission key → the permission(s)
+  the granter must hold to assign it to an `ApiKey`, gating
+  `ApiKey.set_permissions` on REST write. `sys.`-prefixed requirements escalate
+  to a global grant. Stops a group admin from self-minting a key with
+  permissions they aren't entitled to grant.
+  **Three layers, merged.** The effective map is the platform-wide `Setting`
+  row (a JSON object string), with the settings-file value merged *over* it,
+  with `ApiKey.APIKEY_PERMS_PROTECTION_DEFAULTS` merged over both. The
+  framework floor currently protects `geoip_sync`, `dnsman_acme_federation`,
+  `edge_node`, and `mojosec_ingest` with their matching global `sys.*` grants,
+  and neither the file nor a row can override or relax one of its entries.
+  **The settings file wins over a row, in both directions.** A database row can
+  **add** protected permissions, but it can neither loosen nor tighten one the
+  file names: a row's entry for a file key is ignored. To change a permission
+  the file names, edit the file. A group-scoped row is never read. A blank row
+  (empty or whitespace-only) adds nothing. Row additions are best-effort — if
+  the database and Redis cannot be read, only the file map and the floor apply
+  — so put anything that must always hold in the settings file.
+  **Malformed refuses.** The value shape is
+  [`MEMBER_PERMS_PROTECTION`](#member)'s: each value a non-empty string or a
+  non-empty list (in the file also a tuple or set) of non-empty strings, keyed
+  by a non-empty string. If either source is anything else — a list, a number,
+  a non-JSON string, an object with one bad entry — nobody below a global
+  `manage_groups`/`manage_users` holder can change any API-key permission, a
+  key-backed session can grant none, and an error is logged on each refusal. A
+  save that changes no permission still works. `None`, `""` and `{}` read as
+  empty. A malformed row is repaired through the settings API by a
+  `manage_settings` holder; a malformed settings-file value needs a file edit
+  and a restart. Saving a malformed row — including a JSON `null` — is refused
+  with a 400 (`/api/settings`, `Setting.set`, any `save()`), and the key can
+  be neither secret nor group-scoped.
 
 ### APPLE
 
@@ -302,6 +320,14 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   Fails closed exactly like `AUTH_HANDOFF_RESOLVER`: raising, failing to
   import, naming an unknown or inactive group, or returning a junk type all
   refuse.
+- `AUTH_HANDOFF_REQUIRE_PKCE` — **file-only** (`settings.get_static`). `"off"`
+  (default) or `"native"`. With `"native"`, `POST /api/auth/handoff` refuses to
+  mint a code without a PKCE `code_challenge` when the code is going to an app
+  on the device: a custom-scheme link, a loopback address in any spelling a
+  browser accepts, `localhost`, or no `redirect_uri`. An `https://` web destination is unaffected, so the sign-in
+  pages keep working. An unknown value is logged and treated as `"native"`.
+  A code minted **with** a challenge needs its `code_verifier` at exchange in
+  either mode. File-only so a `Setting` row cannot switch the protection off.
 - `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` — **file-only** (`settings.get_static`). A fixed code accepted in place of the real SMS code during phone verification; never set it in production. Deliberately not readable from the DB/Redis settings plane, so a `Setting` row cannot arm an authentication bypass at runtime.
 
 ### AWS
@@ -404,13 +430,13 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
 - `BOUNCER_CONTACT_PATH`
 - `BOUNCER_LEARN_CAMPAIGN_THRESHOLD`
 - `BOUNCER_LEARN_ENABLED`
-- `BOUNCER_LEARN_FP_THRESHOLD`
+- `BOUNCER_LEARN_FP_THRESHOLD` — no longer read: the Bouncer does not learn User-Agent or fingerprint signatures
 - `BOUNCER_LEARN_MIN_SCORE`
 - `BOUNCER_LEARN_SIGNAL_SET_TTL`
 - `BOUNCER_LEARN_SUBNET_THRESHOLD`
 - `BOUNCER_LEARN_SUBNET_TTL`
-- `BOUNCER_LEARN_UA_THRESHOLD`
-- `BOUNCER_LEARN_UA_TTL`
+- `BOUNCER_LEARN_UA_THRESHOLD` — no longer read: the Bouncer does not learn User-Agent or fingerprint signatures
+- `BOUNCER_LEARN_UA_TTL` — no longer read: the Bouncer does not learn User-Agent or fingerprint signatures
 - `BOUNCER_LOGIN_PATH`
 - `BOUNCER_LOGO_URL`
 - `BOUNCER_PASS_COOKIE_DOMAIN` — `Domain` attribute for the `mbp` pass cookie
@@ -453,6 +479,25 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   `ChatRoom.group` is `on_delete=CASCADE` from `account.Group`, so deleting a
   Group destroys rooms and their messages with no REST layer involved. See
   [the deletion hook](../chat/services.md#deletion-hook).
+
+### CODE
+
+Per-account limits on one-time codes. See
+[Failed Login Protection](../account/auth.md#failed-login-protection).
+
+- `CODE_ATTEMPT_LIMIT` — int, default `5`. Tries at a one-time code per
+  account per window, for every kind of code. Never below `1`.
+- `CODE_ATTEMPT_WINDOW` — int seconds, default `900`. Window for the try
+  counter. **Keep it at or above the longest code lifetime you configure**
+  (`SMS_OTP_TTL`, `PASSWORD_RESET_CODE_TTL`, `PHONE_VERIFY_CODE_TTL`,
+  `EMAIL_VERIFY_CODE_TTL`, `EMAIL_CHANGE_CODE_TTL`,
+  `PHONE_REGISTER_SESSION_TTL`; all default `600`). A code that lives longer
+  than the window gets a window stretched to its own lifetime, so the value
+  here would no longer be the one in force for that code.
+- `CODE_SEND_LIMIT` — int, default `5`. One-time codes sent per account, or
+  per phone number at sign-up, per window. Never below `1`.
+- `CODE_SEND_WINDOW` — int seconds, default `900`. Window for the send
+  counter.
 
 ### DEACTIVATE
 
@@ -639,6 +684,10 @@ reasoning: [edge README](../edge/README.md#settings),
 - `EDGE_DEPLOY_STATUS_TTL` — **file-only** (`settings.get_static`), int
   seconds, default `900`. Expiry on the Redis deploy target/status keys — the
   backstop that stops a canary dying hard from wedging every future deploy.
+  The orchestrator renews the status lease while it drives the deploy, so
+  this is a crash backstop, not a deadline; a lease that expires with no
+  successor fails the attempt (`lease_expired_before_start` or
+  `lease_expired_mid_canary`) with an incident.
 - `EDGE_PYPI_VERSION_TTL` — **file-only** (`settings.get_static`), int seconds,
   default `21600` (6 hours). How long a successful PyPI lookup for the newest
   published `django-mojo` is cached by `edge.services.framework_version`. The
@@ -884,6 +933,10 @@ restart. See
 - `JOBS_ENGINE_LOGFILE`
 - `JOBS_ENGINE_MAX_WORKERS`
 - `JOBS_ENGINE_READ_TIMEOUT`
+- `JOBS_ENGINE_RESERVED_WORKERS` — worker slots only the `priority` channel
+  and the engine's box-direct channel may claim; unset means
+  `min(2, max_workers // 4)`, so a pool under four reserves nothing. An engine
+  that consumes neither channel reserves nothing whatever the value. See [Jobs — Engine Configuration](../jobs/settings.md#engine-configuration).
 - `JOBS_HOSTNAME_CHANNEL` — when `True` (default), each engine also consumes
   its box-direct channel, named after its runner id (default
   `<hostname>-engine`), so a publisher can address one specific engine with
@@ -1173,6 +1226,13 @@ registered resource is enabled; until then every endpoint answers 404.
 
 - `SMS_FAKE_MAPPINGS`
 - `SMS_INBOUND_HANDLER`
+- `SMS_OTP_LENGTH` — int, default `6`. How many digits the two SMS codes that
+  can sign someone in have: the SMS sign-in / second-factor code
+  (`auth/sms/login`, `auth/sms/send`) and the phone sign-up code
+  (`auth/phone/register/start`). Allowed range `6` to `10`: a value below `6`
+  reads as `6`, so the setting can only lengthen a code, a value above `10`
+  reads as `10`, and a value that is not a finite number reads as `6`. See
+  [Code length](../account/auth.md#code-length).
 - `SMS_OTP_TTL`
 
 ### SNS
@@ -1197,6 +1257,9 @@ registered resource is enabled; until then every endpoint answers 404.
 
 ### TOTP
 
+- `TOTP_ATTEMPT_DAILY_LIMIT` — int, default `20`. Authenticator sign-in tries
+  per account per 24 hours, shared by `auth/totp/verify` and
+  `auth/totp/login`, on top of `CODE_ATTEMPT_LIMIT`. Never below `1`.
 - `TOTP_ISSUER`
 - `TOTP_RECOVERY_BCRYPT_ROUNDS` — **file-only** (`settings.get_static`), default
   `12`. bcrypt cost factor for hashing TOTP recovery codes

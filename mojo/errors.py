@@ -106,6 +106,26 @@ class ReauthRequiredException(MojoException):
         super().__init__(reason, code, status)
 
 
+class RateLimitException(MojoException):
+    """
+    Raised when a per-account limit refuses a try.
+
+    Lets a limit reached deep in a model setter or action answer the same 429
+    the rate-limit decorators return: the REST dispatcher adds `Retry-After`
+    and a `retry_after` field in the body from this exception.
+
+    Attributes:
+        retry_after (int): Seconds until the next try will be accepted.
+        reason (str): Defaults to 'Rate limit exceeded'.
+        code (int): Mirrored into the response body. Defaults to 429.
+        status (int): HTTP status code. Defaults to 429.
+    """
+
+    def __init__(self, retry_after, reason='Rate limit exceeded', code=429, status=429):
+        super().__init__(reason, code, status)
+        self.retry_after = max(1, int(retry_after))
+
+
 class RestErrorException(MojoException):
     """
     Exception raised for REST API errors.

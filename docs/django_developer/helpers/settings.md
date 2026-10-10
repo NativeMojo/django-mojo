@@ -145,6 +145,29 @@ The parent chain is walked through `group.parent`, so the first group-scoped
 read on a freshly loaded `Group` fetches each ancestor once; Django caches it
 on that instance for later reads.
 
+### A setting's group is fixed at creation
+
+A `Setting` row never changes scope. `Setting.save()` and the `/api/settings`
+REST surface both refuse a write that changes `group` on an existing row —
+clearing it, or pointing it at another group — with a `ValueException` (`400`
+over REST), for every caller including a superuser. A global row overrides the
+settings file for every tenant and a row on a parent group governs its
+children, so a move would let a writer authorized in one scope publish into
+another.
+
+- To move a setting, create it in the new scope and remove the old row with
+  `Setting.remove(key, group=old_group)`. A secret setting has to be entered
+  again: its value is never returned.
+- A REST create that is authorized through a group (`group` or `group_uuid` on
+  the request) can only produce a row in that group; naming a second group in
+  the body (`group_id`) is refused with `403`. A create with no group needs the
+  platform-wide permission, as before.
+- `QuerySet.update()` and raw SQL bypass `save()` and are not covered. Neither
+  is reachable from a request.
+- Rows moved before this rule existed are not found or repaired. Review the
+  global rows with
+  `Setting.objects.filter(group=None).values_list("key", "modified")`.
+
 ## `settings.get_static()` — Conf-File-Only Reads
 
 `settings.get()` is DB/Redis-aware: it checks the `Setting` model (Redis cache →

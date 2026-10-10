@@ -131,13 +131,56 @@ Two flows supported:
 1. `POST /api/auth/forgot` with `email` + `method=code`
 2. 6-digit code emailed, stored encrypted in user secrets
 3. `POST /api/auth/password/reset/code` with `email`, `code`, `new_password`
-4. Returns new JWT on success
+4. Returns new JWT on success, and ends every other session (see below)
 
 ### Link-based
 1. `POST /api/auth/forgot` with `email` + `method=link`
 2. Signed token emailed
 3. `POST /api/auth/password/reset/token` with `token`, `new_password`
-4. Returns new JWT on success
+4. Returns new JWT on success, and ends every other session (see below)
+
+## Sessions End When the Password Changes
+
+A new password signs the account out everywhere else. Without that, a stolen refresh token keeps renewing after the owner has "fixed" the account.
+
+One method does it for every flow, `User.end_sessions(reason, request=None, actor=None)`:
+
+| What it does | Why |
+|---|---|
+| Replaces `auth_key` | Every session JWT, every group token, every OAuth-server access token and every unopened emailed link (reset, magic login, email verify, invite) is signed with it and stops verifying. |
+| Revokes the account's OAuth-server grants (`revoked_reason` = the `reason` passed) | Their refresh tokens are opaque and not signed with the key, so they would keep minting. |
+| Clears the cached invite token | It was signed with the old key. The next invite mints one that works. |
+| Drops the account's live websockets | Websocket auth happens once, at connect. Best effort, after commit; a failed drop undoes nothing. |
+
+The stored state is read and written under a lock on the account's row, and the caller's own copy is refreshed, so a later `save()` on it can't write the old key or the old secrets back.
+
+**Which flows call it**
+
+| Flow | The device that asked |
+|---|---|
+| `POST /api/auth/password/reset/code` and `POST /api/auth/password/reset/token` | Stays signed in: the reset answers with a new token pair, as before. |
+| Password change on the account save (`new_password`), by the account's owner | Stays signed in: the save answers with a `tokens` object beside the account data. See [User — Password Change](user.md#password-change). |
+| Password change on the account save, by an admin for someone else | The admin's own session is untouched. No tokens for the other person are returned. |
+| An admin's temporary password, and the forced change that completes it | These already replaced the key. They now revoke the grants and clear the invite cache too. |
+| `revoke_sessions` action and `POST /api/auth/sessions/revoke` | As before, and they now revoke the OAuth-server grants. `auth/sessions/revoke` now drops live websockets as well. |
+
+For a reset and for a password change, the new password, the new key, the grant revocation and the cleared invite are one transaction. There is no moment with the new password and the old sessions, and if any of it fails none of it is stored: the request answers with an error and the old password still stands. Only the websocket drop is outside it, after the commit.
+
+**What survives:** per-user API keys and passkeys. They are separate credentials with their own revocation.
+
+**What it costs the user:** other devices sign in again. Any unopened emailed link for that account stops working. The websocket of the device that changed the password drops and reconnects. A password-reset link opened a second time now answers `Invalid token signature` where it used to answer `Token already used`, because the first use replaced the key.
+
+**From your own code:** when a custom flow sets a password or must sign an account out, call the helper after your save, in the same transaction. Do not set `user.auth_key` by hand, which leaves the grants and the invite cache behind.
+
+```python
+with transaction.atomic():
+    user.set_permanent_password(new_password)
+    user.save()
+    user.end_sessions("password_reset", request=request)
+return jwt_login(request, user, source="password_reset")   # signed with the new key
+```
+
+Not routed through the helper: the email-change confirm, and disabling or closing an account. Each replaces the key itself. A disabled account's grants are refused because the account is inactive.
 
 ## Magic Login
 
@@ -193,7 +236,54 @@ code = auth_handoff.create_handoff_code(request.user, destination=destination, i
 # Consumed by the public POST /api/auth/exchange handler
 data = auth_handoff.consume_handoff_code(code)
 # -> {"uid": <id>, "ip": "...", "dest": "https://app.example.com/"} or None
+#    plus "cc": "<S256 challenge>" when the code was minted with one
 ```
+
+### PKCE: binding a code to the party that asked for it
+
+`create_handoff_code(..., code_challenge=...)` stores an already-validated S256
+challenge in the record as `cc`. The handlers use four service functions:
+
+| Function | Answers |
+|---|---|
+| `get_pkce_mode()` | `"off"` or `"native"`, from `AUTH_HANDOFF_REQUIRE_PKCE`. File-only; an unknown value is logged and read as `"native"`. |
+| `is_app_destination(dest)` | False only for http/https on a host that is not loopback. A custom scheme, `127.0.0.1` in any spelling a browser accepts (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`), `[::1]`, `0.0.0.0`, `localhost`, an absent destination and one that does not parse are all True. So is a web host this function cannot read the way a browser does: one with a percent-escape, a non-ASCII character or a backslash. A name that only *resolves* to loopback is not detected; refuse it with the allowlist. |
+| `pkce_required(dest)` | `get_pkce_mode() == "native" and is_app_destination(dest)`. |
+| `check_exchange(data, code_verifier=NOT_SENT)` | True when the verifier is what the consumed record calls for. Pass `NOT_SENT` when the request has no such field; a field sent as `null` was sent. Never raises. |
+| `request_facts(request)` | The request facts a handoff incident keeps: address, path, method, user agent, signed-in user. Never the query string or body. |
+
+`check_exchange` has three cases. No `cc` and no verifier field: True, a client
+from before PKCE. No `cc` and a verifier field of any value, `null` included:
+**False**, because accepting it would let
+an attacker mint a code for their own account and feed it to the real app. A
+`cc`: the verifier must be its S256 pre-image. The validation and comparison
+are the OAuth server's own (`oauth_server.codes.validate_pkce_challenge`,
+`verify_pkce`); there is one implementation.
+
+`on_auth_exchange` runs the check right after the code is consumed and before
+the user is looked up, so a caller without the secret cannot tell a disabled
+account (403) from a bad code (401). A failed check spends the code. A code
+minted with a challenge needs the verifier in **every** mode; the setting only
+decides whether a code may be minted without one.
+
+Presence is tested, not value: `code_challenge`, `code_challenge_method` and
+`code_verifier` sent as JSON `null` are fields that were sent. A null challenge
+or method is a `400`; a null verifier fails the check.
+
+The three PKCE incidents are filed **without** the request object. The incident
+reporter stores the query string of a request it is handed, and both endpoints
+accept their fields there, so the code, the challenge and the verifier would be
+kept. `request_facts` passes the address, path, method, user agent and user
+instead.
+
+**What PKCE does not cover.** A sign-in the hostile app starts itself: it
+supplies its own challenge and holds the verifier (RFC 8252 section 8.6).
+django-mojo has no consent step of its own; a project that hands codes to apps
+must have its page ask the person before it calls `/api/auth/handoff`.
+
+Rolling it out: leave the setting `off`, ship apps and pages that send a
+challenge, watch `auth:handoff_pkce_missing` until it goes quiet, then set
+`"native"`.
 
 Codes are 32-hex random strings stored under Redis key `auth:handoff:<code>`,
 with a TTL controlled by the `AUTH_HANDOFF_CODE_TTL` setting (default `60`
@@ -783,7 +873,7 @@ of the parent gets no token for a child group).
 | Lever | Scope | How |
 |---|---|---|
 | Epoch bump | every token for one group | `group.bump_group_token_epoch()`, or `POST /api/group/<pk>` with `{"revoke_group_tokens": true}` |
-| `auth_key` rotation | every token for one user | `POST /api/user/me {"revoke_sessions": true}`, or set `user.auth_key` |
+| `auth_key` rotation | every token for one user | `POST /api/user/me {"revoke_sessions": true}`, a password reset or change, or `user.end_sessions(reason)` |
 | Membership removal | that user in that group | delete the `GroupMember` row |
 | Group (or ancestor) deactivation | every token for the subtree | `group.is_active = False` |
 | User deactivation | every token for that user | `user.is_active = False` |
@@ -1306,6 +1396,32 @@ group.metadata["webapp_auth_path"] = "/login"  # optional, default /auth
 group.save()
 ```
 
+**Who may set a tenant's address.** The address decides where every account
+of that tenant is sent with a sign-in token, so over REST only a signed-in
+person holding **global** `manage_groups` or `groups`, or a superuser, can
+set, change or clear either key. A member-level grant is not enough, whatever
+it is named, and a group API key or a group token never passes, even one that
+acts as a member who holds the permission. The same permission is needed to
+move a group into, out of or between group trees (a change of `parent` that
+changes the top of the tree), because a group is trusted by the tree it sits
+in. Moving a sub-group inside its own tree is not affected. An allowed change
+writes one `group:webapp_url_changed` log row with the old and new values.
+
+The guard is in `Group.on_rest_pre_save`, so it covers every save that goes
+through the REST machinery: a merge, a `"__replace": true` payload, a dotted
+key, `metadata` sent as a JSON string, a nested save through another row, and
+`update_from_dict` / `create_from_dict`. Called with no request (a job, a
+management command, a shell), those two are **refused** when they change either
+key or the tree: server code that sets a tenant's address assigns
+`group.metadata[...]` and calls `group.save()`, as above. A plain ORM write is
+not guarded.
+
+The decision that counts is made in `Group.save()`, on the locked row, so a
+save that overlaps an operator's change cannot undo it: a value the saving
+instance did not change is taken from the stored row, and a value it did
+change is judged against what is stored at that moment. See
+[group.md](group.md#keys-that-need-a-global-permission).
+
 List an operator frontend (file-only, so a database row cannot widen it):
 
 ```python
@@ -1345,6 +1461,30 @@ the link goes to the default frontend instead and an incident names the host:
 | A custom-scheme (deep-link) base in a request or in tenant metadata | Not accepted | Use an `https` frontend origin |
 | A tenant `webapp_base_url` with a query, a fragment, credentials or no scheme (`//host`) | Skipped; the link goes to the next source | Store a plain `https://host[/path]` or a relative path such as `/portal` |
 
+**Upgrading to the release that carries #6350.** A stored address keeps
+working exactly as before, whoever stored it; nothing records who wrote it.
+Before this release anyone who could save a group could store one, so list
+every group that has one and check each:
+
+```python
+from mojo.apps.account.models import Group
+
+for key in ("webapp_base_url", "webapp_auth_path"):
+    for group in Group.objects.filter(metadata__has_key=key):
+        print(group.pk, group.name, group.parent_id, key, group.metadata.get(key))
+```
+
+An address on a **sub-group** deserves the closest look: the public send
+endpoints accept `?group=`, so any anonymous caller can select that sub-group's
+address for every account of its tenant. Remove any you did not put there.
+After the upgrade:
+
+| Before | Now | What to do |
+|---|---|---|
+| A tenant manager (member-level `manage_group`) or a group API key sets `webapp_base_url` / `webapp_auth_path` over REST | `403` | Set it as a holder of global `manage_groups` / `groups` |
+| The same caller moves a group to another tree, or detaches it from its tree | `403` | Same |
+| Server code calls `group.update_from_dict({"metadata": {"webapp_base_url": ...}})` outside a request | `PermissionDeniedException` | Assign `group.metadata[...]` and call `group.save()` |
+
 ## Failed Login Protection
 
 The login endpoint applies a layered, bypass-resistant throttle stack. Each tier is independent — tripping one does not bypass any other.
@@ -1371,10 +1511,96 @@ The login endpoint applies a layered, bypass-resistant throttle stack. Each tier
 | `LOGIN_USERNAME_WINDOW` | `900` | Window in seconds for per-account counter |
 | `MFA_VERIFY_IP_LIMIT` | `10` | Max TOTP/passkey verify attempts per IP per window |
 | `MFA_VERIFY_IP_WINDOW` | `60` | Window in seconds for MFA verify IP counter |
+| `CODE_ATTEMPT_LIMIT` | `5` | Max tries at a one-time code per account per window. Never below 1 |
+| `CODE_ATTEMPT_WINDOW` | `900` | Window in seconds for the code counter. Keep it at or above the longest code lifetime |
+| `TOTP_ATTEMPT_DAILY_LIMIT` | `20` | Max authenticator sign-in tries per account per 24 hours |
+| `CODE_SEND_LIMIT` | `5` | Max one-time codes sent per account (or per phone number at sign-up) per window |
+| `CODE_SEND_WINDOW` | `900` | Window in seconds for the send counter |
+
+### One-time codes — per-account try limit
+
+The per-IP limits on the code endpoints do nothing against a guesser who rotates addresses, so every check of a one-time code is also counted against the **account** the code belongs to: five tries per 15 minutes, whatever address they come from. Password sign-in keeps its own ten.
+
+| Code | Checked by | Counter |
+|---|---|---|
+| SMS sign-in / SMS second factor | `POST /api/auth/sms/verify` | `code:sms` |
+| Password reset code | `POST /api/auth/password/reset/code` | `code:reset` |
+| Phone verification | `POST /api/auth/verify/phone/confirm` | `code:phone_verify` |
+| Email verification | `POST /api/auth/verify/email/confirm` | `code:email_verify` |
+| Email change (code method) | `POST /api/auth/email/change/confirm` | `code:email_change` |
+| Phone sign-up | `POST /api/auth/phone/register/verify` | `code:phone_register`, keyed on the normalised phone number — no account exists yet |
+| Authenticator second factor | `POST /api/auth/totp/verify` | `code:totp` |
+| Authenticator passwordless sign-in | `POST /api/auth/totp/login` | `code:totp_login` |
+| Authenticator set-up checks (confirm, regenerate recovery codes) | `POST /api/account/totp/confirm`, `POST /api/account/totp/recovery-codes/regenerate` and the matching `User` actions (`confirm_totp`, `regenerate_totp_codes`) | `code:totp_manage` |
+
+How a try is handled, in `mojo.decorators.limits.check_code_attempt`:
+
+- **Refused tries are not counted.** When the account already has its five tries in the window, the try is refused before the compare and leaves the counter alone. Retrying while locked does not extend the wait.
+- **Otherwise the try is counted before the compare**, in one Redis script, so two tries arriving together are both counted and no sixth compare happens in a window.
+- **The refusal is the standard 429**, with `Retry-After` and a `retry_after` field in the body. Both carry the real wait in seconds: the time until the oldest counted try ages out. The hosted pages show it as "Too many attempts. Try again in N minutes."
+- **A right code clears the counter at once**, before anything else can fail. A right reset code with a weak new password is not a guess.
+- **The window is never shorter than the code's own lifetime.** A deployment that lengthens `SMS_OTP_TTL` beyond `CODE_ATTEMPT_WINDOW` gets a window stretched to match for that code. Keep `CODE_ATTEMPT_WINDOW` at or above the longest code lifetime you configure, so the number in the settings is the number in force.
+- **Fail-open on Redis errors**, like the password counter. The codes still expire.
+- Each wrong guess still files its incident, as before. The counter itself writes nothing to the database.
+
+`totp_login` is no longer the password `login` bucket, so wrong authenticator codes cannot lock password sign-in. `totp_manage` is separate from both sign-in checks, so set-up typos cannot lock sign-in either.
+
+#### Code length
+
+The per-account limit bounds guessing at one account. It does nothing against a guesser who spreads single guesses over many accounts: each guess at a six-digit code is one in a million whichever account it hits. A deployment that wants longer odds sets `SMS_OTP_LENGTH`.
+
+- **What it covers:** the two SMS codes that can sign someone in. The SMS sign-in / second-factor code (`auth/sms/login`, `auth/sms/send`, checked by `auth/sms/verify`) and the phone sign-up code (`auth/phone/register/start`, checked by `auth/phone/register/verify`), which signs in an existing account when the number already has one.
+- **What it does not cover:** the phone verification, phone change, email and password reset codes. They stay six digits.
+- **Range:** `6` to `10`, default `6`. The value is read by `mojo.apps.account.utils.tokens.sms_otp_length()`. A value below `6` reads as `6`: the setting is DB-backed, so it must not be a way to shorten a code. A value above `10` reads as `10`. A value that is not a finite number reads as `6`, including an infinity stored or set in the settings file.
+- **A code already sent keeps its length.** The check compares against the stored code and does not look at the setting, so a code sent before a change stays valid until it expires. New codes use the new length.
+- **The hosted sign-in and register pages follow it in their wording only.** `_auth_context` passes `sms_code_length` for the wording and `sms_code_max_length` (always `10`) for the two code boxes. The boxes take the longest code whatever the setting is, because a code sent before a change is still valid at its old length and an open page is not redrawn. For up to one code lifetime after a change, the wording can name the new length while the live code has the old one. An application with its own sign-in screen must accept the longer code itself: do not hard-code six.
+
+**Authenticator daily cap.** Three authenticator codes are valid at any moment and the secret never expires, so `totp` and `totp_login` also share a cap of `TOTP_ATTEMPT_DAILY_LIMIT` (20) tries per 24 hours, in the counter `code:totp_daily`. When both the 15-minute and the daily counter are full, the wait reported is the longer one.
+
+**The phone-change code has no counter.** Its session token is consumed before the compare, so each request already gets one guess.
+
+**Reset codes are counted per identifier as typed.** `POST /api/auth/password/reset/code` answers "Invalid code" for an unknown account and for a wrong code alike. So that the 429 cannot tell them apart either, each try is counted against every identifier sent, whether or not an account was found, and against the account when there is one. Each value is counted in every form the account lookup can match it in: as typed (lowercased and trimmed), and also in its normalised phone form when it reads as a phone number. **The field a value is sent in makes no difference to its counters**: the lookup accepts an email under `email` or `username` and a phone number under `phone_number` or `username`, so a counter that followed the field name would give one string a fresh set of tries under each name. The try is refused when any of those counters is full, and is then counted against none. A right code and an admin release clear both forms. One case is left open on purpose: someone who already holds two different identifiers of the same account, say its username and its email, sees them share that account's counter.
+
+A cost of counting the phone form: two unrelated values that hold the same ten digits, such as a username `5551234567` and an email `jo_5551234567@example.com`, share one counter.
+
+**What this costs.** Someone who knows a username can lock that account's code entry for 15 minutes at a time with five wrong tries. Password sign-in has the same property at ten. The lock ends on its own, or an admin releases it (below).
+
+### One-time codes — sends
+
+`POST /api/auth/sms/login`, `POST /api/auth/forgot` (code mode) and `POST /api/auth/phone/register/start` are open to anyone who knows a username or a phone number. Three rules apply to them (`limits.allow_code_send`, `tokens.live_or_new_code`):
+
+- **A repeat request inside a code's life re-sends the same code** (`sms/login` and `forgot`). Its life is not extended. A stranger can no longer replace the code a user is typing. Finding the live code and storing a new one are one step under a lock on the account row, so two requests arriving together send the same code. `POST /api/auth/sms/send` (the second-factor send) re-sends the live code in the same way. `phone/register/start` is different and unchanged: every call opens its own session with its own code, and an earlier session stays valid until it expires.
+- **At most `CODE_SEND_LIMIT` (5) sends per account, or per phone number at sign-up, per `CODE_SEND_WINDOW` (900 s).** Over the cap nothing is sent.
+- **Nothing is sent while the account's code entry is locked.** A code sent then could expire before the lock ends.
+
+In the last two cases the endpoint answers exactly as if the code had been sent. `phone/register/start` still returns its `session_token`; the code for that session was simply never texted.
+
+### Current-password checks by a signed-in caller
+
+A signed-in session must not be a way to guess the account's password. Every check of `current_password` is counted per account in the counter `password_check`, with the password sign-in numbers (`LOGIN_USERNAME_LIMIT` per `LOGIN_USERNAME_WINDOW`, ten per 900 s):
+
+- the password change on the account save (`new_password` + `current_password`, `User.set_new_password`),
+- `POST /api/auth/email/change/request`,
+- `POST /api/auth/phone/change/request`.
+
+It works like the code counter (`limits.check_password_attempt`): counted before the compare, refused uncounted at the limit with the 429 above, cleared by a right password. A right password sent while the counter is full is refused too. The counter is its own, so these tries cannot lock password sign-in. A request that sends no `current_password` is not counted.
+
+The 429 is raised from inside the model setter as `mojo.errors.RateLimitException(retry_after)`; the REST dispatcher turns it into the response. Use it for any limit reached below the view.
+
+### Per-address limits added with the above
+
+| Endpoint | Limit |
+|---|---|
+| `POST /api/auth/verify/phone/confirm` | 10 requests / 300 s per IP |
+| `POST /api/auth/verify/email/confirm` | 10 requests / 300 s per IP |
+
+### SMS sign-in and the bouncer token
+
+`POST /api/auth/sms/login` carries `@md.requires_bouncer_token('login')`, the same check as password sign-in. With enforcement off (`BOUNCER_REQUIRE_TOKEN=False`, the default) a missing or invalid token is only logged and nothing changes. With enforcement on, a request without a valid `login` token gets 403 before anything is looked up or sent, so every client that calls this endpoint must send one. The hosted sign-in page does. See [Bouncer](bouncer.md).
 
 ### Admin — releasing a stuck account
 
-When a user is locked out by tier 3, an admin with `manage_users` can clear the counter. This endpoint (and `GET /api/auth/manage/throttle`) is gated with `@md.requires_global_perms` — the grant must be global on the User, not a group/member-scoped permission:
+When a user is locked out by tier 3, by a code counter or by the current-password counter, an admin with `manage_users` can release them. This endpoint (and `GET /api/auth/manage/throttle`) is gated with `@md.requires_global_perms` — the grant must be global on the User, not a group/member-scoped permission:
 
 ```
 POST /api/auth/manage/clear_rate_limit
@@ -1392,7 +1618,7 @@ POST /api/auth/manage/clear_rate_limit
 }
 ```
 
-When `username` or `user_id` is provided without an explicit `key`, the key defaults to `"login"`. To clear a specific bucket:
+**An account-scope clear releases every per-account counter for that user, whatever `key` is sent**: the password counter, `password_check`, each code counter, the authenticator daily cap and the send counters (`limits.clear_account_limits`, the names in `limits.ACCOUNT_BUCKETS`). It also clears the reset-code counters for the account's own username, email and phone as typed. Support tooling that sends `"key": "login"` therefore releases a user locked out of code entry unchanged:
 
 ```
 POST /api/auth/manage/clear_rate_limit
@@ -1402,7 +1628,11 @@ POST /api/auth/manage/clear_rate_limit
 }
 ```
 
-The endpoint also accepts `ip`, `duid`, and `muid` to clear other tiers independently.
+A phone sign-up lock has no account. It is not released here and ends on its own after the window.
+
+The endpoint also accepts `ip`, `duid`, and `muid` to clear other tiers independently. `duid` and `muid` need a `key`.
+
+`GET /api/auth/manage/throttle` reads one counter. `key` defaults to `login` and may be any name in `limits.ACCOUNT_BUCKETS`: `login`, `password_check`, `code:sms`, `code:reset`, `code:phone_verify`, `code:email_verify`, `code:email_change`, `code:totp`, `code:totp_login`, `code:totp_manage`, `code:totp_daily`, `code_send:sms`, `code_send:reset`. The `limit` and `window` in the answer are those of the counter asked for. Any other key is a 400.
 
 ## Incident Reporting
 

@@ -582,6 +582,11 @@ POST /api/user/<id>
 
 Requires `manage_users` or `users` permission.
 
+**Changing a group's parent** in the group form follows the rule in
+[Hierarchical Groups](group.md#hierarchical-groups): a move inside a tree needs
+a member grant on both parents, anything else needs global
+`manage_groups`/`groups`, and a refused save returns a `403`.
+
 **Update a group member's permissions:**
 
 ```
@@ -692,7 +697,7 @@ This prevents non-admin users from escalating their own access.
 | Admin temporary password | `POST /api/account/admin/user/password/temporary` | Same; plaintext appears once and forces replacement |
 | Permission bundles | `GET/POST /api/account/admin/people/permission-bundles` | Global User view/manage; writes require interactive auth in the last 600 seconds |
 | API-key lifecycle | `POST /api/account/admin/apikey/action` | Object edit authority, non-key session, interactive auth in the last 600 seconds |
-| Secure settings | `GET/POST /api/settings`, `DELETE /api/settings/<id>` | `groups` |
+| Secure settings | `GET/POST /api/settings`, `POST /api/settings/<id>` | `groups` |
 | System Setup | `/api/account/admin/setup/*` | Literal active superuser only |
 | Platform evidence/deploy recovery | `/api/account/admin/platform` (read it through the `?sections=` allowlist — the portal sends `deployments,api`, `fleet`, or `security`), `/api/account/admin/platform/deploy/*` | Dedicated global Platform grants, checked per section; writes require fresh non-key auth |
 | Web-app deployment rows | `GET /api/edge/webapp/summaries` — each item carries `current_release.source` and `latest_deployment.release`, and the envelope carries a `fleet` block scoped to the listed apps ([shape](../edge/README.md#the-summaries-envelope)) | Human-only (key-backed sessions refused); WebApp `VIEW_PERMS` globally or in at least one group, always intersected with `?group=` |
@@ -787,8 +792,16 @@ moves, and preserves the generic endpoint's supported group-scoped rows.
 | `GET` | `/api/settings` | List settings (requires `groups` or `manage_settings`) |
 | `POST` | `/api/settings` | Create setting |
 | `GET` | `/api/settings/<id>` | Get one setting |
-| `POST` | `/api/settings/<id>` | Update setting |
-| `DELETE` | `/api/settings/<id>` | Delete setting |
+| `POST` | `/api/settings/<id>` | Update setting (its `group` cannot be changed) |
+| `DELETE` | `/api/settings/<id>` | Not enabled — returns `403` |
+
+**A setting's group is fixed when it is created.** `POST /api/settings/<id>`
+with a `group` or `group_id` that differs from the row's own — null, blank,
+zero or another group — returns `400` and changes nothing, for every caller.
+To move a setting, create it in the new scope; a secret value has to be
+entered again because the API never returns it. A create sent with `group`
+(or `group_uuid`) lands in that group only: a body that also names a different
+`group_id` is refused with `403`.
 
 Legacy holders of these model permissions can read every non-secret Setting
 row returned by their scope. The curated catalog adds no confidential mutable
@@ -875,6 +888,8 @@ POST /api/user/<target_id>
 ```
 
 No forgot-password email is sent — the password is changed immediately. Password strength validation still applies.
+
+The target is signed out on every device. When an admin sets **their own** password this way, the response carries a `tokens` object beside `data`, and the portal must store that pair or the admin is sent to the sign-in page. See [A new password ends other sessions](authentication.md#a-new-password-ends-other-sessions).
 
 ---
 

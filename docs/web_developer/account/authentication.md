@@ -74,6 +74,31 @@ With a `Retry-After` header indicating seconds until the window resets.
 
 MFA verify endpoints (`POST /api/auth/totp/verify`, `POST /api/auth/passkeys/login/complete`, etc.) have their own separate IP-level rate limit (10 requests per 60 seconds by default).
 
+### Too many attempts on a code or a current password
+
+Every endpoint that checks a one-time code also limits tries **per account**: 5 per 15 minutes, whatever address they come from. That covers the SMS code, the password reset code, the phone and email verification codes, the email-change code, the phone sign-up code (per phone number) and authenticator codes. Authenticator sign-in also has a cap of 20 tries per 24 hours. A signed-in user's `current_password` (password change, email-change request, phone-change request) gets 10 tries per 15 minutes.
+
+At the limit the answer is:
+
+```json
+{
+  "status": false,
+  "code": 429,
+  "error": "Rate limit exceeded",
+  "retry_after": 540
+}
+```
+
+with the same number in the `Retry-After` header. `retry_after` is the real wait in seconds until the next try will be accepted.
+
+- **A correct code or password is refused too while the limit is in force.** Do not keep submitting; show the wait.
+- **Retrying while locked does not extend the wait.** A refused try is not counted.
+- **A correct code or password inside the limit clears the count.**
+- Show "Too many attempts. Try again in N minutes", rounding the wait **up**. The hosted pages do this.
+- The lock ends on its own. An admin can end it sooner with [`POST /api/auth/manage/clear_rate_limit`](user.md#clear-login-throttle).
+
+**Code requests are capped as well.** `POST /api/auth/sms/login` and `POST /api/auth/forgot` (code method) send at most 5 codes per account per 15 minutes, `POST /api/auth/phone/register/start` at most 5 per phone number, and none of them sends while that account's code entry is locked. They answer exactly as usual in those cases — nothing tells the client that no message went out. Inside a code's lifetime, a repeat request to `sms/login` or `forgot` re-sends the **same** code and does not extend its lifetime, so a "resend" button never invalidates the code the user already has.
+
 ## Token Storage (UI Guidance)
 
 For this Bearer-token API, a practical default is:
@@ -301,6 +326,8 @@ minted at the auth origin. The handoff is an authorization-code flow:
 | Field | Required | Notes |
 |---|---|---|
 | `redirect_uri` | **optional by default, required where the server enforces** | The absolute URL the code will be handed to. **Always send it.** |
+| `code_challenge` | **required for an app on the device where the server requires it**, otherwise optional | PKCE challenge: base64url of the SHA-256 of your `code_verifier`, no padding. 43 to 128 characters. |
+| `code_challenge_method` | required whenever `code_challenge` is sent | Must be `"S256"`. `plain` and a missing method are refused. |
 
 **Response:**
 
@@ -330,9 +357,57 @@ error and **does not navigate**. Rate-limited to 30 requests/IP.
 }
 ```
 
+| Field | Required | Notes |
+|---|---|---|
+| `code` | yes | The code from step 1. |
+| `code_verifier` | **yes when the code was minted with a `code_challenge`**, otherwise must not be sent | The secret the challenge was made from: 43 to 128 characters of letters, digits and `-._~`. |
+
 Returns the same `data` shape as `/api/login` (access/refresh tokens, user
 dict). Codes are single-use and expire after `AUTH_HANDOFF_CODE_TTL` seconds
 (default 60). Rate-limited to 20 attempts/min/IP.
+
+### Apps on the device: bind the code to the app (PKCE)
+
+A code handed to a custom-scheme link (`myapp://auth`) or to a loopback listener
+(`http://127.0.0.1:<port>/`) can be received by any other app on the same device
+that claims the same link. PKCE ([RFC 7636](https://www.rfc-editor.org/rfc/rfc7636),
+as [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252) asks of native apps) makes
+a caught code useless on its own:
+
+1. **Before opening the sign-in page**, the app makes a random `code_verifier`
+   (32 random bytes, base64url, no padding) and keeps it in memory. It never
+   goes in a URL.
+2. The app computes `code_challenge = base64url(sha256(code_verifier))`, no
+   padding, and gives it to the page that will call `/api/auth/handoff`.
+3. That page sends `code_challenge` and `code_challenge_method: "S256"` with
+   the handoff request.
+4. The app receives the code on its link and posts `code` **and**
+   `code_verifier` to `/api/auth/exchange`.
+
+The rules the server applies:
+
+- A code minted with a challenge exchanges **only** with the matching
+  `code_verifier`. A missing or wrong one answers `401` *"Invalid or expired
+  handoff code"*, and the code is spent.
+- A `code_verifier` sent for a code that was minted **without** a challenge is
+  also `401`. So the page and the app must switch together: both send, or
+  neither.
+- A malformed challenge, `plain`, or a missing method answers `400` and no code
+  is minted. A field sent as `null` counts as sent: leave a field out rather
+  than sending `null`.
+- Where the server sets `AUTH_HANDOFF_REQUIRE_PKCE = "native"`, a handoff with
+  no challenge answers `400` *"code_challenge is required for this
+  destination"* for a custom scheme, a loopback address in any spelling
+  (`127.0.0.1`, `127.1`, `[::1]`), `localhost`, or no `redirect_uri`. An `https://` web destination is unaffected.
+
+**What this does not protect against.** PKCE stops another app from using a
+code it *caught*. It does not stop a hostile app from *starting* the sign-in
+itself: that app supplies its own challenge and holds the secret. If your
+sign-in page mints a code for whoever opens it while the person is already
+signed in, the page must ask the person first ("Sign in to *App* as *name*?").
+Prefer verified `https://` app links over custom schemes where the platform
+offers them. The social sign-in return (`/api/auth/oauth/...`) is not covered
+by this either.
 
 **Bootstrap helper**
 
@@ -441,6 +516,7 @@ See [User Self-Management § Record a browser sign-out](user_self_management.md#
   - dependency hygiene
 - **Revoke all sessions:** `POST /api/auth/sessions/revoke` rotates `auth_key`, immediately invalidating every outstanding JWT. No `current_password` required — ownership is the authenticated session; when `FRESH_AUTH_WINDOW` is enabled a recent login is required instead (see [Step-Up Auth](step_up_auth.md)). Returns a fresh JWT for the calling session so the user stays logged in. See [User Self-Management § Sessions & Devices](user_self_management.md#8-sessions--devices).
 - **Email change also rotates `auth_key`** — after a successful email change confirm, all other sessions are invalidated as a side effect.
+- **A new password signs the account out everywhere else.** A password reset (by code or by link) and a password change both end every other session: old access and refresh tokens are refused, connected apps authorised through the OAuth server must be authorised again, and any unopened emailed link for the account (reset, magic login, email verify, invite) stops working. The device that did it stays signed in with the tokens in the response. See [A new password ends other sessions](#a-new-password-ends-other-sessions).
 - **Security events feed:** `GET /api/account/security-events` returns auth-relevant audit events (logins, failed passwords, MFA events, email/phone changes, session revokes, etc.) scoped to the authenticated user. No special permission required. See [User Self-Management § Security Events](user_self_management.md#15-security-events).
 - **`login`** — written for every real authentication, for the account whose credentials were verified. A blocked, unfinished or refused attempt writes nothing, and neither does a silent refresh or a re-issue from session revoke / email change.
 - **`sessions:logout`** — written only when a client posts `/api/account/security-events/logout`. It is a note in the history, not a revocation.
@@ -482,6 +558,8 @@ Returns the profile of the authenticated user.
 
 The identifier can be supplied as `email`, `phone`, or `username`. A 6-digit code is dispatched via email by default. Pass `"channel": "sms"` to route the code via SMS instead; the server also routes via SMS automatically when the matched account has no email on file. Response always returns success (to prevent account enumeration).
 
+A repeat request while the code is still live (10 minutes) re-sends the same code. At most 5 codes are sent per account per 15 minutes, and none while the account's reset-code entry is locked; the response is the same success either way.
+
 **Step 2: Submit code and new password**
 
 **POST** `/api/auth/password/reset/code`
@@ -494,7 +572,9 @@ The identifier can be supplied as `email`, `phone`, or `username`. A 6-digit cod
 }
 ```
 
-Returns a JWT on success (automatically logs the user in).
+Returns a JWT on success (automatically logs the user in). Every other session of the account is ended; see [A new password ends other sessions](#a-new-password-ends-other-sessions).
+
+A wrong code, and an identifier that matches no account, both return **400** `"Invalid code"`. Tries are limited to 5 per 15 minutes per account and per identifier as typed; the sixth returns **429** with `retry_after` — see [Too many attempts](#too-many-attempts-on-a-code-or-a-current-password). A correct code with a new password the server rejects as too weak does not use up a try: fix the password and resubmit the same code.
 
 ## Password Reset — Link Method
 
@@ -518,7 +598,10 @@ parameter and the browser's `Origin` header can **select** one of those
 frontends; they cannot add a new one (1.31.4). A value that is not configured
 is ignored — the response is the same and the link goes to the default
 frontend. The same rule applies to magic login links and invites; see
-[Magic Login Links](magic_login.md).
+[Magic Login Links](magic_login.md). A tenant's own frontend address is set by
+the platform operator (a holder of the global `manage_groups` or `groups`
+permission), not by the tenant's own managers — see
+[Update Group](group.md#update-group).
 
 **Step 2: Submit token and new password**
 
@@ -531,7 +614,44 @@ frontend. The same rule applies to magic login links and invites; see
 }
 ```
 
-Returns a JWT on success.
+Returns a JWT on success. Every other session of the account is ended.
+
+A reset link works once. Opened a second time it returns **400** `"Invalid token signature"` (it used to answer `"Token already used"`): the first use replaced the account's signing key.
+
+## A new password ends other sessions
+
+Whenever an account's password is set, every session that existed before is ended.
+
+| What sets the password | Other devices | The device that did it |
+|---|---|---|
+| `POST /api/auth/password/reset/code` | signed out | signed in: the response is a token pair, as before |
+| `POST /api/auth/password/reset/token` (reset link or invite link) | signed out | signed in: the response is a token pair, as before |
+| `POST /api/user/me` with `new_password` (own password) | signed out | signed in **only if you store the new tokens**: the response carries `tokens` beside `data` |
+| `POST /api/user/<id>` with `new_password` (an admin, for someone else) | that person is signed out everywhere | the admin's session is untouched; no tokens are returned |
+
+**What "signed out" covers**
+
+- Access and refresh tokens issued before: refused with 401. A refresh attempt fails, so the app must send the user to sign in.
+- Group tokens the account holds: refused.
+- Apps authorised through the OAuth server (for example an MCP connector): their access is revoked and they must be authorised again.
+- Emailed links not yet opened (reset, magic login, email verify, invite): they stop working. Request a new one.
+- Open websockets: closed. A client that reconnects with a new token is back on.
+
+Per-user API keys and passkeys are not affected.
+
+**Changing your own password: store the new tokens.** The response to `POST /api/user/me` is the account, as always, with one more top-level field:
+
+```json
+{
+  "status": true,
+  "data": {"id": 42, "username": "alice"},
+  "tokens": {"access_token": "eyJ...", "refresh_token": "eyJ..."}
+}
+```
+
+Replace your stored access and refresh tokens with these before the next request. The tokens you sent the request with are dead as soon as it returns, and your websocket is closed; reconnect it with the new access token. A client that ignores `tokens` sends its user to the sign-in page once. `tokens` appears only on a save that changed the caller's own password.
+
+The new pair keeps the sign-in time of the session that asked (`auth_time`). A password change does not count as a new sign-in for [step-up auth](step_up_auth.md).
 
 ## Admin Password Reset (for another user)
 
@@ -546,6 +666,8 @@ Admins with `manage_users` can set any user's password directly:
 ```
 
 No `current_password` needed. No forgot-password email is sent — the password is changed immediately. Password strength validation still applies.
+
+The target is signed out everywhere (see above). The response carries no `tokens`, unless the admin set their own password.
 
 See also [User API — Admin Password Reset](user.md#admin-password-reset-for-another-user).
 
@@ -660,7 +782,7 @@ Response:
 { "status": true, "data": { "session_token": "<32-hex>", "expires_in": 600 } }
 ```
 
-The server sends a 6-digit code via SMS. Rate-limited per IP (5 requests / 300s).
+The server sends a 6-digit code via SMS (longer, up to 10 digits, where the deployment sets `SMS_OTP_LENGTH`; accept 6 to 10 digits in your code field). Rate-limited per IP (5 requests / 300s). A phone number is also texted at most 5 codes per 15 minutes, and none while its code entry is locked (below); the response is then the same `session_token` body, but no message went out.
 
 If the transport did not accept the message the call returns **503** with `{"status": false, "code": 503, "error": "Unable to send the text message right now. Please try again in a few minutes."}` (retryable); if the provider rejected the number itself it returns **400** with `{"status": false, "code": 400, "error": "This phone number cannot receive text messages."}` (retrying the same number will not help). Neither returns a `session_token` — restart at step 1. Provider error text and codes never reach the client.
 
@@ -678,7 +800,7 @@ Response:
 { "status": true, "data": { "verified_phone_token": "<32-hex>", "expires_in": 600 } }
 ```
 
-A wrong code returns **400** but does **not** invalidate the session — resubmit the correct code on the **same** `session_token` until it succeeds or the session expires (`expires_in`). Only a successful verification consumes the session; repeated attempts are bounded by the per-IP rate limit.
+A wrong code returns **400** but does **not** invalidate the session — resubmit the correct code on the **same** `session_token` until it succeeds or the session expires (`expires_in`). Only a successful verification consumes the session. Repeated attempts are bounded by the per-IP rate limit and by a limit of 5 tries per 15 minutes per phone number, counted across sessions for the same number; the sixth returns **429** with `retry_after` — see [Too many attempts](#too-many-attempts-on-a-code-or-a-current-password).
 
 The returned `verified_phone_token` is single-use on a successful registration. Include it (and the same `phone`) in the subsequent `/api/auth/register` POST. The server consumes the token, marks `is_phone_verified=True`, and creates the User row in a single transaction.
 

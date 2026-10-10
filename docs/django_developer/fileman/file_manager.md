@@ -157,10 +157,10 @@ they are not manager-setting changes. See
 | `aws_key` | Static access key id. Optional. |
 | `aws_secret` | Static secret. Required if `aws_key` is set, and vice versa. |
 | `aws_region` | Region. Defaults to `us-east-1`. |
-| `assume_role_arn` | Cross-account role to assume. When set, the settings above become only the *source* identity used to call `sts:AssumeRole`. **Superuser-writable only.** |
-| `external_id` | `sts:ExternalId` for the trust policy. Omitted from the STS call when unset. **Superuser-writable only.** Write-only — reads back as `has_external_id`. |
-| `role_session_name` | STS session name. Defaults to `django-mojo-fileman-<manager pk>`. **Superuser-writable only.** |
-| `assume_role_duration` | Role session seconds. Defaults to 43200 (12 hours). **Superuser-writable only.** |
+| `assume_role_arn` | Cross-account role to assume. When set, the settings above become only the *source* identity used to call `sts:AssumeRole`. See the role rule below. |
+| `external_id` | `sts:ExternalId` for the trust policy. Omitted from the STS call when unset. Write-only — reads back as `has_external_id`. |
+| `role_session_name` | STS session name. Defaults to `django-mojo-fileman-<manager pk>`. |
+| `assume_role_duration` | Role session seconds. Defaults to 43200 (12 hours). |
 
 **Leaving `aws_key`/`aws_secret` unset is a supported configuration**, not a
 misconfiguration: the session falls through to botocore's default chain, which
@@ -182,12 +182,42 @@ constraint for a 1-hour URL; with a short `assume_role_duration` it will be, and
 the returned URL simply expires sooner than requested. The lifetime actually
 requested for downloads is `urls_expire_in` (default 3600).
 
-**Why the role settings are superuser-only:** REST save dispatches a `set_<key>`
-method for any key in the payload, and `SAVE_PERMS` for FileManager is the
-group-level `files`/`manage_files` permission. Without the gate, anyone who can
-administer files could point the platform's own credentials at a role they
-control — a confused deputy. Writing any of the four role settings through REST
-therefore requires `is_superuser`; direct ORM/bootstrap code is unaffected.
+**Who may set a role over REST.** REST save dispatches a `set_<key>` method for
+any key in the payload — the flat fields, `secrets` and `settings` all write the
+same store — and `SAVE_PERMS` for FileManager is the group-level
+`files`/`manage_files` permission. Without a check, anyone who can administer
+files could point the platform's own credentials at a role they control — a
+confused deputy. So `on_rest_pre_save` applies one rule to the store as the
+request leaves it: a non-superuser may not leave `assume_role_arn` set on a
+store for which `uses_platform_credentials()` is true, if the request changed
+any of `FileManager.ROLE_SETTING_KEYS`, `aws_key` or `aws_secret` (on create,
+every value counts as changed). It raises `PermissionDeniedException` (HTTP
+403) before the `is_default` reshuffle or the save, so nothing from the object
+that carries the refused change is stored, and the refused role value is stored
+on no manager. The check does not make the request all-or-nothing: REST save
+writes each object of a request separately (the addressed record's own fields,
+then each nested object such as `parent: {...}`), so a change carried by a
+different object may be kept when another object of the same request refuses,
+on a different record or on the same one.
+
+`uses_platform_credentials()` is true when the manager is system-scoped, when
+its own secrets hold no `aws_key` or no `aws_secret` (a parent's key does not
+count), or when its `aws_key` equals `settings.AWS_KEY` or the `aws_key` of any
+system-scoped manager. Stores created over REST without a key, and the stores
+`get_for_user` / `get_for_group` derive, are seeded with the platform's key, so
+they stay in this group until given their own. On a store with its own key the
+role is assumed with that key and reaches only what the key already reaches, so
+the file permission is enough.
+
+The rule reads each manager's own secrets. A child manager's own key and role
+are stored but not used for storage calls (see above), and are judged the same
+way.
+
+Limits: the rule lives in the REST save hook only — direct ORM use (bootstrap,
+`on_action_clone`, `get_for_*`) is not checked, and a role already stored is not
+undone. A platform key that is in neither `settings.AWS_KEY` nor a system-scoped
+manager cannot be recognised. `RestMeta.NO_SAVE_FIELDS` keeps `mojo_secrets`,
+`secret` and `setting` out of a request body.
 
 Changing `assume_role_arn` or `external_id` also changes the manager's
 public-access config fingerprint, so cached audit evidence collected under the
@@ -319,12 +349,46 @@ model. Force a bulk policy refresh after such a change:
 ```bash
 python manage.py reconcile_fileman_public_access
 python manage.py reconcile_fileman_public_access --dry-run
+python manage.py reconcile_fileman_public_access --groups
+python manage.py reconcile_fileman_public_access --manager 12 --manager 40
 ```
 
-The command audits active user-scoped S3 managers independently, reports
+The command audits each selected manager independently, reports
 `public`/`private`/`unknown` totals, and continues if one manager fails. Dry-run
 performs the read-only AWS inspection without changing `is_public` or audit
-metadata.
+metadata. Which managers are selected depends on the arguments:
+
+- No argument — active user-scoped S3 managers only. If active group-scoped S3
+  managers exist, one line reports how many were not checked.
+- `--groups` — also every active S3 manager that has a group, whether or not
+  it also has a user.
+- `--manager <pk>` (repeatable) — only the named managers, user-scoped or
+  group-scoped. It overrides `--groups`.
+
+Inactive managers and system managers (no user and no group) are never
+checked. One named with `--manager` is reported as skipped with the reason, as
+is a manager that is not S3 or does not exist. A reactivated group manager is
+not re-checked on its own; run the command for it.
+
+A user-scoped manager is corrected in both directions. A group-scoped manager
+is only ever corrected from public to private. The command never turns a group
+manager public, because a group manager's policy answer is never confirmed
+against a real object, and a store kept private on purpose (a FileVault store,
+or one under a world-readable prefix) would have its expiring signed links
+replaced by permanent unsigned ones. Two notes mark the group managers the
+command left for an operator:
+
+- `(policy is public, is_public False kept)` — the policy allows anonymous
+  reads but the manager is flagged private. Its links stay signed and keep
+  working. Set `is_public` on the manager if it should be public.
+- `(is_public True kept, not verified)` — the manager is flagged public and
+  the check answered `unknown`. Its links stay unsigned and may be refused by
+  the bucket. These are counted as `unverified_public` in the summary.
+
+The summary line also reports `changed` (`would_change` in a dry run) and
+`skipped`. On a bucket whose only Deny statement is the TLS-only one, the check
+is conclusive only from the release that carries the TLS-only Deny fix; before
+it, such group managers report `unknown`.
 
 ### Backend interface — `download(file_path, local_path)`
 
@@ -394,5 +458,6 @@ returned as stored and is not re-checked on read.
 
 The inherited value is the operator's setting on the system default manager.
 That setting is not itself checked automatically.
-`reconcile_fileman_public_access` covers user-scoped managers only. It does not
-check group or system managers.
+`reconcile_fileman_public_access` checks user-scoped managers by default and
+group-scoped managers when run with `--groups` or `--manager <pk>`. It never
+checks system managers.

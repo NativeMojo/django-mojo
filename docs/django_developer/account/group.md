@@ -18,7 +18,7 @@ class Group(MojoSecrets, MojoModel):
 | `kind` | CharField | Type: `"group"`, `"organization"`, custom |
 | `parent` | FK → Group (self) | Parent group for hierarchy |
 | `is_active` | BooleanField | Active flag |
-| `uuid` | CharField | Unique identifier |
+| `uuid` | CharField | Unique identifier. Writable over REST by a caller with the group's `SAVE_PERMS`, by declaration: `RestMeta.ALLOW_SAVE_FIELDS = ["uuid"]` (every other model has `uuid` protected by the framework) |
 | `metadata` | JSONField | Arbitrary group metadata (includes `timezone`, `short_name`) |
 | `avatar` | FK → fileman.File | Group image |
 | `last_activity` | DateTimeField | Last group activity |
@@ -150,6 +150,52 @@ group.metadata["max_users"] = 50
 group.metadata["feature_flags"] = {"new_ui": True}
 group.save()
 ```
+
+### Keys that need a global permission
+
+Two metadata keys decide where a tenant's sign-in, password-reset and invite
+links land: `webapp_base_url` and `webapp_auth_path` (see
+[auth.md](auth.md)). Setting, changing or clearing either one over REST needs a
+signed-in person holding **global** `manage_groups` or `groups`, or a
+superuser. A member-level `manage_group` (or a member-level grant named
+`manage_groups`) is refused with a `403`, and so is every group API key and
+group token. An unchanged value in the payload is fine: a manager editing
+another key, or resending the whole metadata as it is, still gets `200`.
+A per-user API key is the person's own session and passes when that person
+holds the global permission. `geofence_strict` has its own global gate
+(`manage_geofence` / `security`).
+
+**A save does not write back a link setting it did not change.** A `Group`
+instance remembers the two keys and the parent it was loaded with. `save()`
+locks the row, and for each of the three that this instance left as loaded it
+takes the stored value instead of the loaded one. So a request, a `touch()` or
+a job holding a row loaded before an operator's change cannot put the old
+address or the old parent back; its other edits are still stored. A value the
+instance did change is written as before, and for a REST save the permission
+is judged again on the locked row. This covers a full `save()` and any
+`save(update_fields=...)` that names `metadata` or `parent`. Other metadata
+keys are not merged: the last full save still wins for those.
+
+What the instance remembers follows what it really read and wrote, the two
+keys and the parent separately:
+
+- `refresh_from_db(fields=[...])`, and a field left out by `defer()` or
+  `only()` that loads later, count as reading only the fields named. A value
+  read this way is not an edit, and an edit of the other one is still pending.
+- `save(update_fields=[...])` counts as writing only the fields named. An
+  address or parent assigned before a partial save that leaves it out is
+  stored by the later save that names it.
+- A field that was never loaded is not compared and not written.
+- An instance built with an existing `pk`, rather than loaded, is written as
+  built: it has nothing remembered.
+
+One limit. If a save is rolled back with its transaction and the same
+instance is saved again without being reloaded, the address or parent it
+assigned is treated as already stored and the stored value is kept. Django
+does not revert an instance when a transaction rolls back
+([Controlling transactions explicitly](https://docs.djangoproject.com/en/5.2/topics/db/transactions/#controlling-transactions-explicitly));
+call `refresh_from_db()` and assign again. A write that skips `save()`
+(`QuerySet.update()`, `bulk_update()`) is a plain ORM write and is not covered.
 
 ### Protected Metadata
 
@@ -430,6 +476,65 @@ Each Group's active webhook delivery targets are managed through the `WebhookSub
 ```python
 group.touch()   # updates last_activity (rate-limited by GROUP_LAST_ACTIVITY_FREQ)
 ```
+
+## Moving a group between trees
+
+A change of `parent` that changes the **top of the tree** the group sits under
+— attaching a top-level group beneath another tree, detaching a sub-group, or
+moving it from one tree to another — needs the same global `manage_groups` or
+`groups` permission (or a superuser) as the two link-address keys above, and a
+group API key or group token never passes. The link resolver trusts a group by
+the top of its tree, so a group moved into a tenant could otherwise bring an
+address with it.
+
+## Moving a group inside its tree, and creating one under a parent
+
+A group's parent decides which settings, sign-in rules, administrators and API
+keys reach it, so a REST save may change it only for a caller with authority
+over both ends (`Group._guard_parent_change`):
+
+- **A move inside one tree** needs save rights (`SAVE_PERMS`) on the parent the
+  group leaves **and** the parent it joins.
+- **A new group with a parent** needs them on that parent.
+- The global `manage_groups` or `groups` permission (or a superuser) passes
+  both, as it does for a move between trees.
+
+"Save rights on a parent" (`Group._may_manage_tree_position`) means a member
+row on that parent or one of its ancestors that holds a `SAVE_PERMS` grant; for
+a group API key or group token, that the parent is inside the tree the
+identity is confined to and it holds the permission. Three things follow from
+how that is read:
+
+- **A `manage_group` on the user row does not count.** `user_has_permission`
+  accepts it for every group, so it says nothing about one parent; the helper
+  calls it with `check_user=False`. That holder can still save any group and
+  create a top-level one, but cannot place a group under a parent or move one
+  between parents without the member grant.
+- **The nearest member row decides.** `get_member_for_user` returns the first
+  row found walking up, so a tenant manager who also has a plain member row on
+  a branch is refused there. It fails closed; remove the plain row or put the
+  grant on it.
+- **A key cannot move its own group**: the parent it would leave is outside
+  the key's tree.
+
+The decision compares the stored `parent_id` with the new one, so a payload
+that repeats the current parent is not a move. It runs in `on_rest_pre_save`
+and again in `save()`, for a move and for a new group. That second pass is
+the one that counts. By then `save()` holds row locks on the group itself, on
+the new parent and every ancestor of it, and on the parent it leaves and
+every ancestor of that, and it keeps them to the write. The new parent is
+read again by primary key, so a parent that left the tree while the save was
+in flight is judged as it now stands, and no parent involved can move between
+the decision and the write. A save that moves one of those rows waits for
+this one. Member rows are not locked: a grant removed while a save is in
+flight may still carry that save.
+
+**Server code is not checked.** The guard belongs to the REST save. A plain
+`group.save()`, `Group.objects.create(parent=...)`, a queryset `.update()` and
+Django admin set a parent with no permission question, here and for a move
+between trees. `update_from_dict` runs the REST hooks, so outside a request it
+is refused like any caller with no rights. Code that moves groups on a user's
+behalf must check that user itself.
 
 ## Hierarchy integrity
 

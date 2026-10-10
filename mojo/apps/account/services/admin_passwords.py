@@ -69,9 +69,11 @@ def issue_temporary_password(request, user_id):
         user.log(
             f"Temporary password issued by administrator {request.user.pk}",
             "password:temporary_issued")
-
-    from mojo.apps.account.services.disable import disconnect_realtime
-    disconnect_realtime(user, request=request)
+        # The key went out with the password above. The shared helper does the
+        # rest of a sign-out: the account's OAuth-server grants, the cached
+        # invite and its live websockets (maestro #6226).
+        user.end_sessions(
+            "password_reset", request=request, actor=request.user, key_rotated=True)
     return {
         "user": user.pk,
         "temporary_password": temporary_password,

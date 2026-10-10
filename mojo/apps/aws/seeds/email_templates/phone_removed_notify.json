@@ -1,0 +1,19 @@
+{
+  "name": "phone_removed_notify",
+  "metadata": {
+    "description": "Security notification sent to the account's email address when a verified phone number is removed from the account (sent by User.notify_phone_removed via user.send_template_email).",
+    "context_keys": [
+      "user",
+      "phone_last4"
+    ],
+    "notes": [
+      "`user` is a dict (user.to_dict('basic')) representing the account holder.",
+      "`phone_last4` is the last four digits of the number that was removed. The full number is never put in the email.",
+      "Sent after the save that removed the number has gone through. No token or link is included.",
+      "If the user did not remove the number, they should change their password and contact support."
+    ]
+  },
+  "subject_template": "A phone number was removed from your account",
+  "text_template": "Hello{% if user.display_name %} {{ user.display_name }}{% endif %},\n\nThis is a security notice. The verified phone number ending in {{ phone_last4 }} was removed from your account.\n\nIf you made this change, no action is needed.\n\nIf you did NOT make this change, someone else may have access to your account. Change your password right away and contact support.\n",
+  "html_template": "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n    <title>A phone number was removed from your account</title>\n  </head>\n  <body style=\"margin:0;padding:0;background:#f6f7f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111;\">\n    <div style=\"max-width:640px;margin:0 auto;padding:24px;\">\n      <div style=\"background:#ffffff;border:1px solid #e6e8ec;border-radius:10px;padding:24px;\">\n        <h1 style=\"margin:0 0 12px 0;font-size:20px;line-height:1.3;\">A phone number was removed from your account</h1>\n\n        <p style=\"margin:0 0 16px 0;font-size:14px;line-height:1.6;color:#333;\">\n          Hello{% if user.display_name %} {{ user.display_name }}{% endif %},\n        </p>\n\n        <p style=\"margin:0 0 16px 0;font-size:14px;line-height:1.6;color:#333;\">\n          This is a security notice. The verified phone number ending in <strong>{{ phone_last4 }}</strong> was removed from your account.\n        </p>\n\n        <div style=\"margin:16px 0;padding:14px 16px;background:#fff8e6;border:1px solid #f0d080;border-radius:8px;\">\n          <p style=\"margin:0;font-size:13px;line-height:1.6;color:#7a5c00;\">\n            <strong>Didn't make this change?</strong> Someone else may have access to your account. Change your password right away and contact support.\n          </p>\n        </div>\n\n        <p style=\"margin:16px 0 0 0;font-size:12px;line-height:1.6;color:#666;\">\n          If you made this change, no action is needed.\n        </p>\n      </div>\n\n      <div style=\"text-align:center;margin-top:14px;font-size:12px;color:#8a8f98;\">\n        Sent by Django-MOJO\n      </div>\n    </div>\n  </body>\n</html>\n"
+}

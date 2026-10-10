@@ -240,6 +240,8 @@ file_instance.set_metadata("width", 1920)
 file_instance.save()
 ```
 
+`set_metadata(key, value)` is the Python helper and stores what you give it. A `metadata` value saved over the REST API is validated first (it must be an object, and a client `expires_at` must carry a timezone) and is then merged by the framework's JSON-field save.
+
 ### `expires_at` — automatic expiry
 
 Set `metadata["expires_at"]` to an ISO 8601 timestamp to mark a file for automatic deletion by the cleanup job:
@@ -256,6 +258,8 @@ file_instance.save()
 ```
 
 The cleanup job (`mojo.apps.fileman.asyncjobs.cleanup_expired_files`) runs daily at 04:00 UTC. It finds all active files with an `expires_at` key and deletes any whose timestamp has passed. Deletion calls `on_rest_pre_delete()` before removing the record — which cleans up the storage backend file.
+
+A value with no timezone, or a date alone, is read as UTC, and a date alone means the start of that day. A value the job cannot read is skipped.
 
 This pattern is used by the assistant `export_data` tool. You can use it for any time-limited generated file.
 

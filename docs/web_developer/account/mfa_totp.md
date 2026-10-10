@@ -373,6 +373,30 @@ issuing a password is impractical and TOTP alone is the accepted trust level.
 
 ---
 
+## Attempt Limits
+
+Tries at an authenticator code are limited per account, whatever address they
+come from:
+
+| Check | Limit |
+|---|---|
+| `POST /api/auth/totp/verify` (second factor) | 5 per 15 minutes |
+| `POST /api/auth/totp/login` (standalone) | 5 per 15 minutes, counted separately from the second factor and from password sign-in |
+| The two sign-in checks above, together | 20 per 24 hours |
+| `POST /api/account/totp/confirm`, `POST /api/account/totp/recovery-codes/regenerate` and the matching `/api/user/me` actions | 5 per 15 minutes, counted separately, so set-up typos never lock sign-in |
+
+At the limit the answer is `429` with a `Retry-After` header and a
+`retry_after` field in the body (seconds). When both the 15-minute and the
+daily limit are full, the longer wait is reported. A correct code is refused
+too until the wait is over, and retrying does not extend it. A correct code
+inside the limit clears the count. See
+[Too many attempts](authentication.md#too-many-attempts-on-a-code-or-a-current-password).
+
+Wrong codes at `/api/auth/totp/login` no longer count toward the password
+sign-in limit, so they cannot lock password sign-in.
+
+---
+
 ## Quick Decision Guide
 
 ```
@@ -403,3 +427,4 @@ User wants to view or refresh their recovery codes?
 | `403` | Auth | Recovery code is invalid or already used |
 | `403` | Auth | TOTP not enabled on this account |
 | `403` | Management | Invalid TOTP code during recovery-code regeneration |
+| `429` | Both | Too many tries at a code — see [Attempt Limits](#attempt-limits) |

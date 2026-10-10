@@ -7,6 +7,10 @@
 .claude/worktrees
 .claude/scheduled_tasks.lock
 .codex-worktrees/
+# Agent worktrees and local session settings. Listed here, not only in
+# .git/info/exclude: a build tool reads this file and not that one.
+.worktrees/
+.claude/settings.local.json
 # Editors
 *~
 /.zed

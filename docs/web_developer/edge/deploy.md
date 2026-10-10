@@ -101,3 +101,17 @@ converted to one of these supported shapes.
 The trigger itself has no polling endpoint. Platform operators can inspect the
 durable deployment journal through `GET /api/account/admin/platform` and use
 the `edge_deploy` incident stream for node failures.
+
+An attempt that ends `superseded` always has a successor: a newer push took
+over. An attempt whose coordination lease expired with **no** successor —
+typically because the job queue was saturated and the deploy waited too long —
+ends `failed` with reason `lease_expired_before_start` (no node was told to
+update) or `lease_expired_mid_canary` (the canary may still be updating; no
+other node was released), and an `Edge deploy lost its coordination lease`
+incident. **Retry same SHA** restarts it. A deployment that was requested but
+never picked up at all ends `unknown` with reason `coordination_lease_expired`
+and an `Edge deploy was never orchestrated` incident. A canary that never
+reported carries a `diagnosis` in its failure detail saying whether its node
+job `never_started` (no free worker on that node) or `started` and went
+quiet. On engines with four or more workers, deploy jobs have reserved worker
+slots, so ordinary background work does not keep a deploy from starting.

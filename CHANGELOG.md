@@ -14,6 +14,58 @@
 
 ## Unreleased
 
+### fileman: one rule for who may set a FileManager's AWS role (#7586)
+
+**Security fix and behaviour change.** The four role settings (`assume_role_arn`,
+`external_id`, `role_session_name`, `assume_role_duration`) were superuser-only
+as flat fields, but a file admin could post them inside `secrets` or `settings`
+and so point the platform's AWS identity at a role of their choosing. The four
+per-field checks are replaced by one check on the store as a REST save leaves it:
+
+- A non-superuser gets 403, and the refused change is not stored, when a save would leave a role
+  on a store that runs on platform credentials and the request changed a role
+  value, `aws_key` or `aws_secret`. Flat fields, `secrets` and `settings` alike,
+  on update and on create.
+- A store runs on platform credentials when it is system-scoped, has no
+  `aws_key` or `aws_secret` of its own, or its `aws_key` equals the `AWS_KEY`
+  setting or a system-scoped manager's key.
+- **Relaxed:** a file admin may now set the role on a store that has its own AWS
+  key. Before, that was refused on the flat fields.
+- `mojo_secrets`, `secret` and `setting` are no longer accepted in a FileManager
+  request body.
+
+**Not undone on upgrade:** a role already stored stays. To list the stores that
+have a role on platform credentials, run in `manage.py shell`:
+
+```python
+from mojo.apps.fileman.models import FileManager
+for fm in FileManager.objects.all():
+    if fm.assume_role_arn and fm.uses_platform_credentials():
+        print(fm.pk, fm.name, fm.group_id, fm.user_id, fm.assume_role_arn)
+```
+
+The secrets are encrypted per row, so this cannot be a SQL query.
+
+### jobs, edge: Deploys start while ordinary work fills the workers; a lost lease is a failure, not "superseded" (#4857)
+
+**Behaviour change on upgrade:** a job engine now holds worker slots back for
+the `priority` channel and its own box-direct channel. Unset,
+`JOBS_ENGINE_RESERVED_WORKERS` is `min(2, max_workers // 4)`: a pool of 8 or
+more reserves two, 4 to 7 one, smaller pools none, so ordinary work gets 8 of
+10 workers by default. Set it to `0` to restore the old behaviour. An engine
+that consumes neither reserved channel reserves nothing. Claim order is
+`priority`, the box-direct channel, then the rest.
+
+The deploy orchestrator is published on `priority` when a live engine consumes
+it, otherwise on `default` as before. It renews its coordination lease, and the
+target key with it, while it waits on the canary. A lease that expires with no
+successor now ends the deployment `failed` (`lease_expired_before_start` or
+`lease_expired_mid_canary`) with an incident; `superseded` is kept for a
+deployment a newer one really replaced. A deployment that was never
+orchestrated still ends `unknown` (`coordination_lease_expired`) through the
+stale sweep, now with an incident. A silent canary's failure detail says
+whether its node job never started or started and went quiet.
+
 ### account: Preserve brand context through hosted login (#4622)
 
 Passkey begin/complete and SMS verification accept optional `options.group_uuid`

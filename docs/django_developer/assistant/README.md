@@ -511,7 +511,7 @@ bound to the originating browser Origin.
 
 | Tool | Permission | Mutates | Description |
 |---|---|---|---|
-| `describe_model` | `view_admin` | No | Describe a MojoModel's fields, graphs, permissions, and search fields. Use this to discover what data is available before querying. Requires `app_name` and `model_name`. Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secret`) are excluded from output. Only works on MojoModels with a `RestMeta` definition and without `NO_REST = True`. |
+| `describe_model` | `view_admin` | No | Describe a MojoModel's fields, the shape its rows are returned in (`serialization`), permissions, and search fields. Use this to discover what data is available before querying. Requires `app_name` and `model_name`. `fields` lists only what may be asked by: a field the [input rule](#what-a-caller-may-ask-by-sensitive_fields) refuses — a sensitive name, a field the model declares in `SENSITIVE_FIELDS`, a JSON column — is left out. Only works on MojoModels with a `RestMeta` definition and without `NO_REST = True`. |
 | `query_model` | `view_admin` | No | Query any MojoModel and return results inline as JSON. Best for small result sets (detail lookups, spot-checking). Respects `RestMeta` permissions and owner/group filtering. Max 200 rows. For exports use `export_data`; for counts/sums use `aggregate_model`. |
 | `aggregate_model` | `view_admin` | No | Run aggregate queries (count, sum, avg, min, max, count_distinct) on any MojoModel, with optional `group_by`. Use for summaries — never pull rows just to count or sum them. |
 | `export_data` | `view_admin` | Yes | Export query results to a CSV file in file storage (S3). Data is written directly to a `fileman.File` record — not returned inline. Returns a download URL. Use for any export request, especially large result sets. |
@@ -528,7 +528,6 @@ bound to the originating browser Origin.
 | `search` | string | — | Free-text search using the model's `SEARCH_FIELDS` |
 | `ordering` | string | `-pk` | Order by field, prefix with `-` for descending (e.g. `-created`) |
 | `limit` | integer | `50` | Max results to return (max 200) |
-| `graph` | string | `default` | Serialization graph name |
 | `count_only` | boolean | `false` | If true, return only the total count with no row data |
 
 `aggregate_model` parameters:
@@ -554,10 +553,149 @@ bound to the originating browser Origin.
 | `search` | string | — | Free-text search using the model's `SEARCH_FIELDS` |
 | `ordering` | string | `-pk` | Order by field |
 | `limit` | integer | `5000` | Max rows to export (max 50000) |
-| `fields` | array | — | Specific fields to include. Defaults to the model's graph config. |
-| `graph` | string | `default` | Serialization graph name |
+| `fields` | array | — | Columns to keep, in this order. Each must be one of `describe_model`'s `serialization.fields`: it narrows the export and can never add a column. An empty list, a duplicate, or a name outside that set is refused before any file is created. |
 
 `export_data` requires `fileman` to be installed and a `FileManager` configured for the user/group. Files are stored with `metadata.expires_at` set to `FILEMAN_EXPORT_EXPIRES_DAYS` days from creation (default 14). If `mojo.apps.shortlink` is installed, the returned URL is a shortlink. The assistant should present the URL using a `file` block (see structured block types in the system prompt).
+
+#### The assistant's serialization graph (`ai`, else `default`)
+
+The assistant never chooses a graph, and neither does the person talking to it.
+Every generic path that turns a model row into data for the LLM — `query_model`,
+`export_data`, the generic context builder, and a tool result that happens to
+contain a model instance or queryset — serializes through **one** graph the
+server selects:
+
+1. `RestMeta.GRAPHS["ai"]` when the model declares it;
+2. otherwise `RestMeta.GRAPHS["default"]`.
+
+```python
+class RestMeta:
+    GRAPHS = {
+        "default": {"fields": ["id", "name", "status", "created"]},
+        "detail": {"fields": ["id", "name", "status", "notes", "metadata", "created"]},
+        # What the assistant reads. Omit it and the assistant reads `default`.
+        "ai": {"fields": ["id", "name", "status"]},
+    }
+```
+
+Rules, all fail-closed:
+
+- **No tool accepts a `graph`.** `describe_model`, `query_model`,
+  `aggregate_model` and `export_data` do not advertise one, and a call that
+  sends a `graph` key anyway is refused with an error — it is neither ignored
+  nor honored.
+- **A wider graph is unreachable.** A `detail`, `full` or special-purpose graph
+  cannot be reached through the assistant, whether or not its author added a
+  `GRAPH_PERMISSIONS` entry for it. A graph added to a model later is closed to
+  the assistant by default.
+- **The selected entry must be a mapping.** A present-but-malformed `ai`
+  (`None`, a string, a list) is an error, not a reason to fall back to
+  `default`. A model with no `default` and no `ai` — including a model that
+  declares no `GRAPHS` at all — cannot be read row-by-row by the assistant. An
+  explicit `{}` is valid and means the framework's all-fields graph.
+- **`GRAPH_PERMISSIONS` still applies**, to the selected name. A model that
+  gates `ai` or `default` has that gate checked against the caller before any
+  row is serialized. See [Core → Graphs](../core/graphs.md#per-graph-permissions-graph_permissions).
+- **`describe_model` reports it**: `"serialization": {"graph": "ai" | "default",
+  "fields": [...]}`. `fields` is the ordered list of keys a row will carry —
+  the graph's fields after `exclude` and `NO_SHOW_FIELDS`, then `extra`
+  aliases, then nested-graph keys. Other graph names are not listed.
+- **`export_data` writes those keys as its columns.** Each row is serialized
+  through the selected graph first and the resulting dictionaries are written to
+  CSV, so excludes, extras and nested graphs are already applied. A nested graph
+  fills one column under its key. A key is read exactly as the graph names it:
+  an `extra` alias such as `owner.label` is one column, not a path. `fields`
+  only narrows.
+- **`count_only` and `aggregate_model` do not serialize rows** and work on a
+  model regardless of its graphs.
+
+> **`ai` is a selection convention, not a private graph.** An ordinary REST
+> caller who holds the model's `VIEW_PERMS` can still request `?graph=ai`. Do
+> not put anything on `ai` that those callers may not read. To restrict who may
+> read it, add a `GRAPH_PERMISSIONS["ai"]` entry — the assistant honors it too.
+
+The selection lives in `mojo.apps.assistant.services.model_serialization`
+(`select_graph`, `resolve_graph`, `output_fields`, `serialize_instance`,
+`serialize_queryset`). The serializers take an optional `graph_override`
+argument. It exists for **server code only** — the case where an instance
+permission hook downgrades a caller to a narrower graph — and no model tool
+passes it; nothing in a tool's parameters can reach it. Never fill it from
+caller input.
+
+A tool handler that returns a model instance or a queryset in its result is
+serialized the same way. A `.values()` / `.values_list()` queryset is withheld
+(a one-line marker replaces it) because its raw column rows never pass through a
+graph; return model instances, or build the dictionaries yourself.
+
+#### What a caller may ask by (`SENSITIVE_FIELDS`)
+
+The graph above decides what a row **shows**. A second, separate rule decides
+what a caller may **ask by**: the paths in `filters`, `ordering`, an
+aggregation's `field`, `group_by`, the names in `export_data`'s `fields`, and
+the fields a `search` is matched against.
+Without it a column the graph never shows could still be read one comparison at
+a time — `filters={"edata__startswith": "A"}` with `count_only`, repeated over
+an alphabet — or outright with `min`/`max`.
+
+A path is refused when any of these holds:
+
+- a segment contains `password`, `auth_key`, `onetime_code`, `secret` or
+  `token` (the name heuristic, unchanged);
+- a segment names a field in the `RestMeta.SENSITIVE_FIELDS` of the model that
+  segment lands on. Relations are followed, forward and reverse, so
+  `vault_data__edata` is judged by `VaultData`'s declaration from whichever
+  model the query starts on;
+- a segment is `mojo_secrets`, on any model, declared or not;
+- a segment is a JSON column. A JSON lookup takes any key the caller invents,
+  so a JSON column cannot be filtered, ordered, grouped or aggregated on
+  through the assistant.
+
+```python
+class RestMeta:
+    # Not filterable, sortable, groupable or aggregatable through the
+    # assistant (or through REST list filters), on this model or through a
+    # relation to it.
+    SENSITIVE_FIELDS = ["ekey", "edata"]
+```
+
+Details that matter when you declare one:
+
+- **A foreign key is refused under both spellings.** Declaring `"user"` also
+  refuses `user_id`, and the reverse. (REST list filters compare the spelling
+  as written; the assistant asks about both.)
+- **This rule does not edit a graph.** If you put a sensitive field in the
+  model's `ai` graph, rows and exports carry it: the graph is yours.
+  `serialization.fields` in `describe_model` is not filtered either. Keep
+  secrets out of `ai` and `default`.
+- **Export `fields` are output names, not lookups.** A name the model declares
+  sensitive (or one the name heuristic matches) cannot be singled out with
+  `fields`, even where the graph shows it. The JSON rule does not apply there:
+  an export may be narrowed to a JSON column the graph returns.
+- **Aggregation aliases and `having` keys are output names** and are not
+  checked against the model. An alias is still subject to the name heuristic
+  when it is used in `ordering`.
+- **`search` is a comparison too.** `query_model` and `export_data` hand
+  `search` to the model's `on_rest_list_search`, which matches the text against
+  `SEARCH_FIELDS` (every text column when none are declared) after dropping
+  what the shared helper calls sensitive. If a field is left in that list that
+  this rule refuses — in practice a foreign key declared as `"user_id"` with
+  `"user__username"` in `SEARCH_FIELDS` — the tools refuse **every** search on
+  that model, plain or `field:value`, and file one event naming the field. The
+  search text is never recorded. The fix is in the model: declare the relation
+  by its own name, or take the path out of `SEARCH_FIELDS`. A `field:value`
+  term naming a field that is not a search field compares nothing, as on REST.
+- **`describe_model` follows the same rule passively.** Its `fields` list
+  leaves out what would be refused, `search_fields` lists only what a search
+  compares against (empty when searches on the model are refused), and it
+  reports nothing.
+- **Every refused call files one event**: category `assistant_sensitive_field`,
+  level 7, naming the model, the path and the surface (`filter`, `ordering`,
+  `aggregation`, `group_by`, `export field`, `search`). It never carries the
+  value the caller tried — that value is the guess being tested.
+
+The rule is `_is_sensitive_input` in
+`mojo/apps/assistant/services/tools/models.py`. It delegates the relation walk
+to `mojo.models.rest.is_sensitive_filter_path`; do not write a second walker.
 
 #### `DENY_AI_*` RestMeta flags
 
@@ -576,7 +714,7 @@ The AI gate runs **before** the REST permission check, so denied requests return
 
 The tool delegates to `instance.on_rest_save(request, data)` so all model-level save hooks, validators, and `POST_SAVE_ACTIONS` fire exactly as they would through the REST API. The `action_response` from `POST_SAVE_ACTIONS` is included in the return dict when present. Setting `CAN_CREATE = False` in `RestMeta` blocks creates; setting `CAN_UPDATE = False` blocks updates to existing instances.
 
-All five tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter or aggregate on sensitive fields are blocked and reported as security events.
+All five tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter, order, group, aggregate, search or narrow an export by a sensitive path are refused and reported as security events — see [What a caller may ask by](#what-a-caller-may-ask-by-sensitive_fields).
 
 #### `add_context` — Clickable model references
 
@@ -808,6 +946,7 @@ The assistant reports security-relevant actions and errors to the incident syste
 | `assistant:approval:denied` | 6 | A resolution was refused (suppressed + budgeted — see [Approvals](approvals.md)) |
 | `assistant:approval:failed` | 6 | An approved handler raised or returned an error |
 | `assistant:tool:<name>` | 5 | Successful mutating tool execution (block_ip, disable_user, etc.). Unchanged — it now fires from `approvals.resolve()`, so existing RuleSets keep working. |
+| `assistant_sensitive_field` | 7 | A model tool refused a filter, ordering, aggregation, `group_by`, export field or search on a sensitive path. One event per refused call; the attempted value is never recorded. |
 | `assistant:error` | 6 | Tool handler raised an unhandled exception |
 | `assistant:error` | 7 | Agent loop crashed |
 | `assistant:error` | 5 | Max tool turns exhausted |
@@ -972,7 +1111,9 @@ Create a conversation pre-loaded with the full context of any MojoModel instance
 
 ### Endpoint
 
-`POST /api/assistant/context` — requires `view_admin` + the model's own `VIEW_PERMS`. Like `POST /api/assistant`, this is gated with `@md.requires_global_perms('view_admin', 'assistant')` — the grant must be global on the User, not a group/member-scoped permission.
+`POST /api/assistant/context` — requires `view_admin` or `assistant`, plus the right to read that one row. Like `POST /api/assistant`, this is gated with `@md.requires_global_perms('view_admin', 'assistant')` — that grant must be global on the User, not a group/member-scoped permission. A key-backed session (API key, group token) is refused.
+
+The row itself is checked the way a REST read of it is: `model.rest_check_permission(request, "VIEW_PERMS", instance)`. So the owner match, the row's own tenant and the instance's `check_view_permission` hook all apply. A grant held in one tenant opens that tenant's rows only, an owner-only row opens for its owner, and a global grant opens what it opens over REST. One difference from REST: a model that declares no `VIEW_PERMS` is refused here.
 
 ```json
 {"model": "incident.Ticket", "pk": 123}
@@ -985,14 +1126,37 @@ Returns:
 
 ### How It Works
 
-1. Resolves the model via `apps.get_model(app_label, ModelName)`
-2. Checks the user has at least one of the model's `VIEW_PERMS`
-3. Checks for duplicate: same user + same model + same pk returns the existing conversation (with `"existing": true`)
-4. Builds a context message — rich builders for Ticket and Incident, generic `to_dict()` fallback for everything else
-5. Creates a Conversation with `metadata: {"source_model": "incident.ticket", "source_pk": 123}`
-6. Stores the context as the first `user` message
+The endpoint is thin; the work is `open_context(request)` in `services/context.py`, in this order:
+
+1. Refuses a request that carries `graph`. The graph is the server's choice.
+2. Resolves the model via `apps.get_model(app_label, ModelName)` and applies model policy (`NO_REST`, `DENY_AI*`) before any row is read
+3. Turns `pk` into the model's own key type and reads the row **once**
+4. Checks the caller may read that row (`authorize_source`)
+5. Checks for a duplicate: same user + same row returns the existing conversation (with `"existing": true`). This is after step 4, so a retry is checked again
+6. Builds a context message from the row already read — rich builders for Ticket and Incident; everything else is serialized through the assistant's graph (`ai`, else `default`)
+7. Stores the Conversation and its first `user` message in one transaction, with `metadata: {"source_model": "incident.ticket", "source_pk": 123}`
 
 The admin then sends their first real message and the assistant responds with full tool access.
+
+### What It Answers
+
+| Status | When | Body |
+|---|---|---|
+| 200 | Created, or an existing conversation found | `{"status": true, "data": {"conversation_id": 789}}`, plus `"existing": true` when found |
+| 400 | `graph` sent; `model` or `pk` missing, malformed or of the wrong type; unknown model; a model that is not a MojoModel, has no `RestMeta`, or is `NO_REST` | A fixed sentence. Nothing the caller sent is repeated |
+| 403 | No global `view_admin` / `assistant`; a key-backed session; a model closed by `DENY_AI` / `DENY_AI_VIEW` | `"<app>.<Model> is not available to the assistant"` for the policy case |
+| 404 | The row does not exist, **or** the caller may not read it, or no context could be built for it | Always `{"status": false, "error": "Context source not found"}` |
+
+A missing row and a row the caller may not read give the same status and the same body, with no model name and no id, so the answer does not say whether a row exists. A whole number that no row has is a missing row. Timing is not equalized. A refused read emits a level-4 `assistant_context_denied` incident event with no group stamp, at most one an hour for one caller and model (`report_event_suppressed`); every refusal is written to `assistant.log`. A missing row is not reported.
+
+### The Source Row Decides, Not the Request
+
+- **Tenant.** `Conversation.group` is the row's own tenant, `model._instance_group(instance)` (`RestMeta.GROUP_FIELD`, else the row's `group`). A `group` sent with the request is never used for it. A row with no tenant gives a conversation with no group; so does an `account.Group` row, which has no owning group of its own.
+- **Identity.** `source_model` is the row's own lowercase label and `source_pk` its own key, so `"7"` and `7`, or `incident.Ticket` and `incident.TICKET`, find the same conversation.
+- **Graph.** The permission check may select a narrower graph: `account.Group.check_view_permission` sets `basic` for a plain member. That exact graph is used, through the `graph_override` seam of the [assistant's serialization graph](#the-assistants-serialization-graph-ai-else-default). If the check selects something the model does not declare as an explicit mapping, the read is refused with the 404; it never falls back to a wider graph. A row with a selected graph always takes the generic path, because a rich builder reads the row directly and cannot honor it.
+- **Request state.** The permission check re-points `request.group` and may set `request.DATA["graph"]`. `authorize_source` puts both back on every path.
+
+Duplicate detection is not a lock: two first requests at the same instant can each create a conversation.
 
 ### Rich Context Builders
 
@@ -1003,7 +1167,7 @@ Ticket and Incident have custom builders that load related data:
 
 ### Generic Fallback
 
-Any MojoModel without a registered builder gets `to_dict(graph="detail")` serialization with sensitive fields stripped. This means the endpoint works for RuleSets, Jobs, Users, or any other model — the context is less rich but still useful.
+Any MojoModel without a registered builder is serialized through the [assistant's serialization graph](#the-assistants-serialization-graph-ai-else-default) — `ai` when the model declares it, otherwise `default`, never the wider `detail` — with sensitive-looking keys stripped on top as defense in depth. `GRAPH_PERMISSIONS` on that graph is checked against the caller. The context heading and the conversation title use the row's `title` or `name` only when that graph serialized it; otherwise they read `<Model> #<pk>`. This means the endpoint works for RuleSets, Jobs, Users, or any other model — the context is less rich but still useful. Registered rich builders (Ticket, Incident) are unaffected.
 
 ### Registering Custom Builders
 
@@ -1017,6 +1181,12 @@ def build_order_context(instance):
 
 register_context_builder("myapp.Order", build_order_context)
 ```
+
+A builder is called only with a row the caller has been authorized to read, and it must not look the row up again. **That authorization covers the row, not what the builder adds.** The Ticket and Incident builders add notes, history, events and linked tickets, all of which belong to the row. A custom builder that adds child or related rows must check that the caller may read those, or add only what belongs to the row; write down which in the builder.
+
+A builder that returns no title gets `<Model> #<pk>`. One that returns an error or no text gives the 404 above and stores nothing.
+
+`build_context(model_string, instance, request=None, graph_override=None)` takes the row, not a pk. Before this it took a pk and read the row itself.
 
 ### Key Files
 
