@@ -192,12 +192,13 @@ request leaves it: a non-superuser may not leave `assume_role_arn` set on a
 store for which `uses_platform_credentials()` is true, if the request changed
 any of `FileManager.ROLE_SETTING_KEYS`, `aws_key` or `aws_secret` (on create,
 every value counts as changed). It raises `PermissionDeniedException` (HTTP
-403) before the `is_default` reshuffle or the save, so nothing from the request
-is stored on the manager that refuses, and the refused role value is stored on
-no manager. The check does not make the request all-or-nothing: REST save
-writes each record of a request separately, so a different record changed
-through a nested object such as `parent: {...}` may be kept when another record
-of the same request refuses.
+403) before the `is_default` reshuffle or the save, so nothing from the object
+that carries the refused change is stored, and the refused role value is stored
+on no manager. The check does not make the request all-or-nothing: REST save
+writes each object of a request separately (the addressed record's own fields,
+then each nested object such as `parent: {...}`), so a change carried by a
+different object may be kept when another object of the same request refuses,
+on a different record or on the same one.
 
 `uses_platform_credentials()` is true when the manager is system-scoped, when
 its own secrets hold no `aws_key` or no `aws_secret` (a parent's key does not

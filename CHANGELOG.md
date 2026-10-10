@@ -22,7 +22,7 @@ as flat fields, but a file admin could post them inside `secrets` or `settings`
 and so point the platform's AWS identity at a role of their choosing. The four
 per-field checks are replaced by one check on the store as a REST save leaves it:
 
-- A non-superuser gets 403, and nothing is stored on that store, when a save would leave a role
+- A non-superuser gets 403, and the refused change is not stored, when a save would leave a role
   on a store that runs on platform credentials and the request changed a role
   value, `aws_key` or `aws_secret`. Flat fields, `secrets` and `settings` alike,
   on update and on create.
