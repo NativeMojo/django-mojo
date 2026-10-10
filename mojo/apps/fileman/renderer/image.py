@@ -19,6 +19,7 @@ class ImageRenderer(BaseRenderer):
 
     # Image file categories
     supported_categories = ['image']
+    config_category = 'image'
 
     # Default rendition definitions with sizes and options
     default_renditions = {
@@ -81,11 +82,12 @@ class ImageRenderer(BaseRenderer):
         """
         _, ext = os.path.splitext(source_path.lower())
 
-        # Use specified format if provided
+        # Use specified format if provided. "jpg" is the admin-facing alias
+        # of Pillow's "JPEG" — Pillow has no "JPG" format.
         if options and 'format' in options:
             format_name = options['format'].upper()
-            if format_name == 'JPEG':
-                return format_name, '.jpg'
+            if format_name in ('JPEG', 'JPG'):
+                return 'JPEG', '.jpg'
             return format_name, f".{options['format'].lower()}"
 
         # Use original format if supported
@@ -160,7 +162,10 @@ class ImageRenderer(BaseRenderer):
                 buffer = io.BytesIO()
                 if format_name == 'JPEG':
                     img.save(buffer, format=format_name, quality=quality, optimize=True)
+                elif format_name == 'WEBP':
+                    img.save(buffer, format=format_name, quality=quality)
                 else:
+                    # PNG and GIF are lossless; quality does not apply.
                     img.save(buffer, format=format_name)
 
                 buffer.seek(0)
@@ -183,8 +188,12 @@ class ImageRenderer(BaseRenderer):
             FileRendition: The created rendition, or None if creation failed
         """
         try:
-            # Get rendition settings
-            settings = self.default_renditions.get(role, {})
+            # Get rendition settings (class defaults + admin override)
+            try:
+                settings = self.get_rendition_options(role)
+            except ValueError:
+                logger.warning(f"Unsupported rendition role for images: {role}")
+                return None
             if options:
                 settings.update(options)
 

@@ -235,19 +235,22 @@ class DocumentRenderer(BaseRenderer):
             logger.error(f"Failed to create PDF thumbnail: {str(e)}")
             return None, None, 0
     
-    def _optimize_pdf(self, pdf_path: str, quality: str = 'medium') -> Tuple[str, int]:
+    def _optimize_pdf(self, pdf_path: str, quality: str = 'medium',
+                      max_pages=None) -> Tuple[str, int]:
         """
         Optimize a PDF file to reduce size
-        
+
         Args:
             pdf_path: Path to the PDF
             quality: Quality level ('low', 'medium', 'high')
-            
+            max_pages: Keep only the first N pages (best-effort: a
+                Ghostscript failure falls back to the untruncated PDF)
+
         Returns:
             Tuple[str, int]: (Output path, file size)
         """
         output_path = self.get_temp_path(".pdf")
-        
+
         try:
             # Set Ghostscript parameters based on quality
             if quality == 'low':
@@ -256,7 +259,9 @@ class DocumentRenderer(BaseRenderer):
                 params = ["-dPDFSETTINGS=/ebook"]  # medium quality, medium size
             else:  # high
                 params = ["-dPDFSETTINGS=/prepress"]  # high quality, larger size
-            
+            if max_pages:
+                params.extend(["-dFirstPage=1", "-dLastPage=%d" % int(max_pages)])
+
             # Use Ghostscript to optimize
             cmd = [
                 "gs",
@@ -297,16 +302,20 @@ class DocumentRenderer(BaseRenderer):
             FileRendition: The created rendition, or None if creation failed
         """
         try:
-            # Get rendition settings
-            settings = dict(self.default_renditions.get(role, {}))
+            # Get rendition settings (class defaults + admin override)
+            try:
+                settings = self.get_rendition_options(role)
+            except ValueError:
+                logger.warning(f"Unsupported rendition role for documents: {role}")
+                return None
             if options:
                 settings.update(options)
-            
+
             # Download the original file
             source_path = self._download_original()
             if not source_path:
                 return None
-            
+
             temp_files = [source_path]  # Track temporary files to clean up
             
             try:
@@ -320,9 +329,10 @@ class DocumentRenderer(BaseRenderer):
                     
                     # For preview or PDF rendition
                     quality = settings.get('quality', 'medium')
-                    
-                    # Optimize the PDF
-                    optimized_pdf, file_size = self._optimize_pdf(pdf_path, quality)
+
+                    # Optimize the PDF (and truncate to max_pages when set)
+                    optimized_pdf, file_size = self._optimize_pdf(
+                        pdf_path, quality, settings.get('max_pages'))
                     temp_files.append(optimized_pdf)
                     
                     # Set output details

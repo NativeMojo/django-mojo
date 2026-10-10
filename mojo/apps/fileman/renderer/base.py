@@ -30,6 +30,7 @@ class RenditionRole:
     VIDEO_PREVIEW = 'video_preview'
     VIDEO_MP4 = 'video_mp4'
     VIDEO_WEBM = 'video_webm'
+    VIDEO_HEVC = 'video_hevc'
     
     # Document-specific roles
     DOCUMENT_THUMBNAIL = 'document_thumbnail'
@@ -65,36 +66,75 @@ class BaseRenderer(ABC):
     # None means every declared rendition is automatic. Renderers with
     # expensive opt-in roles may provide an explicit tuple.
     automatic_rendition_roles = None
-    
+
+    # Which FILEMAN_RENDITIONS_* setting may override this renderer's options
+    # (see renderer/config.py). None means the class defaults are final.
+    config_category = None
+
     def __init__(self, file: File):
         """
         Initialize renderer with a file
-        
+
         Args:
             file: The original file to create renditions from
         """
         self.file = file
         self.renditions = {}
         self.failures = {}
+        self._rendition_config = None
         self._load_existing_renditions()
-    
+
     def _load_existing_renditions(self):
         """Load existing renditions for this file"""
         for rendition in FileRendition.objects.filter(
                 original_file=self.file).order_by("created"):
             self.renditions[rendition.role] = rendition
 
+    # ------------------------------------------------------------------
+    # Rendition options: class defaults, then the admin override on top.
+    # Every renderer reads its options through the two instance methods
+    # below; nothing else consults default_renditions directly.
+    # ------------------------------------------------------------------
+
     @classmethod
-    def get_automatic_rendition_roles(cls):
+    def default_automatic_roles(cls):
         if cls.automatic_rendition_roles is None:
             return tuple(cls.default_renditions.keys())
         return tuple(cls.automatic_rendition_roles)
 
     @classmethod
-    def get_rendition_options(cls, role):
+    def default_rendition_options(cls, role):
         if role not in cls.default_renditions:
             raise ValueError("unsupported rendition role: %s" % role)
         return dict(cls.default_renditions[role])
+
+    def _config_group(self):
+        group = getattr(self.file, "group", None)
+        if group is None:
+            manager = getattr(self.file, "file_manager", None)
+            group = getattr(manager, "group", None)
+        return group
+
+    def _merged_rendition_config(self):
+        """(options_by_role, automatic_roles) with the override applied,
+        resolved once per renderer instance."""
+        if self._rendition_config is None:
+            from mojo.apps.fileman.renderer import config
+            override = {}
+            if self.config_category:
+                override = config.load(self.config_category, group=self._config_group())
+            self._rendition_config = config.merge(
+                self.default_renditions, self.default_automatic_roles(), override)
+        return self._rendition_config
+
+    def get_automatic_rendition_roles(self):
+        return self._merged_rendition_config()[1]
+
+    def get_rendition_options(self, role):
+        options = self._merged_rendition_config()[0]
+        if role not in options:
+            raise ValueError("unsupported rendition role: %s" % role)
+        return dict(options[role])
     
     @classmethod
     def supports_file(cls, file: File) -> bool:

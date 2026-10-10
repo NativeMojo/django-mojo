@@ -321,10 +321,14 @@ class AudioRenderer(BaseRenderer):
         """
         try:
             # Get rendition settings
-            settings = dict(self.default_renditions.get(role, {}))
+            try:
+                settings = self.get_rendition_options(role)
+            except ValueError:
+                logger.warning(f"Unsupported rendition role for audio: {role}")
+                return None
             if options:
                 settings.update(options)
-            
+
             # Download the original file
             source_path = self._download_original()
             if not source_path:

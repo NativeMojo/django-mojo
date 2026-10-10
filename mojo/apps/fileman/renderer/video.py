@@ -13,6 +13,84 @@ from mojo.helpers import logit
 
 logger = logit.get_logger(__name__, "fileman.log")
 
+
+def _fit_filter(width, height):
+    """Scale into a WxH bounding box: keep aspect ratio, never upscale (the
+    same semantics as the image renderer's "contain"), and round to even
+    dimensions, which libx264/libx265 require."""
+    return (
+        "scale='min(iw,%d)':'min(ih,%d)':force_original_aspect_ratio=decrease,"
+        "scale=trunc(iw/2)*2:trunc(ih/2)*2" % (width, height)
+    )
+
+
+def build_thumbnail_args(source_path, output_path, options):
+    """ffmpeg argv for one still frame. Pure: no I/O, so tests can assert it."""
+    width = options.get('width', 300)
+    height = options.get('height', 169)
+    time_offset = options.get('time_offset', '00:00:03')
+    return [
+        "ffmpeg",
+        "-y",  # Overwrite output files
+        "-ss", time_offset,  # Seek to time offset
+        "-i", source_path,  # Input file
+        "-vframes", "1",  # Extract one frame
+        "-vf", _fit_filter(width, height),
+        "-f", "image2",  # Force image2 format
+        output_path,
+    ]
+
+
+def build_transcode_args(source_path, output_path, options):
+    """ffmpeg argv for a transcode. Pure: no I/O, so tests can assert it.
+
+    `format` wins: webm is always VP8 at the given bitrate; mp4 honors
+    `codec` — h264 (libx264, bitrate-driven, today's behavior) or h265
+    (libx265, CRF-driven; `bitrate` is ignored because mixing -b:v and -crf
+    under x265 degrades to ABR).
+    """
+    width = options.get('width', 1280)
+    height = options.get('height', 720)
+    bitrate = options.get('bitrate', '2000k')
+    output_format = options.get('format', 'mp4')
+    codec = options.get('codec', 'h264')
+    duration = options.get('duration')  # Optional duration limit in seconds
+    audio = options.get('audio', True)
+
+    cmd = [
+        "ffmpeg",
+        "-y",  # Overwrite output files
+        "-i", source_path,  # Input file
+    ]
+    if duration:
+        cmd.extend(["-t", str(duration)])
+    cmd.extend(["-vf", _fit_filter(width, height)])
+
+    if output_format == "webm":
+        cmd.extend(["-c:v", "libvpx", "-b:v", bitrate])
+    elif codec == "h265":
+        cmd.extend([
+            "-c:v", "libx265",
+            "-tag:v", "hvc1",  # the tag Apple players require for HEVC in mp4
+            "-pix_fmt", "yuv420p",
+            "-crf", str(options.get('crf', 28)),
+            "-preset", options.get('preset', 'medium'),
+        ])
+    else:
+        cmd.extend(["-c:v", "libx264", "-b:v", bitrate])
+
+    if audio:
+        if output_format == "mp4":
+            cmd.extend(["-c:a", "aac", "-b:a", "128k"])
+        else:  # webm
+            cmd.extend(["-c:a", "libvorbis", "-b:a", "128k"])
+    else:
+        cmd.extend(["-an"])  # No audio
+
+    cmd.append(output_path)
+    return cmd
+
+
 class VideoRenderer(BaseRenderer):
     """
     Renderer for video files
@@ -22,18 +100,19 @@ class VideoRenderer(BaseRenderer):
     
     # Video file categories
     supported_categories = ['video']
-    
+    config_category = 'video'
+
     # Default rendition definitions with options
     default_renditions = {
         RenditionRole.VIDEO_THUMBNAIL: {
-            'width': 300, 
-            'height': 169, 
+            'width': 300,
+            'height': 169,
             'time_offset': '00:00:03',
             'format': 'jpg'
         },
         RenditionRole.THUMBNAIL: {
-            'width': 300, 
-            'height': 169, 
+            'width': 300,
+            'height': 169,
             'time_offset': '00:00:03',
             'format': 'jpg'
         },
@@ -43,6 +122,7 @@ class VideoRenderer(BaseRenderer):
             'bitrate': '500k',
             'duration': 10,
             'format': 'mp4',
+            'codec': 'h264',
             'audio': True,
         },
         RenditionRole.VIDEO_MP4: {
@@ -50,6 +130,7 @@ class VideoRenderer(BaseRenderer):
             'height': 720,
             'bitrate': '2000k',
             'format': 'mp4',
+            'codec': 'h264',
             'audio': True,
         },
         RenditionRole.VIDEO_WEBM: {
@@ -57,6 +138,18 @@ class VideoRenderer(BaseRenderer):
             'height': 720,
             'bitrate': '2000k',
             'format': 'webm',
+            'audio': True,
+        },
+        # H.265/HEVC: roughly half the bytes of H.264 at the same quality,
+        # several times the encode time, and no Firefox playback — so it is
+        # an opt-in role beside video_mp4, never a replacement for it.
+        RenditionRole.VIDEO_HEVC: {
+            'width': 1280,
+            'height': 720,
+            'format': 'mp4',
+            'codec': 'h265',
+            'crf': 28,
+            'preset': 'medium',
             'audio': True,
         },
     }
@@ -121,20 +214,12 @@ class VideoRenderer(BaseRenderer):
             Tuple[str, str, int]: (Output path, mime type, file size)
         """
         temp_output = self.get_temp_path(f".{output_format}")
-        
+
         try:
-            # Use ffmpeg to extract a frame
-            cmd = [
-                "ffmpeg",
-                "-y",  # Overwrite output files
-                "-ss", time_offset,  # Seek to time offset
-                "-i", source_path,  # Input file
-                "-vframes", "1",  # Extract one frame
-                "-s", f"{width}x{height}",  # Set size
-                "-f", "image2",  # Force image2 format
-                temp_output  # Output file
-            ]
-            
+            cmd = build_thumbnail_args(source_path, temp_output, {
+                'width': width, 'height': height, 'time_offset': time_offset,
+            })
+
             run_process(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
             # Get file size
@@ -162,46 +247,13 @@ class VideoRenderer(BaseRenderer):
         Returns:
             Tuple[str, str, int]: (Output path, mime type, file size)
         """
-        width = options.get('width', 1280)
-        height = options.get('height', 720)
-        bitrate = options.get('bitrate', '2000k')
         output_format = options.get('format', 'mp4')
-        duration = options.get('duration')  # Optional duration limit in seconds
-        audio = options.get('audio', True)
-        
+
         temp_output = self.get_temp_path(f".{output_format}")
-        
+
         try:
-            # Build ffmpeg command
-            cmd = [
-                "ffmpeg",
-                "-y",  # Overwrite output files
-                "-i", source_path,  # Input file
-            ]
-            
-            # Add duration limit if specified
-            if duration:
-                cmd.extend(["-t", str(duration)])
-            
-            # Video settings
-            cmd.extend([
-                "-vf", f"scale={width}:{height}",
-                "-c:v", "libx264" if output_format == "mp4" else "libvpx",
-                "-b:v", bitrate,
-            ])
-            
-            # Audio settings
-            if audio:
-                if output_format == "mp4":
-                    cmd.extend(["-c:a", "aac", "-b:a", "128k"])
-                else:  # webm
-                    cmd.extend(["-c:a", "libvorbis", "-b:a", "128k"])
-            else:
-                cmd.extend(["-an"])  # No audio
-            
-            # Add output file
-            cmd.append(temp_output)
-            
+            cmd = build_transcode_args(source_path, temp_output, options)
+
             run_process(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
             # Get file size
@@ -230,21 +282,25 @@ class VideoRenderer(BaseRenderer):
             FileRendition: The created rendition, or None if creation failed
         """
         try:
-            # Get rendition settings
-            settings = dict(self.default_renditions.get(role, {}))
+            # Get rendition settings (class defaults + admin override)
+            try:
+                settings = self.get_rendition_options(role)
+            except ValueError:
+                logger.warning(f"Unsupported rendition role for videos: {role}")
+                return None
             if options:
                 settings.update(options)
-            
+
             # Download the original file
             source_path = self._download_original()
             if not source_path:
                 return None
-            
+
             try:
                 temp_output = None
                 mime_type = None
                 file_size = None
-                
+
                 # Process based on role type
                 if role in [RenditionRole.THUMBNAIL, RenditionRole.VIDEO_THUMBNAIL]:
                     # Create thumbnail image

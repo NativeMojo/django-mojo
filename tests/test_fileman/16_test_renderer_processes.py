@@ -45,12 +45,16 @@ def test_video_automatic_roles_exclude_full_transcodes(opts):
     from mojo.apps.fileman.renderer.base import RenditionRole
     from mojo.apps.fileman.renderer.video import VideoRenderer
 
-    automatic = set(VideoRenderer.get_automatic_rendition_roles())
+    automatic = set(VideoRenderer.default_automatic_roles())
     assert_eq(
         automatic,
         {RenditionRole.VIDEO_THUMBNAIL, RenditionRole.THUMBNAIL,
          RenditionRole.VIDEO_PREVIEW},
         "automatic video renditions must keep thumbnails and the short preview only",
+    )
+    assert_true(
+        RenditionRole.VIDEO_HEVC not in automatic,
+        "the H.265 transcode must stay opt-in: it is several times the encode cost",
     )
     assert_true(
         RenditionRole.VIDEO_MP4 in VideoRenderer.default_renditions,
