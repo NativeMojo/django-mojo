@@ -193,8 +193,9 @@ store for which `uses_platform_credentials()` is true, if the request changed
 any of `FileManager.ROLE_SETTING_KEYS`, `aws_key` or `aws_secret` (on create,
 every value counts as changed). It raises `PermissionDeniedException` (HTTP
 403) before the `is_default` reshuffle or the save. `FileManager.on_rest_save`
-holds a related dict such as `parent: {...}` back until the manager itself has
-saved, so a refused request stores nothing on the related record either.
+holds a related dict such as `parent: {...}` back and applies it from
+`on_rest_pre_save`, after the manager's own check and before its first write.
+Whichever of the two records refuses, nothing from the request is stored.
 
 `uses_platform_credentials()` is true when the manager is system-scoped, when
 its own secrets hold no `aws_key` or no `aws_secret` (a parent's key does not

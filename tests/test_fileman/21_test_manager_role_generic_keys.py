@@ -274,6 +274,42 @@ def test_refused_body_does_not_save_related_parent(opts):
                       f"{who}: the parent's settings must be untouched")
 
 
+@th.tier("core")
+@th.django_unit_test("platform credentials: a refusal by the related store stores nothing on this one either")
+def test_related_parent_refusal_does_not_save_child(opts):
+    from mojo.apps.fileman.models import FileManager
+
+    _login(opts, MEMBER)
+    for form, nested_role in _forms({"assume_role_arn": POSTED_ARN}):
+        own = {"description": "persisted-from-refused-request", "aws_region": "eu-west-1"}
+        for order, body in (("parent first", {"parent": nested_role, **own}),
+                            ("own fields first", {**own, "parent": nested_role})):
+            parent = _new_manager(opts, f"nested_rev_parent_{form}", key="platform")
+            child = _new_manager(opts, f"nested_rev_child_{form}", key="own")
+            FileManager.objects.filter(pk=child.pk).update(parent=parent)
+            who = f"group file manager ({form}, {order})"
+            parent_before = _stored(parent)
+            _assert_refused(opts, child, body, who)
+            assert_eq(FileManager.objects.get(pk=child.pk).description, "",
+                      f"{who}: the child's own field must not be stored when the parent refuses")
+            assert_eq(_stored(parent), parent_before,
+                      f"{who}: the refusing parent must be unchanged")
+
+
+@th.django_unit_test("a body of nested parent fields alone is still saved")
+def test_nested_only_body_saves_related_parent(opts):
+    from mojo.apps.fileman.models import FileManager
+
+    _login(opts, MEMBER)
+    parent = _new_manager(opts, "nested_only_parent", key="own")
+    child = _new_manager(opts, "nested_only_child", key="own")
+    FileManager.objects.filter(pk=child.pk).update(parent=parent)
+    resp = _post(opts, child, {"parent": {"description": "rolegen nested only"}})
+    assert_eq(resp.status_code, 200, f"a nested-only body must be accepted, got HTTP {resp.status_code}")
+    assert_eq(FileManager.objects.get(pk=parent.pk).description, "rolegen nested only",
+              "a nested-only body must still save the parent's field")
+
+
 @th.django_unit_test("own key: a nested parent field is still saved with an accepted body")
 def test_accepted_body_saves_related_parent(opts):
     from mojo.apps.fileman.models import FileManager

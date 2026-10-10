@@ -611,33 +611,48 @@ class FileManager(MojoSecrets, MojoModel):
     def on_rest_created(self):
         self._update_default()
 
+    _held_related = None
+
     def on_rest_save(self, request, data_dict):
-        # on_rest_pre_save can only refuse after every posted field has been
-        # dispatched, and a related dict (`parent: {...}`) saves that record
-        # as it is dispatched. Hold those back until this store has saved, so
-        # a refused request stores nothing.
-        nested = {}
+        # A related dict (`parent: {...}`) saves that record as the framework
+        # dispatches it, before on_rest_pre_save can refuse this one; and the
+        # related record can refuse too. Hold those dicts back and apply them
+        # from on_rest_pre_save, after this store's own check and before its
+        # first write, so whichever of the two refuses, nothing is stored.
+        held = {}
         for key, value in data_dict.items():
             field = self.get_model_field(key) if isinstance(value, dict) else None
             if field is not None and field.is_relation:
-                nested[key] = field
-        if not nested:
+                held[key] = (field, value)
+        if not held:
             return super().on_rest_save(request, data_dict)
-        own = {key: value for key, value in data_dict.items() if key not in nested}
-        response = super().on_rest_save(request, own)
+        own = {key: value for key, value in data_dict.items() if key not in held}
+        self._held_related = (request, held)
+        try:
+            response = super().on_rest_save(request, own)
+            # A body of related dicts alone never reaches on_rest_pre_save.
+            self._save_held_related()
+        finally:
+            self._held_related = None
+        return response
+
+    def _save_held_related(self):
+        if not self._held_related:
+            return
+        request, held = self._held_related
+        self._held_related = None
         # Same restore as the framework's field loop: a related permission
         # check may re-bind request.group and the response graph.
         caller_group = getattr(request, "group", None)
         request_data = getattr(request, "DATA", None)
         caller_graph = (request_data.get("graph", _GRAPH_UNSET)
                         if hasattr(request_data, "get") else _GRAPH_UNSET)
-        for key, field in nested.items():
+        for field, value in held.values():
             try:
-                self.on_rest_save_related_field(field, data_dict[key], request)
+                self.on_rest_save_related_field(field, value, request)
             finally:
                 request.group = caller_group
                 _restore_request_graph(request, caller_graph)
-        return response
 
     def on_rest_pre_save(self, changed_fields, created):
         if created and self.user is None and self.group is None:
@@ -657,6 +672,7 @@ class FileManager(MojoSecrets, MojoModel):
         # defaults below cannot change the answer — a created store with no
         # key of its own is on platform credentials either way.
         self._require_superuser_for_platform_role(created)
+        self._save_held_related()
         self._update_default()
         if not self.name:
             self.name = self.generate_name()
