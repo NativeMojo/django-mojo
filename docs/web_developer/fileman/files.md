@@ -160,6 +160,8 @@ Regenerate only specific roles:
 
 The call returns immediately; the actual work runs on the background worker. Only the named roles (or all, if the value is `true`) are replaced.
 
+Which roles exist, their sizes and formats, the video codec (H.264 or H.265) and which roles run automatically on upload are admin-configurable — see [Rendition Options](renditions.md).
+
 ### Sharing a file (per-share audit trail)
 
 Every call to the `share` action mints a **new** shortlink attributed to the current user, enabling "whose link got used" audit.

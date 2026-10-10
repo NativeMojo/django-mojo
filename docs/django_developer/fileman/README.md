@@ -6,7 +6,7 @@ File management with multiple storage backends (file system, S3, Azure, GCS), di
 
 - [file.md](file.md) — File model, upload flow, storage backends
 - [file_manager.md](file_manager.md) — FileManager configuration and backends
-- [renditions.md](renditions.md) — Async rendition pipeline: handlers, channel, idempotency, adding roles.
+- [renditions.md](renditions.md) — Async rendition pipeline: handlers, channel, idempotency, admin-configurable options (`FILEMAN_RENDITIONS_*`, H.264/H.265), adding roles.
 - [shortlinks.md](shortlinks.md) — Short URLs for File/Rendition, tier-1 auto + tier-2 share, opt-out toggles.
 
 ## Models

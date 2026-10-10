@@ -204,11 +204,121 @@ POST /api/fileman/file/123
 {"regenerate_renditions": true}
 ```
 
+## Configuring renditions
+
+Every renderer declares its roles and their options in a class-level
+`default_renditions` dict. An admin can override those options — and decide
+which roles run automatically on upload — through three JSON `Setting` keys,
+one per media category:
+
+| Key | Renderer | Roles |
+|---|---|---|
+| `FILEMAN_RENDITIONS_IMAGE` | `ImageRenderer` (and SVG via `VectorRenderer`) | `thumbnail`, `thumbnail_sm`, `thumbnail_md`, `thumbnail_lg`, `square_sm` |
+| `FILEMAN_RENDITIONS_VIDEO` | `VideoRenderer` | `thumbnail`, `video_thumbnail`, `video_preview`, `video_mp4`, `video_webm`, `video_hevc` |
+| `FILEMAN_RENDITIONS_DOCUMENT` | `DocumentRenderer` | `thumbnail`, `document_thumbnail`, `document_preview`, `document_pdf` |
+
+The value is an object keyed by role, plus an optional `_automatic` list:
+
+```json
+{
+  "thumbnail": {"width": 200, "height": 200},
+  "video_hevc": {"crf": 24, "preset": "fast"},
+  "_automatic": ["thumbnail", "video_thumbnail", "video_preview", "video_hevc"]
+}
+```
+
+- Per-role options **shallow-merge** over the class defaults: name only the
+  keys you change. An absent role, key or setting means the class default,
+  so an empty object `{}` is valid and changes nothing.
+- `_automatic`, when present, **replaces** the renderer's automatic-role list
+  (what `create_all_renditions` runs after an upload). `[]` means nothing
+  runs on upload. Any declared role can still be requested explicitly through
+  the `regenerate_renditions` action.
+- **Scope.** A global row applies everywhere. A row scoped to a group applies
+  to files whose `File.group` (or, failing that, their FileManager's group)
+  is that group or one of its descendants, through the normal
+  `settings.get(key, group=...)` chain. Rows may be written by anyone who can
+  write `Setting` rows for that scope — the bare `groups` permission for a
+  group row — which is why every numeric option is capped (below).
+- The merge happens in exactly one place, `BaseRenderer.get_rendition_options`
+  / `get_automatic_rendition_roles`, resolved once per renderer instance.
+  Renderers never read `default_renditions` or a setting directly.
+
+### Options per role kind
+
+Writes are validated (`Setting.register_validator`, registered from
+`FilemanConfig.ready`) on every path — REST and `Setting.set` alike. An
+unknown role, an unknown option, an out-of-range number or a wrong enum is
+refused with a message naming `role.option`, so a typo can never silently
+fall back to the default. Group rows are validated the same way.
+
+| Category · kind | Roles | Options |
+|---|---|---|
+| image | all | `width`, `height` 1–4096 · `mode` contain / crop / stretch · `format` jpeg / jpg / png / webp / gif · `quality` 1–100 (JPEG and WEBP only; PNG and GIF are lossless and ignore it) |
+| video · thumbnail | `thumbnail`, `video_thumbnail` | `width`, `height` · `time_offset` `HH:MM:SS` · `format` jpg / png |
+| video · transcode | `video_preview`, `video_mp4`, `video_webm`, `video_hevc` | `width`, `height` · `format` mp4 / webm · `codec` h264 / h265 · `bitrate` (`2000k`, `2M`) · `crf` 18–51 · `preset` ultrafast … slow · `duration` 1–60 s · `audio` bool |
+| document · thumbnail | `thumbnail`, `document_thumbnail` | `width`, `height` · `page` 1–500 · `format` jpg / png |
+| document · pdf | `document_preview`, `document_pdf` | `quality` low / medium / high · `max_pages` 1–200 |
+
+The caps bound what one rendition job may cost: a 4096-pixel bounding box,
+no encoder preset slower than `slow`, no CRF below 18, previews no longer
+than 60 s, previews of at most 200 pages. The schema, the caps and the
+validators live in `mojo/apps/fileman/renderer/config.py`; the role list is
+always the renderer's own `default_renditions` keys, so a role added in code
+is valid and visible without touching the validator.
+
+`max_pages` is applied by Ghostscript (`-dFirstPage=1 -dLastPage=N`) during
+the optimize step. It is best-effort: if Ghostscript fails, the existing
+fallback returns the untruncated PDF.
+
+### Video codecs
+
+`format` wins. A `webm` role is always VP8 at the given `bitrate`; `codec`,
+`crf` and `preset` are refused on it. An `mp4` role honors `codec`:
+
+| codec | Encoder | Driven by | Notes |
+|---|---|---|---|
+| `h264` (default) | libx264 | `bitrate` | Today's behavior, unchanged. Plays everywhere. |
+| `h265` | libx265 | `crf` + `preset` (`bitrate` ignored) | Tagged `hvc1` for Apple players, `yuv420p`. About half the bytes of H.264 at the same quality and **3–10× the encode time**. Plays in Safari and in Chrome/Edge with hardware decode; Firefox support is spotty. |
+
+`video_hevc` is the declared H.265 role (1280×720, CRF 28, preset medium). It
+is **not** automatic — adding it to `_automatic` multiplies the CPU every
+video upload costs, so keep `video_mp4` as the compatibility rendition and
+request HEVC where the players are known. A host whose ffmpeg lacks
+`libx265` fails the role with a bounded `failed` rendition row; there is no
+encoder probe.
+
+Scaling fits the frame into the `width`×`height` box, keeps the aspect
+ratio, **never upscales** (the same semantics as the image renderer's
+`contain`) and rounds to even dimensions, which x264/x265 require. Thumbnails
+use the same filter. The argv is built by `video.build_transcode_args` and
+`video.build_thumbnail_args`, pure functions the tests assert against.
+
+### Video engine
+
+`FILEMAN_VIDEO_ENGINE` is a validated global-only key reserved for the
+transcode backend. The only accepted value today is `"ffmpeg"`, and the
+renderer does not read it yet. It exists so that a managed service (AWS
+MediaConvert) can be added later as a second engine behind the same switch
+without changing the settings an admin already has.
+
+### Describing the options to a UI
+
+`GET /api/fileman/renditions/options` (any of `manage_settings`,
+`manage_files`, `files`, `groups`) returns, per category: the setting `key`,
+the class `defaults`, the `automatic_default` list, the global **database**
+`override` (or `null` — a deployment-file value is deliberately not reported,
+because an admin cannot clear it), the merged `effective` options and
+automatic list, each role's `role_kinds`, the `fields` and enum `choices`
+per kind, and the numeric `limits`. It is read-only: writes are ordinary
+`Setting` rows through `/api/settings`. See the
+[REST reference](../../web_developer/fileman/renditions.md).
+
 ## Adding a new rendition role
 
 1. Add the role constant to `RenditionRole` in `renderer/base.py`.
-2. Add an entry to the matching renderer's `default_renditions` mapping with its options (dimensions, bitrate, format, etc.).
-3. Extend the renderer's `create_rendition` dispatch if the role needs custom handling.
+2. Add an entry to the matching renderer's `default_renditions` mapping with its options (dimensions, bitrate, format, etc.). Every option you declare must be one the role kind's schema in `renderer/config.py` accepts, or an admin cannot override it; extend the schema there if the role needs a new option.
+3. Extend the renderer's `create_rendition` dispatch if the role needs custom handling. Read options through `self.get_rendition_options(role)`, never from `default_renditions` directly, so the admin override applies.
 4. No model migration is needed — `FileRendition.role` is a free-form string field.
 
 Existing files can be backfilled via the `regenerate_renditions` action (per-file) or a one-off management script that iterates `File.objects.filter(upload_status="completed")` and calls `file.publish_regenerate_renditions(roles=[NEW_ROLE])`.
