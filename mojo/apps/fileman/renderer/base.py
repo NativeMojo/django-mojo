@@ -134,6 +134,21 @@ class BaseRenderer(ABC):
         if role not in options:
             raise ValueError("unsupported rendition role: %s" % role)
         return dict(options[role])
+
+    def resolve_rendition_options(self, role, options=None):
+        """Options for one create_rendition call: the role's merged options
+        with the caller's on top. A role this renderer does not declare is
+        honored only when the caller passes its own options, starting from
+        an empty dict; with none it raises ValueError like the accessor."""
+        try:
+            resolved = self.get_rendition_options(role)
+        except ValueError:
+            if not options:
+                raise
+            resolved = {}
+        if options:
+            resolved.update(options)
+        return resolved
     
     @classmethod
     def supports_file(cls, file: File) -> bool:

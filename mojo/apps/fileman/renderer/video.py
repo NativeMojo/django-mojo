@@ -282,12 +282,10 @@ class VideoRenderer(BaseRenderer):
         try:
             # Get rendition settings (class defaults + admin override)
             try:
-                settings = self.get_rendition_options(role)
+                settings = self.resolve_rendition_options(role, options)
             except ValueError:
                 logger.warning(f"Unsupported rendition role for videos: {role}")
                 return None
-            if options:
-                settings.update(options)
 
             # Download the original file
             source_path = self._download_original()

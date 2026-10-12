@@ -10,6 +10,7 @@ Setting write here is a GROUP-scoped row on a test-owned group with a literal
 key, never a global row and never a /api/settings write; validator
 rejections are proven in-process through the same save() hook REST runs.
 """
+import io
 import json
 import os
 import tempfile
@@ -28,6 +29,20 @@ def _clear_group_rows(group):
     Setting.remove("FILEMAN_RENDITIONS_IMAGE", group=group)
     Setting.remove("FILEMAN_RENDITIONS_VIDEO", group=group)
     Setting.remove("FILEMAN_RENDITIONS_DOCUMENT", group=group)
+
+
+def _png_bytes(width, height):
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), color=(200, 50, 50)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _rendition_size(tmpdir, rendition):
+    from PIL import Image
+    full_path = os.path.join(tmpdir, rendition.storage_path.lstrip("/"))
+    with Image.open(full_path) as img:
+        return img.size
 
 
 def _user(username, perms):
@@ -83,6 +98,30 @@ def setup_rendition_config(opts):
 
     opts.grouped_image_id = make_file(grouped, opts.group, "rcfg-grouped.png", "image/png", "image").pk
     opts.plain_image_id = make_file(ungrouped, None, "rcfg-plain.png", "image/png", "image").pk
+
+    def make_real_file(name, group):
+        # Real bytes on disk under a manager whose base_path is the temp
+        # directory, so a rendition is actually rendered and can be read back.
+        manager = FileManager.objects.create(
+            name=name, backend_type="file", backend_url="file://",
+            group=group, is_active=True)
+        manager.set_setting("base_path", opts.tmpdir)
+        manager.save(update_fields=["mojo_secrets", "modified"])
+        data = _png_bytes(200, 100)
+        f = File(file_manager=manager, group=group,
+                 filename="%s.png" % name.replace("_", "-"),
+                 content_type="image/png", category="image", file_size=len(data),
+                 upload_status=File.COMPLETED)
+        f.generate_storage_filename()
+        f.save()
+        full_path = os.path.join(opts.tmpdir, f.storage_file_path.lstrip("/"))
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, "wb") as fh:
+            fh.write(data)
+        return f.pk
+
+    opts.real_image_id = make_real_file("rcfg_real", None)
+    opts.real_grouped_image_id = make_real_file("rcfg_real_grouped", opts.group)
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +241,103 @@ def test_create_rendition_does_not_mutate_class_defaults(opts):
               "caller options must merge into a copy, never into the class dict")
     assert_eq(renderer.create_rendition("video_mp4"), None,
               "an undeclared role must return None rather than raise")
+
+
+# ---------------------------------------------------------------------------
+# Custom roles from application code (maestro #7862)
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("Rendition config: a custom role with caller options renders real bytes")
+def test_custom_role_with_options_renders(opts):
+    # Regression: 1.34.0 refused every role the renderer does not declare
+    # before it looked at the caller's options.
+    from mojo.apps.fileman.models import File, FileRendition
+    from mojo.apps.fileman.renderer.image import ImageRenderer
+
+    renderer = ImageRenderer(File.objects.get(pk=opts.real_image_id))
+    rendition = renderer.create_rendition(
+        "rcfg_banner", {"width": 80, "height": 80, "mode": "contain", "format": "png"})
+    assert_true(rendition is not None,
+                "a custom role with explicit options must produce a rendition")
+    assert_eq(rendition.role, "rcfg_banner", "the rendition must carry the caller's role")
+    assert_eq(rendition.upload_status, FileRendition.COMPLETED,
+              "the custom-role rendition must be completed")
+    assert_eq(rendition.content_type, "image/png", "the caller's format must be honored")
+    assert_eq(_rendition_size(opts.tmpdir, rendition), (80, 40),
+              "a 200x100 source contained in 80x80 must be stored as 80x40")
+
+
+@th.django_unit_test("Rendition config: a custom role without options is still refused")
+def test_custom_role_without_options_is_refused(opts):
+    from mojo.apps.fileman.models import File, FileRendition
+    from mojo.apps.fileman.renderer.image import ImageRenderer
+
+    real = File.objects.get(pk=opts.real_image_id)
+    renderer = ImageRenderer(real)
+    assert_eq(renderer.create_rendition("rcfg_plain"), None,
+              "an undeclared role with no options must be refused")
+    assert_eq(renderer.create_rendition("rcfg_plain", {}), None,
+              "an undeclared role with an empty options dict must be refused")
+    assert_eq(FileRendition.objects.filter(original_file=real, role="rcfg_plain").count(), 0,
+              "a refused role must not leave a rendition row")
+
+
+@th.django_unit_test("Rendition config: declared roles and a group override still render as configured")
+def test_declared_roles_and_override_unchanged(opts):
+    from mojo.apps.account.models import Setting
+    from mojo.apps.fileman.models import File
+    from mojo.apps.fileman.renderer.image import ImageRenderer
+
+    before = {role: dict(options) for role, options in ImageRenderer.default_renditions.items()}
+
+    plain = ImageRenderer(File.objects.get(pk=opts.real_image_id))
+    rendition = plain.create_rendition("thumbnail", {"width": 20, "height": 20})
+    assert_true(rendition is not None, "a declared role with caller options must render")
+    assert_eq(_rendition_size(opts.tmpdir, rendition), (20, 10),
+              "caller options must sit on top of a declared role's options")
+
+    try:
+        Setting.set("FILEMAN_RENDITIONS_IMAGE", {"thumbnail_lg": {"width": 40}},
+                    group=opts.group)
+        grouped = ImageRenderer(File.objects.get(pk=opts.real_grouped_image_id))
+        rendition = grouped.create_rendition("thumbnail_lg")
+        assert_true(rendition is not None, "a declared role must render with no caller options")
+        assert_eq(_rendition_size(opts.tmpdir, rendition), (40, 20),
+                  "the group's override must decide the declared role's width")
+    finally:
+        Setting.remove("FILEMAN_RENDITIONS_IMAGE", group=opts.group)
+
+    assert_eq(ImageRenderer.default_renditions, before,
+              "rendering must never mutate the class defaults")
+
+
+@th.django_unit_test("Rendition config: resolve_rendition_options honors a custom role only with options")
+def test_resolve_rendition_options(opts):
+    from mojo.apps.fileman.models import File
+    from mojo.apps.fileman.renderer.image import ImageRenderer
+
+    renderer = ImageRenderer(File.objects.get(pk=opts.plain_image_id))
+    assert_eq(renderer.resolve_rendition_options("thumbnail"),
+              renderer.get_rendition_options("thumbnail"),
+              "a declared role with no options must resolve to its merged options")
+
+    resolved = renderer.resolve_rendition_options("thumbnail", {"width": 7})
+    expected = renderer.get_rendition_options("thumbnail")
+    expected["width"] = 7
+    assert_eq(resolved, expected, "caller options must sit on top of a declared role's options")
+
+    custom = {"width": 80, "format": "png"}
+    resolved = renderer.resolve_rendition_options("rcfg_banner", custom)
+    assert_eq(resolved, custom, "an undeclared role must resolve to exactly the caller's options")
+    assert_true(resolved is not custom, "the resolved options must be a copy of the caller's dict")
+
+    for empty in (None, {}):
+        raised = False
+        try:
+            renderer.resolve_rendition_options("rcfg_banner", empty)
+        except ValueError:
+            raised = True
+        assert_true(raised, "an undeclared role with options %r must raise ValueError" % (empty,))
 
 
 # ---------------------------------------------------------------------------
