@@ -322,11 +322,50 @@ per kind, and the numeric `limits`. It is read-only: writes are ordinary
 `Setting` rows through `/api/settings`. See the
 [REST reference](../../web_developer/fileman/renditions.md).
 
+### Custom roles from application code
+
+A role the renderer does not declare is honoured when the calling code passes
+its own options:
+
+```python
+from mojo.apps.fileman import renderer
+
+renderer.create_rendition(file, "banner", {
+    "width": 1200, "height": 400, "mode": "contain", "format": "webp"})
+```
+
+The options are the caller's only. No class default and no
+`FILEMAN_RENDITIONS_*` row applies, and they are not validated or checked
+against the caps above, so never pass request values through unchecked. With
+no options, or an empty dict, an undeclared role is refused: a warning is
+logged and `None` is returned. Image and SVG files render to the given size; a
+custom role on a video is always a transcode and on an audio file always a
+conversion; document files accept declared roles only.
+
+The role name is used verbatim in the storage key. Use a plain slug of
+letters, digits, `_` and `-`; never build it from request input.
+
+A custom role is never created on upload. `regenerate_renditions` deletes a
+custom role's rendition (when the role is named, and on a full regenerate) and
+cannot rebuild it, because it passes no options. The application gets no
+signal when that happens: the rendition is simply missing the next time it is
+looked up. Code that
+depends on a custom rendition must check that it exists and create it again
+from application code when it does not. Before re-creating a role that already
+has a completed rendition, delete the old row, or the file ends up with two
+rows for one role.
+
+**Compatibility.** Through 1.33.1 an undeclared role rendered, with or without
+options (never on document files). 1.34.0 refused every undeclared role. From
+the release after 1.34.0 an undeclared role works again when options are
+passed. Code that relied on an undeclared role with no options must pass them,
+or declare the role (below).
+
 ## Adding a new rendition role
 
 1. Add the role constant to `RenditionRole` in `renderer/base.py`.
 2. Add an entry to the matching renderer's `default_renditions` mapping with its options (dimensions, bitrate, format, etc.). Every option you declare must be one the role kind's schema in `renderer/config.py` accepts, or an admin cannot override it; extend the schema there if the role needs a new option.
-3. Extend the renderer's `create_rendition` dispatch if the role needs custom handling. Read options through `self.get_rendition_options(role)`, never from `default_renditions` directly, so the admin override applies.
+3. Extend the renderer's `create_rendition` dispatch if the role needs custom handling. `create_rendition` gets its options from `self.resolve_rendition_options(role, options)`, which puts the caller's options on top of the role's merged ones; `self.get_rendition_options(role)` stays the accessor for the merged options alone. Never read `default_renditions` directly, or the admin override does not apply.
 4. No model migration is needed — `FileRendition.role` is a free-form string field.
 
 Existing files can be backfilled via the `regenerate_renditions` action (per-file) or a one-off management script that iterates `File.objects.filter(upload_status="completed")` and calls `file.publish_regenerate_renditions(roles=[NEW_ROLE])`.
