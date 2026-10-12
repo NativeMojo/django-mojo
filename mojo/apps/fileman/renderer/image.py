@@ -190,12 +190,10 @@ class ImageRenderer(BaseRenderer):
         try:
             # Get rendition settings (class defaults + admin override)
             try:
-                settings = self.get_rendition_options(role)
+                settings = self.resolve_rendition_options(role, options)
             except ValueError:
                 logger.warning(f"Unsupported rendition role for images: {role}")
                 return None
-            if options:
-                settings.update(options)
 
             # Default dimensions and mode
             width = settings.get('width', 150)
