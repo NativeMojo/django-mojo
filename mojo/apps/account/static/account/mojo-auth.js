@@ -257,9 +257,17 @@
             .trim();
     }
 
+    function displayErrorMessage(message) {
+        if (typeof message !== 'string') return '';
+        var text = stripUrls(message);
+        // A machine code is diagnostic data, not an explanation for a player.
+        return /^(?:[a-z\d]+(?:_[a-z\d]+)+|[A-Z\d_-]+)$/.test(text) ? '' : text;
+    }
+
     function getError(err) {
-        if (!err) return 'An error occurred';
-        if (typeof err === 'string') return stripUrls(err) || 'An error occurred';
+        var fallback = 'We could not complete your request. Please try again or contact support for help.';
+        if (!err) return fallback;
+        if (typeof err === 'string') return displayErrorMessage(err) || fallback;
         // Backstop: any raw browser credential error that escaped a mapping
         // layer is mapped here rather than leaking its spec-URL message.
         if (typeof DOMException !== 'undefined' && err instanceof DOMException) {
@@ -275,10 +283,31 @@
             return 'Too many attempts. Try again in ' + minutes +
                 (minutes === 1 ? ' minute.' : ' minutes.');
         }
-        var msg = err.message || err.error ||
-            (Array.isArray(err.errors) && err.errors[0] && err.errors[0].message) ||
-            '';
-        return stripUrls(msg) || 'An error occurred';
+        if (err.error === 'geofence_blocked') {
+            var geoCopy = {
+                country_not_allowed: 'This service is not available in your country. If you think this is a mistake, please contact support.',
+                region_not_allowed: 'This service is not available in your region. If you think this is a mistake, please contact support.',
+                lookup_failed: 'We could not verify your location. Please try again in a moment.',
+                private_ip: 'This service requires a regular home or mobile internet connection. Please switch networks and try again.',
+                datacenter_detected: 'This service requires a regular home or mobile internet connection. Please switch networks and try again.',
+                no_rules_strict: 'Access is currently unavailable. Please contact support for help.',
+                rule_invalid: 'Access is currently unavailable. Please contact support for help.'
+            };
+            var connections = { vpn_detected: 'VPN', proxy_detected: 'proxy', tor_detected: 'Tor connection' };
+            if (Object.prototype.hasOwnProperty.call(connections, err.reason)) {
+                return 'This service does not allow access through a ' + connections[err.reason] +
+                    '. Please use your regular internet connection and try again.';
+            }
+            return Object.prototype.hasOwnProperty.call(geoCopy, err.reason) ? geoCopy[err.reason] :
+                'We could not allow access from your current location or connection. Please contact support for help.';
+        }
+        var first = Array.isArray(err.errors) && err.errors[0] || {};
+        var messages = [err.message, err.detail, first.message, first.detail, err.error];
+        for (var i = 0; i < messages.length; i++) {
+            var msg = displayErrorMessage(messages[i]);
+            if (msg) return msg;
+        }
+        return fallback;
     }
 
     // -------------------------------------------------------------------------

@@ -547,6 +547,15 @@ the SMS view isn't already active. See
 [web_developer/account/auth_pages.md](../../web_developer/account/auth_pages.md)
 for the exact rejection contract consumed by custom front-ends.
 
+**Decline messages.** All hosted forms use `MojoAuth.getError()` to show
+plain-language geofence restrictions and guidance for VPN/proxy/Tor or location
+lookup failures. Other refusals use the response's `message` or `detail`,
+including the first nested error, before a readable `error`. Machine codes
+without an explanation receive a retry/support fallback. The original error
+object remains available for diagnostics; enforcement and API responses are
+unchanged. Deploy `mojo-auth.js` together with `auth_base.html`, whose version
+query follows the script's SHA-256 so browsers fetch the updated formatter.
+
 - Session check on load (auto-redirect if already authenticated)
 - OAuth callback handling (`?code=...&state=...`)
 - Magic link token handling (`?token=ml:...`)

@@ -250,8 +250,12 @@ so a backend error still reaches you in the backend's own error shape.
 Two helpers back this and are safe to reuse in a custom UI:
 
 - `MojoAuth.getError(err)` — extract a display string from any caught error (an
-  `Error`, a string, a backend `{error}` / `{errors:[…]}` shape, or a raw
-  `DOMException` as a backstop). Strips spec URLs from the result.
+  `Error`, a string, a backend `{error, message, detail}` / `{errors:[…]}` shape,
+  or a raw `DOMException` as a backstop). Shows geofence explanations with
+  location, connection, or retry/support guidance. Other refusals prefer a
+  readable `message` or `detail`, including the first nested error, over the
+  `error` code; unknown machine codes receive a retry/support fallback. Strips
+  spec URLs from the result and preserves the original error for diagnostics.
 - `MojoAuth.sanitizeMessage(text)` — strip URLs and `See: https://…` fragments
   out of an arbitrary message string (non-strings pass through unchanged). The
   hosted pages also run this at the render layer on every error-type message,
