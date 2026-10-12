@@ -97,13 +97,13 @@
                 form.reset();
                 window._mat.showMessage("Thanks — we received your message.", "success");
             } else {
-                var msg = (r.body && (r.body.error || r.body.reason)) || "Something went wrong — please try again.";
+                var msg = MojoAuth.getError(r.body);
                 window._mat.showMessage(msg, "error");
             }
         })
         .catch(function (error) {
             window._mat.setLoading(submitBtn, false);
-            window._mat.showMessage(error.message || "Network error — please try again.", "error");
+            window._mat.showMessage(MojoAuth.getError(error), "error");
         });
     });
 })();
