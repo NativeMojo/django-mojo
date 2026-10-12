@@ -11,9 +11,6 @@ let checks = 0;
 function check(error, expected, label) {
     assert.equal(auth.getError(error), expected, label);
     checks += 1;
-    assert.deepEqual(await contactDecline(null, { error: 'contact_declined' }),
-        [{ text: fallback, type: 'error' }], 'Contact transport decline codes receive useful fallback copy');
-    checks += 1;
 }
 
 check({ error: 'geofence_blocked', code: 403, reason: 'region_not_allowed',
@@ -92,6 +89,9 @@ async function contactDecline(body, transportError) {
     checks += 1;
     assert.deepEqual(await contactDecline(null, { error: 'contact_declined', message: 'Please reload and try again.' }),
         [{ text: 'Please reload and try again.', type: 'error' }], 'Contact transport failures use the same formatter');
+    checks += 1;
+    assert.deepEqual(await contactDecline(null, { error: 'contact_declined' }),
+        [{ text: fallback, type: 'error' }], 'Contact transport decline codes receive useful fallback copy');
     checks += 1;
     process.stdout.write(JSON.stringify({ passed: checks, failed: 0 }) + '\n');
 })().catch(error => { process.stderr.write(String(error.stack || error)); process.exitCode = 1; });
