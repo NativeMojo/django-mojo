@@ -192,7 +192,6 @@ def test_manager_cannot_repoint_an_override_key_by_user_id(opts):
 
     for body in ({"user_id": opts.target_id},
                  {"override_user": True, "user_id": opts.target_id},
-                 {"user_id": opts.target_id, "user": opts.viewer_manager_id},
                  {"user": opts.viewer_manager_id, "user_id": opts.target_id}):
         payload = {"group": opts.parent_id}
         payload.update(body)
@@ -208,6 +207,16 @@ def test_manager_cannot_repoint_an_override_key_by_user_id(opts):
                   "the refusal must not silently clear override")
         assert_eq(fresh.override_enabled_by_id, opts.viewer_manager_id,
                   "the refused request must leave the issuer record alone")
+
+    # The last name posted wins, and the rule reads the final row: a body
+    # that ends on the manager changes nothing, whatever it named first.
+    resp = opts.client.post("/api/group/apikey/%s" % key.pk, {
+        "group": opts.parent_id, "user_id": opts.target_id,
+        "user": opts.viewer_manager_id})
+    fresh = _reload(key)
+    assert_eq((fresh.user_id, fresh.override_user), (opts.viewer_manager_id, True),
+              "a body that ends on the manager must leave the key the manager's: %s %r"
+              % (resp.status_code, resp.response))
 
     identity, error = ApiKey.validate_token(token, th.get_mock_request())
     assert_eq(error, None, "the manager's own key must still authenticate")
@@ -237,6 +246,28 @@ def test_manager_cannot_create_override_key_for_another_member_by_user_id(opts):
                     "got %s %r" % (name, resp.status_code, resp.response))
         assert_eq(ApiKey.objects.filter(name=name).count(), 0,
                   "%s: no key may exist after the refusal" % name)
+    opts.client.logout()
+
+
+@th.django_unit_test("ApiKey delegation: user_id with override switched on in one body cannot hand a key to another member")
+def test_manager_cannot_enable_override_and_repoint_by_user_id(opts):
+    # Linked to the manager for reference. Switching override on is theirs to
+    # do; naming another member by user_id in the same body is not.
+    key = _key(opts, "akd_id_enable_repoint", user_id=opts.viewer_manager_id)
+    _login(opts, VIEWER_MANAGER)
+    for body in ({"override_user": True, "user_id": opts.target_id},
+                 {"user_id": opts.target_id, "override_user": True}):
+        payload = {"group": opts.parent_id}
+        payload.update(body)
+        resp = opts.client.post("/api/group/apikey/%s" % key.pk, payload)
+        assert_eq(resp.status_code, 403,
+                  "override on plus user_id for another member must be refused, "
+                  "body order %s: %r" % (list(body), resp.response))
+        fresh = _reload(key)
+        assert_eq((fresh.user_id, fresh.override_user),
+                  (opts.viewer_manager_id, False),
+                  "the refused request must leave the stored key as it was, body order %s"
+                  % list(body))
     opts.client.logout()
 
 
@@ -551,6 +582,109 @@ def test_manager_links_member_by_user_id_in_reference_mode(opts):
     assert_true(fresh.user_linked_at is not None,
                 "a link made by user_id must record when it was made")
     opts.client.logout()
+
+
+@th.django_unit_test("ApiKey delegation: clearing the member by user_id clears override and the issuer record")
+def test_clearing_by_user_id_clears_override_and_issuer(opts):
+    from mojo.apps.account.models import ApiKey
+    _login(opts, VIEWER_MANAGER)
+    resp = opts.client.post("/api/group/apikey", {
+        "name": "akd_id_clear", "group": opts.parent_id,
+        "user": opts.viewer_manager_id, "override_user": True})
+    assert_eq(resp.status_code, 200,
+              "the manager must be able to issue their own key: %r" % resp.response)
+    key = ApiKey.objects.get(pk=resp.response.data.id)
+    assert_eq(key.override_enabled_by_id, opts.viewer_manager_id,
+              "the key must start with an issuer record to clear")
+
+    resp = opts.client.post("/api/group/apikey/%s" % key.pk,
+                            {"group": opts.parent_id, "user_id": None})
+    assert_eq(resp.status_code, 200,
+              "a manager must be able to clear the member by user_id: %r" % resp.response)
+    fresh = _reload(key)
+    assert_eq((fresh.user_id, fresh.override_user), (None, False),
+              "clearing the member must clear override with it")
+    assert_eq((fresh.user_linked_by_id, fresh.user_linked_at,
+               fresh.override_enabled_by_id, fresh.override_enabled_at),
+              (None, None, None, None),
+              "clearing the member must clear all four issuer fields")
+    opts.client.logout()
+
+
+@th.django_unit_test("ApiKey delegation: a platform administrator re-points by user_id and is recorded as issuer")
+def test_platform_admin_repoints_by_user_id(opts):
+    key = _key(opts, "akd_id_admin_repoint", user_id=opts.service_id, override=True)
+    _login(opts, PLATFORM_ADMIN)
+    resp = opts.client.post("/api/group/apikey/%s" % key.pk,
+                            {"group": opts.parent_id, "user_id": opts.other_id})
+    assert_eq(resp.status_code, 200,
+              "a platform administrator may re-point by user_id: %r" % resp.response)
+    key = _reload(key)
+    assert_eq((key.user_id, key.override_user, key.user_linked_by_id, key.override_enabled_by_id),
+              (opts.other_id, True, opts.admin_id, opts.admin_id),
+              "re-pointing by user_id must record the administrator in both issuer pairs")
+    assert_true(key.user_linked_at is not None and key.override_enabled_at is not None,
+                "re-pointing by user_id must record when")
+    opts.client.logout()
+
+
+@th.django_unit_test("ApiKey delegation: override_user before user in one body still self-issues")
+def test_member_self_issues_with_override_first(opts):
+    from mojo.apps.account.models import ApiKey
+    _login(opts, MANAGER)
+    resp = opts.client.post("/api/group/apikey", {
+        "name": "akd_self_issue_override_first", "group": opts.parent_id,
+        "override_user": True, "user": opts.manager_id})
+    assert_eq(resp.status_code, 200,
+              "the order of override_user and user must not matter: %r" % resp.response)
+    key = ApiKey.objects.get(pk=resp.response.data.id)
+    assert_eq((key.user_id, key.override_user), (opts.manager_id, True),
+              "the key must assume the member who issued it")
+    assert_eq((key.user_linked_by_id, key.override_enabled_by_id),
+              (opts.manager_id, opts.manager_id),
+              "a self-issued key must record its issuer in both pairs")
+    assert_eq(_log_count(key, "api_key:override_enabled"), 1,
+              "a key created with override on must leave one audit row")
+    opts.client.logout()
+
+
+@th.django_unit_test("ApiKey delegation: an OAuth sign-in with the api scope self-issues an override key")
+def test_oauth_session_self_issues_override_key(opts):
+    # In process: the save runs with a request shaped as the OAuth door
+    # leaves it, a real user plus the grant it resolved.
+    from mojo.apps.account.models import ApiKey, Group, OAuthClient, User
+    from mojo.apps.account.services.oauth_server import tokens
+    from mojo.helpers.request import credential_kind
+    from mojo.models import rest
+
+    OAuthClient.objects.filter(client_id="akd_oauth_client").delete()
+    client = OAuthClient.objects.create(
+        client_id="akd_oauth_client", kind="dcr", client_name="akd oauth client",
+        redirect_uris=["http://127.0.0.1:8500/cb"])
+    manager = User.objects.get(pk=opts.manager_id)
+    grant = tokens.create_grant(
+        manager, client, ["api"], "https://akd.testit.example/api", 1700000000)
+
+    request = th.get_mock_request(user=manager, method="POST")
+    request.oauth_grant = grant
+    request.group = Group.objects.get(pk=opts.parent_id)
+    request.DATA = {}
+    assert_eq(credential_kind(request), "oauth",
+              "the request must count as an OAuth sign-in")
+
+    key = _key(opts, "akd_oauth_self_issue")
+    active = rest.ACTIVE_REQUEST.set(request)
+    try:
+        key.on_rest_save(request, {"user": opts.manager_id, "override_user": True})
+    finally:
+        rest.ACTIVE_REQUEST.reset(active)
+        OAuthClient.objects.filter(client_id="akd_oauth_client").delete()
+
+    fresh = _reload(key)
+    assert_eq((fresh.user_id, fresh.override_user), (opts.manager_id, True),
+              "an OAuth sign-in must be able to make a key assume its own user")
+    assert_eq(fresh.override_enabled_by_id, opts.manager_id,
+              "the OAuth self-issue must record the issuer")
 
 
 @th.django_unit_test("ApiKey delegation: a platform administrator provisions override for a service member")

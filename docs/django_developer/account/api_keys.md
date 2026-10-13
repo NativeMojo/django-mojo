@@ -167,8 +167,10 @@ Where it is enforced, all on the REST boundary:
 | `GET ...?graph=token` on a key that assumes a member | 200 with `"token": null`, and an `api_key:token_read_refused` Log row in place of `api_key:token_read` |
 | `POST /api/account/admin/apikey/action` with `rotate` on such a key | 403 |
 
-Both setters call the rule, so the order of `user` and `override_user` in one
-body cannot matter. Still open to a manager, because a manager must always be
+`ApiKey.on_rest_pre_save` applies the rule once, to the final row compared
+with the stored one, so the order of `user` and `override_user` in one body
+cannot matter, and neither can the name the link was posted under (`user` or
+`user_id`). The setters only parse the value and apply the manager bar. Still open to a manager, because a manager must always be
 able to reduce or stop a key: switching `override_user` off, clearing `user`,
 `deactivate`, `reactivate`, `revoke` and delete. Unchanged: the create response
 (the creator passed the rule in that same request) and `group/apikey/rotate`,
@@ -176,9 +178,8 @@ where the key rotates itself with its own token.
 
 `user_id`, the column name of the link, has its own setter (`set_user_id`) that
 calls `set_user`: the REST save picks a setter by the posted name and otherwise
-assigns the foreign key directly. `on_rest_pre_save` backs this up and refuses
-any save whose member differs from the stored one without `set_user` having
-approved it.
+assigns the foreign key directly. Membership (`validate_acting_user`), the
+issuer record and the audit row are all written in `on_rest_pre_save` too.
 
 **Server code is trusted.** `ApiKey.create_for_group(...)`, a management
 command or a shell is not a request and is not checked against this rule; the
@@ -206,7 +207,7 @@ print(q.count(), q.filter(is_active=True).count(), q.values("group").distinct().
 | `user_linked_by`, `user_linked_at` | Who linked the current member, and when |
 | `override_enabled_by`, `override_enabled_at` | Who switched `override_user` on, and when |
 
-Written only by `set_user` / `set_override_user`, from the request's user, and
+Written only by `on_rest_pre_save`, from the request's user, and
 by `create_for_group(issued_by=<User>)`. They are in `NO_SAVE_FIELDS` (the
 `_id` aliases too), so a posted value is ignored. Each pair is cleared with
 the value it describes: clearing `user` clears all four, switching override off

@@ -151,7 +151,7 @@ class ApiKey(MojoSecrets, MojoModel):
     override_user = models.BooleanField(default=False)
 
     # The issuer record: who linked the member and who switched override on,
-    # and when. Stamped only by set_user / set_override_user (from the
+    # and when. Stamped only by on_rest_pre_save (from the
     # request's user) and by create_for_group(issued_by=...); cleared together
     # with the value they describe. Null on a key written before these fields
     # existed, or by server code that named no issuer.
@@ -498,7 +498,7 @@ class ApiKey(MojoSecrets, MojoModel):
         """This key's group, resolved explicitly.
 
         On REST create the group FK is auto-stamped AFTER the field loop, so
-        self.group may still be None while set_user runs (same trap
+        self.group may still be None while a setter runs (same trap
         set_permissions documents). Fall back to the request's group. Returns
         None when neither is available — callers MUST fail closed, never
         default to "no group means no check".
@@ -568,7 +568,10 @@ class ApiKey(MojoSecrets, MojoModel):
     def set_user(self, value):
         """REST setter for the acting member.
 
-        Falsy clears the link (and override_user with it — see below).
+        Parses the value and applies the manager bar; falsy clears the link.
+        Everything else about the link — who may make a key assume the
+        member, membership, the issuer record — is decided once, on the
+        final row, in on_rest_pre_save.
         """
         from mojo.apps.account.models.user import User
 
@@ -578,6 +581,73 @@ class ApiKey(MojoSecrets, MojoModel):
 
         if not value:
             self.user = None
+            # Cleared here as well as in on_rest_pre_save, so a caller of the
+            # setter alone never holds a key set to assume nobody.
+            self.override_user = False
+            return
+
+        pk = value.get("id") if isinstance(value, dict) else value
+        try:
+            self.user = User.objects.get(pk=int(pk))
+        except (User.DoesNotExist, TypeError, ValueError):
+            raise merrors.ValueException("user must be a valid user id")
+
+    def set_user_id(self, value):
+        """REST setter for `user_id`, the column name of the same link.
+
+        The REST save picks a setter by the name the caller posted and
+        otherwise assigns the foreign key itself, so without this
+        `{"user_id": 7}` would skip the manager bar and the parsing above.
+        """
+        self.set_user(value)
+
+    def set_override_user(self, value):
+        """REST setter for override_user — the switch from reference to assume.
+
+        Same requester bar as set_user. Whether the switch is allowed is
+        decided on the final row in on_rest_pre_save.
+        """
+        request = self.active_request
+        if not self._can_manage_acting_user(request):
+            raise merrors.PermissionDeniedException()
+        self.override_user = bool(value)
+
+    def on_rest_pre_save(self, changed_fields, created):
+        """The one place a key's member, override switch and group are decided.
+
+        Runs after the whole body is applied, on create and on update, and
+        compares the final row with the stored one (nothing, on create). The
+        decision therefore cannot depend on the order of the fields, on which
+        name a field was posted under (`user` or `user_id`), or on which
+        setter ran. Read from the stored row rather than changed_fields for
+        the same reason. A refusal raises before the save, so the stored row
+        is left as it was.
+
+          - A link is valid only for an active direct member of the key's
+            own group (validate_acting_user), so a new member, or a move to
+            another group, is checked against the final group.
+          - A key that assumes a member carries that member's authority.
+            Switching that on, or re-pointing a key that already has it on,
+            needs _can_assume for the final member. Switching it off keeps
+            the manager's bar, so a manager can always reduce a key.
+          - The issuer record is stamped here, so every spelling records it.
+        """
+        request = self.active_request
+        stored_user_id, stored_override, stored_group_id = None, False, None
+        if not created:
+            stored_user_id, stored_override, stored_group_id = type(
+                self).objects.filter(pk=self.pk).values_list(
+                    "user_id", "override_user", "group_id").first()
+        user_changed = self.user_id != stored_user_id
+        override_changed = bool(self.override_user) != bool(stored_override)
+        if ((user_changed or override_changed)
+                and not self._can_manage_acting_user(request)):
+            raise merrors.PermissionDeniedException()
+
+        if not self.user_id:
+            if self.override_user and not stored_override:
+                raise merrors.ValueException(
+                    "override_user requires a linked user")
             # An override_user=True key with no member is a meaningless state
             # that reads as "assume nobody" — clear both together so the row
             # can never sit in it.
@@ -586,84 +656,40 @@ class ApiKey(MojoSecrets, MojoModel):
             self.user_linked_at = None
             self.override_enabled_by = None
             self.override_enabled_at = None
-            self._acting_user_checked = None
             return
 
-        pk = value.get("id") if isinstance(value, dict) else value
-        try:
-            target = User.objects.get(pk=int(pk))
-        except (User.DoesNotExist, TypeError, ValueError):
-            raise merrors.ValueException("user must be a valid user id")
+        if user_changed or (not created and stored_group_id != self.group_id):
+            self.validate_acting_user(self.user, request)
 
-        self.validate_acting_user(target, request)
-        # A key that already assumes a member takes the new target's authority
-        # the moment it is re-pointed, so the stricter bar applies here too.
-        # set_override_user does nothing when override is already on, which is
-        # why this half exists. Refuse; never silently drop override.
-        if (self.override_user and self.user_id != target.pk
-                and not self._can_assume(request, target)):
-            raise merrors.PermissionDeniedException()
-        if self.user_id != target.pk:
-            now = dates.utcnow()
+        enabled = self.override_user and not stored_override
+        if self.override_user and (user_changed or enabled):
+            # The moment the key takes this member's authority: only the
+            # member themself or a platform administrator may do it. Refuse;
+            # never silently drop override.
+            if not self._can_assume(request, self.user):
+                raise merrors.PermissionDeniedException()
+
+        now = dates.utcnow()
+        if user_changed:
             self.user_linked_by = request.user
             self.user_linked_at = now
-            if self.override_user:
-                # Re-pointing a key that assumes a member is issuing that
-                # authority for the new member: the requester just passed
-                # _can_assume for them, so the override record names them.
-                self.override_enabled_by = request.user
-                self.override_enabled_at = now
-        self.user = target
-        self._acting_user_checked = target.pk
-
-        elevated = self._elevated_perms_for(target)
-        if elevated:
-            self._report_acting_user_event(
-                f"ApiKey '{self.name}' linked to {target.username}, who holds "
-                f"elevated permissions: {', '.join(sorted(elevated))}",
-                "API key linked to an elevated member", 4)
-
-    def set_user_id(self, value):
-        """REST setter for `user_id`, the column name of the same link.
-
-        The REST save picks a setter by the name the caller posted and
-        otherwise assigns the foreign key itself, so without this
-        `{"user_id": 7}` re-points the key past every check in set_user.
-        on_rest_pre_save refuses any link change that did not come through
-        here, whatever it was called.
-        """
-        self.set_user(value)
-
-    def set_override_user(self, value):
-        """REST setter for override_user — the switch from reference to assume.
-
-        Same requester bar as set_user. Always reported: this is the moment a
-        key stops being a scoped credential and starts carrying a member's
-        identity.
-        """
-        request = self.active_request
-        if not self._can_manage_acting_user(request):
-            raise merrors.PermissionDeniedException()
-
-        enabled = bool(value)
-        if enabled and self.user_id is None:
-            raise merrors.ValueException(
-                "override_user requires a linked user")
-
-        was = self.override_user
-        # Switching on is the moment the key takes the member's authority:
-        # only the member themself or a platform administrator may do it.
-        # Switching off keeps the manager's bar, so a manager can always
-        # reduce a key.
-        if enabled and not was and not self._can_assume(request, self.user):
-            raise merrors.PermissionDeniedException()
-        self.override_user = enabled
-        if not enabled:
+        if not self.override_user:
             self.override_enabled_by = None
             self.override_enabled_at = None
-        if enabled and not was:
+        elif user_changed or enabled:
+            # Re-pointing a key that assumes a member is issuing that
+            # authority for the new member, so the record names the requester.
             self.override_enabled_by = request.user
-            self.override_enabled_at = dates.utcnow()
+            self.override_enabled_at = now
+
+        if user_changed:
+            elevated = self._elevated_perms_for(self.user)
+            if elevated:
+                self._report_acting_user_event(
+                    f"ApiKey '{self.name}' linked to {self.user.username}, who "
+                    f"holds elevated permissions: {', '.join(sorted(elevated))}",
+                    "API key linked to an elevated member", 4)
+        if enabled:
             # A Log row as well as the incident: it names the issuer in text,
             # so the record survives deletion of the issuer's account. On
             # create the row has no id yet, so on_rest_created writes it.
@@ -676,34 +702,6 @@ class ApiKey(MojoSecrets, MojoModel):
                 f"{self.user.username} — permissions resolve through that "
                 f"member, bounded by the key's group",
                 "API key override_user enabled", 5)
-
-    def on_rest_pre_save(self, changed_fields, created):
-        """A linked key may not be moved to a group its member is not in.
-
-        A link is valid only for an active direct member of the key's own
-        group (validate_acting_user). `group` is an ordinary writable field,
-        so without this a manager of two groups could move a linked key into
-        one where the member was never a member. Checked here, after the
-        whole body is applied, so the order of fields cannot matter. Read
-        from the stored row rather than changed_fields: the comparison must
-        not depend on how the field was written.
-
-        The same goes for the link itself: a member that is not the stored
-        one must have been approved by set_user in this save. Fails closed,
-        so a spelling of the field that reaches the row without the setter
-        is refused rather than saved.
-        """
-        stored_user_id = stored_group_id = None
-        if not created:
-            stored_user_id, stored_group_id = type(self).objects.filter(
-                pk=self.pk).values_list("user_id", "group_id").first()
-        if (self.user_id != stored_user_id and getattr(
-                self, "_acting_user_checked", False) != self.user_id):
-            raise merrors.PermissionDeniedException()
-        if created or not self.user_id:
-            return
-        if stored_group_id != self.group_id:
-            self.validate_acting_user(self.user, self.active_request)
 
     def _log_override_enabled(self):
         """Audit row for the switch from reference to assume. Never raises."""
