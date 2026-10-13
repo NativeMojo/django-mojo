@@ -370,3 +370,156 @@ def test_exit_for_and_checkpoint_rule(opts):
     assert not keeps("tests_failed"), "a completed failing run clears the checkpoint"
     assert not keeps("nothing_selected"), "a stale --continue must not stick red"
     assert not keeps("nothing_executed"), "an all-skipped run clears the checkpoint"
+
+
+def _exit_module(dotted, calls, code):
+    """An in-memory test file whose first setup raises SystemExit(code)."""
+    import sys
+    import types
+
+    module = types.ModuleType(dotted)
+    module.__file__ = __file__
+
+    def setup_guard(opts):
+        calls.append(f"{dotted}:setup_guard")
+        raise SystemExit(code)
+
+    def setup_after(opts):
+        calls.append(f"{dotted}:setup_after")
+
+    @th.unit_test("guarded one")
+    def test_guarded(opts):
+        calls.append(f"{dotted}:test_guarded")
+
+    for func in (setup_guard, setup_after, test_guarded):
+        setattr(module, func.__name__, func)
+    sys.modules[dotted] = module
+    return module
+
+
+@th.unit_test("setup SystemExit: recorded as a setup error that stops the run")
+def test_setup_system_exit_is_setup_error_and_aborts(opts):
+    import threading
+    from types import SimpleNamespace
+    from unittest import mock
+    from testit import runner
+
+    for code, summary in ((0, "SystemExit: 0"), (None, "SystemExit: None"),
+                          ("guard message", "SystemExit: guard message")):
+        calls = []
+        module = _exit_module("t4761_exit.seam", calls, code)
+        try:
+            with _scratch_run() as (state, events), \
+                    mock.patch.object(runner, "_abort_event", threading.Event()):
+                failed = None
+                try:
+                    runner.run_setup(_local_opts(), module, "setup_guard",
+                                     "t4761_exit", "seam")
+                except runner._SetupFailed as exc:
+                    failed = exc
+                except SystemExit as exc:
+                    raise AssertionError(
+                        f"SystemExit({exc.code!r}) escaped setup handling") from None
+                assert failed is not None and failed.summary == summary, (
+                    f"SystemExit({code!r}) must raise _SetupFailed with {summary!r}, got {failed!r}")
+                errors = [r for r in state.records if r.get("kind") == "setup_error"]
+                assert len(errors) == 1 and errors[0]["detail"] == \
+                    f"setup failed in setup_guard: {summary}", \
+                    f"SystemExit({code!r}) must give one setup_error record, got {state.records}"
+                assert runner._abort_event.is_set(), \
+                    f"SystemExit({code!r}) in setup must set the abort event"
+                reasons = runner._run_verdict(state)
+                assert [r["code"] for r in reasons] == ["setup_error", "aborted"], \
+                    f"SystemExit({code!r}) must fail with setup_error and aborted, got {reasons}"
+                report = runner._build_agent_report(
+                    SimpleNamespace(), display=SimpleNamespace(trackers={}, _order=[]))
+                assert report["status"] == "failed", \
+                    f"SystemExit({code!r}) must fail the report, got {report['status']}"
+                assert runner._keeps_checkpoint(report["reasons"]), \
+                    "a run stopped by a setup SystemExit keeps its checkpoint"
+                try:
+                    runner._exit_for(report, False)
+                    exit_code = None
+                except SystemExit as exc:
+                    exit_code = exc.code
+                assert exit_code not in (None, 0), \
+                    f"SystemExit({code!r}) in setup must exit non-zero, got {exit_code!r}"
+        finally:
+            import sys
+            sys.modules.pop("t4761_exit.seam", None)
+
+
+@th.unit_test("setup SystemExit: the file's tests are not run and the run stops")
+def test_setup_system_exit_stops_file_without_stop_flag(opts):
+    import sys
+    import threading
+    from unittest import mock
+    from testit import runner, helpers
+
+    calls, saved = [], []
+    _exit_module("t4761_exit.file", calls, 0)
+    try:
+        with _scratch_run() as (state, events), \
+                mock.patch.object(runner, "_abort_event", threading.Event()), \
+                mock.patch.object(runner, "save_checkpoint",
+                                  lambda m, t: saved.append((m, t))):
+            raised = False
+            try:
+                runner.run_module_tests_by_name(_local_opts(), "t4761_exit", "file")
+            except helpers.TestitAbort:
+                raised = True
+            except SystemExit as exc:
+                raise AssertionError(
+                    f"SystemExit({exc.code!r}) escaped setup handling") from None
+            assert raised, "a setup SystemExit must stop the run even without --stop"
+            assert calls == ["t4761_exit.file:setup_guard"], \
+                f"the later setup and the test body must not run, got {calls}"
+            kinds = [r.get("kind") for r in state.records]
+            assert kinds == ["setup_error", "not_run"], \
+                f"the file's test must still be recorded as not run, got {kinds}"
+            assert state.aborted is True, "the raise site must mark the run aborted"
+            assert saved == [("t4761_exit", "file")], \
+                f"the checkpoint must name the stopped file, got {saved}"
+    finally:
+        sys.modules.pop("t4761_exit.file", None)
+
+
+@th.unit_test("setup SystemExit: other workers start no new files")
+def test_setup_system_exit_stops_other_workers(opts):
+    import os
+    import sys
+    import threading
+    from types import SimpleNamespace
+    from unittest import mock
+    from testit import runner
+
+    calls = []
+    _exit_module("t4761_par_a.first", calls, 0)
+    _probe_module("t4761_par_b.second", calls, setup_raises=False)
+    root = os.path.dirname(os.path.abspath(__file__))
+    record_a = SimpleNamespace(name="t4761_par_a", path=root)
+    record_b = SimpleNamespace(name="t4761_par_b", path=root)
+    files = {"t4761_par_a": [("first", __file__)], "t4761_par_b": [("second", __file__)]}
+    try:
+        with _scratch_run() as (state, events), \
+                mock.patch.object(runner, "_abort_event", threading.Event()), \
+                mock.patch.object(runner, "save_checkpoint", lambda m, t: None), \
+                mock.patch.object(runner, "_discover_record_files",
+                                  lambda record: files[record.name]):
+            template = _local_opts(test_modules=None)
+            for record in (record_a, record_b):
+                tracker = runner._ModuleTracker(record.name, 1)
+                try:
+                    runner._run_module_in_thread(template, record, tracker)
+                except SystemExit as exc:
+                    raise AssertionError(
+                        f"SystemExit({exc.code!r}) escaped setup handling") from None
+            assert calls == ["t4761_par_a.first:setup_guard"], (
+                f"after one worker's setup exits, no other worker may start a file, got {calls}")
+            assert state.aborted is True, "the stopped run must be marked aborted"
+            codes = [r["code"] for r in runner._run_verdict(state)]
+            assert codes == ["setup_error", "aborted"], \
+                f"the parallel run must fail with setup_error and aborted, got {codes}"
+    finally:
+        sys.modules.pop("t4761_par_a.first", None)
+        sys.modules.pop("t4761_par_b.second", None)

@@ -1016,26 +1016,40 @@ def run_setup(opts, module, func_name, module_name, test_name):
         return True
     except helpers.TestitAbort:
         raise
-    except Exception as err:
-        tb = traceback.format_exc()
-        summary = f"{type(err).__name__}: {err}"
-        helpers._set_active_test(f"{module_name}:{test_name}:{func_name}")
-        helpers._increment("total")
-        helpers._increment("failed")
-        # No display event: a tracker's total is the file's static test count,
-        # and the report merge adds this one extra failed record.
-        helpers._record_result(
-            f"{func_name} (setup)", status="error",
-            detail=f"setup failed in {func_name}: {summary}",
-            agent_context=_setup_error_context(module, func_name, tb),
-            kind="setup_error")
-        if not helpers._get_display_fn():
-            logit.color_print(
-                f"{helpers.INDENT}Setup Error: {module_name}.{test_name}.{func_name}: {summary}",
-                logit.ConsoleLogger.RED)
-        if opts.verbose:
-            traceback.print_exc()
+    except SystemExit as err:
+        # A guard that exits means "do not run tests here": record it like any
+        # setup error, then stop the run so no other file starts in this
+        # environment. SystemExit(0) and SystemExit(None) included (#4761).
+        summary = f"SystemExit: {err.code}"
+        _record_setup_error(opts, module, func_name, module_name, test_name, summary)
+        _abort_event.set()
         raise _SetupFailed(func_name, summary)
+    except Exception as err:
+        summary = f"{type(err).__name__}: {err}"
+        _record_setup_error(opts, module, func_name, module_name, test_name, summary)
+        raise _SetupFailed(func_name, summary)
+
+
+def _record_setup_error(opts, module, func_name, module_name, test_name, summary):
+    """One counted `error` record of kind `setup_error` for a raising setup
+    function. Call from inside its except block (item #4761)."""
+    tb = traceback.format_exc()
+    helpers._set_active_test(f"{module_name}:{test_name}:{func_name}")
+    helpers._increment("total")
+    helpers._increment("failed")
+    # No display event: a tracker's total is the file's static test count,
+    # and the report merge adds this one extra failed record.
+    helpers._record_result(
+        f"{func_name} (setup)", status="error",
+        detail=f"setup failed in {func_name}: {summary}",
+        agent_context=_setup_error_context(module, func_name, tb),
+        kind="setup_error")
+    if not helpers._get_display_fn():
+        logit.color_print(
+            f"{helpers.INDENT}Setup Error: {module_name}.{test_name}.{func_name}: {summary}",
+            logit.ConsoleLogger.RED)
+    if opts.verbose:
+        traceback.print_exc()
 
 
 def import_module_for_testing(module_name, test_name, expected_root=None):
@@ -1168,7 +1182,9 @@ def run_module_tests_by_name(opts, module_name, test_name, expected_root=None):
     except _SetupFailed as failure:
         run_module_tests(opts, module, test_name, module_name,
                          setup_failure=failure)
-        if opts.stop:
+        # --stop, or a setup that exited (it set the abort event): no other
+        # file starts on any path, and --continue can resume here.
+        if opts.stop or _abort_event.is_set():
             save_checkpoint(module_name, test_name)
             helpers.mark_aborted()
             raise helpers.TestitAbort()
@@ -1276,7 +1292,9 @@ def run_module_tests(opts, module, test_name, module_name, setup_failure=None):
 
     for func_name, func in functions:
         if func_name.startswith(prefix):
-            if _abort_event.is_set():
+            # Recording a not-run test runs nothing, so a setup that exited
+            # (and set the abort event) still records its file's tests.
+            if _abort_event.is_set() and setup_failure is None:
                 helpers.mark_aborted()
                 raise helpers.TestitAbort()
             if gate is not None:
