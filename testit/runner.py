@@ -1165,7 +1165,7 @@ def run_module_tests_by_name(opts, module_name, test_name, expected_root=None):
     # A stopped run starts no file: main's next phase (file specs after
     # packages, or packages after file specs) reaches here before any other
     # abort check, and setup must not run (item #4761).
-    if _abort_event.is_set():
+    if _run_stopped():
         helpers.mark_aborted()
         raise helpers.TestitAbort()
     module = import_module_for_testing(module_name, test_name, expected_root)
@@ -2061,6 +2061,13 @@ def _push_refused(opts):
 # ---------------------------------------------------------------------------
 # Parallel module runner
 # ---------------------------------------------------------------------------
+def _run_stopped():
+    """True once the run has been stopped: a setup exit, --stop or the abort
+    key. Every dispatch loop in main, and the per-file entry point, checks it
+    before starting another record (item #4761)."""
+    return _abort_event.is_set() or bool(helpers.TEST_RUN.aborted)
+
+
 def _run_module_in_thread(opts_template, record, tracker):
     """Run all test files for a module record. Called from a thread."""
     # Each thread gets its own opts copy with its own client
@@ -2649,6 +2656,8 @@ def main(opts):
                 with ThreadPoolExecutor(max_workers=opts.jobs) as executor:
                     futures = {}
                     for record in parallel_modules:
+                        if _run_stopped():
+                            break
                         tracker = display.trackers[record.name]
                         future = executor.submit(
                             _run_module_in_thread,
@@ -2664,7 +2673,7 @@ def main(opts):
 
             # Run serial modules sequentially
             for record in serial_modules:
-                if _abort_event.is_set():
+                if _run_stopped():
                     break
                 tracker = display.trackers[record.name]
 
@@ -2706,6 +2715,8 @@ def main(opts):
 
         # Run file specs first (sequential)
         for record in file_specs:
+            if _run_stopped():
+                break
             try:
                 run_module_tests_by_name(opts, record.name, record.test_file,
                                          expected_root=record.path)
@@ -2717,6 +2728,8 @@ def main(opts):
             with ThreadPoolExecutor(max_workers=opts.jobs) as executor:
                 futures = {}
                 for record in parallel_modules:
+                    if _run_stopped():
+                        break
                     tracker = _ModuleTracker(record.name, 0)
                     future = executor.submit(
                         _run_module_in_thread,
@@ -2731,6 +2744,8 @@ def main(opts):
 
         # Run serial modules sequentially
         for record in serial_modules:
+            if _run_stopped():
+                break
             if _resume.active and not _resume.reached:
                 if record.name != _resume.module:
                     continue
@@ -2749,6 +2764,8 @@ def main(opts):
 
         # Run file specs first
         for record in file_specs:
+            if _run_stopped():
+                break
             try:
                 run_module_tests_by_name(opts, record.name, record.test_file,
                                          expected_root=record.path)
@@ -2757,6 +2774,8 @@ def main(opts):
 
         # Run all modules sequentially
         for record in parallel_modules + serial_modules:
+            if _run_stopped():
+                break
             if _resume.active and not _resume.reached:
                 if record.name != _resume.module:
                     continue
@@ -2772,6 +2791,8 @@ def main(opts):
     if use_rich and file_specs:
         helpers._set_display_fn(None)
         for record in file_specs:
+            if _run_stopped():
+                break
             try:
                 run_module_tests_by_name(opts, record.name, record.test_file,
                                          expected_root=record.path)

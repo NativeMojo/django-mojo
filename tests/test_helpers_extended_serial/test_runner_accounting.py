@@ -578,3 +578,38 @@ def test_setup_system_exit_stops_next_dispatch_phase(opts):
     finally:
         sys.modules.pop("t4761_phase_a.first", None)
         sys.modules.pop("t4761_phase_b.second", None)
+
+
+@th.unit_test("stopped run: a --stop abort also starts no further file")
+def test_stop_abort_starts_no_further_file(opts):
+    """--stop marks the run aborted without setting the abort event; the
+    shared stopped-state guard must refuse the next file as well."""
+    import os
+    import sys
+    import threading
+    from types import SimpleNamespace
+    from unittest import mock
+    from testit import runner, helpers
+
+    calls = []
+    _probe_module("t4761_stopflag.next", calls, setup_raises=False)
+    root = os.path.dirname(os.path.abspath(__file__))
+    try:
+        with _scratch_run() as (state, events), \
+                mock.patch.object(runner, "_abort_event", threading.Event()):
+            state.aborted = True
+            refused = False
+            try:
+                runner.run_module_tests_by_name(_local_opts(), "t4761_stopflag", "next",
+                                                expected_root=root)
+            except helpers.TestitAbort:
+                refused = True
+            assert refused, "the next file must be refused with TestitAbort after --stop"
+            assert calls == [], f"no setup or test may run after --stop, got {calls}"
+            assert runner._run_stopped(), "a run marked aborted by --stop is stopped"
+            state.aborted = False
+            assert not runner._run_stopped(), "a run neither aborted nor signalled is not stopped"
+            runner._abort_event.set()
+            assert runner._run_stopped(), "a set abort event is a stopped run"
+    finally:
+        sys.modules.pop("t4761_stopflag.next", None)
