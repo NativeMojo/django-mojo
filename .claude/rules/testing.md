@@ -84,6 +84,7 @@ Before writing any test, read `docs/django_developer/testit/Overview.md`. This i
 - Every `assert` must include a descriptive failure message — no bare asserts
 - Tests must pass when the feature is correct and fail when it is broken
 - Never write tests that assert the feature is absent or broken
+- A raising `setup_` function fails its file: its tests are reported as not run and the run exits non-zero with `setup_error` — never rely on a setup error being ignored
 - Setup functions must clean up test data before creating it — tests run on long-lived databases, not just fresh ones. Delete any records your setup will create before inserting them.
 - If a test fails, fix the **code** (not the test) unless the test itself is wrong
 - Never write "bug confirmation" tests that pass by asserting the bug occurs

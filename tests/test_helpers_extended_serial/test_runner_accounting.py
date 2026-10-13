@@ -172,21 +172,21 @@ def test_setup_error_becomes_error_record(opts):
             errors = [r for r in state.records if r.get("kind") == "setup_error"]
             assert len(errors) == 1, f"one setup_error record expected, got {state.records}"
             record = errors[0]
-            assert record["status"] == "error", record
-            assert record["function"] == "setup_first", record
-            assert "RuntimeError: probe setup exploded" in record["detail"], record
+            assert record["status"] == "error", f"the setup record is an error, got {record}"
+            assert record["function"] == "setup_first", f"the record names the raising setup, got {record}"
+            assert "RuntimeError: probe setup exploded" in record["detail"], f"the detail carries the exception type and message, got {record}"
             ctx = record["agent_context"]
-            assert ctx["function"] == "setup_first", ctx
-            assert "RuntimeError: probe setup exploded" in ctx["traceback"], ctx
+            assert ctx["function"] == "setup_first", f"the context names the setup function, got {ctx}"
+            assert "RuntimeError: probe setup exploded" in ctx["traceback"], f"the context carries the traceback, got {ctx}"
             assert ctx["file_path"] == __file__, (
                 f"file_path must be the test file, not the decorator's: {ctx.get('file_path')}")
-            assert "def setup_first" in ctx["test_source"], ctx
+            assert "def setup_first" in ctx["test_source"], f"the context carries the setup source, got {ctx}"
             report = runner._build_agent_report(
                 SimpleNamespace(), display=SimpleNamespace(trackers={}, _order=[]))
-            assert report["status"] == "failed", report["status"]
+            assert report["status"] == "failed", f"a setup error fails the report, got {report['status']}"
             failure = [f for f in report["failures"] if f["kind"] == "setup_error"]
-            assert len(failure) == 1 and failure[0]["file_path"] == __file__, report["failures"]
-            assert "setup_error" in {r["code"] for r in report["reasons"]}, report["reasons"]
+            assert len(failure) == 1 and failure[0]["file_path"] == __file__, f"failures carry one setup_error with the test file, got {report['failures']}"
+            assert "setup_error" in {r["code"] for r in report["reasons"]}, f"the report names setup_error, got {report['reasons']}"
     finally:
         sys.modules.pop("t4761_probe.setup_record", None)
 
@@ -204,17 +204,17 @@ def test_setup_error_stops_file_and_marks_tests_not_run(opts):
             assert calls == ["setup_first"], (
                 f"the later setup and every test body must not run, got {calls}")
             not_run = [r for r in state.records if r.get("kind") == "not_run"]
-            assert [r["name"] for r in not_run] == ["one", "two", "three"], not_run
-            assert all(r["status"] == "skipped" for r in not_run), not_run
+            assert [r["name"] for r in not_run] == ["one", "two", "three"], f"every test is recorded not run, in order, got {not_run}"
+            assert all(r["status"] == "skipped" for r in not_run), f"not-run tests are skips naming the cause, got {not_run}"
             assert all(r["detail"] == "not run: setup failed in setup_first: "
-                       "RuntimeError: probe setup exploded" for r in not_run), not_run
+                       "RuntimeError: probe setup exploded" for r in not_run), f"not-run tests are skips naming the cause, got {not_run}"
             assert (state.total, state.failed, state.skipped, state.passed) == (4, 1, 3, 0), \
                 "the setup record is the file's only counted failure"
             results = [kw for e, kw in events if e == "test_result"]
             assert len(results) == 3 and all(kw["status"] == "skipped" for kw in results), \
                 "only the not-run records reach the tracker"
             codes = [r["code"] for r in runner._run_verdict(state)]
-            assert codes == ["setup_error"], codes
+            assert codes == ["setup_error"], f"a setup error alone is setup_error, got {codes}"
     finally:
         sys.modules.pop("t4761_probe.not_run", None)
 
@@ -239,10 +239,11 @@ def test_setup_error_under_stop_aborts_red(opts):
                     raised = True
             assert raised, "a setup error under --stop must raise TestitAbort"
             assert state.aborted is True, "the raise site must mark the run aborted"
-            assert saved == [("t4761_probe", "stop")], saved
+            assert saved == [("t4761_probe", "stop")], f"the checkpoint names the stopped file, got {saved}"
             codes = [r["code"] for r in runner._run_verdict(state)]
-            assert codes == ["setup_error", "aborted"], codes
-            assert runner._keeps_checkpoint(runner._run_verdict(state))
+            assert codes == ["setup_error", "aborted"], f"a stopped setup error is setup_error and aborted, got {codes}"
+            assert runner._keeps_checkpoint(runner._run_verdict(state)), \
+                "a run stopped by a setup error keeps its --continue checkpoint"
     finally:
         sys.modules.pop("t4761_probe.stop", None)
 
@@ -261,10 +262,12 @@ def test_unselected_file_runs_no_setup(opts):
             assert calls == [], f"no setup or test may run, got {calls}"
             assert all(r["detail"] == "tier 'admin' not selected" for r in state.records), \
                 state.records
-            assert (state.total, state.skipped, state.failed) == (3, 3, 0)
-            assert not any(r.get("kind") for r in state.records), state.records
+            assert (state.total, state.skipped, state.failed) == (3, 3, 0), \
+                f"three counted tier skips expected, got {(state.total, state.skipped, state.failed)}"
+            assert not any(r.get("kind") for r in state.records), f"no record carries a kind, got {state.records}"
             # A tier skip is a skip: alone it is "nothing executed", never a setup error.
-            assert [r["code"] for r in runner._run_verdict(state)] == ["nothing_executed"]
+            assert [r["code"] for r in runner._run_verdict(state)] == ["nothing_executed"], \
+                "tier skips alone are nothing executed, never a setup error"
             state.passed = state.total = 4
             assert runner._run_verdict(state) == [], \
                 "tier skips beside a passing test leave no reason"
@@ -296,10 +299,11 @@ def test_setup_skip_still_skips_file(opts):
     try:
         with _scratch_run() as (state, events):
             runner.run_module_tests_by_name(_local_opts(), "t4761_probe", "setup_skip")
-            assert calls == ["setup_skips"], calls
-            assert (state.total, state.skipped, state.failed) == (1, 1, 0)
-            assert [r["detail"] for r in state.records] == ["setup skipped"], state.records
-            assert not any(r.get("kind") for r in state.records), state.records
+            assert calls == ["setup_skips"], f"only the skipping setup runs, got {calls}"
+            assert (state.total, state.skipped, state.failed) == (1, 1, 0), \
+                f"one counted skip expected, got {(state.total, state.skipped, state.failed)}"
+            assert [r["detail"] for r in state.records] == ["setup skipped"], f"the file's test is a setup skip, got {state.records}"
+            assert not any(r.get("kind") for r in state.records), f"no record carries a kind, got {state.records}"
     finally:
         sys.modules.pop("t4761_probe.setup_skip", None)
 
@@ -321,16 +325,16 @@ def test_run_verdict_cases(opts):
     assert not runner._abort_event.is_set(), "the verdict cases assume no abort key"
     assert codes(run(total=2, passed=2)) == [], "a passing run has no reasons"
     failed = runner._run_verdict(run(total=2, passed=1, failed=1))
-    assert [r["code"] for r in failed] == ["tests_failed"]
+    assert [r["code"] for r in failed] == ["tests_failed"], f"a failed test is tests_failed, got {failed}"
     assert failed[0]["message"] == "  Tests failed!", "the historic message is unchanged"
     setup = runner._run_verdict(run(total=1, failed=1, kinds=["setup_error"]))
-    assert [r["code"] for r in setup] == ["setup_error"]
-    assert "m.f.fn0" in setup[0]["message"], setup
+    assert [r["code"] for r in setup] == ["setup_error"], f"a setup error is setup_error only, got {setup}"
+    assert "m.f.fn0" in setup[0]["message"], f"the message names module.file.function, got {setup}"
     assert codes(run(total=4, failed=1, skipped=3,
                      kinds=["setup_error", "not_run", "not_run", "not_run"])) == \
         ["setup_error"], "not-run tests never add nothing_executed beside a setup error"
-    assert codes(run(total=1, passed=1, aborted=True)) == ["aborted"]
-    assert codes(run()) == ["nothing_selected"]
+    assert codes(run(total=1, passed=1, aborted=True)) == ["aborted"], "a stopped run is aborted"
+    assert codes(run()) == ["nothing_selected"], "an empty selection is nothing_selected"
     assert codes(run(total=3, skipped=3)) == ["nothing_executed"], \
         "all-skipped is distinct from nothing selected"
     assert codes(run(total=3, passed=1, failed=2, kinds=["setup_error"])) == \
@@ -349,7 +353,7 @@ def test_exit_for_and_checkpoint_rule(opts):
         return None
 
     failed = {"reasons": [{"code": "tests_failed", "message": "  Tests failed!"}]}
-    assert exit_message(failed, False) == "  Tests failed!"
+    assert exit_message(failed, False) == "  Tests failed!", "a failed run exits with its message"
     assert exit_message(failed, True) == "  Tests failed!", "the verdict outranks the budget"
     empty = {"reasons": [{"code": "nothing_selected", "message": "  none"}]}
     assert exit_message(empty, False) == "  none", "an empty run exits non-zero"
@@ -360,8 +364,9 @@ def test_exit_for_and_checkpoint_rule(opts):
     def keeps(*codes):
         return runner._keeps_checkpoint([{"code": c} for c in codes])
 
-    assert keeps("aborted") and keeps("setup_error") and keeps("tests_failed", "aborted")
+    assert keeps("aborted") and keeps("setup_error") and keeps("tests_failed", "aborted"), \
+        "aborted and setup_error runs keep the checkpoint"
     assert not keeps(), "a clean run clears the checkpoint"
-    assert not keeps("tests_failed")
+    assert not keeps("tests_failed"), "a completed failing run clears the checkpoint"
     assert not keeps("nothing_selected"), "a stale --continue must not stick red"
-    assert not keeps("nothing_executed")
+    assert not keeps("nothing_executed"), "an all-skipped run clears the checkpoint"
