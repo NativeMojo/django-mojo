@@ -150,6 +150,20 @@ class ApiKey(MojoSecrets, MojoModel):
         on_delete=models.SET_NULL, related_name="api_keys")
     override_user = models.BooleanField(default=False)
 
+    # The issuer record: who linked the member and who switched override on,
+    # and when. Stamped only by set_user / set_override_user (from the
+    # request's user) and by create_for_group(issued_by=...); cleared together
+    # with the value they describe. Null on a key written before these fields
+    # existed, or by server code that named no issuer.
+    user_linked_by = models.ForeignKey(
+        "account.User", null=True, blank=True, default=None,
+        on_delete=models.SET_NULL, related_name="+")
+    user_linked_at = models.DateTimeField(null=True, default=None, blank=True)
+    override_enabled_by = models.ForeignKey(
+        "account.User", null=True, blank=True, default=None,
+        on_delete=models.SET_NULL, related_name="+")
+    override_enabled_at = models.DateTimeField(null=True, default=None, blank=True)
+
     class Meta:
         ordering = ["-created"]
 
@@ -166,8 +180,11 @@ class ApiKey(MojoSecrets, MojoModel):
         # The framework default, plus the encrypted store that holds the raw
         # token: the REST save would otherwise hand a posted `secrets` to
         # MojoSecrets.set_secrets. A declared list REPLACES the default.
+        # The issuer record is written by the two setters only, never posted.
         NO_SAVE_FIELDS = ["id", "pk", "created", "uuid",
-                          "secrets", "mojo_secrets", "secret"]
+                          "secrets", "mojo_secrets", "secret",
+                          "user_linked_by", "user_linked_at",
+                          "override_enabled_by", "override_enabled_at"]
         SENSITIVE_FIELDS = ["token_hash"]
         # This table holds live credentials. The assistant's query_model takes a
         # caller-supplied graph and does not filter sensitive values out of
@@ -183,11 +200,14 @@ class ApiKey(MojoSecrets, MojoModel):
                 "fields": [
                     "id", "created", "modified", "name",
                     "is_active", "permissions", "limits",
-                    "last_used", "expires_at", "metadata", "override_user"
+                    "last_used", "expires_at", "metadata", "override_user",
+                    "user_linked_at", "override_enabled_at"
                 ],
                 "graphs": {
                     "group": "basic",
                     "user": "basic",
+                    "user_linked_by": "basic",
+                    "override_enabled_by": "basic",
                 }
             },
             # Opt-in credential read: same shape as "default" plus the live raw
@@ -199,12 +219,15 @@ class ApiKey(MojoSecrets, MojoModel):
                 "fields": [
                     "id", "created", "modified", "name",
                     "is_active", "permissions", "limits",
-                    "last_used", "expires_at", "metadata", "override_user"
+                    "last_used", "expires_at", "metadata", "override_user",
+                    "user_linked_at", "override_enabled_at"
                 ],
                 "extra": [("rest_get_token", "token")],
                 "graphs": {
                     "group": "basic",
                     "user": "basic",
+                    "user_linked_by": "basic",
+                    "override_enabled_by": "basic",
                 }
             },
             # Safe self-introspection graph for the `group/apikey/me` whoami
@@ -216,11 +239,13 @@ class ApiKey(MojoSecrets, MojoModel):
                 "fields": [
                     "id", "created", "name", "is_active",
                     "permissions", "limits", "last_used", "expires_at",
-                    "override_user"
+                    "override_user", "user_linked_at", "override_enabled_at"
                 ],
                 "graphs": {
                     "group": "basic",
                     "user": "basic",
+                    "user_linked_by": "basic",
+                    "override_enabled_by": "basic",
                 }
             }
         }
@@ -433,6 +458,42 @@ class ApiKey(MojoSecrets, MojoModel):
         return req_member.has_permission(
             ["manage_group", "manage_members", "manage_users", "manage_groups"])
 
+    def _can_assume(self, request, target):
+        """Whether `request.user` may make this key ASSUME `target`.
+
+        Stricter than _can_manage_acting_user, which is the bar for a
+        reference-mode link. A key that assumes a member carries that member's
+        authority, so managing the group is not enough: the requester must be
+        the member themself, or a platform-wide administrator. Otherwise a
+        manager could reach, through the key, what only the member may reach.
+
+        The credential must be a person's own session. A per-user API key is a
+        stored secret, and letting it mint a second credential would give the
+        holder one that outlives the first key's revocation.
+
+        Also the bar for reading or replacing the token of such a key, which
+        is the same authority in another form.
+        """
+        if target is None or not self._can_manage_acting_user(request):
+            return False
+        from mojo.helpers.request import credential_kind
+        if credential_kind(request) not in ("user", "oauth"):
+            return False
+        user = request.user
+        if user.pk == target.pk:
+            return True
+        return bool(user.has_permission(["manage_groups", "manage_users"]))
+
+    def can_release_token(self, request):
+        """Whether `request` may read or replace this key's token.
+
+        A key that assumes a member answers to _can_assume; every other key
+        keeps the bar its route already enforces.
+        """
+        if not (self.override_user and self.user_id):
+            return True
+        return self._can_assume(request, self.user)
+
     def _acting_group(self, request):
         """This key's group, resolved explicitly.
 
@@ -521,6 +582,10 @@ class ApiKey(MojoSecrets, MojoModel):
             # that reads as "assume nobody" — clear both together so the row
             # can never sit in it.
             self.override_user = False
+            self.user_linked_by = None
+            self.user_linked_at = None
+            self.override_enabled_by = None
+            self.override_enabled_at = None
             return
 
         pk = value.get("id") if isinstance(value, dict) else value
@@ -530,6 +595,23 @@ class ApiKey(MojoSecrets, MojoModel):
             raise merrors.ValueException("user must be a valid user id")
 
         self.validate_acting_user(target, request)
+        # A key that already assumes a member takes the new target's authority
+        # the moment it is re-pointed, so the stricter bar applies here too.
+        # set_override_user does nothing when override is already on, which is
+        # why this half exists. Refuse; never silently drop override.
+        if (self.override_user and self.user_id != target.pk
+                and not self._can_assume(request, target)):
+            raise merrors.PermissionDeniedException()
+        if self.user_id != target.pk:
+            now = dates.utcnow()
+            self.user_linked_by = request.user
+            self.user_linked_at = now
+            if self.override_user:
+                # Re-pointing a key that assumes a member is issuing that
+                # authority for the new member: the requester just passed
+                # _can_assume for them, so the override record names them.
+                self.override_enabled_by = request.user
+                self.override_enabled_at = now
         self.user = target
 
         elevated = self._elevated_perms_for(target)
@@ -556,13 +638,59 @@ class ApiKey(MojoSecrets, MojoModel):
                 "override_user requires a linked user")
 
         was = self.override_user
+        # Switching on is the moment the key takes the member's authority:
+        # only the member themself or a platform administrator may do it.
+        # Switching off keeps the manager's bar, so a manager can always
+        # reduce a key.
+        if enabled and not was and not self._can_assume(request, self.user):
+            raise merrors.PermissionDeniedException()
         self.override_user = enabled
+        if not enabled:
+            self.override_enabled_by = None
+            self.override_enabled_at = None
         if enabled and not was:
+            self.override_enabled_by = request.user
+            self.override_enabled_at = dates.utcnow()
+            # A Log row as well as the incident: it names the issuer in text,
+            # so the record survives deletion of the issuer's account. On
+            # create the row has no id yet, so on_rest_created writes it.
+            if self.pk:
+                self._log_override_enabled()
+            else:
+                self._pending_override_log = True
             self._report_acting_user_event(
                 f"ApiKey '{self.name}' now assumes the identity of "
                 f"{self.user.username} — permissions resolve through that "
                 f"member, bounded by the key's group",
                 "API key override_user enabled", 5)
+
+    def on_rest_pre_save(self, changed_fields, created):
+        """A linked key may not be moved to a group its member is not in.
+
+        A link is valid only for an active direct member of the key's own
+        group (validate_acting_user). `group` is an ordinary writable field,
+        so without this a manager of two groups could move a linked key into
+        one where the member was never a member. Checked here, after the
+        whole body is applied, so the order of fields cannot matter. Read
+        from the stored row rather than changed_fields: the comparison must
+        not depend on how the field was written.
+        """
+        if created or not self.user_id:
+            return
+        stored_group_id = type(self).objects.filter(
+            pk=self.pk).values_list("group_id", flat=True).first()
+        if stored_group_id != self.group_id:
+            self.validate_acting_user(self.user, self.active_request)
+
+    def _log_override_enabled(self):
+        """Audit row for the switch from reference to assume. Never raises."""
+        try:
+            self.log(
+                f"API Key '{self.name}' override_user enabled for user "
+                f"{self.user_id} by user {self.override_enabled_by_id}",
+                "api_key:override_enabled")
+        except Exception:
+            logit.exception("failed to log api_key override_enabled")
 
     def is_group_allowed(self, group):
         """
@@ -681,7 +809,7 @@ class ApiKey(MojoSecrets, MojoModel):
 
     @classmethod
     def create_for_group(cls, group, name, permissions=None, limits=None,
-                         user=None, override_user=False):
+                         user=None, override_user=False, issued_by=None):
         """
         Create a new ApiKey for a group programmatically.
 
@@ -700,6 +828,10 @@ class ApiKey(MojoSecrets, MojoModel):
             override_user: When True the key ASSUMES that user's identity and
                          permissions; when False (default) the link is a
                          reference used only for attribution.
+            issued_by:   Optional account.User recorded as the one who linked
+                         the member (and enabled override, when it is on).
+                         A record only: this is a trusted internal call and
+                         the value is not checked against any rule.
         """
         api_key = cls(
             group=group,
@@ -717,6 +849,13 @@ class ApiKey(MojoSecrets, MojoModel):
                 raise merrors.PermissionDeniedException()
             api_key.user = user
             api_key.override_user = bool(override_user)
+            if issued_by is not None:
+                now = dates.utcnow()
+                api_key.user_linked_by = issued_by
+                api_key.user_linked_at = now
+                if api_key.override_user:
+                    api_key.override_enabled_by = issued_by
+                    api_key.override_enabled_at = now
         elif override_user:
             raise merrors.ValueException("override_user requires a user")
         token = api_key.generate_token()
@@ -840,10 +979,20 @@ class ApiKey(MojoSecrets, MojoModel):
         from "this key has no token". A failing audit write must never be able
         to reach that.
         """
+        # A key that assumes a member hands its token only to that member or a
+        # platform administrator (see _can_assume). The refusal is audited
+        # too, and reads as `"token": null` like a key with no token.
+        allowed = self.can_release_token(self.active_request)
         try:
-            self.log(f"API Key '{self.name}' token read", "api_key:token_read")
+            if allowed:
+                self.log(f"API Key '{self.name}' token read", "api_key:token_read")
+            else:
+                self.log(f"API Key '{self.name}' token read refused",
+                         "api_key:token_read_refused")
         except Exception:
             logit.exception("failed to audit api_key token read")
+        if not allowed:
+            return None
         return self.get_token()
 
     def on_rest_get(self, request, graph="default"):
@@ -874,6 +1023,9 @@ class ApiKey(MojoSecrets, MojoModel):
         self._raw_token = self.generate_token()
         self.save()
         self.log(f"API Key '{self.name}' created", "api_key:generated")
+        if getattr(self, "_pending_override_log", False):
+            self._pending_override_log = False
+            self._log_override_enabled()
 
     def rotate_token(self):
         """Rotate this key's secret in place: same id / name / permissions /
