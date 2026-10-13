@@ -16,30 +16,28 @@ Compiled assets use a relative base; Portal API requests always use same-origin
 
 ## Pinned identity and offline replacement
 
-The current artifact is portal-mojo **0.2.8**, source revision
-`9eb3d5ee8f4989d009ba8bfd08fa3e16bba3c860` (portal-mojo `main` on GitHub),
+The current artifact is portal-mojo **0.2.16**, source revision
+`949e6aabc452a437e07e465aab8738db23a6e17c` (the `v0.2.16` tag on GitHub),
 built clean with Node **24.21.0** / npm **11.19.0** and lockfile SHA-256
-`1db3a5c22924025e0c7add39835f8aeb2f7c3e5fdfb98bc8c3bb18ff34879f86`.
-Its 125-file inventory includes the Vite manifest and lazy chunks.
+`c8f07c485d2e45d7b689a03a8cea214be144f6089b6133b04d9241cac7250cf8`.
+Its 127-file inventory includes the Vite manifest and lazy chunks.
 The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 
-`614987622428d2d29b6317ce5ec921879d841422190144a4d5c13407f553748e`
+`b8786967302bfe27c4cca986b9a565fb81879e27bc753ad310b56b058fbc35ab`
 
-This pin comes from the clean local canonical build for item #7493. The
-source revision is later than the npm 0.2.8 release and carries the same
-version number, because no portal-mojo release was cut for it. The sidebar
-therefore shows 0.2.8 for both; tell two bundles apart by source revision and
-manifest SHA-256, never by version. portal-mojo promises identical bytes on one
-platform only, so a CI build of the same revision may carry a different hash.
+This pin comes from a clean local canonical build of the released tag, so the
+sidebar version and the npm release agree. portal-mojo promises identical bytes
+on one platform only, so a CI build of the same revision may carry a different
+hash; tell two bundles apart by source revision and manifest SHA-256.
 The complete artifact includes hidden `.vite` content; verify the manifest
-digest before vendoring it. This build has not been released to npm or deployed.
+digest before vendoring it.
 
 Stop processes serving/importing the checkout before replacing the artifact:
 
 ```bash
 uv run python scripts/vendor_admin_portal.py \
   --source /absolute/path/to/verified/dist/admin \
-  --expected-manifest-sha256 614987622428d2d29b6317ce5ec921879d841422190144a4d5c13407f553748e
+  --expected-manifest-sha256 b8786967302bfe27c4cca986b9a565fb81879e27bc753ad310b56b058fbc35ab
 uv run python scripts/vendor_admin_portal.py --check
 ```
 
@@ -66,7 +64,25 @@ startup and delivers only its validated allowlist. Provenance and
 
 ## Included Portal behavior
 
-This artifact (revision `9eb3d5ee`) adds, over the previously packaged bundle:
+portal-mojo 0.2.16 adds, over the previously packaged 0.2.8 build:
+
+- **Users → Sys Perms** lists every system permission a user holds, including
+  keys outside the built-in catalog, and can grant or remove such custom keys.
+  Removal sends a falsy value, which `User.set_permissions` deletes.
+- The user header avatar shows the attached image; administrators click it to
+  replace or clear it.
+- Detail-modal overview cards (users, groups, members, devices, GeoIP) are
+  compact single-line KPIs.
+- Members: group-local write gates and invite role presets.
+- **Storage → Media rendering** edits rendition settings.
+- Charts handle sparse timestamp histories and long or formatted axis labels.
+- Session, realtime and active-group handling survive transient token-refresh
+  and read failures instead of signing out or dropping the group.
+
+These are frontend updates against existing APIs; no database migration is
+needed.
+
+The earlier 0.2.8 build (revision `9eb3d5ee`) added, over its predecessor:
 
 - **My account** in the avatar menu: password, email, passkeys and
   authenticator (TOTP) for the signed-in user. After an own password change the

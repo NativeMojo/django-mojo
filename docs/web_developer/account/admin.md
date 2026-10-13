@@ -1,15 +1,22 @@
 # Packaged Admin Security client
 
-The packaged Portal is **portal-mojo 0.2.8**, source revision
-`9eb3d5ee8f4989d009ba8bfd08fa3e16bba3c860`. That revision is later than the npm
-0.2.8 release and carries the same version number, so the revision and the
-manifest hash identify the build, not the version.
+The packaged Portal is **portal-mojo 0.2.16**, source revision
+`949e6aabc452a437e07e465aab8738db23a6e17c` (the `v0.2.16` tag).
 
-- Manifest SHA-256: `614987622428d2d29b6317ce5ec921879d841422190144a4d5c13407f553748e`
-- Lockfile SHA-256: `1db3a5c22924025e0c7add39835f8aeb2f7c3e5fdfb98bc8c3bb18ff34879f86`
-- Inventory: 125 files
+- Manifest SHA-256: `b8786967302bfe27c4cca986b9a565fb81879e27bc753ad310b56b058fbc35ab`
+- Lockfile SHA-256: `c8f07c485d2e45d7b689a03a8cea214be144f6089b6133b04d9241cac7250cf8`
+- Inventory: 127 files
 
 New in this build:
+
+- **Users → Sys Perms** shows every system permission a user holds, including
+  custom keys outside the catalog, and can grant or remove them.
+- Clicking the user avatar replaces or clears it.
+- Compact overview cards in the user, group, member, device and GeoIP modals.
+- Members: group-local write gates and invite role presets.
+- **Storage → Media rendering** for rendition settings.
+
+Added in the earlier 0.2.8 build:
 
 - **My account** in the avatar menu: password, email, passkeys and
   authenticator. An own password change keeps the user signed in and offers
