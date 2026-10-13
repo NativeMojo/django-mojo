@@ -1162,6 +1162,12 @@ def _record_unrunnable_file(module_name, test_name, expected_root, reason):
 
 def run_module_tests_by_name(opts, module_name, test_name, expected_root=None):
     """Run all test functions in a specific test module in the order they appear."""
+    # A stopped run starts no file: main's next phase (file specs after
+    # packages, or packages after file specs) reaches here before any other
+    # abort check, and setup must not run (item #4761).
+    if _abort_event.is_set():
+        helpers.mark_aborted()
+        raise helpers.TestitAbort()
     module = import_module_for_testing(module_name, test_name, expected_root)
     if not module:
         _record_unrunnable_file(

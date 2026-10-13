@@ -523,3 +523,58 @@ def test_setup_system_exit_stops_other_workers(opts):
     finally:
         sys.modules.pop("t4761_par_a.first", None)
         sys.modules.pop("t4761_par_b.second", None)
+
+
+@th.unit_test("setup SystemExit: main's next phase starts no file and runs no setup")
+def test_setup_system_exit_stops_next_dispatch_phase(opts):
+    """main runs file specs and packages in separate loops; each catches
+    TestitAbort and breaks, then the next loop begins. Both entry points it
+    uses must refuse to start a file once a setup exit stopped the run."""
+    import os
+    import sys
+    import threading
+    from types import SimpleNamespace
+    from unittest import mock
+    from testit import runner, helpers
+
+    calls = []
+    _exit_module("t4761_phase_a.first", calls, 0)
+    _probe_module("t4761_phase_b.second", calls, setup_raises=False)
+    root = os.path.dirname(os.path.abspath(__file__))
+    package_b = SimpleNamespace(name="t4761_phase_b", path=root)
+    try:
+        with _scratch_run() as (state, events), \
+                mock.patch.object(runner, "_abort_event", threading.Event()), \
+                mock.patch.object(runner, "save_checkpoint", lambda m, t: None), \
+                mock.patch.object(runner, "_discover_record_files",
+                                  lambda record: [("second", __file__)]):
+            local = _local_opts()
+            stopped = []
+            # Phase one: a file spec whose setup exits.
+            try:
+                runner.run_module_tests_by_name(local, "t4761_phase_a", "first",
+                                                expected_root=root)
+            except helpers.TestitAbort:
+                stopped.append("file spec")
+            except SystemExit as exc:
+                raise AssertionError(
+                    f"SystemExit({exc.code!r}) escaped setup handling") from None
+            # Phase two, either order: the package loop, then a file spec.
+            for label, start in (
+                    ("package", lambda: runner.run_tests_for_record(local, package_b)),
+                    ("file spec", lambda: runner.run_module_tests_by_name(
+                        local, "t4761_phase_b", "second", expected_root=root))):
+                try:
+                    start()
+                except helpers.TestitAbort:
+                    stopped.append(label)
+            assert stopped == ["file spec", "package", "file spec"], (
+                f"every phase after the exit must stop with TestitAbort, got {stopped}")
+            assert calls == ["t4761_phase_a.first:setup_guard"], (
+                f"no later phase may run a setup or a test, got {calls}")
+            codes = [r["code"] for r in runner._run_verdict(state)]
+            assert codes == ["setup_error", "aborted"], \
+                f"the stopped run must fail with setup_error and aborted, got {codes}"
+    finally:
+        sys.modules.pop("t4761_phase_a.first", None)
+        sys.modules.pop("t4761_phase_b.second", None)
