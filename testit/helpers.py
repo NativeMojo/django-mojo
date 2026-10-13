@@ -317,7 +317,8 @@ def _result_key(test_name):
     return test_name
 
 
-def _record_result(test_name, *, status, detail=None, agent_context=None, duration=None):
+def _record_result(test_name, *, status, detail=None, agent_context=None, duration=None,
+                   kind=None):
     context = _active_context()
     key = _result_key(test_name)
     record = {
@@ -327,6 +328,11 @@ def _record_result(test_name, *, status, detail=None, agent_context=None, durati
         "name": test_name,
         "status": status,
     }
+    if kind:
+        # What the record is when it is not an ordinary test outcome:
+        # "setup_error" for a raising setup_ function, "not_run" for a test
+        # that setup error stopped (item #4761). The run verdict counts these.
+        record["kind"] = kind
     if duration is not None:
         # Wall time for this single test. The runner surfaces the slowest of these
         # in the agent report; module-level timing alone cannot tell you which test

@@ -105,3 +105,263 @@ def test_file_selection_report_accounting(opts):
             "A selected file adds an execution to its whole-skipped package"
         assert report['modules']['test_optin']['skipped'] == 4, \
             "A file skip must not disappear into the package's unrecorded skips"
+
+
+# ---------------------------------------------------------------------------
+# Setup errors, not-run tests and the run verdict (item #4761)
+# ---------------------------------------------------------------------------
+def _local_opts(**kwargs):
+    from types import SimpleNamespace
+    base = dict(verbose=False, errors=False, stop=False, host="http://127.0.0.1:9",
+                logger=None, select_all=False, test_modules=["probe"],
+                selected_tags=set(), extra_list=[], extra=[])
+    base.update(kwargs)
+    return SimpleNamespace(**base)
+
+
+def _probe_module(dotted, calls, *, setup_raises=True, file_tier=None):
+    """An in-memory test file: two setups, three tests, in source order.
+    Registered in sys.modules so import_module returns it; the caller removes it."""
+    import sys
+    import types
+
+    module = types.ModuleType(dotted)
+    module.__file__ = __file__
+
+    @th.unit_setup()
+    def setup_first(opts):
+        calls.append("setup_first")
+        if setup_raises:
+            raise RuntimeError("probe setup exploded")
+
+    @th.unit_setup()
+    def setup_second(opts):
+        calls.append("setup_second")
+
+    @th.unit_test("probe one")
+    def test_one(opts):
+        calls.append("test_one")
+
+    @th.unit_test("probe two")
+    def test_two(opts):
+        calls.append("test_two")
+
+    @th.unit_test("probe three")
+    def test_three(opts):
+        calls.append("test_three")
+
+    for func in (setup_first, setup_second, test_one, test_two, test_three):
+        setattr(module, func.__name__, func)
+    if file_tier:
+        module.TESTIT_TIER = file_tier
+    sys.modules[dotted] = module
+    return module
+
+
+@th.unit_test("setup error: becomes one structured error record, without --verbose")
+def test_setup_error_becomes_error_record(opts):
+    import sys
+    from types import SimpleNamespace
+    from testit import runner
+
+    calls = []
+    _probe_module("t4761_probe.setup_record", calls)
+    try:
+        with _scratch_run() as (state, events):
+            runner.run_module_tests_by_name(_local_opts(), "t4761_probe", "setup_record")
+            errors = [r for r in state.records if r.get("kind") == "setup_error"]
+            assert len(errors) == 1, f"one setup_error record expected, got {state.records}"
+            record = errors[0]
+            assert record["status"] == "error", record
+            assert record["function"] == "setup_first", record
+            assert "RuntimeError: probe setup exploded" in record["detail"], record
+            ctx = record["agent_context"]
+            assert ctx["function"] == "setup_first", ctx
+            assert "RuntimeError: probe setup exploded" in ctx["traceback"], ctx
+            assert ctx["file_path"] == __file__, (
+                f"file_path must be the test file, not the decorator's: {ctx.get('file_path')}")
+            assert "def setup_first" in ctx["test_source"], ctx
+            report = runner._build_agent_report(
+                SimpleNamespace(), display=SimpleNamespace(trackers={}, _order=[]))
+            assert report["status"] == "failed", report["status"]
+            failure = [f for f in report["failures"] if f["kind"] == "setup_error"]
+            assert len(failure) == 1 and failure[0]["file_path"] == __file__, report["failures"]
+            assert "setup_error" in {r["code"] for r in report["reasons"]}, report["reasons"]
+    finally:
+        sys.modules.pop("t4761_probe.setup_record", None)
+
+
+@th.unit_test("setup error: stops the file and marks its tests not run")
+def test_setup_error_stops_file_and_marks_tests_not_run(opts):
+    import sys
+    from testit import runner
+
+    calls = []
+    _probe_module("t4761_probe.not_run", calls)
+    try:
+        with _scratch_run() as (state, events):
+            runner.run_module_tests_by_name(_local_opts(), "t4761_probe", "not_run")
+            assert calls == ["setup_first"], (
+                f"the later setup and every test body must not run, got {calls}")
+            not_run = [r for r in state.records if r.get("kind") == "not_run"]
+            assert [r["name"] for r in not_run] == ["one", "two", "three"], not_run
+            assert all(r["status"] == "skipped" for r in not_run), not_run
+            assert all(r["detail"] == "not run: setup failed in setup_first: "
+                       "RuntimeError: probe setup exploded" for r in not_run), not_run
+            assert (state.total, state.failed, state.skipped, state.passed) == (4, 1, 3, 0), \
+                "the setup record is the file's only counted failure"
+            results = [kw for e, kw in events if e == "test_result"]
+            assert len(results) == 3 and all(kw["status"] == "skipped" for kw in results), \
+                "only the not-run records reach the tracker"
+            codes = [r["code"] for r in runner._run_verdict(state)]
+            assert codes == ["setup_error"], codes
+    finally:
+        sys.modules.pop("t4761_probe.not_run", None)
+
+
+@th.unit_test("setup error: under --stop the run aborts red with a checkpoint")
+def test_setup_error_under_stop_aborts_red(opts):
+    import sys
+    from unittest import mock
+    from testit import runner, helpers
+
+    calls, saved = [], []
+    _probe_module("t4761_probe.stop", calls)
+    try:
+        with _scratch_run() as (state, events):
+            with mock.patch.object(runner, "save_checkpoint",
+                                   lambda m, t: saved.append((m, t))):
+                raised = False
+                try:
+                    runner.run_module_tests_by_name(
+                        _local_opts(stop=True), "t4761_probe", "stop")
+                except helpers.TestitAbort:
+                    raised = True
+            assert raised, "a setup error under --stop must raise TestitAbort"
+            assert state.aborted is True, "the raise site must mark the run aborted"
+            assert saved == [("t4761_probe", "stop")], saved
+            codes = [r["code"] for r in runner._run_verdict(state)]
+            assert codes == ["setup_error", "aborted"], codes
+            assert runner._keeps_checkpoint(runner._run_verdict(state))
+    finally:
+        sys.modules.pop("t4761_probe.stop", None)
+
+
+@th.unit_test("tier gate: a file with no selected test runs no setup")
+def test_unselected_file_runs_no_setup(opts):
+    import sys
+    from testit import runner
+
+    calls = []
+    _probe_module("t4761_probe.unselected", calls, file_tier="admin")
+    try:
+        with _scratch_run() as (state, events):
+            local = _local_opts(test_modules=None, selected_tags={"core", "framework"})
+            runner.run_module_tests_by_name(local, "t4761_probe", "unselected")
+            assert calls == [], f"no setup or test may run, got {calls}"
+            assert all(r["detail"] == "tier 'admin' not selected" for r in state.records), \
+                state.records
+            assert (state.total, state.skipped, state.failed) == (3, 3, 0)
+            assert not any(r.get("kind") for r in state.records), state.records
+            # A tier skip is a skip: alone it is "nothing executed", never a setup error.
+            assert [r["code"] for r in runner._run_verdict(state)] == ["nothing_executed"]
+            state.passed = state.total = 4
+            assert runner._run_verdict(state) == [], \
+                "tier skips beside a passing test leave no reason"
+    finally:
+        sys.modules.pop("t4761_probe.unselected", None)
+
+
+@th.unit_test("setup skip: a TestitSkip in setup still skips the file, no error")
+def test_setup_skip_still_skips_file(opts):
+    import sys
+    import types
+    from testit import runner
+
+    calls = []
+    module = types.ModuleType("t4761_probe.setup_skip")
+    module.__file__ = __file__
+
+    def setup_skips(opts):
+        calls.append("setup_skips")
+        raise th.TestitSkip("not here")
+
+    @th.unit_test("skipped one")
+    def test_skipped(opts):
+        calls.append("test_skipped")
+
+    module.setup_skips = setup_skips
+    module.test_skipped = test_skipped
+    sys.modules["t4761_probe.setup_skip"] = module
+    try:
+        with _scratch_run() as (state, events):
+            runner.run_module_tests_by_name(_local_opts(), "t4761_probe", "setup_skip")
+            assert calls == ["setup_skips"], calls
+            assert (state.total, state.skipped, state.failed) == (1, 1, 0)
+            assert [r["detail"] for r in state.records] == ["setup skipped"], state.records
+            assert not any(r.get("kind") for r in state.records), state.records
+    finally:
+        sys.modules.pop("t4761_probe.setup_skip", None)
+
+
+@th.unit_test("run verdict: one reason list per run shape")
+def test_run_verdict_cases(opts):
+    from objict import objict
+    from testit import runner
+
+    def run(total=0, passed=0, failed=0, skipped=0, aborted=False, kinds=()):
+        records = [{"module": "m", "test_module": "f", "function": f"fn{i}", "kind": k}
+                   for i, k in enumerate(kinds)]
+        return objict(total=total, passed=passed, failed=failed, skipped=skipped,
+                      aborted=aborted, records=records)
+
+    def codes(state):
+        return [r["code"] for r in runner._run_verdict(state)]
+
+    assert not runner._abort_event.is_set(), "the verdict cases assume no abort key"
+    assert codes(run(total=2, passed=2)) == [], "a passing run has no reasons"
+    failed = runner._run_verdict(run(total=2, passed=1, failed=1))
+    assert [r["code"] for r in failed] == ["tests_failed"]
+    assert failed[0]["message"] == "  Tests failed!", "the historic message is unchanged"
+    setup = runner._run_verdict(run(total=1, failed=1, kinds=["setup_error"]))
+    assert [r["code"] for r in setup] == ["setup_error"]
+    assert "m.f.fn0" in setup[0]["message"], setup
+    assert codes(run(total=4, failed=1, skipped=3,
+                     kinds=["setup_error", "not_run", "not_run", "not_run"])) == \
+        ["setup_error"], "not-run tests never add nothing_executed beside a setup error"
+    assert codes(run(total=1, passed=1, aborted=True)) == ["aborted"]
+    assert codes(run()) == ["nothing_selected"]
+    assert codes(run(total=3, skipped=3)) == ["nothing_executed"], \
+        "all-skipped is distinct from nothing selected"
+    assert codes(run(total=3, passed=1, failed=2, kinds=["setup_error"])) == \
+        ["tests_failed", "setup_error"], "a real failure beside a setup error keeps both"
+
+
+@th.unit_test("exit and checkpoint: reasons exit non-zero; budget keeps its message")
+def test_exit_for_and_checkpoint_rule(opts):
+    from testit import runner
+
+    def exit_message(report, budget_failed):
+        try:
+            runner._exit_for(report, budget_failed)
+        except SystemExit as exc:
+            return exc.code
+        return None
+
+    failed = {"reasons": [{"code": "tests_failed", "message": "  Tests failed!"}]}
+    assert exit_message(failed, False) == "  Tests failed!"
+    assert exit_message(failed, True) == "  Tests failed!", "the verdict outranks the budget"
+    empty = {"reasons": [{"code": "nothing_selected", "message": "  none"}]}
+    assert exit_message(empty, False) == "  none", "an empty run exits non-zero"
+    assert exit_message({"reasons": []}, True) == \
+        "  Tier budget exceeded — see 'Tier budget' above.", "budget string unchanged"
+    assert exit_message({"reasons": []}, False) is None, "a clean run returns"
+
+    def keeps(*codes):
+        return runner._keeps_checkpoint([{"code": c} for c in codes])
+
+    assert keeps("aborted") and keeps("setup_error") and keeps("tests_failed", "aborted")
+    assert not keeps(), "a clean run clears the checkpoint"
+    assert not keeps("tests_failed")
+    assert not keeps("nothing_selected"), "a stale --continue must not stick red"
+    assert not keeps("nothing_executed")
