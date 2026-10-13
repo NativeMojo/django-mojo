@@ -22,7 +22,12 @@ PLATFORM_ADMIN = "akd_platform_admin"  # global manage_users/manage_groups, no m
 PARENT_GROUP = "akd_parent"
 CHILD_GROUP = "akd_child"
 SECOND_GROUP = "akd_second"      # the manager manages it; the target is not a member
-USERS = [MANAGER, TARGET, OTHER, CHILD_TARGET, SERVICE, PLATFORM_ADMIN]
+# A manager who can also read every user (global view_users). Reading a user
+# is what lets a posted foreign key attach, so this is the caller who reaches
+# the link by its column name; it grants no authority over any member.
+VIEWER_MANAGER = "akd_viewer_manager"
+USERS = [MANAGER, TARGET, OTHER, CHILD_TARGET, SERVICE, PLATFORM_ADMIN,
+         VIEWER_MANAGER]
 
 
 def _make_user(username, global_perms=None):
@@ -60,9 +65,12 @@ def setup_api_key_delegation(opts):
     child_target = _make_user(CHILD_TARGET)
     service = _make_user(SERVICE)
     admin = _make_user(PLATFORM_ADMIN, ["manage_users", "manage_groups"])
+    viewer_manager = _make_user(VIEWER_MANAGER, ["view_users"])
 
     GroupMember.objects.create(user=manager, group=parent, permissions={"manage_group": True})
     GroupMember.objects.create(user=manager, group=second, permissions={"manage_group": True})
+    GroupMember.objects.create(user=viewer_manager, group=parent,
+                               permissions={"manage_group": True})
     # The permission the manager does NOT hold: an override key linked to the
     # target is what would hand it to the manager.
     GroupMember.objects.create(user=target, group=parent, permissions={"manage_tickets": True})
@@ -79,6 +87,7 @@ def setup_api_key_delegation(opts):
     opts.child_target_id = child_target.pk
     opts.service_id = service.pk
     opts.admin_id = admin.pk
+    opts.viewer_manager_id = viewer_manager.pk
 
 
 def _login(opts, username):
@@ -163,6 +172,84 @@ def test_manager_cannot_repoint_an_override_key(opts):
                   "the refused request must leave the key linked to its member")
         assert_eq(fresh.override_user, True,
                   "the refusal must not silently clear override")
+    opts.client.logout()
+
+
+@th.django_unit_test("ApiKey delegation: user_id cannot re-point a key that already assumes a member")
+def test_manager_cannot_repoint_an_override_key_by_user_id(opts):
+    # `user_id` is the column name of the same link. The key and its token
+    # are the manager's own, issued the legitimate way.
+    from mojo.apps.account.models import ApiKey
+    _login(opts, VIEWER_MANAGER)
+    resp = opts.client.post("/api/group/apikey", {
+        "name": "akd_repoint_by_id", "group": opts.parent_id,
+        "user": opts.viewer_manager_id, "override_user": True})
+    assert_eq(resp.status_code, 200,
+              "the manager must be able to issue their own key: %r" % resp.response)
+    key = ApiKey.objects.get(pk=resp.response.data.id)
+    token = resp.response.data.get("token")
+    assert_true(token, "the creator must receive the new token")
+
+    for body in ({"user_id": opts.target_id},
+                 {"override_user": True, "user_id": opts.target_id},
+                 {"user_id": opts.target_id, "user": opts.viewer_manager_id},
+                 {"user": opts.viewer_manager_id, "user_id": opts.target_id}):
+        payload = {"group": opts.parent_id}
+        payload.update(body)
+        resp = opts.client.post("/api/group/apikey/%s" % key.pk, payload)
+        assert_eq(resp.status_code, 403,
+                  "re-pointing an override key by user_id must be refused, body keys %s: %r"
+                  % (sorted(body), resp.response))
+        fresh = _reload(key)
+        assert_eq(fresh.user_id, opts.viewer_manager_id,
+                  "the refused request must leave the key linked to its member, body keys %s"
+                  % sorted(body))
+        assert_eq(fresh.override_user, True,
+                  "the refusal must not silently clear override")
+        assert_eq(fresh.override_enabled_by_id, opts.viewer_manager_id,
+                  "the refused request must leave the issuer record alone")
+
+    identity, error = ApiKey.validate_token(token, th.get_mock_request())
+    assert_eq(error, None, "the manager's own key must still authenticate")
+    assert_eq(identity.pk, opts.viewer_manager_id,
+              "the manager's token must still act as the manager, never the other member")
+    opts.client.logout()
+
+
+@th.django_unit_test("ApiKey delegation: user_id cannot create an override key for another member in one body")
+def test_manager_cannot_create_override_key_for_another_member_by_user_id(opts):
+    from mojo.apps.account.models import ApiKey
+    _login(opts, VIEWER_MANAGER)
+    for name, body in (
+            ("akd_id_body_plain",
+             {"user_id": opts.target_id, "override_user": True}),
+            ("akd_id_body_override_first",
+             {"override_user": True, "user_id": opts.target_id}),
+            # Approved for themself, then re-pointed by the other name.
+            ("akd_id_body_self_then_id",
+             {"user": opts.viewer_manager_id, "override_user": True,
+              "user_id": opts.target_id})):
+        payload = {"name": name, "group": opts.parent_id}
+        payload.update(body)
+        resp = opts.client.post("/api/group/apikey", payload)
+        assert_true(resp.status_code in (400, 403),
+                    "%s: a create that makes a key assume another member must be refused, "
+                    "got %s %r" % (name, resp.status_code, resp.response))
+        assert_eq(ApiKey.objects.filter(name=name).count(), 0,
+                  "%s: no key may exist after the refusal" % name)
+    opts.client.logout()
+
+
+@th.django_unit_test("ApiKey delegation: user_id cannot link someone who is not a member of the key's group")
+def test_user_id_cannot_link_a_non_member(opts):
+    key = _key(opts, "akd_id_non_member")
+    _login(opts, VIEWER_MANAGER)
+    resp = opts.client.post("/api/group/apikey/%s" % key.pk,
+                            {"group": opts.parent_id, "user_id": opts.child_target_id})
+    assert_eq(resp.status_code, 403,
+              "user_id must not link a user who is not a direct member: %r" % resp.response)
+    assert_eq(_reload(key).user_id, None,
+              "the refused request must leave the key unlinked")
     opts.client.logout()
 
 
@@ -445,6 +532,24 @@ def test_member_self_issues_override_key(opts):
     identity, error = ApiKey.validate_token(token, th.get_mock_request())
     assert_eq(error, None, "the self-issued key must authenticate")
     assert_eq(identity.pk, opts.manager_id, "the self-issued key must act as its member")
+    opts.client.logout()
+
+
+@th.django_unit_test("ApiKey delegation: a manager links a member by user_id in reference mode")
+def test_manager_links_member_by_user_id_in_reference_mode(opts):
+    key = _key(opts, "akd_id_reference")
+    _login(opts, VIEWER_MANAGER)
+    resp = opts.client.post("/api/group/apikey/%s" % key.pk,
+                            {"group": opts.parent_id, "user_id": opts.target_id})
+    assert_eq(resp.status_code, 200,
+              "a manager must still be able to link a member by user_id: %r" % resp.response)
+    fresh = _reload(key)
+    assert_eq((fresh.user_id, fresh.override_user), (opts.target_id, False),
+              "the key must be linked for reference only")
+    assert_eq(fresh.user_linked_by_id, opts.viewer_manager_id,
+              "a link made by user_id must record who made it")
+    assert_true(fresh.user_linked_at is not None,
+                "a link made by user_id must record when it was made")
     opts.client.logout()
 
 

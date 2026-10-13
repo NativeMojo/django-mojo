@@ -586,6 +586,7 @@ class ApiKey(MojoSecrets, MojoModel):
             self.user_linked_at = None
             self.override_enabled_by = None
             self.override_enabled_at = None
+            self._acting_user_checked = None
             return
 
         pk = value.get("id") if isinstance(value, dict) else value
@@ -613,6 +614,7 @@ class ApiKey(MojoSecrets, MojoModel):
                 self.override_enabled_by = request.user
                 self.override_enabled_at = now
         self.user = target
+        self._acting_user_checked = target.pk
 
         elevated = self._elevated_perms_for(target)
         if elevated:
@@ -620,6 +622,17 @@ class ApiKey(MojoSecrets, MojoModel):
                 f"ApiKey '{self.name}' linked to {target.username}, who holds "
                 f"elevated permissions: {', '.join(sorted(elevated))}",
                 "API key linked to an elevated member", 4)
+
+    def set_user_id(self, value):
+        """REST setter for `user_id`, the column name of the same link.
+
+        The REST save picks a setter by the name the caller posted and
+        otherwise assigns the foreign key itself, so without this
+        `{"user_id": 7}` re-points the key past every check in set_user.
+        on_rest_pre_save refuses any link change that did not come through
+        here, whatever it was called.
+        """
+        self.set_user(value)
 
     def set_override_user(self, value):
         """REST setter for override_user — the switch from reference to assume.
@@ -674,11 +687,21 @@ class ApiKey(MojoSecrets, MojoModel):
         whole body is applied, so the order of fields cannot matter. Read
         from the stored row rather than changed_fields: the comparison must
         not depend on how the field was written.
+
+        The same goes for the link itself: a member that is not the stored
+        one must have been approved by set_user in this save. Fails closed,
+        so a spelling of the field that reaches the row without the setter
+        is refused rather than saved.
         """
+        stored_user_id = stored_group_id = None
+        if not created:
+            stored_user_id, stored_group_id = type(self).objects.filter(
+                pk=self.pk).values_list("user_id", "group_id").first()
+        if (self.user_id != stored_user_id and getattr(
+                self, "_acting_user_checked", False) != self.user_id):
+            raise merrors.PermissionDeniedException()
         if created or not self.user_id:
             return
-        stored_group_id = type(self).objects.filter(
-            pk=self.pk).values_list("group_id", flat=True).first()
         if stored_group_id != self.group_id:
             self.validate_acting_user(self.user, self.active_request)
 

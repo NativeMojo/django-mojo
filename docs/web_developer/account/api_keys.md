@@ -102,6 +102,8 @@ permissions, or superuser flag).
 | `user` | user id, or `null` to clear | The member this key acts as |
 | `override_user` | bool, default `false` | `false`: the link is a **reference** — it changes who your writes are attributed to, nothing else. `true`: the key **assumes** that member, and permissions come from their group membership. |
 
+`user_id` is accepted as another name for `user` and follows the same rules.
+
 ```http
 POST /api/group/apikey/42
 Content-Type: application/json

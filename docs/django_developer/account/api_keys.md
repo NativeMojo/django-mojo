@@ -174,6 +174,12 @@ able to reduce or stop a key: switching `override_user` off, clearing `user`,
 (the creator passed the rule in that same request) and `group/apikey/rotate`,
 where the key rotates itself with its own token.
 
+`user_id`, the column name of the link, has its own setter (`set_user_id`) that
+calls `set_user`: the REST save picks a setter by the posted name and otherwise
+assigns the foreign key directly. `on_rest_pre_save` backs this up and refuses
+any save whose member differs from the stored one without `set_user` having
+approved it.
+
 **Server code is trusted.** `ApiKey.create_for_group(...)`, a management
 command or a shell is not a request and is not checked against this rule; the
 data rules (never a superuser, only a direct member) still apply there. Whoever
