@@ -183,12 +183,20 @@ def test_policy_refusal_writes_record_and_releases(opts):
         runlock.mark_pending(claim)
         message = None
         try:
-            runner._enforce_policies(claim, tests_root, None)
-        except SystemExit as exit_:
-            message = exit_.code
+            try:
+                runner._enforce_policies(claim, tests_root, None)
+            except SystemExit as exit_:
+                message = exit_.code
+            # Read before cleanup: the policy itself must have released the lock.
+            released_by_policy = runlock.current(tmp) is None and claim.released
+            free_before_cleanup = _lock_is_free(tmp)
         finally:
+            # Only releases a lock the policy failed to release, after a failure.
             if runlock.current(tmp) is not None:
                 runlock.release(runlock.current(tmp))
+
+        assert released_by_policy, "_enforce_policies must release the claim itself, before any cleanup"
+        assert free_before_cleanup, "the lock must be free when the policy refusal returns"
 
         assert isinstance(message, str) and "no tests were run" in message, \
             f"the policy must still exit with today's message, got {message!r}"
@@ -323,13 +331,15 @@ def _launcher_copy(root, settings_body=None):
     return os.path.join(root, "bin", "testit.py")
 
 
-def _run_launcher(launcher, *args, token="t-8052"):
+def _run_launcher(launcher, *args, token="t-8052", pythonpath=None):
     import os
     import subprocess
     import sys
     env = dict(os.environ)
     env.pop("DJANGO_SETTINGS_MODULE", None)
     env["TESTIT_RUN_TOKEN"] = token
+    if pythonpath:
+        env["PYTHONPATH"] = os.pathsep.join([pythonpath] + [p for p in [env.get("PYTHONPATH")] if p])
     return subprocess.run([sys.executable, launcher, *args], env=env, cwd=os.path.dirname(launcher),
                           capture_output=True, text=True, timeout=120)
 
@@ -415,3 +425,111 @@ def test_list_extras_does_not_flush(opts):
         assert _lock_is_free(var_root), "--list-extras must not keep the lock"
         assert result.returncode == 0, \
             f"--list-extras should succeed, got {result.returncode}:\n{output}"
+
+
+# --- startup refusals before the runner can import (#8052 review 103865) ----
+
+# Shadows `requests`, which testit.client (imported by testit.runner) needs and
+# nothing the launcher runs before the lock does.
+_BROKEN_REQUESTS = (
+    'raise ModuleNotFoundError("No module named \'requests\' (probe #8052)", name="requests")\n')
+
+
+def _import_failure_project(root):
+    """A launcher copy whose runner import fails, plus an old passing report."""
+    import json
+    import os
+    settings = _MINIMAL_SETTINGS.format(db=os.path.join(root, "db.sqlite3"), prefix="")
+    launcher = _launcher_copy(root, settings)
+    probe = os.path.join(root, "probe")
+    os.makedirs(probe)
+    with open(os.path.join(probe, "requests.py"), "w") as fh:
+        fh.write(_BROKEN_REQUESTS)
+    var_root = os.path.join(root, "testproject", "var")
+    os.makedirs(var_root)
+    report = os.path.join(var_root, "test_failures.json")
+    with open(report, "w", encoding="utf-8") as fh:
+        json.dump({"status": "passed", "total": 99, "passed": 99}, fh)
+    return launcher, probe, var_root, report
+
+
+@th.django_unit_test("launcher: a runner import failure replaces an old pass with a runner_import refusal")
+def test_launcher_runner_import_failure_writes_record(opts):
+    import json
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as root:
+        launcher, probe, var_root, report = _import_failure_project(root)
+        result = _run_launcher(launcher, "--no-maestro", pythonpath=probe)
+        output = result.stdout + result.stderr
+        assert result.returncode == 1, \
+            f"a runner that cannot import must exit 1, got {result.returncode}:\n{output}"
+        with open(report, encoding="utf-8") as fh:
+            record = json.load(fh)
+        assert record.get("status") == "refused", \
+            f"the old pass must not survive a failed runner import, got {record}"
+        codes = [reason["code"] for reason in record.get("reasons", [])]
+        assert codes == ["runner_import"], f"expected the runner_import reason, got {codes}"
+        assert "requests" in record["reasons"][0]["message"], \
+            f"the reason must name the missing module, got {record['reasons'][0]['message']!r}"
+        assert record.get("run", {}).get("run_id") and record["run"].get("token") == "t-8052", \
+            f"the refusal must carry this launch's run identity, got {record.get('run')}"
+        assert "requests" in output, f"the launcher must print the cause, got:\n{output}"
+        assert _lock_is_free(var_root), "the lock must be free after the refusal"
+
+
+@th.django_unit_test("launcher: a runner import failure on --help says why and leaves the report alone")
+def test_launcher_runner_import_failure_help_writes_nothing(opts):
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as root:
+        launcher, probe, var_root, report = _import_failure_project(root)
+        with open(report, "rb") as fh:
+            before = fh.read()
+        result = _run_launcher(launcher, "--help", pythonpath=probe)
+        output = result.stdout + result.stderr
+        assert result.returncode != 0, \
+            f"--help with a runner that cannot import must exit non-zero, got 0:\n{output}"
+        assert "could not import the test runner" in output, \
+            f"the launcher must name the import failure, got:\n{output}"
+        with open(report, "rb") as fh:
+            after = fh.read()
+        assert after == before, "--help is not a test run and must leave the report byte-identical"
+        assert _lock_is_free(var_root), "--help must not keep the lock"
+
+
+def _assert_setup_exit_refused(exit_expression):
+    import json
+    import os
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as root:
+        launcher = _launcher_copy(root, f"raise SystemExit({exit_expression})\n")
+        var_root = os.path.join(root, "testproject", "var")
+        os.makedirs(var_root)
+        report = os.path.join(var_root, "test_failures.json")
+        with open(report, "w", encoding="utf-8") as fh:
+            json.dump({"status": "passed", "total": 99, "passed": 99}, fh)
+
+        result = _run_launcher(launcher, "--no-maestro")
+        output = result.stdout + result.stderr
+        assert result.returncode == 1, \
+            f"SystemExit({exit_expression}) from django.setup() must exit 1, got {result.returncode}:\n{output}"
+        assert "django.setup() failed" in output, \
+            f"the launcher must print the cause, got:\n{output}"
+        with open(report, encoding="utf-8") as fh:
+            record = json.load(fh)
+        assert record.get("status") == "refused", f"expected status refused, got {record}"
+        codes = [reason["code"] for reason in record.get("reasons", [])]
+        assert codes == ["django_setup"], f"expected the django_setup reason, got {codes}"
+        assert _lock_is_free(var_root), "the lock must be free after the refusal"
+
+
+@th.django_unit_test("launcher: SystemExit(0) from django.setup() exits 1 with the cause")
+def test_launcher_setup_systemexit_zero_exits_one(opts):
+    _assert_setup_exit_refused("0")
+
+
+@th.django_unit_test("launcher: SystemExit(None) from django.setup() exits 1 with the cause")
+def test_launcher_setup_systemexit_none_exits_one(opts):
+    _assert_setup_exit_refused("None")
