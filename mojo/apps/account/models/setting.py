@@ -526,13 +526,17 @@ class Setting(MojoSecrets, MojoModel):
         # the cache push below would publish the unsaved draft, and for a new
         # row MojoSecrets.save's second, unrestricted save would insert it
         # (#7739). update_fields is the 4th positional argument Django 5.2
-        # still accepts; a generator is materialised once and passed on.
-        if "update_fields" in kwargs:
-            if kwargs["update_fields"] is not None:
-                kwargs["update_fields"] = frozenset(kwargs["update_fields"])
-                if not kwargs["update_fields"]:
-                    return
-        elif len(args) >= 4 and args[3] is not None:
+        # still accepts. Bind it the way Model._parse_save_params does: the
+        # positional value wins when the keyword is its default None, and
+        # both set is Django's TypeError, left for super().save() to raise.
+        # A generator is materialised once and passed on.
+        keyword = kwargs.get("update_fields")
+        positional = len(args) >= 4
+        if keyword is not None and not positional:
+            kwargs["update_fields"] = frozenset(keyword)
+            if not kwargs["update_fields"]:
+                return
+        elif keyword is None and positional and args[3] is not None:
             args = args[:3] + (frozenset(args[3]),) + args[4:]
             if not args[3]:
                 return
