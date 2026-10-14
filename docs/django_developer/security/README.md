@@ -997,6 +997,45 @@ exact matching count no longer grows, broker transport errors stopped,
 `sync_firewall` completes/backs off normally, and unrelated sudo evidence such
 as deploy `/usr/bin/bash` commands remains.
 
+### Per-receipt MojoSec Event retention
+
+A receipt that is not routed to a grouped case writes one Event with
+`scope="mojosec"` and `model_name="mojosec_sensor"`. `prune_events` keeps every
+level 6 or higher Event, and `web.probe` and `fim.change` are level 8, so these
+rows need their own retention. The daily `prune_mojosec_events` job deletes
+them once they are older than `MOJOSEC_RECEIPT_RETENTION_DAYS` (default 45,
+minimum 7), in batches of 1,000, at most 100 batches a run. A larger backlog
+continues the next day, and the job log says rows remain.
+
+It keeps an Event that has an Incident, and an Event whose receipt is pending
+or dead for publication or has a handler pending, queued or failed. It deletes
+an aged Event whose receipt is already gone. Case promotion Events
+(`model_name="mojosec_case"`) and every other scope or model name are never
+touched. On a server where a RuleSet turns these reports into incidents, the
+kept count stays high until those incidents are cleared.
+
+Before the first deletion on a database, run the count-only preview and have a
+person read it:
+
+```bash
+uv run python manage.py prune_mojosec_events
+uv run python manage.py prune_mojosec_events --older-than-days 60
+```
+
+The JSON report (`schema: mojosec.event-prune`, version 1) gives
+`would_delete`, `by_category`, the ID and date `range`, and `kept` counts by
+reason (`has_incident`, `receipt_not_finished`). `--older-than-days` accepts 7
+or more and defaults to the receipt retention. Clearing the backlog needs an
+explicit ceiling:
+
+```bash
+uv run python manage.py prune_mojosec_events --apply --max-events 100000
+```
+
+`--apply` without `--max-events` is refused. Deleting an Event nulls the
+`SET_NULL` links to it on receipts, case transitions, CloudWatch alarm
+transitions and GuardDuty findings.
+
 ## 8. Bouncer Integration
 
 Bouncer (the bot detection system) feeds events into the incident pipeline. See [Bouncer docs](../account/bouncer.md) for the full bouncer architecture.
@@ -1128,6 +1167,7 @@ Default health rules are auto-created on first health check run. They send notif
 | Job | Schedule | What it does |
 |-----|----------|--------------|
 | `prune_mojosec_receipts` | Daily 8:15 AM | Deletes published and dead MojoSec receipts older than `MOJOSEC_RECEIPT_RETENTION_DAYS`; never deletes live pending publication rows |
+| `prune_mojosec_events` | Daily 8:35 AM | Deletes per-receipt MojoSec Events (`model_name="mojosec_sensor"`) older than `MOJOSEC_RECEIPT_RETENTION_DAYS`, in bounded batches; keeps Events with an Incident or an unfinished receipt. See [Per-receipt MojoSec Event retention](#per-receipt-mojosec-event-retention) |
 | `prune_mojosec_learning` | Daily 8:25 AM | Deletes bounded offline evaluation summaries older than `MOJOSEC_LEARNING_EVALUATION_RETENTION_DAYS`; feedback/proposal audit rows remain |
 | `replay_mojosec_handler_outbox` | Every 5 minutes | Replays published MojoSec receipts whose handler dispatch is pending, failed, or stale-queued past `MOJOSEC_HANDLER_QUEUED_STALE_SECONDS`; dead-letters receipts at `MOJOSEC_HANDLER_MAX_ATTEMPTS` and pending receipts whose Event was pruned |
 | `settle_mojosec_cases` | Every 5 minutes | Settles quiet MojoSec deployment cases past `MOJOSEC_DEPLOY_QUIET_SECONDS`, heals crashed case promotions, re-drives stranded case-routed receipts, and coalesces distributed web probes into campaign cases; system transitions only, never Events |

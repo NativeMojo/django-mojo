@@ -66,6 +66,14 @@ def prune_mojosec_learning(force=False, verbose=False, now=None):
         channel="cleanup", payload={})
 
 
+# After the receipt prune, so most aged Events no longer have a receipt.
+@schedule(minutes="35", hours="8")
+def prune_mojosec_events(force=False, verbose=False, now=None):
+    jobs.publish(
+        func="mojo.apps.incident.services.mojosec_retention.prune_projected_events",
+        channel="cleanup", payload={})
+
+
 @schedule(minutes="*/5")
 def replay_mojosec_handler_outbox(force=False, verbose=False, now=None):
     jobs.publish(
