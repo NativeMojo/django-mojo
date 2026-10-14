@@ -193,7 +193,9 @@ constraint `account_setting_global_key_uniq`, added by migration
   stops before changing anything. It names each key and its row ids, never a
   value. Decide which row is correct, delete the others, and run `migrate`
   again. Secret copies always count as different, because each is encrypted
-  separately.
+  separately. While it runs, the migration holds every settings write until
+  it commits, so no copy can change between the check and the merge. Reads
+  continue.
 
 Check a database before upgrading:
 
