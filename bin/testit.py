@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """
 Test runner bootstrap.
-Activates the venv automatically if present, flushes the database,
-then hands off to testit.runner.
+Activates the venv automatically if present, takes the run lock, flushes the
+database, then hands off to testit.runner.
 """
 import os
 import sys
@@ -35,8 +35,21 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")
 from mojo.helpers import paths
 paths.configure_paths(str(TESTPROJECT / "config" / "settings" / "__init__.py"), 1)
 
+# The run lock comes before anything that can exit or reset test state (item
+# #8052). It marks var/test_failures.json "not completed" until this run
+# replaces it, so no exit below can leave an older report looking current. A
+# launch that cannot get the lock exits here having touched nothing — before
+# this, it flushed the live run's database and Redis first. None means
+# --init / --list-extras: not a test run, so nothing below may reset state.
+from testit import runner
+claim = runner.claim_run(sys.argv[1:])
+
 import django
-django.setup()
+try:
+    django.setup()
+except (Exception, SystemExit) as err:
+    runner.refuse_run("django_setup", f"  django.setup() failed: {err!r}")
+    raise
 
 def _load_testenv():
     """Load testit/testenv.py by FILE PATH, the way bin/create_testproject does.
@@ -100,6 +113,7 @@ if redis_client is not None:
                 redis_index, str(REPO_ROOT), client=redis_client)
         except testenv.AllocationError as err:
             print(f"ERROR: {err}", file=sys.stderr)
+            runner.refuse_run("redis_index_claimed", f"  {err}")
             sys.exit(1)
 
     # Pub/Sub isolation guard. The db index above only isolates stored keys —
@@ -112,6 +126,10 @@ if redis_client is not None:
     _expected_prefix = testenv.expected_pubsub_prefix(str(REPO_ROOT))
     _actual_prefix = mojo_settings.get_static("REDIS_PUBSUB_PREFIX", "") or ""
     if _actual_prefix != _expected_prefix:
+        runner.refuse_run(
+            "pubsub_prefix",
+            f"  REDIS_PUBSUB_PREFIX is {_actual_prefix or 'missing'!r}; this "
+            f"checkout requires {_expected_prefix!r}. Run bin/create_testproject.")
         print(
             "ERROR: REDIS_PUBSUB_PREFIX is "
             + (f"'{_actual_prefix}'" if _actual_prefix else "missing")
@@ -121,8 +139,11 @@ if redis_client is not None:
             file=sys.stderr)
         sys.exit(1)
 
-# Skip flush when continuing from a checkpoint so prior test state is preserved
-if CONTINUING:
+# Skip flush when continuing from a checkpoint so prior test state is preserved.
+# Never flush without the run lock: --init and --list-extras run no tests.
+if claim is None:
+    pass
+elif CONTINUING:
     print("==> Skipping flush (--continue mode)")
 else:
     from django.db import connection
@@ -155,8 +176,6 @@ else:
         # onto a localhost index this checkout never uses.
         testenv.stamp_redis_owner(
             redis_index, str(REPO_ROOT), client=redis_client)
-
-from testit import runner
 
 if __name__ == "__main__":
     runner.main(runner.setup_parser())
