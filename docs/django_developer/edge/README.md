@@ -112,7 +112,10 @@ whitelist-validated like everything else; the full contracts live in
 > cannot traverse, collide, or name someone else's content.
 
 `headers` is not a field in v1. The base config sets the security headers, and
-every structured field is another renderer input to test.
+every structured field is another renderer input to test. The platform sends no
+`Permissions-Policy`: browser-feature access (camera, microphone, geolocation,
+media) is the website's call, so a site that wants to restrict it sets that
+header itself (maestro #8225).
 
 Constraints worth knowing about:
 

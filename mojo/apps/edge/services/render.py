@@ -355,6 +355,12 @@ def _header_block(indent="    "):
     is another renderer input to test, and there is no requirement yet that
     these differ per site.
 
+    There is deliberately NO `Permissions-Policy` here (maestro #8225, Ian's
+    ruling 2026-10-14): which browser features a site and what it embeds may
+    use — camera, microphone, geolocation, media — is the website's decision,
+    not the platform's. A site that wants to restrict them sets the header
+    itself; the platform never restricts on its behalf.
+
     `indent` exists because nginx's `add_header` inheritance is
     replace-not-merge: a location that declares ANY `add_header` of its own
     (the no-cache posture on proxied locations, the immutable caching on
@@ -367,8 +373,6 @@ def _header_block(indent="    "):
         f"{indent}add_header Referrer-Policy strict-origin-when-cross-origin always;",
         f"{indent}add_header Strict-Transport-Security "
         "\"max-age=31536000; includeSubDomains\" always;",
-        f"{indent}add_header Permissions-Policy "
-        "\"camera=(), microphone=(), geolocation=()\" always;",
     ])
 
 
