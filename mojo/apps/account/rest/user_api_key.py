@@ -11,14 +11,14 @@ import mojo.errors as merrors
 # admit manage_users/users — so a key acting as an admin member could
 # otherwise widen `allowed_ips` on a live 360-day token and weaken a
 # credential that outlives the key. Reads stay available.
-@md.denies_key_backed_session(methods=("POST", "PUT", "PATCH", "DELETE"))
+@md.denies_key_backed_session(methods=("POST", "PUT", "PATCH", "DELETE"), deny_user_api_keys=True)
 @md.uses_model_security(UserAPIKey)
 def on_user_api_keys(request, pk=None):
     return UserAPIKey.on_rest_request(request, pk)
 
 
 @md.POST("auth/generate_api_key")
-@md.denies_key_backed_session()
+@md.denies_key_backed_session(deny_user_api_keys=True)
 @md.requires_auth()
 def generate_api_key(request):
     allowed_ips = request.DATA.get_typed("allowed_ips", [], typed=list)

@@ -804,11 +804,23 @@ oversold property is a security liability; this one is worth having and narrow.
 Long-lived JWTs restricted by IP allowlist.
 
 **Generate own key:** `POST /api/auth/generate_api_key`
-- Required: `allowed_ips` (list), `expire_days` (max 360)
+- Optional: `allowed_ips` (list), `expire_days` (default and max 360), `label`
+- Always for the caller. There is no admin route that generates a key for
+  another user.
 
-**Admin generate for another user:** `POST /api/auth/generate_api_key`
-- Required: `allowed_ips`, `expire_days`, `uid`
-- Requires: `manage_users` permission
+**A per-user key cannot manage keys or sign-in details (#7635).** A per-user
+API key (`UserAPIKey`) is otherwise the person's own session, but it is refused
+with `403` on every route that creates, changes or revokes a credential or
+sign-in detail of the caller: `generate_api_key`, writes to
+`/api/account/api_keys` (revoke, `is_active`, `allowed_ips`, `label`),
+passkeys, the authenticator (TOTP and recovery codes), email, phone and
+username changes, the sign-in hand-off, session revoke, sign-out telemetry,
+OAuth connection writes and OAuth consent approval. Those need a signed-in
+session. Otherwise revoking a leaked key would not end the access: the holder
+could mint a replacement first. These routes carry
+`@md.denies_key_backed_session(deny_user_api_keys=True)`; the operator routes
+behind the same decorator still admit a per-user key, and
+`tests/test_security/security_events.py` pins which is which.
 
 ## Group-Scoped Tokens
 

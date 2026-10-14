@@ -376,7 +376,7 @@ def _gate_handoff_destination(request, destination):
 
 
 @md.POST("auth/handoff")
-@md.denies_key_backed_session()
+@md.denies_key_backed_session(deny_user_api_keys=True)
 @md.requires_auth()
 @md.strict_rate_limit("auth_handoff", ip_limit=30)
 @md.requires_geofence(scope="auth")
@@ -1804,7 +1804,7 @@ def _record_email_change_send_failure(request, user, sent):
 
 
 @md.POST("auth/email/change/request")
-@md.denies_key_backed_session()
+@md.denies_key_backed_session(deny_user_api_keys=True)
 @md.requires_auth()
 @md.requires_fresh_auth()
 @md.strict_rate_limit("email_change_request", ip_limit=5, ip_window=3600)
@@ -2140,7 +2140,7 @@ def _commit_email_change(request, user, new_email):
 
 
 @md.POST("auth/email/change/confirm")
-@md.denies_key_backed_session()
+@md.denies_key_backed_session(deny_user_api_keys=True)
 @md.strict_rate_limit("email_change_confirm", ip_limit=10, ip_window=3600)
 @md.custom_security("requires valid email change token, or authenticated session with valid OTP code")
 def on_email_change_confirm(request):
@@ -2186,7 +2186,7 @@ def on_email_change_confirm(request):
 
 
 @md.POST("auth/email/change/apply")
-@md.denies_key_backed_session()
+@md.denies_key_backed_session(deny_user_api_keys=True)
 @md.strict_rate_limit("email_change_apply", ip_limit=10, ip_window=3600)
 @md.custom_security("requires valid email change token")
 @md.requires_params("token")
@@ -2313,7 +2313,7 @@ def _clear_phone_change_state(user):
 
 
 @md.POST("auth/phone/change/request")
-@md.denies_key_backed_session()
+@md.denies_key_backed_session(deny_user_api_keys=True)
 @md.requires_auth()
 @md.requires_fresh_auth()
 @md.strict_rate_limit("phone_change_request", ip_limit=5, ip_window=3600)
@@ -2397,7 +2397,7 @@ def on_phone_change_request(request, *, send=None):
 
 
 @md.POST("auth/phone/change/confirm")
-@md.denies_key_backed_session()
+@md.denies_key_backed_session(deny_user_api_keys=True)
 @md.strict_rate_limit("phone_change_confirm", ip_limit=10, ip_window=3600)
 @md.requires_auth()
 @md.requires_params("session_token", "code")
@@ -2472,7 +2472,7 @@ def on_phone_change_cancel(request):
 # -----------------------------------------------------------------
 
 @md.POST("auth/username/change")
-@md.denies_key_backed_session()
+@md.denies_key_backed_session(deny_user_api_keys=True)
 @md.requires_auth()
 @md.requires_fresh_auth()
 @md.requires_params("username")
@@ -2523,7 +2523,7 @@ def on_username_change(request):
 # -----------------------------------------------------------------
 
 @md.POST("auth/sessions/revoke")
-@md.denies_key_backed_session()
+@md.denies_key_backed_session(deny_user_api_keys=True)
 @md.requires_auth()
 @md.requires_fresh_auth()
 @md.strict_rate_limit("sessions_revoke", ip_limit=5, ip_window=300)
@@ -2781,7 +2781,7 @@ def on_account_security_events(request):
 
 
 @md.POST("account/security-events/logout")
-@md.denies_key_backed_session()
+@md.denies_key_backed_session(deny_user_api_keys=True)
 @md.requires_auth()
 @md.strict_rate_limit("security_logout", ip_limit=30,
                       muid_limit=10, muid_window=300)

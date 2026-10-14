@@ -2,7 +2,8 @@ from functools import wraps
 import mojo.errors
 from mojo.helpers import logit
 from mojo.helpers.request import (
-    is_request_user, is_key_backed_session, is_override_user_session)
+    is_request_user, is_key_backed_session, is_override_user_session,
+    validated_user_api_key, credential_kind)
 from mojo.helpers.settings import settings
 
 logger = logit.get_logger("error", "error.log")
@@ -62,7 +63,7 @@ def _deny_machine_identity_without_active_group(request, perms):
         raise mojo.errors.PermissionDeniedException()
 
 
-def denies_key_backed_session(methods=None):
+def denies_key_backed_session(methods=None, deny_user_api_keys=False):
     """Refuse any request authenticated with a CONFINED bearer credential — an
     ApiKey (linked or not) or a GroupScopedToken.
 
@@ -70,6 +71,17 @@ def denies_key_backed_session(methods=None):
     combined CRUD endpoints where only the mutating verbs change credentials
     and the reads are ordinary. Omit it (the default) to refuse every method,
     which is right for the dedicated credential endpoints.
+
+    `deny_user_api_keys=True` also refuses a per-user API key (UserAPIKey,
+    `validated_user_api_key`), under the same `methods` rule. A per-user key is
+    otherwise the person's own session and passes this decorator, which is
+    right for operator work but not for a route that changes how the person
+    signs in: a leaked per-user key could mint a 360-day replacement, revoke
+    or widen the person's other keys, or move their email, phone, passkeys or
+    authenticator, and revoking it would no longer end the access (#7635).
+    Turn it on for every route that creates, changes or revokes a credential
+    or sign-in detail of the CALLER; tests/test_security/security_events.py
+    pins which guarded routes refuse per-user keys and which admit them.
 
     For endpoints that change how a user AUTHENTICATES — registering a passkey,
     minting a long-lived token, enrolling or disabling MFA, moving the email or
@@ -96,19 +108,24 @@ def denies_key_backed_session(methods=None):
     def decorator(func):
         func._mojo_denies_key_backed_session = True
         func._mojo_denies_key_backed_methods = blocked
+        func._mojo_denies_user_api_keys = bool(deny_user_api_keys)
         _register_security(
             func,
             denies_key_backed_session=True,
             denies_key_backed_methods=sorted(blocked) if blocked else "all",
+            denies_user_api_keys=bool(deny_user_api_keys),
             function=func,
         )
 
         @wraps(func)
         def wrapper(request, *args, **kwargs):
-            if is_key_backed_session(request):
+            refused = is_key_backed_session(request) or (
+                deny_user_api_keys
+                and validated_user_api_key(request) is not None)
+            if refused:
                 if blocked is None or request.method.upper() in blocked:
                     logger.error(
-                        "api key denied on credential endpoint "
+                        f"{credential_kind(request)} denied on credential endpoint "
                         f"{func.__module__}.{func.__name__} ({request.method})")
                     raise mojo.errors.PermissionDeniedException()
             return func(request, *args, **kwargs)

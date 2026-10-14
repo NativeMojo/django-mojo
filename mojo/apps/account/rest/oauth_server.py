@@ -136,7 +136,7 @@ def on_authorize(request):
 
 
 @md.POST(f"{_ROOT}/approve")
-@md.denies_key_backed_session()
+@md.denies_key_backed_session(deny_user_api_keys=True)
 @md.requires_auth()
 @md.strict_rate_limit("oauth_approve", ip_limit=20)
 def on_approve(request):

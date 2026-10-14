@@ -284,7 +284,7 @@ These generate a long-lived JWT that carries the user's full permissions. **Use 
 
 **POST** `/api/auth/generate_api_key`
 
-Requires authentication.
+Requires a signed-in session. A user auth token cannot generate another one: it gets `403`.
 
 ```json
 {
@@ -311,20 +311,6 @@ Requires authentication.
 }
 ```
 
-### Generate a Token for Another User (Admin)
-
-**POST** `/api/auth/manage/generate_api_key`
-
-Requires `manage_users` permission.
-
-```json
-{
-  "uid": 42,
-  "allowed_ips": ["10.0.0.1"],
-  "expire_days": 30
-}
-```
-
 ### Using a User Auth Token
 
 ```
@@ -332,6 +318,16 @@ Authorization: bearer <jwt_token>
 ```
 
 The request runs with the user's full permissions. If `allowed_ips` was set, requests from IPs not in that list are rejected.
+
+**What a user auth token cannot do.** It cannot create, change or revoke the user's tokens, and it cannot change how the user signs in. These calls return `403` and need a signed-in session:
+
+- `POST /api/auth/generate_api_key`
+- `POST`, `PUT` and `DELETE` on `/api/account/api_keys/<id>` (revoke, `is_active`, `allowed_ips`, `label`); listing the tokens still works
+- passkey registration and passkey changes, the authenticator app (setup, confirm, disable, recovery codes)
+- email, phone and username changes, the sign-in hand-off, `POST /api/auth/sessions/revoke`, `POST /api/account/security-events/logout`
+- writes to linked sign-in accounts (`/api/account/oauth_connection`) and OAuth consent approval
+
+This is what makes revoking a leaked token final: its holder cannot mint a replacement first.
 
 ---
 
@@ -343,7 +339,7 @@ The request runs with the user's full permissions. If `allowed_ips` was set, req
 - **Ordinary ApiKey traffic is unlimited by default, not unmonitored.** Set a
   positive per-key limit when a contractual hard ceiling is required; strict
   security/write endpoints remain hard for every caller.
-- **User Auth Tokens**: carry full user permissions including `sys.*` — use with caution
+- **User Auth Tokens**: carry full user permissions including `sys.*` — use with caution. They cannot create, change or revoke tokens or change sign-in details (see above).
 - Set short expiry periods for temporary integrations
 - All key generation is logged in the audit trail
 
