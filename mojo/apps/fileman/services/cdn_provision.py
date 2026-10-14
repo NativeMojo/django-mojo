@@ -29,6 +29,7 @@ import hashlib
 import json
 import uuid
 from datetime import timedelta
+import re
 
 from django.utils import timezone
 
@@ -46,6 +47,7 @@ REPORT_VERSION = 1
 TAG_KEY = "mojo:fileman-bucket"
 CACHING_OPTIMIZED_POLICY_ID = "658327ea-f89d-4fab-a63d-7e88639e58f6"
 MAX_KEYS_PER_GROUP = 5
+MAX_BEHAVIORS = 25          # CloudFront's default cache-behavior quota per distribution
 
 STEP_PREFLIGHT = "preflight"
 STEP_BUCKET = "bucket"
@@ -79,7 +81,9 @@ def oac_name(bucket):
 
 
 def public_key_name(row_pk):
-    return f"mojo-fm-key-{int(row_pk)}"
+    """Account-wide unique: CloudFront public key names are shared by every
+    deployment in the account, so the deployment slug is part of the name."""
+    return f"mojo-fm-key-{deployment_slug()}-{int(row_pk)}"
 
 
 def origin_domain(bucket, region):
@@ -129,14 +133,36 @@ def merged_policy(current, statement):
     return policy
 
 
+def _statements(policy):
+    statements = (policy or {}).get("Statement") if isinstance(policy, dict) else None
+    if isinstance(statements, dict):
+        statements = [statements]
+    return [st for st in (statements or []) if isinstance(st, dict)]
+
+
 def _has_statement(policy, statement):
-    for current in (policy or {}).get("Statement") or []:
+    for current in _statements(policy):
         if current.get("Sid") == statement["Sid"]:
-            principal = current.get("Principal") or {}
-            condition = ((current.get("Condition") or {}).get("StringEquals") or {})
-            if (principal.get("Service") == "cloudfront.amazonaws.com"
-                    and condition.get("AWS:SourceArn") == statement["Condition"]["StringEquals"]["AWS:SourceArn"]):
+            principal = current.get("Principal")
+            principal = principal if isinstance(principal, dict) else {}
+            condition = current.get("Condition") if isinstance(current.get("Condition"), dict) else {}
+            equals = condition.get("StringEquals") if isinstance(condition.get("StringEquals"), dict) else {}
+            if (current.get("Effect") == "Allow"
+                    and principal.get("Service") == "cloudfront.amazonaws.com"
+                    and equals.get("AWS:SourceArn") == statement["Condition"]["StringEquals"]["AWS:SourceArn"]):
                 return True
+    return False
+
+
+def _is_anonymous_allow(statement):
+    if statement.get("Effect") != "Allow":
+        return False
+    principal = statement.get("Principal")
+    if principal == "*":
+        return True
+    if isinstance(principal, dict):
+        aws = principal.get("AWS")
+        return aws == "*" or (isinstance(aws, list) and "*" in aws)
     return False
 
 
@@ -144,7 +170,15 @@ def _has_statement(policy, statement):
 # distribution config
 # ----------------------------------------------------------------------
 
+class KeyGroupMissing(ValueError):
+    """A signed behavior was asked for with no key group to trust."""
+
+
 def _behavior(origin_id, key_group_id, signed, path_pattern=None):
+    if signed and not key_group_id:
+        # Never write a "signed" behavior that trusts nobody: CloudFront would
+        # serve the prefix to anyone.
+        raise KeyGroupMissing("a signed cache behavior needs the deployment key group")
     behavior = {
         "TargetOriginId": origin_id,
         "ViewerProtocolPolicy": "redirect-to-https",
@@ -154,7 +188,7 @@ def _behavior(origin_id, key_group_id, signed, path_pattern=None):
         "CachePolicyId": CACHING_OPTIMIZED_POLICY_ID,
         "TrustedSigners": {"Enabled": False, "Quantity": 0},
         "TrustedKeyGroups": (
-            {"Enabled": True, "Quantity": 1, "Items": [key_group_id]} if signed and key_group_id
+            {"Enabled": True, "Quantity": 1, "Items": [key_group_id]} if signed
             else {"Enabled": False, "Quantity": 0}),
     }
     if path_pattern:
@@ -162,24 +196,59 @@ def _behavior(origin_id, key_group_id, signed, path_pattern=None):
     return behavior
 
 
-def desired_behaviors(managers, origin_id, key_group_id):
-    """One cache behavior per manager prefix, longest prefix first (first
-    match wins at the edge, so a shorter unsigned prefix must not shadow a
-    longer signed one)."""
-    rows = []
-    seen = set()
+def plan_behaviors(managers, origin_id, key_group_id):
+    """The cache behaviors a bucket needs, planned fail-closed.
+
+    Every S3 manager on the bucket counts — active or not, opted out or not:
+    its objects are in the bucket either way and the bucket policy grants
+    CloudFront all of them. Where two managers share a prefix, signed wins.
+    A prefix CloudFront would read as a wildcard (`*`, `?`) or that carries a
+    character outside the path-pattern charset gets no behavior at all (it
+    falls under the signed default) and is reported. A child prefix with
+    the same signedness as its nearest ancestor is covered by the ancestor
+    and gets no behavior of its own, which keeps the count under CloudFront's
+    quota. A PRIVATE prefix under a PUBLIC ancestor is reported as nested:
+    whether CloudFront matches the encoded or the decoded path decides if the
+    longer signed pattern can be sidestepped, so it is refused until the live
+    probe says otherwise.
+
+    Returns {"behaviors", "unsafe", "nested", "prefixes"}.
+    """
+    signed_by_prefix = {}
+    unsafe = []
     for manager in managers:
         prefix = (manager.root_path or "").strip("/")
-        if not prefix or prefix in seen:
+        if not prefix:
             continue
-        seen.add(prefix)
-        rows.append((prefix, bool(manager.is_public)))
-    rows.sort(key=lambda row: (-len(row[0]), row[0]))
-    return [_behavior(origin_id, key_group_id, signed=not public, path_pattern=f"{prefix}/*")
-            for prefix, public in rows]
+        if not cdn.PREFIX_SAFE_RE.match(prefix):
+            unsafe.append((prefix, getattr(manager, "name", "")))
+            continue
+        signed_by_prefix[prefix] = signed_by_prefix.get(prefix, False) or not bool(manager.is_public)
+    ordered = sorted(signed_by_prefix, key=lambda p: (p.count("/"), p))
+    nested = []
+    kept = {}
+    for prefix in ordered:
+        ancestor = None
+        for candidate in kept:
+            if prefix.startswith(candidate + "/") and (ancestor is None or len(candidate) > len(ancestor)):
+                ancestor = candidate
+        signed = signed_by_prefix[prefix]
+        if ancestor is not None and kept[ancestor] == signed:
+            continue
+        if ancestor is not None and signed and not kept[ancestor]:
+            nested.append((prefix, ancestor))
+        kept[prefix] = signed
+    rows = sorted(kept.items(), key=lambda row: (-len(row[0]), row[0]))
+    behaviors = [_behavior(origin_id, key_group_id, signed=signed, path_pattern=f"{prefix}/*")
+                 for prefix, signed in rows]
+    return {"behaviors": behaviors, "unsafe": unsafe, "nested": nested, "prefixes": dict(kept)}
 
 
-def distribution_config(bucket, region, oac_id, key_group_id, managers, caller_reference,
+def desired_behaviors(managers, origin_id, key_group_id):
+    return plan_behaviors(managers, origin_id, key_group_id)["behaviors"]
+
+
+def distribution_config(bucket, region, oac_id, key_group_id, behaviors, caller_reference,
                         enabled=True, current=None):
     """The full DistributionConfig we converge to. With `current`, fields we
     do not own (aliases, certificate, price class, logging...) are kept."""
@@ -200,8 +269,7 @@ def distribution_config(bucket, region, oac_id, key_group_id, managers, caller_r
         "HttpVersion": "http2",
         "IsIPV6Enabled": True,
     }
-    behaviors = desired_behaviors(managers, origin_id, key_group_id)
-    config["CacheBehaviors"] = {"Quantity": len(behaviors), "Items": behaviors}
+    config["CacheBehaviors"] = {"Quantity": len(behaviors), "Items": list(behaviors)}
     if isinstance(current, dict):
         merged = dict(current)
         for key in ("Enabled", "Origins", "DefaultCacheBehavior", "CacheBehaviors"):
@@ -453,13 +521,10 @@ class CdnProvisioner:
         self.observed["bucket_kms_key"] = default.get("KMSMasterKeyID")
 
     def _managers_on_bucket(self):
-        from mojo.apps.fileman.models import FileManager
-        rows = []
-        for manager in FileManager.objects.filter(backend_type="s3", is_active=True,
-                                                   backend_url__contains=self.bucket):
-            if manager.root_location == self.bucket:
-                rows.append(manager)
-        return rows
+        """Every S3 manager row on the bucket, active or not: their objects are
+        in the bucket regardless, and the bucket policy grants CloudFront all
+        of them, so every prefix must be planned."""
+        return managers_on_bucket(self.bucket)
 
     def _opted_out_public_managers(self):
         names = []
@@ -473,28 +538,52 @@ class CdnProvisioner:
                 continue
         return names
 
-    def _cdn_managers(self):
-        """Every manager on the bucket that delivers through the CDN. The
-        provisioner's own manager instance replaces its database row, so a
-        pre-save behavior sync sees the value about to be written."""
+    def _behavior_managers(self):
+        """Every manager on the bucket, with this provisioner's own instance
+        replacing its database row so a pre-save sync sees the value about
+        to be written. Opt-out does not remove a manager: it only changes the
+        links it hands out, not what the edge must protect."""
         rows = []
         for manager in self._managers_on_bucket():
-            if manager.pk == self.manager.pk:
-                manager = self.manager
-            try:
-                if cdn.validate_switch(manager.get_setting(cdn.CDN_SWITCH_KEY)) == "off":
-                    continue
-            except ValueError:
-                continue
-            rows.append(manager)
+            rows.append(self.manager if manager.pk == self.manager.pk else manager)
         if all(m.pk != self.manager.pk for m in rows):
-            try:
-                opted_out = cdn.validate_switch(self.manager.get_setting(cdn.CDN_SWITCH_KEY)) == "off"
-            except ValueError:
-                opted_out = True
-            if not opted_out:
-                rows.append(self.manager)
+            rows.append(self.manager)
         return rows
+
+    def _planned_behaviors(self, origin_id, key_group_id, step=STEP_DISTRIBUTION):
+        """plan_behaviors plus its findings. Returns the plan, or None when it
+        must not be written (no key group, a nested private prefix, over quota)."""
+        try:
+            plan = plan_behaviors(self._behavior_managers(), origin_id, key_group_id)
+        except KeyGroupMissing:
+            self._add(step, report.MANUAL, "key_group.missing",
+                      "a private prefix needs the deployment signing key group, and this "
+                      "distribution has none recorded",
+                      "run enable to create or record the key group, then re-run")
+            self.blocked.add(step)
+            return None
+        for prefix, name in plan["unsafe"]:
+            self._add(step, report.MANUAL, "prefix.unsafe",
+                      f"manager {name!r} has root path {prefix!r}, which CloudFront would read as a "
+                      f"wildcard or cannot match; it gets no cache behavior and its links will fail",
+                      "change the manager's backend_url to a path of letters, digits, '/', '-', "
+                      "'_', '.' or '~'")
+        for prefix, ancestor in plan["nested"]:
+            self._add(step, report.MANUAL, "prefix.nested_private",
+                      f"private prefix {prefix!r} sits under public prefix {ancestor!r}; an "
+                      f"encoded request path could reach it through the public behavior",
+                      "make the parent manager private, or move the private manager to a prefix "
+                      "that is not under a public one")
+        if len(plan["behaviors"]) > MAX_BEHAVIORS:
+            self._add(step, report.MANUAL, "behaviors.quota",
+                      f"{len(plan['behaviors'])} cache behaviors are needed but CloudFront allows "
+                      f"{MAX_BEHAVIORS} per distribution by default",
+                      "request a quota increase, or give managers with the same visibility a "
+                      "common parent prefix")
+        if plan["nested"] or len(plan["behaviors"]) > MAX_BEHAVIORS:
+            self.blocked.add(step)
+            return None
+        return plan
 
     def _signing_key(self):
         from mojo.apps.fileman.models import CdnSigningKey
@@ -619,14 +708,27 @@ class CdnProvisioner:
             if item.get("Name") == name:
                 key_id = item.get("Id")
                 break
-        if key_id is None:
-            try:
-                private_key = self.key_loader(row)
-            except Exception as error:
-                self._add(STEP_KEY, report.BLIND, "signing_key.unreadable",
-                          f"the stored private key could not be read ({type(error).__name__})",
-                          "check KMS_KEY_ID and kms:Decrypt on it, then re-run")
+        try:
+            private_key = self.key_loader(row)
+        except Exception as error:
+            self._add(STEP_KEY, report.BLIND, "signing_key.unreadable",
+                      f"the stored private key could not be read ({type(error).__name__})",
+                      "check KMS_KEY_ID and kms:Decrypt on it, then re-run")
+            return None
+        if key_id is not None:
+            # Resume by name — but only if that public key is really ours.
+            found = self._call(STEP_KEY, "cloudfront.get_public_key", "cloudfront:GetPublicKey",
+                               lambda: cf.get_public_key(Id=key_id))
+            if found is None:
                 return None
+            encoded = ((found.get("PublicKey") or {}).get("PublicKeyConfig") or {}).get("EncodedKey") or ""
+            if encoded.strip() != cdn.public_key_pem(private_key).strip():
+                self._add(STEP_KEY, report.MANUAL, "signing_key.name_collision",
+                          f"CloudFront public key {name} exists but does not match the stored private key",
+                          "another deployment in this account uses the same name; delete or rename "
+                          "that key, then re-run")
+                return None
+        if key_id is None:
             created = self._call(STEP_KEY, "cloudfront.create_public_key", "cloudfront:CreatePublicKey",
                                  lambda: cf.create_public_key(PublicKeyConfig={
                                      "CallerReference": name, "Name": name,
@@ -767,9 +869,12 @@ class CdnProvisioner:
 
     def _create_distribution(self, cf):
         region = self.observed.get("bucket_region", self.region)
+        plan = self._planned_behaviors(f"s3-{self.bucket}", self.observed.get("key_group_id"))
+        if plan is None:
+            return
         config = distribution_config(
             self.bucket, region, self.observed.get("oac_id"), self.observed.get("key_group_id"),
-            self._cdn_managers(), caller_reference=f"mojo-fm-{self.bucket}-{uuid.uuid4().hex[:8]}")
+            plan["behaviors"], caller_reference=f"mojo-fm-{self.bucket}-{uuid.uuid4().hex[:8]}")
         self.actions.append(report.Action(STEP_DISTRIBUTION, "create", self.bucket))
         created = self._call(STEP_DISTRIBUTION, "cloudfront.create_distribution_with_tags",
                              "cloudfront:CreateDistribution",
@@ -806,6 +911,11 @@ class CdnProvisioner:
         default = config.get("DefaultCacheBehavior") or {}
         groups = default.get("TrustedKeyGroups") or {}
         key_group_id = self.observed.get("key_group_id")
+        if not key_group_id and byo and groups.get("Enabled") and groups.get("Items"):
+            # A BYO distribution trusts its own key group; record it so the
+            # plan can sign with it.
+            key_group_id = (groups.get("Items") or [None])[0]
+            self.observed["key_group_id"] = key_group_id
         if not groups.get("Enabled") or (key_group_id and key_group_id not in (groups.get("Items") or [])):
             problems.append(("default_behavior.unsigned",
                              "the default cache behavior does not require the signing key group, so "
@@ -822,7 +932,10 @@ class CdnProvisioner:
             problems.append(("cache_key.query_strings",
                              "query strings are in the cache key, so every signed URL is cached separately"))
         origin_id = origin.get("Id") or f"s3-{self.bucket}"
-        desired = desired_behaviors(self._cdn_managers(), origin_id, key_group_id)
+        plan = self._planned_behaviors(origin_id, key_group_id)
+        if plan is None:
+            return
+        desired = plan["behaviors"]
         current = (config.get("CacheBehaviors") or {}).get("Items") or []
         if not _behaviors_match(current, desired):
             problems.append(("behaviors.drift", "the per-manager cache behaviors differ from what the "
@@ -858,7 +971,7 @@ class CdnProvisioner:
         region = self.observed.get("bucket_region", self.region)
         new_config = distribution_config(
             self.bucket, region, origin.get("OriginAccessControlId") or self.observed.get("oac_id"),
-            key_group_id, self._cdn_managers(), config.get("CallerReference"), enabled=True,
+            key_group_id, desired, config.get("CallerReference"), enabled=True,
             current=config)
         self.actions.append(report.Action(STEP_DISTRIBUTION, "modify", dist_id,
                                           "converge behaviors and enablement"))
@@ -872,6 +985,56 @@ class CdnProvisioner:
         self._record_distribution((updated.get("Distribution") or {}) or distribution)
         self._add(STEP_DISTRIBUTION, report.PASS, "distribution.updated",
                   f"distribution {dist_id} updated")
+
+    def sync_behaviors_only(self, row):
+        """Rewrite ONLY the per-prefix cache behaviors of the bucket's distribution.
+
+        Used by visibility flips. Nothing else in the config is touched — not
+        `Enabled`, not the origin, not a BYO distribution's own settings —
+        and the default behavior is left as it is (reported if unsigned).
+        """
+        cf = self.client("cloudfront")
+        got = self._call(STEP_DISTRIBUTION, "cloudfront.get_distribution_config",
+                         "cloudfront:GetDistributionConfig",
+                         lambda: cf.get_distribution_config(Id=row.distribution_id),
+                         not_found_codes=("NoSuchDistribution",))
+        if got is None:
+            if STEP_DISTRIBUTION not in self.blocked:
+                self._add(STEP_DISTRIBUTION, report.MANUAL, "distribution.gone",
+                          f"distribution {row.distribution_id} no longer exists",
+                          "run check to re-record, or disable the CDN for this bucket")
+                self.blocked.add(STEP_DISTRIBUTION)
+            return
+        config = got.get("DistributionConfig") or {}
+        origins = ((config.get("Origins") or {}).get("Items") or [])
+        origin_id = (origins[0].get("Id") if origins else None) or f"s3-{self.bucket}"
+        default_groups = (config.get("DefaultCacheBehavior") or {}).get("TrustedKeyGroups") or {}
+        key_group_id = row.key_group_id or ((default_groups.get("Items") or [None])[0]
+                                            if default_groups.get("Enabled") else None)
+        if not default_groups.get("Enabled"):
+            self._add(STEP_DISTRIBUTION, report.DRIFT, "distribution.default_behavior.unsigned",
+                      "the default cache behavior does not require a signature",
+                      "run enable to converge it")
+        plan = self._planned_behaviors(origin_id, key_group_id)
+        if plan is None:
+            return
+        current = (config.get("CacheBehaviors") or {}).get("Items") or []
+        if _behaviors_match(current, plan["behaviors"]):
+            self._add(STEP_DISTRIBUTION, report.PASS, "behaviors.ok", "cache behaviors already match")
+            return
+        new_config = dict(config)
+        new_config["CacheBehaviors"] = {"Quantity": len(plan["behaviors"]), "Items": plan["behaviors"]}
+        self.actions.append(report.Action(STEP_DISTRIBUTION, "modify", row.distribution_id,
+                                          "converge cache behaviors"))
+        updated = self._call(STEP_DISTRIBUTION, "cloudfront.update_distribution",
+                             "cloudfront:UpdateDistribution",
+                             lambda: cf.update_distribution(Id=row.distribution_id, IfMatch=got.get("ETag"),
+                                                            DistributionConfig=new_config),
+                             mutation=True)
+        if updated is None:
+            return
+        self._add(STEP_DISTRIBUTION, report.PASS, "behaviors.updated",
+                  f"cache behaviors of {row.distribution_id} updated")
 
     def _bucket_policy(self):
         if self._blocked(STEP_POLICY, STEP_DISTRIBUTION):
@@ -894,8 +1057,8 @@ class CdnProvisioner:
             except ValueError:
                 current = None
         statement = bucket_policy_statement(self.bucket, arn)
-        for existing in (current or {}).get("Statement") or []:
-            if existing.get("Effect") == "Allow" and existing.get("Principal") in ("*", {"AWS": "*"}):
+        for existing in _statements(current):
+            if _is_anonymous_allow(existing):
                 self._add(STEP_POLICY, report.DRIFT, "bucket_policy.public_statement",
                           f"the bucket policy grants anonymous access (Sid {existing.get('Sid')})",
                           "remove it once every manager on the bucket delivers through the CDN; "
@@ -940,6 +1103,14 @@ class CdnProvisioner:
                       "fix the manager's kms_key_id or the bucket's default encryption key")
             return
         key_id = metadata.get("KeyId")
+        envelope = settings.get("KMS_KEY_ID", None)
+        if envelope and envelope in (key_id, metadata.get("Arn"), key_ref):
+            self._add(STEP_KMS, report.MANUAL, "kms.envelope_key",
+                      "the media key is the deployment's KMS_KEY_ID, which wraps every secret this "
+                      "deployment holds; CloudFront will not be granted it",
+                      "use a customer-managed key dedicated to media as the manager's kms_key_id")
+            self.blocked.add(STEP_KMS)
+            return
         if metadata.get("KeyManager") == "AWS":
             self._add(STEP_KMS, report.MANUAL, "kms.aws_managed",
                       "objects are encrypted with the AWS-managed aws/s3 key, whose policy cannot be "
@@ -983,7 +1154,8 @@ class CdnProvisioner:
         from mojo.apps.fileman.models import CdnDistribution, CdnSigningKey
         row = CdnDistribution.objects.filter(bucket_name=self.bucket).first()
         rep = self.report()
-        if not self.observed.get("distribution_id"):
+        if not self.apply or not self.observed.get("distribution_id"):
+            # check mode records its findings and changes nothing else.
             if row is not None:
                 row.last_check = rep
                 row.save(update_fields=["last_check", "modified"])
@@ -1077,32 +1249,59 @@ def disable(manager, retire=False, clients=None, **kwargs):
 
 
 def sync_manager_behavior(manager, clients=None, **kwargs):
-    """Converge the bucket's cache behaviors after a manager's is_public changed.
-    Returns the report; raises nothing — the caller decides what a failure means."""
-    provisioner = CdnProvisioner(manager, apply=True, clients=clients, **kwargs)
-    if not provisioner._preflight():
-        return provisioner.report()
+    """Converge the bucket's cache behaviors after a manager's visibility or
+    prefix changed. Behaviors only, under a row lock so two concurrent flips
+    cannot interleave their reads and writes. Returns the report; raises
+    nothing — the caller decides what a failure means."""
+    from django.db import transaction
     from mojo.apps.fileman.models import CdnDistribution
-    row = CdnDistribution.objects.filter(bucket_name=manager.root_location, is_enabled=True).first()
-    if row is None:
-        return provisioner.report()
-    provisioner.observed["key_group_id"] = row.key_group_id
-    provisioner.observed["oac_id"] = row.oac_id
-    provisioner._distribution()
-    return provisioner.report()
+    provisioner = CdnProvisioner(manager, apply=True, clients=clients, **kwargs)
+    with transaction.atomic():
+        row = (CdnDistribution.objects.select_for_update()
+               .filter(bucket_name=manager.root_location).exclude(distribution_id="").first())
+        if row is None:
+            return provisioner.report()
+        provisioner.observed["key_group_id"] = row.key_group_id
+        provisioner.sync_behaviors_only(row)
+        rep = provisioner.report()
+        row.last_check = rep
+        row.save(update_fields=["last_check", "modified"])
+    return rep
+
+
+def managers_on_bucket(bucket):
+    """Every S3 manager whose bucket is exactly `bucket`."""
+    from mojo.apps.fileman.models import FileManager
+    return [m for m in FileManager.objects.filter(backend_type="s3", backend_url__contains=bucket)
+            if m.root_location == bucket]
+
+
+def distribution_row_for(manager):
+    """The bucket's CdnDistribution with a real distribution, enabled or not.
+
+    Visibility flips must converge the edge whenever a distribution exists:
+    a disabled row or an opted-out manager still has its objects served by
+    that distribution, so "disabled" never means "unprotected".
+    """
+    from mojo.apps.fileman.models import CdnDistribution
+    if not getattr(manager, "is_s3", False):
+        return None
+    return (CdnDistribution.objects.filter(bucket_name=manager.root_location)
+            .exclude(distribution_id="").first())
 
 
 def _anchor(manager=None):
     """The (row, manager) a key operation runs against: the manager's bucket
     when given, else the first enabled distribution."""
-    from mojo.apps.fileman.models import CdnDistribution, FileManager
+    from mojo.apps.fileman.models import CdnDistribution
     if manager is not None:
         row = CdnDistribution.objects.filter(bucket_name=manager.root_location).first()
         return row, manager
     row = CdnDistribution.objects.filter(is_enabled=True, key_group_id__gt="").order_by("pk").first()
     if row is None:
         return None, None
-    return row, FileManager.objects.filter(backend_type="s3", backend_url__contains=row.bucket_name).first()
+    rows = managers_on_bucket(row.bucket_name)
+    return row, (rows[0] if rows else None)
 
 
 def rotate_key(manager=None, clients=None, **kwargs):
@@ -1125,7 +1324,7 @@ def rotate_key(manager=None, clients=None, **kwargs):
     if current is None:
         return provisioner.report()
     members = list(((current.get("KeyGroup") or {}).get("KeyGroupConfig") or {}).get("Items") or [])
-    if len(members) >= MAX_KEYS_PER_GROUP - 1:
+    if len(members) >= MAX_KEYS_PER_GROUP:
         provisioner._add(STEP_KEY, report.MANUAL, "key_group.full",
                          f"the key group already holds {len(members)} keys",
                          "revoke or retire an old key first (fileman_cdn revoke-key)")
@@ -1137,7 +1336,8 @@ def rotate_key(manager=None, clients=None, **kwargs):
         return provisioner.report()
     CdnDistribution.objects.filter(is_enabled=True).update(signing_key=new)
     if old is not None and old.pk != new.pk:
-        old.retire_after = provisioner.now() + timedelta(seconds=cdn.max_expires_in())
+        # Links round up to the hour past the cap, so the window does too.
+        old.retire_after = provisioner.now() + timedelta(seconds=cdn.max_expires_in() + 3600)
         old.save(update_fields=["retire_after", "modified"])
     provisioner._add(STEP_KEY, report.PASS, "key.rotated",
                      f"{new.key_id} now signs; {old.key_id if old else 'no previous key'} retires after "
@@ -1147,23 +1347,29 @@ def rotate_key(manager=None, clients=None, **kwargs):
 
 def revoke_key(key_id, manager=None, clients=None, **kwargs):
     """Remove a key from the key group now and deactivate it. Links it signed
-    fail once the change reaches the edge (minutes)."""
+    fail once the change reaches the edge (minutes). The key is deactivated
+    only once CloudFront has confirmed it no longer trusts it — a revocation
+    the edge did not see must not read as done."""
     from mojo.apps.fileman.models import CdnDistribution, CdnSigningKey
     key = CdnSigningKey.objects.filter(key_id=key_id).first()
     if key is None:
         return {"status": False, "error": f"no signing key {key_id}"}
     anchor, manager = _anchor(manager)
-    findings = []
-    if anchor is not None and manager is not None:
-        provisioner = CdnProvisioner(manager, apply=True, clients=clients, **kwargs)
-        cf = provisioner.client("cloudfront")
-        current = provisioner._call(STEP_KEY, "cloudfront.get_key_group", "cloudfront:GetKeyGroup",
-                                    lambda: cf.get_key_group(Id=anchor.key_group_id))
-        if current is not None:
-            members = [m for m in ((current.get("KeyGroup") or {}).get("KeyGroupConfig") or {}).get("Items") or []
-                       if m != key_id]
-            provisioner._update_key_group(cf, anchor.key_group_id, members, STEP_KEY)
-        findings = [f.as_dict() for f in provisioner.findings]
+    if anchor is None or manager is None or not anchor.key_group_id:
+        return {"status": False, "error": "no CDN distribution with a key group to revoke from",
+                "items": []}
+    provisioner = CdnProvisioner(manager, apply=True, clients=clients, **kwargs)
+    cf = provisioner.client("cloudfront")
+    current = provisioner._call(STEP_KEY, "cloudfront.get_key_group", "cloudfront:GetKeyGroup",
+                                lambda: cf.get_key_group(Id=anchor.key_group_id))
+    findings = lambda: [f.as_dict() for f in provisioner.findings]
+    if current is None:
+        return {"status": False, "error": "the key group could not be read", "items": findings()}
+    members = [m for m in ((current.get("KeyGroup") or {}).get("KeyGroupConfig") or {}).get("Items") or []]
+    if key_id in members:
+        if not provisioner._update_key_group(cf, anchor.key_group_id, [m for m in members if m != key_id], STEP_KEY):
+            return {"status": False, "error": "CloudFront still trusts the key; the key group update failed",
+                    "items": findings()}
     key.is_active = False
     key.retire_after = None
     key.save(update_fields=["is_active", "retire_after", "modified"])
@@ -1172,7 +1378,7 @@ def revoke_key(key_id, manager=None, clients=None, **kwargs):
         replacement = CdnSigningKey.objects.filter(is_active=True, key_id__isnull=False).exclude(pk=key.pk).order_by("-pk").first()
         row.signing_key = replacement
         row.save(update_fields=["signing_key", "modified"])
-    return {"status": True, "revoked": key_id, "items": findings}
+    return {"status": True, "revoked": key_id, "items": findings()}
 
 
 def retire_due_keys(manager=None, now=None, clients=None, **kwargs):
@@ -1191,12 +1397,10 @@ def invalidate_paths(distribution, paths, clients=None, **kwargs):
     """Best-effort CloudFront invalidation for keys that changed in place."""
     if distribution is None or not distribution.distribution_id or not paths:
         return None
-    from mojo.apps.fileman.models import FileManager
-    manager = FileManager.objects.filter(backend_type="s3",
-                                         backend_url__contains=distribution.bucket_name).first()
-    if manager is None:
+    rows = managers_on_bucket(distribution.bucket_name)
+    if not rows:
         return None
-    provisioner = CdnProvisioner(manager, apply=True, clients=clients, **kwargs)
+    provisioner = CdnProvisioner(rows[0], apply=True, clients=clients, **kwargs)
     cf = provisioner.client("cloudfront")
     items = sorted({"/" + str(p).lstrip("/") for p in paths})
     return provisioner._call(

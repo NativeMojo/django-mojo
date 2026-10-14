@@ -294,6 +294,15 @@ class FileManager(MojoSecrets, MojoModel):
 
         switch = self.get_secret("cdn")
         expires = self.get_secret("cdn_url_expires_in")
+        if self.is_s3 and self._cdn_distribution_row() is not None:
+            # On a CDN bucket the root path becomes a CloudFront path pattern:
+            # a `*` or `?` in it would be read as a wildcard and could match
+            # another manager's prefix.
+            prefix = (self.root_path or "").strip("/")
+            if prefix and not cdn.PREFIX_SAFE_RE.match(prefix):
+                raise me.ValueException(
+                    "on a bucket delivered through the CDN a file manager's path may only use "
+                    "letters, digits, '/', '-', '_', '.', '~', '@', ':' and '+'")
         if switch in (None, "") and expires in (None, ""):
             return
         if not self.is_s3:
@@ -307,22 +316,40 @@ class FileManager(MojoSecrets, MojoModel):
         except ValueError as exc:
             raise me.ValueException(str(exc))
 
-    def _cdn_visibility_change(self, created):
-        """(old, new) is_public when a CDN manager's visibility is changing, else None."""
-        if created or not self.uses_cdn or not self.pk:
+    def _cdn_distribution_row(self):
+        """The bucket's CdnDistribution with a real distribution, enabled or
+        not. Visibility and prefix changes must reach the edge whenever one
+        exists: a disabled row or an opted-out manager still has its objects
+        served by that distribution."""
+        from mojo.apps.fileman.services import cdn_provision
+        return cdn_provision.distribution_row_for(self)
+
+    def _cdn_edge_change(self, created):
+        """What a save changes at the edge: 'tighten', 'loosen' or None.
+
+        A new private manager, a public→private flip and any move of the
+        prefix tighten (the edge must protect the prefix before the row says
+        it is private); a new public manager or a private→public flip loosens.
+        """
+        if not self.is_s3 or self._cdn_distribution_row() is None:
             return None
-        stored = FileManager.objects.filter(pk=self.pk).values_list("is_public", flat=True).first()
-        if stored is None or bool(stored) == bool(self.is_public):
+        if created:
+            return "loosen" if self.is_public else "tighten"
+        stored = FileManager.objects.filter(pk=self.pk).values("is_public", "backend_url").first()
+        if stored is None:
             return None
-        return bool(stored), bool(self.is_public)
+        if stored["backend_url"] != self.backend_url:
+            return "tighten"
+        if bool(stored["is_public"]) == bool(self.is_public):
+            return None
+        return "loosen" if self.is_public else "tighten"
 
     def _tighten_cdn_before_save(self, created):
-        """Public → private on a CDN manager converges the cache behavior BEFORE
-        the row is written: if CloudFront refuses, the save fails and the edge
-        stays as it was. Never a database that says private while the edge
-        still serves the prefix unsigned."""
-        change = self._cdn_visibility_change(created)
-        if change is None or change != (True, False):
+        """A change that must protect a prefix converges the cache behaviors
+        BEFORE the row is written: if CloudFront refuses, the save fails and
+        the edge stays as it was. Never a database that says private while
+        the edge still serves the prefix unsigned."""
+        if self._cdn_edge_change(created) != "tighten":
             return
         from mojo.apps.fileman.services import cdn_provision
         result = cdn_provision.sync_manager_behavior(self, **(self._cdn_provision_kwargs or {}))
@@ -336,7 +363,11 @@ class FileManager(MojoSecrets, MojoModel):
     def _loosen_cdn_after_save(self, changed_fields, created):
         """Private → public converges after the write; a failure is logged and
         shows in check_cdn as behaviors.drift, never a public row served signed."""
-        if created or "is_public" not in (changed_fields or {}) or not self.uses_cdn or not self.is_public:
+        if created and not self.is_public:
+            return
+        if not created and "is_public" not in (changed_fields or {}):
+            return
+        if not self.is_public or self._cdn_distribution_row() is None:
             return
         from mojo.apps.fileman.services import cdn_provision
         result = cdn_provision.sync_manager_behavior(self, **(self._cdn_provision_kwargs or {}))
@@ -819,7 +850,7 @@ class FileManager(MojoSecrets, MojoModel):
         if backend_changed or created:
             self._backend = None
             self._cdn_distribution_cache = _CDN_UNRESOLVED
-        if self.uses_cdn:
+        if self.uses_cdn or (self.is_s3 and self._cdn_distribution_row() is not None):
             # With a CDN, `is_public` means "deliverable unsigned through the
             # CDN"; the bucket stays private behind OAC. No bucket-policy
             # write (Block Public Access refuses it anyway) and no S3 audit,
@@ -1055,7 +1086,16 @@ class FileManager(MojoSecrets, MojoModel):
         return dict(status=True, result=cdn_provision.enable(self, harden=harden))
 
     def on_action_check_cdn(self, value):
-        """Read-only: validate the bucket's distribution, provisioned or BYO."""
+        """Read-only: validate the bucket's distribution, provisioned or BYO.
+
+        Superuser only like the other two: it reads the account under the
+        deployment identity and reports policy documents and ARNs.
+        """
+        if not self._cdn_action_allowed():
+            raise me.PermissionDeniedException(
+                reason="Only superusers can check CDN delivery",
+                model_name="FileManager", event_type="user_permission_denied",
+                branch="fileman_cdn_check")
         if not self.is_s3:
             return dict(status=False, error="CDN delivery is only supported for S3 backends.")
         from mojo.apps.fileman.services import cdn_provision
@@ -1079,6 +1119,9 @@ class FileManager(MojoSecrets, MojoModel):
         new_manager.name = f"Clone of {self.name}"
         new_manager.backend_url = self.backend_url
         new_manager.backend_type = self.backend_type
+        # A clone shares the original's prefix, so it must share its visibility:
+        # a public duplicate of a private prefix would be a public prefix.
+        new_manager.is_public = self.is_public
         new_manager.set_secrets(secrets)
         new_manager.save()
         return dict(status=True, id=new_manager.id)

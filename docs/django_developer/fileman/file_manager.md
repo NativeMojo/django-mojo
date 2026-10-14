@@ -278,8 +278,9 @@ manage.py fileman_cdn rotate-key   /   revoke-key --key-id <K...>
 ```
 
 or the FileManager actions `enable_cdn`, `check_cdn`, `disable_cdn`
-(`POST /api/fileman/manager/<id>` with `{"action": "enable_cdn"}`); the
-mutating two are superuser-only. `enable` runs under the deployment's AWS
+(`POST /api/fileman/manager/<id>` with `{"action": "enable_cdn"}`); all three
+are superuser-only, since they read or change the account under the
+deployment identity and report ARNs and policy documents. `enable` runs under the deployment's AWS
 identity (`AWS_KEY`/`AWS_SECRET` or the instance role), never a manager's
 upload credentials; `--profile` runs under an operator's boto3 profile.
 
@@ -306,10 +307,26 @@ A manager opts out with its own or top-parent setting `cdn = "off"`.
 
 **Public means deliverable through the CDN.** In CDN mode `is_public` no
 longer writes a bucket policy or runs the S3 audit (which would read the
-private bucket and rewrite `is_public`). Flipping a manager public→private
-converges its cache behavior in `on_rest_pre_save` and refuses the save if
+private bucket and rewrite `is_public`). Any change that must protect a
+prefix — a new private manager, a public→private flip, a moved
+`backend_url` — converges the cache behaviors in `on_rest_pre_save`, under a
+lock on the bucket's `CdnDistribution` row, and refuses the save if
 CloudFront refuses, so the edge never serves a prefix unsigned while the row
-says private. Private→public converges after the write.
+says private. That holds even when the CDN row is disabled or the manager is
+opted out, because the distribution still serves the bucket. Private→public
+converges after the write. The sync rewrites cache behaviors only — never
+`Enabled`, the origin or a BYO distribution's own settings.
+
+**Behaviors are planned fail-closed.** Every S3 manager on the bucket counts
+(active or not, opted out or not); where two share a prefix, signed wins;
+a prefix containing `*`, `?` or any character CloudFront could not match
+literally gets no behavior (it falls under the signed default) and such a
+path is refused on save; a child with the same visibility as its nearest
+ancestor is covered by the ancestor (which keeps the count under
+CloudFront's 25-behavior quota); a **private manager under a public
+manager's prefix is refused** — whether CloudFront matches the encoded or
+the decoded path decides if the longer signed pattern could be sidestepped,
+and the live proof probes that. A clone keeps its original's visibility.
 
 **Links.** `S3StorageBackend.get_url` is the one seam: `expires_in=None`
 is unsigned, otherwise a canned-policy signed URL for
@@ -350,6 +367,12 @@ adopts an untagged distribution on a bucket: that is a `MANUAL` finding.
   change in place.
 - `disable` reverts links immediately and leaves AWS as is; `--retire` sets
   the distribution disabled. Deleting it is a human step.
+- `revoke-key` marks a key inactive only once CloudFront has confirmed the
+  key group no longer trusts it; a refused update returns `status: false`.
+- CloudFront public key names include the deployment slug; a name that
+  already exists with a different public key is reported, never adopted.
+- CloudFront is never granted the deployment's `KMS_KEY_ID`; a manager whose
+  `kms_key_id` resolves to it is reported MANUAL.
 
 **IAM, by mode** (exact action names; a denial reports the one to grant):
 - links: `kms:Decrypt` on `KMS_KEY_ID`.

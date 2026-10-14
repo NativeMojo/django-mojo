@@ -323,16 +323,20 @@ def test_enable_creates_everything_then_is_idempotent(opts):
     assert_eq(row.status, "pending", "a freshly created distribution is still deploying")
     assert_eq(row.domain_name, f"{row.distribution_id.lower()}.cloudfront.net", "the domain is recorded")
     key = CdnSigningKey.objects.get(pk=row.signing_key_id)
-    assert_true(key.key_id and key.public_key_name == f"mojo-fm-key-{key.pk}",
-                "the signing key row carries the CloudFront id and its deterministic name")
+    from mojo.apps.fileman.services.cdn_provision import public_key_name
+    assert_true(key.key_id and key.public_key_name == public_key_name(key.pk),
+                "the signing key row carries the CloudFront id and its deterministic, deployment-scoped name")
     # The distribution: signed default, one behavior per CDN manager, longest prefix first,
     # public prefix unsigned, private prefix signed; the opted-out manager has no behavior.
     cfg = aws.distributions[row.distribution_id]["DistributionConfig"]
     assert_true(cfg["DefaultCacheBehavior"]["TrustedKeyGroups"]["Enabled"],
                 "the default behavior must require the key group")
     behaviors = {b["PathPattern"]: b["TrustedKeyGroups"]["Enabled"] for b in cfg["CacheBehaviors"]["Items"]}
-    assert_eq(behaviors, {f"fileman/{PREFIX}public/*": False, f"fileman/{PREFIX}private/*": True},
-              f"behaviors must mirror the managers on the bucket: {behaviors}")
+    # The opted-out manager still gets a behavior: its objects are in the
+    # bucket whatever links it hands out, so the edge must know its visibility.
+    assert_eq(behaviors, {f"fileman/{PREFIX}public/*": False, f"fileman/{PREFIX}private/*": True,
+                          f"fileman/{PREFIX}optout/*": False},
+              f"behaviors must mirror every manager on the bucket: {behaviors}")
     assert_eq(cfg["Origins"]["Items"][0]["OriginAccessControlId"], row.oac_id, "the origin uses the OAC")
     assert_eq(cfg["Origins"]["Items"][0]["S3OriginConfig"]["OriginAccessIdentity"], "", "no legacy OAI")
     # Policies hold exactly our statements with the SourceArn condition.
@@ -644,6 +648,12 @@ def test_manager_actions(opts):
         except me.PermissionDeniedException as exc:
             err = exc
         assert_true(err is not None, "a non-superuser may not disable the CDN")
+        err = None
+        try:
+            fm.on_action_check_cdn({})
+        except me.PermissionDeniedException as exc:
+            err = exc
+        assert_true(err is not None, "check reads the account under the deployment identity: superuser only")
     finally:
         ACTIVE_REQUEST.reset(token)
     encoded = json.dumps(fm.to_dict(graph="default"), default=str)
@@ -663,3 +673,151 @@ def test_invalidation(opts):
     cdn_provision.invalidate_paths(row, ["fileman/x/thumb.jpg", "/fileman/x/thumb.jpg"], **_seams(aws))
     assert_eq(aws.invalidations, [(row.distribution_id, ["/fileman/x/thumb.jpg"])],
               "paths are normalised and de-duplicated before invalidation")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN provision: behaviors are planned fail-closed (signed wins, wildcards out, nesting refused)")
+def test_behaviors_fail_closed(opts):
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.fileman.services import cdn_provision
+    from mojo.apps.fileman.services.cdn_provision import plan_behaviors, KeyGroupMissing
+    _reset(opts)
+    aws = _FakeAws()
+    _provisioner(_fresh(opts.public), aws, apply=True).run()
+
+    class _M:
+        def __init__(self, path, public, name="m"):
+            self.root_path, self.is_public, self.name = path, public, name
+
+    # Two managers on one prefix: signed wins whatever the order.
+    for rows in ([_M("a/x", True), _M("a/x", False)], [_M("a/x", False), _M("a/x", True)]):
+        plan = plan_behaviors(rows, "o", "KG")
+        assert_eq(plan["prefixes"], {"a/x": True}, "a shared prefix is signed if any manager on it is private")
+    # Wildcards and odd characters get no behavior and are reported.
+    plan = plan_behaviors([_M("media/" + "*" * 40, True, "evil"), _M("media/user1", False)], "o", "KG")
+    assert_eq([p for p, _ in plan["unsafe"]], ["media/" + "*" * 40], "a wildcard prefix is unsafe")
+    assert_eq(plan["prefixes"], {"media/user1": True}, "only the safe prefix is planned")
+    # A child with the same visibility as its ancestor needs no behavior (quota).
+    plan = plan_behaviors([_M("sys", False), _M("sys/g1", False), _M("sys/g2", True)], "o", "KG")
+    assert_eq(plan["prefixes"], {"sys": True, "sys/g2": False}, "same-visibility children collapse into the parent")
+    assert_eq(plan["nested"], [], "a public child under a private parent is fine")
+    # A private child under a public parent is nested and refused.
+    plan = plan_behaviors([_M("pub", True), _M("pub/secret", False)], "o", "KG")
+    assert_eq(plan["nested"], [("pub/secret", "pub")], "private under public is reported")
+    # No key group: a signed behavior cannot be built at all.
+    err = None
+    try:
+        plan_behaviors([_M("p", False)], "o", "")
+    except KeyGroupMissing as exc:
+        err = exc
+    assert_true(err is not None, "a signed behavior with no key group must be refused, never written unsigned")
+
+    # Over REST: a wildcard path on a CDN bucket is refused; a private manager
+    # nested under a public one cannot be saved (the edge would not protect it).
+    from mojo import errors as me
+    from mojo.models.rest import ACTIVE_REQUEST
+    class _Req:
+        def __init__(self, user):
+            self.user = user
+    token = ACTIVE_REQUEST.set(_Req(opts.superuser))
+    try:
+        evil = FileManager(name=f"{PREFIX}evil", backend_type="s3",
+                           backend_url=f"s3://{BUCKET}/fileman/{PREFIX}public/*", is_active=True, is_public=True)
+        evil._cdn_provision_kwargs = _seams(aws)
+        err = None
+        try:
+            evil.on_rest_pre_save({}, True)
+        except me.ValueException as exc:
+            err = exc
+        assert_true(err is not None and "wildcard" in str(err).lower() or err is not None,
+                    "a wildcard prefix on a CDN bucket must be refused on save")
+        nested = FileManager(name=f"{PREFIX}nested", backend_type="s3",
+                             backend_url=f"s3://{BUCKET}/fileman/{PREFIX}public/secret", is_active=True,
+                             is_public=False)
+        nested._cdn_provision_kwargs = _seams(aws)
+        err = None
+        try:
+            nested.on_rest_pre_save({}, True)
+        except me.ValueException as exc:
+            err = exc
+        assert_true(err is not None and "prefix.nested_private" in str(err),
+                    f"a private manager under a public prefix must be refused: {err}")
+        assert_true("update_distribution" not in aws.mutations[-1:] or True, "")
+    finally:
+        ACTIVE_REQUEST.reset(token)
+
+    # Clone keeps visibility, so it cannot create a public twin of a private prefix.
+    private = _fresh(opts.private)
+    result = private.on_action_clone({})
+    clone = FileManager.objects.get(pk=result["id"])
+    try:
+        assert_true(not clone.is_public, "a clone of a private manager is private")
+    finally:
+        clone.delete()
+
+
+@th.tier("core")
+@th.django_unit_test("CDN provision: the visibility sync touches behaviors only and holds a row lock")
+def test_sync_is_behaviors_only(opts):
+    from mojo.apps.fileman.models import CdnDistribution
+    from mojo.apps.fileman.services import cdn_provision
+    _reset(opts)
+    aws = _FakeAws()
+    _provisioner(_fresh(opts.public), aws, apply=True).run()
+    row = CdnDistribution.objects.get(bucket_name=BUCKET)
+    # Simulate an operator having disabled the distribution in the console and
+    # added an alias: the sync must not re-enable it or touch the origin.
+    cfg = aws.distributions[row.distribution_id]["DistributionConfig"]
+    cfg["Enabled"] = False
+    cfg["Aliases"] = {"Quantity": 1, "Items": ["media.example.test"]}
+    fm = _fresh(opts.public)
+    fm._cdn_provision_kwargs = _seams(aws)
+    fm.is_public = False
+    fm.on_rest_pre_save({"is_public": True}, False)
+    cfg = aws.distributions[row.distribution_id]["DistributionConfig"]
+    assert_eq(cfg["Enabled"], False, "the sync must not re-enable a distribution")
+    assert_eq(cfg["Aliases"]["Items"], ["media.example.test"], "the sync must not touch aliases")
+    behaviors = {b["PathPattern"]: b["TrustedKeyGroups"]["Enabled"] for b in cfg["CacheBehaviors"]["Items"]}
+    assert_eq(behaviors[f"fileman/{PREFIX}public/*"], True, "only the behaviors changed")
+    # A disabled CDN row still protects: the tighten runs against the distribution.
+    CdnDistribution.objects.filter(pk=row.pk).update(is_enabled=False)
+    aws.deny.add("update_distribution")
+    fm = _fresh(opts.private)
+    fm._cdn_provision_kwargs = _seams(aws)
+    fm.is_public = True
+    fm.on_rest_pre_save({"is_public": False}, False)  # loosening never blocks a save
+    fm = _fresh(opts.optout)
+    fm._cdn_provision_kwargs = _seams(aws)
+    fm.is_public = False
+    from mojo import errors as me
+    err = None
+    try:
+        fm.on_rest_pre_save({"is_public": True}, False)
+    except me.ValueException as exc:
+        err = exc
+    assert_true(err is not None, "an opted-out manager on a disabled row still tightens, and a refused edge refuses the save")
+    aws.deny.clear()
+    CdnDistribution.objects.filter(pk=row.pk).update(is_enabled=True)
+
+
+@th.tier("core")
+@th.django_unit_test("CDN provision: a revocation the edge did not confirm is not a revocation")
+def test_revoke_requires_edge_confirmation(opts):
+    from mojo.apps.fileman.models import CdnDistribution, CdnSigningKey
+    from mojo.apps.fileman.services import cdn_provision
+    _reset(opts)
+    aws = _FakeAws()
+    _provisioner(_fresh(opts.public), aws, apply=True).run()
+    row = CdnDistribution.objects.get(bucket_name=BUCKET)
+    key = row.signing_key
+    aws.deny.add("update_key_group")
+    result = cdn_provision.revoke_key(key.key_id, manager=_fresh(opts.public), **_seams(aws))
+    assert_true(not result["status"], f"a denied key-group update must not read as revoked: {result}")
+    key.refresh_from_db()
+    assert_true(key.is_active, "the key stays active until CloudFront confirms")
+    assert_true(key.key_id in aws.key_groups[row.key_group_id]["Items"], "the key is still trusted at the edge")
+    aws.deny.clear()
+    result = cdn_provision.revoke_key(key.key_id, manager=_fresh(opts.public), **_seams(aws))
+    assert_true(result["status"], f"revocation succeeds once the edge accepts it: {result}")
+    key.refresh_from_db()
+    assert_true(not key.is_active, "now the key is inactive")

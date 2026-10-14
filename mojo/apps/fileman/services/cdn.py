@@ -16,6 +16,7 @@ round trip.
 """
 
 import math
+import re
 import threading
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlparse
@@ -35,6 +36,11 @@ CDN_EXPIRES_KEY = "cdn_url_expires_in"
 MANAGER_SETTING_KEYS = (CDN_SWITCH_KEY, CDN_EXPIRES_KEY)
 
 RSA_KEY_BITS = 2048
+
+# A manager root path that can be a CloudFront path pattern literally: no
+# `*` or `?` (wildcards), no `%`, space or quote (encoding ambiguity), only
+# the characters CloudFront accepts in a pattern.
+PREFIX_SAFE_RE = re.compile(r"^[A-Za-z0-9_\-./~@:+]+\Z")
 
 _signer_cache = {}
 _signer_lock = threading.Lock()
