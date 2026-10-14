@@ -30,10 +30,15 @@ Structural on **every** kind — rendered always, optional never:
   (`EDGE_ACME_WEBROOT`) plus a 301 to https. DNSMAN-only fleets set it false;
   they render no public HTTP blocks because DNS-01 issuance needs no listener.
 - The **security headers** (HSTS, nosniff, `X-Frame-Options DENY`,
-  Referrer-Policy, Permissions-Policy), re-emitted inside any location that
+  Referrer-Policy), re-emitted inside any location that
   declares its own `add_header` — nginx header inheritance is
   replace-not-merge, so the no-cache posture on proxied locations and the
-  immutable caching on assets would otherwise silently drop them.
+  immutable caching on assets would otherwise silently drop them. There is
+  deliberately **no `Permissions-Policy`**: which browser features a site and
+  the things it embeds may use (camera, microphone, geolocation, media) is
+  the website's decision, not the platform's. A site that wants to restrict
+  them sends that header itself; the edge never restricts on its behalf
+  (maestro #8225, 2026-10-14).
 - `client_max_body_size` rendered from `body_size_mb` (default 50, range
   1–4096) — nginx's 1m default is never silently in play.
 - The **blocklist guards** (`if ($edge_block_ip)` / `if ($edge_block_ua)` →
