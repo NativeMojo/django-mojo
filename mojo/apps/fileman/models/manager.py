@@ -11,6 +11,9 @@ from mojo.helpers.settings import settings
 from mojo import errors as me
 from mojo.helpers.aws.provider_call import safe_error_detail
 
+# "not resolved yet" for the per-instance CDN cache; None is a real answer.
+_CDN_UNRESOLVED = object()
+
 class FileManager(MojoSecrets, MojoModel):
     """
     File manager configuration for different storage backends and upload strategies
@@ -37,7 +40,7 @@ class FileManager(MojoSecrets, MojoModel):
         GRAPHS = {
             "default": {
                 "extra": ["aws_region", "aws_key_masked", "aws_secret_masked", "allowed_origins",
-                          "assume_role_arn", "has_external_id"],
+                          "assume_role_arn", "has_external_id", "cdn"],
                 "fields": [
                     "created", "id", "name", "use", "backend_type", "backend_url",
                     "is_active", "is_default", "is_public"],
@@ -227,15 +230,102 @@ class FileManager(MojoSecrets, MojoModel):
 
     def set_secret(self, key, value):
         self._backend = None
+        self._cdn_distribution_cache = _CDN_UNRESOLVED
         return super().set_secret(key, value)
 
     def set_secrets(self, value):
         self._backend = None
+        self._cdn_distribution_cache = _CDN_UNRESOLVED
         return super().set_secrets(value)
 
     def clear_secrets(self):
         self._backend = None
+        self._cdn_distribution_cache = _CDN_UNRESOLVED
         return super().clear_secrets()
+
+    # --- CDN delivery (maestro #8250) ---
+
+    _cdn_distribution_cache = _CDN_UNRESOLVED
+
+    @property
+    def cdn_distribution(self):
+        """The CdnDistribution this manager delivers through, or None.
+
+        Resolved once per instance (the bucket's enabled row, unless this
+        manager or its top parent sets `cdn = "off"`); reset whenever the
+        settings store or the backend changes.
+        """
+        if self._cdn_distribution_cache is _CDN_UNRESOLVED:
+            from mojo.apps.fileman.services import cdn
+            self._cdn_distribution_cache = cdn.resolve_for_manager(self)
+        return self._cdn_distribution_cache
+
+    @property
+    def uses_cdn(self):
+        return self.cdn_distribution is not None
+
+    @property
+    def cdn(self):
+        """Graph extra: what the portal shows. Never the key material."""
+        distribution = self.cdn_distribution
+        if distribution is None:
+            return {"enabled": False}
+        return {
+            "enabled": True,
+            "url": distribution.base_url,
+            "bucket": distribution.bucket_name,
+            "distribution_id": distribution.distribution_id,
+            "source": distribution.source,
+            "status": distribution.status,
+            "signed": not self.is_public,
+            "signing_key_id": distribution.signing_key.key_id if distribution.signing_key_id else None,
+        }
+
+    CDN_SETTING_KEYS = ("cdn", "cdn_url_expires_in")
+
+    def _validate_cdn_settings(self):
+        """The per-manager CDN settings are small and strict; S3 only."""
+        from mojo.apps.fileman.services import cdn
+
+        switch = self.get_secret("cdn")
+        expires = self.get_secret("cdn_url_expires_in")
+        if switch in (None, "") and expires in (None, ""):
+            return
+        if not self.is_s3:
+            raise me.ValueException(
+                "cdn settings apply to S3 file managers only")
+        try:
+            if switch not in (None, ""):
+                self.set_secret("cdn", cdn.validate_switch(switch))
+            if expires not in (None, ""):
+                self.set_secret("cdn_url_expires_in", cdn.validate_expires_in(expires))
+        except ValueError as exc:
+            raise me.ValueException(str(exc))
+
+    def _require_superuser_for_cdn(self, created):
+        """Only a superuser may change a manager's CDN settings over REST.
+
+        The settings decide whether a manager's links are signed for and
+        how long a bearer link lives, which is platform policy, not a file
+        admin's call. Same shape as `_require_superuser_for_platform_role`.
+        """
+        actor = self.active_user
+        if actor is not None and getattr(actor, "is_superuser", False):
+            return
+        if not created:
+            stored = FileManager.objects.filter(pk=self.pk).first()
+            if stored is not None and all(
+                    self.get_secret(key) == stored.get_secret(key)
+                    for key in self.CDN_SETTING_KEYS):
+                return
+        elif all(self.get_secret(key) in (None, "") for key in self.CDN_SETTING_KEYS):
+            return
+        raise me.PermissionDeniedException(
+            reason="Only superusers can change a FileManager's CDN settings",
+            model_name="FileManager",
+            event_type="user_permission_denied",
+            branch="fileman_cdn_setting",
+        )
 
     def get_setting(self, key, default=None):
         """Get a specific setting value"""
@@ -662,6 +752,8 @@ class FileManager(MojoSecrets, MojoModel):
         # defaults below cannot change the answer — a created store with no
         # key of its own is on platform credentials either way.
         self._require_superuser_for_platform_role(created)
+        self._require_superuser_for_cdn(created)
+        self._validate_cdn_settings()
         self._update_default()
         if not self.name:
             self.name = self.generate_name()
@@ -683,6 +775,13 @@ class FileManager(MojoSecrets, MojoModel):
         policy_changed = "is_public" in changed_fields or created
         if backend_changed or created:
             self._backend = None
+            self._cdn_distribution_cache = _CDN_UNRESOLVED
+        if self.uses_cdn:
+            # With a CDN, `is_public` means "deliverable unsigned through the
+            # CDN"; the bucket stays private behind OAC. No bucket-policy
+            # write (Block Public Access refuses it anyway) and no S3 audit,
+            # which would read the private bucket and rewrite is_public.
+            return
         if policy_changed:
             if self.is_public:
                 self.backend.make_path_public()
@@ -759,7 +858,7 @@ class FileManager(MojoSecrets, MojoModel):
         the operator's stored value but is effectively private so callers use a
         presigned URL.
         """
-        if not self.is_s3:
+        if not self.is_s3 or self.uses_cdn:
             return self.is_public
         if not force and self._public_access_audit_is_current(file_path=file_path):
             return self.public_access_audit.get("status") == "public"
@@ -803,7 +902,7 @@ class FileManager(MojoSecrets, MojoModel):
 
     def ensure_public_access_audited(self, file_path=None, force=False, persist=True):
         """Return safe effective access, auditing only stale personal S3 state."""
-        if not self._uses_automatic_public_access_audit():
+        if self.uses_cdn or not self._uses_automatic_public_access_audit():
             return self.is_public
         return self.audit_is_public(file_path=file_path, force=force, persist=persist)
 
