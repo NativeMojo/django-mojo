@@ -180,8 +180,9 @@ The key is in `FLEET_PROVIDER_KEYS`, so `is_catalog_protected()` is true and
 `Setting.save`/`set`/`remove` and the REST surface all refuse it. The writer
 therefore mirrors `_write_configuration_revision`: a queryset `.update()` with
 `bulk_create` fallback, inside `transaction.atomic()` holding the same
-installation lock. Reads tolerate the duplicate `(key, NULL)` rows PostgreSQL
-still permits — the oldest row wins rather than the read failing. The blob
+installation lock. Reads tolerate the duplicate `(key, NULL)` rows a database
+before migration `account 0055` can hold — the oldest row wins rather than the
+read failing. The blob
 stores a host-bearing message from a fixed vocabulary and never a key,
 credential, request body, or exception repr.
 
@@ -199,9 +200,11 @@ config-sync/restart cycle is pending, not that every node has restarted. Publish
 the S3 location, KMS key, application allowlist, and the independent node
 bootstrap delegation documented in [Node deployment tooling](../../deploy/README.md#admin-fleet-overrides).
 
-PostgreSQL permits duplicate `(key, NULL)` rows under the legacy constraint.
-The catalog reports `duplicate_override`, refuses Set, and offers one Clear
-operation. Clear locks and removes every global duplicate atomically. Set and
+Since migration `account 0055` the database refuses a second `(key, NULL)`
+row (see [One row per key in each scope](../../helpers/settings.md#one-row-per-key-in-each-scope)),
+so duplicates exist only on a database that has not run it. There the catalog
+reports `duplicate_override`, refuses Set, and offers one Clear operation.
+Clear locks and removes every global duplicate atomically. Set and
 Clear publish Redis `hset`/`hdel` only from `transaction.on_commit`; rollback
 cannot change cache state. Setting a single legacy secret catalog row replaces
 it with the validated non-secret value; Clear removes it. The POST body is

@@ -803,6 +803,14 @@ entered again because the API never returns it. A create sent with `group`
 (or `group_uuid`) lands in that group only: a body that also names a different
 `group_id` is refused with `403`.
 
+**One setting per key in each scope.** A `POST /api/settings` for a key that
+already exists in that scope returns `400`, and so does a
+`POST /api/settings/<id>` that renames `key` onto a taken one. The error says
+what to do: "A platform-wide setting named KEY already exists; edit that
+setting instead of creating another", or "This group already has a setting
+named KEY; …" for a group. Look the setting up with
+`GET /api/settings?search=KEY` and update it by id instead.
+
 Legacy holders of these model permissions can read every non-secret Setting
 row returned by their scope. The curated catalog adds no confidential mutable
 values and does not make this generic read surface more private.
