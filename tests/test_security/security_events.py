@@ -1103,29 +1103,69 @@ ADMITS_USER_API_KEYS = {
 }
 
 
+def _guarded_routes_in_text(source, module):
+    """Views in one module's source that carry `denies_key_backed_session`,
+    found by parsing, so any spacing, line break or import alias counts.
+    Returns {"module.function": refuses_user_api_keys}."""
+    import ast
+
+    found = {}
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            call = decorator if isinstance(decorator, ast.Call) else None
+            target = call.func if call else decorator
+            name = getattr(target, "attr", None) or getattr(target, "id", None)
+            if name != "denies_key_backed_session":
+                continue
+            found[f"{module}.{node.name}"] = any(
+                keyword.arg == "deny_user_api_keys"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is True
+                for keyword in (call.keywords if call else ()))
+    return found
+
+
 def _guarded_routes_in_source():
-    """Every `@md.denies_key_backed_session(...)` view in mojo/, read from
-    source so an app missing from this test project's INSTALLED_APPS is still
-    counted. Returns {"module.function": decorator_line}."""
+    """Every `denies_key_backed_session` view in mojo/, read from source so an
+    app missing from this test project's INSTALLED_APPS is still counted.
+    Returns {"module.function": refuses_user_api_keys}."""
     import pathlib
-    import re
     import mojo
 
     root = pathlib.Path(mojo.__file__).resolve().parent
     found = {}
     for path in sorted(root.rglob("*.py")):
-        lines = path.read_text().splitlines()
-        for i, line in enumerate(lines):
-            if not line.startswith("@md.denies_key_backed_session("):
-                continue
-            for later in lines[i + 1:i + 40]:
-                match = re.match(r"def (\w+)\(", later)
-                if match:
-                    module = ".".join(
-                        ("mojo",) + path.relative_to(root).with_suffix("").parts)
-                    found[f"{module}.{match.group(1)}"] = line
-                    break
+        module = ".".join(
+            ("mojo",) + path.relative_to(root).with_suffix("").parts)
+        found.update(_guarded_routes_in_text(path.read_text(), module))
     return found
+
+
+@th.django_unit_test("#7635: the guarded-route scanner finds every spelling of the decorator")
+def test_guarded_route_scanner_reads_any_spelling(opts):
+    source = (
+        "from mojo import decorators as md\n"
+        "from mojo.decorators import auth\n"
+        "from mojo.decorators.auth import denies_key_backed_session\n"
+        "@md.denies_key_backed_session ()\n"
+        "def spaced(request): pass\n"
+        "@md.denies_key_backed_session(\n"
+        "    methods=['POST'],\n"
+        "    deny_user_api_keys=True)\n"
+        "def multiline(request): pass\n"
+        "@auth.denies_key_backed_session()\n"
+        "def aliased(request): pass\n"
+        "@denies_key_backed_session(deny_user_api_keys=True)\n"
+        "def bare(request): pass\n"
+        "@md.requires_auth()\n"
+        "def unguarded(request): pass\n")
+    assert_eq(_guarded_routes_in_text(source, "m"), {
+        "m.spaced": False, "m.multiline": True, "m.aliased": False,
+        "m.bare": True},
+        "the scanner must find the decorator however it is written, and read "
+        "deny_user_api_keys from its arguments")
 
 
 @th.django_unit_test("#7635: every guarded route says whether a per-user API key may use it")
@@ -1144,10 +1184,10 @@ def test_guarded_routes_classified_for_user_api_keys(opts):
     assert_eq(sorted(pinned - set(found)), [],
               "listed routes no longer carry denies_key_backed_session")
 
-    for key, line in found.items():
-        refuses = "deny_user_api_keys=True" in line
+    for key, refuses in found.items():
         assert_eq(refuses, key in REFUSES_USER_API_KEYS,
-                  f"{key}: decorator `{line}` disagrees with its pinned list")
+                  f"{key}: deny_user_api_keys={refuses} disagrees with its "
+                  f"pinned list")
 
     # The source flag and the registered behaviour agree for every own-sign-in
     # route; the operator routes that are loaded here must not refuse.

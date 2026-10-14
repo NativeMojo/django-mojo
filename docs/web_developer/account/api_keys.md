@@ -327,7 +327,7 @@ The request runs with the user's full permissions. If `allowed_ips` was set, req
 - email, phone and username changes, the sign-in hand-off, `POST /api/auth/sessions/revoke`, `POST /api/account/security-events/logout`
 - writes to linked sign-in accounts (`/api/account/oauth_connection`) and OAuth consent approval
 
-This is what makes revoking a leaked token final: its holder cannot mint a replacement first.
+So the holder of a leaked token cannot mint a replacement for themselves before it is revoked. This does not cover a token whose user holds an administrative permission. Such a token still reaches the admin routes that permission opens, for example `POST /api/account/admin/user/password/temporary` with `manage_users`, which returns a temporary password for any account, the token's own included. Revoking that token does not end access gained that way, so treat an administrator's leaked token as a compromise of every account it could manage.
 
 ---
 
