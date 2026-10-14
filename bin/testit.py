@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """
 Test runner bootstrap.
-Activates the venv automatically if present, flushes the database,
-then hands off to testit.runner.
+Activates the venv automatically if present, takes the run lock, flushes the
+database, then hands off to testit.runner.
 """
 import os
 import sys
@@ -35,8 +35,65 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")
 from mojo.helpers import paths
 paths.configure_paths(str(TESTPROJECT / "config" / "settings" / "__init__.py"), 1)
 
+# The run lock comes before anything that can exit or reset test state (item
+# #8052), including the runner import, which pulls in third-party packages.
+# Every exit below writes a refusal or claim_run's "not completed" marker, so
+# none can leave an older report looking current. A launch that
+# cannot get the lock exits here having touched nothing — before this, it
+# flushed the live run's database and Redis first.
+#
+# runlock is standard library only and is loaded by FILE PATH: importing the
+# testit package would import helpers and its dependencies first. It is
+# registered as testit.runlock, so the runner's own `from testit import
+# runlock` gets this module and reuses the claim taken here.
+def _load_runlock():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "testit.runlock", str(REPO_ROOT / "testit" / "runlock.py"))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["testit.runlock"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _refused_start(err, message):
+    """A refused start never exits 0: print the cause, then re-raise anything
+    but a successful SystemExit, which becomes exit 1."""
+    print(f"ERROR:{message}", file=sys.stderr)
+    if isinstance(err, SystemExit) and err.code in (0, None):
+        raise SystemExit(1)
+    raise err
+
+
+runlock = _load_runlock()
+_launch_claim, _holder = runlock.acquire(paths.VAR_ROOT)
+if _launch_claim is None:
+    print(runlock.holder_message(_holder, runlock.lock_path(paths.VAR_ROOT)))
+    sys.exit(1)
+
+# Only the runner's parser can say what argv asks for (help, --init, a run),
+# so nothing classifies it before this import. If the import fails, every
+# launch, --help included, records runner_import: no older report survives
+# a launch that could not even start (#8052 review 103952).
+try:
+    from testit import runner
+except (Exception, SystemExit) as err:
+    _message = f"  The launcher could not import the test runner: {err!r}"
+    runlock.refuse(_launch_claim, "runner_import", _message)
+    _refused_start(err, _message)
+
+# Reuses the claim above. None means --init / --list-extras: not a test run,
+# so nothing below may reset state.
+claim = runner.claim_run(sys.argv[1:])
+
 import django
-django.setup()
+try:
+    django.setup()
+except (Exception, SystemExit) as err:
+    _message = f"  django.setup() failed: {err!r}"
+    runner.refuse_run("django_setup", _message)
+    _refused_start(err, _message)
 
 def _load_testenv():
     """Load testit/testenv.py by FILE PATH, the way bin/create_testproject does.
@@ -100,6 +157,7 @@ if redis_client is not None:
                 redis_index, str(REPO_ROOT), client=redis_client)
         except testenv.AllocationError as err:
             print(f"ERROR: {err}", file=sys.stderr)
+            runner.refuse_run("redis_index_claimed", f"  {err}")
             sys.exit(1)
 
     # Pub/Sub isolation guard. The db index above only isolates stored keys —
@@ -112,6 +170,10 @@ if redis_client is not None:
     _expected_prefix = testenv.expected_pubsub_prefix(str(REPO_ROOT))
     _actual_prefix = mojo_settings.get_static("REDIS_PUBSUB_PREFIX", "") or ""
     if _actual_prefix != _expected_prefix:
+        runner.refuse_run(
+            "pubsub_prefix",
+            f"  REDIS_PUBSUB_PREFIX is {_actual_prefix or 'missing'!r}; this "
+            f"checkout requires {_expected_prefix!r}. Run bin/create_testproject.")
         print(
             "ERROR: REDIS_PUBSUB_PREFIX is "
             + (f"'{_actual_prefix}'" if _actual_prefix else "missing")
@@ -121,8 +183,11 @@ if redis_client is not None:
             file=sys.stderr)
         sys.exit(1)
 
-# Skip flush when continuing from a checkpoint so prior test state is preserved
-if CONTINUING:
+# Skip flush when continuing from a checkpoint so prior test state is preserved.
+# Never flush without the run lock: --init and --list-extras run no tests.
+if claim is None:
+    pass
+elif CONTINUING:
     print("==> Skipping flush (--continue mode)")
 else:
     from django.db import connection
@@ -155,8 +220,6 @@ else:
         # onto a localhost index this checkout never uses.
         testenv.stamp_redis_owner(
             redis_index, str(REPO_ROOT), client=redis_client)
-
-from testit import runner
 
 if __name__ == "__main__":
     runner.main(runner.setup_parser())

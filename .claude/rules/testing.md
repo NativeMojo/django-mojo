@@ -21,6 +21,7 @@ Before writing any test, read `docs/django_developer/testit/Overview.md`. This i
 ## Running
 - Run with `bin/run_tests --agent -t test_module.filename` — do not ask the user to run them
 - Always use `--agent` flag — read `testproject/var/test_failures.json` for diagnostics, never parse terminal output
+- `status: refused`: read `reasons`; `not_completed` may have partly run, any other code means nothing ran
 - The work item's verification tier decides what runs; see `.claude/rules/build-baseline.md`
   for the tiers, picking the modules for a `targeted` run, and what counts as `full` here
 - Use `--all` to include opt-in modules (`requires_extra` — `slow` and `extended`) — needed

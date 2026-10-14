@@ -15,6 +15,7 @@ from importlib import import_module
 
 from mojo.helpers import logit
 from testit import helpers
+from testit import runlock
 import testit.client
 import testit.maestro
 
@@ -597,56 +598,81 @@ def _record_has_selected_tag(record, selected_tags):
 
 
 # ---------------------------------------------------------------------------
-# Run lock — prevents concurrent test runs from colliding
+# Run lock — one run per checkout, and that run owns the report (item #8052)
 # ---------------------------------------------------------------------------
-def _acquire_lock():
-    """Acquire the test run lock. Returns True if acquired, False if another run is active."""
-    os.makedirs(os.path.dirname(_LOCK_FILE), exist_ok=True)
-    if os.path.exists(_LOCK_FILE):
-        try:
-            with open(_LOCK_FILE, "r") as fh:
-                info = json.load(fh)
-            pid = info.get("pid")
-            # Check if the locking process is still alive
-            if pid and _pid_alive(pid):
-                return False, info
-            # Stale lock — process is gone
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    lock_info = {
-        "pid": os.getpid(),
-        "started": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "user": os.environ.get("USER", "unknown"),
-    }
-    with open(_LOCK_FILE, "w") as fh:
-        json.dump(lock_info, fh)
-    return True, lock_info
+def _held_message(holder, lock_file=None):
+    """Who holds the run lock, read from the lock file, and how to find them."""
+    return runlock.holder_message(holder, lock_file or _LOCK_FILE)
 
 
-def _release_lock():
-    """Release the test run lock."""
+def _acquire_lock(var_root=None):
+    """Take the run lock. Returns (claim, None), or (None, holder) when another
+    live run holds it. Re-entrant within one process."""
+    return runlock.acquire(var_root or paths.VAR_ROOT)
+
+
+def _release_lock(claim=None):
+    """Release this process's run lock. The lock file stays in place."""
+    runlock.release(claim or runlock.current(paths.VAR_ROOT))
+
+
+def claim_run(argv=None, *, var_root=None):
+    """Claim the run lock for a launcher, before Django starts.
+
+    Call it after ``paths.configure_paths`` and before ``django.setup()`` or any
+    other check that can exit. It takes the run lock and marks
+    ``var/test_failures.json`` refused / ``not_completed`` until the run
+    replaces it, so a launch that dies before finishing never leaves an older
+    report looking current.
+
+    - Another run holds the lock: prints the holder and exits 1, having
+      written nothing.
+    - ``--help``: releases the lock and writes nothing (argparse exits 0).
+    - Bad arguments or config: writes the refusal ``bad_arguments``, then
+      re-raises.
+    - ``--init`` / ``--list-extras``: releases the lock and returns None. None
+      means "not a test run"; the launcher must not reset any test state.
+
+    Otherwise returns the run identity. ``runner.main`` finds and reuses the
+    claim; ``refuse_run`` records a launcher refusal against it.
+    """
+    var_root = var_root or paths.VAR_ROOT
+    claim, holder = runlock.acquire(var_root)
+    if claim is None:
+        print(_held_message(holder, runlock.lock_path(var_root)))
+        sys.exit(1)
     try:
-        if os.path.exists(_LOCK_FILE):
-            with open(_LOCK_FILE, "r") as fh:
-                info = json.load(fh)
-            # Only remove if we own the lock
-            if info.get("pid") == os.getpid():
-                os.remove(_LOCK_FILE)
-    except (json.JSONDecodeError, OSError):
-        try:
-            os.remove(_LOCK_FILE)
-        except OSError:
-            pass
+        opts = setup_parser(argv)
+    except SystemExit as exit_:
+        if exit_.code in (0, None):
+            runlock.release(claim)
+        else:
+            message = exit_.code if isinstance(exit_.code, str) else (
+                f"  Invalid arguments (exit {exit_.code}).")
+            runlock.refuse(claim, "bad_arguments", message)
+        raise
+    except Exception as err:
+        runlock.refuse(claim, "bad_arguments", f"  Invalid arguments: {err}")
+        raise
+    if getattr(opts, "init_package", None) or opts.list_extras:
+        runlock.release(claim)
+        return None
+    runlock.mark_pending(claim)
+    return dict(claim.identity)
 
 
-def _pid_alive(pid):
-    """Check if a process is still running."""
-    try:
-        os.kill(pid, 0)
-        return True
-    except (OSError, ProcessLookupError):
+def refuse_run(code, message, *, var_root=None):
+    """Record why a claimed run refused to start, and release the lock.
+
+    For a launcher that claimed with ``claim_run`` and is about to exit before
+    ``runner.main``. Returns True when a refusal was written; False when this
+    process holds no claim, in which case nothing is touched.
+    """
+    claim = runlock.current(var_root or paths.VAR_ROOT)
+    if claim is None:
         return False
+    runlock.refuse(claim, code, message)
+    return True
 
 
 def _load_module_config_ex(module_path):
@@ -1964,8 +1990,17 @@ def _build_agent_report(opts, display=None, conf_drift=None):
         "failures": failures,
         # Key names only — never the values (see _snapshot_conf).
         "conf_drift": list(conf_drift or []),
+        # Which run wrote this report (item #8052): the run lock's identity, so
+        # a launcher can tell a report is not from the run it just started.
+        "run": _current_run_identity(),
     }
     return report
+
+
+def _current_run_identity():
+    """The identity of the run lock this process holds, or None."""
+    claim = runlock.current(paths.VAR_ROOT)
+    return dict(claim.identity) if claim is not None else None
 
 
 def _write_agent_report(opts, display=None, conf_drift=None):
@@ -2042,13 +2077,16 @@ def _exit_for(report, budget_failed):
         sys.exit("  Tier budget exceeded — see 'Tier budget' above.")
 
 
-def _push_refused(opts):
+def _push_refused(opts, report=None):
     """Why this run must not be reported to maestro, or None when it may be.
 
     maestro answers "is this project green?" from the latest push per suite, so
     a run that is not the suite's verdict would overwrite a real result with a
     partial one.
     """
+    if report is not None and report.get("status") == "refused":
+        # Every refusal exits before the push today; this is the backstop.
+        return "run was refused"
     if helpers.TEST_RUN.aborted or _abort_event.is_set():
         return "run stopped early"
     if opts.test_modules:
@@ -2130,7 +2168,14 @@ def _dir_has_python(path):
 
 
 def _previous_module_durations():
-    """Per-module durations from the last run's report, or {} (maestro #2789)."""
+    """Per-module durations from the last run's report, or {} (maestro #2789).
+
+    A claimed run has already replaced the report with its pending marker, so
+    the durations come from what the claim read before writing it (#8052).
+    """
+    claim = runlock.current(paths.VAR_ROOT)
+    if claim is not None:
+        return dict(claim.previous_durations)
     report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
     try:
         with open(report_path, "r", encoding="utf-8") as fh:
@@ -2276,6 +2321,42 @@ def _enforce_consumer_policy(test_root):
         test_root, ORIGIN_CONSUMER_ENFORCED, production_prefixes=prefixes)
 
 
+def _enforce_policies(claim, parent_test_root, test_root):
+    """Run both isolation policies; a refusal is recorded before it exits.
+
+    A policy failure exits "no tests were run". Until #8052 it left the last
+    run's report in place and kept the lock. Now the held claim gets the
+    refusal record ``isolation_policy`` and is released, and the same
+    SystemExit carries on. Returns the advisory (cold) counts as
+    (sites, packages).
+    """
+    try:
+        cold_sites, cold_packages = _enforce_repository_policy(parent_test_root)
+        consumer_sites, consumer_packages = _enforce_consumer_policy(test_root)
+    except SystemExit as exit_:
+        if exit_.code not in (0, None) and claim is not None:
+            message = exit_.code if isinstance(exit_.code, str) else (
+                f"  Isolation policy failed (exit {exit_.code}).")
+            runlock.refuse(claim, "isolation_policy", message)
+        raise
+    return cold_sites + consumer_sites, cold_packages + consumer_packages
+
+
+def _claim_for_main():
+    """The run lock for main: the launcher's claim when it made one, else a
+    fresh one marked pending. Exits 1, touching nothing, when another run
+    holds it."""
+    claim = runlock.current(paths.VAR_ROOT)
+    if claim is not None:
+        return claim
+    claim, holder = runlock.acquire(paths.VAR_ROOT)
+    if claim is None:
+        print(_held_message(holder))
+        sys.exit(1)
+    runlock.mark_pending(claim)
+    return claim
+
+
 def _make_record(kind, name, origin, path, test_file=None):
     """One collected unit of work, with its ownership resolved up front.
 
@@ -2402,16 +2483,11 @@ def main(opts):
     if getattr(opts, "init_package", None):
         return _scaffold_init(opts.init_package)
 
-    # Acquire run lock to prevent concurrent test runs
-    acquired, lock_info = _acquire_lock()
-    if not acquired:
-        pid = lock_info.get("pid", "?")
-        started = lock_info.get("started", "?")
-        user = lock_info.get("user", "?")
-        print(f"\n  Another test run is active (pid={pid}, user={user}, started={started})")
-        print(f"  Lock file: {_LOCK_FILE}")
-        print(f"  If this is stale, remove it: rm {_LOCK_FILE}\n")
-        sys.exit(1)
+    # The run lock (item #8052). --list-extras runs no tests and takes none.
+    # Otherwise reuse the launcher's claim (claim_run), or take the lock here
+    # and mark the report pending — the run that holds the lock owns the
+    # report until it replaces the marker with a refusal or its real report.
+    claim = None if opts.list_extras else _claim_for_main()
 
     _abort_event.clear()
     # Baseline for the end-of-run django.conf drift check (see _snapshot_conf).
@@ -2515,12 +2591,10 @@ def main(opts):
         _isolation_cache_mod = None
 
     # Fail-closed repository isolation policy — before any import or worker.
-    cold_sites, cold_packages = _enforce_repository_policy(parent_test_root)
     # Consumer app test root: opt-in strict scanning when apps/tests/testit.json
     # declares "isolation": "enforce" (maestro #2793). Absent = today's exemption.
-    consumer_sites, consumer_packages = _enforce_consumer_policy(test_root)
-    cold_sites += consumer_sites
-    cold_packages += consumer_packages
+    # A refusal is recorded against the claim and releases it (item #8052).
+    cold_sites, cold_packages = _enforce_policies(claim, parent_test_root, test_root)
     if cold_sites:
         print(
             f"  isolation advisory: {cold_sites} app-internal patch site(s) in "
@@ -2807,8 +2881,8 @@ def main(opts):
     _report_conf_drift(drifted)
 
     # Structured report — built for every run so the tier budget (maestro
-    # #2790) and the maestro reporter both see the same object. Written to disk
-    # only in --agent mode.
+    # #2790) and the maestro reporter both see the same object. Written on
+    # every run (item #8052): it replaces this run's own pending marker.
     report = _build_agent_report(opts, display=display, conf_drift=drifted)
     if not _keeps_checkpoint(report["reasons"]):
         clear_checkpoint()
@@ -2822,12 +2896,9 @@ def main(opts):
     _print_budget_violations(opts, report["budget_violations"])
     budget_failed = _budget_fails_run(opts, report["budget_violations"])
 
+    runlock.write_report(claim, report)
     if opts.agent:
-        report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
-        os.makedirs(os.path.dirname(report_path), exist_ok=True)
-        with open(report_path, "w", encoding="utf-8") as fh:
-            json.dump(report, fh, indent=2, default=str)
-        print(f"\n  Agent report: {report_path}")
+        print(f"\n  Agent report: {claim.report_path}")
         if helpers.TEST_RUN.failed > 0:
             print(f"  {helpers.TEST_RUN.failed} failure(s) — read the report for diagnostics")
 
@@ -2840,12 +2911,12 @@ def main(opts):
         _isolation_cache_mod.save_scan_cache()
 
     # Release run lock
-    _release_lock()
+    _release_lock(claim)
 
     # Report to maestro. After the lock release, so a slow network call never
     # blocks a waiting run; before the exit below, so a red run still reports.
     if maestro_settings:
-        refused = _push_refused(opts)
+        refused = _push_refused(opts, report)
         if refused:
             print(f"\n  Maestro: not reporting — {refused}, so this is not the suite's result")
         else:
