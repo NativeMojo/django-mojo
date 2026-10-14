@@ -132,9 +132,10 @@ VERIFY_MESSAGES = {
 def _global_rows(key, *, lock=False):
     """Global rows for one key, oldest first.
 
-    PostgreSQL still permits a duplicate global row. Reads take the oldest one
-    rather than failing, matching ``provider_setup._read_verify_state``; writes
-    take the lock and repair to a single row.
+    A database before migration 0055 (#8201) can hold a duplicate global row.
+    Reads take the oldest one rather than failing, matching
+    ``provider_setup._read_verify_state``; writes take the lock and repair to a
+    single row.
     """
     from mojo.apps.account.models import Setting
     rows = Setting.objects.filter(key=key, group=None).order_by("pk")

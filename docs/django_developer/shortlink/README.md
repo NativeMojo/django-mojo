@@ -88,7 +88,7 @@ The core model. Located at `mojo/apps/shortlink/models/shortlink.py`.
 - `VIEW_PERMS = ["manage_shortlinks", "owner"]`
 - `SAVE_PERMS = ["manage_shortlinks", "owner"]`
 
-This means users with owner access can operate on their own `ShortLink` records (where `shortlink.user == request.user`) without global `manage_shortlinks`.
+This means users with owner access can operate on their own `ShortLink` records (where `shortlink.user == request.user`) without `manage_shortlinks`.
 
 **REST create/update behavior**: the model's `on_rest_pre_save` hook makes the
 generic RestMeta path (`POST /api/shortlink/link`) match `ShortLink.create()`
@@ -417,6 +417,11 @@ visitors who may have no relationship with your app, and to link-preview bots.
 - `owner` — access to own shortlinks on `/api/shortlink/link*` (when `shortlink.user == request.user`)
 - `shortlink` click-history endpoints remain `manage_shortlinks` scoped
 - The redirect endpoint (`/s/<code>`) is public — no authentication required
+- **Role presets grant `manage_shortlinks` by name.** It belongs to no category,
+  and `admin` does not imply it (see
+  [Permissions](../core/permissions.md#category-permissions-broad-access)). As a
+  member permission it covers that group's links; `ShortLinkClick` has no group,
+  so click history needs it as a global (user) permission.
 
 ---
 

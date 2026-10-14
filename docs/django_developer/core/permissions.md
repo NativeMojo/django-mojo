@@ -203,13 +203,20 @@ for every category in the table below), at all three checker levels
 term to every perm list; a list naming `manage_users` admits `users` holders
 by definition.
 
-Two boundaries to the expansion:
+Three boundaries to the expansion:
 
 - **One-directional.** `manage_users` alone does NOT satisfy a check for bare
   `users` — the combined term is the superset, not the other way around.
 - **Categories only.** Fine-grained perms that aren't `view_`/`manage_` +
   a category name (`manage_group` (singular), `manage_members`,
   `manage_settings`, `manage_chat`, ...) are never expanded.
+- **`admin` is not a wildcard.** It is an exact key that only platform-wide
+  checks name — global-only endpoints and the groupless `Log` and
+  `PlatformDeployment` models — so a member who holds `admin` in a group gains
+  nothing in that group. Only `is_superuser` bypasses checks. A role preset
+  that should reach a domain outside the categories (short links, for example)
+  grants that domain's key by name. The web-mojo frontend does treat `admin` as
+  a wildcard; see [Bootstrap](../account/bootstrap.md).
 
 | Permission | Domain | Grants access to |
 |-----------|--------|-----------------|
@@ -251,7 +258,7 @@ Use these when you need read-only access or scoped access within a domain:
 | `manage_docit` | Docs | Manage documentation books, pages, assets — across all tenants |
 | `view_logs` | Security | Read logit entries |
 | `manage_logs` | Security | Write/delete logit entries |
-| `admin` | Security | Full admin access to logit |
+| `admin` | Platform | Platform-wide admin, global grants only: admin-portal platform, settings, fleet and system-setup endpoints, logit, platform deployments. Not a wildcard |
 | `manage_notifications` | Communications | Manage notification templates and delivery |
 | `view_notifications` | Communications | Read notification delivery records |
 | `manage_devices` | Communications | Manage registered push devices |
@@ -269,7 +276,7 @@ Use these when you need read-only access or scoped access within a domain:
 | `view_metrics` | Metrics | Read metrics data and categories |
 | `manage_metrics` | Metrics | Manage metrics permissions and accounts |
 | `write_metrics` | Metrics | Record metrics data |
-| `manage_shortlinks` | Shortlink | Manage short links |
+| `manage_shortlinks` | Shortlink | Manage short links and read click history. In no category, so role presets grant it by name |
 
 ## Permission Map — All Models
 
@@ -368,8 +375,8 @@ The `metrics` category grants full read+write access to all metrics operations. 
 
 | Model | VIEW_PERMS | SAVE_PERMS | Notes |
 |-------|-----------|-----------|-------|
-| ShortLink | manage_shortlinks, owner | manage_shortlinks, owner | |
-| ShortLinkClick | manage_shortlinks | (read-only) | Analytics |
+| ShortLink | manage_shortlinks, owner | manage_shortlinks, owner | Group-scoped: a member grant covers that group's links. `admin` is not accepted — grant `manage_shortlinks` (maestro #2240) |
+| ShortLinkClick | manage_shortlinks | (read-only) | Analytics. Groupless: only a global grant reads it |
 | Book | view_docit, manage_docit, docs, member | manage_docit, docs, owner | GROUP_FIELD=`group`; `member`=any member of the owning group; anonymous reading is a separate opt-in — see [docit/README.md](../docit/README.md#public-documentation-opt-in) |
 | Asset | view_docit, manage_docit, docs, member | manage_docit, docs, owner | GROUP_FIELD=`book__group` |
 | Page | view_docit, manage_docit, docs, member | manage_docit, docs, owner | GROUP_FIELD=`book__group` |

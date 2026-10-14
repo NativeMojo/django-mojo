@@ -223,8 +223,9 @@ def _store(key, normalized):
 
     with transaction.atomic():
         # A protected row may not exist yet, so lock one stable row shared by
-        # every administrator before looking it up. PostgreSQL does not treat
-        # NULLs as equal in Setting's legacy unique_together constraint.
+        # every administrator before looking it up. Before migration 0055
+        # (#8201) PostgreSQL let two global rows share a key, because NULLs
+        # are not equal in Setting's unique_together constraint.
         from mojo.apps.account.models import User
         User.objects.select_for_update().order_by("pk").first()
         row = Setting.objects.select_for_update().filter(key=key, group=None).first()

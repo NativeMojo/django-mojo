@@ -65,6 +65,25 @@ def test_increment_atomic(opts):
     th.assert_eq(helpers.TEST_RUN._scratch_counter, 100,
                  f"Expected exactly 100 after 100 concurrent increments, got {helpers.TEST_RUN._scratch_counter}")
 
+def _scratch_var_root():
+    """Point paths.VAR_ROOT at a temp directory for one report-writing test.
+
+    The live report is this run's pending marker (item #8052); a test that
+    wrote the real var/test_failures.json would overwrite it mid-run.
+    """
+    import contextlib
+    import tempfile
+    from unittest import mock
+    from mojo.helpers import paths
+
+    @contextlib.contextmanager
+    def scratch():
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(paths, "VAR_ROOT", tmp):
+            yield tmp
+    return scratch()
+
+
 @th.django_unit_test("agent output: _write_agent_report creates file")
 def test_agent_report_writes(opts):
     import os
@@ -77,12 +96,13 @@ def test_agent_report_writes(opts):
     helpers.AGENT_MODE = True
 
     try:
-        runner._write_agent_report(opts)
-        report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
-        th.assert_true(os.path.exists(report_path), "test_failures.json should be created")
+        with _scratch_var_root():
+            runner._write_agent_report(opts)
+            report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
+            th.assert_true(os.path.exists(report_path), "test_failures.json should be created")
 
-        with open(report_path) as fh:
-            data = json.load(fh)
+            with open(report_path) as fh:
+                data = json.load(fh)
         th.assert_true("total" in data, "Report should have total field")
         th.assert_true("failures" in data, "Report should have failures field")
         th.assert_true(isinstance(data["failures"], list), "failures should be a list")
@@ -131,9 +151,10 @@ def test_agent_report_rollup_matches_modules(opts):
     old_agent = helpers.AGENT_MODE
     helpers.AGENT_MODE = True
     try:
-        runner._write_agent_report(opts, display=display)
-        with open(os.path.join(paths.VAR_ROOT, "test_failures.json")) as fh:
-            data = json.load(fh)
+        with _scratch_var_root():
+            runner._write_agent_report(opts, display=display)
+            with open(os.path.join(paths.VAR_ROOT, "test_failures.json")) as fh:
+                data = json.load(fh)
     finally:
         helpers.AGENT_MODE = old_agent
 
@@ -172,9 +193,10 @@ def test_agent_report_slowest(opts):
             {"module": "test_alpha", "test_module": "a", "function": "f",
              "name": "untimed", "status": "passed"},
         ]
-        runner._write_agent_report(opts)
-        with open(os.path.join(paths.VAR_ROOT, "test_failures.json")) as fh:
-            data = json.load(fh)
+        with _scratch_var_root():
+            runner._write_agent_report(opts)
+            with open(os.path.join(paths.VAR_ROOT, "test_failures.json")) as fh:
+                data = json.load(fh)
     finally:
         helpers.TEST_RUN.records = old_records
         helpers.AGENT_MODE = old_agent

@@ -545,6 +545,10 @@ Category permissions are the **recommended way** to assign access. Each category
 
 **Superusers** (`is_superuser=true`) bypass all permission checks automatically. No category permissions needed.
 
+Permissions outside these categories, such as `manage_shortlinks`, must be granted
+by name. `admin` is not a wildcard on the server: every framework check that
+accepts it is platform-wide, so granting it on a member opens nothing in that group.
+
 ### How to Display Permissions
 
 Build your permission editor as a simple list of category toggles:
@@ -802,6 +806,14 @@ To move a setting, create it in the new scope; a secret value has to be
 entered again because the API never returns it. A create sent with `group`
 (or `group_uuid`) lands in that group only: a body that also names a different
 `group_id` is refused with `403`.
+
+**One setting per key in each scope.** A `POST /api/settings` for a key that
+already exists in that scope returns `400`, and so does a
+`POST /api/settings/<id>` that renames `key` onto a taken one. The error says
+what to do: "A platform-wide setting named KEY already exists; edit that
+setting instead of creating another", or "This group already has a setting
+named KEY; …" for a group. Look the setting up with
+`GET /api/settings?search=KEY` and update it by id instead.
 
 Legacy holders of these model permissions can read every non-secret Setting
 row returned by their scope. The curated catalog adds no confidential mutable

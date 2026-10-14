@@ -907,41 +907,53 @@ def test_partial_runs_refused(opts):
 def test_stop_on_fail_marks_aborted(opts):
     """The flag is set where TestitAbort is raised, not where it is caught.
 
-    This exercises the setup-error path deliberately: it records no failure and
-    touches no counter, so the probe cannot pollute the run it is part of — and
-    it is exactly the case a catch-site flag would miss, since an aborted setup
-    leaves `failed` at zero and looks like a clean run.
+    A setup error is a counted error record since item #4761, so the probe
+    runs inside a scratch TEST_RUN and cannot pollute the run it is part of.
+    A catch-site flag would miss this case: under --stop the worker that
+    raised is the only place that knows the run was cut short.
     """
+    import sys
+    import types
+    from types import SimpleNamespace
+    from unittest import mock
     from testit import runner, helpers
+    from test_helpers_extended_serial.test_runner_accounting import _scratch_run
 
-    class _Module:
-        @staticmethod
-        def setup_explodes(_opts):
-            raise RuntimeError("deliberate setup failure")
+    def setup_explodes(_opts):
+        raise RuntimeError("deliberate setup failure")
 
-    was_aborted = helpers.TEST_RUN.aborted
-    before = (helpers.TEST_RUN.total, helpers.TEST_RUN.failed)
+    def test_never_runs(_opts):
+        raise AssertionError("a test after a failed setup must not run")
+
+    module = types.ModuleType("t4761_stop.probe")
+    module.__file__ = __file__
+    module.setup_explodes = setup_explodes
+    module.test_never_runs = test_never_runs
+    sys.modules["t4761_stop.probe"] = module
+    stop_opts = SimpleNamespace(stop=True, verbose=False, errors=False,
+                                host="http://127.0.0.1:9", logger=None,
+                                test_modules=["t4761_stop"], select_all=False,
+                                selected_tags=set())
     try:
-        helpers.TEST_RUN.aborted = False
-        stop_opts = _opts(stop=True, verbose=False, errors=False)
+        with _scratch_run() as (state, _events):
+            raised = False
+            with mock.patch.object(runner, "save_checkpoint", lambda m, t: None):
+                try:
+                    runner.run_module_tests_by_name(stop_opts, "t4761_stop", "probe")
+                except helpers.TestitAbort:
+                    raised = True
 
-        raised = False
-        try:
-            runner.run_setup(stop_opts, _Module, "setup_explodes", "m", "t")
-        except helpers.TestitAbort:
-            raised = True
-
-        assert raised, "a setup error under stop-on-fail must raise TestitAbort"
-        assert helpers.TEST_RUN.aborted is True, (
-            "the raise site must mark the run aborted, or a run cut short during setup "
-            "would be reported to maestro as the project's verdict"
-        )
-        assert (helpers.TEST_RUN.total, helpers.TEST_RUN.failed) == before, (
-            "this probe must not disturb the run's own counters, got "
-            f"{(helpers.TEST_RUN.total, helpers.TEST_RUN.failed)} vs {before}"
-        )
+            assert raised, "a setup error under stop-on-fail must raise TestitAbort"
+            assert state.aborted is True, (
+                "the raise site must mark the run aborted, or a run cut short during setup "
+                "would be reported to maestro as the project's verdict"
+            )
+            kinds = [r.get("kind") for r in state.records]
+            assert kinds == ["setup_error", "not_run"], (
+                f"the scratch run must hold the setup record and one not-run test, got {kinds}"
+            )
     finally:
-        helpers.TEST_RUN.aborted = was_aborted
+        sys.modules.pop("t4761_stop.probe", None)
 
 @th.unit_test("maestro reporting: the agent report still carries its documented shape")
 def test_report_shape_unchanged(opts):

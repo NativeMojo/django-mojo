@@ -71,6 +71,8 @@ Every response is wrapped in a standard envelope.
 }
 ```
 
+A nested object sent for a related record that does not exist yet on the reverse side of a one-to-one — for example `{"push_config": {"name": "x"}}` on a group with no push config — is refused with `400` and an `error` that names the field (`"push_config has no record to update"`); the record you addressed is not saved, though nested fields processed earlier in the same request may be. Create the related record through its own endpoint first.
+
 ## HTTP Status Codes
 
 | Code | Meaning |

@@ -130,6 +130,9 @@ Wall-clock budgets are declared in `tests/testit.json`:
   `cold_budget`; an over-budget module is flagged whatever preset ran it.
 - Budgets are skipped for partial runs (`-t` / `--ignore`) — those are not the
   preset's wall clock.
+- The budget exit is separate from the run's verdict and unchanged: it never
+  sets the report `status` or `reasons` (see *What makes a run fail* in
+  `Overview.md`).
 
 ## Diagnostics
 
@@ -172,8 +175,10 @@ ships the same example package, and `bin/create_testproject` generates it too.
 
 **`default_preset` is not optional for a consumer.** django-mojo's bare run
 selects the `core` preset, and a consumer's packages are `framework`-bucket by
-default — so a bare `bin/run_tests` with no `default_preset` selects **nothing**
-and reads as green. Set `"default_preset": "framework"` so a bare run runs your
+default — so a bare `bin/run_tests` with no `default_preset` selects **nothing**.
+Such a run used to read as green; it now fails with the reason
+`nothing_selected` or `nothing_executed`, as does any preset, tier or `-t` that
+selects no test that runs. Set `"default_preset": "framework"` so a bare run runs your
 tests; `--init` and the skeleton set it for you. An unknown or non-concrete
 value falls back to `core`, never to an empty selection.
 

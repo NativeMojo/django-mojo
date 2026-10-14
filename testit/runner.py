@@ -15,6 +15,7 @@ from importlib import import_module
 
 from mojo.helpers import logit
 from testit import helpers
+from testit import runlock
 import testit.client
 import testit.maestro
 
@@ -597,56 +598,81 @@ def _record_has_selected_tag(record, selected_tags):
 
 
 # ---------------------------------------------------------------------------
-# Run lock — prevents concurrent test runs from colliding
+# Run lock — one run per checkout, and that run owns the report (item #8052)
 # ---------------------------------------------------------------------------
-def _acquire_lock():
-    """Acquire the test run lock. Returns True if acquired, False if another run is active."""
-    os.makedirs(os.path.dirname(_LOCK_FILE), exist_ok=True)
-    if os.path.exists(_LOCK_FILE):
-        try:
-            with open(_LOCK_FILE, "r") as fh:
-                info = json.load(fh)
-            pid = info.get("pid")
-            # Check if the locking process is still alive
-            if pid and _pid_alive(pid):
-                return False, info
-            # Stale lock — process is gone
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    lock_info = {
-        "pid": os.getpid(),
-        "started": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "user": os.environ.get("USER", "unknown"),
-    }
-    with open(_LOCK_FILE, "w") as fh:
-        json.dump(lock_info, fh)
-    return True, lock_info
+def _held_message(holder, lock_file=None):
+    """Who holds the run lock, read from the lock file, and how to find them."""
+    return runlock.holder_message(holder, lock_file or _LOCK_FILE)
 
 
-def _release_lock():
-    """Release the test run lock."""
+def _acquire_lock(var_root=None):
+    """Take the run lock. Returns (claim, None), or (None, holder) when another
+    live run holds it. Re-entrant within one process."""
+    return runlock.acquire(var_root or paths.VAR_ROOT)
+
+
+def _release_lock(claim=None):
+    """Release this process's run lock. The lock file stays in place."""
+    runlock.release(claim or runlock.current(paths.VAR_ROOT))
+
+
+def claim_run(argv=None, *, var_root=None):
+    """Claim the run lock for a launcher, before Django starts.
+
+    Call it after ``paths.configure_paths`` and before ``django.setup()`` or any
+    other check that can exit. It takes the run lock and marks
+    ``var/test_failures.json`` refused / ``not_completed`` until the run
+    replaces it, so a launch that dies before finishing never leaves an older
+    report looking current.
+
+    - Another run holds the lock: prints the holder and exits 1, having
+      written nothing.
+    - ``--help``: releases the lock and writes nothing (argparse exits 0).
+    - Bad arguments or config: writes the refusal ``bad_arguments``, then
+      re-raises.
+    - ``--init`` / ``--list-extras``: releases the lock and returns None. None
+      means "not a test run"; the launcher must not reset any test state.
+
+    Otherwise returns the run identity. ``runner.main`` finds and reuses the
+    claim; ``refuse_run`` records a launcher refusal against it.
+    """
+    var_root = var_root or paths.VAR_ROOT
+    claim, holder = runlock.acquire(var_root)
+    if claim is None:
+        print(_held_message(holder, runlock.lock_path(var_root)))
+        sys.exit(1)
     try:
-        if os.path.exists(_LOCK_FILE):
-            with open(_LOCK_FILE, "r") as fh:
-                info = json.load(fh)
-            # Only remove if we own the lock
-            if info.get("pid") == os.getpid():
-                os.remove(_LOCK_FILE)
-    except (json.JSONDecodeError, OSError):
-        try:
-            os.remove(_LOCK_FILE)
-        except OSError:
-            pass
+        opts = setup_parser(argv)
+    except SystemExit as exit_:
+        if exit_.code in (0, None):
+            runlock.release(claim)
+        else:
+            message = exit_.code if isinstance(exit_.code, str) else (
+                f"  Invalid arguments (exit {exit_.code}).")
+            runlock.refuse(claim, "bad_arguments", message)
+        raise
+    except Exception as err:
+        runlock.refuse(claim, "bad_arguments", f"  Invalid arguments: {err}")
+        raise
+    if getattr(opts, "init_package", None) or opts.list_extras:
+        runlock.release(claim)
+        return None
+    runlock.mark_pending(claim)
+    return dict(claim.identity)
 
 
-def _pid_alive(pid):
-    """Check if a process is still running."""
-    try:
-        os.kill(pid, 0)
-        return True
-    except (OSError, ProcessLookupError):
+def refuse_run(code, message, *, var_root=None):
+    """Record why a claimed run refused to start, and release the lock.
+
+    For a launcher that claimed with ``claim_run`` and is about to exit before
+    ``runner.main``. Returns True when a refusal was written; False when this
+    process holds no claim, in which case nothing is touched.
+    """
+    claim = runlock.current(var_root or paths.VAR_ROOT)
+    if claim is None:
         return False
+    runlock.refuse(claim, code, message)
+    return True
 
 
 def _load_module_config_ex(module_path):
@@ -974,8 +1000,36 @@ def run_test(opts, module, func_name, module_name, test_name):
             raise helpers.TestitAbort()
 
 
+class _SetupFailed(Exception):
+    """A setup_ function raised. Carries what the file's not-run records name."""
+
+    def __init__(self, func_name, summary):
+        super().__init__(f"{func_name}: {summary}")
+        self.func_name = func_name
+        self.summary = summary
+
+
+def _setup_error_context(module, func_name, tb):
+    """Structured agent context for a setup error: where the setup function
+    lives, not where its decorator does (item #4761)."""
+    context = {"function": func_name, "status": "error", "traceback": tb}
+    try:
+        func = inspect.unwrap(getattr(module, func_name))
+        context["test_source"] = inspect.getsource(func)
+        context["file_path"] = inspect.getfile(func)
+        context["line"] = inspect.getsourcelines(func)[1]
+    except (OSError, TypeError):
+        pass
+    return context
+
+
 def run_setup(opts, module, func_name, module_name, test_name):
-    """Run a specific setup function. Returns True if skipped."""
+    """Run a specific setup function. Returns True if skipped.
+
+    A raising setup function is recorded as one counted `error` record of kind
+    `setup_error`, with or without --verbose, and raises _SetupFailed so the
+    file's remaining setup and tests do not run (item #4761).
+    """
     test_key = f"{module_name}.{test_name}.{func_name}"
     helpers.VERBOSE = opts.verbose or opts.errors
     try:
@@ -986,14 +1040,42 @@ def run_setup(opts, module, func_name, module_name, test_name):
         if not helpers._get_display_fn():
             logit.color_print(f"{helpers.INDENT}{msg}", logit.ConsoleLogger.BLUE)
         return True
+    except helpers.TestitAbort:
+        raise
+    except SystemExit as err:
+        # A guard that exits means "do not run tests here": record it like any
+        # setup error, then stop the run so no other file starts in this
+        # environment. SystemExit(0) and SystemExit(None) included (#4761).
+        summary = f"SystemExit: {err.code}"
+        _record_setup_error(opts, module, func_name, module_name, test_name, summary)
+        _abort_event.set()
+        raise _SetupFailed(func_name, summary)
     except Exception as err:
-        if opts.verbose:
-            print(f"  Setup Error: {err}")
-            traceback.print_exc()
-        if opts.stop:
-            helpers.mark_aborted()
-            raise helpers.TestitAbort()
-        return False
+        summary = f"{type(err).__name__}: {err}"
+        _record_setup_error(opts, module, func_name, module_name, test_name, summary)
+        raise _SetupFailed(func_name, summary)
+
+
+def _record_setup_error(opts, module, func_name, module_name, test_name, summary):
+    """One counted `error` record of kind `setup_error` for a raising setup
+    function. Call from inside its except block (item #4761)."""
+    tb = traceback.format_exc()
+    helpers._set_active_test(f"{module_name}:{test_name}:{func_name}")
+    helpers._increment("total")
+    helpers._increment("failed")
+    # No display event: a tracker's total is the file's static test count,
+    # and the report merge adds this one extra failed record.
+    helpers._record_result(
+        f"{func_name} (setup)", status="error",
+        detail=f"setup failed in {func_name}: {summary}",
+        agent_context=_setup_error_context(module, func_name, tb),
+        kind="setup_error")
+    if not helpers._get_display_fn():
+        logit.color_print(
+            f"{helpers.INDENT}Setup Error: {module_name}.{test_name}.{func_name}: {summary}",
+            logit.ConsoleLogger.RED)
+    if opts.verbose:
+        traceback.print_exc()
 
 
 def import_module_for_testing(module_name, test_name, expected_root=None):
@@ -1106,13 +1188,39 @@ def _record_unrunnable_file(module_name, test_name, expected_root, reason):
 
 def run_module_tests_by_name(opts, module_name, test_name, expected_root=None):
     """Run all test functions in a specific test module in the order they appear."""
+    # A stopped run starts no file: main's next phase (file specs after
+    # packages, or packages after file specs) reaches here before any other
+    # abort check, and setup must not run (item #4761).
+    if _run_stopped():
+        helpers.mark_aborted()
+        raise helpers.TestitAbort()
     module = import_module_for_testing(module_name, test_name, expected_root)
     if not module:
         _record_unrunnable_file(
             module_name, test_name, expected_root,
             "import failed or resolved to a shadowing package (see output above)")
         return
-    skipped = run_module_setup(opts, module, test_name, module_name)
+    gate = _tier_gate(opts, module)
+    if gate is not None and not any(
+            gate(func) is None
+            for func_name, func in inspect.getmembers(module, inspect.isfunction)
+            if func_name.startswith("test_")):
+        # Nothing in this file is in the selected tier: record its tier skips
+        # and pay no setup for them (item #4761).
+        run_module_tests(opts, module, test_name, module_name)
+        return
+    try:
+        skipped = run_module_setup(opts, module, test_name, module_name)
+    except _SetupFailed as failure:
+        run_module_tests(opts, module, test_name, module_name,
+                         setup_failure=failure)
+        # --stop, or a setup that exited (it set the abort event): no other
+        # file starts on any path, and --continue can resume here.
+        if opts.stop or _abort_event.is_set():
+            save_checkpoint(module_name, test_name)
+            helpers.mark_aborted()
+            raise helpers.TestitAbort()
+        return
     if skipped:
         # Count all tests in this file as skipped so totals stay consistent
         prefix = "test_"
@@ -1131,7 +1239,11 @@ def run_module_tests_by_name(opts, module_name, test_name, expected_root=None):
 
 
 def run_module_setup(opts, module, test_name, module_name):
-    """Run all setup functions for a module. Returns True if module was skipped."""
+    """Run all setup functions for a module. Returns True if module was skipped.
+
+    A raising setup function raises _SetupFailed out of this loop, so the
+    file's later setup functions do not run (item #4761).
+    """
     opts.client = testit.client.RestClient(opts.host, logger=opts.logger)
     test_key = f"{module_name}.{test_name}"
     started = time.time()
@@ -1160,7 +1272,40 @@ def run_module_setup(opts, module, test_name, module_name):
     return False
 
 
-def run_module_tests(opts, module, test_name, module_name):
+def _tier_gate(opts, module):
+    """The effective-tier gate for one test file, or None when gating is off.
+
+    Effective-tier gate (maestro #2790 mechanism, completed in #2792). Each
+    test's bucket is its own @th.tier, else its file's module-level
+    TESTIT_TIER, else its package's tier tags. A test whose effective bucket
+    is not among the selected tier(s) is a COUNTED skip, decided before
+    invoking. Bypassed for select_all (--all / --tier all) and for -t runs
+    ("this package regardless of tags").
+
+    The returned function maps a test function to the bucket string to record
+    its tier skip under, or None when the test is selected.
+    """
+    gate_tiers = (not getattr(opts, "select_all", False)
+                  and not getattr(opts, "test_modules", None))
+    selected = getattr(opts, "selected_tags", None) or set()
+    if not (gate_tiers and selected):
+        return None
+    file_tier = getattr(module, "TESTIT_TIER", None)
+    try:
+        pkg_tags = _resolve_tags(_load_module_config(
+            os.path.dirname(os.path.abspath(module.__file__)))) or {"framework"}
+    except Exception:
+        pkg_tags = {"framework"}
+
+    def unselected_bucket(func):
+        eff = _effective_tier_tags(getattr(func, "_tier", None), file_tier, pkg_tags)
+        if eff & selected:
+            return None
+        return ",".join(sorted(eff)) or "framework"
+    return unselected_bucket
+
+
+def run_module_tests(opts, module, test_name, module_name, setup_failure=None):
     if not getattr(opts, 'client', None):
         opts.client = testit.client.RestClient(opts.host, logger=opts.logger)
     test_key = f"{module_name}.{test_name}"
@@ -1175,37 +1320,37 @@ def run_module_tests(opts, module, test_name, module_name):
         key=lambda func: inspect.getsourcelines(func[1])[1]
     )
 
-    # Effective-tier gate (maestro #2790 mechanism, completed in #2792). Each
-    # test's bucket is its own @th.tier, else its file's module-level
-    # TESTIT_TIER, else its package's tier tags. A test whose effective bucket
-    # is not among the selected tier(s) is a COUNTED skip, decided here before
-    # invoking so the module pays no setup for it. Bypassed for select_all
-    # (--all / --tier all) and for -t runs ("this package regardless of tags").
-    gate_tiers = (not getattr(opts, "select_all", False)
-                  and not getattr(opts, "test_modules", None))
-    selected = getattr(opts, "selected_tags", None) or set()
-    file_tier = getattr(module, "TESTIT_TIER", None)
-    pkg_tags = None
-    if gate_tiers:
-        try:
-            pkg_tags = _resolve_tags(_load_module_config(
-                os.path.dirname(os.path.abspath(module.__file__)))) or {"framework"}
-        except Exception:
-            pkg_tags = {"framework"}
+    gate = _tier_gate(opts, module)
 
     for func_name, func in functions:
         if func_name.startswith(prefix):
-            if _abort_event.is_set():
+            # Recording a not-run test runs nothing, so a setup that exited
+            # (and set the abort event) still records its file's tests.
+            if _abort_event.is_set() and setup_failure is None:
                 helpers.mark_aborted()
                 raise helpers.TestitAbort()
-            if gate_tiers and selected:
-                eff = _effective_tier_tags(
-                    getattr(func, "_tier", None), file_tier, pkg_tags)
-                if not (eff & selected):
+            if gate is not None:
+                bucket = gate(func)
+                if bucket is not None:
                     helpers.record_tier_skip(
-                        module_name, test_name, func_name,
-                        ",".join(sorted(eff)) or "framework")
+                        module_name, test_name, func_name, bucket)
                     continue
+            if setup_failure is not None:
+                # The file's setup raised: a counted skip of kind `not_run`
+                # that names the cause, never an execution (item #4761).
+                name = (getattr(func, "_test_name", None)
+                        or func_name.removeprefix("test_"))
+                detail = (f"not run: setup failed in {setup_failure.func_name}: "
+                          f"{setup_failure.summary}")
+                helpers._set_active_test(f"{module_name}:{test_name}:{func_name}")
+                helpers._increment("total")
+                helpers._increment("skipped")
+                helpers._record_result(name, status="skipped", detail=detail,
+                                       kind="not_run")
+                dfn = helpers._get_display_fn()
+                if dfn:
+                    dfn("test_result", name=name, status="skipped", detail=detail)
+                continue
             # Track current test for the running display
             dfn = helpers._get_display_fn()
             if dfn:
@@ -1711,6 +1856,7 @@ def _build_agent_report(opts, display=None, conf_drift=None):
             "test_file": record.get("test_module"),
             "function": record.get("function"),
             "status": record["status"],
+            "kind": record.get("kind"),
             "assertion": record.get("detail"),
         }
         # Merge agent context if available
@@ -1816,8 +1962,11 @@ def _build_agent_report(opts, display=None, conf_drift=None):
         for key in totals:
             totals[key] += entry.get(key, 0) or 0
 
+    # One verdict decides status, the exit code and the checkpoint (#4761).
+    reasons = _run_verdict(helpers.TEST_RUN)
     report = {
-        "status": "passed" if helpers.TEST_RUN.failed == 0 else "failed",
+        "status": "failed" if reasons else "passed",
+        "reasons": reasons,
         # The tier preset this run selected (maestro #2790) — core / framework /
         # all / a literal bucket. Distinguishes suite identities on the board.
         "preset": getattr(opts, "selected_preset", None),
@@ -1841,8 +1990,17 @@ def _build_agent_report(opts, display=None, conf_drift=None):
         "failures": failures,
         # Key names only — never the values (see _snapshot_conf).
         "conf_drift": list(conf_drift or []),
+        # Which run wrote this report (item #8052): the run lock's identity, so
+        # a launcher can tell a report is not from the run it just started.
+        "run": _current_run_identity(),
     }
     return report
+
+
+def _current_run_identity():
+    """The identity of the run lock this process holds, or None."""
+    claim = runlock.current(paths.VAR_ROOT)
+    return dict(claim.identity) if claim is not None else None
 
 
 def _write_agent_report(opts, display=None, conf_drift=None):
@@ -1860,13 +2018,75 @@ def _write_agent_report(opts, display=None, conf_drift=None):
     return report
 
 
-def _push_refused(opts):
+def _run_verdict(run):
+    """Why this run failed, as a list of {"code", "message"}; empty when it
+    passed. The one verdict behind the report status, the exit code and the
+    checkpoint clear (item #4761). The tier budget is not a reason here: it
+    changes the exit only, through _exit_for.
+    """
+    records = run.records or []
+    setup_errors = [r for r in records if r.get("kind") == "setup_error"]
+    not_run = sum(1 for r in records if r.get("kind") == "not_run")
+    setup_count = len(setup_errors)
+    real_failed = run.failed - setup_count
+    executed = run.passed + real_failed
+
+    reasons = []
+    if real_failed > 0:
+        reasons.append({"code": "tests_failed", "message": "  Tests failed!"})
+    if setup_count:
+        names = [".".join(str(part) for part in (r.get("module"), r.get("test_module"),
+                                                  r.get("function")))
+                 for r in setup_errors[:5]]
+        more = f" and {setup_count - 5} more" if setup_count > 5 else ""
+        reasons.append({
+            "code": "setup_error",
+            "message": (f"  {setup_count} setup error(s): {', '.join(names)}{more}; "
+                        f"{not_run} test(s) not run"),
+        })
+    if run.aborted or _abort_event.is_set():
+        reasons.append({"code": "aborted", "message": "  Run stopped early."})
+    if not setup_count and executed == 0:
+        if run.total == 0:
+            reasons.append({
+                "code": "nothing_selected",
+                "message": "  No tests ran: the selection matched no tests.",
+            })
+        else:
+            reasons.append({
+                "code": "nothing_executed",
+                "message": (f"  No tests ran: all {run.skipped} selected test(s) "
+                            "were skipped."),
+            })
+    return reasons
+
+
+def _keeps_checkpoint(reasons):
+    """Keep the --continue checkpoint only for a run it can resume: one stopped
+    early or stopped by a setup error. A stale --continue that selects nothing
+    still clears, so it cannot stick red (item #4761)."""
+    return bool({"aborted", "setup_error"} & {r["code"] for r in reasons})
+
+
+def _exit_for(report, budget_failed):
+    """Exit non-zero for a failed verdict, else for a blown tier budget."""
+    reasons = report.get("reasons") or []
+    if reasons:
+        sys.exit("\n".join(reason["message"] for reason in reasons))
+    if budget_failed:
+        sys.exit("  Tier budget exceeded — see 'Tier budget' above.")
+
+
+def _push_refused(opts, report=None):
     """Why this run must not be reported to maestro, or None when it may be.
 
     maestro answers "is this project green?" from the latest push per suite, so
     a run that is not the suite's verdict would overwrite a real result with a
     partial one.
     """
+    if report is not None and report.get("status") == "refused":
+        # Every refusal exits before the push today; this is the backstop.
+        return "run was refused"
     if helpers.TEST_RUN.aborted or _abort_event.is_set():
         return "run stopped early"
     if opts.test_modules:
@@ -1879,6 +2099,13 @@ def _push_refused(opts):
 # ---------------------------------------------------------------------------
 # Parallel module runner
 # ---------------------------------------------------------------------------
+def _run_stopped():
+    """True once the run has been stopped: a setup exit, --stop or the abort
+    key. Every dispatch loop in main, and the per-file entry point, checks it
+    before starting another record (item #4761)."""
+    return _abort_event.is_set() or bool(helpers.TEST_RUN.aborted)
+
+
 def _run_module_in_thread(opts_template, record, tracker):
     """Run all test files for a module record. Called from a thread."""
     # Each thread gets its own opts copy with its own client
@@ -1941,7 +2168,14 @@ def _dir_has_python(path):
 
 
 def _previous_module_durations():
-    """Per-module durations from the last run's report, or {} (maestro #2789)."""
+    """Per-module durations from the last run's report, or {} (maestro #2789).
+
+    A claimed run has already replaced the report with its pending marker, so
+    the durations come from what the claim read before writing it (#8052).
+    """
+    claim = runlock.current(paths.VAR_ROOT)
+    if claim is not None:
+        return dict(claim.previous_durations)
     report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
     try:
         with open(report_path, "r", encoding="utf-8") as fh:
@@ -2087,6 +2321,42 @@ def _enforce_consumer_policy(test_root):
         test_root, ORIGIN_CONSUMER_ENFORCED, production_prefixes=prefixes)
 
 
+def _enforce_policies(claim, parent_test_root, test_root):
+    """Run both isolation policies; a refusal is recorded before it exits.
+
+    A policy failure exits "no tests were run". Until #8052 it left the last
+    run's report in place and kept the lock. Now the held claim gets the
+    refusal record ``isolation_policy`` and is released, and the same
+    SystemExit carries on. Returns the advisory (cold) counts as
+    (sites, packages).
+    """
+    try:
+        cold_sites, cold_packages = _enforce_repository_policy(parent_test_root)
+        consumer_sites, consumer_packages = _enforce_consumer_policy(test_root)
+    except SystemExit as exit_:
+        if exit_.code not in (0, None) and claim is not None:
+            message = exit_.code if isinstance(exit_.code, str) else (
+                f"  Isolation policy failed (exit {exit_.code}).")
+            runlock.refuse(claim, "isolation_policy", message)
+        raise
+    return cold_sites + consumer_sites, cold_packages + consumer_packages
+
+
+def _claim_for_main():
+    """The run lock for main: the launcher's claim when it made one, else a
+    fresh one marked pending. Exits 1, touching nothing, when another run
+    holds it."""
+    claim = runlock.current(paths.VAR_ROOT)
+    if claim is not None:
+        return claim
+    claim, holder = runlock.acquire(paths.VAR_ROOT)
+    if claim is None:
+        print(_held_message(holder))
+        sys.exit(1)
+    runlock.mark_pending(claim)
+    return claim
+
+
 def _make_record(kind, name, origin, path, test_file=None):
     """One collected unit of work, with its ownership resolved up front.
 
@@ -2213,16 +2483,11 @@ def main(opts):
     if getattr(opts, "init_package", None):
         return _scaffold_init(opts.init_package)
 
-    # Acquire run lock to prevent concurrent test runs
-    acquired, lock_info = _acquire_lock()
-    if not acquired:
-        pid = lock_info.get("pid", "?")
-        started = lock_info.get("started", "?")
-        user = lock_info.get("user", "?")
-        print(f"\n  Another test run is active (pid={pid}, user={user}, started={started})")
-        print(f"  Lock file: {_LOCK_FILE}")
-        print(f"  If this is stale, remove it: rm {_LOCK_FILE}\n")
-        sys.exit(1)
+    # The run lock (item #8052). --list-extras runs no tests and takes none.
+    # Otherwise reuse the launcher's claim (claim_run), or take the lock here
+    # and mark the report pending — the run that holds the lock owns the
+    # report until it replaces the marker with a refusal or its real report.
+    claim = None if opts.list_extras else _claim_for_main()
 
     _abort_event.clear()
     # Baseline for the end-of-run django.conf drift check (see _snapshot_conf).
@@ -2326,12 +2591,10 @@ def main(opts):
         _isolation_cache_mod = None
 
     # Fail-closed repository isolation policy — before any import or worker.
-    cold_sites, cold_packages = _enforce_repository_policy(parent_test_root)
     # Consumer app test root: opt-in strict scanning when apps/tests/testit.json
     # declares "isolation": "enforce" (maestro #2793). Absent = today's exemption.
-    consumer_sites, consumer_packages = _enforce_consumer_policy(test_root)
-    cold_sites += consumer_sites
-    cold_packages += consumer_packages
+    # A refusal is recorded against the claim and releases it (item #8052).
+    cold_sites, cold_packages = _enforce_policies(claim, parent_test_root, test_root)
     if cold_sites:
         print(
             f"  isolation advisory: {cold_sites} app-internal patch site(s) in "
@@ -2467,6 +2730,8 @@ def main(opts):
                 with ThreadPoolExecutor(max_workers=opts.jobs) as executor:
                     futures = {}
                     for record in parallel_modules:
+                        if _run_stopped():
+                            break
                         tracker = display.trackers[record.name]
                         future = executor.submit(
                             _run_module_in_thread,
@@ -2482,7 +2747,7 @@ def main(opts):
 
             # Run serial modules sequentially
             for record in serial_modules:
-                if _abort_event.is_set():
+                if _run_stopped():
                     break
                 tracker = display.trackers[record.name]
 
@@ -2524,6 +2789,8 @@ def main(opts):
 
         # Run file specs first (sequential)
         for record in file_specs:
+            if _run_stopped():
+                break
             try:
                 run_module_tests_by_name(opts, record.name, record.test_file,
                                          expected_root=record.path)
@@ -2535,6 +2802,8 @@ def main(opts):
             with ThreadPoolExecutor(max_workers=opts.jobs) as executor:
                 futures = {}
                 for record in parallel_modules:
+                    if _run_stopped():
+                        break
                     tracker = _ModuleTracker(record.name, 0)
                     future = executor.submit(
                         _run_module_in_thread,
@@ -2549,6 +2818,8 @@ def main(opts):
 
         # Run serial modules sequentially
         for record in serial_modules:
+            if _run_stopped():
+                break
             if _resume.active and not _resume.reached:
                 if record.name != _resume.module:
                     continue
@@ -2567,6 +2838,8 @@ def main(opts):
 
         # Run file specs first
         for record in file_specs:
+            if _run_stopped():
+                break
             try:
                 run_module_tests_by_name(opts, record.name, record.test_file,
                                          expected_root=record.path)
@@ -2575,6 +2848,8 @@ def main(opts):
 
         # Run all modules sequentially
         for record in parallel_modules + serial_modules:
+            if _run_stopped():
+                break
             if _resume.active and not _resume.reached:
                 if record.name != _resume.module:
                     continue
@@ -2590,6 +2865,8 @@ def main(opts):
     if use_rich and file_specs:
         helpers._set_display_fn(None)
         for record in file_specs:
+            if _run_stopped():
+                break
             try:
                 run_module_tests_by_name(opts, record.name, record.test_file,
                                          expected_root=record.path)
@@ -2599,18 +2876,16 @@ def main(opts):
     if slow_watchdog is not None:
         slow_watchdog.stop()
 
-    # Clear checkpoint on clean completion
-    if helpers.TEST_RUN.failed == 0:
-        clear_checkpoint()
-
     # Did a settings override strand itself in var/django.conf?
     drifted = _conf_drift(conf_before, _snapshot_conf())
     _report_conf_drift(drifted)
 
     # Structured report — built for every run so the tier budget (maestro
-    # #2790) and the maestro reporter both see the same object. Written to disk
-    # only in --agent mode.
+    # #2790) and the maestro reporter both see the same object. Written on
+    # every run (item #8052): it replaces this run's own pending marker.
     report = _build_agent_report(opts, display=display, conf_drift=drifted)
+    if not _keeps_checkpoint(report["reasons"]):
+        clear_checkpoint()
     report["budget_violations"] = _compute_budget_violations(
         opts, report, parent_test_root)
     with _SLOW_STACKS_LOCK:
@@ -2621,12 +2896,9 @@ def main(opts):
     _print_budget_violations(opts, report["budget_violations"])
     budget_failed = _budget_fails_run(opts, report["budget_violations"])
 
+    runlock.write_report(claim, report)
     if opts.agent:
-        report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
-        os.makedirs(os.path.dirname(report_path), exist_ok=True)
-        with open(report_path, "w", encoding="utf-8") as fh:
-            json.dump(report, fh, indent=2, default=str)
-        print(f"\n  Agent report: {report_path}")
+        print(f"\n  Agent report: {claim.report_path}")
         if helpers.TEST_RUN.failed > 0:
             print(f"  {helpers.TEST_RUN.failed} failure(s) — read the report for diagnostics")
 
@@ -2639,23 +2911,20 @@ def main(opts):
         _isolation_cache_mod.save_scan_cache()
 
     # Release run lock
-    _release_lock()
+    _release_lock(claim)
 
     # Report to maestro. After the lock release, so a slow network call never
     # blocks a waiting run; before the exit below, so a red run still reports.
     if maestro_settings:
-        refused = _push_refused(opts)
+        refused = _push_refused(opts, report)
         if refused:
             print(f"\n  Maestro: not reporting — {refused}, so this is not the suite's result")
         else:
             testit.maestro.report_run(maestro_settings, lambda: report)
 
-    # Exit with failure status if any test failed, or the core-tier budget was
-    # blown (maestro #2790).
-    if helpers.TEST_RUN.failed > 0:
-        sys.exit("  Tests failed!")
-    if budget_failed:
-        sys.exit("  Tier budget exceeded — see 'Tier budget' above.")
+    # Exit with failure status when the run's verdict failed (item #4761), or
+    # the core-tier budget was blown (maestro #2790).
+    _exit_for(report, budget_failed)
 
 
 if __name__ == "__main__":
