@@ -187,17 +187,25 @@ constraint `account_setting_global_key_uniq`, added by migration
   second row raises `django.db.IntegrityError`. Use `Setting.set()`, which
   updates the existing row, and is safe under a race: a writer that loses waits
   for the winner, then updates its row.
-- **Upgrading to migration 0055:** copies that are identical (same value and
-  secret flag) are merged, keeping the oldest row, so no setting changes value.
-  If a key has platform-wide copies with **different** values, the migration
-  stops before changing anything. It names each key and its row ids, never a
-  value. Decide which row is correct, delete the others, and run `migrate`
-  again. Secret copies always count as different, because each is encrypted
-  separately. While it runs, the migration holds every settings write until
-  it commits, so no copy can change between the check and the merge. Reads
-  continue.
+- **Upgrading to migration 0055:** the migration never stops a deploy. For
+  each key with more than one platform-wide row it keeps the **oldest** row
+  (the lowest id) and deletes the others.
+  - Identical copies (same value and secret flag) change nothing visible.
+  - Copies with **different** values are logged to the migrate output and
+    `mojo.log`: the key, the row kept and the rows deleted, never a value.
+    Before 0055 a reader could be served either copy, so check that each kept
+    value is the one you want. Secret copies always count as different,
+    because each is encrypted separately.
+  - After the migration commits, each repaired key is removed from the
+    `settings:global` Redis hash, so no reader keeps a deleted copy cached. If
+    Redis is unreachable the migration still succeeds and says so; the hash's
+    one-hour TTL clears it.
+  - While it runs, the migration holds every settings write until it commits,
+    so no copy can change or be added between the read, the delete and the new
+    unique index. Reads continue.
 
-Check a database before upgrading:
+To choose the surviving value yourself, check a database before upgrading and
+delete the unwanted copies:
 
 ```python
 from django.db.models import Count

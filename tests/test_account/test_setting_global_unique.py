@@ -212,7 +212,7 @@ def test_global_key_constraint_present(opts):
         f"account_setting_global_key_uniq is missing or wrong: {found}")
 
 
-@th.django_unit_test("#8201: migration 0055 collapses identical copies and lists conflicting ones")
+@th.django_unit_test("#8201: migration 0055 keeps the oldest copy of every duplicated key and logs conflicts")
 def test_migration_dedup_planner(opts):
     migration = importlib.import_module(
         "mojo.apps.account.migrations.0055_setting_global_key_unique")
@@ -228,15 +228,18 @@ def test_migration_dedup_planner(opts):
         row(6, "SECRET", "", True, "cipher-a"), row(8, "SECRET", "", True, "cipher-b"),
     ]
     delete_pks, conflicts = migration.plan_global_dedup(rows)
-    assert sorted(delete_pks) == [7, 9], (
-        f"identical copies must collapse to the lowest pk, deleted {delete_pks}")
-    assert conflicts == [("DIFFERENT", [5, 12]), ("SECRET", [6, 8])], (
-        f"conflicting copies must be listed with their pks, got {conflicts}")
-    message = migration.conflict_message(conflicts)
-    for key, pks in conflicts:
-        assert key in message and ", ".join(map(str, pks)) in message, (
-            f"the stop message must name {key} and rows {pks}: {message}")
+    assert sorted(delete_pks) == [7, 8, 9, 12], (
+        f"every duplicated key must keep only its lowest pk, deleted {delete_pks}")
+    assert conflicts == [("DIFFERENT", 5, [12]), ("SECRET", 6, [8])], (
+        f"conflicting keys must be listed with the kept and deleted pks, got {conflicts}")
+    message = migration.repair_message(conflicts)
+    for key, kept, deleted in conflicts:
+        assert key in message and f"kept Setting row {kept}" in message, (
+            f"the log must name {key} and its kept row {kept}: {message}")
+        assert ", ".join(map(str, deleted)) in message, (
+            f"the log must name {key}'s deleted rows {deleted}: {message}")
+    assert "SAME" not in message, f"identical copies are not a conflict: {message}"
     for value in ("secret-text-one", "secret-text-two", "cipher-a", "cipher-b"):
-        assert value not in message, f"the stop message exposed a value: {message}"
+        assert value not in message, f"the log exposed a value: {message}"
     assert migration.plan_global_dedup([row(1, "A", "v")]) == ([], []), \
         "a clean database must plan nothing"

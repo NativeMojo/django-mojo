@@ -167,11 +167,22 @@ def test_migration_collapses_identical_copies(opts):
         f"identical copies must collapse to the oldest row: {seen}")
 
 
-@th.django_unit_test("#8201: migration 0055 stops on conflicting global copies and changes nothing")
-def test_migration_stops_on_conflicting_copies(opts):
+@th.django_unit_test("#8201: migration 0055 keeps the oldest conflicting copy, logs ids only and clears the cache on commit")
+def test_migration_keeps_oldest_conflicting_copy(opts):
+    """Option B (Ian, #8201): conflicting platform-wide copies never stop the
+    migration. The oldest row stays with its value untouched, the rest go, the
+    log names keys and row ids but no value, and each repaired key is cleared
+    from the settings:global hash after commit."""
+    import contextlib
+    import io
+    import types
+    from unittest import mock
     from django.apps import apps
 
-    seen = {}
+    seen = {"callbacks": []}
+
+    def capture_on_commit(func, using=None):
+        seen["callbacks"].append(func)
 
     def body(Setting, migration):
         Setting.objects.bulk_create([
@@ -179,29 +190,79 @@ def test_migration_stops_on_conflicting_copies(opts):
             Setting(key="TESTIT_UNIQ_MIG_SAME", value="on"),
             Setting(key="TESTIT_UNIQ_MIG_DIFF", value="value-one"),
             Setting(key="TESTIT_UNIQ_MIG_DIFF", value="value-two"),
+            Setting(key="TESTIT_UNIQ_MIG_DIFF", value="value-three"),
         ])
-        before = sorted(Setting.objects.filter(
-            key__startswith="TESTIT_UNIQ_MIG_", group=None).values_list("pk", flat=True))
-        try:
+        diff = list(Setting.objects.filter(key="TESTIT_UNIQ_MIG_DIFF", group=None)
+                    .order_by("pk").values_list("pk", "value"))
+        same = sorted(Setting.objects.filter(key="TESTIT_UNIQ_MIG_SAME", group=None)
+                      .values_list("pk", flat=True))
+        seen["diff_before"], seen["same_oldest"] = diff, same[0]
+        out = io.StringIO()
+        # Module-local patch: the migration's own reference to transaction,
+        # never Django's shared on_commit (see #7494).
+        fake_transaction = types.SimpleNamespace(on_commit=capture_on_commit)
+        with mock.patch.object(migration, "transaction", fake_transaction), \
+                contextlib.redirect_stdout(out):
             migration.collapse_global_duplicates(apps, _editor())
-        except migration.ConflictingGlobalSettings as exc:
-            seen["message"] = str(exc)
-        seen["unchanged"] = before == sorted(Setting.objects.filter(
-            key__startswith="TESTIT_UNIQ_MIG_", group=None).values_list("pk", flat=True))
-        seen["diff_pks"] = sorted(Setting.objects.filter(
-            key="TESTIT_UNIQ_MIG_DIFF").values_list("pk", flat=True))
+        seen["log"] = out.getvalue()
+        seen["diff_after"] = list(Setting.objects.filter(
+            key="TESTIT_UNIQ_MIG_DIFF", group=None).values_list("pk", "value"))
+        seen["same_after"] = list(Setting.objects.filter(
+            key="TESTIT_UNIQ_MIG_SAME", group=None).values_list("pk", flat=True))
 
     _without_constraint(body)
-    message = seen.get("message")
-    assert message, "conflicting copies must stop the migration"
-    assert seen["unchanged"], "a stopped migration deleted rows"
-    pks = ", ".join(str(pk) for pk in seen["diff_pks"])
-    assert "TESTIT_UNIQ_MIG_DIFF" in message and pks in message, (
-        f"the stop message must name the key and rows {pks}: {message}")
-    assert "TESTIT_UNIQ_MIG_SAME" not in message, (
-        f"identical copies are not a conflict: {message}")
-    assert "value-one" not in message and "value-two" not in message, (
-        f"the stop message exposed a value: {message}")
+    diff_before = seen["diff_before"]
+    assert seen["diff_after"] == [diff_before[0]], (
+        f"the oldest conflicting row must stay, value untouched: {seen['diff_after']} "
+        f"from {diff_before}")
+    assert seen["same_after"] == [seen["same_oldest"]], (
+        f"identical copies must collapse to the oldest row: {seen['same_after']}")
+    log = seen["log"]
+    deleted = ", ".join(str(pk) for pk, _ in diff_before[1:])
+    assert "TESTIT_UNIQ_MIG_DIFF" in log and f"kept Setting row {diff_before[0][0]}" in log \
+        and deleted in log, f"the log must name the key, kept row and deleted rows: {log!r}"
+    assert "TESTIT_UNIQ_MIG_SAME" not in log, f"identical copies are not a conflict: {log!r}"
+    for value in ("value-one", "value-two", "value-three"):
+        assert value not in log, f"the log exposed a value: {log!r}"
+    assert len(seen["callbacks"]) == 1, (
+        f"exactly one after-commit cache clear expected, got {len(seen['callbacks'])}")
+
+    # The after-commit callback clears every repaired key from the real hash.
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.models.setting import REDIS_GLOBAL_KEY
+    r = Setting._redis()
+    assert r is not None, "the test needs Redis to check the cache clear"
+    keys = ("TESTIT_UNIQ_MIG_DIFF", "TESTIT_UNIQ_MIG_SAME")
+    try:
+        for key in keys:
+            r.hset(REDIS_GLOBAL_KEY, key, "stale")
+        r.hset(REDIS_GLOBAL_KEY, "TESTIT_UNIQ_MIG_UNTOUCHED", "keep")
+        seen["callbacks"][0]()
+        left = {key: r.hget(REDIS_GLOBAL_KEY, key) for key in keys}
+        assert left == {key: None for key in keys}, (
+            f"repaired keys must be cleared from {REDIS_GLOBAL_KEY}: {left}")
+        assert r.hget(REDIS_GLOBAL_KEY, "TESTIT_UNIQ_MIG_UNTOUCHED") is not None, \
+            "the cache clear must touch only the repaired keys"
+    finally:
+        r.hdel(REDIS_GLOBAL_KEY, *keys, "TESTIT_UNIQ_MIG_UNTOUCHED")
+
+
+@th.django_unit_test("#8201: migration 0055's cache clear never raises when Redis fails")
+def test_migration_cache_clear_survives_redis_failure(opts):
+    import contextlib
+    import importlib
+    import io
+    from unittest import mock
+
+    migration = importlib.import_module(
+        "mojo.apps.account.migrations.0055_setting_global_key_unique")
+    out = io.StringIO()
+    with mock.patch("mojo.helpers.redis.get_connection",
+                    side_effect=ConnectionError("redis down")), \
+            contextlib.redirect_stdout(out):
+        migration.clear_cached_globals(["TESTIT_UNIQ_MIG_DIFF"])
+    assert "could not clear 1 repaired key" in out.getvalue(), (
+        f"a failed cache clear must say so: {out.getvalue()!r}")
 
 
 @th.django_unit_test("#8201: migration 0055 holds writers off, so it never deletes a committed change")
