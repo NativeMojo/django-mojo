@@ -129,12 +129,97 @@ Enforced by `validate_acting_user`, on both the REST setter and
   a key to a more privileged *parent*-group member.
 - **The requester needs key-management perms** — global `manage_groups`/
   `manage_users`, or `manage_group`/`manage_members`/`manage_users`/
-  `manage_groups` within the key's group.
+  `manage_groups` within the key's group. That bar is enough for a
+  **reference-mode** link only. Making the key *assume* the member has a
+  stricter one, below.
+- **A linked key cannot be moved to a group its member is not in.** `group` is
+  an ordinary writable field; a REST save that changes it on a linked key
+  re-runs the two rules above against the new group and answers 403 when the
+  member is not an active direct member there. An unlinked key moves as before.
 
 Two incidents are raised on the **link** (never on use — a linked key serving
 10k requests must not write 10k incidents): linking to a member holding
 `manage_users`, `manage_groups`, or any `sys.*`; and enabling `override_user`
 at all.
+
+### Who may make a key assume a member
+
+Managing a group is **not** enough to switch `override_user` on. A key that
+assumes a member carries that member's authority, so a manager who could do it
+for anyone would reach, through the key, whatever only the member may reach.
+`ApiKey._can_assume(request, target)` is the one rule, and it is true only
+when all of these hold:
+
+- the requester passes the key-management bar above;
+- the credential is a **person's own session** — `credential_kind(request)` is
+  `"user"` or `"oauth"`. A per-user API key (`UserAPIKey`) is refused, self-issue
+  included: it is a stored secret, and a second credential minted from it would
+  outlive its revocation. Group API keys and group tokens were already refused;
+- the requester **is the member**, or holds platform-wide `manage_users` or
+  `manage_groups` (the way to provision a key for a service member).
+
+Where it is enforced, all on the REST boundary:
+
+| Request | Result when `_can_assume` is false |
+|---|---|
+| `override_user: true` on a key that has it off (create or edit) | 403 |
+| `user: <other member>` on a key that already has `override_user` on | 403. The link and override are left as they were; override is never silently cleared |
+| `GET ...?graph=token` on a key that assumes a member | 200 with `"token": null`, and an `api_key:token_read_refused` Log row in place of `api_key:token_read` |
+| `POST /api/account/admin/apikey/action` with `rotate` on such a key | 403 |
+
+`ApiKey.on_rest_pre_save` applies the rule once, to the final row compared
+with the stored one, so the order of `user` and `override_user` in one body
+cannot matter, and neither can the name the link was posted under (`user` or
+`user_id`). The setters only parse the value and apply the manager bar. Still open to a manager, because a manager must always be
+able to reduce or stop a key: switching `override_user` off, clearing `user`,
+`deactivate`, `reactivate`, `revoke` and delete. Unchanged: the create response
+(the creator passed the rule in that same request) and `group/apikey/rotate`,
+where the key rotates itself with its own token.
+
+`user_id`, the column name of the link, has its own setter (`set_user_id`) that
+calls `set_user`: the REST save picks a setter by the posted name and otherwise
+assigns the foreign key directly. Membership (`validate_acting_user`), the
+issuer record and the audit row are all written in `on_rest_pre_save` too.
+
+**Server code is trusted.** `ApiKey.create_for_group(...)`, a management
+command or a shell is not a request and is not checked against this rule; the
+data rules (never a superuser, only a direct member) still apply there. Whoever
+can run code on the server can therefore create a key that assumes any member.
+
+**Keys that assumed a member before this rule existed keep working.** They
+sign in as before and carry no issuer record. The token and rotate rows above
+apply to them at once, so a group manager can no longer read or admin-rotate
+their tokens; the member or a platform administrator can. Authority a manager
+created earlier, and any token already copied, stays live until the key is
+rotated or revoked. To count them, in a Django shell (counts only, reads no
+token):
+
+```python
+from mojo.apps.account.models import ApiKey
+q = ApiKey.objects.filter(override_user=True, user__isnull=False)
+print(q.count(), q.filter(is_active=True).count(), q.values("group").distinct().count())
+```
+
+### The issuer record
+
+| Field | Meaning |
+|---|---|
+| `user_linked_by`, `user_linked_at` | Who linked the current member, and when |
+| `override_enabled_by`, `override_enabled_at` | Who switched `override_user` on, and when |
+
+Written only by `on_rest_pre_save`, from the request's user, and
+by `create_for_group(issued_by=<User>)`. They are in `NO_SAVE_FIELDS` (the
+`_id` aliases too), so a posted value is ignored. Each pair is cleared with
+the value it describes: clearing `user` clears all four, switching override off
+clears the second pair. Re-posting the same member does not re-stamp; re-pointing a key that already assumes a member stamps both pairs with the requester. They are
+null on a key written before the fields existed, and on any key server code
+created without `issued_by`. All four are in the `default`, `token` and `me`
+graphs (the two users through the User `basic` graph).
+
+The FKs are `SET_NULL`, so the record alone does not survive deletion of the
+issuer's account. Switching override on therefore also writes an
+`api_key:override_enabled` `logit.Log` row that names the member and the issuer
+by id, beside the existing level 5 incident.
 
 ### What an override key still cannot do
 
@@ -162,6 +247,20 @@ does. The link rules control who can create it, the incident makes it
 discoverable, the credential block stops it becoming permanent, and deleting
 the key ends the access — but choosing whom to link is a real decision.
 
+Three limits of the assume rule, so nobody reads more into it:
+
+- **A key keeps up with its member.** A member's own override key gains what
+  the member is granted later. That grant is checked against the grantor when
+  it is made (`GroupMember` permission rules), and no ceiling tied to the
+  issuer is applied at sign-in.
+- **A manager can still build a member and act as it.** A manager who can
+  create a member, grant it permissions and sign in as it can self-issue a key
+  for it. The key carries only what the manager could already grant; protected
+  permissions stay refused at grant time.
+- **Membership is not re-read at sign-in.** A member removed from the group
+  after issuing a key still authenticates with it; group checks then find no
+  member row for them.
+
 ### Deactivation
 
 If the linked member is deactivated, the key stops authenticating and returns
@@ -184,6 +283,8 @@ api_key, raw_token = ApiKey.create_for_group(
     name="Mobile App v2",
     permissions={"view_orders": True, "create_orders": True},
 )
+# Optional: user=<member>, override_user=True, issued_by=<User>. issued_by is
+# recorded as the issuer (see "The issuer record"); it is not checked.
 # raw_token is a 48-char alphanumeric string. It is also stored encrypted on the
 # row, so api_key.get_token() returns it later — you do not have to persist it to
 # recover it. Treat it as a live credential regardless.
@@ -258,6 +359,12 @@ inside the group. That trust boundary also applies to key-backed callers: an
 API key carrying `manage_group` may request the `token` graph for sibling keys
 and recover their live tokens. The framework does not block that path. Give
 integrations narrower permissions when they must not administer credentials.
+
+**One exception: a key that assumes a member.** Its token is that member's
+authority, not the group's, so the `token` graph returns `null` for it, and the
+admin `rotate` action is refused, unless the caller is the member or a platform
+administrator on their own session. No API key can read it. See
+[Who may make a key assume a member](#who-may-make-a-key-assume-a-member).
 
 ### `GET /api/group/apikey/me` — whoami
 
