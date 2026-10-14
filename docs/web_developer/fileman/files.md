@@ -29,6 +29,8 @@ For the normal case — `<img src={file.thumbnail}>`, `<a href={file.url}>Downlo
 
 If a deployment has shortlinks disabled (global `FILEMAN_USE_SHORTLINKS=False` or per-FileManager override), `url` will be the direct backend URL with no wrapping. Treat both forms as opaque.
 
+**CDN-delivered managers.** When a manager's bucket delivers through CloudFront (see [manager.md](manager.md#cdn-delivery-cloudfront)), the direct URL is a CDN link: unsigned and non-expiring for a public manager, signed with a configurable lifetime (default 7 days) for a private one. A client holding a signed link must re-fetch it before it expires; a shortlink is the stable handle that re-signs on each click.
+
 The server verifies personal S3 managers before exposing an unsigned URL. It
 may first inspect manager-level policy when resolving the personal manager, then
 supersedes policy-only evidence once with the first exact file or rendition

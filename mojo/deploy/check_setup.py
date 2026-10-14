@@ -1017,7 +1017,8 @@ def check_s3(report, session, config):
                 "or ACL from exposing the bucket, and nothing warns you when "
                 "one does.",
                 "enable all four, then carve out public objects via CloudFront "
-                "rather than by leaving the bucket open")
+                "rather than by leaving the bucket open — `manage.py fileman_cdn "
+                "--manager <id> enable` sets that up")
 
         policy = safe(report, "s3", f"{name} policy",
                       lambda n=name: s3.get_bucket_policy(Bucket=n))
@@ -1033,7 +1034,8 @@ def check_s3(report, session, config):
                     "confirm no private material can ever land under that "
                     "prefix, since a wildcard matches more than it looks like",
                     "serve public assets through CloudFront with OAC and keep "
-                    "the bucket itself private")
+                    "the bucket itself private — `manage.py fileman_cdn --manager "
+                    "<id> enable` provisions that; `check` validates one you bring")
 
         versioning = safe(report, "s3", f"{name} versioning",
                           lambda n=name: s3.get_bucket_versioning(Bucket=n))

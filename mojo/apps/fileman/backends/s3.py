@@ -14,8 +14,11 @@ from threading import RLock
 
 from mojo.helpers.aws.client import get_session, get_assumed_session
 from mojo.helpers.aws.provider_call import safe_error_detail
+from mojo.helpers import logit
 
 from .base import StorageBackend
+
+logger = logit.get_logger("fileman", "fileman.log")
 
 
 _S3_CLIENT_CACHE_SIZE = 128
@@ -311,6 +314,31 @@ class S3StorageBackend(StorageBackend):
                 ExpiresIn=self._clamp_expires_in(expires_in)
             )
         return url
+
+    def invalidate(self, paths):
+        """Queue a CloudFront invalidation for keys that changed in place.
+
+        Originals never change (generated names), so this is called for a
+        regenerated rendition and for deletes. Best-effort and asynchronous:
+        the request path never waits on CloudFront, and a failure to queue is
+        logged, not raised.
+        """
+        manager = getattr(self, "file_manager", None)
+        distribution = manager.cdn_distribution if manager is not None else None
+        paths = [str(p) for p in (paths or []) if p]
+        if distribution is None or not paths:
+            return None
+        try:
+            from mojo.apps import jobs
+            return jobs.publish(
+                "mojo.apps.fileman.asyncjobs.invalidate_cdn_paths",
+                {"bucket": distribution.bucket_name, "paths": paths},
+                channel="cleanup",
+            )
+        except Exception as exc:
+            logger.warning("cdn invalidation could not be queued for %s: %s",
+                           distribution.bucket_name, type(exc).__name__)
+            return None
 
     def public_s3_url(self, file_path: str) -> str:
         """The raw S3 URL regardless of CDN mode — what the public-access

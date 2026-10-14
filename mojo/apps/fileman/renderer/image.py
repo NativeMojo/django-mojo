@@ -223,9 +223,10 @@ class ImageRenderer(BaseRenderer):
                     filename
                 )
 
-                # Upload to storage
-                # print(storage_path)
+                # Upload to storage. A regenerated rendition overwrites the
+                # same key, so any CDN copy of the old bytes is invalidated.
                 backend.save(buffer, storage_path, mime_type)
+                backend.invalidate([storage_path])
 
                 # Get file size
                 file_size = buffer.getbuffer().nbytes

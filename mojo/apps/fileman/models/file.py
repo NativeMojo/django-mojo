@@ -495,10 +495,12 @@ class File(models.Model, MojoModel):
         # have `file=NULL` + `rendition=<id>`. Without this loop, the
         # rendition's SET_NULL cascade would leave orphan inert rows.
         backend = self.file_manager.backend
+        removed = []
         for rendition in self.file_renditions.all():
             if rendition.storage_path:
                 try:
                     backend.delete(rendition.storage_path)
+                    removed.append(rendition.storage_path)
                 except Exception as e:
                     logger.warning("on_rest_pre_delete: failed to delete rendition %s (%s): %s",
                                    rendition.id, rendition.storage_path, str(e))
@@ -507,9 +509,13 @@ class File(models.Model, MojoModel):
         if self.storage_file_path:
             try:
                 backend.delete(self.storage_file_path)
+                removed.append(self.storage_file_path)
             except Exception as e:
                 logger.warning("on_rest_pre_delete: failed to delete original %s: %s",
                                self.storage_file_path, str(e))
+        # A CDN keeps serving a deleted object until its TTL; drop its copies.
+        if removed:
+            backend.invalidate(removed)
         # Drop auto-generated shortlink rows (tier-1 display + tier-2 share)
         # attached to the File itself. Human-created shortlinks (different
         # `source`) stay intact (their FK goes NULL via SET_NULL).
