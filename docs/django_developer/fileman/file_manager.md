@@ -58,6 +58,16 @@ and `use` selectors must still agree with that manager. Client-supplied `user`
 selectors are never accepted. Authorization failures happen before storage
 targets are generated.
 
+A REST create of a `File` (`POST /api/fileman/file`) uses
+`FileManager.resolve_for_file_create(request)`. For user sessions it is
+`resolve_for_upload` unchanged. An `ApiKey` or group token, which the upload rule
+refuses, gets the same selectors (named manager, else `get_from_request`) and is
+allowed only an active group-scoped manager with no user that
+`FileManager.rest_check_permission(request, "SAVE_PERMS", manager)` passes: the
+key's own group or a descendant, with `files` or `manage_files` there. Anything
+else is `403 File manager is unavailable`. `request.group` is restored after the
+check.
+
 `upload_policy` is the safe graph for upload configuration. It contains only
 `id`, `name`, `use`, `is_active`, `max_file_size`, `allowed_extensions`,
 `allowed_mime_types`, and `supports_direct_upload`; backend locations,

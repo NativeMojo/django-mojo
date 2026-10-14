@@ -607,6 +607,40 @@ class FileManager(MojoSecrets, MojoModel):
         file_manager.authorize_for_upload(request)
         return file_manager
 
+    @classmethod
+    def resolve_for_file_create(cls, request):
+        """Resolve the manager for a File created over the general endpoint.
+
+        User sessions get the upload rule unchanged. An ApiKey or group token,
+        which that rule refuses, may use group storage only where the
+        framework's own permission check lets it save that manager: its group
+        or, for a key, a descendant, with `files` or `manage_files` there.
+        """
+        from mojo.helpers.request import restricted_identity
+
+        if restricted_identity(request) is None:
+            return cls.resolve_for_upload(request)
+        fm_id = request.DATA.get(["fileman", "filemanager", "file_manager", "manager", "file_manager_id"])
+        try:
+            if fm_id:
+                file_manager = cls.objects.select_related("user", "group").get(pk=int(fm_id))
+            else:
+                file_manager = cls.get_from_request(request)
+        except (TypeError, ValueError, cls.DoesNotExist):
+            raise me.PermissionDeniedException("File manager is unavailable")
+        if file_manager is None or not file_manager.is_active:
+            raise me.PermissionDeniedException("File manager is unavailable")
+        if file_manager.group_id is None or file_manager.user_id is not None:
+            raise me.PermissionDeniedException("File manager is unavailable")
+        original_group = getattr(request, "group", None)
+        try:
+            allowed = cls.rest_check_permission(request, "SAVE_PERMS", file_manager)
+        finally:
+            request.group = original_group
+        if not allowed:
+            raise me.PermissionDeniedException("File manager is unavailable")
+        return file_manager
+
     def on_rest_created(self):
         self._update_default()
 
