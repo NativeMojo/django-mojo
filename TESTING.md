@@ -122,9 +122,10 @@ scaffold a package with `./bin/run_tests --init <package>` (see
 
 ## Agent Mode
 
-`--agent` writes `testproject/var/test_failures.json` — a structured JSON report designed for LLM agents and CI pipelines. It includes:
+Every run writes `testproject/var/test_failures.json` — a structured JSON report designed for LLM agents and CI pipelines; `--agent` prints its path. It includes:
 
-- **Top-level**: `status` (passed/failed), total, passed, failed, skipped, duration
+- **Top-level**: `status` (passed/failed, or refused when the run did not complete), total, passed, failed, skipped, duration
+- **run**: which run wrote it (`run_id`, `pid`, `token` from `TESTIT_RUN_TOKEN`)
 - **modules**: per-module breakdown with tests/passed/failed/skipped/duration
 - **failures**: per-failure diagnostics (file path, line number, test source, traceback, server log tail)
 

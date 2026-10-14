@@ -94,7 +94,7 @@ Use `bin/run_tests` — it handles starting and stopping the test server automat
   `./bin/run_tests --all`
 - Force plain text output and disable the rich progress UI:
   `./bin/run_tests --plain`
-- Write structured test report for LLM agents:
+- Print where the structured test report is, for LLM agents (every run writes it):
   `./bin/run_tests --agent`
 
 All arguments are passed directly to `bin/testit.py`. If the server is already running, `bin/run_tests` will not stop it after the suite completes.
@@ -161,9 +161,9 @@ When `rich` is installed and `-j` is greater than 1, the runner shows a live per
 
 ### Agent Mode
 
-`--agent` writes `testproject/var/test_failures.json` after the run — a structured JSON report designed for LLM agents and CI pipelines. The report includes:
+Every run writes `testproject/var/test_failures.json` — a structured JSON report designed for LLM agents and CI pipelines. Before item #8052 only `--agent` runs wrote it; `--agent` now only prints where it is. The report includes:
 
-- **Top-level**: `status` (`failed` when `reasons` is non-empty, else `passed`), `total`, `passed`, `failed`, `skipped`, `duration` — summed across every module, **including modules skipped whole** (`requires_apps`/`requires_extra`). This is the baseline-comparison number.
+- **Top-level**: `status` (`failed` when `reasons` is non-empty, `refused` for a run that did not complete — see *Run lock and refusals* — else `passed`), `total`, `passed`, `failed`, `skipped`, `duration` — summed across every module, **including modules skipped whole** (`requires_apps`/`requires_extra`). This is the baseline-comparison number.
 - **`ran`**: the same shape (`total`, `passed`, `failed`, `skipped`) but restricted to what this invocation actually *executed* — whole-skipped modules contribute to the top-level totals but not to `ran`. Use `ran` when you need "how much work did this run really do," e.g. distinguishing a default-tier run from one that also pulled in `--extra` modules.
 - **`modules`**: per-module breakdown — `tests`, `passed`, `failed`, `skipped`, `duration` for each test module, plus `skipped_reason` when the whole module was skipped
 - **`slowest`**: the 25 slowest individual tests, sorted descending by `duration` — `test_name`, `module`, `test_file`, `status`, `duration`. Module-level `duration` alone can't say which test inside a slow module is the cost; every executed test records its own `duration` (seconds) and this is ranked from it.
@@ -171,6 +171,7 @@ When `rich` is installed and `-j` is greater than 1, the runner shows a live per
 - **`failures`**: per-failure entries with `test_name`, `function`, `status`, `kind` (`setup_error` for a raising setup function, else null), `assertion`, `test_source`, `file_path`, `line`, `traceback` (errors only), and `server_log_tail`
 - **`started_at`**: epoch seconds when the run began (the maestro reporter sends this as the run's start time)
 - **`conf_drift`**: names of any `var/django.conf` keys that changed across the run — normally empty. A non-empty list means a `th.server_settings()` context did not restore cleanly and the key is now stranded. Key **names only**; values are never reported, since an override may be a credential.
+- **`run`**: which run wrote the report — `run_id` (a fresh uuid per run), `pid`, `started`, `started_at`, `user`, and `token`. `token` is the value of `TESTIT_RUN_TOKEN` when the launcher set it, else null. **`run.token` is the supported way for a launcher to tell the report is from the run it just started**: `bin/run_tests` starts the runner through `uv run`, so the pid a launcher sees may be `uv`'s, not the runner's.
 
 #### What makes a run fail
 
@@ -185,6 +186,51 @@ One verdict sets the report `status`, the exit code and whether the `--continue`
 The two empty-run codes apply only when there is no setup error. The checkpoint is kept only for `aborted` or `setup_error`. The tier-budget exit is separate and unchanged: a blown `core` budget exits non-zero with its own message, but does not change `status` or `reasons`.
 
 LLM agents should always use `--agent` and read the JSON report instead of parsing terminal output. Never use `--plain` — it disables the rich UI but doesn't improve agent output.
+
+#### Run lock and refusals
+
+One run at a time owns a checkout's `testproject/var`. The run lock is a kernel `flock` on `testproject/var/testit.lock`, and the run that holds it owns `test_failures.json` for as long as it lives. The kernel drops the lock when the holder exits, however it exits, so there is no stale lock to remove. The lock file is never deleted.
+
+- **Another run is active**: the launch exits 1, prints the holder's pid, user and start time, and touches nothing — not the report, not the database, not Redis. A stuck holder is found with `fuser testproject/var/testit.lock`.
+- **While it holds the lock**, a run first marks the report `status: "refused"` with the reason `not_completed`, stamped with its `run`. It then replaces that marker with a named refusal or with its real report. A run killed part-way leaves the marker, so an older report can never be read as the current one.
+- **A refusal** is a report with `status: "refused"`, one entry in `reasons`, zero counts and empty `modules`, `failures` and lists. It is never pushed to maestro. Its codes:
+
+| Code | Meaning |
+|---|---|
+| `not_completed` | The run did not finish. **It may have partly run.** |
+| `bad_arguments` | An argument or `--config` error. |
+| `isolation_policy` | The isolation policy refused the run. |
+| `django_setup` | `django.setup()` failed in the launcher. |
+| `redis_index_claimed` | Another checkout owns this Redis index. |
+| `pubsub_prefix` | The testproject's `REDIS_PUBSUB_PREFIX` is missing or stale. |
+
+Every code except `not_completed` means nothing ran. Each refusal still exits non-zero with its message, as before. Two exits leave the old report in place: a missing `testproject/` (there is no `var` to write into) and shell failures in `bin/run_tests` before Python starts, such as the dev server failing to start. The old report's `run` is what tells a reader it isn't theirs.
+
+`test_results.json` is not authoritative after a refusal: only `test_failures.json` is replaced.
+
+#### Consumer launchers: `claim_run`
+
+A project with its own launcher calls `testit.runner.claim_run` after `paths.configure_paths` and **before** `django.setup()` or any other check that can exit. `runner.main` finds and reuses the claim; `testit.runner.refuse_run(code, message)` records a launcher refusal and releases the lock.
+
+```python
+from mojo.helpers import paths
+paths.configure_paths(SETTINGS_FILE, 1)
+
+from testit import runner
+claim = runner.claim_run(sys.argv[1:])   # exits 1 if another run is active
+
+try:
+    init_django()                         # the project's own setup
+except Exception as err:
+    runner.refuse_run("django_setup", f"  Django setup failed: {err!r}")
+    raise
+
+if claim is not None:                     # None: --init / --list-extras
+    reset_test_database()
+runner.main(runner.setup_parser())
+```
+
+`claim_run` returns None for `--init` and `--list-extras`, which run no tests: **the launcher must not reset any test state then.** `--help` releases the lock and writes nothing; an argument or config error writes `bad_arguments` and re-raises. A launcher that never calls `claim_run` still gets the lock and the pending marker from `runner.main`, but its own exits before `main` leave the old report.
 
 ### Maestro Reporting
 
@@ -794,7 +840,8 @@ All other keys (e.g. `periods`, `slug`, `status`, `data`, `id`) are safe to acce
   - `total`, `passed`, `failed`
   - `records[]` with module, file, function, status (`passed`, `failed`, `error`, `skipped`), and `duration` (seconds, when the test actually ran)
   - timestamps (`started_at`, `finished_at`, `duration`)
-- Agent report (written when `--agent` is passed): `testproject/var/test_failures.json`
+- Agent report (written by every run; `--agent` prints its path): `testproject/var/test_failures.json`
+  - `run` — the identity of the run that wrote it (`run_id`, `pid`, `started_at`, `token`); `status: "refused"` with a `reasons` code when the run did not complete (see *Run lock and refusals*)
   - Top-level `status`, `total`, `passed`, `failed`, `skipped`, `duration` — summed across all modules, including ones skipped whole
   - `reasons` — why the run failed, as `{code, message}` entries (`tests_failed`, `setup_error`, `aborted`, `nothing_selected`, `nothing_executed`); empty on a passing run
   - `ran` — the same counts restricted to what actually executed this run (excludes whole-skipped modules)
