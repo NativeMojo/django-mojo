@@ -85,6 +85,18 @@ def read_holder(var_root):
         return {}
 
 
+def holder_message(holder, lock_file):
+    """Who holds the run lock, read from the lock file, and how to find them.
+    Shared by the launcher (before the runner can import) and the runner."""
+    pid = holder.get("pid", "?")
+    started = holder.get("started", "?")
+    user = holder.get("user", "?")
+    return (f"\n  Another test run is active (pid={pid}, user={user}, started={started})\n"
+            f"  Lock file: {lock_file}\n"
+            "  The lock frees itself when that process exits; to find a stuck "
+            f"holder: fuser {lock_file}\n")
+
+
 def _read_durations(var_root):
     """Per-module durations from the report on disk, or {}."""
     try:

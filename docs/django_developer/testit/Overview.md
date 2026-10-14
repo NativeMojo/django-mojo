@@ -161,7 +161,7 @@ When `rich` is installed and `-j` is greater than 1, the runner shows a live per
 
 ### Agent Mode
 
-Every run writes `testproject/var/test_failures.json` — a structured JSON report designed for LLM agents and CI pipelines. Before item #8052 only `--agent` runs wrote it; `--agent` now only prints where it is. The report includes:
+Every run writes `testproject/var/test_failures.json` — a structured JSON report designed for LLM agents and CI pipelines. Before item #8052 only `--agent` runs wrote it. `--agent` (and maestro reporting) still adds detailed failure context — `test_source`, `file_path`, `line` and `traceback` for each failure — and prints where the report is; without it, failures carry less detail. The report includes:
 
 - **Top-level**: `status` (`failed` when `reasons` is non-empty, `refused` for a run that did not complete — see *Run lock and refusals* — else `passed`), `total`, `passed`, `failed`, `skipped`, `duration` — summed across every module, **including modules skipped whole** (`requires_apps`/`requires_extra`). This is the baseline-comparison number.
 - **`ran`**: the same shape (`total`, `passed`, `failed`, `skipped`) but restricted to what this invocation actually *executed* — whole-skipped modules contribute to the top-level totals but not to `ran`. Use `ran` when you need "how much work did this run really do," e.g. distinguishing a default-tier run from one that also pulled in `--extra` modules.
@@ -200,11 +200,12 @@ One run at a time owns a checkout's `testproject/var`. The run lock is a kernel 
 | `not_completed` | The run did not finish. **It may have partly run.** |
 | `bad_arguments` | An argument or `--config` error. |
 | `isolation_policy` | The isolation policy refused the run. |
+| `runner_import` | The launcher could not import `testit.runner`, for example a missing dependency. |
 | `django_setup` | `django.setup()` failed in the launcher. |
 | `redis_index_claimed` | Another checkout owns this Redis index. |
 | `pubsub_prefix` | The testproject's `REDIS_PUBSUB_PREFIX` is missing or stale. |
 
-Every code except `not_completed` means nothing ran. Each refusal still exits non-zero with its message, as before. Two exits leave the old report in place: a missing `testproject/` (there is no `var` to write into) and shell failures in `bin/run_tests` before Python starts, such as the dev server failing to start. The old report's `run` is what tells a reader it isn't theirs.
+Every code except `not_completed` means nothing ran. Each refusal exits non-zero with its message, as before; a `SystemExit(0)` or `SystemExit(None)` raised during the launcher's startup also exits 1 with the cause printed, never 0. Two exits leave the old report in place: a missing `testproject/` (there is no `var` to write into) and shell failures in `bin/run_tests` before Python starts, such as the dev server failing to start. The old report's `run` is what tells a reader it isn't theirs.
 
 `test_results.json` is not authoritative after a refusal: only `test_failures.json` is replaced.
 
@@ -230,7 +231,7 @@ if claim is not None:                     # None: --init / --list-extras
 runner.main(runner.setup_parser())
 ```
 
-`claim_run` returns None for `--init` and `--list-extras`, which run no tests: **the launcher must not reset any test state then.** `--help` releases the lock and writes nothing; an argument or config error writes `bad_arguments` and re-raises. A launcher that never calls `claim_run` still gets the lock and the pending marker from `runner.main`, but its own exits before `main` leave the old report.
+`claim_run` returns None for `--init` and `--list-extras`, which run no tests: **the launcher must not reset any test state then.** `--help` releases the lock and writes nothing; an argument or config error writes `bad_arguments` and re-raises. A launcher that never calls `claim_run` still gets the lock and the pending marker from `runner.main`, but its own exits before `main` leave the old report. `claim_run` cannot record a failed runner import, because it lives in the runner: a launcher that also wants that recorded takes the lock through `testit.runlock` before importing the runner, the way django-mojo's own `bin/testit.py` does.
 
 ### Maestro Reporting
 

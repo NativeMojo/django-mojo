@@ -602,14 +602,7 @@ def _record_has_selected_tag(record, selected_tags):
 # ---------------------------------------------------------------------------
 def _held_message(holder, lock_file=None):
     """Who holds the run lock, read from the lock file, and how to find them."""
-    lock_file = lock_file or _LOCK_FILE
-    pid = holder.get("pid", "?")
-    started = holder.get("started", "?")
-    user = holder.get("user", "?")
-    return (f"\n  Another test run is active (pid={pid}, user={user}, started={started})\n"
-            f"  Lock file: {lock_file}\n"
-            "  The lock frees itself when that process exits; to find a stuck "
-            f"holder: fuser {lock_file}\n")
+    return runlock.holder_message(holder, lock_file or _LOCK_FILE)
 
 
 def _acquire_lock(var_root=None):
