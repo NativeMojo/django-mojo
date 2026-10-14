@@ -126,6 +126,12 @@ has set them.
 - **A miss is per scope.** Setting a key on a parent, or globally, is visible
   at once to a child group that cached its own miss: the child's miss is still
   true and the walk continues to the parent.
+- **An empty `update_fields` is a no-op.** `Setting.save(update_fields=[])`
+  (any empty collection or generator, or the fourth positional argument)
+  returns before anything else: nothing is written, nothing is published to
+  the cache, and a new row is not inserted. Django writes nothing for an empty
+  `update_fields`, so publishing the in-memory value would put an unsaved
+  draft in the cache (#7739).
 - **Readers never overwrite writers.** A read backfills with `HSETNX`, so a
   reader whose `SELECT` raced a save cannot replace the value the save pushed.
 - **Backstop.** Each hash expires one hour (`CACHE_TTL`) after it is first
