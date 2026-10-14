@@ -478,24 +478,74 @@ def test_launcher_runner_import_failure_writes_record(opts):
         assert _lock_is_free(var_root), "the lock must be free after the refusal"
 
 
-@th.django_unit_test("launcher: a runner import failure on --help says why and leaves the report alone")
-def test_launcher_runner_import_failure_help_writes_nothing(opts):
+def _assert_import_failure_refused(*args):
+    """With the runner unable to import, this launch, whatever its argv,
+    replaces an old pass with a runner_import refusal and exits 1."""
+    import json
     import tempfile
 
     with tempfile.TemporaryDirectory() as root:
         launcher, probe, var_root, report = _import_failure_project(root)
+        result = _run_launcher(launcher, *args, pythonpath=probe)
+        output = result.stdout + result.stderr
+        assert result.returncode == 1, \
+            f"{args}: a runner that cannot import must exit 1, got {result.returncode}:\n{output}"
+        assert "could not import the test runner" in output, \
+            f"{args}: the launcher must name the import failure, got:\n{output}"
+        with open(report, encoding="utf-8") as fh:
+            record = json.load(fh)
+        assert record.get("status") == "refused", \
+            f"{args}: the old pass must not survive a failed runner import, got {record}"
+        codes = [reason["code"] for reason in record.get("reasons", [])]
+        assert codes == ["runner_import"], f"{args}: expected the runner_import reason, got {codes}"
+        assert _lock_is_free(var_root), f"{args}: the lock must be free after the refusal"
+
+
+# Without the runner nothing can parse argv, so no launch may claim to be a
+# non-run; every one records the refusal (#8052 review 103952, Rick 103958).
+@th.django_unit_test("launcher: a runner import failure on --help records runner_import and exits 1")
+def test_launcher_runner_import_failure_help_refused(opts):
+    _assert_import_failure_refused("--help")
+
+
+@th.django_unit_test("launcher: a runner import failure on --init= or --list-extras=no records runner_import")
+def test_launcher_runner_import_failure_option_values_refused(opts):
+    _assert_import_failure_refused("--init=")
+    _assert_import_failure_refused("--list-extras=no")
+
+
+@th.django_unit_test("launcher: combined short help -vh prints help and leaves the report byte-identical")
+def test_launcher_combined_short_help_writes_nothing(opts):
+    import importlib.util
+    import os
+    import tempfile
+
+    spec = importlib.util.spec_from_file_location(
+        "testenv_probe", os.path.join(_repo_root(), "testit", "testenv.py"))
+    testenv = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(testenv)
+
+    with tempfile.TemporaryDirectory() as root:
+        settings = _MINIMAL_SETTINGS.format(
+            db=os.path.join(root, "db.sqlite3"),
+            prefix=testenv.expected_pubsub_prefix(root))
+        launcher = _launcher_copy(root, settings)
+        var_root = os.path.join(root, "testproject", "var")
+        os.makedirs(var_root)
+        report = os.path.join(var_root, "test_failures.json")
+        with open(report, "w", encoding="utf-8") as fh:
+            fh.write('{"status": "passed", "total": 99, "passed": 99}')
         with open(report, "rb") as fh:
             before = fh.read()
-        result = _run_launcher(launcher, "--help", pythonpath=probe)
+
+        result = _run_launcher(launcher, "-vh", "--no-maestro")
         output = result.stdout + result.stderr
-        assert result.returncode != 0, \
-            f"--help with a runner that cannot import must exit non-zero, got 0:\n{output}"
-        assert "could not import the test runner" in output, \
-            f"the launcher must name the import failure, got:\n{output}"
+        assert result.returncode == 0, f"-vh prints help and exits 0, got {result.returncode}:\n{output}"
+        assert "usage:" in output, f"-vh must print the parser's help, got:\n{output}"
         with open(report, "rb") as fh:
             after = fh.read()
-        assert after == before, "--help is not a test run and must leave the report byte-identical"
-        assert _lock_is_free(var_root), "--help must not keep the lock"
+        assert after == before, f"-vh is help, not a test run, and must leave the report byte-identical, got {after!r}"
+        assert _lock_is_free(var_root), "-vh must not keep the lock"
 
 
 def _assert_setup_exit_refused(exit_expression):
