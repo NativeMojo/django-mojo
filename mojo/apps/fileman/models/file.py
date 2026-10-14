@@ -495,10 +495,12 @@ class File(models.Model, MojoModel):
         # have `file=NULL` + `rendition=<id>`. Without this loop, the
         # rendition's SET_NULL cascade would leave orphan inert rows.
         backend = self.file_manager.backend
+        removed = []
         for rendition in self.file_renditions.all():
             if rendition.storage_path:
                 try:
                     backend.delete(rendition.storage_path)
+                    removed.append(rendition.storage_path)
                 except Exception as e:
                     logger.warning("on_rest_pre_delete: failed to delete rendition %s (%s): %s",
                                    rendition.id, rendition.storage_path, str(e))
@@ -507,9 +509,13 @@ class File(models.Model, MojoModel):
         if self.storage_file_path:
             try:
                 backend.delete(self.storage_file_path)
+                removed.append(self.storage_file_path)
             except Exception as e:
                 logger.warning("on_rest_pre_delete: failed to delete original %s: %s",
                                self.storage_file_path, str(e))
+        # A CDN keeps serving a deleted object until its TTL; drop its copies.
+        if removed:
+            backend.invalidate(removed)
         # Drop auto-generated shortlink rows (tier-1 display + tier-2 share)
         # attached to the File itself. Human-created shortlinks (different
         # `source`) stay intact (their FK goes NULL via SET_NULL).
@@ -694,17 +700,27 @@ class File(models.Model, MojoModel):
         bypassing any shortlink wrapping. Used by the shortlink resolver and
         as the fallback when shortlinks are disabled.
         """
-        effective_public = self.file_manager.ensure_public_access_audited(
+        manager = self.file_manager
+        if manager.uses_cdn:
+            # CDN mode never reads or writes the download_url cache: a raw S3
+            # URL persisted before the CDN was switched on must not be served,
+            # and a CDN link is string formatting plus at most one signature.
+            from mojo.apps.fileman.services import cdn
+            if manager.is_public:
+                return manager.backend.get_url(self.storage_file_path)
+            return manager.backend.get_url(
+                self.storage_file_path, cdn.link_expires_in(manager))
+        effective_public = manager.ensure_public_access_audited(
             file_path=self.storage_file_path,
         )
         if effective_public:
             if not self.download_url:
-                self.download_url = self.file_manager.backend.get_url(self.storage_file_path)
+                self.download_url = manager.backend.get_url(self.storage_file_path)
             return self.download_url
         # Private — regenerate a fresh presigned URL every call.
-        return self.file_manager.backend.get_url(
+        return manager.backend.get_url(
             self.storage_file_path,
-            self.file_manager.get_setting("urls_expire_in", 3600),
+            manager.get_setting("urls_expire_in", 3600),
         )
 
     def generate_download_url(self):

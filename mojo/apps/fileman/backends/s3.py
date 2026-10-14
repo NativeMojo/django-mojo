@@ -14,8 +14,11 @@ from threading import RLock
 
 from mojo.helpers.aws.client import get_session, get_assumed_session
 from mojo.helpers.aws.provider_call import safe_error_detail
+from mojo.helpers import logit
 
 from .base import StorageBackend
+
+logger = logit.get_logger("fileman", "fileman.log")
 
 
 _S3_CLIENT_CACHE_SIZE = 128
@@ -285,7 +288,19 @@ class S3StorageBackend(StorageBackend):
             return None
 
     def get_url(self, file_path: str, expires_in: Optional[int] = None) -> str:
-        """Get a URL to access the file, either public or pre-signed based on expiration"""
+        """Get a URL to access the file, either public or pre-signed based on expiration.
+
+        In CDN mode (the bucket has an enabled CdnDistribution, maestro #8250)
+        the link points at the CDN instead: unsigned when `expires_in` is
+        None, a CloudFront signed URL for min(expires_in, cap) otherwise. A
+        manager without a CDN takes exactly the path it always did.
+        """
+        manager = getattr(self, "file_manager", None)
+        distribution = manager.cdn_distribution if manager is not None else None
+        if distribution is not None:
+            from mojo.apps.fileman.services import cdn
+            return cdn.cdn_url(distribution, file_path, expires_in,
+                               signer=(getattr(self, "config", None) or {}).get("cdn_signer"))
         if expires_in is None:
             url = self.get_public_url(file_path)
         else:
@@ -299,6 +314,36 @@ class S3StorageBackend(StorageBackend):
                 ExpiresIn=self._clamp_expires_in(expires_in)
             )
         return url
+
+    def invalidate(self, paths):
+        """Queue a CloudFront invalidation for keys that changed in place.
+
+        Originals never change (generated names), so this is called for a
+        regenerated rendition and for deletes. Best-effort and asynchronous:
+        the request path never waits on CloudFront, and a failure to queue is
+        logged, not raised.
+        """
+        manager = getattr(self, "file_manager", None)
+        distribution = manager.cdn_distribution if manager is not None else None
+        paths = [str(p) for p in (paths or []) if p]
+        if distribution is None or not paths:
+            return None
+        try:
+            from mojo.apps import jobs
+            return jobs.publish(
+                "mojo.apps.fileman.asyncjobs.invalidate_cdn_paths",
+                {"bucket": distribution.bucket_name, "paths": paths},
+                channel="cleanup",
+            )
+        except Exception as exc:
+            logger.warning("cdn invalidation could not be queued for %s: %s",
+                           distribution.bucket_name, type(exc).__name__)
+            return None
+
+    def public_s3_url(self, file_path: str) -> str:
+        """The raw S3 URL regardless of CDN mode — what the public-access
+        probe must test, since the question it answers is about the bucket."""
+        return self.get_public_url(file_path)
 
     def get_public_url(self, file_path: str) -> str:
         """Build the unsigned URL for the same endpoint used by this backend."""
@@ -793,7 +838,7 @@ class S3StorageBackend(StorageBackend):
             return False, ["Authenticated HeadObject failed safely."], details
 
         try:
-            response = requests.head(self.get_url(file_path), allow_redirects=True, timeout=3)
+            response = requests.head(self.public_s3_url(file_path), allow_redirects=True, timeout=3)
             details["anonymous_head_status"] = response.status_code
         except Exception as exc:
             details["status"] = "unknown"

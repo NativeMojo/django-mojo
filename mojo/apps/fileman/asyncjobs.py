@@ -133,3 +133,36 @@ def cleanup_expired_files(job):
         logger.warning("cleanup_expired_files: %d files failed and were kept", failed)
         return f"completed:deleted={deleted},failed={failed}"
     return f"completed:deleted={deleted}"
+
+
+def invalidate_cdn_paths(job):
+    """Invalidate CDN copies of keys that changed in place (maestro #8250).
+
+    Payload:
+        bucket: the S3 bucket a CdnDistribution fronts
+        paths: storage keys to invalidate
+    Best-effort: a distribution that no longer exists or a denied call is
+    logged and the job completes.
+    """
+    from mojo.apps.fileman.models import CdnDistribution
+    from mojo.apps.fileman.services import cdn_provision
+
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    bucket = payload.get("bucket")
+    paths = [p for p in (payload.get("paths") or []) if p]
+    distribution = CdnDistribution.objects.filter(bucket_name=bucket, is_enabled=True).first()
+    if distribution is None or not paths:
+        return "completed:skipped=no-distribution-or-paths"
+    result = cdn_provision.invalidate_paths(distribution, paths)
+    if result is None:
+        logger.warning("invalidate_cdn_paths: invalidation for %s was not accepted", bucket)
+        return "completed:failed"
+    return f"completed:paths={len(paths)}"
+
+
+def retire_cdn_signing_keys(job):
+    """Remove signing keys whose retire window passed from the key group."""
+    from mojo.apps.fileman.services import cdn_provision
+
+    retired = cdn_provision.retire_due_keys()
+    return f"completed:retired={len(retired)}"

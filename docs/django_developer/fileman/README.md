@@ -5,7 +5,7 @@ File management with multiple storage backends (file system, S3, Azure, GCS), di
 ## Contents
 
 - [file.md](file.md) — File model, upload flow, storage backends
-- [file_manager.md](file_manager.md) — FileManager configuration and backends
+- [file_manager.md](file_manager.md) — FileManager configuration and backends, incl. CDN delivery (CloudFront) for S3 managers
 - [renditions.md](renditions.md) — Async rendition pipeline: handlers, channel, idempotency, admin-configurable options (`FILEMAN_RENDITIONS_*`, H.264/H.265), adding roles.
 - [shortlinks.md](shortlinks.md) — Short URLs for File/Rendition, tier-1 auto + tier-2 share, opt-out toggles.
 
@@ -16,6 +16,8 @@ File management with multiple storage backends (file system, S3, Azure, GCS), di
 | `FileManager` | Backend configuration — bucket, root path, size/MIME restrictions, per-group defaults |
 | `File` | Uploaded file — lifecycle status, storage path, metadata, rendition accessors |
 | `FileRendition` | Derived artifact (thumbnail, preview, transcoded video, etc.) linked to a `File` |
+| `CdnDistribution` | CloudFront delivery for one S3 bucket: distribution, OAC, key group, active signing key, status (maestro #8250) |
+| `CdnSigningKey` | A CloudFront signing key pair; the private half KMS-encrypted, never serialized |
 
 Located in `mojo/apps/fileman/models/`. Each has `RestMeta` wiring the standard MojoModel REST surface.
 
