@@ -44,6 +44,16 @@ class Setting(MojoSecrets, MojoModel):
 
     class Meta:
         unique_together = [("key", "group")]
+        constraints = [
+            # A platform-wide row has a NULL group, and NULLs do not collide in
+            # a unique index — so unique_together above cannot keep global keys
+            # distinct. This one does, for every writer: REST, Setting.set, a
+            # direct save() and the bulk_create service writers alike.
+            models.UniqueConstraint(
+                fields=["key"],
+                condition=models.Q(group__isnull=True),
+                name="account_setting_global_key_uniq"),
+        ]
         ordering = ["key"]
 
     class RestMeta:
@@ -129,6 +139,7 @@ class Setting(MojoSecrets, MojoModel):
         self._reject_scope_change()
         if created:
             self._reject_create_outside_request_group()
+        self._reject_duplicate_key(changed_fields, created)
         if self.is_secret and "value" in changed_fields:
             raw = self.value
             self.value = ""
@@ -163,6 +174,31 @@ class Setting(MojoSecrets, MojoModel):
             raise merrors.ValueException(
                 "a setting's group cannot be changed; "
                 "create it in the new scope instead")
+
+    def _reject_duplicate_key(self, changed_fields, created):
+        """One row per key in each scope: a readable 400 instead of a raw error.
+
+        The database enforces it for every writer (unique_together for a
+        group, account_setting_global_key_uniq for the platform-wide scope);
+        this only turns a REST create, or a REST rename onto a taken key, into
+        a message that says what to do. Deliberately NOT in save(): there a
+        race loser would raise this instead of the IntegrityError that
+        Setting.set's get_or_create recovers from.
+        """
+        if not created and "key" not in changed_fields:
+            return
+        taken = Setting.objects.filter(
+            key=self.key, group_id=self.group_id).exclude(pk=self.pk)
+        if not taken.exists():
+            return
+        from mojo import errors as merrors
+        if self.group_id is None:
+            raise merrors.ValueException(
+                f"A platform-wide setting named {self.key} already exists; "
+                "edit that setting instead of creating another")
+        raise merrors.ValueException(
+            f"This group already has a setting named {self.key}; "
+            "edit that setting instead of creating another")
 
     def _reject_create_outside_request_group(self):
         """A REST create authorized through a group lands in that group.

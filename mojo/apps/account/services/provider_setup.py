@@ -374,9 +374,10 @@ def _write_configuration_revision(revision):
 def _read_verify_state():
     """Return the persisted per-topic verification state of the STORED config.
 
-    Tolerates the duplicate global rows PostgreSQL still permits: the oldest row
-    wins rather than the read failing, because a settings list that cannot
-    render is worse than one showing a stale verification.
+    Tolerates the duplicate global rows a database before migration 0055
+    (#8201) can hold: the oldest row wins rather than the read failing, because
+    a settings list that cannot render is worse than one showing a stale
+    verification.
     """
     from mojo.apps.account.models import Setting
     row = Setting.objects.filter(

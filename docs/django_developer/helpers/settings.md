@@ -168,6 +168,43 @@ another.
   global rows with
   `Setting.objects.filter(group=None).values_list("key", "modified")`.
 
+### One row per key in each scope
+
+Each key has at most one row in each scope: one in each group, and one
+platform-wide row (`group = None`). The database enforces it for every writer,
+including the `bulk_create` service writers that skip `save()`. Group rows use
+`unique_together = ("key", "group")`. Platform-wide rows use the partial unique
+constraint `account_setting_global_key_uniq`, added by migration
+`account 0055`, because PostgreSQL never treats two NULL groups as equal.
+
+- **REST:** `POST /api/settings` for a key that already exists in that scope,
+  or a `POST /api/settings/<id>` that renames `key` onto a taken one, returns
+  `400` with a readable message. The platform-wide message is "A platform-wide
+  setting named KEY already exists; edit that setting instead of creating
+  another". The group message is "This group already has a setting named KEY;
+  …". The protected-key and group checks run first, so their `403` still wins.
+- **Python:** a direct `save()`, `objects.create()` or `bulk_create()` of a
+  second row raises `django.db.IntegrityError`. Use `Setting.set()`, which
+  updates the existing row, and is safe under a race: a writer that loses waits
+  for the winner, then updates its row.
+- **Upgrading to migration 0055:** copies that are identical (same value and
+  secret flag) are merged, keeping the oldest row, so no setting changes value.
+  If a key has platform-wide copies with **different** values, the migration
+  stops before changing anything. It names each key and its row ids, never a
+  value. Decide which row is correct, delete the others, and run `migrate`
+  again. Secret copies always count as different, because each is encrypted
+  separately.
+
+Check a database before upgrading:
+
+```python
+from django.db.models import Count
+from mojo.apps.account.models import Setting
+
+Setting.objects.filter(group=None).values("key").annotate(
+    n=Count("pk")).filter(n__gt=1)
+```
+
 ## `settings.get_static()` — Conf-File-Only Reads
 
 `settings.get()` is DB/Redis-aware: it checks the `Setting` model (Redis cache →
