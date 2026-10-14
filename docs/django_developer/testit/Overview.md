@@ -163,13 +163,26 @@ When `rich` is installed and `-j` is greater than 1, the runner shows a live per
 
 `--agent` writes `testproject/var/test_failures.json` after the run — a structured JSON report designed for LLM agents and CI pipelines. The report includes:
 
-- **Top-level**: `status` (passed/failed), `total`, `passed`, `failed`, `skipped`, `duration` — summed across every module, **including modules skipped whole** (`requires_apps`/`requires_extra`). This is the baseline-comparison number.
+- **Top-level**: `status` (`failed` when `reasons` is non-empty, else `passed`), `total`, `passed`, `failed`, `skipped`, `duration` — summed across every module, **including modules skipped whole** (`requires_apps`/`requires_extra`). This is the baseline-comparison number.
 - **`ran`**: the same shape (`total`, `passed`, `failed`, `skipped`) but restricted to what this invocation actually *executed* — whole-skipped modules contribute to the top-level totals but not to `ran`. Use `ran` when you need "how much work did this run really do," e.g. distinguishing a default-tier run from one that also pulled in `--extra` modules.
 - **`modules`**: per-module breakdown — `tests`, `passed`, `failed`, `skipped`, `duration` for each test module, plus `skipped_reason` when the whole module was skipped
 - **`slowest`**: the 25 slowest individual tests, sorted descending by `duration` — `test_name`, `module`, `test_file`, `status`, `duration`. Module-level `duration` alone can't say which test inside a slow module is the cost; every executed test records its own `duration` (seconds) and this is ranked from it.
-- **`failures`**: per-failure entries with `test_name`, `function`, `status`, `assertion`, `test_source`, `file_path`, `line`, `traceback` (errors only), and `server_log_tail`
+- **`reasons`**: why the run failed, as a list of `{code, message}`; empty on a passing run. See *What makes a run fail* below.
+- **`failures`**: per-failure entries with `test_name`, `function`, `status`, `kind` (`setup_error` for a raising setup function, else null), `assertion`, `test_source`, `file_path`, `line`, `traceback` (errors only), and `server_log_tail`
 - **`started_at`**: epoch seconds when the run began (the maestro reporter sends this as the run's start time)
 - **`conf_drift`**: names of any `var/django.conf` keys that changed across the run — normally empty. A non-empty list means a `th.server_settings()` context did not restore cleanly and the key is now stranded. Key **names only**; values are never reported, since an override may be a credential.
+
+#### What makes a run fail
+
+One verdict sets the report `status`, the exit code and whether the `--continue` checkpoint is kept. A run fails, exiting non-zero with each reason's message, for any of these `reasons` codes:
+
+- **`tests_failed`**: a test failed or errored, or a test file could not be imported. The message is `Tests failed!`.
+- **`setup_error`**: a `setup_` function raised. The message names up to five `module.file.function` setups and counts the tests not run.
+- **`aborted`**: the run was stopped early, by `-s` or the abort key.
+- **`nothing_selected`**: the selection matched no tests, for example a `-t` or `--tier` naming nothing that exists.
+- **`nothing_executed`**: tests were selected but every one was skipped.
+
+The two empty-run codes apply only when there is no setup error. The checkpoint is kept only for `aborted` or `setup_error`. The tier-budget exit is separate and unchanged: a blown `core` budget exits non-zero with its own message, but does not change `status` or `reasons`.
 
 LLM agents should always use `--agent` and read the JSON report instead of parsing terminal output. Never use `--plain` — it disables the rich UI but doesn't improve agent output.
 
@@ -213,9 +226,9 @@ Every discovered value can be overridden, so CI can point a run somewhere else:
 
 The **key is never read from a config file** — those are committed, and a key in one would be a key in git. Environment or discovery only. `MAESTRO_VERSION` is *your project's* version of the code under test (semver, build or deploy tag), which is not the same thing as the commit or as testit's own version; the spec marks it SHOULD-report.
 
-**A push never changes the exit code.** Every failure — offline, outage, bad key, timeout, even a bug in the reporter itself — degrades to one warning line; the exit code stays a function of the tests alone. One honest limit: the timeout bounds each socket operation, not wall clock, so a wedged DNS resolver can still exceed it.
+**A push never changes the exit code.** Every failure — offline, outage, bad key, timeout, even a bug in the reporter itself — degrades to one warning line; the exit code follows the run's verdict (see *What makes a run fail*), never the push. One honest limit: the timeout bounds each socket operation, not wall clock, so a wedged DNS resolver can still exceed it.
 
-**Partial runs are not reported.** maestro treats the latest push per suite as the project's status, so a run that is not the suite's verdict would overwrite a real result with a fragment. Refused: `-t` and `--ignore` runs, and any run cut short by `-s` or the abort key. In practice this means the iteration loop — run one module, fix, run it again — never touches the board; only a whole-suite run does.
+**Partial runs are not reported.** maestro treats the latest push per suite as the project's status, so a run that is not the suite's verdict would overwrite a real result with a fragment. Refused: `-t` and `--ignore` runs, and any run cut short by `-s` or the abort key. A run cut short is still not reported, and it now exits non-zero with the reason `aborted`. In practice this means the iteration loop — run one module, fix, run it again — never touches the board; only a whole-suite run does.
 
 `--extra`/`--all` runs *are* reported: they are complete runs of a wider tier. An `--all` run reports as **suite `full`** automatically, preserving the durable suite identity while keeping its larger totals separate from the default tier's. Without that separation, a default run passing after a red `--all` would report green over an extended-module failure and the failure would vanish from the board without being fixed.
 
@@ -614,6 +627,8 @@ def test_admin_can_login(opts):
 - `opts` persists for the module. Store objects, IDs, and flags for reuse.
 - Import Django models inside `@django_unit_setup` / `@django_unit_test` only.
 - Tests run in definition order; keep related assertions grouped.
+- A raising `setup_` function stops its file. The file's later setup functions and every test body do not run. The setup error is one failed record with its cause, and each of the file's tests is reported as skipped with kind `not_run` and the same cause, never as one failure per test. The run fails with the reason `setup_error`.
+- A file whose tests are all outside the selected tier runs no setup; its tests are counted as tier skips.
 
 > **Collection is by function-name PREFIX, not by decorator, and there is no
 > teardown phase.** The runner collects `setup_*` for the setup phase and
@@ -781,10 +796,11 @@ All other keys (e.g. `periods`, `slug`, `status`, `data`, `id`) are safe to acce
   - timestamps (`started_at`, `finished_at`, `duration`)
 - Agent report (written when `--agent` is passed): `testproject/var/test_failures.json`
   - Top-level `status`, `total`, `passed`, `failed`, `skipped`, `duration` — summed across all modules, including ones skipped whole
+  - `reasons` — why the run failed, as `{code, message}` entries (`tests_failed`, `setup_error`, `aborted`, `nothing_selected`, `nothing_executed`); empty on a passing run
   - `ran` — the same counts restricted to what actually executed this run (excludes whole-skipped modules)
   - Per-module stats in `modules` dict (tests, passed, failed, skipped, duration, plus `skipped_reason` when the module was skipped whole)
   - `slowest` — the 25 slowest individual tests, sorted descending by `duration`
-  - Per-failure diagnostics in `failures` list (test_source, file_path, line, traceback, server_log_tail)
+  - Per-failure diagnostics in `failures` list (`kind`, test_source, file_path, line, traceback, server_log_tail)
   - `conf_drift` — names of `var/django.conf` keys stranded by a settings override (empty on a clean run)
 - HTTP helper: `testit.client.RestClient`
   - Reuses auth tokens and integrates with `opts.client`.
