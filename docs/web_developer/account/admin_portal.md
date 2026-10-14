@@ -545,6 +545,10 @@ Category permissions are the **recommended way** to assign access. Each category
 
 **Superusers** (`is_superuser=true`) bypass all permission checks automatically. No category permissions needed.
 
+Permissions outside these categories, such as `manage_shortlinks`, must be granted
+by name. `admin` is not a wildcard on the server: every framework check that
+accepts it is platform-wide, so granting it on a member opens nothing in that group.
+
 ### How to Display Permissions
 
 Build your permission editor as a simple list of category toggles:

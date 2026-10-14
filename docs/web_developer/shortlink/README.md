@@ -18,6 +18,11 @@ The shortlink app provides URL shortening with automatic rich previews for messa
 | GET | `/api/shortlink/history` | `manage_shortlinks` | List click history |
 | GET | `/api/shortlink/history/<id>` | `manage_shortlinks` | Get click history record |
 
+`manage_shortlinks` is not part of any category permission, and `admin` does not
+grant it. A role that should manage short links needs `manage_shortlinks` itself:
+as a member permission it covers that group's links (pass `group` when listing);
+click history needs it as a user (global) permission.
+
 ---
 
 ## Redirect Endpoint
