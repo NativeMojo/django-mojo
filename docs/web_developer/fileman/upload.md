@@ -173,6 +173,12 @@ curl -X POST \
 }
 ```
 
+The storage is chosen and checked as in [`upload/initiate`](#selecting-a-filemanager)
+for user sessions. Unlike initiate, an API key or group token may use this route,
+inside group storage of its own group (or, for a key, a group beneath it) where it
+holds `files` or `manage_files`; see [Fields the server owns](files.md#fields-the-server-owns).
+Storage paths, upload state and size in the body are ignored.
+
 ---
 
 ## Method 3 (Fallback): Base64 Inline
