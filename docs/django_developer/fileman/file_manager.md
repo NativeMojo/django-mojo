@@ -279,8 +279,10 @@ manage.py fileman_cdn rotate-key   /   revoke-key --key-id <K...>
 
 or the FileManager actions `enable_cdn`, `check_cdn`, `disable_cdn`
 (`POST /api/fileman/manager/<id>` with `{"action": "enable_cdn"}`); all three
-are superuser-only, since they read or change the account under the
-deployment identity and report ARNs and policy documents. `enable` runs under the deployment's AWS
+need the **global** `manage_files` (or `files`) permission, which a superuser
+implies: they read or change the account under the deployment identity and
+report ARNs and policy documents, so the group-level grant that satisfies the
+manager's `SAVE_PERMS` is not enough. `enable` runs under the deployment's AWS
 identity (`AWS_KEY`/`AWS_SECRET` or the instance role), never a manager's
 upload credentials; `--profile` runs under an operator's boto3 profile.
 
@@ -338,7 +340,8 @@ inside an hour. `File`/`FileRendition` pass the manager's
 download route keeps its 3600 s; the `download_url` cache is never used in
 CDN mode. Signing is local — the signer for a key is cached per process, so
 a link costs one RSA signature, not a KMS decrypt. The `cdn` and
-`cdn_url_expires_in` settings are superuser-only writes.
+`cdn_url_expires_in` settings are writable by global file admins
+(`manage_files` / `files`, or a superuser); anyone else sending them gets 403.
 
 **Bring your own distribution.** `fileman_cdn --manager <id> byo
 --distribution <id> --alias https://media.example.com` registers one you

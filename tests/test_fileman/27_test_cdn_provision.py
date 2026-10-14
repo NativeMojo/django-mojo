@@ -296,6 +296,9 @@ def setup_cdn_provision(opts):
         username=f"{PREFIX}super", email=f"{PREFIX}super@example.com", is_superuser=True)
     opts.member = User.objects.create(
         username=f"{PREFIX}member", email=f"{PREFIX}member@example.com", is_superuser=False)
+    opts.file_admin = User.objects.create(
+        username=f"{PREFIX}fadmin", email=f"{PREFIX}fadmin@example.com", is_superuser=False,
+        permissions={"manage_files": True})
     opts.public = _manager(f"{PREFIX}public", True).pk
     opts.private = _manager(f"{PREFIX}private", False).pk
     opts.optout = _manager(f"{PREFIX}optout", True, cdn="off").pk
@@ -623,7 +626,7 @@ def test_rotate_and_revoke(opts):
 
 
 @th.tier("core")
-@th.django_unit_test("CDN provision: manager actions gate on superuser and report no secrets")
+@th.django_unit_test("CDN provision: manager actions gate on manage_files and report no secrets")
 def test_manager_actions(opts):
     from mojo import errors as me
     from mojo.models.rest import ACTIVE_REQUEST
@@ -641,21 +644,41 @@ def test_manager_actions(opts):
             fm.on_action_enable_cdn({})
         except me.PermissionDeniedException as exc:
             err = exc
-        assert_true(err is not None, "a non-superuser may not enable the CDN")
+        assert_true(err is not None, "a user without manage_files may not enable the CDN")
         err = None
         try:
             fm.on_action_disable_cdn({})
         except me.PermissionDeniedException as exc:
             err = exc
-        assert_true(err is not None, "a non-superuser may not disable the CDN")
+        assert_true(err is not None, "a user without manage_files may not disable the CDN")
         err = None
         try:
             fm.on_action_check_cdn({})
         except me.PermissionDeniedException as exc:
             err = exc
-        assert_true(err is not None, "check reads the account under the deployment identity: superuser only")
+        assert_true(err is not None,
+                    "check reads the account under the deployment identity: manage_files only")
     finally:
         ACTIVE_REQUEST.reset(token)
+
+    # A global file admin who is not a superuser runs all three.
+    aws = _FakeAws()
+    fm = _fresh(opts.public)
+    fm._cdn_provision_kwargs = _seams(aws)
+    token = ACTIVE_REQUEST.set(_Req(opts.file_admin))
+    try:
+        enabled = fm.on_action_enable_cdn({})
+        assert_true(enabled["status"] and enabled["result"]["converged"],
+                    f"a manage_files holder may enable the CDN: {enabled}")
+        checked = fm.on_action_check_cdn({})
+        assert_true(checked["status"] and not checked["result"]["blocking"],
+                    f"a manage_files holder may check the CDN: {checked}")
+        disabled = fm.on_action_disable_cdn({})
+        assert_true(disabled["status"] and disabled["result"]["disabled"],
+                    f"a manage_files holder may disable the CDN: {disabled}")
+    finally:
+        ACTIVE_REQUEST.reset(token)
+    _reset(opts)
     encoded = json.dumps(fm.to_dict(graph="default"), default=str)
     assert_true("PRIVATE KEY" not in encoded and "cdn-prov-secret" not in encoded,
                 "the manager graph carries neither key material nor AWS secrets")

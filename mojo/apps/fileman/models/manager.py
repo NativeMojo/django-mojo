@@ -375,15 +375,29 @@ class FileManager(MojoSecrets, MojoModel):
             logit.warning("fileman", f"CDN behavior sync for manager {self.pk} did not converge; "
                                      f"run check_cdn: {result.get('worst')}")
 
-    def _require_superuser_for_cdn(self, created):
-        """Only a superuser may change a manager's CDN settings over REST.
+    CDN_ADMIN_PERMS = ("manage_files", "files")
+
+    def _is_cdn_admin(self):
+        """A global file admin (`manage_files` / `files`, which a superuser
+        implies) may run the CDN controls. SAVE_PERMS is satisfied by the
+        group-level grant too, and that holder must not drive the
+        deployment's AWS identity, so the check is the global one."""
+        actor = self.active_user
+        if actor is None:
+            return False
+        if getattr(actor, "is_superuser", False):
+            return True
+        check = getattr(actor, "has_permission", None)
+        return bool(check and check(list(self.CDN_ADMIN_PERMS)))
+
+    def _require_cdn_admin_for_settings(self, created):
+        """Only a global file admin may change a manager's CDN settings over REST.
 
         The settings decide whether a manager's links are signed for and
-        how long a bearer link lives, which is platform policy, not a file
-        admin's call. Same shape as `_require_superuser_for_platform_role`.
+        how long a bearer link lives. Same shape as
+        `_require_superuser_for_platform_role`, with the file-admin gate.
         """
-        actor = self.active_user
-        if actor is not None and getattr(actor, "is_superuser", False):
+        if self._is_cdn_admin():
             return
         if not created:
             stored = FileManager.objects.filter(pk=self.pk).first()
@@ -394,7 +408,7 @@ class FileManager(MojoSecrets, MojoModel):
         elif all(self.get_secret(key) in (None, "") for key in self.CDN_SETTING_KEYS):
             return
         raise me.PermissionDeniedException(
-            reason="Only superusers can change a FileManager's CDN settings",
+            reason="Only file admins (manage_files) can change a FileManager's CDN settings",
             model_name="FileManager",
             event_type="user_permission_denied",
             branch="fileman_cdn_setting",
@@ -825,7 +839,7 @@ class FileManager(MojoSecrets, MojoModel):
         # defaults below cannot change the answer — a created store with no
         # key of its own is on platform credentials either way.
         self._require_superuser_for_platform_role(created)
-        self._require_superuser_for_cdn(created)
+        self._require_cdn_admin_for_settings(created)
         self._validate_cdn_settings()
         self._tighten_cdn_before_save(created)
         self._update_default()
@@ -1064,54 +1078,55 @@ class FileManager(MojoSecrets, MojoModel):
         return self.check_public_access_report()
 
     def _cdn_action_allowed(self):
-        actor = self.active_user
-        return actor is not None and getattr(actor, "is_superuser", False)
+        return self._is_cdn_admin()
 
     def on_action_enable_cdn(self, value):
         """Provision CloudFront delivery for this manager's bucket (maestro #8250).
 
-        Runs under the deployment's AWS identity, superuser only. `harden`
+        Runs under the deployment's AWS identity; global file admins only. `harden`
         in the value also turns on Block Public Access and Object Ownership,
         which breaks raw-S3 public links of managers opted out of the CDN.
         """
         if not self._cdn_action_allowed():
             raise me.PermissionDeniedException(
-                reason="Only superusers can enable CDN delivery",
+                reason="Only file admins (manage_files) can enable CDN delivery",
                 model_name="FileManager", event_type="user_permission_denied",
                 branch="fileman_cdn_enable")
         if not self.is_s3:
             return dict(status=False, error="CDN delivery is only supported for S3 backends.")
         from mojo.apps.fileman.services import cdn_provision
         harden = bool((value or {}).get("harden")) if isinstance(value, dict) else False
-        return dict(status=True, result=cdn_provision.enable(self, harden=harden))
+        return dict(status=True, result=cdn_provision.enable(
+            self, harden=harden, **(self._cdn_provision_kwargs or {})))
 
     def on_action_check_cdn(self, value):
         """Read-only: validate the bucket's distribution, provisioned or BYO.
 
-        Superuser only like the other two: it reads the account under the
+        File-admin only like the other two: it reads the account under the
         deployment identity and reports policy documents and ARNs.
         """
         if not self._cdn_action_allowed():
             raise me.PermissionDeniedException(
-                reason="Only superusers can check CDN delivery",
+                reason="Only file admins (manage_files) can check CDN delivery",
                 model_name="FileManager", event_type="user_permission_denied",
                 branch="fileman_cdn_check")
         if not self.is_s3:
             return dict(status=False, error="CDN delivery is only supported for S3 backends.")
         from mojo.apps.fileman.services import cdn_provision
-        return dict(status=True, result=cdn_provision.check(self))
+        return dict(status=True, result=cdn_provision.check(self, **(self._cdn_provision_kwargs or {})))
 
     def on_action_disable_cdn(self, value):
         """Every manager on the bucket reverts to S3 links. AWS is untouched
         unless `retire` is set, which disables the distribution (never deletes)."""
         if not self._cdn_action_allowed():
             raise me.PermissionDeniedException(
-                reason="Only superusers can disable CDN delivery",
+                reason="Only file admins (manage_files) can disable CDN delivery",
                 model_name="FileManager", event_type="user_permission_denied",
                 branch="fileman_cdn_disable")
         from mojo.apps.fileman.services import cdn_provision
         retire = bool((value or {}).get("retire")) if isinstance(value, dict) else False
-        return dict(status=True, result=cdn_provision.disable(self, retire=retire))
+        return dict(status=True, result=cdn_provision.disable(
+            self, retire=retire, **(self._cdn_provision_kwargs or {})))
 
     def on_action_clone(self, value):
         secrets = self.secrets

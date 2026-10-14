@@ -65,6 +65,10 @@ def setup_cdn_links(opts):
         username=f"{PREFIX}super", email=f"{PREFIX}super@example.com", is_superuser=True)
     opts.member = User.objects.create(
         username=f"{PREFIX}member", email=f"{PREFIX}member@example.com", is_superuser=False)
+    # A global file admin: not a superuser, holds manage_files.
+    opts.file_admin = User.objects.create(
+        username=f"{PREFIX}fadmin", email=f"{PREFIX}fadmin@example.com", is_superuser=False,
+        permissions={"manage_files": True})
 
     # The signing key row carries no PEM (no KMS here); the backend seam
     # supplies the signer. key_id is what reaches Key-Pair-Id.
@@ -300,7 +304,7 @@ def test_child_manager_keeps_public_and_inherits_switch(opts):
 
 
 @th.tier("core")
-@th.django_unit_test("CDN: settings are superuser-only, S3-only and validated")
+@th.django_unit_test("CDN: settings are file-admin-only, S3-only and validated")
 def test_cdn_settings_gates(opts):
     from mojo.models.rest import ACTIVE_REQUEST
     from mojo import errors as me
@@ -319,7 +323,17 @@ def test_cdn_settings_gates(opts):
             fm.on_rest_pre_save({}, False)
         except me.PermissionDeniedException as exc:
             err = exc
-        assert_true(err is not None, "a non-superuser must not change cdn settings")
+        assert_true(err is not None, "a user without manage_files must not change cdn settings")
+    finally:
+        ACTIVE_REQUEST.reset(token)
+
+    fm = FileManager.objects.get(pk=opts.private_cdn)
+    token = ACTIVE_REQUEST.set(_Req(opts.file_admin))
+    try:
+        fm.set_setting("cdn_url_expires_in", 43200)
+        fm.on_rest_pre_save({}, False)
+        assert_eq(fm.get_setting("cdn_url_expires_in"), 43200,
+                  "a global file admin (manage_files, not superuser) may set the lifetime")
     finally:
         ACTIVE_REQUEST.reset(token)
 

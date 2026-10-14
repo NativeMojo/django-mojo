@@ -95,14 +95,16 @@ or `{"enabled": false}`. Actions on `POST /api/fileman/manager/<id>`:
 
 | Action | Who | Effect |
 |---|---|---|
-| `{"action": "enable_cdn"}` (optional `"harden": true`) | superuser | Provisions CloudFront for the manager's bucket under the deployment's AWS identity and returns the findings (`items`, `converged`, `distribution`). Re-running creates nothing. |
-| `{"action": "check_cdn"}` | superuser | Read-only validation of the bucket's distribution (provisioned or brought) with exact remediation JSON. |
-| `{"action": "disable_cdn"}` (optional `"retire": true`) | superuser | Every manager on the bucket reverts to S3 links; `retire` also disables the distribution. Nothing is deleted. |
+| `{"action": "enable_cdn"}` (optional `"harden": true`) | global `manage_files` / `files` | Provisions CloudFront for the manager's bucket under the deployment's AWS identity and returns the findings (`items`, `converged`, `distribution`). Re-running creates nothing. |
+| `{"action": "check_cdn"}` | global `manage_files` / `files` | Read-only validation of the bucket's distribution (provisioned or brought) with exact remediation JSON. |
+| `{"action": "disable_cdn"}` (optional `"retire": true`) | global `manage_files` / `files` | Every manager on the bucket reverts to S3 links; `retire` also disables the distribution. Nothing is deleted. |
 
-Two manager settings, both **superuser only**, both S3 only: `cdn`
-(`"off"` opts this manager, and its children, out of its bucket's CDN) and
-`cdn_url_expires_in` (seconds, 60 to the platform cap). A non-superuser
-sending either gets 403; a non-S3 manager gets 400.
+Two manager settings, both for **global file admins** (`manage_files` /
+`files`, which a superuser implies; the group-level grant is not enough), both
+S3 only: `cdn` (`"off"` opts this manager, and its children, out of its
+bucket's CDN) and `cdn_url_expires_in` (seconds, 60 to the platform cap). A
+caller without that permission sending either gets 403; a non-S3 manager gets
+400.
 
 ## AWS credential fields
 
