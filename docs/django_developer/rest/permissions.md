@@ -378,7 +378,7 @@ The event carries these metadata fields: `field_name`, `related_model`, `related
 
 This prevents cross-model privilege escalation: a user with SAVE_PERMS on model A but no view access to model B cannot attach B records to A. The same gate has always applied when the value is a dict (which triggers a cascading save and additionally requires SAVE_PERMS on the target).
 
-A dict sent for a reverse one-to-one with no related row (e.g. `{"push_config": {...}}` on a group that has none) is refused with a 400 `ValueException` naming the field (`"push_config has no record to update"`) and nothing is saved; the related row is never created this way (item #8184).
+A dict sent for a reverse one-to-one with no related row (e.g. `{"push_config": {...}}` on a group that has none) is refused with a 400 `ValueException` naming the field (`"push_config has no record to update"`); the addressed row is not saved and no related row is created (item #8184). Nested fields processed earlier in the same request may already be saved (#7690).
 
 Related models may opt into a candidate-returning protocol with
 `resolve_rest_related_candidate(parent, field_name, value, current, request)`.
