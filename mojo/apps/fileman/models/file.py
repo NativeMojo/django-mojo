@@ -255,6 +255,14 @@ class File(models.Model, MojoModel):
 
     class RestMeta:
         SENSITIVE_FIELDS = ['upload_token']
+        # The storage, the owner and everything that names a stored object are
+        # the server's: a body value could point a record at another group's
+        # object. The manager is chosen on create by
+        # FileManager.resolve_for_file_create.
+        NO_SAVE_FIELDS = [
+            "file_manager", "user", "storage_filename", "storage_file_path",
+            "download_url", "upload_token", "upload_status", "shortlink_code",
+            "file_size", "checksum", "category"]
         CAN_CREATE = True
         CAN_DELETE = True
         DEFAULT_SORT = "-created"
@@ -469,7 +477,8 @@ class File(models.Model, MojoModel):
     def on_rest_pre_save(self, changed_fields, created):
         if created:
             if not hasattr(self, "file_manager") or self.file_manager is None:
-                self.file_manager = FileManager.get_from_request(self.active_request)
+                self.file_manager = FileManager.resolve_for_file_create(self.active_request)
+                self.group = self.file_manager.group
             if not self.content_type:
                 self.content_type = mimetypes.guess_type(self.filename)[0] or 'application/octet-stream'
             self.category = utils.get_file_category(self.content_type)
@@ -955,6 +964,7 @@ class File(models.Model, MojoModel):
         self.content_type = file.content_type
         self.category = utils.get_file_category(self.content_type)
         self.set_filename(file.name)
+        self.file_size = getattr(file, "size", None)
         if not getattr(self, "file_manager", None):
             req = self.active_request
             if req:
