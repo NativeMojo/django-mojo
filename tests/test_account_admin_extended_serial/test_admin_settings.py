@@ -6,7 +6,7 @@ rows, which is unsafe under the parallel default tier. The read-only
 catalog, decorator, and asset contracts remain in the default-tier module.
 """
 
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -14,6 +14,30 @@ from testit import helpers as th
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+class _Rollback(Exception):
+    """Raised to undo a test's DDL and seeded rows."""
+
+
+@contextmanager
+def _unmigrated_global_duplicates():
+    """The database as it was before migration 0055 (#8201): the platform-wide
+    unique constraint is dropped, so duplicate global rows can be seeded. The
+    DDL and every row written inside are rolled back on exit. This keeps the
+    duplicate defences, which stay for unmigrated databases, under test."""
+    from django.db import connection, transaction
+    from mojo.apps.account.models import Setting
+    constraint = next(c for c in Setting._meta.constraints
+                      if c.name == "account_setting_global_key_uniq")
+    try:
+        with transaction.atomic():
+            with connection.schema_editor() as editor:
+                editor.remove_constraint(Setting, constraint)
+            yield
+            raise _Rollback()
+    except _Rollback:
+        pass
 
 
 CATALOG_KEYS = (
@@ -182,8 +206,8 @@ def test_static_provider_settings_are_protected(opts):
 
 @th.django_unit_test("#8201: a second global override is refused; clear removes the one row")
 def test_settings_duplicate_set_clear(opts):
-    """Before #8201 this seeded two global rows on purpose. The database now
-    refuses the second one, even from bulk_create, which skips save()."""
+    """The database now refuses a second global row, even from bulk_create,
+    which skips save()."""
     from django.db import IntegrityError, transaction
     from mojo.apps.account.models import Setting, User
     from mojo.apps.account.services import admin_settings
@@ -201,6 +225,28 @@ def test_settings_duplicate_set_clear(opts):
     assert removed == 1, f"clear removed {removed} rows instead of the one override"
     assert not Setting.objects.filter(key=key, group=None).exists(), \
         "the global override survived clear"
+
+
+@th.django_unit_test("dedicated writer rejects ambiguity and clears every duplicate (unmigrated database)")
+def test_settings_duplicate_set_clear_unmigrated(opts):
+    from mojo import errors as me
+    from mojo.apps.account.models import Setting, User
+    from mojo.apps.account.services import admin_settings
+    key = "ALLOW_PHONE_CHANGE"
+    Setting.objects.filter(key=key).delete()
+    actor = User.objects.get(pk=opts.settings_admin)
+    seen = {}
+    with _unmigrated_global_duplicates():
+        Setting.objects.bulk_create([
+            Setting(key=key, value="true"), Setting(key=key, value="false")])
+        with mock.patch.object(admin_settings, "_audit"):
+            with th.assert_raises(me.ValueException):
+                admin_settings.set_override(actor, key, True)
+            seen["removed"] = admin_settings.clear_override(actor, key)
+        seen["left"] = Setting.objects.filter(key=key, group=None).count()
+    assert seen.get("removed") == 2, \
+        f"clear removed {seen.get('removed')} duplicate rows instead of every row"
+    assert seen.get("left") == 0, "duplicate global overrides survived atomic clear"
 
 
 @th.django_unit_test("catalog cache publication waits for the outer transaction commit")
@@ -269,24 +315,22 @@ def test_settings_catalog_redaction(opts):
     from mojo.apps.account.models import Setting
     from mojo.apps.account.services import admin_settings
     key = "WEBAPP_BASE_URL"
-    # Since #8201 (migration 0055) a database cannot hold two global rows, so
-    # the duplicate branch, kept as defence for an unmigrated database, is
-    # driven with in-memory rows.
-    descriptor = next(d for d in admin_settings.descriptors() if d.key == key)
-    value, source, ignored, duplicate = admin_settings._resolve(descriptor, [
-        Setting(key=key, value='"https://one.example.com"'),
-        Setting(key=key, value='"https://two.example.com"'),
-    ])
-    assert duplicate and source == "duplicate_override" and value is None, \
-        "an ambiguous duplicate override exposed a cached or arbitrary effective value"
     Setting.objects.filter(key=key).delete()
-    Setting.objects.bulk_create([
-        Setting(key=key, value='"https://one.example.com"')])
-    report = admin_settings.catalog(capabilities={
-        "catalog_write": True, "owner_display": True, "owner_edit": False})
-    rows = {row["key"]: row for row in report["entries"]}
-    assert not rows[key]["duplicate_override"] and rows[key]["can_write"], \
-        "a single global override was reported as a duplicate"
+    # Duplicates exist only on a database before migration 0055 (#8201).
+    rows = {}
+    with _unmigrated_global_duplicates():
+        Setting.objects.bulk_create([
+            Setting(key=key, value='"https://one.example.com"'),
+            Setting(key=key, value='"https://two.example.com"'),
+        ])
+        report = admin_settings.catalog(capabilities={
+            "catalog_write": True, "owner_display": True, "owner_edit": False})
+        rows = {row["key"]: row for row in report["entries"]}
+    assert rows, "the catalog returned no entries"
+    assert rows[key]["source"] == "duplicate_override" and not rows[key]["can_write"], \
+        "duplicate global overrides did not fail closed"
+    assert rows[key]["effective_value"] is None, \
+        "an ambiguous duplicate override exposed a cached or arbitrary effective value"
     assert rows["KMS_KEY_ID"]["effective_value"] in (
         {"configured": True}, {"configured": False}), \
         "a sensitive deployment setting exposed more than configured state"

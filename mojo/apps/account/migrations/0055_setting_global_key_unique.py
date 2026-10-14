@@ -17,6 +17,10 @@ Secret rows always count as conflicting: each is encrypted with a random salt
 and nonce under a password that includes its own pk, so two equal secrets
 never store equal text. That is the safe direction.
 
+The repair locks the settings table against writers before it reads a row,
+and holds that lock until the migration commits, so no write can change a copy
+between the check and the delete. Reads continue meanwhile.
+
 Idempotent: once clean, the repair matches nothing.
 """
 from django.db import migrations, models
@@ -75,8 +79,33 @@ def conflict_message(conflicts):
     return "\n".join(lines)
 
 
+def lock_out_writers(Setting, connection):
+    """Hold off every settings writer until this migration commits.
+
+    Without it the repair decides from a snapshot: a writer could change one
+    "identical" copy after it was read, and the delete would discard that
+    committed change (review 103840 on #8201). SHARE ROW EXCLUSIVE conflicts
+    with the ROW EXCLUSIVE lock every INSERT, UPDATE and DELETE takes, so
+    writes wait while reads go on. It is held to the end of the migration's
+    transaction, through the delete and the new unique index. A write that
+    committed first is simply read, and a changed copy then stops the
+    migration as a conflict.
+    """
+    if connection.vendor != "postgresql":
+        return
+    if not connection.in_atomic_block:
+        raise RuntimeError(
+            "migration account 0055 must run inside a transaction, so that "
+            "settings writers can be held off while duplicates are repaired")
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "LOCK TABLE %s IN SHARE ROW EXCLUSIVE MODE"
+            % connection.ops.quote_name(Setting._meta.db_table))
+
+
 def collapse_global_duplicates(apps, schema_editor):
     Setting = apps.get_model("account", "Setting")
+    lock_out_writers(Setting, schema_editor.connection)
     duplicated = (Setting.objects.filter(group__isnull=True)
                   .values("key").annotate(n=models.Count("pk"))
                   .filter(n__gt=1).values_list("key", flat=True))
