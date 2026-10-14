@@ -877,13 +877,19 @@ def ingest_batch(api_key, batch, *, volume_observer=None):
     }
 
 
-def prune_receipts(job=None, now=None):
-    from mojo.apps.incident.models import MojoSecReceipt
-
+def receipt_retention_days():
+    """Effective receipt retention; per-receipt Event retention reads it too."""
     retention_days = settings.get_static(
         "MOJOSEC_RECEIPT_RETENTION_DAYS", 45, kind="int")
     if retention_days < 7:
         retention_days = 7
+    return retention_days
+
+
+def prune_receipts(job=None, now=None):
+    from mojo.apps.incident.models import MojoSecReceipt
+
+    retention_days = receipt_retention_days()
     cutoff = (now or dates.utcnow()) - dates.timedelta(days=retention_days)
     deleted, _ = MojoSecReceipt.objects.filter(
         publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,

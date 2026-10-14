@@ -1,0 +1,253 @@
+import datetime
+import io
+import json
+
+from django.core.management import call_command
+from django.core.management.base import CommandError
+
+from testit import helpers as th
+
+
+TITLE = "mojosec-retention-test"
+SENSOR = "mojosec-retention-sensor"
+
+
+def _now():
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _clear():
+    from mojo.apps.incident.models import Event, Incident, MojoSecReceipt
+
+    MojoSecReceipt.objects.filter(sensor_id=SENSOR).delete()
+    Event.objects.filter(title__startswith=TITLE).delete()
+    Incident.objects.filter(category=TITLE).delete()
+
+
+def _event(age_days, category="mojosec.web.probe", scope="mojosec",
+           model_name="mojosec_sensor", incident=None):
+    from mojo.apps.incident.models import Event
+
+    event = Event.objects.create(
+        scope=scope, category=category, level=8, title=f"{TITLE} {category}",
+        model_name=model_name, incident=incident,
+        metadata={"mojosec": {"sensor_id": SENSOR}})
+    Event.objects.filter(pk=event.pk).update(
+        created=_now() - datetime.timedelta(days=age_days))
+    return event
+
+
+def _receipt(opts, event, publish_state="published", handler_state="none"):
+    from mojo.apps.incident.models import MojoSecReceipt
+
+    return MojoSecReceipt.objects.create(
+        api_key_id=opts.retention_key_id,
+        event=event,
+        sensor_id=SENSOR,
+        wire_event_id=f"retention-{event.pk}",
+        payload_digest="b" * 64,
+        publish_state=publish_state,
+        handler_state=handler_state,
+        replay_features={"event": {"id": f"retention-{event.pk}"}},
+    )
+
+
+def _remaining(ids):
+    from mojo.apps.incident.models import Event
+
+    return set(Event.objects.filter(pk__in=ids).values_list("pk", flat=True))
+
+
+def _dry_run(**options):
+    output = io.StringIO()
+    call_command("prune_mojosec_events", stdout=output, **options)
+    return json.loads(output.getvalue().strip())
+
+
+class _Job:
+    def __init__(self):
+        self.logs = []
+
+    def add_log(self, message):
+        self.logs.append(message)
+
+
+@th.django_unit_setup()
+def setup_mojosec_retention(opts):
+    from mojo.apps.account.models import ApiKey, Group
+
+    _clear()
+    ApiKey.objects.filter(name="mojosec_retention_key").delete()
+    Group.objects.filter(name="mojosec_retention_group").delete()
+    group = Group.objects.create(name="mojosec_retention_group", kind="organization")
+    key, unused_token = ApiKey.create_for_group(
+        group, "mojosec_retention_key", permissions={"mojosec_ingest": True})
+    opts.retention_key_id = key.pk
+
+
+@th.django_unit_test("retention deletes aged finished and orphaned Events, keeps the rest")
+def test_retention_keep_and_delete_rules(opts):
+    from mojo.apps.incident.models import Incident
+    from mojo.apps.incident.services import mojosec_retention
+
+    _clear()
+    orphan = _event(60)
+    deleted = [orphan.pk]
+    for handler_state in ("none", "dispatched", "dead"):
+        event = _event(60, category="mojosec.fim.change")
+        _receipt(opts, event, handler_state=handler_state)
+        deleted.append(event.pk)
+
+    incident = Incident.objects.create(category=TITLE, scope="mojosec", title="held")
+    kept = {"incident": _event(60, incident=incident).pk}
+    for name, publish_state, handler_state in (
+            ("publish_pending", "pending", "none"),
+            ("publish_dead", "dead", "none"),
+            ("handler_pending", "published", "pending"),
+            ("handler_queued", "published", "queued"),
+            ("handler_failed", "published", "failed")):
+        event = _event(60)
+        _receipt(opts, event, publish_state=publish_state, handler_state=handler_state)
+        kept[name] = event.pk
+    kept["case_promotion"] = _event(60, model_name="mojosec_case").pk
+    kept["other_scope"] = _event(60, scope="global").pk
+    kept["other_model"] = _event(60, model_name="other_sensor").pk
+    kept["recent"] = _event(10).pk
+
+    count = mojosec_retention.prune_projected_events(now=_now())
+
+    th.assert_true(count >= len(deleted), f"deleted {count}, expected at least {len(deleted)}")
+    th.assert_eq(_remaining(deleted), set(), "an aged finished or orphaned Event survived")
+    survivors = _remaining(kept.values())
+    missing = sorted(name for name, pk in kept.items() if pk not in survivors)
+    th.assert_eq(missing, [], "retention deleted an Event it must keep")
+    _clear()
+
+
+@th.django_unit_test("dry run deletes nothing and reports counts, range and kept reasons")
+def test_retention_dry_run_reports_without_deleting(opts):
+    from mojo.apps.incident.models import Incident
+
+    _clear()
+    # Older than any other row in this package, so the window holds only these.
+    probes = [_event(500).pk for unused in range(3)]
+    fim = _event(500, category="mojosec.fim.change").pk
+    incident = Incident.objects.create(category=TITLE, scope="mojosec", title="held")
+    held = _event(500, incident=incident).pk
+    pending = _event(500)
+    _receipt(opts, pending, publish_state="pending")
+
+    result = _dry_run(older_than_days=400)
+
+    th.assert_eq((result["schema"], result["version"], result["mode"]),
+                 ("mojosec.event-prune", 1, "dry-run"), "wrong report header")
+    th.assert_eq(result["would_delete"], 4, "would_delete is wrong")
+    th.assert_eq(result["by_category"],
+                 {"mojosec.web.probe": 3, "mojosec.fim.change": 1},
+                 "per-category counts are wrong")
+    th.assert_eq(result["kept"], {"has_incident": 1, "receipt_not_finished": 1},
+                 "kept counts by reason are wrong")
+    th.assert_eq((result["range"]["first_id"], result["range"]["last_id"]),
+                 (min(probes + [fim]), max(probes + [fim])), "id range is wrong")
+    th.assert_true(result["range"]["first_created"] is not None, "date range missing")
+    th.assert_eq(len(_remaining(probes + [fim, held, pending.pk])), 6,
+                 "a dry run deleted rows")
+    _clear()
+
+
+@th.django_unit_test("apply needs --max-events and the age floor is seven days")
+def test_retention_command_refusals(opts):
+    with th.assert_raises(CommandError):
+        call_command("prune_mojosec_events", apply=True, stdout=io.StringIO())
+    with th.assert_raises(CommandError):
+        call_command("prune_mojosec_events", older_than_days=6, stdout=io.StringIO())
+    with th.assert_raises(CommandError):
+        call_command("prune_mojosec_events", apply=True, max_events=0,
+                     stdout=io.StringIO())
+    result = _dry_run(older_than_days=7)
+    th.assert_eq(result["older_than_days"], 7, "seven days was refused")
+    th.assert_eq(_dry_run()["older_than_days"], 45,
+                 "the default is not the receipt retention")
+
+
+@th.django_unit_test("apply deletes at most --max-events")
+def test_retention_apply_honours_max_events(opts):
+    _clear()
+    ids = [_event(500).pk for unused in range(5)]
+
+    output = io.StringIO()
+    call_command("prune_mojosec_events", older_than_days=400, apply=True,
+                 max_events=3, stdout=output)
+    result = json.loads(output.getvalue().strip())
+
+    th.assert_eq((result["mode"], result["deleted"]), ("apply", 3), "apply ignored the ceiling")
+    th.assert_eq(len(_remaining(ids)), 2, "apply deleted past --max-events")
+    _clear()
+
+
+@th.django_unit_test("the job stops at its batch ceiling and logs that rows remain")
+def test_retention_batch_ceiling(opts):
+    from mojo.apps.incident.services import mojosec_retention
+
+    _clear()
+    ids = [_event(500).pk for unused in range(5)]
+    job = _Job()
+
+    count = mojosec_retention.prune_projected_events(
+        job=job, days=400, batch=2, max_batches=2)
+
+    th.assert_eq(count, 4, "the batch ceiling was not applied")
+    th.assert_eq(len(_remaining(ids)), 1, "wrong rows remain after the ceiling")
+    th.assert_true(job.logs and "more remain" in job.logs[-1],
+                   f"the job log did not say rows remain: {job.logs}")
+    _clear()
+
+
+@th.django_unit_test("sixty days at the production mix leave only the retention window")
+def test_retention_sixty_day_scaled_mix(opts):
+    from mojo.apps.incident.models import Event, MojoSecReceipt
+    from mojo.apps.incident.services import mojosec, mojosec_retention
+
+    _clear()
+    now = _now()
+    # August 2026: 55,638 of 55,815 receipts were web.probe or fim.change.
+    # Ten rows a day, one in ten days an ssh login.
+    rows = []
+    for day in range(60):
+        for slot in range(10):
+            if slot == 0 and day % 10 == 0:
+                category = "mojosec.auth.ssh_login"
+            else:
+                category = ("mojosec.web.probe", "mojosec.fim.change")[slot % 2]
+            rows.append((day, Event(
+                scope="mojosec", category=category, level=8,
+                title=f"{TITLE} {category}", model_name="mojosec_sensor",
+                metadata={"mojosec": {"sensor_id": SENSOR}})))
+    events = Event.objects.bulk_create([event for unused, event in rows])
+    receipts = []
+    for (day, unused), event in zip(rows, events):
+        created = now - datetime.timedelta(days=day, hours=12)
+        Event.objects.filter(pk=event.pk).update(created=created)
+        receipts.append(MojoSecReceipt(
+            api_key_id=opts.retention_key_id, event=event, sensor_id=SENSOR,
+            wire_event_id=f"retention-{event.pk}", payload_digest="c" * 64,
+            publish_state="published", handler_state="none", published_at=created,
+            replay_features={"event": {"id": f"retention-{event.pk}"}}))
+    MojoSecReceipt.objects.bulk_create(receipts)
+    ids = [event.pk for event in events]
+
+    mojosec.prune_receipts(now=now)
+    orphaned = Event.objects.filter(
+        pk__in=ids, mojosec_receipts__isnull=True).count()
+    th.assert_eq(orphaned, 150, "the receipt prune should leave 150 aged Events without a receipt")
+
+    mojosec_retention.prune_projected_events(now=now)
+
+    cutoff = now - datetime.timedelta(days=45)
+    remaining = Event.objects.filter(pk__in=ids)
+    th.assert_eq(remaining.count(), 450, "more or less than the 45-day window remains")
+    th.assert_eq(remaining.filter(created__lt=cutoff).count(), 0,
+                 "an Event older than the retention remains")
+    th.assert_eq(remaining.filter(mojosec_receipts__isnull=True).count(), 0,
+                 "an Event whose receipt is gone remains")
+    _clear()
