@@ -251,3 +251,95 @@ def test_retention_sixty_day_scaled_mix(opts):
     th.assert_eq(remaining.filter(mojosec_receipts__isnull=True).count(), 0,
                  "an Event whose receipt is gone remains")
     _clear()
+
+
+def _locks_or_writes(sql):
+    return sql.startswith(("UPDATE ", "DELETE ")) or (
+        sql.startswith("SELECT ") and " FOR UPDATE" in sql)
+
+
+@th.django_unit_test("an Incident linked by another connection after the candidate read is kept")
+def test_retention_keeps_event_linked_during_prune(opts):
+    import threading
+    from django.db import connection
+    from mojo.apps.incident.models import Event, Incident
+    from mojo.apps.incident.services import mojosec_retention
+
+    _clear()
+    event = _event(500)
+    incident = Incident.objects.create(category=TITLE, scope="mojosec", title="linked late")
+    state = {}
+
+    def link():
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SET lock_timeout = '2s'")
+            Event.objects.get(pk=event.pk).link_to_incident(
+                Incident.objects.get(pk=incident.pk))
+            state["linked"] = True
+        except Exception as error:
+            state["error"] = repr(error)
+        finally:
+            connection.close()
+
+    def interleave(execute, sql, params, many, context):
+        # The candidate ids are already read. Commit the link on another
+        # connection just before the prune first locks or writes a row.
+        if "linked" not in state and "error" not in state and _locks_or_writes(sql):
+            writer = threading.Thread(target=link)
+            writer.start()
+            writer.join(10)
+        return execute(sql, params, many, context)
+
+    with connection.execute_wrapper(interleave):
+        count = mojosec_retention.prune_projected_events(days=400)
+
+    th.assert_eq(state, {"linked": True}, "the second connection did not commit its link")
+    th.assert_eq(count, 0, "the prune counted the Event linked during it")
+    survivor = Event.objects.filter(pk=event.pk).first()
+    th.assert_true(survivor is not None, "the prune deleted an Event an Incident now holds")
+    th.assert_eq(survivor.incident_id, incident.pk, "the Incident link was lost")
+    _clear()
+
+
+@th.django_unit_test("a row another connection has locked is skipped without waiting")
+def test_retention_skips_locked_row(opts):
+    import threading
+    from django.db import connection, transaction
+    from mojo.apps.incident.models import Event
+    from mojo.apps.incident.services import mojosec_retention
+
+    _clear()
+    locked = _event(500)
+    others = [_event(500).pk for unused in range(2)]
+    holding, release = threading.Event(), threading.Event()
+
+    def hold():
+        try:
+            with transaction.atomic():
+                list(Event.objects.select_for_update().filter(pk=locked.pk))
+                holding.set()
+                release.wait(20)
+        finally:
+            connection.close()
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    try:
+        th.assert_true(holding.wait(10), "the second connection did not lock the row")
+        with connection.cursor() as cursor:
+            # A prune that waits on the lock fails here instead of hanging.
+            cursor.execute("SET lock_timeout = '3s'")
+        try:
+            count = mojosec_retention.prune_projected_events(days=400)
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute("RESET lock_timeout")
+    finally:
+        release.set()
+        holder.join(20)
+
+    th.assert_eq(count, 2, "the prune did not delete exactly the unlocked rows")
+    th.assert_eq(_remaining(others), set(), "an unlocked aged row survived")
+    th.assert_eq(_remaining([locked.pk]), {locked.pk}, "the locked row was deleted")
+    _clear()

@@ -103,9 +103,14 @@ def prune_projected_events(job=None, now=None, batch=1000, max_batches=100,
                            days=None, limit=None):
     """Delete aged per-receipt Events in bounded batches; return the count.
 
-    Walks ids upward so a kept prefix is not re-read on every batch, and
-    re-applies the selector to each batch inside its own transaction.
-    ``limit`` caps the total deleted (the command's ``--max-events``).
+    Walks ids upward so a kept prefix is not re-read on every batch. Each
+    batch, in its own transaction, locks its rows with the selector
+    (``FOR UPDATE SKIP LOCKED``) and deletes only the rows it locked. The
+    lock re-checks the selector against the newest row version, so an
+    Incident linked after the ids were read keeps its Event; a row another
+    transaction holds is skipped until the next run, so the job never waits
+    on a writer. ``limit`` caps the total deleted (the command's
+    ``--max-events``).
     """
     from mojo.apps.incident.models import Event
 
@@ -124,8 +129,11 @@ def prune_projected_events(job=None, now=None, batch=1000, max_batches=100,
             break
         last_id = ids[-1]
         with transaction.atomic():
-            unused_total, by_model = projected_events(cutoff).filter(
-                pk__in=ids).delete()
+            locked = list(projected_events(cutoff).filter(pk__in=ids)
+                          .select_for_update(skip_locked=True)
+                          .values_list("pk", flat=True))
+            unused_total, by_model = Event.objects.filter(
+                pk__in=locked).delete()
         deleted += by_model.get(Event._meta.label, 0)
     else:
         capped = True
