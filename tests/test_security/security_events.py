@@ -998,3 +998,167 @@ def test_signin_reaches_the_feed(opts):
     assert_true("127.0.0.1" not in scoped,
                 f"a sign-in that carried no brand context stays in the owner-wide "
                 f"view only: {sorted(scoped)}")
+
+
+# ---------------------------------------------------------------------------
+# #7635: every route behind denies_key_backed_session says whether a per-user
+# API key may use it. A new guarded route fails here until it is classified.
+# ---------------------------------------------------------------------------
+
+# Routes that change how the caller signs in: a per-user key is refused.
+REFUSES_USER_API_KEYS = {
+    "mojo.apps.account.rest.user_api_key.on_user_api_keys",
+    "mojo.apps.account.rest.user_api_key.generate_api_key",
+    "mojo.apps.account.rest.passkeys.on_account_passkey",
+    "mojo.apps.account.rest.passkeys.on_passkeys_register_begin",
+    "mojo.apps.account.rest.passkeys.on_passkeys_register_complete",
+    "mojo.apps.account.rest.totp.on_totp_setup",
+    "mojo.apps.account.rest.totp.on_totp_confirm",
+    "mojo.apps.account.rest.totp.on_totp_disable",
+    "mojo.apps.account.rest.totp.on_totp_recovery_codes_get",
+    "mojo.apps.account.rest.totp.on_totp_recovery_codes_regenerate",
+    "mojo.apps.account.rest.user.on_auth_handoff",
+    "mojo.apps.account.rest.user.on_email_change_request",
+    "mojo.apps.account.rest.user.on_email_change_confirm",
+    "mojo.apps.account.rest.user.on_email_change_apply",
+    "mojo.apps.account.rest.user.on_phone_change_request",
+    "mojo.apps.account.rest.user.on_phone_change_confirm",
+    "mojo.apps.account.rest.user.on_username_change",
+    "mojo.apps.account.rest.user.on_sessions_revoke",
+    "mojo.apps.account.rest.user.on_account_security_events_logout",
+    "mojo.apps.account.rest.oauth.on_oauth_connection",
+    "mojo.apps.account.rest.oauth_server.on_approve",
+}
+
+# Operator routes, and the assistant approvals documented as open to a
+# per-user key (docs/web_developer/assistant/approvals.md). Whether a per-user
+# key should be refused here is an open product question (#7635); moving a
+# route means moving its name and adding deny_user_api_keys=True.
+ADMITS_USER_API_KEYS = {
+    "mojo.apps.account.rest.admin_assistant.on_admin_llm_safety",
+    "mojo.apps.account.rest.admin_assistant.on_admin_assistant",
+    "mojo.apps.account.rest.admin_assistant.on_admin_assistant_mutate",
+    "mojo.apps.account.rest.admin_fleet.on_admin_fleet",
+    "mojo.apps.account.rest.admin_fleet.on_admin_fleet_history",
+    "mojo.apps.account.rest.admin_fleet.on_admin_fleet_operation",
+    "mojo.apps.account.rest.admin_fleet.on_admin_fleet_mutate",
+    "mojo.apps.account.rest.admin_people.on_admin_user_password_reset",
+    "mojo.apps.account.rest.admin_people.on_admin_user_password_temporary",
+    "mojo.apps.account.rest.admin_people.on_admin_permission_bundles",
+    "mojo.apps.account.rest.admin_people.on_admin_permission_bundles_save",
+    "mojo.apps.account.rest.admin_people.on_admin_apikey_action",
+    "mojo.apps.account.rest.admin_platform.on_admin_platform_retry",
+    "mojo.apps.account.rest.admin_platform.on_admin_platform_verify",
+    "mojo.apps.account.rest.admin_platform.on_admin_platform_converge",
+    "mojo.apps.account.rest.admin_platform.on_admin_platform_framework_update",
+    "mojo.apps.account.rest.admin_platform.on_admin_advanced_settings",
+    "mojo.apps.account.rest.admin_portal.on_admin_session",
+    "mojo.apps.account.rest.admin_portal.on_admin_bootstrap",
+    "mojo.apps.account.rest.admin_settings.on_admin_settings",
+    "mojo.apps.account.rest.admin_settings.on_admin_settings_mutate",
+    "mojo.apps.account.rest.admin_signin.on_admin_signin",
+    "mojo.apps.account.rest.admin_signin.on_admin_signin_save",
+    "mojo.apps.account.rest.admin_sms.on_admin_sms_mutate",
+    "mojo.apps.account.rest.system_setup.on_setup_options",
+    "mojo.apps.account.rest.system_setup.on_setup_readiness",
+    "mojo.apps.account.rest.system_setup.on_setup_create",
+    "mojo.apps.account.rest.system_setup.on_setup_detail",
+    "mojo.apps.account.rest.system_setup.on_setup_advance",
+    "mojo.apps.account.rest.system_setup.on_setup_choose",
+    "mojo.apps.account.rest.system_setup.on_setup_cancel",
+    "mojo.apps.assistant.rest.assistant.on_assistant_action",
+    "mojo.apps.assistant.rest.assistant.on_assistant_action_list",
+    "mojo.apps.aws.rest.capacity.on_capacity_apply",
+    "mojo.apps.aws.rest.capacity.on_capacity_plan",
+    "mojo.apps.aws.rest.capacity.on_capacity_plan_apply",
+    "mojo.apps.aws.rest.email_admin.on_email_summary",
+    "mojo.apps.aws.rest.email_admin.on_email_test",
+    "mojo.apps.aws.rest.email_admin.on_email_mailbox_default",
+    "mojo.apps.aws.rest.maintenance.on_maintenance_apply",
+    "mojo.apps.dnsman.rest.purchase.on_registrar_purchase",
+    "mojo.apps.edge.rest.web_app.on_webapp_link_key",
+    "mojo.apps.edge.rest.web_app.on_webapp_key_status",
+    "mojo.apps.edge.rest.web_app.on_webapp_revoke_key",
+    "mojo.apps.edge.rest.web_app.on_webapp_rollback",
+    "mojo.apps.edge.rest.web_app.on_webapp_detach_address",
+    "mojo.apps.edge.rest.web_app.on_webapp_attach_domain",
+    "mojo.apps.edge.rest.web_app.on_webapp_attach_preview",
+    "mojo.apps.edge.rest.web_app.on_webapp_detach_domain",
+    "mojo.apps.edge.rest.web_app.on_webapp_aliases",
+    "mojo.apps.edge.rest.web_app.on_webapp_serving",
+    "mojo.apps.edge.rest.web_app.on_webapp_serving_save",
+    "mojo.apps.edge.rest.web_app.on_webapp_certificate",
+    "mojo.apps.edge.rest.web_app.on_webapp_add_route",
+    "mojo.apps.edge.rest.web_app.on_webapp_remove_route",
+    "mojo.apps.edge.rest.web_app.on_webapp_health",
+    "mojo.apps.edge.rest.webapp_onboarding.on_webapp_onboarding_options",
+    "mojo.apps.edge.rest.webapp_onboarding.on_webapp_onboarding_precheck",
+    "mojo.apps.edge.rest.webapp_onboarding.on_webapp_onboarding_create",
+    "mojo.apps.edge.rest.webapp_onboarding.on_webapp_onboarding_detail",
+    "mojo.apps.edge.rest.webapp_onboarding.on_webapp_onboarding_choose",
+    "mojo.apps.edge.rest.webapp_onboarding.on_webapp_onboarding_cancel",
+    "mojo.apps.edge.rest.webapp_onboarding.on_webapp_onboarding_workflow",
+    "mojo.apps.edge.rest.webapp_onboarding.on_webapp_summary",
+    "mojo.apps.edge.rest.webapp_onboarding.on_webapp_summaries",
+}
+
+
+def _guarded_routes_in_source():
+    """Every `@md.denies_key_backed_session(...)` view in mojo/, read from
+    source so an app missing from this test project's INSTALLED_APPS is still
+    counted. Returns {"module.function": decorator_line}."""
+    import pathlib
+    import re
+    import mojo
+
+    root = pathlib.Path(mojo.__file__).resolve().parent
+    found = {}
+    for path in sorted(root.rglob("*.py")):
+        lines = path.read_text().splitlines()
+        for i, line in enumerate(lines):
+            if not line.startswith("@md.denies_key_backed_session("):
+                continue
+            for later in lines[i + 1:i + 40]:
+                match = re.match(r"def (\w+)\(", later)
+                if match:
+                    module = ".".join(
+                        ("mojo",) + path.relative_to(root).with_suffix("").parts)
+                    found[f"{module}.{match.group(1)}"] = line
+                    break
+    return found
+
+
+@th.django_unit_test("#7635: every guarded route says whether a per-user API key may use it")
+def test_guarded_routes_classified_for_user_api_keys(opts):
+    import importlib
+    from mojo.decorators.auth import SECURITY_REGISTRY
+
+    assert_true(not (REFUSES_USER_API_KEYS & ADMITS_USER_API_KEYS),
+                f"a route is in both lists: "
+                f"{sorted(REFUSES_USER_API_KEYS & ADMITS_USER_API_KEYS)}")
+    found = _guarded_routes_in_source()
+    pinned = REFUSES_USER_API_KEYS | ADMITS_USER_API_KEYS
+    assert_eq(sorted(set(found) - pinned), [],
+              "new routes behind denies_key_backed_session must be added to "
+              "REFUSES_USER_API_KEYS or ADMITS_USER_API_KEYS")
+    assert_eq(sorted(pinned - set(found)), [],
+              "listed routes no longer carry denies_key_backed_session")
+
+    for key, line in found.items():
+        refuses = "deny_user_api_keys=True" in line
+        assert_eq(refuses, key in REFUSES_USER_API_KEYS,
+                  f"{key}: decorator `{line}` disagrees with its pinned list")
+
+    # The source flag and the registered behaviour agree for every own-sign-in
+    # route; the operator routes that are loaded here must not refuse.
+    for module in {key.rsplit(".", 1)[0] for key in REFUSES_USER_API_KEYS}:
+        importlib.import_module(module)
+    for key in REFUSES_USER_API_KEYS:
+        entry = SECURITY_REGISTRY.get(key) or {}
+        assert_true(entry.get("denies_user_api_keys") is True,
+                    f"{key} must register denies_user_api_keys=True: {entry}")
+    for key in ADMITS_USER_API_KEYS:
+        entry = SECURITY_REGISTRY.get(key)
+        if entry is not None:
+            assert_true(entry.get("denies_user_api_keys") is not True,
+                        f"{key} must keep admitting per-user keys: {entry}")
