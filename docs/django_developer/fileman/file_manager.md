@@ -326,7 +326,8 @@ ancestor is covered by the ancestor (which keeps the count under
 CloudFront's 25-behavior quota); a **private manager under a public
 manager's prefix is refused** — whether CloudFront matches the encoded or
 the decoded path decides if the longer signed pattern could be sidestepped,
-and the live proof probes that. A clone keeps its original's visibility.
+and until a live probe settles that the layout is not allowed. A clone keeps
+its original's visibility.
 
 **Links.** `S3StorageBackend.get_url` is the one seam: `expires_in=None`
 is unsigned, otherwise a canned-policy signed URL for
