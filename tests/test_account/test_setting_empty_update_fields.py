@@ -121,6 +121,59 @@ def test_empty_positional_existing_row(opts):
         _assert_untouched(opts, warm, f"positional [], cache {'warm' if warm else 'cold'}")
 
 
+@th.django_unit_test("#7739: positional update_fields with keyword update_fields=None is bound as Django binds it")
+def test_empty_positional_with_keyword_none(opts):
+    import warnings
+    from mojo.apps.account.models import Setting
+
+    forms = (
+        ("list", lambda: []),
+        ("tuple", lambda: ()),
+        ("generator", lambda: (name for name in ())),
+    )
+    with warnings.catch_warnings():
+        # Django 5.2 takes the positional value when the keyword is its
+        # default None (Model._parse_save_params); the mix is under test.
+        warnings.simplefilter("ignore")
+        for warm in (True, False):
+            for name, make in forms:
+                row = _fresh_row(opts, warm)
+                row.set_value("60")
+                row.save(False, False, None, make(), update_fields=None)
+                _assert_untouched(
+                    opts, warm,
+                    f"positional {name} with update_fields=None, cache {'warm' if warm else 'cold'}")
+
+        fresh = Setting(key=NEW_KEY, group=None, is_secret=False)
+        fresh.set_value("60")
+        fresh.save(False, False, None, [], update_fields=None)
+        assert not Setting.objects.filter(key=NEW_KEY).exists(), \
+            "a new row saved with positional [] and update_fields=None must not be inserted"
+        assert _cached(NEW_KEY)[1] is False, \
+            f"a new row saved with positional [] and update_fields=None must not be cached, got {_cached(NEW_KEY)}"
+
+        row = _fresh_row(opts, warm=True)
+        row.set_value("60")
+        try:
+            row.save(False, False, None, [], update_fields=[])
+        except TypeError:
+            pass
+        else:
+            raise AssertionError(
+                "positional and keyword update_fields together must still raise Django's TypeError")
+        _assert_untouched(opts, True, "positional and keyword update_fields together")
+
+        row = _fresh_row(opts, warm=False)
+        row.set_value("64")
+        row.save(False, False, None, (name for name in ["value"]), update_fields=None)
+        assert _stored(opts.row_pk).value == "64" and _cached(KEY) == ("64", True), \
+            f"a non-empty positional generator with update_fields=None must write and publish, " \
+            f"got {_stored(opts.row_pk).value!r} / {_cached(KEY)}"
+        row = _fresh_row(opts, warm=True)
+        row.set_value("75")
+        row.save()
+
+
 @th.django_unit_test("#7739: a draft differing in value, is_secret, key or group changes nothing")
 def test_empty_save_with_any_draft(opts):
     from mojo.apps.account.models import Group
