@@ -200,7 +200,7 @@ One run at a time owns a checkout's `testproject/var`. The run lock is a kernel 
 | `not_completed` | The run did not finish. **It may have partly run.** |
 | `bad_arguments` | An argument or `--config` error. |
 | `isolation_policy` | The isolation policy refused the run. |
-| `runner_import` | The launcher could not import `testit.runner`, for example a missing dependency. |
+| `runner_import` | The launcher could not import `testit.runner`, for example a missing dependency. Every launch records it, `--help` included, because without the runner nothing can parse the arguments. |
 | `django_setup` | `django.setup()` failed in the launcher. |
 | `redis_index_claimed` | Another checkout owns this Redis index. |
 | `pubsub_prefix` | The testproject's `REDIS_PUBSUB_PREFIX` is missing or stale. |

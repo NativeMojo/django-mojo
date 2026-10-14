@@ -36,9 +36,9 @@ from mojo.helpers import paths
 paths.configure_paths(str(TESTPROJECT / "config" / "settings" / "__init__.py"), 1)
 
 # The run lock comes before anything that can exit or reset test state (item
-# #8052), including the runner import, which pulls in third-party packages. It
-# marks var/test_failures.json "not completed" until this run replaces it, so
-# no exit below can leave an older report looking current. A launch that
+# #8052), including the runner import, which pulls in third-party packages.
+# Every exit below writes a refusal or claim_run's "not completed" marker, so
+# none can leave an older report looking current. A launch that
 # cannot get the lock exits here having touched nothing — before this, it
 # flushed the live run's database and Redis first.
 #
@@ -57,27 +57,6 @@ def _load_runlock():
     return module
 
 
-# Launches that run no tests: they take the lock but write no marker. argparse
-# accepts an abbreviation, so a prefix of 3+ characters counts. A prefix that
-# is ambiguous for argparse (--h: --help/--host) is refused by claim_run with
-# bad_arguments, which writes its own record, so treating it as a non-run here
-# loses nothing. --list-tiers is --list-extras' alias.
-_NON_RUN_OPTIONS = ("--help", "--init", "--list-extras", "--list-tiers")
-
-
-def _is_non_run(argv):
-    for arg in argv:
-        if arg == "--":
-            break
-        if arg == "-h":
-            return True
-        name = arg.split("=", 1)[0]
-        if name.startswith("--") and len(name) >= 3 and any(
-                opt.startswith(name) for opt in _NON_RUN_OPTIONS):
-            return True
-    return False
-
-
 def _refused_start(err, message):
     """A refused start never exits 0: print the cause, then re-raise anything
     but a successful SystemExit, which becomes exit 1."""
@@ -92,18 +71,16 @@ _launch_claim, _holder = runlock.acquire(paths.VAR_ROOT)
 if _launch_claim is None:
     print(runlock.holder_message(_holder, runlock.lock_path(paths.VAR_ROOT)))
     sys.exit(1)
-_RUN_LAUNCH = not _is_non_run(sys.argv[1:])
-if _RUN_LAUNCH:
-    runlock.mark_pending(_launch_claim)
 
+# Only the runner's parser can say what argv asks for (help, --init, a run),
+# so nothing classifies it before this import. If the import fails, every
+# launch, --help included, records runner_import: no older report survives
+# a launch that could not even start (#8052 review 103952).
 try:
     from testit import runner
 except (Exception, SystemExit) as err:
     _message = f"  The launcher could not import the test runner: {err!r}"
-    if _RUN_LAUNCH:
-        runlock.refuse(_launch_claim, "runner_import", _message)
-    else:
-        runlock.release(_launch_claim)
+    runlock.refuse(_launch_claim, "runner_import", _message)
     _refused_start(err, _message)
 
 # Reuses the claim above. None means --init / --list-extras: not a test run,
