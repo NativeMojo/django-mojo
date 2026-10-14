@@ -2259,7 +2259,15 @@ class MojoModel:
             return
         if isinstance(field_value, dict):
             # we want to check if we have an existing field and if so we will update it after security
-            related_instance = getattr(self, field.name)
+            try:
+                related_instance = getattr(self, field.name)
+            except ObjectDoesNotExist:
+                # A reverse one-to-one with no row raises rather than returning
+                # None. Refuse with a 400 naming the field; nothing is saved
+                # (item #8184). Any other missing-object error is unchanged.
+                if isinstance(field, dm.OneToOneRel):
+                    raise me.ValueException(f"{field.name} has no record to update")
+                raise
             if related_instance is None:
                 # skip None fields for now
                 # FUTURE look at creating a new instance
