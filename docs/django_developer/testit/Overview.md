@@ -676,6 +676,7 @@ def test_admin_can_login(opts):
 - Tests run in definition order; keep related assertions grouped.
 - A raising `setup_` function stops its file. The file's later setup functions and every test body do not run. The setup error is one failed record with its cause, and each of the file's tests is reported as skipped with kind `not_run` and the same cause, never as one failure per test. The run fails with the reason `setup_error`.
 - A file whose tests are all outside the selected tier runs no setup; its tests are counted as tier skips.
+- A file with no tests of its own (a shared-setup file such as `1_setup.py`) runs its setup whenever its package runs, whatever the tier. A setup error there is reported as `setup_error`, and setup alone is never counted as an executed test.
 
 > **Collection is by function-name PREFIX, not by decorator, and there is no
 > teardown phase.** The runner collects `setup_*` for the setup phase and

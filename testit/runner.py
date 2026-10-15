@@ -1201,12 +1201,13 @@ def run_module_tests_by_name(opts, module_name, test_name, expected_root=None):
             "import failed or resolved to a shadowing package (see output above)")
         return
     gate = _tier_gate(opts, module)
-    if gate is not None and not any(
-            gate(func) is None
-            for func_name, func in inspect.getmembers(module, inspect.isfunction)
-            if func_name.startswith("test_")):
+    tests = [func for func_name, func in inspect.getmembers(module, inspect.isfunction)
+             if func_name.startswith("test_")]
+    if gate is not None and tests and not any(gate(func) is None for func in tests):
         # Nothing in this file is in the selected tier: record its tier skips
-        # and pay no setup for them (item #4761).
+        # and pay no setup for them (item #4761). A file with no tests is a
+        # shared-setup file serving later files, so it always runs its setup
+        # (item #8300).
         run_module_tests(opts, module, test_name, module_name)
         return
     try:
