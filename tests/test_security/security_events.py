@@ -1112,15 +1112,29 @@ def _guarded_routes_in_text(source, module):
     Returns {"module.function": refuses_user_api_keys}."""
     import ast
 
+    tree = ast.parse(source)
+    # The local names the decorator is bound to in this module: its own name,
+    # plus any `from ... import denies_key_backed_session as <name>`. A module
+    # alias (`import ... as x`, then `@x.denies_key_backed_session`) keeps the
+    # attribute name, so it needs no entry here.
+    guard_names = {"denies_key_backed_session"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "denies_key_backed_session" and alias.asname:
+                    guard_names.add(alias.asname)
     found = {}
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for decorator in node.decorator_list:
             call = decorator if isinstance(decorator, ast.Call) else None
             target = call.func if call else decorator
-            name = getattr(target, "attr", None) or getattr(target, "id", None)
-            if name != "denies_key_backed_session":
+            if isinstance(target, ast.Attribute):
+                guarded = target.attr == "denies_key_backed_session"
+            else:
+                guarded = getattr(target, "id", None) in guard_names
+            if not guarded:
                 continue
             found[f"{module}.{node.name}"] = any(
                 keyword.arg == "deny_user_api_keys"
