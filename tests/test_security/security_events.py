@@ -1112,15 +1112,29 @@ def _guarded_routes_in_text(source, module):
     Returns {"module.function": refuses_user_api_keys}."""
     import ast
 
+    tree = ast.parse(source)
+    # The local names the decorator is bound to in this module: its own name,
+    # plus any `from ... import denies_key_backed_session as <name>`. A module
+    # alias (`import ... as x`, then `@x.denies_key_backed_session`) keeps the
+    # attribute name, so it needs no entry here.
+    guard_names = {"denies_key_backed_session"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "denies_key_backed_session" and alias.asname:
+                    guard_names.add(alias.asname)
     found = {}
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for decorator in node.decorator_list:
             call = decorator if isinstance(decorator, ast.Call) else None
             target = call.func if call else decorator
-            name = getattr(target, "attr", None) or getattr(target, "id", None)
-            if name != "denies_key_backed_session":
+            if isinstance(target, ast.Attribute):
+                guarded = target.attr == "denies_key_backed_session"
+            else:
+                guarded = getattr(target, "id", None) in guard_names
+            if not guarded:
                 continue
             found[f"{module}.{node.name}"] = any(
                 keyword.arg == "deny_user_api_keys"
@@ -1152,6 +1166,7 @@ def test_guarded_route_scanner_reads_any_spelling(opts):
         "from mojo import decorators as md\n"
         "from mojo.decorators import auth\n"
         "from mojo.decorators.auth import denies_key_backed_session\n"
+        "from mojo.decorators.auth import denies_key_backed_session as guard\n"
         "@md.denies_key_backed_session ()\n"
         "def spaced(request): pass\n"
         "@md.denies_key_backed_session(\n"
@@ -1162,11 +1177,13 @@ def test_guarded_route_scanner_reads_any_spelling(opts):
         "def aliased(request): pass\n"
         "@denies_key_backed_session(deny_user_api_keys=True)\n"
         "def bare(request): pass\n"
+        "@guard(deny_user_api_keys=True)\n"
+        "def renamed(request): pass\n"
         "@md.requires_auth()\n"
         "def unguarded(request): pass\n")
     assert_eq(_guarded_routes_in_text(source, "m"), {
         "m.spaced": False, "m.multiline": True, "m.aliased": False,
-        "m.bare": True},
+        "m.bare": True, "m.renamed": True},
         "the scanner must find the decorator however it is written, and read "
         "deny_user_api_keys from its arguments")
 
