@@ -1006,6 +1006,37 @@ def test_cors_sync_copies_live_default(opts):
             for behavior in cfg["CacheBehaviors"]["Items"]:
                 assert_eq(behavior.get("ResponseHeadersPolicyId"), POLICY_X,
                           f"{behavior['PathPattern']} copies the live default's policy, not {policy!r}")
+        # The normal path: no policy seam, the provisioner the save hook
+        # builds itself. The setting must not be read at all.
+        import sys
+        from mojo.apps.fileman.services import cdn
+        reads = []
+
+        def profile(frame, event, arg):
+            if event == "call" and frame.f_code is cdn.response_headers_policy_id.__code__:
+                reads.append(frame.f_back.f_code.co_name)
+
+        fm = _fresh(opts.public)
+        fm._cdn_provision_kwargs = _seams(aws)
+        fm.is_public = False
+        previous = sys.getprofile()
+        sys.setprofile(profile)
+        try:
+            fm.on_rest_pre_save({"is_public": True}, False)
+        finally:
+            sys.setprofile(previous)
+        assert_eq(reads, [], "a visibility save must never read FILEMAN_CDN_RESPONSE_HEADERS_POLICY")
+        cfg = aws.distributions[row.distribution_id]["DistributionConfig"]
+        for behavior in cfg["CacheBehaviors"]["Items"]:
+            assert_eq(behavior.get("ResponseHeadersPolicyId"), POLICY_X,
+                      f"{behavior['PathPattern']} copies the live default's policy on the normal path")
+        # enable and check do read it, once, when they first need it.
+        sys.setprofile(profile)
+        try:
+            _provisioner(_fresh(opts.public), aws, apply=False).run()
+        finally:
+            sys.setprofile(previous)
+        assert_eq(len(reads), 1, f"check reads the setting once: {reads}")
     finally:
         FileManager.objects.filter(pk__in=[opts.public, opts.optout]).update(is_public=True)
 

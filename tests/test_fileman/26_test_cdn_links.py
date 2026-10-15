@@ -453,3 +453,31 @@ def test_root_manager_links(opts):
         _verify_signed(priv.backend.get_url("x/b.mp4", 3600), f"https://{CDN_HOST}/x/b.mp4")
     finally:
         FileManager.objects.filter(pk__in=created).delete()
+
+
+@th.tier("core")
+@th.django_unit_test("CDN: a root public manager audited private uses signed CDN links once reloaded")
+def test_root_manager_audit_then_reload(opts):
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.fileman.backends.s3 import S3StorageBackend
+
+    class _PrivateAudit:
+        """The S3 audit's answer behind Block Public Access, with no AWS."""
+        def check_public_access_for_prefix(self, file_path=None):
+            return False, ["Block Public Access"], {"status": "private", "method": "policy"}
+
+    fm = FileManager(name=f"{PREFIX}rootaudit", backend_type="s3", backend_url=f"s3://{BUCKET}",
+                     is_active=True, is_default=False, is_public=True)
+    fm.save()
+    try:
+        fm._backend = _PrivateAudit()
+        assert_true(not fm.uses_cdn, "a public root manager starts on S3 links")
+        assert_eq(fm.audit_is_public(force=True, persist=True), False, "the audit finds it private")
+        assert_true(not fm.uses_cdn, "the instance that ran the audit keeps its cached S3 resolution")
+        fresh = FileManager.objects.get(pk=fm.pk)
+        assert_true(not fresh.is_public, "the audit persisted is_public = False")
+        assert_true(fresh.uses_cdn, "reloaded, a private root manager delivers through the CDN")
+        fresh._backend = S3StorageBackend(fresh, cdn_signer=_signer())
+        _verify_signed(fresh.backend.get_url("x/c.mp4", 3600), f"https://{CDN_HOST}/x/c.mp4")
+    finally:
+        FileManager.objects.filter(pk=fm.pk).delete()

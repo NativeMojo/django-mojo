@@ -333,16 +333,21 @@ class CdnProvisioner:
         self.now = now or timezone.now
         self.session_factory = session_factory
         self.profile = profile
-        # The policy `enable` writes on a distribution fileman provisioned.
-        # The visibility sync never uses it: it copies the live default's.
-        if response_headers_policy is _FROM_SETTING:
-            response_headers_policy = cdn.response_headers_policy_id()
-        self.response_headers_policy = response_headers_policy or None
+        # The policy `enable` writes on a distribution fileman provisioned,
+        # read from the setting only when `enable`/`check` first asks for it.
+        # The visibility sync never asks: it copies the live default's.
+        self._response_headers_policy = response_headers_policy
         self.caller = ProviderCaller(logger)
         self.findings = []
         self.actions = []
         self.observed = {}
         self.blocked = set()
+
+    @property
+    def response_headers_policy(self):
+        if self._response_headers_policy is _FROM_SETTING:
+            self._response_headers_policy = cdn.response_headers_policy_id()
+        return self._response_headers_policy or None
 
     # --- plumbing ------------------------------------------------------
 
