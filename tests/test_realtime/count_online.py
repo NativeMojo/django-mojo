@@ -8,6 +8,7 @@ keys (user type "t8352") in the checkout's Redis. The checks that need
 end) live in tests/test_realtime_extended_serial/count_online_cluster.py.
 """
 from testit import helpers as th
+from testit.helpers import assert_eq, assert_true
 
 USER_TYPE = "t8352"
 
@@ -56,17 +57,17 @@ def test_count_online_exported(opts):
     import mojo.apps.realtime as realtime
     from mojo.apps.realtime import manager
 
-    assert realtime.count_online is manager.count_online
-    assert realtime.is_online is manager.is_online
+    assert_true(realtime.count_online is manager.count_online, "the package exports the manager's count_online")
+    assert_true(realtime.is_online is manager.is_online, "the package exports the manager's is_online")
 
 
 @th.django_unit_test("count_online: empty input returns 0")
 def test_count_online_empty(opts):
     from mojo.apps.realtime import count_online
 
-    assert count_online(USER_TYPE, []) == 0
-    assert count_online(USER_TYPE, ()) == 0
-    assert count_online(USER_TYPE, iter([])) == 0
+    assert_eq(count_online(USER_TYPE, []), 0, "an empty list counts 0")
+    assert_eq(count_online(USER_TYPE, ()), 0, "an empty tuple counts 0")
+    assert_eq(count_online(USER_TYPE, iter([])), 0, "an empty iterator counts 0")
 
 
 @th.django_unit_test("count_online: chunk_size must be a non-bool int >= 1, checked before empty input")
@@ -105,9 +106,9 @@ def test_count_online_matches_is_online(opts):
         redis.set(_key(8352001), '{"connection_ids": ["c1"]}')
         redis.sadd(_key(8352002), "c2")
         ids = [8352001, 8352002, 8352003]
-        assert count_online(USER_TYPE, ids) == 2
-        assert [is_online(USER_TYPE, uid) for uid in ids] == [True, True, False]
-        assert count_online(USER_TYPE, [8352003]) == 0
+        assert_eq(count_online(USER_TYPE, ids), 2, "one set key and one legacy string key count as 2 online")
+        assert_eq([is_online(USER_TYPE, uid) for uid in ids], [True, True, False], "is_online agrees id by id")
+        assert_eq(count_online(USER_TYPE, [8352003]), 0, "an absent id counts 0")
     finally:
         _clear(8352001, 8352002, 8352003)
 
@@ -134,14 +135,14 @@ def test_count_existing_chunks(opts):
     def sizes(count, chunk_size):
         client = _RecordingClient()
         keys = [_key(i) for i in range(count)]
-        assert _count_existing(client, keys, chunk_size) == count
+        assert_eq(_count_existing(client, keys, chunk_size), count, "every key counts once")
         return [len(call) for call in client.calls]
 
-    assert sizes(3, 3) == [3]
-    assert sizes(4, 3) == [3, 1]
-    assert sizes(1000, 1000) == [1000]
-    assert sizes(1001, 1000) == [1000, 1]
-    assert sizes(10000, 1000) == [1000] * 10
+    assert_eq(sizes(3, 3), [3], "3 ids at chunk 3 take one call")
+    assert_eq(sizes(4, 3), [3, 1], "4 ids at chunk 3 take calls of 3 and 1")
+    assert_eq(sizes(1000, 1000), [1000], "1,000 ids at chunk 1,000 take one call")
+    assert_eq(sizes(1001, 1000), [1000, 1], "1,001 ids take calls of 1,000 and 1")
+    assert_eq(sizes(10000, 1000), [1000] * 10, "10,000 ids take exactly 10 calls")
 
 
 @th.django_unit_test("count_online: a Redis error in a later chunk propagates, no partial sum")
@@ -157,7 +158,7 @@ def test_count_existing_error_propagates(opts):
         pass
     else:
         raise AssertionError(f"the error must reach the caller, got {result!r}")
-    assert len(client.calls) == 2
+    assert_eq(len(client.calls), 2, "no third chunk after the failing second")
 
 
 @th.django_unit_test("count_online: ceil(unique/chunk) EXISTS calls on the real connection, no KEYS or SCAN")
@@ -172,7 +173,7 @@ def test_count_existing_round_trips_real_redis(opts):
         for uid in online:
             redis.sadd(_key(uid), f"c{uid}")
         client = _RecordingClient(inner=redis)
-        assert _count_existing(client, [_key(uid) for uid in uids], 10) == len(online)
-        assert [len(call) for call in client.calls] == [10, 10, 5]
+        assert_eq(_count_existing(client, [_key(uid) for uid in uids], 10), len(online), "only the seeded online ids count")
+        assert_eq([len(call) for call in client.calls], [10, 10, 5], "25 ids at chunk 10 take calls of 10, 10 and 5")
     finally:
         _clear(*uids)

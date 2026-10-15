@@ -8,6 +8,7 @@ import time
 from unittest import mock
 
 from testit import helpers as th
+from testit.helpers import assert_eq, assert_true
 
 from .pubsub_event_loop import CLUSTER_BUS_OFFSET, MAX_CLUSTER_PORT, _cluster_ports
 
@@ -41,9 +42,9 @@ def test_count_online_empty_touches_no_redis(opts):
     from mojo.apps.realtime import manager
 
     with mock.patch.object(manager, "get_redis", _no_redis):
-        assert manager.count_online(USER_TYPE, []) == 0
-        assert manager.count_online(USER_TYPE, ()) == 0
-        assert manager.count_online(USER_TYPE, iter([])) == 0
+        assert_eq(manager.count_online(USER_TYPE, []), 0, "an empty list counts 0")
+        assert_eq(manager.count_online(USER_TYPE, ()), 0, "an empty tuple counts 0")
+        assert_eq(manager.count_online(USER_TYPE, iter([])), 0, "an empty iterator counts 0")
 
 
 @th.django_unit_test("count_online: one EXISTS per chunk end to end; 10,000 ids take 10 calls (#8352)")
@@ -59,11 +60,11 @@ def test_count_online_calls_per_chunk(opts):
             redis.sadd(_key(uid), f"c{uid}")
         client = _CountingClient(redis)
         with mock.patch.object(manager, "get_redis", lambda: client):
-            assert manager.count_online(USER_TYPE, range(10000)) == 3
-            assert [len(call) for call in client.calls] == [1000] * 10
+            assert_eq(manager.count_online(USER_TYPE, range(10000)), 3, "three of 10,000 ids are online")
+            assert_eq([len(call) for call in client.calls], [1000] * 10, "10,000 ids take 10 EXISTS calls of 1,000")
             client.calls.clear()
             assert manager.count_online(USER_TYPE, [7, "7", 7, "8"]) == 1
-            assert client.calls == [(_key(7), _key(8))]
+            assert_eq(client.calls, [(_key(7), _key(8))], "7, '7' and 7 collapse to one key: one call with keys 7 and 8")
     finally:
         redis.delete(*[_key(uid) for uid in online])
 
@@ -90,7 +91,7 @@ def test_count_online_error_end_to_end(opts):
             pass
         else:
             raise AssertionError(f"the error must reach the caller, got {result!r}")
-    assert client.calls == 2
+    assert_eq(client.calls, 2, "no third chunk after the failing second")
 
 
 @th.django_unit_test("cluster: count_online is exact and costs at most one exchange per node per chunk (#8352)")
@@ -177,7 +178,7 @@ def test_count_online_on_cluster(opts):
         chunks = -(-len(uids) // chunk_size)
         with mock.patch.object(manager, "get_redis", lambda: cluster), \
                 mock.patch.object(NodeCommands, "write", counting_write):
-            assert manager.count_online(USER_TYPE, uids, chunk_size=chunk_size) == len(online)
+            assert_eq(manager.count_online(USER_TYPE, uids, chunk_size=chunk_size), len(online), "the cluster count is exact")
         assert chunks < len(writes) <= chunks * len(ports), (
             f"{chunks} chunks over {len(ports)} nodes must take more than {chunks} and at most "
             f"{chunks * len(ports)} node exchanges, took {len(writes)}")
