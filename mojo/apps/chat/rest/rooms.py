@@ -4,6 +4,7 @@ from mojo.helpers import dates
 from mojo.helpers.request import (
     identity_allows_group, is_override_user_session, restricted_identity)
 from ..models import ChatRoom, ChatMembership
+from ..services import reachability
 from ..services.access import publish_access_change
 from ..services.messages import send_message
 
@@ -146,9 +147,15 @@ def on_chat_room_leave(request):
 
 @md.POST('room/member/add')
 @md.requires_auth()
-@md.requires_params('room_id', 'user_id')
+@md.requires_params('room_id')
 def on_chat_room_add_member(request):
-    """Add a member to a group or channel room. Requires admin role or manage_chat permission."""
+    """Add a member to a group or channel room. Requires admin role or manage_chat permission.
+
+    The target must pass the reachability rule (services/reachability.py),
+    including the fixed rule that a group room only takes members of its
+    group. Room-side answers come first; every target-side refusal is the one
+    404 "User not found", with no row written and no system message.
+    """
     room = ChatRoom.objects.filter(pk=request.DATA.room_id).first()
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
@@ -163,11 +170,15 @@ def on_chat_room_add_member(request):
     # Permission check
     _check_room_admin(request, room)
 
-    from mojo.apps.account.models import User
-    target_user = User.objects.filter(pk=request.DATA.user_id).first()
-    if not target_user:
-        return ChatRoom.rest_error_response(request, 404, error="User not found")
+    target_id = reachability.parse_user_id(request.DATA.get("user_id"))
+    if target_id is None or reachability.is_caller(request, target_id):
+        return reachability.refuse(request)
+    target_user = reachability.reachable_user(request, target_id, room=room)
+    if target_user is None:
+        return reachability.refuse(request)
 
+    # Only after the rule passes: a ban is lifted only by an active admin
+    # adding someone still reachable. There is no other unban path.
     membership, created = ChatMembership.objects.get_or_create(
         room=room, user=target_user,
         defaults={"role": "member", "status": "active"},
@@ -370,9 +381,12 @@ def _check_room_admin(request, room):
     member's untenanted platform-wide dict, which a confined credential must
     never inherit. Authority comes from the room membership or a member grant
     in the room's own group.
+
+    A banned admin's membership carries no authority; a muted admin keeps it
+    (a mute stops content, not room management).
     """
     membership = ChatMembership.objects.filter(room=room, user=request.user).first()
-    if membership and membership.is_admin:
+    if membership and membership.is_admin and membership.status != "banned":
         return
     check_user = not is_override_user_session(request)
     if room.group and room.group.user_has_permission(request.user, "manage_chat", check_user):
@@ -388,7 +402,7 @@ def _check_room_moderator(request, room):
     Same assumed-member discipline as _check_room_admin.
     """
     membership = ChatMembership.objects.filter(room=room, user=request.user).first()
-    if membership and membership.is_admin:
+    if membership and membership.is_admin and membership.status != "banned":
         return
     check_user = not is_override_user_session(request)
     if room.group and room.group.user_has_permission(

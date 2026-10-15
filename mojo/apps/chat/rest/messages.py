@@ -3,6 +3,7 @@ from mojo import errors as merrors
 from mojo.helpers.request import is_override_user_session
 from .rooms import _deny_cross_tenant_room
 from ..models import ChatRoom, ChatMessage, ChatMembership
+from ..services import reachability
 from ..services.messages import visible_messages
 from ..services.read_state import mark_read
 
@@ -96,7 +97,6 @@ def on_chat_room_flagged(request):
 
 @md.POST('dm')
 @md.requires_auth()
-@md.requires_params('user_id')
 def on_chat_dm(request):
     """
     Get or create a direct message room with the given user.
@@ -108,22 +108,21 @@ def on_chat_dm(request):
     it. Minting a second groupless room instead would strand the conversation:
     the history stays in the old room, `/api/chat/rooms` lists both, and
     neither party learns why the thread went blank.
-    """
-    from mojo.apps.account.models import User
 
+    A NEW room needs the reachability rule (services/reachability.py). Every
+    target-side refusal -- no id, a bad id, the caller's own, a missing,
+    inactive or unreachable user -- is the one 404 "User not found", with no
+    row written, so the answer reveals nothing about which ids exist.
+    """
     # A DM room is groupless by construction, so no confined credential
     # (ApiKey / GroupScopedToken) may open or reach one — the same
     # None-group deny every room-resolving endpoint applies, enforced up front
     # so the create and reuse paths agree.
     _deny_cross_tenant_room(request, None)
 
-    target_user_id = int(request.DATA.user_id)
-    if target_user_id == request.user.pk:
-        return ChatRoom.rest_error_response(request, 400, error="Cannot DM yourself")
-
-    target_user = User.objects.filter(pk=target_user_id).first()
-    if not target_user:
-        return ChatRoom.rest_error_response(request, 404, error="User not found")
+    target_id = reachability.parse_user_id(request.DATA.get("user_id"))
+    if target_id is None or reachability.is_caller(request, target_id):
+        return reachability.refuse(request)
 
     # Every direct room the caller is in. The group predicate is applied to
     # each lookup below, never here: the two cases stay separate and explicit
@@ -133,10 +132,14 @@ def on_chat_dm(request):
         room__kind="direct",
     ).values_list("room_id", flat=True)
 
+    # Reuse runs before the rule: both people are already members of the room
+    # it returns, so it lets nobody reach anyone new and answers nothing about
+    # an id the caller does not already share a room with.
+
     # 1. A personal DM the pair already shares. Groupless, like the one the
     # create path below builds.
     existing_room = ChatMembership.objects.filter(
-        user=target_user,
+        user_id=target_id,
         room_id__in=my_rooms,
         room__kind="direct",
         room__group__isnull=True,
@@ -149,7 +152,7 @@ def on_chat_dm(request):
     # Return it rather than forking the conversation into a second room; the
     # response carries `group`, which is how a client tells the two apart.
     scoped_room = ChatMembership.objects.filter(
-        user=target_user,
+        user_id=target_id,
         room_id__in=my_rooms,
         room__kind="direct",
         room__group__isnull=False,
@@ -157,6 +160,10 @@ def on_chat_dm(request):
 
     if scoped_room:
         return scoped_room.room.on_rest_get(request)
+
+    target_user = reachability.reachable_user(request, target_id)
+    if target_user is None:
+        return reachability.refuse(request)
 
     # Create new DM room
     room = ChatRoom.objects.create(
