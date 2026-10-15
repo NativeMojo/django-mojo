@@ -80,6 +80,17 @@ def test_bare_credentials_scrubbed(opts):
     assert_true("Key-Pair-Id: [redacted]" in error.provider_message, error.provider_message)
 
 
+@th.unit_test("provider call: Route53 hosted-zone and change ids are scrubbed, CloudFront ids kept")
+def test_route53_ids_scrubbed(opts):
+    message = ("No hosted zone found with ID: Z0123456789ABCDEFGHIJ; change C2682N5HXP0BZ4 pending; "
+               "distribution E1ABCDEFGHIJKL key group 83050000-0000-0000-0000-000000000101")
+    error, lines = _call(_client_error(message, code="NoSuchHostedZone"))
+    for value in ("Z0123456789ABCDEFGHIJ", "C2682N5HXP0BZ4"):
+        assert_true(value not in lines[0], f"{value!r} is scrubbed: {lines[0]}")
+    for value in ("E1ABCDEFGHIJKL", "83050000-0000-0000-0000-000000000101"):
+        assert_true(value in error.provider_message, f"{value!r} stays readable: {error.provider_message}")
+
+
 @th.unit_test("provider call: the message never reaches detail() or safe_error_detail()")
 def test_message_not_in_detail(opts):
     import json

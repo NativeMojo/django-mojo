@@ -39,6 +39,8 @@ _MESSAGE_SCRUBS = (
                 r"Key-Pair-Id|AWSAccessKeyId|SessionToken|Token)(\s*[=:]\s*)[^\s&,;'\"]+", re.I),
      r"\1\2[redacted]"),
     (re.compile(r"\b(?:AKIA|ASIA|AROA|AIDA)[A-Z0-9]{12,}\b"), "[redacted]"),
+    # Route53 hosted-zone and change ids: dnsman's ACME federation never logs them.
+    (re.compile(r"\b[ZC][A-Z0-9]{9,31}\b"), "[redacted]"),
     (re.compile(r"-----BEGIN [A-Z ]+-----.*?(?:-----END [A-Z ]+-----|$)", re.S), "[redacted]"),
     (re.compile(r"[A-Za-z0-9+/_=-]{40,}"), "[redacted]"),
 )
