@@ -52,7 +52,12 @@ bounded domain fields such as account, region, ARN, or candidate count. A
 denied fix step records its IAM action in the bounded operation log; other
 ambiguous provider failures remain reconciling. Raw provider messages,
 credentials, exception chains, and request parameters are never retained in
-UI, JSON, durable state, or application logs.
+UI, JSON or durable state. The one exception is the operator log: when a call
+through `ProviderCaller` fails, its warning line carries AWS's message as
+`provider_message`, scrubbed first (URL query strings, signatures,
+credentials, tokens, access-key ids, PEM blocks, Route53 hosted-zone and
+change ids and opaque strings of 40 or more characters removed; one line, at
+most 256 characters). `ProviderCallError.detail()` never carries it.
 
 This portal integration does not change the `manage.py aws-check` flags,
 section names, JSON schema, or exit codes below. The command and portal share
