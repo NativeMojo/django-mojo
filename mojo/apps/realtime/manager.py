@@ -138,6 +138,45 @@ def is_online(user_type, user_id):
     return redis_client.exists(key) > 0
 
 
+def count_online(user_type, user_ids, chunk_size=1000):
+    """
+    Count how many of the given users are currently online.
+
+    Each id counts once: ids are compared as text, so 5 and "5" are one user.
+    A user counts as online exactly when is_online would say so. The count is
+    exact (no cache, cap or estimate) and costs one multi-key EXISTS per
+    chunk_size ids on a single Redis node. Each chunk is read at its own
+    moment; the total is not atomic across chunks. Redis errors are raised,
+    never turned into a partial or zero count.
+
+    Args:
+        user_type: Type of user (e.g., "user", "customer")
+        user_ids: Iterable of user IDs (a bare str or bytes is refused)
+        chunk_size: Most keys sent in one EXISTS command (int >= 1)
+
+    Returns:
+        int: Number of the given users with active connections
+    """
+    if not isinstance(chunk_size, int) or isinstance(chunk_size, bool) or chunk_size < 1:
+        raise ValueError(f"chunk_size must be an int >= 1, got {chunk_size!r}")
+    if isinstance(user_ids, (str, bytes)):
+        raise TypeError("user_ids must be an iterable of ids, not a single str or bytes")
+    ids = list(dict.fromkeys(str(user_id) for user_id in user_ids))
+    if not ids:
+        return 0
+    keys = [f"realtime:online:{user_type}:{user_id}" for user_id in ids]
+    return _count_existing(get_redis(), keys, chunk_size)
+
+
+def _count_existing(redis_client, keys, chunk_size):
+    """Sum EXISTS over keys, one command per chunk_size keys. No error handling:
+    a failed chunk raises and no partial sum is returned."""
+    total = 0
+    for start in range(0, len(keys), chunk_size):
+        total += redis_client.exists(*keys[start:start + chunk_size])
+    return total
+
+
 def get_auth_count(user_type=None):
     """
     Get count of authenticated connections.

@@ -50,6 +50,9 @@ if realtime.is_online("user", user_id):
 else:
     send_email_notification(user_id, data)
 
+# Count how many of a list of users are online (exact; one Redis call per 1,000 ids)
+online_doors = realtime.count_online("door", door_ids)
+
 # Publish to topic subscribers
 realtime.publish_topic("chat:room1", {
     "type": "message",
@@ -286,6 +289,25 @@ ws.onmessage = (event) => {
 ### Status Functions
 
 - `is_online(user_type, user_id)` - Check if user is online
+- `count_online(user_type, user_ids, chunk_size=1000)` - Count how many of `user_ids` are online.
+  Ids are compared as text and de-duplicated, so `5` and `"5"` count once. Each id
+  counts exactly when `is_online` would say it is online (set or legacy string
+  presence key). Empty input returns 0 without touching Redis. `chunk_size` must be
+  an int of at least 1 (`ValueError` otherwise); a bare `str` or `bytes` as
+  `user_ids` raises `TypeError`. Each chunk is read at its own moment: the total is
+  not atomic across chunks. Redis errors are raised, never returned as a partial or
+  zero count. No KEYS or SCAN, no cache, no cap.
+
+  **Cost.** On a single Redis node, one multi-key `EXISTS` per `chunk_size` ids:
+  at most `ceil(unique ids / chunk_size)` round trips (10 for 10,000 ids). On a
+  Redis Cluster (`REDIS_CLUSTER=True`) the count is still exact, but redis-py
+  splits each chunk by hash slot and sends one pipelined exchange per node the
+  chunk touches, so a chunk costs up to one round trip per node, plus retries
+  while slots move. With replica reads on (the default), a cluster count can trail
+  a just-connected or just-disconnected user by replication lag, as `is_online`
+  can. A cluster-mode server must run with `REDIS_CLUSTER=True`: a plain client
+  sends one `EXISTS` across slots and the server refuses it with `CROSSSLOT`,
+  which `count_online` raises.
 - `get_auth_count(user_type=None)` - Get count of authenticated connections
 - `get_user_connections(user_type, user_id)` - Get connection IDs for user
 - `get_online_users(user_type=None)` - Get list of online users
