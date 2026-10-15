@@ -137,7 +137,12 @@ production callers omit it and the realtime publisher is used.
 {"type": "chat_edit", "message_id": 42, "body": "updated text"}
 ```
 
-- Author or room admin can edit
+- Author or room admin can edit, and either needs an **active** membership in
+  the room — the same bar as send. A removed, banned or muted member (author
+  or admin) gets `{"type": "error", "error": "Cannot edit this message"}`, the
+  one refusal for every case, checked before rules, save and publish. No
+  global or group permission edits without a membership row; staff edit
+  through the REST message save
 - Re-runs room rules and `check_moderation_scored(body, group=msg.room.group)`
   on the new body, so the room group's live hide level and allowed domains
   apply (the message is loaded with `select_related("room", "room__group")`)

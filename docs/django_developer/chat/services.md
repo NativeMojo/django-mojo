@@ -305,12 +305,47 @@ bounds it. `publisher` is a test seam.
 (`mojo.apps.realtime.access.ACCESS_CHANGE_FRAMES`). The REST leave, member
 remove, member ban and room delete paths call it.
 
+## Reachability — who a caller may put in a chat
+
+`mojo.apps.chat.services.reachability` holds the one rule `POST dm` (a new
+room) and `POST room/member/add` ask. The rule, the fixed group-room clause
+and the uniform refusal are described in
+[Permissions](permissions.md#who-a-caller-may-put-in-a-chat-reachability).
+
+```python
+# settings.py -- the settings FILE; a database Setting row is never read
+CHAT_REACHABILITY_HANDLER = "myapp.chat.can_reach"
+
+# myapp/chat.py
+from mojo.apps.chat.services.reachability import default_can_reach
+
+def can_reach(user, target, room):
+    # room is None for a DM. Return True to allow; anything else refuses.
+    if is_blocked(target, user):
+        return False
+    return default_can_reach(user, target, room)
+```
+
+- `reachable_user(request, target_id, room=None)` returns the active `User`
+  or None. Group-room integrity runs after the rule, whichever answered.
+- `refuse(request)` is the one answer: 404 `"User not found"`.
+- `parse_user_id(value)` returns a positive int or None.
+- Ships `default_can_reach`, `allow_all` (reach any active user, the
+  pre-#8345 behaviour) and `deny_all` (no client DMs or adds; server code
+  still creates rooms).
+- Fails closed: an unloadable path, a non-callable or an exception refuses
+  and logs to `chat.log`.
+- Test seams: keyword-only `handler=` (the callable; None means "no hook")
+  and `path=` (a dotted path to load) on `reachable_user`.
+
 ## Settings
 
-All optional, all defaulting to today's behavior.
+All optional. Every one but `CHAT_REACHABILITY_HANDLER` defaults to the
+previous behavior.
 
 | Setting | Default | Purpose |
 |---|---|---|
 | `CHAT_KIND_VALIDATORS` | `{}` | Per-kind payload validators, `{kind: "dotted.path"}` |
 | `CHAT_METADATA_MAX_BYTES` | `4096` | Byte cap on the compact JSON encoding of `metadata` |
 | `CHAT_MESSAGE_DELETED_HANDLER` | `None` | Dotted path to `handler(room_id, message_ids)` |
+| `CHAT_REACHABILITY_HANDLER` | `None` (shared-group rule) | Settings file only. Dotted path to `handler(user, target, room) -> bool` for `dm` and `room/member/add` |

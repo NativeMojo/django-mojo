@@ -31,6 +31,22 @@ All require JWT authentication via `Authorization: Bearer <token>`.
 | GET | `/api/chat/room/members?room_id=X` | List members |
 | GET | `/api/chat/room/online?room_id=X` | Online members (members, or group chat/manage_chat) |
 
+**Creating a room in a group needs you in that group.** To create a room with
+a `group`, you need `chat` or `manage_chat` in that group, else 403. The room's
+owner is always you; a `user` field is ignored.
+
+**Who you can add.** You can add someone you share a group with. A room in a
+group only takes members of that group, whoever is adding. A project can
+change who counts as reachable on the server. A banned admin can no longer add
+or manage members.
+
+**One answer for every "can't add this person".** After the room checks (404
+room not found, 403 not your room or not an admin, 400 a direct room), every
+refusal about the person is 404 `{"error": "User not found"}`: no `user_id`, a
+bad one, your own, an account that does not exist, is inactive, or that you
+cannot reach. Do not tell these apart in your UI; the server deliberately
+doesn't.
+
 ### Messages
 
 | Method | Endpoint | Description |
@@ -72,6 +88,12 @@ group id — the endpoint will not quietly open a second, empty room and strand
 the conversation you already have. `group: null` means a personal DM. Decide
 what to do about a non-null `group` in your UI; there is no flag to force a
 new personal room.
+
+**You can only start a DM with someone you share a group with**, unless the
+app's server says otherwise. A DM you already have always comes back. Every
+refusal — no `user_id`, a bad one, yourself, an account that does not exist,
+is inactive or that you cannot reach — is the same 404
+`{"error": "User not found"}`. A DM to yourself used to be 400.
 
 ### Read State
 
@@ -147,6 +169,10 @@ Response:
 {"type": "chat_edit_ack", "message_id": 42, "edited_at": "...",
  "moderation_decision": "allow", "moderation_reasons": [], "moderation_score": 0}
 ```
+
+You can edit your own messages, or any message as a room admin, only while you
+can send in the room. Once removed, banned or muted you get
+`{"type": "error", "error": "Cannot edit this message"}`.
 
 Replace all three local moderation fields on an accepted edit; a clean score
 clears prior hidden state. Permission and explicit room-rule refusals preserve
