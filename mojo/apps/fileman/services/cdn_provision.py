@@ -48,6 +48,7 @@ TAG_KEY = "mojo:fileman-bucket"
 CACHING_OPTIMIZED_POLICY_ID = "658327ea-f89d-4fab-a63d-7e88639e58f6"
 MAX_KEYS_PER_GROUP = 5
 MAX_BEHAVIORS = 25          # CloudFront's default cache-behavior quota per distribution
+KEY_GROUP_PAGE_LIMIT = 100    # 100 groups a page: far past the default 10-group quota
 
 STEP_PREFLIGHT = "preflight"
 STEP_BUCKET = "bucket"
@@ -1137,7 +1138,9 @@ class CdnProvisioner:
             return True
         known = set()
         marker = None
-        for _ in range(10):
+        seen = set()
+        complete = False
+        for _ in range(KEY_GROUP_PAGE_LIMIT):
             kwargs = {"MaxItems": "100", **({"Marker": marker} if marker else {})}
             page = self._call(STEP_DISTRIBUTION, "cloudfront.list_key_groups", "cloudfront:ListKeyGroups",
                               lambda: cf.list_key_groups(**kwargs))
@@ -1146,9 +1149,21 @@ class CdnProvisioner:
             listing = page.get("KeyGroupList") or {}
             for item in listing.get("Items") or []:
                 known.add((item.get("KeyGroup") or item).get("Id"))
+            if unknown <= known:
+                return True
             marker = listing.get("NextMarker")
-            if not marker or unknown <= known:
+            if not marker:
+                complete = True
                 break
+            if marker in seen:
+                break
+            seen.add(marker)
+        if not complete:
+            # A listing cut short (page limit, or a marker that repeats) has
+            # not shown the group is absent: send the update and let
+            # CloudFront judge. Nothing is saved before it answers, and a
+            # refusal logs AWS's message.
+            return True
         missing = sorted(unknown - known)
         if missing:
             self._add(STEP_DISTRIBUTION, report.MANUAL, "key_group.mismatch",

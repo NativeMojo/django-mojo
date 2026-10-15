@@ -1270,3 +1270,97 @@ def test_refused_update_logs_message(opts):
     finally:
         aws.update_error = None
         FileManager.objects.filter(pk=opts.public).update(is_public=True)
+
+
+class _KeyGroupPager:
+    """A list_key_groups answer split into pages, each listing one group.
+    `repeat_at` makes that page hand back an earlier marker."""
+
+    def __init__(self, ids, endless=False, repeat_at=None):
+        self.ids = list(ids)
+        self.endless = endless
+        self.repeat_at = repeat_at
+        self.markers = []
+
+    def list_key_groups(self, **kw):
+        self.markers.append(kw.get("Marker"))
+        index = len(self.markers) - 1
+        gid = self.ids[index] if index < len(self.ids) else f"filler-{index}"
+        listing = {"Items": [{"KeyGroup": {"Id": gid}}]}
+        if self.repeat_at is not None and index == self.repeat_at:
+            listing["NextMarker"] = "m0"
+        elif self.endless or index + 1 < len(self.ids):
+            listing["NextMarker"] = f"m{index}"
+        return {"KeyGroupList": listing}
+
+
+def _signed(pattern, *groups):
+    return {"PathPattern": pattern,
+            "TrustedKeyGroups": {"Enabled": True, "Quantity": len(groups), "Items": list(groups)}}
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8346: the key-group check pages to the end and never calls a group absent on a cut listing")
+def test_key_group_check_pagination(opts):
+    _reset(opts)
+    default = {"Enabled": True, "Quantity": 1, "Items": ["live"]}
+    behaviors = [_signed("fileman/a/*", "target")]
+
+    def check(pager):
+        prov = _provisioner(_fresh(opts.public), _FakeAws())
+        ok = prov._signed_behaviors_writable(pager, behaviors, default)
+        return ok, {(f.status, f.code) for f in prov.findings}
+
+    # The group is on page eleven of eleven.
+    pager = _KeyGroupPager([f"g{i}" for i in range(10)] + ["target"])
+    ok, findings = check(pager)
+    assert_true(ok, f"a group on page eleven is found: {findings}")
+    assert_eq(len(pager.markers), 11, "eleven pages read")
+    assert_eq(pager.markers[:3], [None, "m0", "m1"], "each NextMarker is sent back as Marker")
+
+    # A complete listing without the group proves it absent.
+    ok, findings = check(_KeyGroupPager(["g0", "g1", "g2"]))
+    assert_true(not ok and ("MANUAL", "key_group.mismatch") in findings,
+                f"an absent group on a finished listing is refused: {findings}")
+
+    # A listing cut at the page limit has not shown absence: the update goes to CloudFront.
+    from mojo.apps.fileman.services.cdn_provision import KEY_GROUP_PAGE_LIMIT
+    pager = _KeyGroupPager([], endless=True)
+    ok, findings = check(pager)
+    assert_eq(len(pager.markers), KEY_GROUP_PAGE_LIMIT, "paging stops at the limit")
+    assert_true(ok and not findings, f"a cut listing refuses nothing: {findings}")
+
+    # A marker handed back twice ends the listing without a verdict of absence.
+    pager = _KeyGroupPager(["g0", "g1", "g2"], endless=True, repeat_at=2)
+    ok, findings = check(pager)
+    assert_eq(len(pager.markers), 3, f"a repeated marker stops the paging: {pager.markers}")
+    assert_true(ok and not findings, f"a looping listing refuses nothing: {findings}")
+
+    # The default's own group needs no listing.
+    pager = _KeyGroupPager([])
+    prov = _provisioner(_fresh(opts.public), _FakeAws())
+    assert_true(prov._signed_behaviors_writable(pager, [_signed("fileman/a/*", "live")], default),
+                "the live default's group is accepted")
+    assert_eq(pager.markers, [], "no listing for the default's group")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8346: duplicate path patterns and a signed behavior with no key group are refused unsent")
+def test_signed_behavior_shape_guards(opts):
+    _reset(opts)
+    default = {"Enabled": True, "Quantity": 1, "Items": ["live"]}
+    cases = {
+        "duplicate pattern": [_signed("fileman/a/*", "live"), {"PathPattern": "fileman/a/*"}],
+        "empty signed group": [{"PathPattern": "fileman/b/*",
+                                "TrustedKeyGroups": {"Enabled": True, "Quantity": 0, "Items": []}}],
+        "quantity disagrees": [{"PathPattern": "fileman/c/*",
+                                "TrustedKeyGroups": {"Enabled": True, "Quantity": 2, "Items": ["live"]}}],
+    }
+    for name, behaviors in cases.items():
+        pager = _KeyGroupPager([])
+        prov = _provisioner(_fresh(opts.public), _FakeAws())
+        ok = prov._signed_behaviors_writable(pager, behaviors, default)
+        codes = {(f.status, f.code) for f in prov.findings}
+        assert_true(not ok and ("MANUAL", "behaviors.invalid") in codes, f"{name} is refused: {codes}")
+        assert_true("distribution" in prov.blocked, f"{name} blocks the distribution step")
+        assert_eq(pager.markers, [], f"{name} lists no key groups")

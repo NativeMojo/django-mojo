@@ -122,3 +122,61 @@ def test_no_message_and_no_chain(opts):
     assert_true(lines[0].endswith("provider_message='-'"), lines[0])
     error, _ = _call(_client_error())
     assert_true(error.__cause__ is None and error.__suppress_context__, "raised from None")
+
+
+class _Sink:
+    """The stdlib-logger end of a real logit.Logger, built here: records
+    what the wrapper renders, writes nothing."""
+
+    def __init__(self):
+        self.lines = []
+
+    def warning(self, message):
+        self.lines.append(message)
+
+
+def _logged_through_logit(message):
+    from mojo.helpers import logit
+    from mojo.helpers.aws.provider_call import ProviderCallError, ProviderCaller
+    sink = _Sink()
+
+    def boom():
+        raise _client_error(message)
+
+    try:
+        ProviderCaller(logit.Logger("aws_provider_8346", None, sink)).call(
+            "cloudfront.update_distribution", boom, iam_action="cloudfront:UpdateDistribution",
+            mutation=True)
+    except ProviderCallError as error:
+        assert_eq(len(sink.lines), 1, f"one rendered log line: {sink.lines}")
+        return error, sink.lines[0]
+    raise AssertionError("the call must raise ProviderCallError")
+
+
+@th.unit_test("provider call: quoted, JSON and percent-encoded credentials are scrubbed through logit")
+def test_quoted_and_encoded_credentials_scrubbed(opts):
+    import urllib.parse
+    encoded = urllib.parse.quote("synthetic+encoded/token/8346" * 3, safe="")
+    cases = {
+        "single-quoted encoded token": ("Invalid X-Amz-Security-Token='" + encoded + "'", encoded),
+        "double-quoted token with a space": ('Invalid X-Amz-Security-Token="QTOK8346 SECRETPART"',
+                                             "SECRETPART"),
+        "JSON signature": ('{"Signature": "SIGJSON8346SECRET", "Key-Pair-Id": "K2"}',
+                           "SIGJSON8346SECRET"),
+        "quoted signature": ("Signature='SIGQ8346SECRET' rejected", "SIGQ8346SECRET"),
+        "URL userinfo": ("fetch https://alice:PASS8346WORD@origin.example.com/p failed",
+                         "PASS8346WORD"),
+        "bare encoded blob": ("blob " + encoded, encoded),
+        "encoded fragment in a bare token": ("SessionToken=" + encoded[:30] + " rest", encoded[:30]),
+    }
+    for name, (message, secret) in cases.items():
+        error, line = _logged_through_logit(message)
+        assert_true(secret not in line, f"{name}: {secret!r} is scrubbed from the log: {line}")
+        assert_true(secret not in error.provider_message,
+                    f"{name}: {secret!r} is scrubbed from the field: {error.provider_message}")
+    error, line = _logged_through_logit(
+        "The parameter TrustedKeyGroups is invalid for X-Amz-Security-Token='" + encoded + "'")
+    assert_true("The parameter TrustedKeyGroups is invalid" in line,
+                f"the diagnostic text stays readable: {line}")
+    assert_true("X-Amz-Security-Token=[redacted]" in line, f"the field name stays, its value goes: {line}")
+

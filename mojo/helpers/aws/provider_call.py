@@ -35,14 +35,22 @@ _MESSAGE_SCRUBS = (
     # A presigned or signed URL's query string carries the signature,
     # credential scope and session token.
     (re.compile(r"(https?://[^\s?#]+)[?#]\S*", re.I), r"\1?[redacted]"),
+    # URL userinfo (user:password@host).
+    (re.compile(r"(https?://)[^\s/?#@]+@", re.I), r"\1[redacted]@"),
+    # A named credential's value, bare, quoted or JSON-shaped
+    # (Token=v, Token='v', "Token": "v"): a quoted value is cut at its
+    # closing quote, so spaces or encoding inside it don't end the match.
     (re.compile(r"\b(X-Amz-(?:Signature|Credential|Security-Token|Date)|Signature|Policy|"
-                r"Key-Pair-Id|AWSAccessKeyId|SessionToken|Token)(\s*[=:]\s*)[^\s&,;'\"]+", re.I),
+                r"Key-Pair-Id|AWSAccessKeyId|AccessKeyId|SecretAccessKey|SessionToken|Token|"
+                r"Credential|Password|Secret)([\"']?\s*[=:]\s*)"
+                r"(?:\"[^\"]*(?:\"|$)|'[^']*(?:'|$)|[^\s&,;'\"]+)", re.I),
      r"\1\2[redacted]"),
     (re.compile(r"\b(?:AKIA|ASIA|AROA|AIDA)[A-Z0-9]{12,}\b"), "[redacted]"),
     # Route53 hosted-zone and change ids: dnsman's ACME federation never logs them.
     (re.compile(r"\b[ZC][A-Z0-9]{9,31}\b"), "[redacted]"),
     (re.compile(r"-----BEGIN [A-Z ]+-----.*?(?:-----END [A-Z ]+-----|$)", re.S), "[redacted]"),
-    (re.compile(r"[A-Za-z0-9+/_=-]{40,}"), "[redacted]"),
+    # Long opaque blobs, percent-encoded or not.
+    (re.compile(r"(?:[A-Za-z0-9+/_=-]|%[0-9A-Fa-f]{2}){40,}"), "[redacted]"),
 )
 _MUTATION_PREFIXES = (
     "create_", "delete_", "put_", "set_", "subscribe", "tag_", "untag_",
