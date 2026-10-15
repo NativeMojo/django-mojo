@@ -517,6 +517,23 @@ def test_identity_policy_scopes_logs_actions_to_the_project_log_group_prefix(opt
                      f"dropped — an account built by this tool and one built "
                      f"by tofu have to look the same to an auditor")
 
+    th.assert_in("DjangoMojoFilemanCdn", by_sid,
+                 f"fileman's CloudFront delivery runs under the node role, and "
+                 f"the setup statement names no cloudfront action, so the CDN "
+                 f"grant must be its own statement: {sorted(by_sid)}")
+    cdn = by_sid["DjangoMojoFilemanCdn"]
+    for action in ("cloudfront:CreateDistribution", "cloudfront:CreateOriginAccessControl",
+                   "cloudfront:CreateKeyGroup", "cloudfront:CreatePublicKey",
+                   "cloudfront:UpdateKeyGroup", "cloudfront:CreateInvalidation",
+                   "cloudfront:ListTagsForResource", "cloudfront:GetPublicKey"):
+        th.assert_in(action, cdn["Action"],
+                     f"enable_cdn / rotate-key / invalidation cannot run on a "
+                     f"provisioned node without {action}")
+    th.assert_true(all(a.startswith("cloudfront:") for a in cdn["Action"]),
+                   f"the CDN statement grants CloudFront only — the bucket and "
+                   f"key policies it writes are covered by the setup statement: "
+                   f"{cdn['Action']}")
+
 
 @th.django_unit_test("a matching inline policy is left alone rather than rewritten every run")
 def test_identity_policy_comparison_ignores_serialization(opts):
