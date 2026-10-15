@@ -139,9 +139,10 @@ def setup_group_global_guard_keys(opts):
     # A member-level manager of the tenant: no global permission at all.
     _member(top, _mk_user("mgr"), "manage_group", "manage_members")
     # Members who hold a global permission themselves, so a key can act as them.
+    # sec can also save the group as a member, so its posture change reaches the guard.
     sec = _mk_user("sec")
     sec.add_permission("security")
-    _member(top, sec)
+    _member(top, sec, "manage_group")
     verify = _mk_user("verify")
     verify.add_permission("admin_verify")
     _member(top, verify)
