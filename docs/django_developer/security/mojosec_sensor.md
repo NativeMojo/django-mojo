@@ -1045,13 +1045,15 @@ same retention clock. Live pending publication and incomplete handler-outbox
 receipts are never removed by that retention job.
 
 The per-receipt Events (`model_name="mojosec_sensor"`) follow the same
-retention. The daily `prune_mojosec_events` job deletes them once they are
+retention. Once `MOJOSEC_EVENT_PRUNE_ENABLED` is on in the deployment's
+settings file, the daily `prune_mojosec_events` job deletes them once they are
 older than `MOJOSEC_RECEIPT_RETENTION_DAYS`, in bounded batches, after the
 receipt prune has run. An Event that has an Incident, or whose receipt is still
 pending or dead for publication or has an unfinished handler, is kept. An aged
 Event whose receipt is gone is deleted. Case promotion Events are not touched.
-Preview the counts with `manage.py prune_mojosec_events` before the first
-deletion on a database; see
+While the setting is off (the default) the job deletes nothing and logs that
+it is off. Preview the counts with `manage.py prune_mojosec_events` before the
+first deletion on a database; see
 [the security README](README.md#per-receipt-mojosec-event-retention).
 
 ## Human feedback and offline policy evaluation

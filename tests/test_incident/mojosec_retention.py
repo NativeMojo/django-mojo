@@ -172,6 +172,11 @@ def test_retention_command_refusals(opts):
 
 @th.django_unit_test("apply deletes at most --max-events")
 def test_retention_apply_honours_max_events(opts):
+    from mojo.apps.incident.services import mojosec_retention
+
+    # The daily job's switch is off here, so this also proves --apply is not gated.
+    th.assert_true(mojosec_retention.deletion_enabled() is False,
+                   "the test project turns MOJOSEC_EVENT_PRUNE_ENABLED on")
     _clear()
     ids = [_event(500).pk for unused in range(5)]
 
@@ -193,7 +198,7 @@ def test_retention_batch_ceiling(opts):
     ids = [_event(500).pk for unused in range(5)]
     job = _Job()
 
-    count = mojosec_retention.prune_projected_events(
+    count = mojosec_retention._prune_projected_events(
         job=job, days=400, batch=2, max_batches=2)
 
     th.assert_eq(count, 4, "the batch ceiling was not applied")
@@ -201,6 +206,86 @@ def test_retention_batch_ceiling(opts):
     th.assert_true(job.logs and "more remain" in job.logs[-1],
                    f"the job log did not say rows remain: {job.logs}")
     _clear()
+
+
+@th.django_unit_test("the daily job deletes nothing while the switch is off")
+def test_daily_prune_off_by_default_deletes_nothing(opts):
+    from mojo.apps.incident.models import Incident
+    from mojo.apps.incident.services import mojosec_retention
+
+    th.assert_true(mojosec_retention.deletion_enabled() is False,
+                   "MOJOSEC_EVENT_PRUNE_ENABLED is not off by default")
+    _clear()
+    ids = [_event(500).pk for unused in range(3)]
+    ids.append(_event(500, category="mojosec.fim.change").pk)
+    incident = Incident.objects.create(category=TITLE, scope="mojosec", title="held")
+    ids.append(_event(500, incident=incident).pk)
+    job = _Job()
+
+    count = mojosec_retention.daily_prune(job=job, days=400)
+
+    th.assert_eq(count, 0, "the daily job deleted while the switch is off")
+    th.assert_eq(_remaining(ids), set(ids), "rows were deleted while the switch is off")
+    th.assert_true(job.logs and "deleted nothing" in job.logs[-1]
+                   and "prune_mojosec_events" in job.logs[-1],
+                   f"the job log did not say deletion is off: {job.logs}")
+    _clear()
+
+
+@th.django_unit_test("the daily job deletes as before once the switch is on")
+def test_daily_prune_on_deletes_as_before(opts):
+    from mojo.apps.incident.services import mojosec_retention
+
+    _clear()
+    ids = [_event(500).pk for unused in range(3)]
+    job = _Job()
+
+    count = mojosec_retention.daily_prune(job=job, days=400, enabled=True)
+
+    th.assert_eq(count, 3, "the switched-on job did not delete the aged rows")
+    th.assert_eq(_remaining(ids), set(), "aged rows remain with the switch on")
+    th.assert_true(job.logs and job.logs[-1].startswith("Pruned 3 "),
+                   f"the job log changed: {job.logs}")
+    _clear()
+
+
+@th.django_unit_test("a job queued under the old path also obeys the switch")
+def test_old_job_path_obeys_the_switch(opts):
+    from mojo.apps.jobs.job_engine import load_job_function
+
+    old_entry = load_job_function(
+        "mojo.apps.incident.services.mojosec_retention.prune_projected_events")
+
+    _clear()
+    ids = [_event(500).pk for unused in range(3)]
+    job = _Job()
+    count = old_entry(job, days=400)
+    th.assert_eq(count, 0, "a job queued under the old path deleted while the switch is off")
+    th.assert_eq(_remaining(ids), set(ids), "the old job path deleted rows while the switch is off")
+    th.assert_true(job.logs and "deleted nothing" in job.logs[-1],
+                   f"the old job path did not log that deletion is off: {job.logs}")
+
+    job = _Job()
+    count = old_entry(job, days=400, enabled=True)
+    th.assert_eq(count, 3, "the old job path did not delete with the switch on")
+    th.assert_eq(_remaining(ids), set(), "aged rows remain on the old job path with the switch on")
+    th.assert_true(job.logs and job.logs[-1].startswith("Pruned 3 "),
+                   f"the old job path's log changed: {job.logs}")
+    _clear()
+
+
+@th.django_unit_test("the 08:35 cron publishes the gated entry")
+def test_cron_publishes_the_gated_entry(opts):
+    from mojo.apps.incident import cronjobs
+    from mojo.apps.incident.services import mojosec_retention
+    from mojo.apps.jobs.job_engine import load_job_function
+
+    th.assert_eq(cronjobs.MOJOSEC_EVENT_PRUNE_JOB,
+                 "mojo.apps.incident.services.mojosec_retention.daily_prune",
+                 "the cron does not publish the gated entry")
+    th.assert_true(
+        load_job_function(cronjobs.MOJOSEC_EVENT_PRUNE_JOB) is mojosec_retention.daily_prune,
+        "the cron's job path does not load daily_prune")
 
 
 @th.django_unit_test("sixty days at the production mix leave only the retention window")
