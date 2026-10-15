@@ -296,26 +296,36 @@ def test_protected_settings_keys(opts):
             assert not ApiKey.objects.filter(name=name).exists(), \
                 f"SECURITY: a key carrying {perm} exists after the refusal"
 
-        # Keys and a group token acting as a member are refused, even as a superuser.
-        acting = (
-            ("a key acting as a global admin_verify holder", "verify"),
-            ("a key acting as a superuser", "super"),
-        )
-        for what, name in acting:
-            _use_key(opts, _key(opts_group(top), f"acts_as_{name}",
-                                permissions={"manage_group": True},
-                                user=_user(name), override_user=True))
-            _protected_refused(opts, top, what)
+        # A key and a group token acting as a global admin_verify holder are refused.
+        _use_key(opts, _key(opts_group(top), "acts_as_verify",
+                            permissions={"manage_group": True},
+                            user=_user("verify"), override_user=True))
+        _protected_refused(opts, top, "a key acting as a global admin_verify holder")
         opts.client.logout()
-        token = group_token.mint(_user("super"), opts_group(top))
-        _protected_refused(opts, top, "a group token acting as a superuser",
+        token = group_token.mint(_user("verify"), opts_group(top))
+        _protected_refused(opts, top, "a group token for a global admin_verify holder",
                            headers={"Authorization": f"grouptoken {token}"})
+
+        # Neither credential can be set up to act as a superuser today
+        # (validate_acting_user, group_token.can_mint). If one ever did, the
+        # member-acting refusal comes before the superuser pass.
+        from objict import objict
+        group = opts_group(top)
+        for what, ident in (("a key", "api_key"), ("a group token", "group_token")):
+            req = objict(user=_user("super"), api_key=None, group_token=None)
+            req[ident] = objict(override_user=True)
+            assert group._can_edit_protected_json(req) is False, \
+                f"SECURITY: {what} acting as a superuser may write metadata.protected"
+        assert group._can_edit_protected_json(
+            objict(user=_user("super"), api_key=None, group_token=None)) is True, \
+            "a signed-in superuser must still write metadata.protected"
 
         # Staff can still grant it, and a staff-made key still writes (option 1).
         _login(opts, "global_mg")
         name = f"{PREFIX}staff_verify"
         resp = opts.client.post("/api/group/apikey", {
-            "group": top, "name": name, "permissions": {"admin_verify": True}})
+            "group": top, "name": name,
+            "permissions": {"manage_group": True, "admin_verify": True}})
         assert resp.status_code == 200, \
             f"a global manage_groups holder must grant admin_verify, got {resp.status_code}: {opts.client.last_response.body}"
         _use_key(opts, ApiKey.objects.get(name=name).get_token())
