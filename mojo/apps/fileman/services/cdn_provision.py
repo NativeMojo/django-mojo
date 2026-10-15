@@ -319,7 +319,7 @@ class CdnProvisioner:
     def __init__(self, manager, apply=False, harden=False, clients=None, region=None,
                  timeout=3, secret_writer=None, key_loader=None, key_pem_factory=None,
                  now=None, session_factory=None, profile=None,
-                 response_headers_policy=_FROM_SETTING):
+                 response_headers_policy=_FROM_SETTING, caller=None):
         self.manager = manager
         self.bucket = manager.root_location
         self.apply = bool(apply)
@@ -337,7 +337,7 @@ class CdnProvisioner:
         # read from the setting only when `enable`/`check` first asks for it.
         # The visibility sync never asks: it copies the live default's.
         self._response_headers_policy = response_headers_policy
-        self.caller = ProviderCaller(logger)
+        self.caller = caller or ProviderCaller(logger)
         self.findings = []
         self.actions = []
         self.observed = {}
@@ -1090,6 +1090,8 @@ class CdnProvisioner:
         if _behaviors_match(current, plan["behaviors"]):
             self._add(STEP_DISTRIBUTION, report.PASS, "behaviors.ok", "cache behaviors already match")
             return
+        if not self._signed_behaviors_writable(cf, plan["behaviors"], default_groups):
+            return
         new_config = dict(config)
         new_config["CacheBehaviors"] = {"Quantity": len(plan["behaviors"]), "Items": plan["behaviors"]}
         self.actions.append(report.Action(STEP_DISTRIBUTION, "modify", row.distribution_id,
@@ -1103,6 +1105,59 @@ class CdnProvisioner:
             return
         self._add(STEP_DISTRIBUTION, report.PASS, "behaviors.updated",
                   f"cache behaviors of {row.distribution_id} updated")
+
+    def _signed_behaviors_writable(self, cf, behaviors, default_groups):
+        """Refuse, as a finding, a behavior set CloudFront would answer with
+        an opaque InvalidArgument (maestro #8346): a duplicate path pattern,
+        a signed behavior that trusts no key group, or a key group that is
+        neither the live default's nor one this account has. The recorded
+        key group is preferred over the live default, so the two can drift
+        apart. Returns True when the update may be sent."""
+        problems = []
+        patterns = [b.get("PathPattern") for b in behaviors]
+        if len(set(patterns)) != len(patterns):
+            problems.append("two cache behaviors share a path pattern")
+        cited = set()
+        for behavior in behaviors:
+            groups = behavior.get("TrustedKeyGroups") or {}
+            if not groups.get("Enabled"):
+                continue
+            items = groups.get("Items") or []
+            if not items or groups.get("Quantity") != len(items):
+                problems.append(f"signed behavior {behavior.get('PathPattern')!r} trusts no key group")
+            cited.update(items)
+        if problems:
+            self._add(STEP_DISTRIBUTION, report.MANUAL, "behaviors.invalid", "; ".join(problems),
+                      "run check_cdn and report the finding; the update was not sent")
+            self.blocked.add(STEP_DISTRIBUTION)
+            return False
+        live = set(default_groups.get("Items") or []) if default_groups.get("Enabled") else set()
+        unknown = cited - live
+        if not unknown:
+            return True
+        known = set()
+        marker = None
+        for _ in range(10):
+            kwargs = {"MaxItems": "100", **({"Marker": marker} if marker else {})}
+            page = self._call(STEP_DISTRIBUTION, "cloudfront.list_key_groups", "cloudfront:ListKeyGroups",
+                              lambda: cf.list_key_groups(**kwargs))
+            if page is None:
+                return False
+            listing = page.get("KeyGroupList") or {}
+            for item in listing.get("Items") or []:
+                known.add((item.get("KeyGroup") or item).get("Id"))
+            marker = listing.get("NextMarker")
+            if not marker or unknown <= known:
+                break
+        missing = sorted(unknown - known)
+        if missing:
+            self._add(STEP_DISTRIBUTION, report.MANUAL, "key_group.mismatch",
+                      f"the recorded signing key group {', '.join(missing)} is not the distribution's "
+                      f"default key group and does not exist in this account",
+                      "run enable to converge the key group, then save the manager again")
+            self.blocked.add(STEP_DISTRIBUTION)
+            return False
+        return True
 
     def _bucket_policy(self):
         if self._blocked(STEP_POLICY, STEP_DISTRIBUTION):

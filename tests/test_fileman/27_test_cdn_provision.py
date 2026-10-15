@@ -50,6 +50,7 @@ class _FakeAws:
         self.distributions = {}
         self.tags = {}
         self.invalidations = []
+        self.update_error = None
         self.counter = 100
         self.cloudfront = _CloudFront(self)
         self.s3 = _S3(self)
@@ -160,6 +161,9 @@ class _CloudFront:
         return {"Distribution": dict(self.aws.distributions[did], Id=did), "ETag": "E-1"}
 
     def update_distribution(self, Id, IfMatch, DistributionConfig):
+        self.aws.check("update_distribution")
+        if self.aws.update_error is not None:
+            raise self.aws.update_error
         self.aws.mutate("update_distribution")
         d = self.aws.distributions[Id]
         d["DistributionConfig"] = json.loads(json.dumps(DistributionConfig))
@@ -1093,3 +1097,176 @@ def test_root_public_manager_reported(opts):
                         f"the harden warning names the root public manager: {pab['remedy']}")
     finally:
         FileManager.objects.filter(pk__in=[root.pk, inactive.pk, optout.pk]).delete()
+
+
+# --- maestro #8346: behavior updates on a shared distribution ------------
+
+def _patterns(aws, row):
+    cfg = aws.distributions[row.distribution_id]["DistributionConfig"]
+    return {b["PathPattern"]: (b["TrustedKeyGroups"]["Enabled"], tuple(b["TrustedKeyGroups"].get("Items") or ()))
+            for b in cfg["CacheBehaviors"]["Items"]}
+
+
+def _refusal(fm):
+    from mojo import errors as me
+    try:
+        fm.on_rest_pre_save({"is_public": True}, False)
+    except me.ValueException as exc:
+        return exc
+    return None
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8346: a recorded key group the account does not have is a finding; nothing is sent")
+def test_sync_refuses_unknown_key_group(opts):
+    from mojo.apps.fileman.models import CdnDistribution, FileManager
+    _reset(opts)
+    aws = _FakeAws()
+    _provisioner(_fresh(opts.public), aws, apply=True).run()
+    row = CdnDistribution.objects.get(bucket_name=BUCKET)
+    live_group = row.key_group_id
+    default = aws.distributions[row.distribution_id]["DistributionConfig"]["DefaultCacheBehavior"]
+    assert_eq(default["TrustedKeyGroups"]["Items"], [live_group], "enable records the default's key group")
+    drifted = str(uuid.UUID(int=0x8346_0000_0000_0000_0000_0000_0000_0001))
+    CdnDistribution.objects.filter(pk=row.pk).update(key_group_id=drifted)
+    config_before = json.loads(json.dumps(aws.distributions[row.distribution_id]["DistributionConfig"]))
+    mutations_before = list(aws.mutations)
+    try:
+        fm = _fresh(opts.public)
+        fm._cdn_provision_kwargs = _seams(aws)
+        fm.is_public = False
+        err = _refusal(fm)
+        assert_true(err is not None, "a drifted key group must refuse the public→private save")
+        assert_true("key_group.mismatch" in str(err), f"the refusal names the finding: {err}")
+        assert_eq(aws.mutations, mutations_before, "UpdateDistribution was never sent")
+        assert_eq(aws.distributions[row.distribution_id]["DistributionConfig"], config_before,
+                  "the edge is unchanged")
+        assert_true(FileManager.objects.get(pk=fm.pk).is_public, "the row stays public")
+        last = CdnDistribution.objects.get(pk=row.pk).last_check
+        mismatch = [i for i in last["items"] if i["code"] == "key_group.mismatch"]
+        assert_true(mismatch and mismatch[0]["status"] == "MANUAL", f"check_cdn shows it: {last['items']}")
+
+        # A recorded group that differs from the default but exists in the
+        # account is a real group: the update goes out and cites it.
+        aws.key_groups[drifted] = dict(aws.key_groups[live_group])
+        fm = _fresh(opts.public)
+        fm._cdn_provision_kwargs = _seams(aws)
+        fm.is_public = False
+        err = _refusal(fm)
+        assert_true(err is None, f"an existing key group is accepted: {err}")
+        assert_eq(_patterns(aws, row)[f"fileman/{PREFIX}public/*"], (True, (drifted,)),
+                  "the signed behavior cites the recorded group")
+    finally:
+        FileManager.objects.filter(pk=opts.public).update(is_public=True)
+        CdnDistribution.objects.filter(pk=row.pk).update(key_group_id=live_group)
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8346: removing one manager's behavior from a shared distribution keeps the others")
+def test_shared_distribution_remove_behavior(opts):
+    from mojo.apps.fileman.models import CdnDistribution, FileManager
+    _reset(opts)
+    aws = _FakeAws()
+    _provisioner(_fresh(opts.public), aws, apply=True).run()
+    row = CdnDistribution.objects.get(bucket_name=BUCKET)
+    before = _patterns(aws, row)
+    gone = f"fileman/{PREFIX}optout/*"
+    assert_true(gone in before and f"fileman/{PREFIX}public/*" in before and f"fileman/{PREFIX}private/*" in before,
+                f"three managers share the distribution: {sorted(before)}")
+    # Moving the opted-out public manager under the public manager's prefix
+    # leaves it covered by its ancestor: its own behavior is removed.
+    fm = _fresh(opts.optout)
+    fm._cdn_provision_kwargs = _seams(aws)
+    fm.backend_url = f"s3://{BUCKET}/fileman/{PREFIX}public/moved"
+    assert_eq(fm._cdn_edge_change(False), "tighten", "a prefix move converges before the save")
+    err = _refusal(fm)
+    assert_true(err is None, f"the update removing a behavior succeeds: {err}")
+    after = _patterns(aws, row)
+    assert_true(gone not in after, f"the moved manager's behavior is removed: {sorted(after)}")
+    assert_eq(len(after), len(before) - 1, "exactly one behavior removed")
+    for pattern, shape in after.items():
+        assert_eq(shape, before[pattern], f"{pattern} is left as it was")
+    assert_eq(FileManager.objects.get(pk=opts.optout).backend_url, f"s3://{BUCKET}/fileman/{PREFIX}optout",
+              "the row was not saved by the test")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8346: adding a new manager's behavior to a shared distribution keeps the others")
+def test_shared_distribution_add_behavior(opts):
+    from mojo.apps.fileman.models import CdnDistribution, FileManager
+    _reset(opts)
+    aws = _FakeAws()
+    _provisioner(_fresh(opts.public), aws, apply=True).run()
+    row = CdnDistribution.objects.get(bucket_name=BUCKET)
+    before = _patterns(aws, row)
+    live_group = row.key_group_id
+    added = []
+    try:
+        for name, is_public in (("kiosk_private", False), ("kiosk_public", True)):
+            fm = FileManager(name=f"{PREFIX}{name}", backend_type="s3",
+                             backend_url=f"s3://{BUCKET}/fileman/{PREFIX}{name}",
+                             is_active=True, is_default=False, is_public=is_public)
+            fm._cdn_provision_kwargs = _seams(aws)
+            if is_public:
+                fm.save()
+                fm._loosen_cdn_after_save({}, True)  # a new public manager converges after its save
+            else:
+                assert_eq(fm._cdn_edge_change(True), "tighten", "a new private manager converges before its save")
+                fm._tighten_cdn_before_save(True)  # raises if CloudFront refuses
+                fm.save()
+            added.append((f"fileman/{PREFIX}{name}/*", (False, ()) if is_public else (True, (live_group,))))
+        after = _patterns(aws, row)
+        for pattern, shape in added:
+            assert_eq(after.get(pattern), shape, f"{pattern} was added to the shared distribution")
+        for pattern, shape in before.items():
+            assert_eq(after.get(pattern), shape, f"{pattern} is left as it was")
+        assert_eq(len(after), len(before) + 2, "two behaviors added, none lost")
+    finally:
+        FileManager.objects.filter(name__in=[f"{PREFIX}kiosk_private", f"{PREFIX}kiosk_public"]).delete()
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8346: a refused update logs AWS's scrubbed message, refuses the save and stores no message")
+def test_refused_update_logs_message(opts):
+    from mojo.apps.fileman.models import CdnDistribution, FileManager
+    from mojo.helpers.aws.provider_call import ProviderCaller
+    _reset(opts)
+    aws = _FakeAws()
+    _provisioner(_fresh(opts.public), aws, apply=True).run()
+    row = CdnDistribution.objects.get(bucket_name=BUCKET)
+    config_before = json.loads(json.dumps(aws.distributions[row.distribution_id]["DistributionConfig"]))
+    aws.update_error = ClientError({
+        "Error": {"Code": "InvalidArgument",
+                  "Message": "The parameter TrustedKeyGroups is invalid for "
+                             "https://d1.cloudfront.net/a.jpg?Expires=1&Signature=SIG8346SECRET&Key-Pair-Id=K1"},
+        "ResponseMetadata": {"HTTPStatusCode": 400, "RequestId": "c4ecc981-3ed2-4b26-9a1b-a0f68f2e982f"}},
+        "UpdateDistribution")
+    records = []
+
+    class _Logger:
+        def warning(self, *args):
+            records.append("\n".join(str(arg) for arg in args))
+
+    try:
+        fm = _fresh(opts.public)
+        fm._cdn_provision_kwargs = dict(_seams(aws), caller=ProviderCaller(_Logger()))
+        fm.is_public = False
+        err = _refusal(fm)
+        assert_true(err is not None, "a refused UpdateDistribution refuses the save")
+        assert_true("cloudfront.update_distribution.error" in str(err), f"the refusal names the step: {err}")
+        assert_eq(aws.distributions[row.distribution_id]["DistributionConfig"], config_before, "the edge is unchanged")
+        assert_true(FileManager.objects.get(pk=fm.pk).is_public, "the row stays public")
+        lines = [line for line in records if "AWS provider operation failed" in line]
+        assert_eq(len(lines), 1, f"one provider line: {records}")
+        line = lines[0]
+        for part in ("operation=cloudfront.update_distribution", "provider_code=InvalidArgument",
+                     "request_id=c4ecc981-3ed2-4b26-9a1b-a0f68f2e982f",
+                     "The parameter TrustedKeyGroups is invalid"):
+            assert_true(part in line, f"the log carries {part!r}: {line}")
+        assert_true("SIG8346SECRET" not in line, f"the signature is scrubbed: {line}")
+        stored = json.dumps(CdnDistribution.objects.get(pk=row.pk).last_check)
+        assert_true("TrustedKeyGroups is invalid" not in stored and "SIG8346SECRET" not in stored,
+                    "AWS's message never reaches the stored report")
+    finally:
+        aws.update_error = None
+        FileManager.objects.filter(pk=opts.public).update(is_public=True)
