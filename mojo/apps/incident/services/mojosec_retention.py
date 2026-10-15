@@ -103,7 +103,22 @@ def summarize(cutoff):
 
 
 def prune_projected_events(job=None, now=None, batch=1000, max_batches=100,
-                           days=None, limit=None):
+                           days=None, limit=None, enabled=None):
+    """Delete aged per-receipt Events; with a job, obey the daily switch.
+
+    1.35.0 and 1.35.1 queued the 08:35 job under this path, and the job
+    engine calls ``func(job)``, so a call with a job goes through
+    ``daily_prune``. The command passes no job and stays ungated.
+    """
+    if job is not None:
+        return daily_prune(job=job, now=now, days=days, enabled=enabled)
+    return _prune_projected_events(
+        job=job, now=now, batch=batch, max_batches=max_batches, days=days,
+        limit=limit)
+
+
+def _prune_projected_events(job=None, now=None, batch=1000, max_batches=100,
+                            days=None, limit=None):
     """Delete aged per-receipt Events in bounded batches; return the count.
 
     Walks ids upward so a kept prefix is not re-read on every batch. Each
@@ -161,7 +176,7 @@ def daily_prune(job=None, now=None, days=None, enabled=None):
     if enabled is None:
         enabled = deletion_enabled()
     if enabled:
-        return prune_projected_events(job=job, now=now, days=days)
+        return _prune_projected_events(job=job, now=now, days=days)
     if job is not None and hasattr(job, "add_log"):
         job.add_log(
             "MojoSec Event prune is off (MOJOSEC_EVENT_PRUNE_ENABLED); deleted "

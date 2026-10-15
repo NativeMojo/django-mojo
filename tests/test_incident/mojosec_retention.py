@@ -198,7 +198,7 @@ def test_retention_batch_ceiling(opts):
     ids = [_event(500).pk for unused in range(5)]
     job = _Job()
 
-    count = mojosec_retention.prune_projected_events(
+    count = mojosec_retention._prune_projected_events(
         job=job, days=400, batch=2, max_batches=2)
 
     th.assert_eq(count, 4, "the batch ceiling was not applied")

@@ -1003,7 +1003,9 @@ The daily `prune_mojosec_events` job deletes nothing until
 `MOJOSEC_EVENT_PRUNE_ENABLED = True` is set in the deployment's Django settings
 file. It is read with `get_static`, so a global `Setting` row cannot turn it
 on; restart the job runners after changing it. While it is off, each morning's
-job log says that deletion is off and names the preview command.
+job log says that deletion is off and names the preview command. A job queued
+under the old path (`mojosec_retention.prune_projected_events`, as 1.35.0 and
+1.35.1 publish it) obeys the same setting.
 
 Roll it out in this order: upgrade; run the count-only preview below and have
 a person read it; optionally clear the backlog with `--apply --max-events`;
