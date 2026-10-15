@@ -68,6 +68,11 @@ def on_admin_apikey_action(request):
     action = request.DATA.get("action")
     data = {"id": api_key.pk, "action": action}
     if action == "rotate":
+        # Rotating returns the new token. For a key that assumes a member
+        # that is the member's authority, so only the member themself or a
+        # platform administrator may. Stopping the key stays open below.
+        if not api_key.can_release_token(request):
+            raise merrors.PermissionDeniedException()
         data["token"] = api_key.rotate_token()
     elif action in ("deactivate", "reactivate"):
         active = action == "reactivate"

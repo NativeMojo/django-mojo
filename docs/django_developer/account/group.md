@@ -121,7 +121,7 @@ class RestMeta:
 | `disable` | `{"disable": {"reason": "admin\|abuse\|archived", "note": "..."}}` | Flips `is_active=False`, writes `metadata.protected.disable.*` |
 | `reactivate` | `{"reactivate": {"note": "..."}}` | Flips `is_active=True`, appends to `disable.history` (FIFO cap 20) |
 
-`disable`/`reactivate` require a global `manage_groups` grant — the combined `groups` term satisfies it too, since it includes `manage_groups` by definition (stricter than the broader Group `SAVE_PERMS` since these are destructive; a member-level `manage_group` grant is not sufficient). See [disable_lifecycle.md](disable_lifecycle.md).
+`disable`/`reactivate` require a global `manage_groups` grant held by a signed-in person — the combined `groups` term satisfies it too, since it includes `manage_groups` by definition (stricter than the broader Group `SAVE_PERMS` since these are destructive; a member-level `manage_group` grant is not sufficient, and a group API key or group token never passes, whatever it carries). See [disable_lifecycle.md](disable_lifecycle.md).
 
 ## Hierarchy
 
@@ -199,7 +199,7 @@ call `refresh_from_db()` and assign again. A write that skips `save()`
 
 ### Protected Metadata
 
-The reserved root key `"protected"` in `metadata` is write-protected at the framework level. Only a superuser or a user with a permission listed in `PROTECTED_JSON_PERMS` (for Group: `"admin_compliance"` or `"admin_verify"`) can set or update it via the REST API. Any attempt by an unprivileged user raises a `403 PermissionDeniedException`. The gate cannot be bypassed with `"__replace": true` or a non-dict overwrite — a wholesale replace that would rewrite **or drop** the existing `protected` subtree is denied the same as a merge that touches it.
+The reserved root key `"protected"` in `metadata` is write-protected at the framework level. Only a superuser or a user with a permission listed in `PROTECTED_JSON_PERMS` (for Group: `"admin_compliance"` or `"admin_verify"`) can set or update it via the REST API. A key or group token that acts as a member is always refused, even when that member is a superuser or holds the permission. A group API key in reference mode passes when its own list carries one of them; both are on the API-key protection floor, so only staff can put them on a key (see [API keys](api_keys.md)). Any attempt by an unprivileged user raises a `403 PermissionDeniedException`. The gate cannot be bypassed with `"__replace": true` or a non-dict overwrite — a wholesale replace that would rewrite **or drop** the existing `protected` subtree is denied the same as a merge that touches it.
 
 Use it to store config that group editors should be able to read but never overwrite:
 

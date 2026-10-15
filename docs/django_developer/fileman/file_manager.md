@@ -58,6 +58,16 @@ and `use` selectors must still agree with that manager. Client-supplied `user`
 selectors are never accepted. Authorization failures happen before storage
 targets are generated.
 
+A REST create of a `File` (`POST /api/fileman/file`) uses
+`FileManager.resolve_for_file_create(request)`. For user sessions it is
+`resolve_for_upload` unchanged. An `ApiKey` or group token, which the upload rule
+refuses, gets the same selectors (named manager, else `get_from_request`) and is
+allowed only an active group-scoped manager with no user that
+`FileManager.rest_check_permission(request, "SAVE_PERMS", manager)` passes: the
+key's own group or a descendant, with `files` or `manage_files` there. Anything
+else is `403 File manager is unavailable`. `request.group` is restored after the
+check.
+
 `upload_policy` is the safe graph for upload configuration. It contains only
 `id`, `name`, `use`, `is_active`, `max_file_size`, `allowed_extensions`,
 `allowed_mime_types`, and `supports_direct_upload`; backend locations,
@@ -247,6 +257,144 @@ credentials and must never echo a displayed mask as a replacement value.
 This response-contract change does not rotate, rewrite, or migrate stored
 credentials and does not change backend authentication. No data migration is
 required.
+
+#### CDN delivery (CloudFront)
+
+An S3 file manager can deliver its files through CloudFront instead of S3
+links (maestro #8250). This is what lets a long-running client (a kiosk, a
+signage player) hold a link to a private, SSE-KMS bucket: a public manager
+gets **unsigned CDN URLs that never expire**, a private manager gets
+**CloudFront signed URLs** whose lifetime can exceed S3's 7-day presign cap.
+The bucket stays private: CloudFront reads it through an Origin Access
+Control, and an anonymous raw-S3 request still gets 403.
+
+**Enable it:**
+
+```bash
+manage.py fileman_cdn --manager <id> enable            # provisions everything
+manage.py fileman_cdn --manager <id> check             # read-only, prints exact fixes
+manage.py fileman_cdn --manager <id> disable [--retire]
+manage.py fileman_cdn rotate-key   /   revoke-key --key-id <K...>
+```
+
+or the FileManager actions `enable_cdn`, `check_cdn`, `disable_cdn`
+(`POST /api/fileman/manager/<id>` with `{"action": "enable_cdn"}`); all three
+need the **global** `manage_files` (or `files`) permission, which a superuser
+implies: they read or change the account under the deployment identity and
+report ARNs and policy documents, so the group-level grant that satisfies the
+manager's `SAVE_PERMS` is not enough. `enable` runs under the deployment's AWS
+identity (`AWS_KEY`/`AWS_SECRET` or the instance role), never a manager's
+upload credentials; `--profile` runs under an operator's boto3 profile.
+
+**What `enable` creates, and how it finds it again.** It converges
+additively, like `mojo/deploy/provision`: create what is missing, never
+delete, no waiters, no state file. A second run creates nothing; a run
+interrupted anywhere is finished by the next one.
+
+| Resource | Identity | Notes |
+|---|---|---|
+| Signing key (`CdnSigningKey`) | row saved first; CloudFront name `mojo-fm-key-<pk>` is the CallerReference | RSA-2048, private half in the KMS envelope (`KMS_KEY_ID` required) |
+| Key group | one per deployment, `mojo-fm-<hash>` | CloudFront allows 10 per account, 5 keys each |
+| Origin Access Control | `mojo-fm-oac-<hash of bucket>` | s3, sigv4, always |
+| Distribution | tag `mojo:fileman-bucket=<bucket>` | signed default behavior; one behavior per manager prefix (public unsigned, private signed), longest prefix first; GET/HEAD; HTTPS; CachingOptimized |
+| Bucket policy | Sid `AllowCloudFrontServicePrincipalReadOnly_<id>` | merged with a SourceArn condition; a `Principal "*"` statement is reported, never removed |
+| KMS key policy | Sid `AllowCloudFrontDecrypt_<id>` | `kms:Decrypt` only; read-merge-write |
+
+**State is per bucket.** `CdnDistribution` is one row per bucket; every S3
+manager on that bucket delivers through it, including the per-user and
+per-group managers `get_for_user`/`get_for_group` create (they copy the
+system manager's secrets, which is why CDN state is not a manager setting).
+Disable, rotate and revoke are therefore one row and every manager follows.
+A manager opts out with its own or top-parent setting `cdn = "off"`.
+
+**Public means deliverable through the CDN.** In CDN mode `is_public` no
+longer writes a bucket policy or runs the S3 audit (which would read the
+private bucket and rewrite `is_public`). Any change that must protect a
+prefix — a new private manager, a public→private flip, a moved
+`backend_url` — converges the cache behaviors in `on_rest_pre_save`, under a
+lock on the bucket's `CdnDistribution` row, and refuses the save if
+CloudFront refuses, so the edge never serves a prefix unsigned while the row
+says private. That holds even when the CDN row is disabled or the manager is
+opted out, because the distribution still serves the bucket. Private→public
+converges after the write. The sync rewrites cache behaviors only — never
+`Enabled`, the origin or a BYO distribution's own settings.
+
+**Behaviors are planned fail-closed.** Every S3 manager on the bucket counts
+(active or not, opted out or not); where two share a prefix, signed wins;
+a prefix containing `*`, `?` or any character CloudFront could not match
+literally gets no behavior (it falls under the signed default) and such a
+path is refused on save; a child with the same visibility as its nearest
+ancestor is covered by the ancestor (which keeps the count under
+CloudFront's 25-behavior quota); a **private manager under a public
+manager's prefix is refused** — whether CloudFront matches the encoded or
+the decoded path decides if the longer signed pattern could be sidestepped,
+and until a live probe settles that the layout is not allowed. A clone keeps
+its original's visibility.
+
+**Links.** `S3StorageBackend.get_url` is the one seam: `expires_in=None`
+is unsigned, otherwise a canned-policy signed URL for
+`min(expires_in, FILEMAN_CDN_MAX_EXPIRES_IN)` seconds (cap default 90 days,
+a validator-registered Setting), rounded up to the hour so links are stable
+inside an hour. `File`/`FileRendition` pass the manager's
+`cdn_url_expires_in` (default 7 days) for a private manager; the token
+download route keeps its 3600 s; the `download_url` cache is never used in
+CDN mode. Signing is local — the signer for a key is cached per process, so
+a link costs one RSA signature, not a KMS decrypt. The `cdn` and
+`cdn_url_expires_in` settings are writable by global file admins
+(`manage_files` / `files`, or a superuser); anyone else sending them gets 403.
+
+**Bring your own distribution.** `fileman_cdn --manager <id> byo
+--distribution <id> --alias https://media.example.com` registers one you
+created; `check` then validates origin, OAC, signed default, behaviors,
+bucket policy, Block Public Access, Object Ownership and the KMS policy, and
+prints each missing statement as the exact merged JSON. django-mojo never
+adopts an untagged distribution on a bucket: that is a `MANUAL` finding.
+
+**Limits worth knowing.**
+- Objects under the AWS-managed `aws/s3` key cannot be served: its policy
+  cannot be changed. `enable` reports `MANUAL` with the remedy — a
+  dedicated media CMK (not `KMS_KEY_ID`, which wraps every secret the
+  deployment holds) as the manager's `kms_key_id`, and re-encryption of
+  existing objects.
+- Block Public Access and Object Ownership are checked, not changed: turning
+  them on bucket-wide breaks the raw-S3 public links of every manager opted
+  out of the CDN. `enable --harden` applies them after naming those managers.
+- A signed link cannot be revoked before it expires except by revoking the
+  key (`revoke-key`), which takes minutes to reach the edge and kills every
+  link that key signed. Rotation (`rotate-key`) adds a key, switches signing
+  to it and retires the old one once its last link has expired (the daily
+  `retire_cdn_signing_keys` cron). Rotation refuses when the group already
+  holds four keys.
+- A CDN copy outlives a delete or a regenerated rendition until its TTL
+  (24 h default); both call `backend.invalidate()` which queues a
+  CloudFront invalidation (1,000 paths a month are free). Originals never
+  change in place.
+- `disable` reverts links immediately and leaves AWS as is; `--retire` sets
+  the distribution disabled. Deleting it is a human step.
+- `revoke-key` marks a key inactive only once CloudFront has confirmed the
+  key group no longer trusts it; a refused update returns `status: false`.
+- CloudFront public key names include the deployment slug; a name that
+  already exists with a different public key is reported, never adopted.
+- CloudFront is never granted the deployment's `KMS_KEY_ID`; a manager whose
+  `kms_key_id` resolves to it is reported MANUAL.
+
+**IAM, by mode** (exact action names; a denial reports the one to grant):
+- links: `kms:Decrypt` on `KMS_KEY_ID`.
+- `check`: `cloudfront:ListDistributions, GetDistribution, GetDistributionConfig, GetOriginAccessControl, ListOriginAccessControls, GetKeyGroup, ListKeyGroups, ListPublicKeys, ListTagsForResource`; `s3:GetBucketLocation, GetBucketPolicy, GetBucketPublicAccessBlock, GetEncryptionConfiguration, GetBucketOwnershipControls`; `kms:DescribeKey, GetKeyPolicy`; `sts:GetCallerIdentity`.
+- `enable`: check + `cloudfront:CreateOriginAccessControl, CreatePublicKey, CreateKeyGroup, UpdateKeyGroup, CreateDistribution, TagResource, UpdateDistribution`; `s3:PutBucketPolicy`; `kms:PutKeyPolicy`; with `--harden` also `s3:PutBucketPublicAccessBlock, PutBucketOwnershipControls`.
+- cron and revoke: `cloudfront:GetKeyGroup, UpdateKeyGroup`; invalidation: `cloudfront:CreateInvalidation`; `--retire`: `cloudfront:GetDistributionConfig, UpdateDistribution`.
+
+A fleet provisioned by `mojo.deploy.provision` carries all of this on its node
+role: the `DjangoMojoFilemanCdn` statement grants the CloudFront actions, and
+the setup statement's `s3:*` / `kms:*` cover the bucket and key policies. A
+fleet whose node role was built elsewhere (OpenTofu, by hand) and then
+narrowed needs the CloudFront actions added, plus `kms:GetKeyPolicy` and
+`kms:PutKeyPolicy` on the media bucket's key; `check_cdn` names each missing
+one as a denied IAM action.
+
+Tests: `tests/test_fileman/26_test_cdn_links.py` and
+`27_test_cdn_provision.py` (no AWS); the opt-in
+`tests/test_fileman_cdn_live_slow_serial/` proves it on a real SSE-KMS bucket.
 
 #### Public-access reconciliation
 

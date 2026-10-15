@@ -24,3 +24,7 @@ class FilemanConfig(AppConfig):
             config.CATEGORY_KEYS["document"], config.validate_document, global_only=False)
         Setting.register_validator(
             config.VIDEO_ENGINE_KEY, config.validate_engine, global_only=True)
+        # The platform cap on a CDN signed link's lifetime (maestro #8250).
+        from mojo.apps.fileman.services import cdn
+        Setting.register_validator(
+            cdn.MAX_EXPIRES_IN_KEY, cdn.validate_max_expires_in, global_only=True)

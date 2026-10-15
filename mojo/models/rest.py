@@ -36,9 +36,10 @@ COMMON_GRAPH_NAMES = frozenset(settings.get_static(
 # Sentinel: the request carried no `graph` key (see on_rest_save).
 _GRAPH_UNSET = object()
 
-# Names the REST save never takes from a request body, on every model. A
-# model's RestMeta.NO_SAVE_FIELDS adds to these (see get_no_save_fields).
-DEFAULT_NO_SAVE_FIELDS = ("id", "pk", "created", "uuid")
+# Names the REST save never takes from a request body, on every model,
+# including the encrypted secrets column (MojoSecrets.mojo_secrets). A model's
+# RestMeta.NO_SAVE_FIELDS adds to these (see get_no_save_fields).
+DEFAULT_NO_SAVE_FIELDS = ("id", "pk", "created", "uuid", "mojo_secrets")
 # The only framework names RestMeta.ALLOW_SAVE_FIELDS can hand back.
 ALLOWABLE_SAVE_FIELDS = ("created", "uuid")
 
@@ -2419,6 +2420,11 @@ class MojoModel:
             return False
         user = getattr(request, "user", None)
         if user is None or not user.is_authenticated:
+            return False
+        # A key or group token acting as a member would read that member's
+        # global list, or their superuser flag; neither is the credential's
+        # authority (#6363). A key in reference mode reads its own list below.
+        if is_override_user_session(request):
             return False
         # request.user may be an ApiKey (no is_superuser attribute)
         if getattr(user, "is_superuser", False):

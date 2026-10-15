@@ -10,13 +10,18 @@ Returns rooms the authenticated user is a member of.
 
 ### `POST /api/chat/room` — Create a room
 
-Any authenticated user can create a room.
+Any authenticated user can create a groupless room. A room in a group needs
+the creator to hold `chat` or `manage_chat` in that group (a member grant or
+the global one, never through an assumed-member session); otherwise 403 and no
+row. This covers the group a request is bound to as well as an explicit
+`group` field.
 
 ```json
 {"name": "My Room", "kind": "group", "group": 5}
 ```
 
-Owner membership is auto-created with `role="owner"`.
+Owner membership is auto-created with `role="owner"`. The owner is always the
+creator: a `user` field in the body is ignored.
 
 ### `GET /api/chat/room/<pk>` — Get room detail
 
@@ -44,11 +49,22 @@ Cannot leave DM rooms. Publishes `chat_member_left` `{room_id, user_id}` after t
 
 ### `POST /api/chat/room/member/add` — Add member
 
-Requires room admin or `manage_chat` permission.
+Requires room admin (not banned) or `manage_chat` permission, then the
+[reachability rule](permissions.md#who-a-caller-may-put-in-a-chat-reachability):
+the caller and the target share an active group (or the caller holds the
+global `manage_chat`, or the project's hook allows it), and a room with a
+`group` only takes members of that group.
 
 ```json
 {"room_id": 5, "user_id": 42}
 ```
+
+Room-side answers come first and are unchanged: 404 `"Room not found"`, 403
+for another tenant's room, 400 for a direct room, 403 for a non-admin. After
+that, every target-side refusal — no `user_id`, a bad one, your own, a
+missing, inactive or unreachable user — is 404 `"User not found"`, with no
+membership and no system message written. A banned member is reactivated only
+when an active admin adds them and they are still reachable.
 
 ### `POST /api/chat/room/member/remove` — Remove member
 
@@ -156,6 +172,11 @@ Two callers are deliberately not bound: `channel` rooms (public, full history to
 every member), and the `manage_chat` moderator read path, which has no
 membership row and therefore no `joined_at` to be bound by.
 
+**Channel history is unbounded, and a groupless channel is open.** Any
+signed-in user can join a channel with no `group` (`POST room/join`) and then
+read its whole history. Put anything not meant for every account in a group
+room, a group-linked channel, or a direct room.
+
 The same three bounds — unflagged, join cutoff, disappearing-message TTL — live
 in `mojo.apps.chat.services.messages.visible_messages(room, membership)`. Every
 reader narrows through it, `GET /api/chat/unread` included, so a badge can never
@@ -169,11 +190,20 @@ Moderator-only. Returns flagged messages for review.
 
 ### `POST /api/chat/dm` — Get or create DM
 
-Returns the pair's existing direct room if one exists, otherwise creates one.
+Returns the pair's existing direct room if one exists, otherwise creates one
+when the [reachability rule](permissions.md#who-a-caller-may-put-in-a-chat-reachability)
+allows it: by default the two share an active group, or the caller holds the
+global `manage_chat`.
 
 ```json
 {"user_id": 42}
 ```
+
+Every refusal about the target — no `user_id`, a bad one, your own, a missing,
+inactive or unreachable user, a hook error — is the same 404
+`{"error": "User not found"}`, with no room written. (A DM to yourself used to
+be 400 `"Cannot DM yourself"`.) The existing-room lookups run before the rule,
+so a pair already sharing a direct room always gets it back.
 
 **Reuse is groupless-first.** A personal DM is groupless by construction — the
 create path here has always built one that way, and `_deny_cross_tenant_room(request, None)`

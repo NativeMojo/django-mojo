@@ -29,6 +29,8 @@ For the normal case — `<img src={file.thumbnail}>`, `<a href={file.url}>Downlo
 
 If a deployment has shortlinks disabled (global `FILEMAN_USE_SHORTLINKS=False` or per-FileManager override), `url` will be the direct backend URL with no wrapping. Treat both forms as opaque.
 
+**CDN-delivered managers.** When a manager's bucket delivers through CloudFront (see [manager.md](manager.md#cdn-delivery-cloudfront)), the direct URL is a CDN link: unsigned and non-expiring for a public manager, signed with a configurable lifetime (default 7 days) for a private one. A client holding a signed link must re-fetch it before it expires; a shortlink is the stable handle that re-signs on each click.
+
 The server verifies personal S3 managers before exposing an unsigned URL. It
 may first inspect manager-level policy when resolving the personal manager, then
 supersedes policy-only evidence once with the first exact file or rendition
@@ -125,6 +127,35 @@ Who may save: the file's owner, a member of the file's group holding `files`, or
 |--------|------|
 | `400` | `metadata` is not an object, or `expires_at` is not a time with a timezone. Nothing from the request is saved, including other fields sent with it. |
 | `403` | The caller may not save this file, or tried to write `protected` without that right. |
+
+### Fields the server owns
+
+A create or a save through `/api/fileman/file` ignores these keys: `file_manager`
+(and `file_manager_id`), `user` (and `user_id`), `storage_filename`,
+`storage_file_path`, `download_url`, `upload_token`, `upload_status`,
+`shortlink_code`, `file_size`, `checksum` and `category`. The stored path and
+name are always generated under the file's own storage, the upload state moves
+only through `{"action": ...}`, and a `user` object sent in a save does not edit
+that user. A client that sends a fetched row back keeps working; those values are
+simply not written.
+
+On create, the storage is chosen from `file_manager` (aliases `fileman`,
+`filemanager`, `manager`), else `use`, else the default for the request's group
+or user, and then checked:
+
+- **User sessions** follow the same rule as [`upload/initiate`](upload.md#selecting-a-filemanager):
+  your own user storage, group storage of a group you are an active member of
+  (send `group` for that group), or any storage with the global `files` /
+  `manage_files` permission. `user` in a create body is refused, and so is a
+  `file_manager` sent with a `group` that is not that storage's group, also for
+  administrators.
+- **API keys and group tokens** may use group storage of their own group, or for
+  an API key a group beneath it, where they hold `files` or `manage_files`.
+  Another group's storage, personal storage and platform storage are refused with
+  `403 File manager is unavailable`.
+
+The file's `group` is set to its storage's group. A refused create stores
+nothing.
 
 ## Delete a File
 

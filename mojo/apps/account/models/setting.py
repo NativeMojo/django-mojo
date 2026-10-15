@@ -521,6 +521,25 @@ class Setting(MojoSecrets, MojoModel):
     def save(self, *args, **kwargs):
         protected_writer = kwargs.pop("_protected_writer", None)
         skip_cache = kwargs.pop("_skip_cache", False)
+        # An explicitly empty update_fields means "write nothing" (Django
+        # returns without a write or a signal). Return before anything else:
+        # the cache push below would publish the unsaved draft, and for a new
+        # row MojoSecrets.save's second, unrestricted save would insert it
+        # (#7739). update_fields is the 4th positional argument Django 5.2
+        # still accepts. Bind it the way Model._parse_save_params does: the
+        # positional value wins when the keyword is its default None, and
+        # both set is Django's TypeError, left for super().save() to raise.
+        # A generator is materialised once and passed on.
+        keyword = kwargs.get("update_fields")
+        positional = len(args) >= 4
+        if keyword is not None and not positional:
+            kwargs["update_fields"] = frozenset(keyword)
+            if not kwargs["update_fields"]:
+                return
+        elif keyword is None and positional and args[3] is not None:
+            args = args[:3] + (frozenset(args[3]),) + args[4:]
+            if not args[3]:
+                return
         if not self._dedicated_writer_owns_row(protected_writer):
             self._reject_protected_write()
         self._reject_scope_change()

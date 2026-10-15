@@ -307,7 +307,10 @@ def test_refused_metadata_stores_nothing_on_a_related_object(opts):
             assert_eq(stored.metadata, {"source": "mdsave"},
                       f"{name}: a refused request must leave metadata unchanged")
 
-    # Control: with good metadata the same request saves all three.
+    # Control: with good metadata the same request saves the filename and the
+    # metadata. `user` is not writable through a File save, so the user
+    # object in it is ignored.
+    User.objects.filter(pk=opts.owner_id).update(display_name="mdsave before")
     f = _new_file(opts, "rel_good")
     resp = _save(opts, f, {
         "filename": "mdsave_renamed_rel_good.csv",
@@ -315,8 +318,10 @@ def test_refused_metadata_stores_nothing_on_a_related_object(opts):
         "metadata": {"expires_at": "2027-01-01T00:00:00+00:00"},
     })
     assert_eq(resp.status_code, 200, f"a good request must save: {resp.response}")
-    assert_eq(User.objects.get(pk=opts.owner_id).display_name, "mdsave after",
-              "the user in an accepted request must be saved")
+    assert_eq(User.objects.get(pk=opts.owner_id).display_name, "mdsave before",
+              "a user object in a File save must be ignored")
+    assert_eq(_stored(f).filename, "mdsave_renamed_rel_good.csv",
+              "the filename in an accepted request must be saved")
     stored = _stored(f)
     assert_eq(stored.metadata.get("expires_at"), "2027-01-01T00:00:00+00:00",
               "the expiry in an accepted request must be stored")

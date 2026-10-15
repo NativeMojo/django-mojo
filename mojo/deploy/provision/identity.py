@@ -81,6 +81,36 @@ AGENT_LOG_ACTIONS = (
 )
 AGENT_METRIC_ACTIONS = ("cloudwatch:PutMetricData",)
 
+# fileman's CloudFront delivery (`manage.py fileman_cdn`, the FileManager
+# enable_cdn / check_cdn / disable_cdn actions, the invalidation and key
+# retirement jobs) runs under this role. CloudFront is the one service the
+# setup statement above does not name — its `s3:*` and `kms:*` already cover
+# the bucket and key policies the provisioner writes — and CloudFront
+# resources (OACs, key groups, public keys) cannot be usefully scoped by ARN
+# before they exist, so the grant is by exact action on `*`. Its own Sid for
+# the same reason as the agent block: the hardening pass that narrows setup
+# must not take media delivery with it.
+CDN_ACTIONS = (
+    "cloudfront:CreateDistribution",
+    "cloudfront:CreateInvalidation",
+    "cloudfront:CreateKeyGroup",
+    "cloudfront:CreateOriginAccessControl",
+    "cloudfront:CreatePublicKey",
+    "cloudfront:GetDistribution",
+    "cloudfront:GetDistributionConfig",
+    "cloudfront:GetKeyGroup",
+    "cloudfront:GetOriginAccessControl",
+    "cloudfront:GetPublicKey",
+    "cloudfront:ListDistributions",
+    "cloudfront:ListKeyGroups",
+    "cloudfront:ListOriginAccessControls",
+    "cloudfront:ListPublicKeys",
+    "cloudfront:ListTagsForResource",
+    "cloudfront:TagResource",
+    "cloudfront:UpdateDistribution",
+    "cloudfront:UpdateKeyGroup",
+)
+
 
 def node_policy_document(spec):
     """The inline policy attached to the node role.
@@ -126,6 +156,12 @@ def node_policy_document(spec):
                 # PutMetricData cannot be scoped by resource — the only lever
                 # AWS offers is a cloudwatch:namespace condition, and the agent
                 # publishes into several.
+                "Resource": "*",
+            },
+            {
+                "Sid": "DjangoMojoFilemanCdn",
+                "Effect": "Allow",
+                "Action": list(CDN_ACTIONS),
                 "Resource": "*",
             },
         ],

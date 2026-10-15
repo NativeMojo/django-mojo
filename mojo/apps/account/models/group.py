@@ -832,7 +832,7 @@ class Group(MojoSecrets, MojoModel):
         from mojo.apps.account.services import disable as disable_service
         if not isinstance(value, dict):
             value = {}
-        if not self.active_user.has_permission("manage_groups"):
+        if not self._has_global_permission(["manage_groups"]):
             raise merrors.PermissionDeniedException("admin tier (groups / manage_groups) required to disable a group")
         reason = value.get("reason")
         if reason not in disable_service.GROUP_REST_REASONS:
@@ -851,7 +851,7 @@ class Group(MojoSecrets, MojoModel):
         from mojo.apps.account.services import disable as disable_service
         if not isinstance(value, dict):
             value = {}
-        if not self.active_user.has_permission("manage_groups"):
+        if not self._has_global_permission(["manage_groups"]):
             raise merrors.PermissionDeniedException("admin tier (groups / manage_groups) required to reactivate a group")
         disable_service.reactivate_entity(
             self,
@@ -1047,9 +1047,9 @@ class Group(MojoSecrets, MojoModel):
             old_strict = (old_md or {}).get("geofence_strict")
         if gf_strict != old_strict:
             from mojo import errors as merrors
-            actor = getattr(self, "active_user", None)
-            if actor is None or not actor.has_permission(
-                    ["manage_geofence", "security"]):
+            # A group API key's own list (which a group manager fills in) or
+            # a member's grant must not pass: the person's own global list only.
+            if not self._has_global_permission(["manage_geofence", "security"]):
                 raise merrors.PermissionDeniedException(
                     "Changing metadata.geofence_strict requires the global "
                     "manage_geofence (or security) permission")

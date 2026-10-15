@@ -8,15 +8,51 @@ Chat integrates with the existing User/Group/Member permission system.
 
 | Permission | What it grants |
 |-----------|---------------|
-| `chat` | Participate in group chat rooms (send messages, react) |
-| `manage_chat` | Create/delete rooms, manage membership, update rules |
+| `chat` | Read a group-linked room's history and members, join its channels, create a room in the group |
+| `manage_chat` | Delete rooms, manage membership, update rules |
 | `moderate_chat` | Flag messages, mute/ban users |
 
 These are stored in `member.permissions` at the group level.
 
+No permission sends a message on its own: sending and editing need an active
+`ChatMembership` row in the room, and reacting needs an active or muted one
+(see the table at the end).
+
 ### System-level
 
-Users with `manage_chat` in `user.permissions` have global access.
+Users with `manage_chat` in `user.permissions` have global access. That
+grant also reaches any active user through the reachability rule below, but
+never through a session that assumes a member (an override ApiKey or a group
+token).
+
+## Who a caller may put in a chat (reachability)
+
+`POST /api/chat/dm` (a new room) and `POST /api/chat/room/member/add` ask one
+rule, in `mojo/apps/chat/services/reachability.py`: may this caller put this
+person in a chat with them? Server code that creates rooms or memberships
+through the ORM is never checked.
+
+- **Default:** caller and target share an active group — both hold an active
+  direct `GroupMember` row in the same effectively active group. Inherited
+  (parent-chain) membership does not count. A global `manage_chat` holder
+  reaches any active user.
+- **Group rooms (fixed):** a room with a `group` only takes members of that
+  group, and its admin must be one too unless they hold the global
+  `manage_chat`. No hook can loosen this.
+- **Hook:** `CHAT_REACHABILITY_HANDLER` in the Django settings file (never a
+  database Setting) names `handler(user, target, room)`; `room` is None for a
+  DM. Only a return of `True` reaches. A load error, a non-callable or an
+  exception refuses. The module ships `default_can_reach` (the default rule,
+  to compose with), `allow_all` (the pre-#8345 reach; group rooms still
+  apply) and `deny_all` (no client DMs or adds).
+- **One refusal:** every target-side refusal — no id, a bad id, the caller's
+  own, a missing, inactive or unreachable user, a hook error — is the same
+  404 `"User not found"`, with nothing written, so the answer reveals no user
+  ids. A custom hook runs after the target is loaded, so its timing is the
+  consumer's to keep even.
+
+A pair that already shares a direct room gets it back from `dm` without the
+rule: both are members already.
 
 ## How Permission Checks Work
 
@@ -33,15 +69,21 @@ Users with `manage_chat` in `user.permissions` have global access.
 
 ### Room-level roles
 
-- **owner** — full control (set via RestMeta OWNER_FIELD)
+- **owner** — full control (set via RestMeta OWNER_FIELD; always the creator)
 - **admin** — can manage members, update rules, edit/flag messages
 - **member** — can send messages, react, read
+
+A **banned** owner or admin has no room authority. A **muted** one keeps it
+(member management, rules) but, like any muted member, cannot send or edit.
 
 ### REST endpoint security
 
 - Room CRUD: `@md.uses_model_security(ChatRoom)` with RestMeta perms
 - Custom endpoints: `@md.requires_auth()` + manual permission checks via `_check_room_admin` / `_check_room_moderator`
-- **CREATE_PERMS = ["authenticated"]** — any logged-in user can create a room
+- **CREATE_PERMS = ["authenticated"]** — any logged-in user can create a
+  groupless room. A room in a group needs the creator to hold `chat` or
+  `manage_chat` there (`ChatRoom.on_rest_pre_save`), else 403 and no row.
+  A body `user` is ignored (`NO_SAVE_FIELDS`): the owner is the creator.
 
 ### Muted vs Banned
 
@@ -82,6 +124,7 @@ room.
 | Mark read (`chat_read`, `POST room/read`) — receipts and `last_read_at` | yes | yes | **no** |
 | React (`chat_react`) | yes | yes | **no** |
 | Send (`chat_message`) | yes | no | no |
+| Edit (`chat_edit`) — own message, or any as a room admin | yes | no | no |
 | Subscribe to the room topic | yes | yes | no |
 
 A banned member attempting to mark read or react gets an error and writes

@@ -83,8 +83,9 @@ POST /api/group/7
 ```
 
 Note: `metadata.geofence_strict` (compliance posture) is additionally gated by
-the **global** `manage_geofence`/`security` perm — a tenant admin with
-`manage_group` cannot flip it. The member-reachable `realtime_message`
+the **global** `manage_geofence`/`security` perm held by a signed-in user — a
+tenant admin with `manage_group`, and any group API key or group token, cannot
+flip it. The member-reachable `realtime_message`
 POST_SAVE_ACTION also requires `manage_group`.
 
 Note: `metadata.webapp_base_url` and `metadata.webapp_auth_path` (where the
@@ -102,6 +103,11 @@ Note: `metadata.protected.*` requires `admin_compliance` or `admin_verify` — a
 write grant alone is not enough. Any update that would touch it (a merge
 carrying `"protected"`, a `"__replace": true` payload, or a non-dict `metadata`
 value that would overwrite the existing `protected` subtree) returns a `403`.
+An API key or group token that acts as a member is refused even when that
+member is a superuser. Only staff (a global `manage_groups` / `manage_users`
+administrator, or a member who holds the permission globally) can put
+`admin_compliance` or `admin_verify` on a group API key; a tenant admin cannot
+grant or remove them.
 
 ## List Groups
 
@@ -253,7 +259,7 @@ so a form that sends every field on save keeps working.
 
 ## Disable Lifecycle
 
-Admins manage group `is_active` state through two named POST_SAVE_ACTIONS. Writing the bare `is_active` field directly still works but does not populate the disable namespace or emit audit events. The actions below are the recommended path for any new code. Requires a global `manage_groups` grant (the combined `groups` term includes it) — stricter than the rest of the Group `SAVE_PERMS` since disable is destructive: a member-level grant is not sufficient.
+Admins manage group `is_active` state through two named POST_SAVE_ACTIONS. Writing the bare `is_active` field directly still works but does not populate the disable namespace or emit audit events. The actions below are the recommended path for any new code. Requires a global `manage_groups` grant (the combined `groups` term includes it) — stricter than the rest of the Group `SAVE_PERMS` since disable is destructive: a member-level grant is not sufficient, and a group API key or group token carrying `manage_groups` (for example a parent group's key) receives `403`.
 
 ### Disable a group
 

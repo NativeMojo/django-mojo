@@ -319,6 +319,12 @@ class StorageBackend(ABC):
         """
         return self.settings.get(key, default)
 
+    def invalidate(self, paths):
+        """Drop cached copies of keys that changed in place (a regenerated
+        rendition, a deleted object). Nothing to do unless a CDN fronts the
+        backend; the S3 backend overrides this."""
+        return None
+
     def make_path_public(self):
         return
 

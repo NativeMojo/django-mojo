@@ -40,6 +40,13 @@ def setup_chat_rooms(opts):
     opts.admin_user.save()
     opts.admin_user.add_permission("manage_chat")
 
+    # Opening a DM or adding a member needs a shared group (#8345).
+    from mojo.apps.account.models import Group
+    Group.objects.filter(name="test-chat-rooms-shared-group").delete()
+    opts.shared_group = Group.objects.create(name="test-chat-rooms-shared-group")
+    for user in (opts.user1, opts.user2, opts.admin_user):
+        opts.shared_group.add_member(user)
+
 
 @th.tier("core")  # prerequisite: sets opts.group_room_id for the core tests below (#2792)
 @th.django_unit_test()
@@ -380,12 +387,13 @@ def test_dm_prefers_groupless_room_over_scoped(opts):
 
 @th.django_unit_test()
 def test_dm_cannot_self(opts):
-    """Cannot create a DM with yourself."""
+    """Cannot create a DM with yourself: the uniform refusal (#8345)."""
     opts.client.login(TEST_EMAIL_1, TEST_PASSWORD)
     resp = opts.client.post('/api/chat/dm', {
         'user_id': opts.user1.pk,
     })
-    assert_eq(resp.status_code, 400, f"expected 400, got {resp.status_code}")
+    assert_eq(resp.status_code, 404, f"expected 404, got {resp.status_code}")
+    assert_eq(resp.json.error, "User not found", f"expected the uniform refusal, got {resp.json}")
 
 
 @th.django_unit_test()

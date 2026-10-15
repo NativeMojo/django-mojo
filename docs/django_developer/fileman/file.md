@@ -211,6 +211,11 @@ See [FK Assignment During Save](../rest/permissions.md#fk-assignment-during-save
 
 ```python
 class RestMeta:
+    SENSITIVE_FIELDS = ["upload_token"]
+    NO_SAVE_FIELDS = [
+        "file_manager", "user", "storage_filename", "storage_file_path",
+        "download_url", "upload_token", "upload_status", "shortlink_code",
+        "file_size", "checksum", "category"]
     CAN_CREATE = True
     CAN_DELETE = True
     VIEW_PERMS = ["view_fileman", "manage_files", "files", "owner"]
@@ -231,6 +236,16 @@ holding `manage_files`/`files`. A permissionless owner's `GET /api/fileman/file`
 list is auto-scoped to their own rows; they never see other users' files. Members
 who own neither the file nor `manage_files`/`files` remain fully denied
 (fail-closed).
+
+`NO_SAVE_FIELDS` keeps the storage, the owner and everything that names a stored
+object out of a REST create or save, so a body cannot point a record at another
+group's object. On a REST create `on_rest_pre_save` picks the manager with
+`FileManager.resolve_for_file_create(request)` and sets the file's `group` to the
+manager's group. That runs only when the record has no manager yet: server code
+that sets `file_manager` before calling `on_rest_pre_save({}, True)`, and
+`create_from_file`, keep the manager and group they were given and are not
+checked. To register an object that already exists in storage, do it from
+server code, never over REST.
 
 ## Metadata
 

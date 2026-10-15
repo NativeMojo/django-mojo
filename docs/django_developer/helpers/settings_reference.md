@@ -197,7 +197,8 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   row (a JSON object string), with the settings-file value merged *over* it,
   with `ApiKey.APIKEY_PERMS_PROTECTION_DEFAULTS` merged over both. The
   framework floor currently protects `geoip_sync`, `dnsman_acme_federation`,
-  `edge_node`, and `mojosec_ingest` with their matching global `sys.*` grants,
+  `edge_node`, `mojosec_ingest`, `admin_compliance`, and `admin_verify` with
+  their matching global `sys.*` grants,
   and neither the file nor a row can override or relax one of its entries.
   **The settings file wins over a row, in both directions.** A database row can
   **add** protected permissions, but it can neither loosen nor tighten one the
@@ -479,6 +480,16 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   `ChatRoom.group` is `on_delete=CASCADE` from `account.Group`, so deleting a
   Group destroys rooms and their messages with no REST layer involved. See
   [the deletion hook](../chat/services.md#deletion-hook).
+- `CHAT_REACHABILITY_HANDLER` — dotted path to
+  `handler(user, target, room) -> bool`, read from the Django settings file
+  only (`settings.get_static`; a database Setting row is ignored), default
+  unset. Decides who `POST dm` (a new room) and `POST room/member/add` may
+  reach. Unset means the caller and target must share an active group, or the
+  caller holds the global `manage_chat`. Only `True` reaches; an unloadable
+  path, a non-callable or an exception refuses. A group room still only takes
+  members of its group. `mojo.apps.chat.services.reachability.allow_all`
+  restores the pre-#8345 reach; `.deny_all` turns off client DMs and adds. See
+  [Chat permissions](../chat/permissions.md#who-a-caller-may-put-in-a-chat-reachability).
 
 ### CODE
 

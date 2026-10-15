@@ -73,6 +73,39 @@ The `user` field is **not** auto-stamped on create. Omitting `user` (or sending 
 
 `group` is auto-filled from the caller's active group (`request.group`) when not specified in the body.
 
+## CDN delivery (CloudFront)
+
+An S3 manager whose bucket has CDN delivery enabled hands out CloudFront
+links instead of S3 links: a public manager's links are plain and never
+expire; a private manager's links are signed and expire after the manager's
+`cdn_url_expires_in` (default 7 days, platform cap 90 days). Clients treat
+both as opaque and re-fetch a signed link before it expires, or use the
+shortlink, which re-signs on every click.
+
+The manager's `default` and `list` graphs carry a read-only `cdn` object:
+
+```json
+"cdn": {"enabled": true, "url": "https://d111111abcdef8.cloudfront.net",
+        "bucket": "media-bucket", "distribution_id": "E1ABC...",
+        "source": "provisioned", "status": "deployed", "signed": false,
+        "signing_key_id": "K2...."}
+```
+
+or `{"enabled": false}`. Actions on `POST /api/fileman/manager/<id>`:
+
+| Action | Who | Effect |
+|---|---|---|
+| `{"action": "enable_cdn"}` (optional `"harden": true`) | global `manage_files` / `files` | Provisions CloudFront for the manager's bucket under the deployment's AWS identity and returns the findings (`items`, `converged`, `distribution`). Re-running creates nothing. |
+| `{"action": "check_cdn"}` | global `manage_files` / `files` | Read-only validation of the bucket's distribution (provisioned or brought) with exact remediation JSON. |
+| `{"action": "disable_cdn"}` (optional `"retire": true`) | global `manage_files` / `files` | Every manager on the bucket reverts to S3 links; `retire` also disables the distribution. Nothing is deleted. |
+
+Two manager settings, both for **global file admins** (`manage_files` /
+`files`, which a superuser implies; the group-level grant is not enough), both
+S3 only: `cdn` (`"off"` opts this manager, and its children, out of its
+bucket's CDN) and `cdn_url_expires_in` (seconds, 60 to the platform cap). A
+caller without that permission sending either gets 403; a non-S3 manager gets
+400.
+
 ## AWS credential fields
 
 An S3 manager can carry credentials in the request body. All of these are

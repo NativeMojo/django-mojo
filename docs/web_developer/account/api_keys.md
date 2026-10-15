@@ -42,13 +42,18 @@ Requires `manage_group`, `manage_groups`, or the combined `groups` permission (g
 | `permissions` | No | JSON **object** of granted permissions (default: empty). Must be a real object — any other shape, including a JSON-encoded string, is rejected with `400` |
 | `limits` | No | Positive per-key hard limits: `{endpoint_key: {"limit": N, "window": minutes}}`; use `"api"` for the global dispatcher ceiling |
 
-Four machine permissions are protected from ordinary group administrators:
-`geoip_sync`, `dnsman_acme_federation`, `edge_node`, and `mojosec_ingest`. On
-the normal member assignment path each requires its corresponding global
-`sys.*` grant; a platform `manage_users` / `manage_groups` administrator can
-also provision them through the global key-admin override. Do not present them
-as routine tenant permission toggles. They authorize fleet-wide federation,
-private edge material, or host-security ingestion rather than tenant CRUD. The
+Six permissions are protected from ordinary group administrators:
+`geoip_sync`, `dnsman_acme_federation`, `edge_node`, `mojosec_ingest`,
+`admin_compliance`, and `admin_verify`. On the normal member assignment path
+each requires its corresponding global `sys.*` grant; a platform
+`manage_users` / `manage_groups` administrator can also provision them through
+the global key-admin override. A member-level manager can neither grant nor
+revoke them, so hide them from tenant permission editors. Do not present them
+as routine tenant permission toggles. The first four authorize fleet-wide
+federation, private edge material, or host-security ingestion rather than
+tenant CRUD; `admin_compliance` and `admin_verify` let a key write a group's
+protected settings. A key that acts as a member never writes protected
+settings, whatever it carries. The
 ACME hub additionally accepts only an active project's ApiKey carrying
 `dnsman_acme_federation` — JWT users and group tokens cannot call it. See
 [dnsman](../dnsman/README.md#acme-delegation-hub-optional) and
@@ -102,6 +107,8 @@ permissions, or superuser flag).
 | `user` | user id, or `null` to clear | The member this key acts as |
 | `override_user` | bool, default `false` | `false`: the link is a **reference** — it changes who your writes are attributed to, nothing else. `true`: the key **assumes** that member, and permissions come from their group membership. |
 
+`user_id` is accepted as another name for `user` and follows the same rules.
+
 ```http
 POST /api/group/apikey/42
 Content-Type: application/json
@@ -115,9 +122,43 @@ Content-Type: application/json
   group, not another tenant.
 - The target must **not** be a superuser.
 - You need key-management permissions (`manage_group` / `manage_members` /
-  `manage_users` / `manage_groups`, or the global equivalents).
+  `manage_users` / `manage_groups`, or the global equivalents). That is enough
+  to link a member as a **reference** (`override_user: false`).
+- **Switching `override_user` on needs more.** You must be the linked member
+  yourself, or a platform administrator (global `manage_users` or
+  `manage_groups`), signed in with your own session. A group manager cannot
+  make a key assume another member, and a per-user API key cannot do it at
+  all, not even for its own user.
+- On a key that already has `override_user` on, changing `user` to someone
+  else needs the same authority for the new member. A refused request leaves
+  the key as it was.
 - `override_user: true` requires a linked `user`. Clearing `user` also clears
   `override_user`.
+- A key with a linked `user` cannot be moved to a `group` that member is not
+  an active direct member of.
+
+Anyone who can manage the key can still switch `override_user` off, clear
+`user`, deactivate, revoke or delete it.
+
+**The token of a key that assumes a member** is returned only to that member
+or a platform administrator. For anyone else `?graph=token` answers `200` with
+`"token": null` (a list returns `null` for those keys and the token for the
+others), and the admin `rotate` action answers `403`. Treat `null` as "you may
+not read this token", not as "this key has no token". The response to the
+request that created the key still carries its token.
+
+**Who issued it.** Four read-only fields, in the `default`, `token` and `me`
+graphs:
+
+| Field | Meaning |
+|---|---|
+| `user_linked_by` | The user who linked the current member (User `basic` graph), or `null` |
+| `user_linked_at` | When |
+| `override_enabled_by` | The user who switched `override_user` on, or `null` |
+| `override_enabled_at` | When |
+
+They are set by the server and ignored when posted. They are `null` on keys
+linked before these fields existed and on keys the server created itself.
 
 **What an override key can and cannot do.** It can do the member's ordinary
 work, bounded by the key's group. It **cannot**:
@@ -334,6 +375,7 @@ So the holder of a leaked token cannot mint a replacement for themselves before 
 ## Security Notes
 
 - Store all tokens securely — treat them like passwords
+- **A key that assumes a member gives its token only to that member or a platform administrator.** A group manager, and any API key, gets `"token": null` for it and cannot rotate it through the admin action. See [Acting as a Member](#acting-as-a-member--user-and-override_user).
 - **API key tokens are recoverable, not write-once — but read-back is opt-in.** The raw token is stored encrypted on the record and returned only by `GET /api/group/apikey/<id>?graph=token`; plain list and detail reads omit it. Every opt-in read is audited server-side. `manage_group` is intentionally a full-trust credential-management grant inside the tenant, so an API key carrying it may request the `token` graph and recover sibling keys' live tokens. The framework does not block that path: the opt-in narrows *where the secret travels*, not *who may ask for it*. Give ordinary integrations narrower permissions. If a management key is compromised, rotate or revoke every sibling it could have read; revoking only that key is not sufficient containment. Rotation does invalidate the previous token permanently.
 - **API Keys**: scoped to one group, explicit permissions, `sys.*` always denied
 - **Ordinary ApiKey traffic is unlimited by default, not unmonitored.** Set a
@@ -349,6 +391,9 @@ The built-in portal uses `POST /api/account/admin/apikey/action` with
 `{"api_key": 91, "action": "rotate|deactivate|reactivate|revoke"}`. The caller
 must hold edit authority for that key, must be an interactive JWT user, and
 must have authenticated within 600 seconds. Rotate returns the new token once;
-creation uses the ordinary create response. Clear the value when its dialog
+creation uses the ordinary create response. Rotate answers `403` for a key
+that assumes a member unless the caller is that member or a platform
+administrator; `deactivate`, `reactivate` and `revoke` stay open to anyone
+with edit authority, so a manager can always stop such a key. Clear the value when its dialog
 closes. The portal deliberately never requests `graph=token`, although that
 audited backend recovery API remains available for compatible clients.
