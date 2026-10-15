@@ -36,7 +36,9 @@ class CdnDistribution(models.Model, MojoModel):
     modified = models.DateTimeField(auto_now=True, db_index=True)
 
     bucket_name = models.CharField(max_length=63, unique=True)
-    distribution_id = models.CharField(max_length=32, blank=True, default="", db_index=True)
+    # CloudFront ids: distributions, OACs and public keys are 13-14 characters,
+    # key groups are 36-character UUIDs (maestro #8305). 64 leaves room.
+    distribution_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
     distribution_arn = models.CharField(max_length=128, blank=True, default="")
     domain_name = models.CharField(
         max_length=128, blank=True, default="",
@@ -45,8 +47,8 @@ class CdnDistribution(models.Model, MojoModel):
         max_length=253, blank=True, default="",
         help_text="Optional custom domain served by the distribution. Links "
                   "use it when set.")
-    oac_id = models.CharField(max_length=32, blank=True, default="")
-    key_group_id = models.CharField(max_length=32, blank=True, default="")
+    oac_id = models.CharField(max_length=64, blank=True, default="")
+    key_group_id = models.CharField(max_length=64, blank=True, default="")
     signing_key = models.ForeignKey(
         "fileman.CdnSigningKey", related_name="distributions",
         null=True, blank=True, default=None, on_delete=models.SET_NULL,
