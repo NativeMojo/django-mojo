@@ -6,12 +6,15 @@ level >= 6 row, and the noisiest MojoSec kinds are level 8, so those rows
 were never removed. This module removes them once they are older than the
 receipt retention, keeping any Event an Incident holds or whose receipt is
 not finished. The daily job and ``prune_mojosec_events`` share one selector.
+The daily job deletes only when ``MOJOSEC_EVENT_PRUNE_ENABLED`` is on and
+otherwise logs that it is off; the command is not gated.
 """
 
 from django.db import transaction
 from django.db.models import Count, Max, Min
 
 from mojo.helpers import dates
+from mojo.helpers.settings import settings
 
 SCOPE = "mojosec"
 MODEL_NAME = "mojosec_sensor"
@@ -143,3 +146,24 @@ def prune_projected_events(job=None, now=None, batch=1000, max_batches=100,
             message += "; more remain past the batch ceiling"
         job.add_log(message)
     return deleted
+
+
+def deletion_enabled():
+    return settings.get_static("MOJOSEC_EVENT_PRUNE_ENABLED", False, kind="bool")
+
+
+def daily_prune(job=None, now=None, days=None, enabled=None):
+    """The 08:35 job: prune only when ``MOJOSEC_EVENT_PRUNE_ENABLED`` is on.
+
+    While it is off, run no query, log that nothing was deleted and name the
+    count-only preview a person reads before turning deletion on.
+    """
+    if enabled is None:
+        enabled = deletion_enabled()
+    if enabled:
+        return prune_projected_events(job=job, now=now, days=days)
+    if job is not None and hasattr(job, "add_log"):
+        job.add_log(
+            "MojoSec Event prune is off (MOJOSEC_EVENT_PRUNE_ENABLED); deleted "
+            "nothing. Preview with: manage.py prune_mojosec_events")
+    return 0

@@ -9,6 +9,8 @@ FIREWALL_SYNC_JOB = "mojo.apps.incident.asyncjobs.sync_firewall"
 FIREWALL_SYNC_CHANNEL = "firewall"
 FIREWALL_SYNC_EXPIRES = 7200
 
+MOJOSEC_EVENT_PRUNE_JOB = "mojo.apps.incident.services.mojosec_retention.daily_prune"
+
 
 def _llm_triage_enabled():
     from mojo.apps.account.services import llm_safety
@@ -67,10 +69,11 @@ def prune_mojosec_learning(force=False, verbose=False, now=None):
 
 
 # After the receipt prune, so most aged Events no longer have a receipt.
+# Deletes nothing until MOJOSEC_EVENT_PRUNE_ENABLED is set.
 @schedule(minutes="35", hours="8")
 def prune_mojosec_events(force=False, verbose=False, now=None):
     jobs.publish(
-        func="mojo.apps.incident.services.mojosec_retention.prune_projected_events",
+        func=MOJOSEC_EVENT_PRUNE_JOB,
         channel="cleanup", payload={})
 
 
