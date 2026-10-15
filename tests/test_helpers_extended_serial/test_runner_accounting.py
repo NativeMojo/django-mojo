@@ -275,6 +275,87 @@ def test_unselected_file_runs_no_setup(opts):
         sys.modules.pop("t4761_probe.unselected", None)
 
 
+def _setup_only_module(dotted, calls, *, setup_raises=False, file_tier=None):
+    """An in-memory shared-setup file: one setup and no tests (item #8300).
+    Registered in sys.modules so import_module returns it; the caller removes it."""
+    import sys
+    import types
+
+    module = types.ModuleType(dotted)
+    module.__file__ = __file__
+
+    @th.unit_setup()
+    def setup_only(opts):
+        calls.append("setup_only")
+        if setup_raises:
+            raise RuntimeError("shared setup exploded")
+
+    module.setup_only = setup_only
+    if file_tier:
+        module.TESTIT_TIER = file_tier
+    sys.modules[dotted] = module
+    return module
+
+
+@th.unit_test("tier gate: a file with no tests still runs its setup under a preset")
+def test_setup_only_file_runs_setup(opts):
+    import sys
+    from testit import runner
+
+    calls = []
+    _setup_only_module("t8300_probe.setup_only", calls)
+    try:
+        with _scratch_run() as (state, events):
+            local = _local_opts(test_modules=None, selected_tags={"core", "framework"})
+            runner.run_module_tests_by_name(local, "t8300_probe", "setup_only")
+            assert calls == ["setup_only"], f"a shared-setup file must run its setup, got {calls}"
+            assert (state.total, state.failed, state.skipped) == (0, 0, 0), \
+                f"setup alone counts nothing, got {(state.total, state.failed, state.skipped)}"
+            codes = [r["code"] for r in runner._run_verdict(state)]
+            assert codes == ["nothing_selected"], f"setup alone is not an executed test, got {codes}"
+    finally:
+        sys.modules.pop("t8300_probe.setup_only", None)
+
+
+@th.unit_test("tier gate: a raising setup in a file with no tests is reported under a preset")
+def test_setup_only_file_error_reported(opts):
+    import sys
+    from testit import runner
+
+    calls = []
+    _setup_only_module("t8300_probe.setup_raises", calls, setup_raises=True)
+    try:
+        with _scratch_run() as (state, events):
+            local = _local_opts(test_modules=None, selected_tags={"core", "framework"})
+            runner.run_module_tests_by_name(local, "t8300_probe", "setup_raises")
+            errors = [r for r in state.records if r.get("kind") == "setup_error"]
+            assert len(errors) == 1, f"one setup_error record expected, got {state.records}"
+            assert errors[0]["function"] == "setup_only", f"the record names the setup, got {errors[0]}"
+            assert (state.total, state.failed, state.skipped) == (1, 1, 0), \
+                f"the setup error is the one counted failure, got {(state.total, state.failed, state.skipped)}"
+            codes = [r["code"] for r in runner._run_verdict(state)]
+            assert codes == ["setup_error"], f"the run fails with setup_error, got {codes}"
+    finally:
+        sys.modules.pop("t8300_probe.setup_raises", None)
+
+
+@th.unit_test("tier gate: a file with no tests runs its setup even when its own tier is unselected")
+def test_setup_only_file_ignores_own_tier(opts):
+    import sys
+    from testit import runner
+
+    calls = []
+    _setup_only_module("t8300_probe.setup_admin", calls, file_tier="admin")
+    try:
+        with _scratch_run() as (state, events):
+            local = _local_opts(test_modules=None, selected_tags={"core", "framework"})
+            runner.run_module_tests_by_name(local, "t8300_probe", "setup_admin")
+            assert calls == ["setup_only"], \
+                f"a shared-setup file serves later files, whatever its own tier, got {calls}"
+    finally:
+        sys.modules.pop("t8300_probe.setup_admin", None)
+
+
 @th.unit_test("setup skip: a TestitSkip in setup still skips the file, no error")
 def test_setup_skip_still_skips_file(opts):
     import sys
