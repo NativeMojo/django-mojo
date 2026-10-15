@@ -197,7 +197,8 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   row (a JSON object string), with the settings-file value merged *over* it,
   with `ApiKey.APIKEY_PERMS_PROTECTION_DEFAULTS` merged over both. The
   framework floor currently protects `geoip_sync`, `dnsman_acme_federation`,
-  `edge_node`, and `mojosec_ingest` with their matching global `sys.*` grants,
+  `edge_node`, `mojosec_ingest`, `admin_compliance`, and `admin_verify` with
+  their matching global `sys.*` grants,
   and neither the file nor a row can override or relax one of its entries.
   **The settings file wins over a row, in both directions.** A database row can
   **add** protected permissions, but it can neither loosen nor tighten one the

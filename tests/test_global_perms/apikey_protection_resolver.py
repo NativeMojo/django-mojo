@@ -101,7 +101,7 @@ def test_builtins_win_over_both(opts):
     from mojo.apps.account.models.api_key import resolve_apikey_perms_protection as resolve
 
     floor = _floor()
-    assert len(floor) == 4, f"this test pins the four built-in protections, got {sorted(floor)}"
+    assert len(floor) == 6, f"this test pins the six built-in protections, got {sorted(floor)}"
     weak = {perm: "manage_group" for perm in floor}
     for label, resolved in {
         "file": resolve(weak, None),
