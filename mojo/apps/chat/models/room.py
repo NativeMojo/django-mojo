@@ -31,6 +31,10 @@ class ChatRoom(models.Model, MojoModel):
         CAN_DELETE = True
         DELETE_PERMS = ["manage_chat"]
         OWNER_FIELD = "user"
+        # The owner is always the creator, through the create-time stamp. A
+        # body `user` would let a caller make someone else the owner, and its
+        # FK attach answers missing and unviewable ids differently (#8345).
+        NO_SAVE_FIELDS = ["user"]
         GROUP_FIELD = "group"
         SEARCH_FIELDS = ["name"]
         GRAPHS = {
@@ -81,6 +85,30 @@ class ChatRoom(models.Model, MojoModel):
     def on_rest_pre_save(self, changed_fields, created):
         if created and not self.rules:
             self.rules = dict(DEFAULT_RULES)
+        if created and self.group_id:
+            self._check_group_create()
+
+    def _check_group_create(self):
+        """A REST create may only place a room in a group the creator can chat
+        in (#8345).
+
+        The create-time stamp puts `request.group` on the row even when the
+        body's explicit group was refused, and `request.group` binds to any
+        active group an ordinary session names. Without this a caller outside
+        a group would own a room in it and could add its members. Same
+        predicate as join and history. Server code, the system pseudo-user and
+        request-less callers are not checked.
+        """
+        from mojo import errors as merrors
+        from mojo.helpers.request import is_override_user_session
+        request = self.active_request
+        actor = getattr(request, "user", None)
+        if not hasattr(actor, "is_request_user"):
+            return
+        if not self.group.user_has_permission(
+                actor, ["chat", "manage_chat"],
+                not is_override_user_session(request)):
+            raise merrors.PermissionDeniedException()
 
     def on_rest_pre_delete(self, *, handler=_UNSET):
         """Notify the deletion handler before the message cascade runs.
