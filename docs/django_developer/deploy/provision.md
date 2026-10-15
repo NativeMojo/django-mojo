@@ -411,7 +411,7 @@ need every poll stubbed in tests. So a fresh account converges in passes:
 
 | Run | What happens |
 |---|---|
-| 1 | network, security groups, config bucket, secrets, key pair, node role, the Aurora cluster and the cache. Stops there: the database has no endpoint yet. |
+| 1 | network, security groups, config bucket, secrets, key pair, node role (the setup statement, the agent's scoped log and metric grants, and the `DjangoMojoFilemanCdn` CloudFront grant fileman's CDN delivery runs under), the Aurora cluster and the cache. Stops there: the database has no endpoint yet. |
 | 2 | writes the stage-1 payload the booting node reads, and launches the EC2 instances. |
 | 3 | attaches the balancer and registers the targets. |
 

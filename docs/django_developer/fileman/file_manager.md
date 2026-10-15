@@ -384,6 +384,14 @@ adopts an untagged distribution on a bucket: that is a `MANUAL` finding.
 - `enable`: check + `cloudfront:CreateOriginAccessControl, CreatePublicKey, CreateKeyGroup, UpdateKeyGroup, CreateDistribution, TagResource, UpdateDistribution`; `s3:PutBucketPolicy`; `kms:PutKeyPolicy`; with `--harden` also `s3:PutBucketPublicAccessBlock, PutBucketOwnershipControls`.
 - cron and revoke: `cloudfront:GetKeyGroup, UpdateKeyGroup`; invalidation: `cloudfront:CreateInvalidation`; `--retire`: `cloudfront:GetDistributionConfig, UpdateDistribution`.
 
+A fleet provisioned by `mojo.deploy.provision` carries all of this on its node
+role: the `DjangoMojoFilemanCdn` statement grants the CloudFront actions, and
+the setup statement's `s3:*` / `kms:*` cover the bucket and key policies. A
+fleet whose node role was built elsewhere (OpenTofu, by hand) and then
+narrowed needs the CloudFront actions added, plus `kms:GetKeyPolicy` and
+`kms:PutKeyPolicy` on the media bucket's key; `check_cdn` names each missing
+one as a denied IAM action.
+
 Tests: `tests/test_fileman/26_test_cdn_links.py` and
 `27_test_cdn_provision.py` (no AWS); the opt-in
 `tests/test_fileman_cdn_live_slow_serial/` proves it on a real SSE-KMS bucket.
