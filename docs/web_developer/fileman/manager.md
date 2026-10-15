@@ -82,6 +82,14 @@ expire; a private manager's links are signed and expire after the manager's
 both as opaque and re-fetch a signed link before it expires, or use the
 shortlink, which re-signs on every click.
 
+CDN responses carry `Access-Control-Allow-Origin: *` for a simple
+cross-site read that sends `Origin` (a `fetch()`, or an element with
+`crossorigin="anonymous"`), so a page on another site can read the file.
+Load every request for such a file with CORS: a copy the browser cached from
+a plain `<img>` load carries no header and a later `fetch()` that reuses it is
+refused. Preflighted and credentialed requests are not supported. A public
+manager with no path of its own (at the top of its bucket) keeps S3 links.
+
 The manager's `default` and `list` graphs carry a read-only `cdn` object:
 
 ```json
