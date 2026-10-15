@@ -249,6 +249,31 @@ def test_daily_prune_on_deletes_as_before(opts):
     _clear()
 
 
+@th.django_unit_test("a job queued under the old path also obeys the switch")
+def test_old_job_path_obeys_the_switch(opts):
+    from mojo.apps.jobs.job_engine import load_job_function
+
+    old_entry = load_job_function(
+        "mojo.apps.incident.services.mojosec_retention.prune_projected_events")
+
+    _clear()
+    ids = [_event(500).pk for unused in range(3)]
+    job = _Job()
+    count = old_entry(job, days=400)
+    th.assert_eq(count, 0, "a job queued under the old path deleted while the switch is off")
+    th.assert_eq(_remaining(ids), set(ids), "the old job path deleted rows while the switch is off")
+    th.assert_true(job.logs and "deleted nothing" in job.logs[-1],
+                   f"the old job path did not log that deletion is off: {job.logs}")
+
+    job = _Job()
+    count = old_entry(job, days=400, enabled=True)
+    th.assert_eq(count, 3, "the old job path did not delete with the switch on")
+    th.assert_eq(_remaining(ids), set(), "aged rows remain on the old job path with the switch on")
+    th.assert_true(job.logs and job.logs[-1].startswith("Pruned 3 "),
+                   f"the old job path's log changed: {job.logs}")
+    _clear()
+
+
 @th.django_unit_test("the 08:35 cron publishes the gated entry")
 def test_cron_publishes_the_gated_entry(opts):
     from mojo.apps.incident import cronjobs
