@@ -999,11 +999,21 @@ as deploy `/usr/bin/bash` commands remains.
 
 ### Per-receipt MojoSec Event retention
 
+The daily `prune_mojosec_events` job deletes nothing until
+`MOJOSEC_EVENT_PRUNE_ENABLED = True` is set in the deployment's Django settings
+file. It is read with `get_static`, so a global `Setting` row cannot turn it
+on; restart the job runners after changing it. While it is off, each morning's
+job log says that deletion is off and names the preview command.
+
+Roll it out in this order: upgrade; run the count-only preview below and have
+a person read it; optionally clear the backlog with `--apply --max-events`;
+then turn the setting on.
+
 A receipt that is not routed to a grouped case writes one Event with
 `scope="mojosec"` and `model_name="mojosec_sensor"`. `prune_events` keeps every
 level 6 or higher Event, and `web.probe` and `fim.change` are level 8, so these
-rows need their own retention. The daily `prune_mojosec_events` job deletes
-them once they are older than `MOJOSEC_RECEIPT_RETENTION_DAYS` (default 45,
+rows need their own retention. Once it is on, the daily `prune_mojosec_events`
+job deletes them once they are older than `MOJOSEC_RECEIPT_RETENTION_DAYS` (default 45,
 minimum 7), in batches of 1,000, at most 100 batches a run. A larger backlog
 continues the next day, and the job log says rows remain.
 
@@ -1032,7 +1042,10 @@ explicit ceiling:
 uv run python manage.py prune_mojosec_events --apply --max-events 100000
 ```
 
-`--apply` without `--max-events` is refused. Deleting an Event nulls the
+`--apply` without `--max-events` is refused. The command is not gated by
+`MOJOSEC_EVENT_PRUNE_ENABLED`, and neither is the assistant's `run_job` tool,
+which needs `manage_jobs` and an operator's approval. `--apply` counts, deletes
+and prints in one call, so run the preview without `--apply` first. Deleting an Event nulls the
 `SET_NULL` links to it on receipts, case transitions, CloudWatch alarm
 transitions and GuardDuty findings.
 
@@ -1167,7 +1180,7 @@ Default health rules are auto-created on first health check run. They send notif
 | Job | Schedule | What it does |
 |-----|----------|--------------|
 | `prune_mojosec_receipts` | Daily 8:15 AM | Deletes published and dead MojoSec receipts older than `MOJOSEC_RECEIPT_RETENTION_DAYS`; never deletes live pending publication rows |
-| `prune_mojosec_events` | Daily 8:35 AM | Deletes per-receipt MojoSec Events (`model_name="mojosec_sensor"`) older than `MOJOSEC_RECEIPT_RETENTION_DAYS`, in bounded batches; keeps Events with an Incident or an unfinished receipt. See [Per-receipt MojoSec Event retention](#per-receipt-mojosec-event-retention) |
+| `prune_mojosec_events` | Daily 8:35 AM | Off unless `MOJOSEC_EVENT_PRUNE_ENABLED`; while off it deletes nothing and logs that it is off. When on, deletes per-receipt MojoSec Events (`model_name="mojosec_sensor"`) older than `MOJOSEC_RECEIPT_RETENTION_DAYS`, in bounded batches; keeps Events with an Incident or an unfinished receipt. See [Per-receipt MojoSec Event retention](#per-receipt-mojosec-event-retention) |
 | `prune_mojosec_learning` | Daily 8:25 AM | Deletes bounded offline evaluation summaries older than `MOJOSEC_LEARNING_EVALUATION_RETENTION_DAYS`; feedback/proposal audit rows remain |
 | `replay_mojosec_handler_outbox` | Every 5 minutes | Replays published MojoSec receipts whose handler dispatch is pending, failed, or stale-queued past `MOJOSEC_HANDLER_QUEUED_STALE_SECONDS`; dead-letters receipts at `MOJOSEC_HANDLER_MAX_ATTEMPTS` and pending receipts whose Event was pruned |
 | `settle_mojosec_cases` | Every 5 minutes | Settles quiet MojoSec deployment cases past `MOJOSEC_DEPLOY_QUIET_SECONDS`, heals crashed case promotions, re-drives stranded case-routed receipts, and coalesces distributed web probes into campaign cases; system transitions only, never Events |
@@ -1236,6 +1249,7 @@ Single-server job functions follow the engine's calling convention: `func(job)` 
 |---------|---------|-------------|
 | `OSSEC_SECRET` | None | Shared secret for legacy OSSEC webhook auth; unset/empty disables both endpoints |
 | `MOJOSEC_RECEIPT_RETENTION_DAYS` | `45` | Published receiver-idempotency retention; minimum 7 days |
+| `MOJOSEC_EVENT_PRUNE_ENABLED` | `False` | Conf-file only. Lets the daily `prune_mojosec_events` job delete aged per-receipt Events; while off it deletes nothing. The manual command is not gated |
 | `MOJOSEC_HANDLER_MAX_ATTEMPTS` | `100` | Handler dispatch attempts before a receipt is dead-lettered (~8h of continuous failure) |
 | `MOJOSEC_HANDLER_QUEUED_STALE_SECONDS` | `1800` | Age after which a queued receipt's vanished dispatch job is recovered inline by the replay cron |
 | `MOJOSEC_CATEGORY_VOLUME_ALERT_THRESHOLD` | `10000` | File-only persisted MojoSec occurrence threshold per server-owned category/fixed UTC hour; `<=0` disables advisory counting/alerts |
