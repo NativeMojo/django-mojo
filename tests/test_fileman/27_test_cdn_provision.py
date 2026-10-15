@@ -1049,8 +1049,8 @@ def test_root_public_manager_reported(opts):
     inactive = _root_manager(f"{PREFIX}rootoff", True, is_active=False)
     optout = _root_manager(f"{PREFIX}rootopt", True, cdn="off")
     try:
-        for apply in (False, True):
-            aws = _FakeAws(pab=False)
+        aws = _FakeAws(pab=False)
+        for apply in (True, False):
             report = _provisioner(_fresh(opts.public), aws, apply=apply).run()
             found = [i for i in report["items"] if i["code"] == "prefix.root_public"]
             assert_eq(len(found), 1, f"one finding, for the active, not opted-out root manager: {found}")

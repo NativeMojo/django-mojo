@@ -13,7 +13,9 @@ a second enable makes no mutating call; after CloudFront reports Deployed,
 an unsigned CDN GET returns 200 on a public manager's prefix and 403 on a
 private one; a signed GET returns 200; an anonymous raw S3 GET returns 403
 (the bucket stays private); key rotation then revocation makes the old
-signed link fail; a BYO check of the same distribution passes. Teardown
+signed link fail; a BYO check of the same distribution passes. A GET with
+`Origin` gets `Access-Control-Allow-Origin: *` and one without gets none
+(maestro #8286). Teardown
 retires and deletes the distribution it created — the one place deletion
 is allowed, because this test created and tagged it.
 """
@@ -48,6 +50,16 @@ def _get(url, timeout=20):
             return response.status
     except urllib.error.HTTPError as error:
         return error.code
+
+
+def _get_headers(url, headers=None, timeout=20):
+    """(status, response headers) for a GET carrying `headers`."""
+    request = urllib.request.Request(url, headers=headers or {})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, response.headers
+    except urllib.error.HTTPError as error:
+        return error.code, error.headers
 
 
 def _wait_deployed(cf, distribution_id):
@@ -117,6 +129,15 @@ def test_live_cdn_delivery(opts):
     public_url = public.backend.get_url(keys["public"])
     assert_true("?" not in public_url, "a public manager's CDN link is unsigned")
     assert_eq(_get(public_url), 200, f"unsigned CDN GET on the public prefix: {public_url}")
+    # CORS (maestro #8286): SimpleCORS answers a request that carries Origin,
+    # and only that one, which is why kiosk pages must load with CORS every time.
+    status, headers = _get_headers(public_url, {"Origin": "https://kiosk.example.test"})
+    assert_eq(status, 200, "a cross-site GET on the public prefix")
+    assert_eq(headers.get("Access-Control-Allow-Origin"), "*",
+              "the CDN answers a cross-site read with Access-Control-Allow-Origin: *")
+    status, headers = _get_headers(public_url)
+    assert_eq(headers.get("Access-Control-Allow-Origin"), None,
+              "without Origin SimpleCORS sends no header (the browser-cache note in the docs)")
     assert_eq(_get(public.backend.public_s3_url(keys["public"])), 403,
               "the bucket stays private: anonymous raw S3 GET is refused")
     unsigned_private = cdn_provision.cdn.build_url(row, keys["private"])

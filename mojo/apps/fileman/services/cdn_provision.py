@@ -174,7 +174,7 @@ class KeyGroupMissing(ValueError):
     """A signed behavior was asked for with no key group to trust."""
 
 
-def _behavior(origin_id, key_group_id, signed, path_pattern=None):
+def _behavior(origin_id, key_group_id, signed, path_pattern=None, response_headers_policy_id=None):
     if signed and not key_group_id:
         # Never write a "signed" behavior that trusts nobody: CloudFront would
         # serve the prefix to anyone.
@@ -191,12 +191,14 @@ def _behavior(origin_id, key_group_id, signed, path_pattern=None):
             {"Enabled": True, "Quantity": 1, "Items": [key_group_id]} if signed
             else {"Enabled": False, "Quantity": 0}),
     }
+    if response_headers_policy_id:
+        behavior["ResponseHeadersPolicyId"] = response_headers_policy_id
     if path_pattern:
         behavior["PathPattern"] = path_pattern
     return behavior
 
 
-def plan_behaviors(managers, origin_id, key_group_id):
+def plan_behaviors(managers, origin_id, key_group_id, response_headers_policy_id=None):
     """The cache behaviors a bucket needs, planned fail-closed.
 
     Every S3 manager on the bucket counts — active or not, opted out or not:
@@ -211,6 +213,8 @@ def plan_behaviors(managers, origin_id, key_group_id):
     whether CloudFront matches the encoded or the decoded path decides if the
     longer signed pattern can be sidestepped, so it is refused until the live
     probe says otherwise.
+
+    Every behavior carries `response_headers_policy_id` when one is given.
 
     Returns {"behaviors", "unsafe", "nested", "prefixes"}.
     """
@@ -239,7 +243,8 @@ def plan_behaviors(managers, origin_id, key_group_id):
             nested.append((prefix, ancestor))
         kept[prefix] = signed
     rows = sorted(kept.items(), key=lambda row: (-len(row[0]), row[0]))
-    behaviors = [_behavior(origin_id, key_group_id, signed=signed, path_pattern=f"{prefix}/*")
+    behaviors = [_behavior(origin_id, key_group_id, signed=signed, path_pattern=f"{prefix}/*",
+                           response_headers_policy_id=response_headers_policy_id)
                  for prefix, signed in rows]
     return {"behaviors": behaviors, "unsafe": unsafe, "nested": nested, "prefixes": dict(kept)}
 
@@ -249,7 +254,7 @@ def desired_behaviors(managers, origin_id, key_group_id):
 
 
 def distribution_config(bucket, region, oac_id, key_group_id, behaviors, caller_reference,
-                        enabled=True, current=None):
+                        enabled=True, current=None, response_headers_policy_id=None):
     """The full DistributionConfig we converge to. With `current`, fields we
     do not own (aliases, certificate, price class, logging...) are kept."""
     origin_id = f"s3-{bucket}"
@@ -263,7 +268,8 @@ def distribution_config(bucket, region, oac_id, key_group_id, behaviors, caller_
             "OriginAccessControlId": oac_id,
             "S3OriginConfig": {"OriginAccessIdentity": ""},
         }]},
-        "DefaultCacheBehavior": _behavior(origin_id, key_group_id, signed=True),
+        "DefaultCacheBehavior": _behavior(origin_id, key_group_id, signed=True,
+                                          response_headers_policy_id=response_headers_policy_id),
         "CacheBehaviors": {"Quantity": 0, "Items": []},
         "PriceClass": "PriceClass_All",
         "HttpVersion": "http2",
@@ -286,7 +292,8 @@ def _behaviors_match(current, desired):
             groups = item.get("TrustedKeyGroups") or {}
             out.append((item.get("PathPattern"), bool(groups.get("Enabled")),
                         tuple(sorted(groups.get("Items") or [])),
-                        item.get("TargetOriginId")))
+                        item.get("TargetOriginId"),
+                        item.get("ResponseHeadersPolicyId") or None))
         return out
     return shape(current) == shape(desired)
 
@@ -294,6 +301,10 @@ def _behaviors_match(current, desired):
 # ----------------------------------------------------------------------
 # the provisioner
 # ----------------------------------------------------------------------
+
+# `CdnProvisioner(response_headers_policy=...)` default: read the setting.
+_FROM_SETTING = object()
+
 
 class CdnProvisioner:
     """Observe and converge CDN delivery for one manager's bucket.
@@ -307,7 +318,8 @@ class CdnProvisioner:
 
     def __init__(self, manager, apply=False, harden=False, clients=None, region=None,
                  timeout=3, secret_writer=None, key_loader=None, key_pem_factory=None,
-                 now=None, session_factory=None, profile=None):
+                 now=None, session_factory=None, profile=None,
+                 response_headers_policy=_FROM_SETTING):
         self.manager = manager
         self.bucket = manager.root_location
         self.apply = bool(apply)
@@ -321,6 +333,11 @@ class CdnProvisioner:
         self.now = now or timezone.now
         self.session_factory = session_factory
         self.profile = profile
+        # The policy `enable` writes on a distribution fileman provisioned.
+        # The visibility sync never uses it: it copies the live default's.
+        if response_headers_policy is _FROM_SETTING:
+            response_headers_policy = cdn.response_headers_policy_id()
+        self.response_headers_policy = response_headers_policy or None
         self.caller = ProviderCaller(logger)
         self.findings = []
         self.actions = []
@@ -470,12 +487,13 @@ class CdnProvisioner:
         self.observed["public_access_block"] = all_on
         self.observed["ownership_enforced"] = enforced
 
-        affected = self._opted_out_public_managers()
+        affected = self._opted_out_public_managers() + [
+            m.name for m in self._root_public_managers()]
         if all_on:
             self._add(STEP_BUCKET, report.PASS, "public_access_block.ok",
                       "Block Public Access is on for every setting")
         else:
-            names = ", ".join(sorted(affected)) or "none"
+            names = ", ".join(sorted(set(affected))) or "none"
             if self.apply and self.harden:
                 self.actions.append(report.Action(STEP_BUCKET, "modify", self.bucket,
                                                   "enable Block Public Access"))
@@ -492,7 +510,8 @@ class CdnProvisioner:
                 self._add(STEP_BUCKET, report.DRIFT, "public_access_block.off",
                           "Block Public Access is not fully on, so the bucket may still be made public by policy",
                           f"re-run with --harden to turn it on. That breaks raw-S3 public links of every "
-                          f"manager opted out of the CDN on this bucket: {names}")
+                          f"manager on this bucket that does not deliver through the CDN (opted out, "
+                          f"or public at the bucket root): {names}")
         if enforced:
             self._add(STEP_BUCKET, report.PASS, "ownership.ok", "Object Ownership is BucketOwnerEnforced")
         elif self.apply and self.harden:
@@ -538,6 +557,25 @@ class CdnProvisioner:
                 continue
         return names
 
+    def _root_public_managers(self):
+        """Active public managers at the top of the bucket that have not opted
+        out: they keep S3 links (`cdn.resolve_for_manager`), because an
+        empty prefix gets no unsigned behavior and the signed default would
+        refuse their unsigned CDN links."""
+        rows = []
+        for manager in self._managers_on_bucket():
+            if not manager.is_active or not manager.is_public:
+                continue
+            if (manager.root_path or "").strip("/"):
+                continue
+            try:
+                if cdn.validate_switch(manager.get_setting(cdn.CDN_SWITCH_KEY)) == "off":
+                    continue
+            except ValueError:
+                continue
+            rows.append(manager)
+        return rows
+
     def _behavior_managers(self):
         """Every manager on the bucket, with this provisioner's own instance
         replacing its database row so a pre-save sync sees the value about
@@ -550,11 +588,13 @@ class CdnProvisioner:
             rows.append(self.manager)
         return rows
 
-    def _planned_behaviors(self, origin_id, key_group_id, step=STEP_DISTRIBUTION):
+    def _planned_behaviors(self, origin_id, key_group_id, step=STEP_DISTRIBUTION,
+                           response_headers_policy_id=None):
         """plan_behaviors plus its findings. Returns the plan, or None when it
         must not be written (no key group, a nested private prefix, over quota)."""
         try:
-            plan = plan_behaviors(self._behavior_managers(), origin_id, key_group_id)
+            plan = plan_behaviors(self._behavior_managers(), origin_id, key_group_id,
+                                  response_headers_policy_id=response_headers_policy_id)
         except KeyGroupMissing:
             self._add(step, report.MANUAL, "key_group.missing",
                       "a private prefix needs the deployment signing key group, and this "
@@ -820,6 +860,12 @@ class CdnProvisioner:
         depends = (STEP_PREFLIGHT, STEP_KEY, STEP_OAC) if self.apply else (STEP_PREFLIGHT,)
         if self._blocked(STEP_DISTRIBUTION, *depends):
             return
+        for manager in self._root_public_managers():
+            self._add(STEP_DISTRIBUTION, report.DRIFT, "prefix.root_public",
+                      f"public manager {manager.name!r} sits at the top of {self.bucket}, so it "
+                      f"keeps S3 links instead of CDN links",
+                      f"give it a path of its own (s3://{self.bucket}/<prefix>) to deliver it "
+                      f"through the CDN")
         cf = self.client("cloudfront")
         distribution, byo, foreign = self._find_distribution(cf)
         if STEP_DISTRIBUTION in self.blocked:
@@ -869,12 +915,14 @@ class CdnProvisioner:
 
     def _create_distribution(self, cf):
         region = self.observed.get("bucket_region", self.region)
-        plan = self._planned_behaviors(f"s3-{self.bucket}", self.observed.get("key_group_id"))
+        plan = self._planned_behaviors(f"s3-{self.bucket}", self.observed.get("key_group_id"),
+                                       response_headers_policy_id=self.response_headers_policy)
         if plan is None:
             return
         config = distribution_config(
             self.bucket, region, self.observed.get("oac_id"), self.observed.get("key_group_id"),
-            plan["behaviors"], caller_reference=f"mojo-fm-{self.bucket}-{uuid.uuid4().hex[:8]}")
+            plan["behaviors"], caller_reference=f"mojo-fm-{self.bucket}-{uuid.uuid4().hex[:8]}",
+            response_headers_policy_id=self.response_headers_policy)
         self.actions.append(report.Action(STEP_DISTRIBUTION, "create", self.bucket))
         created = self._call(STEP_DISTRIBUTION, "cloudfront.create_distribution_with_tags",
                              "cloudfront:CreateDistribution",
@@ -931,8 +979,17 @@ class CdnProvisioner:
         if default.get("ForwardedValues", {}).get("QueryString") is True:
             problems.append(("cache_key.query_strings",
                              "query strings are in the cache key, so every signed URL is cached separately"))
+        # A BYO distribution keeps the policy on its own default behavior; a
+        # provisioned one carries the deployment's (FILEMAN_CDN_RESPONSE_HEADERS_POLICY).
+        live_policy = default.get("ResponseHeadersPolicyId") or None
+        policy = live_policy if byo else self.response_headers_policy
+        if not byo and live_policy != policy:
+            problems.append(("default_behavior.response_headers",
+                             f"the default cache behavior's response headers policy is "
+                             f"{live_policy or 'none'}, expected {policy or 'none'} "
+                             f"({cdn.RESPONSE_HEADERS_POLICY_KEY})"))
         origin_id = origin.get("Id") or f"s3-{self.bucket}"
-        plan = self._planned_behaviors(origin_id, key_group_id)
+        plan = self._planned_behaviors(origin_id, key_group_id, response_headers_policy_id=policy)
         if plan is None:
             return
         desired = plan["behaviors"]
@@ -972,7 +1029,7 @@ class CdnProvisioner:
         new_config = distribution_config(
             self.bucket, region, origin.get("OriginAccessControlId") or self.observed.get("oac_id"),
             key_group_id, desired, config.get("CallerReference"), enabled=True,
-            current=config)
+            current=config, response_headers_policy_id=policy)
         self.actions.append(report.Action(STEP_DISTRIBUTION, "modify", dist_id,
                                           "converge behaviors and enablement"))
         updated = self._call(STEP_DISTRIBUTION, "cloudfront.update_distribution",
@@ -992,6 +1049,9 @@ class CdnProvisioner:
         Used by visibility flips. Nothing else in the config is touched — not
         `Enabled`, not the origin, not a BYO distribution's own settings —
         and the default behavior is left as it is (reported if unsigned).
+        The per-prefix behaviors copy the live default's response headers
+        policy; the setting is never read here, so a bad setting cannot make
+        CloudFront refuse the update and with it a manager's save.
         """
         cf = self.client("cloudfront")
         got = self._call(STEP_DISTRIBUTION, "cloudfront.get_distribution_config",
@@ -1008,14 +1068,17 @@ class CdnProvisioner:
         config = got.get("DistributionConfig") or {}
         origins = ((config.get("Origins") or {}).get("Items") or [])
         origin_id = (origins[0].get("Id") if origins else None) or f"s3-{self.bucket}"
-        default_groups = (config.get("DefaultCacheBehavior") or {}).get("TrustedKeyGroups") or {}
+        default_behavior = config.get("DefaultCacheBehavior") or {}
+        default_groups = default_behavior.get("TrustedKeyGroups") or {}
         key_group_id = row.key_group_id or ((default_groups.get("Items") or [None])[0]
                                             if default_groups.get("Enabled") else None)
         if not default_groups.get("Enabled"):
             self._add(STEP_DISTRIBUTION, report.DRIFT, "distribution.default_behavior.unsigned",
                       "the default cache behavior does not require a signature",
                       "run enable to converge it")
-        plan = self._planned_behaviors(origin_id, key_group_id)
+        plan = self._planned_behaviors(
+            origin_id, key_group_id,
+            response_headers_policy_id=default_behavior.get("ResponseHeadersPolicyId") or None)
         if plan is None:
             return
         current = (config.get("CacheBehaviors") or {}).get("Items") or []

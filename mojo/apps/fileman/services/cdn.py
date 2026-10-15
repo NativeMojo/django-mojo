@@ -31,6 +31,13 @@ DEFAULT_MAX_EXPIRES_IN = 90 * 24 * 3600     # 90 days
 MIN_EXPIRES_IN = 60
 ABSOLUTE_MAX_EXPIRES_IN = 366 * 24 * 3600   # the validator's ceiling for the cap
 
+# The response headers policy on every cache behavior of a distribution
+# fileman provisions (maestro #8286): AWS's managed SimpleCORS unless the
+# deployment names another policy id, or "none" for no policy at all.
+RESPONSE_HEADERS_POLICY_KEY = "FILEMAN_CDN_RESPONSE_HEADERS_POLICY"
+SIMPLE_CORS_POLICY_ID = "60669652-455b-4ae9-85a4-c4c02393f86c"
+POLICY_ID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
+
 CDN_SWITCH_KEY = "cdn"
 CDN_EXPIRES_KEY = "cdn_url_expires_in"
 MANAGER_SETTING_KEYS = (CDN_SWITCH_KEY, CDN_EXPIRES_KEY)
@@ -67,6 +74,35 @@ def validate_max_expires_in(key, parsed):
     if not MIN_EXPIRES_IN <= parsed <= ABSOLUTE_MAX_EXPIRES_IN:
         raise ValueError(
             f"{key} must be between {MIN_EXPIRES_IN} and {ABSOLUTE_MAX_EXPIRES_IN} seconds")
+
+
+def parse_response_headers_policy(value):
+    """A policy id, or None for "none" (any case, spaces ignored).
+    Anything else raises ValueError."""
+    if isinstance(value, str):
+        text = value.strip()
+        if text.lower() == "none":
+            return None
+        if POLICY_ID_RE.match(text):
+            return text.lower()
+    raise ValueError(f"{RESPONSE_HEADERS_POLICY_KEY} must be a CloudFront response headers "
+                     f"policy id or \"none\"")
+
+
+def response_headers_policy_id():
+    """The response headers policy `enable` writes, or None for no policy."""
+    value = settings.get(RESPONSE_HEADERS_POLICY_KEY, SIMPLE_CORS_POLICY_ID)
+    try:
+        return parse_response_headers_policy(value)
+    except ValueError:
+        logit.warning("fileman", f"{RESPONSE_HEADERS_POLICY_KEY} is not a policy id or \"none\"; "
+                                 f"using SimpleCORS")
+        return SIMPLE_CORS_POLICY_ID
+
+
+def validate_response_headers_policy(key, parsed):
+    """`Setting.register_validator` hook for FILEMAN_CDN_RESPONSE_HEADERS_POLICY."""
+    parse_response_headers_policy(parsed)
 
 
 def validate_switch(value):
@@ -137,11 +173,15 @@ def distribution_for_bucket(bucket_name):
 def resolve_for_manager(manager):
     """The CdnDistribution a manager delivers through, or None.
 
-    None when the manager is not S3, its bucket has no enabled distribution,
-    the distribution has no host yet, or the manager (own setting, then top
+    None when the manager is not S3, it is public at the top of its bucket
+    (no folder of its own, so CloudFront has no unsigned behavior for it and
+    it keeps S3 links), its bucket has no enabled distribution, the
+    distribution has no host yet, or the manager (own setting, then top
     parent — `FileManager.get_setting` with no default) opts out.
     """
     if not getattr(manager, "is_s3", False):
+        return None
+    if manager.is_public and not (manager.root_path or "").strip("/"):
         return None
     try:
         if validate_switch(manager.get_setting(CDN_SWITCH_KEY)) == "off":

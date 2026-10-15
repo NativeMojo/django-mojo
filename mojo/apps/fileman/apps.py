@@ -28,3 +28,8 @@ class FilemanConfig(AppConfig):
         from mojo.apps.fileman.services import cdn
         Setting.register_validator(
             cdn.MAX_EXPIRES_IN_KEY, cdn.validate_max_expires_in, global_only=True)
+        # One distribution serves every group on a bucket, so the CORS
+        # response headers policy is global only (maestro #8286).
+        Setting.register_validator(
+            cdn.RESPONSE_HEADERS_POLICY_KEY, cdn.validate_response_headers_policy,
+            global_only=True)
