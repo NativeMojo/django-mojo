@@ -1005,7 +1005,8 @@ def test_signin_reaches_the_feed(opts):
 # API key may use it. A new guarded route fails here until it is classified.
 # ---------------------------------------------------------------------------
 
-# Routes that change how the caller signs in: a per-user key is refused.
+# Routes that change how the caller signs in, and the three operator routes
+# that issue sign-in or key secrets: a per-user key is refused.
 REFUSES_USER_API_KEYS = {
     "mojo.apps.account.rest.user_api_key.on_user_api_keys",
     "mojo.apps.account.rest.user_api_key.generate_api_key",
@@ -1028,6 +1029,11 @@ REFUSES_USER_API_KEYS = {
     "mojo.apps.account.rest.user.on_account_security_events_logout",
     "mojo.apps.account.rest.oauth.on_oauth_connection",
     "mojo.apps.account.rest.oauth_server.on_approve",
+    # Operator routes that hand out lasting access to an account or a key
+    # (#7635 step 2a, Brenda's review 105383).
+    "mojo.apps.account.rest.admin_people.on_admin_user_password_reset",
+    "mojo.apps.account.rest.admin_people.on_admin_user_password_temporary",
+    "mojo.apps.account.rest.admin_people.on_admin_apikey_action",
 }
 
 # Operator routes, and the assistant approvals documented as open to a
@@ -1042,11 +1048,8 @@ ADMITS_USER_API_KEYS = {
     "mojo.apps.account.rest.admin_fleet.on_admin_fleet_history",
     "mojo.apps.account.rest.admin_fleet.on_admin_fleet_operation",
     "mojo.apps.account.rest.admin_fleet.on_admin_fleet_mutate",
-    "mojo.apps.account.rest.admin_people.on_admin_user_password_reset",
-    "mojo.apps.account.rest.admin_people.on_admin_user_password_temporary",
     "mojo.apps.account.rest.admin_people.on_admin_permission_bundles",
     "mojo.apps.account.rest.admin_people.on_admin_permission_bundles_save",
-    "mojo.apps.account.rest.admin_people.on_admin_apikey_action",
     "mojo.apps.account.rest.admin_platform.on_admin_platform_retry",
     "mojo.apps.account.rest.admin_platform.on_admin_platform_verify",
     "mojo.apps.account.rest.admin_platform.on_admin_platform_converge",

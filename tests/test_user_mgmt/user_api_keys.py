@@ -341,6 +341,145 @@ def test_session_can_change_keys(opts):
 
 
 # ===========================================================================
+# #7635 step 2a: an administrator's per-user key cannot issue a temporary
+# password, send a reset link or act on an API key
+# ===========================================================================
+
+ADMIN_USER = "uak_7635_admin"
+ADMIN_EMAIL = "uak_7635_admin@example.com"
+TARGET_USER = "uak_7635_target"
+TARGET_EMAIL = "uak_7635_target@example.com"
+TARGET_GROUP = "uak_7635_group"
+TARGET_KEY = "uak_7635_key"
+
+
+def _admin_cleanup():
+    from mojo.apps.account.models import ApiKey, Group, User, UserAPIKey
+    ApiKey.objects.filter(name=TARGET_KEY).delete()
+    Group.objects.filter(name=TARGET_GROUP).delete()
+    UserAPIKey.objects.filter(user__username__in=[ADMIN_USER, TARGET_USER]).delete()
+    User.objects.filter(username__in=[ADMIN_USER, TARGET_USER]).delete()
+
+
+def _reset_link_logs(opts):
+    from mojo.apps.logit.models import Log
+    return Log.objects.filter(model_name="account.User", model_id=opts.admin_target_id,
+                              kind="password:admin_reset_link").count()
+
+
+@th.django_unit_test("user_api_key #7635: setup an administrator, a target user and a group key")
+def test_admin_key_guard_setup(opts):
+    from mojo.apps.account.models import ApiKey, Group, User, UserAPIKey
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+    _admin_cleanup()
+
+    admin = User(username=ADMIN_USER, email=ADMIN_EMAIL)
+    target = User(username=TARGET_USER, email=TARGET_EMAIL)
+    for user in (admin, target):
+        user.is_active = True
+        user.is_email_verified = True
+        user.requires_mfa = False
+        user.save()
+        user.save_password(TEST_PWORD)
+    admin.add_permission(["manage_users", "users", "manage_groups"])
+    admin.save()
+
+    group = Group.objects.create(name=TARGET_GROUP, kind="organization")
+    key, token = ApiKey.create_for_group(group=group, name=TARGET_KEY)
+
+    opts.admin_target_id = target.pk
+    opts.admin_target_hash = User.objects.get(pk=target.pk).password
+    opts.admin_group_key_id = key.pk
+    opts.admin_group_key_token = token
+    opts.admin_key_token = UserAPIKey.create_for_user(
+        admin, expire_days=1, label="7635 admin key").token
+
+
+@th.django_unit_test("user_api_key #7635: an administrator's per-user key cannot issue a temporary password")
+def test_admin_key_cannot_issue_temporary_password(opts):
+    from mojo.apps.account.models import User
+
+    _use_key(opts, opts.admin_key_token)
+    resp = opts.client.post("/api/account/admin/user/password/temporary",
+                            {"user": opts.admin_target_id})
+    opts.client.logout()
+
+    assert_eq(resp.status_code, 403,
+              f"a per-user key must not issue a temporary password, got "
+              f"{resp.status_code}: {resp.response}")
+    assert_eq(User.objects.get(pk=opts.admin_target_id).password, opts.admin_target_hash,
+              "a refused call must leave the target's password unchanged")
+
+
+@th.django_unit_test("user_api_key #7635: an administrator's per-user key cannot send a reset link")
+def test_admin_key_cannot_send_reset_link(opts):
+    before = _reset_link_logs(opts)
+    _use_key(opts, opts.admin_key_token)
+    resp = opts.client.post("/api/account/admin/user/password/reset",
+                            {"user": opts.admin_target_id})
+    opts.client.logout()
+
+    assert_eq(resp.status_code, 403,
+              f"a per-user key must not send a reset link, got "
+              f"{resp.status_code}: {resp.response}")
+    assert_eq(_reset_link_logs(opts), before, "a refused call must issue no reset link")
+
+
+@th.django_unit_test("user_api_key #7635: an administrator's per-user key cannot act on an API key")
+def test_admin_key_cannot_act_on_api_key(opts):
+    from mojo.apps.account.models import ApiKey
+
+    for action in ("rotate", "deactivate", "revoke"):
+        _use_key(opts, opts.admin_key_token)
+        resp = opts.client.post("/api/account/admin/apikey/action",
+                                {"api_key": opts.admin_group_key_id, "action": action})
+        opts.client.logout()
+        assert_eq(resp.status_code, 403,
+                  f"{action}: a per-user key must not act on an API key, got "
+                  f"{resp.status_code}: {resp.response}")
+
+    key = ApiKey.objects.get(pk=opts.admin_group_key_id)
+    assert_eq(key.is_active, True, "the group key must still be active")
+    assert_eq(key.get_token(), opts.admin_group_key_token, "the group key's token must be unchanged")
+    _identity, error = ApiKey.validate_token(opts.admin_group_key_token, th.get_mock_request())
+    assert_eq(error, None, "the group key must still authenticate")
+
+
+@th.django_unit_test("user_api_key #7635: the administrator's signed-in session can still use the three routes")
+def test_admin_session_can_use_the_three_routes(opts):
+    from mojo.apps.account.models import ApiKey, User
+
+    opts.client.login(ADMIN_USER, TEST_PWORD)
+    assert_true(opts.client.is_authenticated, "administrator login failed")
+    resp_temp = opts.client.post("/api/account/admin/user/password/temporary",
+                                 {"user": opts.admin_target_id})
+    before = _reset_link_logs(opts)
+    resp_reset = opts.client.post("/api/account/admin/user/password/reset",
+                                  {"user": opts.admin_target_id})
+    resp_key = opts.client.post("/api/account/admin/apikey/action",
+                                {"api_key": opts.admin_group_key_id, "action": "deactivate"})
+    opts.client.logout()
+
+    assert_eq(resp_temp.status_code, 200,
+              f"a session may issue a temporary password, got {resp_temp.status_code}: {resp_temp.response}")
+    assert_true(User.objects.get(pk=opts.admin_target_id).password != opts.admin_target_hash,
+                "the session's temporary password must be set")
+    assert_eq(resp_reset.status_code, 200,
+              f"a session may send a reset link, got {resp_reset.status_code}: {resp_reset.response}")
+    assert_eq(_reset_link_logs(opts), before + 1, "the session's reset link must be logged")
+    assert_eq(resp_key.status_code, 200,
+              f"a session may act on an API key, got {resp_key.status_code}: {resp_key.response}")
+    assert_eq(ApiKey.objects.get(pk=opts.admin_group_key_id).is_active, False,
+              "the session's deactivate must switch the key off")
+
+
+@th.django_unit_test("user_api_key #7635: cleanup the administrator fixtures")
+def test_admin_key_guard_cleanup(opts):
+    _admin_cleanup()
+
+
+# ===========================================================================
 # Cleanup
 # ===========================================================================
 
