@@ -4,7 +4,7 @@ from mojo.helpers import dates
 from mojo.helpers.request import (
     identity_allows_group, is_override_user_session, restricted_identity)
 from ..models import ChatRoom, ChatMembership
-from ..services import reachability
+from ..services import reachability, room_authority
 from ..services.access import publish_access_change
 from ..services.messages import send_message
 
@@ -24,10 +24,34 @@ def _deny_cross_tenant_room(request, room):
         raise merrors.PermissionDeniedException()
 
 
+def _refuse_banned(request, room):
+    """A banned caller has no say in a room except leaving it (#8347). Fixed:
+    no authority hook runs before it or can lift it."""
+    if room_authority.is_banned(request, room):
+        raise merrors.PermissionDeniedException()
+
+
 @md.URL('room')
 @md.URL('room/<int:pk>')
 @md.uses_model_security(ChatRoom)
 def on_chat_room(request, pk=None):
+    """RestMeta CRUD for rooms. A write or delete on one room first passes the
+    room-authority rule (services/room_authority.py); RestMeta perms still run
+    afterwards. Create (no pk) and reads are the framework's alone."""
+    if pk and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        room = ChatRoom.objects.filter(pk=pk).first()
+        # A missing room keeps the framework's 404 below.
+        if room is not None:
+            _deny_cross_tenant_room(request, room)
+            if request.method == "DELETE":
+                _refuse_banned(request, room)
+                room_authority.require(request, room, "delete")
+            else:
+                changes, rules = room_authority.update_changes(room, request.DATA)
+                _refuse_banned(request, room)
+                room_authority.require(request, room, "update", changes=changes)
+                if rules is not None:
+                    request.DATA["rules"] = rules
     return ChatRoom.on_rest_request(request, pk)
 
 
@@ -67,12 +91,16 @@ def on_chat_room_join(request):
             request, 403, error="Can only join channel rooms",
         )
 
-    # If group-linked, check group membership
+    # If group-linked, check group membership. Fixed: no hook loosens it.
     if room.group:
         if not room.group.user_has_permission(
                 request.user, ["chat", "manage_chat"],
                 not is_override_user_session(request)):
             raise merrors.PermissionDeniedException()
+
+    _refuse_banned(request, room)
+    # A channel with no group needs global manage_chat unless the hook allows.
+    room_authority.require(request, room, "join")
 
     membership, created = ChatMembership.objects.get_or_create(
         room=room, user=request.user,
@@ -123,6 +151,8 @@ def on_chat_room_leave(request):
         return ChatRoom.rest_error_response(
             request, 400, error="Cannot leave a direct message room",
         )
+
+    room_authority.require(request, room, "leave")
 
     membership = ChatMembership.objects.filter(
         room=room, user=request.user,
@@ -211,7 +241,9 @@ def on_chat_room_remove_member(request):
 
     _deny_cross_tenant_room(request, room)
 
-    _check_room_admin(request, room)
+    _refuse_banned(request, room)
+    room_authority.require(request, room, "member_remove",
+                           target=_target_membership(request, room))
 
     membership = ChatMembership.objects.filter(
         room=room, user_id=request.DATA.user_id,
@@ -236,7 +268,9 @@ def on_chat_room_mute_member(request):
 
     _deny_cross_tenant_room(request, room)
 
-    _check_room_moderator(request, room)
+    _refuse_banned(request, room)
+    room_authority.require(request, room, "member_mute",
+                           target=_target_membership(request, room))
 
     membership = ChatMembership.objects.filter(
         room=room, user_id=request.DATA.user_id,
@@ -260,7 +294,9 @@ def on_chat_room_ban_member(request):
 
     _deny_cross_tenant_room(request, room)
 
-    _check_room_moderator(request, room)
+    _refuse_banned(request, room)
+    room_authority.require(request, room, "member_ban",
+                           target=_target_membership(request, room))
 
     membership = ChatMembership.objects.filter(
         room=room, user_id=request.DATA.user_id,
@@ -279,24 +315,29 @@ def on_chat_room_ban_member(request):
 @md.requires_auth()
 @md.requires_params('room_id')
 def on_chat_room_update_rules(request):
-    """Update room rules. Requires admin role or manage_chat permission."""
+    """Update room rules. Requires admin role or manage_chat permission.
+
+    Every value is checked first (400 naming the key and its range). Turning
+    disappearing messages on or shortening them, and turning rate limiting
+    off, need global manage_chat by default (services/room_authority.py).
+    """
     room = ChatRoom.objects.filter(pk=request.DATA.room_id).first()
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
 
     _deny_cross_tenant_room(request, room)
 
-    _check_room_admin(request, room)
+    incoming = room_authority.validate_rules({
+        key: request.DATA[key]
+        for key in room_authority.RULE_KEYS if key in request.DATA
+    })
+    _refuse_banned(request, room)
 
     # Merge new rules into existing
-    allowed_keys = {
-        "allow_urls", "allow_media", "allow_phone_numbers",
-        "max_message_length", "disappearing_ttl", "rate_limit",
-    }
     rules = dict(room.rules or {})
-    for key in allowed_keys:
-        if key in request.DATA:
-            rules[key] = request.DATA[key]
+    rules.update(incoming)
+    room_authority.require(request, room, "rules",
+                           changes=room_authority.rules_changes(room, rules))
 
     room.rules = rules
     room.save(update_fields=["rules"])
@@ -371,6 +412,14 @@ def on_chat_room_online(request):
             })
 
     return {"status": True, "data": online_users}
+
+
+def _target_membership(request, room):
+    """The member_* target's membership in `room`, or None."""
+    user_id = reachability.parse_user_id(request.DATA.get("user_id"))
+    if user_id is None:
+        return None
+    return ChatMembership.objects.filter(room=room, user_id=user_id).first()
 
 
 def _check_room_admin(request, room):
