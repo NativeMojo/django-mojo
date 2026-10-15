@@ -339,8 +339,11 @@ name each active, not opted-out one as an advisory `DRIFT`
 longer counts as CDN-delivered, the S3 public-access audit applies to it as
 it does to an opted-out manager: a personal or group manager at the root that
 `reconcile_fileman_public_access` (or the lazy personal-manager audit) finds
-private behind Block Public Access is recorded `is_public = False` and gets
-presigned S3 links; the system manager is never reconciled.
+private behind Block Public Access is recorded `is_public = False`. It is
+then a private manager at the root, so it falls under the signed default:
+once reloaded it delivers through the CDN with signed links. The instance
+that ran the audit keeps its cached S3 resolution until it is reloaded. The
+system manager is never reconciled.
 
 **Links.** `S3StorageBackend.get_url` is the one seam: `expires_in=None`
 is unsigned, otherwise a canned-policy signed URL for
