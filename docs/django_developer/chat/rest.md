@@ -25,15 +25,28 @@ creator: a `user` field in the body is ignored.
 
 ### `GET /api/chat/room/<pk>` — Get room detail
 
+### `PUT /api/chat/room/<pk>` — Update a room
+
+Passes the [room-authority rule](permissions.md#who-may-run-a-room-admin-operation-room-authority)
+first, then RestMeta `SAVE_PERMS`. An active or muted owner or admin, or a
+`manage_chat` / `comms` holder, may change `name`, `metadata` and safe
+`rules`. Changing `kind` or `group` needs the global `manage_chat`. A banned
+owner, or one who left the room, gets 403. A `rules` value is validated like
+`room/rules` (400 naming the key); one that is not an object is 400.
+
 ### `DELETE /api/chat/room/<pk>` — Delete a room
 
-Requires `manage_chat`. Notifies `CHAT_MESSAGE_DELETED_HANDLER` before the
+Requires `manage_chat` (globally or in the room's group). A banned caller is
+refused, and a configured authority hook may refuse too. Notifies `CHAT_MESSAGE_DELETED_HANDLER` before the
 cascade, and publishes `chat_room_deleted` `{room_id}` on the room topic after
 the delete commits, so open sockets drop the topic at once.
 
 ### `POST /api/chat/room/join` — Join a channel
 
-Only works for `kind="channel"`. For group-linked channels, checks group permission.
+Only works for `kind="channel"`. For group-linked channels, checks group
+permission. A channel **with no group** needs the global `manage_chat` unless
+the project's authority hook allows the join (403 and no row otherwise). A
+banned member gets 403.
 
 ```json
 {"room_id": 5}
@@ -68,7 +81,8 @@ when an active admin adds them and they are still reachable.
 
 ### `POST /api/chat/room/member/remove` — Remove member
 
-Requires room admin or `manage_chat` permission. Publishes `chat_member_removed` `{room_id, user_id}` after the write commits, so the removed user's open sockets stop receiving the room at once.
+Requires room admin or `manage_chat` permission, and role order: an admin
+cannot act on the owner (403). A banned caller gets 403. Publishes `chat_member_removed` `{room_id, user_id}` after the write commits, so the removed user's open sockets stop receiving the room at once.
 
 ```json
 {"room_id": 5, "user_id": 42}
@@ -76,7 +90,8 @@ Requires room admin or `manage_chat` permission. Publishes `chat_member_removed`
 
 ### `POST /api/chat/room/member/mute` — Mute member
 
-Requires room admin, `moderate_chat`, or `manage_chat` permission. Muted users can read but not send.
+Requires room admin, `moderate_chat`, or `manage_chat` permission, and role
+order (an admin cannot mute the owner). Muted users can read but not send.
 
 ```json
 {"room_id": 5, "user_id": 42}
@@ -84,7 +99,8 @@ Requires room admin, `moderate_chat`, or `manage_chat` permission. Muted users c
 
 ### `POST /api/chat/room/member/ban` — Ban member
 
-Requires room admin, `moderate_chat`, or `manage_chat` permission. Banned users cannot subscribe. Publishes `chat_member_banned` `{room_id, user_id}` after the write commits, so the banned user's open sockets stop receiving the room at once.
+Requires room admin, `moderate_chat`, or `manage_chat` permission, and role
+order (an admin cannot ban the owner). Banned users cannot subscribe. Publishes `chat_member_banned` `{room_id, user_id}` after the write commits, so the banned user's open sockets stop receiving the room at once.
 
 ```json
 {"room_id": 5, "user_id": 42}
@@ -92,7 +108,12 @@ Requires room admin, `moderate_chat`, or `manage_chat` permission. Banned users 
 
 ### `POST /api/chat/room/rules` — Update room rules
 
-Requires room admin or `manage_chat` permission. Merges provided keys into existing rules.
+Requires room admin or `manage_chat` permission. Merges provided keys into
+existing rules. Every value is checked first: a bad one is 400 naming the key
+and its range, with nothing written (ranges in
+[Rules](rules.md#who-may-change-a-rule)). Turning `disappearing_ttl` on or
+shortening it, and setting `rate_limit` to `0`, need the global `manage_chat`
+(403 otherwise).
 
 ```json
 {"room_id": 5, "allow_urls": false, "max_message_length": 1000}
@@ -172,10 +193,10 @@ Two callers are deliberately not bound: `channel` rooms (public, full history to
 every member), and the `manage_chat` moderator read path, which has no
 membership row and therefore no `joined_at` to be bound by.
 
-**Channel history is unbounded, and a groupless channel is open.** Any
-signed-in user can join a channel with no `group` (`POST room/join`) and then
-read its whole history. Put anything not meant for every account in a group
-room, a group-linked channel, or a direct room.
+**Channel history is unbounded.** A member of a channel reads its whole
+history. Joining a channel with no `group` needs the global `manage_chat`
+unless the project's authority hook allows it; its members otherwise arrive
+through `room/member/add`.
 
 The same three bounds — unflagged, join cutoff, disappearing-message TTL — live
 in `mojo.apps.chat.services.messages.visible_messages(room, membership)`. Every

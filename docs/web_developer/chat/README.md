@@ -21,6 +21,8 @@ All require JWT authentication via `Authorization: Bearer <token>`.
 | GET | `/api/chat/rooms` | List rooms you're a member of |
 | POST | `/api/chat/room` | Create a room `{name, kind, group?}` |
 | GET | `/api/chat/room/<pk>` | Get room detail |
+| PUT | `/api/chat/room/<pk>` | Update a room (owner/admin) `{name?, metadata?, rules?}` |
+| DELETE | `/api/chat/room/<pk>` | Delete a room (`manage_chat`) |
 | POST | `/api/chat/room/join` | Join a channel `{room_id}` |
 | POST | `/api/chat/room/leave` | Leave a room `{room_id}` |
 | POST | `/api/chat/room/member/add` | Add member (admin) `{room_id, user_id}` |
@@ -46,6 +48,36 @@ refusal about the person is 404 `{"error": "User not found"}`: no `user_id`, a
 bad one, your own, an account that does not exist, is inactive, or that you
 cannot reach. Do not tell these apart in your UI; the server deliberately
 doesn't.
+
+**Room rules are checked.** `room/rules` and a `rules` value in PUT
+`room/<pk>` refuse a bad value with 400 naming the key, and nothing changes:
+
+| Rule | Accepted |
+|---|---|
+| `disappearing_ttl` | `0` (off), or 3600 to 31536000 seconds (1 hour to 365 days) |
+| `max_message_length` | 1 to 4000 |
+| `rate_limit` | 1 to 100 per second, or `0` (off) |
+| `allow_urls`, `allow_media`, `allow_phone_numbers` | `true` or `false` |
+
+**Turning on disappearing messages is a platform decision.** By default only
+a platform chat admin (the global `manage_chat`) may turn `disappearing_ttl`
+on or shorten it, or set `rate_limit` to `0`; a room admin gets 403. A room
+admin may still lengthen the TTL or turn it off. Hide or explain the control
+rather than letting the 403 surprise the user.
+
+**Who may manage whom.** An admin cannot remove, mute or ban the room owner
+(403). The owner may act on admins; anyone may remove themself. A banned
+member can only leave.
+
+**Changing a room's kind or group** through PUT `room/<pk>` needs the global
+`manage_chat` (403 otherwise). A banned owner, or one who left the room,
+cannot update it.
+
+**Joining a channel with no group** needs the global `manage_chat`; others get
+403. Members of a groupless channel arrive through `room/member/add`.
+
+A project can change any of these defaults on the server, except the value
+checks and the banned-caller refusal.
 
 ### Messages
 
@@ -448,4 +480,4 @@ language sends do not reach that path. No new error-code scheme is introduced.
 |------|------|---------|----------|
 | `direct` | Auto (DM endpoint) | From join date | 1:1 private messages |
 | `group` | Invite only | From join date | Teams, support |
-| `channel` | Self-join | Full | Announcements, community |
+| `channel` | Self-join (in its group; a groupless channel: platform chat admins only) | Full | Announcements, community |

@@ -54,6 +54,56 @@ through the ORM is never checked.
 A pair that already shares a direct room gets it back from `dm` without the
 rule: both are members already.
 
+## Who may run a room-admin operation (room authority)
+
+`POST room/rules`, `room/join`, `room/leave`, `room/member/remove`,
+`room/member/mute`, `room/member/ban`, and PUT/POST/PATCH/DELETE on
+`room/<pk>` ask one rule, in `mojo/apps/chat/services/room_authority.py`. It
+runs only in those REST views: server code that writes rooms, rules or
+memberships through the ORM is never checked, and its values are never
+validated.
+
+**Fixed (no hook changes these):** tenant confinement, the per-kind answers
+(join only a channel, leave no direct room), value validation of every rules
+write (see [Rules](rules.md#who-may-change-a-rule)), and **a banned caller is
+refused every operation except `leave`**, including PUT by a banned owner.
+
+**Default rule.** A "global grant" is the user's own `manage_chat`, never
+through a session that assumes a member (an override ApiKey or a group token).
+
+| Operation | Default |
+|---|---|
+| `room/rules` | Room admin (not banned) or `manage_chat` in the group or globally. Turning disappearing messages on or shortening them, and setting `rate_limit` to `0`, need the **global** `manage_chat`. |
+| PUT `room/<pk>` | An active or muted owner/admin membership, or `manage_chat` / `comms` in the room's group or globally. Rules changes follow the `rules` row. Changing `kind` or `group` needs the global `manage_chat`. `name` and `metadata` stay as before. RestMeta `SAVE_PERMS` still runs afterwards. |
+| DELETE `room/<pk>` | Unchanged: RestMeta `DELETE_PERMS` (`manage_chat` globally or in the room's group). |
+| `room/join` | A channel **with no group** needs the global `manage_chat`. A group channel still needs `chat` or `manage_chat` in its group, and no hook loosens that. |
+| `room/leave` | Unchanged. |
+| `room/member/remove` | Room admin or `manage_chat`, and role order. |
+| `room/member/mute`, `ban` | Room admin, `moderate_chat` or `manage_chat`, and role order. |
+
+**Role order:** owner outranks admin, which outranks member. A caller acting
+only through a room role may act on themself or on a target of strictly
+lower role, so an admin cannot remove, mute or ban the owner. A grant holder
+(`manage_chat` or `moderate_chat`, in the room's group or globally) acts on
+anyone.
+
+**Hook:** `CHAT_ROOM_AUTHORITY_HANDLER` in the Django settings file (never a
+database Setting) names `handler(user, room, action, context) -> bool`.
+`action` is one of `rules`, `update`, `delete`, `join`, `leave`,
+`member_remove`, `member_mute`, `member_ban`. `context` holds `target` (the
+target's `ChatMembership`, or None, for `member_*`), `changes`
+(`{key: (old, new)}`), `assumed_member` and `default` (the built-in verdict),
+so a project narrows with `ctx["default"] and mine` or widens with
+`ctx["default"] or mine`. Only `True` allows; a load error, a non-callable,
+an exception or any other return refuses and logs to `chat.log`. On the seven
+POST endpoints the hook's verdict is final. On `room/<pk>` RestMeta perms run
+afterwards, so there it can only narrow. The module ships
+`default_room_authority` and `deny_all`. See
+[Services](services.md#room-authority--who-may-run-a-room-admin-operation).
+
+There is no batch path: `ChatRoom` does not set `CAN_BATCH`. A consumer that
+sets it sends batch rows through the same `room/<pk>` view.
+
 ## How Permission Checks Work
 
 ### Group-linked rooms (`room.group` is set)
@@ -69,8 +119,9 @@ rule: both are members already.
 
 ### Room-level roles
 
-- **owner** — full control (set via RestMeta OWNER_FIELD; always the creator)
-- **admin** — can manage members, update rules, edit/flag messages
+- **owner** — full control (set via RestMeta OWNER_FIELD; always the creator),
+  except deleting the room (`DELETE_PERMS`) and changing its `kind` or `group`
+- **admin** — can manage members below the owner, update rules, edit/flag messages
 - **member** — can send messages, react, read
 
 A **banned** owner or admin has no room authority. A **muted** one keeps it
@@ -79,7 +130,8 @@ A **banned** owner or admin has no room authority. A **muted** one keeps it
 ### REST endpoint security
 
 - Room CRUD: `@md.uses_model_security(ChatRoom)` with RestMeta perms
-- Custom endpoints: `@md.requires_auth()` + manual permission checks via `_check_room_admin` / `_check_room_moderator`
+- Custom endpoints: `@md.requires_auth()` + the room-authority rule above, whose
+  default calls `_check_room_admin` / `_check_room_moderator`
 - **CREATE_PERMS = ["authenticated"]** — any logged-in user can create a
   groupless room. A room in a group needs the creator to hold `chat` or
   `manage_chat` there (`ChatRoom.on_rest_pre_save`), else 403 and no row.

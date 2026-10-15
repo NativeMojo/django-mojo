@@ -338,10 +338,44 @@ def can_reach(user, target, room):
 - Test seams: keyword-only `handler=` (the callable; None means "no hook")
   and `path=` (a dotted path to load) on `reachable_user`.
 
+## Room authority — who may run a room-admin operation
+
+`mojo.apps.chat.services.room_authority` holds the rule the room-admin REST
+views ask; only `rest/rooms.py` calls it. The rule, its fixed parts and role
+order are described in
+[Permissions](permissions.md#who-may-run-a-room-admin-operation-room-authority).
+
+```python
+# settings.py -- the settings FILE; a database Setting row is never read
+CHAT_ROOM_AUTHORITY_HANDLER = "myapp.chat.room_authority"
+
+# myapp/chat.py
+def room_authority(user, room, action, context):
+    # Let workspace admins turn on disappearing messages too.
+    if action == "rules" and is_workspace_admin(user, room.group):
+        return True
+    return context["default"]
+```
+
+- `require(request, room, action, *, target=None, changes=None)` raises 403
+  unless allowed; `allows(...)` returns the bool.
+- `validate_rules(incoming)` returns the normalised values or raises 400.
+- `update_changes(room, data)` validates a `room/<pk>` write and returns
+  `(changes, rules)`.
+- `is_tightening(old, new)`: a TTL turned on or shortened. A non-integer or
+  negative stored value counts as `0`.
+- `default_verdict(request, room, action, ...)` is the built-in rule;
+  `default_room_authority` and `deny_all` ship for composition.
+- Fails closed: an unloadable path, a non-callable, an exception or a return
+  other than `True` refuses and logs to `chat.log`.
+- Test seams: keyword-only `handler=` (the callable; None means "no hook")
+  and `path=` (a dotted path to load) on `allows` and `require`.
+
 ## Settings
 
-All optional. Every one but `CHAT_REACHABILITY_HANDLER` defaults to the
-previous behavior.
+All optional. Every one but `CHAT_REACHABILITY_HANDLER` and
+`CHAT_ROOM_AUTHORITY_HANDLER` (whose unset defaults are new rules) defaults to
+the previous behavior.
 
 | Setting | Default | Purpose |
 |---|---|---|
@@ -349,3 +383,4 @@ previous behavior.
 | `CHAT_METADATA_MAX_BYTES` | `4096` | Byte cap on the compact JSON encoding of `metadata` |
 | `CHAT_MESSAGE_DELETED_HANDLER` | `None` | Dotted path to `handler(room_id, message_ids)` |
 | `CHAT_REACHABILITY_HANDLER` | `None` (shared-group rule) | Settings file only. Dotted path to `handler(user, target, room) -> bool` for `dm` and `room/member/add` |
+| `CHAT_ROOM_AUTHORITY_HANDLER` | `None` (built-in rule) | Settings file only. Dotted path to `handler(user, room, action, context) -> bool` for the room-admin REST operations |
