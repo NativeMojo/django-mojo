@@ -50,7 +50,8 @@ ops step. See [Settings Reference](#settings-reference).
   global-only; a group-scoped `Setting` row is rejected 400 at write time.
 - **Opt a group out of a platform posture.** Flipping
   `Group.metadata["geofence_strict"]` needs global `manage_geofence` /
-  `security`, not group-admin rights.
+  `security`, held by a signed-in person, not group-admin rights. A group API
+  key or group token never passes, whatever it carries or whoever it acts as.
 - **Silence the evidence.** Enforcement points emit
   `geofence_block` / `geofence_exempt` incident events (cache hits
   included) and every config write emits `geofence_config`. There is no

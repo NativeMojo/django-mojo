@@ -53,8 +53,11 @@ In `GroupMember.has_permission`, a permission like `sys.manage_users` strips the
 
 **Framework protection floor.** `APIKEY_PERMS_PROTECTION` is **not** empty by
 default. `ApiKey.APIKEY_PERMS_PROTECTION_DEFAULTS` currently protects
-`geoip_sync`, `dnsman_acme_federation`, `edge_node`, and `mojosec_ingest` with
-their matching global `sys.*` grants. The effective map has three layers: the
+`geoip_sync`, `dnsman_acme_federation`, `edge_node`, `mojosec_ingest`,
+`admin_compliance` and `admin_verify` with their matching global `sys.*`
+grants. The last two let a key write a group's protected settings
+(`Group.PROTECTED_JSON_PERMS`), so a member-level manager can neither grant nor
+revoke them; a key that already carries one keeps it until staff remove it. The effective map has three layers: the
 platform-wide `Setting` row, with the settings-file value merged over it, with
 `DEFAULTS` merged over both. Deployments may add protected permissions from
 either source, but cannot replace or relax a framework-floor entry, and a

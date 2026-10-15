@@ -39,6 +39,11 @@ APIKEY_PERMS_PROTECTION_DEFAULTS = {
     "dnsman_acme_federation": "sys.dnsman_acme_federation",
     "edge_node": "sys.edge_node",
     "mojosec_ingest": "sys.mojosec_ingest",
+    # Group.PROTECTED_JSON_PERMS: a key carrying either writes the group's
+    # protected settings (token epoch, disable state), so a member-level
+    # manager must not be able to grant or revoke them (#6363).
+    "admin_compliance": "sys.admin_compliance",
+    "admin_verify": "sys.admin_verify",
 }
 
 

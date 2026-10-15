@@ -2421,6 +2421,11 @@ class MojoModel:
         user = getattr(request, "user", None)
         if user is None or not user.is_authenticated:
             return False
+        # A key or group token acting as a member would read that member's
+        # global list, or their superuser flag; neither is the credential's
+        # authority (#6363). A key in reference mode reads its own list below.
+        if is_override_user_session(request):
+            return False
         # request.user may be an ApiKey (no is_superuser attribute)
         if getattr(user, "is_superuser", False):
             return True
