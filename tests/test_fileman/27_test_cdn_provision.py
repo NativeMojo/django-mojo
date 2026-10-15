@@ -8,6 +8,7 @@ has none.
 """
 
 import json
+import uuid
 
 from botocore.exceptions import ClientError
 
@@ -59,8 +60,13 @@ class _FakeAws:
         return {"cloudfront": self.cloudfront, "s3": self.s3, "kms": self.kms, "sts": self.sts}
 
     def next_id(self, prefix):
+        """Ids shaped like CloudFront's, so the persisted row carries real
+        widths: key groups are 36-character UUIDs (maestro #8305), the rest
+        are 14-character upper-case ids."""
         self.counter += 1
-        return f"{prefix}{self.counter}"
+        if prefix == "KG":
+            return str(uuid.UUID(int=0x8305_0000_0000_0000_0000_0000_0000_0000 + self.counter))
+        return f"{prefix}{self.counter:0{14 - len(prefix)}d}".replace("0", "Z")
 
     def check(self, operation):
         if operation in self.deny:

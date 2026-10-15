@@ -81,6 +81,31 @@ def test_github_install_secrets(opts):
 
 
 @th.tier("core")
+@th.django_unit_test("github install: a posted mojo_secrets leaves the stored token intact")
+def test_github_install_rest_save_ignores_mojo_secrets(opts):
+    from mojo.apps.github.models import GitHubInstall
+
+    GitHubInstall.objects.filter(installation_id=900003).delete()
+    install = GitHubInstall.objects.create(installation_id=900003, account_name="secrets-org")
+    install.set_secret("token", "ghs_kept_token_6359")
+    install.save()
+    stored = GitHubInstall.objects.get(pk=install.pk).mojo_secrets
+
+    resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)
+    assert opts.client.is_authenticated, "admin authentication failed"
+    resp = opts.client.post(f"/api/github/github_install/{install.pk}", {"mojo_secrets": "junk"})
+    assert resp.status_code == 200, (
+        f"the save should answer 200, got {resp.status_code}: {resp.response}"
+    )
+
+    install = GitHubInstall.objects.get(pk=install.pk)
+    assert install.mojo_secrets == stored, "a posted mojo_secrets replaced the stored ciphertext"
+    token = install.secrets.get("token")
+    assert token == "ghs_kept_token_6359", f"the stored token no longer reads back, got: {token!r}"
+    GitHubInstall.objects.filter(installation_id=900003).delete()
+
+
+@th.tier("core")
 @th.django_unit_test("github install: mojo_secrets excluded from REST output")
 def test_github_install_secrets_not_in_rest(opts):
     resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)

@@ -36,9 +36,10 @@ COMMON_GRAPH_NAMES = frozenset(settings.get_static(
 # Sentinel: the request carried no `graph` key (see on_rest_save).
 _GRAPH_UNSET = object()
 
-# Names the REST save never takes from a request body, on every model. A
-# model's RestMeta.NO_SAVE_FIELDS adds to these (see get_no_save_fields).
-DEFAULT_NO_SAVE_FIELDS = ("id", "pk", "created", "uuid")
+# Names the REST save never takes from a request body, on every model,
+# including the encrypted secrets column (MojoSecrets.mojo_secrets). A model's
+# RestMeta.NO_SAVE_FIELDS adds to these (see get_no_save_fields).
+DEFAULT_NO_SAVE_FIELDS = ("id", "pk", "created", "uuid", "mojo_secrets")
 # The only framework names RestMeta.ALLOW_SAVE_FIELDS can hand back.
 ALLOWABLE_SAVE_FIELDS = ("created", "uuid")
 
