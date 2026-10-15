@@ -46,6 +46,10 @@ def setup_chat_rooms(opts):
     opts.shared_group = Group.objects.create(name="test-chat-rooms-shared-group")
     for user in (opts.user1, opts.user2, opts.admin_user):
         opts.shared_group.add_member(user)
+    # The channel lives in the shared group: creating it and joining it need
+    # `chat` there (#8345, #8347).
+    for user in (opts.user1, opts.user2):
+        opts.shared_group.get_member_for_user(user).add_permission("chat")
 
 
 @th.tier("core")  # prerequisite: sets opts.group_room_id for the core tests below (#2792)
@@ -70,11 +74,12 @@ def test_create_group_room(opts):
 
 @th.django_unit_test()
 def test_create_channel_room(opts):
-    """Create a channel room."""
+    """Create a channel room in the shared group."""
     opts.client.login(TEST_EMAIL_1, TEST_PASSWORD)
     resp = opts.client.post('/api/chat/room', {
         'name': 'test-chat-channel-room',
         'kind': 'channel',
+        'group': opts.shared_group.pk,
     })
     assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.json}")
     opts.channel_room_id = resp.json.data.id
@@ -88,7 +93,7 @@ def test_create_channel_room(opts):
 
 @th.django_unit_test()
 def test_join_channel(opts):
-    """User 2 joins the channel room."""
+    """User 2 joins the shared group's channel room."""
     opts.client.login(TEST_EMAIL_2, TEST_PASSWORD)
     resp = opts.client.post('/api/chat/room/join', {
         'room_id': opts.channel_room_id,
@@ -102,6 +107,19 @@ def test_join_channel(opts):
     ).first()
     assert_true(ms, "expected membership after joining channel")
     assert_eq(ms.status, "active", "expected active status")
+
+
+@th.django_unit_test()
+def test_join_groupless_channel_fails(opts):
+    """A channel with no group takes no self-join from a plain user (#8347)."""
+    from mojo.apps.chat.models import ChatMembership, ChatRoom
+    ChatRoom.objects.filter(name="test-chat-groupless-channel").delete()
+    room = ChatRoom.objects.create(name="test-chat-groupless-channel", kind="channel")
+    opts.client.login(TEST_EMAIL_2, TEST_PASSWORD)
+    resp = opts.client.post('/api/chat/room/join', {'room_id': room.pk})
+    assert_eq(resp.status_code, 403, f"expected 403 for a groupless channel, got {resp.status_code}: {resp.json}")
+    assert_true(not ChatMembership.objects.filter(room=room, user=opts.user2).exists(),
+                "expected no membership after the refused join")
 
 
 @th.tier("core")
