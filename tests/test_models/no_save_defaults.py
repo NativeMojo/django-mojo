@@ -21,7 +21,7 @@ TESTIT_TIER = "core"
 IP = "127.0.0.1"
 PWORD = "nsd##mojo99Defaults"
 PREFIX = "nsd_"
-DEFAULTS = ("id", "pk", "created", "uuid")
+DEFAULTS = ("id", "pk", "created", "uuid", "mojo_secrets")
 
 
 def _mk_user(name):
