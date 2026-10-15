@@ -850,3 +850,246 @@ def test_revoke_requires_edge_confirmation(opts):
     assert_true(result["status"], f"revocation succeeds once the edge accepts it: {result}")
     key.refresh_from_db()
     assert_true(not key.is_active, "now the key is inactive")
+
+
+# ----------------------------------------------------------------------
+# CORS response headers policy and the bucket-root public manager (#8286)
+# ----------------------------------------------------------------------
+
+SIMPLE_CORS = "60669652-455b-4ae9-85a4-c4c02393f86c"
+POLICY_X = "11111111-aaaa-4bbb-8ccc-222222222222"
+POLICY_Y = "33333333-dddd-4eee-8fff-444444444444"
+
+
+def _policies(aws, distribution_id):
+    """(default behavior's policy id, {path pattern: policy id}) as stored."""
+    cfg = aws.distributions[distribution_id]["DistributionConfig"]
+    default = cfg["DefaultCacheBehavior"].get("ResponseHeadersPolicyId")
+    behaviors = {b["PathPattern"]: b.get("ResponseHeadersPolicyId") for b in cfg["CacheBehaviors"]["Items"]}
+    return default, behaviors
+
+
+def _root_manager(name, is_public, is_active=True, **secrets):
+    """A manager at the top of the bucket: no folder of its own."""
+    from mojo.apps.fileman.models import FileManager
+    fm = FileManager(name=name, backend_type="s3", backend_url=f"s3://{BUCKET}",
+                     is_active=is_active, is_default=False, is_public=is_public)
+    fm.save()
+    fm.set_secrets({"aws_key": "AKIACDNPROV", "aws_secret": "cdn-prov-secret",
+                    "aws_region": REGION, **secrets})
+    fm.save()
+    return fm
+
+
+def _byo_distribution(aws, policy_id):
+    aws.distributions["EBYO"] = {
+        "ARN": f"arn:aws:cloudfront::{ACCOUNT}:distribution/EBYO", "DomainName": "byo.cloudfront.net",
+        "Status": "Deployed", "ETag": "E-b", "DistributionConfig": {
+            "CallerReference": "byo", "Enabled": True, "Comment": "",
+            "Origins": {"Quantity": 1, "Items": [{"Id": "o", "DomainName": f"{BUCKET}.s3.{REGION}.amazonaws.com",
+                                                  "OriginAccessControlId": "OACBYO",
+                                                  "S3OriginConfig": {"OriginAccessIdentity": ""}}]},
+            "DefaultCacheBehavior": {"TargetOriginId": "o", "ViewerProtocolPolicy": "redirect-to-https",
+                                     "AllowedMethods": {"Items": ["GET", "HEAD"]},
+                                     "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+                                     "ResponseHeadersPolicyId": policy_id,
+                                     "TrustedKeyGroups": {"Enabled": True, "Quantity": 1, "Items": ["KGBYO"]}},
+            "CacheBehaviors": {"Quantity": 0, "Items": []}}}
+    aws.key_groups["KGBYO"] = {"Name": "mojo-fm-manual", "Items": []}
+    aws.oacs["OACBYO"] = {"Name": "theirs", "SigningBehavior": "always", "SigningProtocol": "sigv4",
+                          "OriginAccessControlOriginType": "s3"}
+
+
+@th.tier("core")
+@th.django_unit_test("CDN CORS: enable puts SimpleCORS on the default and every prefix behavior, once")
+def test_cors_policy_on_every_behavior(opts):
+    from mojo.apps.fileman.models import CdnDistribution
+    _reset(opts)
+    aws = _FakeAws()
+    report = _provisioner(_fresh(opts.public), aws, apply=True).run()
+    assert_true(not report["blocking"], f"enable must converge: {report['items']}")
+    row = CdnDistribution.objects.get(bucket_name=BUCKET)
+    default, behaviors = _policies(aws, row.distribution_id)
+    assert_eq(default, SIMPLE_CORS, "the default behavior carries AWS's SimpleCORS policy by default")
+    assert_true(behaviors, "the managers on the bucket have behaviors")
+    for pattern, policy in behaviors.items():
+        assert_eq(policy, SIMPLE_CORS, f"behavior {pattern} carries the same policy")
+    before = list(aws.mutations)
+    report = _provisioner(_fresh(opts.public), aws, apply=True).run()
+    assert_eq(aws.mutations, before, f"a second enable makes no change: {report['items']}")
+    assert_true("distribution.default_behavior.response_headers" not in _codes(report),
+                "no policy drift once converged")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN CORS: a policy of None writes no ResponseHeadersPolicyId anywhere")
+def test_cors_policy_none(opts):
+    from mojo.apps.fileman.models import CdnDistribution
+    _reset(opts)
+    aws = _FakeAws()
+    report = _provisioner(_fresh(opts.public), aws, apply=True, response_headers_policy=None).run()
+    assert_true(not report["blocking"], f"enable must converge: {report['items']}")
+    row = CdnDistribution.objects.get(bucket_name=BUCKET)
+    cfg = aws.distributions[row.distribution_id]["DistributionConfig"]
+    assert_true("ResponseHeadersPolicyId" not in cfg["DefaultCacheBehavior"],
+                "no policy key on the default behavior")
+    for behavior in cfg["CacheBehaviors"]["Items"]:
+        assert_true("ResponseHeadersPolicyId" not in behavior,
+                    f"no policy key on {behavior['PathPattern']}")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN CORS: check reports a different policy as DRIFT, enable converges it; BYO keeps its own")
+def test_cors_policy_drift_and_byo(opts):
+    from mojo.apps.fileman.models import CdnDistribution
+    from mojo.apps.fileman.services import cdn_provision
+    _reset(opts)
+    aws = _FakeAws()
+    _provisioner(_fresh(opts.public), aws, apply=True).run()
+    row = CdnDistribution.objects.get(bucket_name=BUCKET)
+    before = list(aws.mutations)
+    report = _provisioner(_fresh(opts.public), aws, apply=False, response_headers_policy=POLICY_X).run()
+    assert_eq(aws.mutations, before, "check must not mutate")
+    drift = [i for i in report["items"] if i["code"] == "distribution.default_behavior.response_headers"]
+    assert_true(drift and drift[0]["status"] == "DRIFT",
+                f"a different default policy is reported as DRIFT: {report['items']}")
+    assert_true(report["converged"], "policy drift does not stop delivery")
+
+    report = _provisioner(_fresh(opts.public), aws, apply=True, response_headers_policy=POLICY_X).run()
+    assert_true(not report["blocking"], f"enable converges the policy: {report['items']}")
+    default, behaviors = _policies(aws, row.distribution_id)
+    assert_eq(default, POLICY_X, "the default behavior now carries the configured policy")
+    for pattern, policy in behaviors.items():
+        assert_eq(policy, POLICY_X, f"behavior {pattern} follows")
+    before = list(aws.mutations)
+    _provisioner(_fresh(opts.public), aws, apply=True, response_headers_policy=POLICY_X).run()
+    assert_eq(aws.mutations, before, "a re-run makes no change")
+
+    # BYO: the operator's own policy on their default behavior is kept.
+    _reset(opts)
+    aws = _FakeAws()
+    _byo_distribution(aws, POLICY_Y)
+    row = cdn_provision.register_byo(_fresh(opts.public), "EBYO", "https://media.example.com")
+    row.key_group_id = "KGBYO"
+    row.save()
+    report = _provisioner(_fresh(opts.public), aws, apply=False).run()
+    assert_true("distribution.default_behavior.response_headers" not in _codes(report),
+                f"no policy drift is reported for a BYO distribution: {report['items']}")
+    _provisioner(_fresh(opts.public), aws, apply=True).run()
+    default, behaviors = _policies(aws, "EBYO")
+    assert_eq(default, POLICY_Y, "enable keeps a BYO distribution's own policy on the default behavior")
+    assert_true(behaviors, f"enable wrote the per-prefix behaviors: {aws.distributions['EBYO']}")
+    for pattern, policy in behaviors.items():
+        assert_eq(policy, POLICY_Y, f"behavior {pattern} copies the BYO policy")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN CORS: the visibility sync copies the live default's policy and never reads the setting")
+def test_cors_sync_copies_live_default(opts):
+    from mojo.apps.fileman.models import CdnDistribution, FileManager
+    _reset(opts)
+    aws = _FakeAws()
+    _provisioner(_fresh(opts.public), aws, apply=True, response_headers_policy=POLICY_X).run()
+    row = CdnDistribution.objects.get(bucket_name=BUCKET)
+    default_before = json.loads(json.dumps(
+        aws.distributions[row.distribution_id]["DistributionConfig"]["DefaultCacheBehavior"]))
+    try:
+        for pk, policy in ((opts.public, POLICY_Y), (opts.optout, "bogus")):
+            fm = _fresh(pk)
+            fm._cdn_provision_kwargs = dict(_seams(aws), response_headers_policy=policy)
+            fm.is_public = False
+            before = len(aws.mutations)
+            fm.on_rest_pre_save({"is_public": True}, False)  # raises if the sync is refused
+            assert_true(len(aws.mutations) > before, "the flip converged the behaviors")
+            cfg = aws.distributions[row.distribution_id]["DistributionConfig"]
+            assert_eq(cfg["DefaultCacheBehavior"], default_before, "the sync leaves the default behavior alone")
+            for behavior in cfg["CacheBehaviors"]["Items"]:
+                assert_eq(behavior.get("ResponseHeadersPolicyId"), POLICY_X,
+                          f"{behavior['PathPattern']} copies the live default's policy, not {policy!r}")
+        # The normal path: no policy seam, the provisioner the save hook
+        # builds itself. The setting must not be read at all.
+        import sys
+        from mojo.apps.fileman.services import cdn
+        reads = []
+
+        def profile(frame, event, arg):
+            if event == "call" and frame.f_code is cdn.response_headers_policy_id.__code__:
+                reads.append(frame.f_back.f_code.co_name)
+
+        fm = _fresh(opts.public)
+        fm._cdn_provision_kwargs = _seams(aws)
+        fm.is_public = False
+        previous = sys.getprofile()
+        sys.setprofile(profile)
+        try:
+            fm.on_rest_pre_save({"is_public": True}, False)
+        finally:
+            sys.setprofile(previous)
+        assert_eq(reads, [], "a visibility save must never read FILEMAN_CDN_RESPONSE_HEADERS_POLICY")
+        cfg = aws.distributions[row.distribution_id]["DistributionConfig"]
+        for behavior in cfg["CacheBehaviors"]["Items"]:
+            assert_eq(behavior.get("ResponseHeadersPolicyId"), POLICY_X,
+                      f"{behavior['PathPattern']} copies the live default's policy on the normal path")
+        # enable and check do read it, once, when they first need it.
+        sys.setprofile(profile)
+        try:
+            _provisioner(_fresh(opts.public), aws, apply=False).run()
+        finally:
+            sys.setprofile(previous)
+        assert_eq(len(reads), 1, f"check reads the setting once: {reads}")
+    finally:
+        FileManager.objects.filter(pk__in=[opts.public, opts.optout]).update(is_public=True)
+
+
+@th.tier("core")
+@th.django_unit_test("CDN CORS: the policy setting accepts a policy id or 'none' and refuses the rest")
+def test_cors_policy_validator(opts):
+    from mojo import errors as me
+    from mojo.apps.account.models import Setting
+    from mojo.apps.fileman.services import cdn
+    assert_eq(cdn.RESPONSE_HEADERS_POLICY_KEY, "FILEMAN_CDN_RESPONSE_HEADERS_POLICY", "the setting's name")
+    assert_eq(cdn.SIMPLE_CORS_POLICY_ID, SIMPLE_CORS, "the SimpleCORS id")
+    assert_eq(cdn.parse_response_headers_policy("none"), None, "'none' switches the policy off")
+    assert_eq(cdn.parse_response_headers_policy(" NONE "), None, "case and spaces are ignored")
+    assert_eq(cdn.parse_response_headers_policy(SIMPLE_CORS), SIMPLE_CORS, "a policy id passes")
+    for bad in ("", "simplecors", 42, True):
+        err = None
+        try:
+            cdn.parse_response_headers_policy(bad)
+        except ValueError as exc:
+            err = exc
+        assert_true(err is not None, f"{bad!r} must be refused")
+    cdn.validate_response_headers_policy(cdn.RESPONSE_HEADERS_POLICY_KEY, SIMPLE_CORS)
+    err = None
+    try:
+        Setting(key="FILEMAN_CDN_RESPONSE_HEADERS_POLICY", value='"bogus"').save()
+    except me.ValueException as exc:
+        err = exc
+    finally:
+        if err is None:
+            Setting.objects.filter(key="FILEMAN_CDN_RESPONSE_HEADERS_POLICY", value='"bogus"').delete()
+    assert_true(err is not None, "a malformed policy setting is refused on write")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN root: a public manager at the top of the bucket is advisory DRIFT and named by harden")
+def test_root_public_manager_reported(opts):
+    from mojo.apps.fileman.models import FileManager
+    _reset(opts)
+    root = _root_manager(f"{PREFIX}rootpub", True)
+    inactive = _root_manager(f"{PREFIX}rootoff", True, is_active=False)
+    optout = _root_manager(f"{PREFIX}rootopt", True, cdn="off")
+    try:
+        aws = _FakeAws(pab=False)
+        for apply in (True, False):
+            report = _provisioner(_fresh(opts.public), aws, apply=apply).run()
+            found = [i for i in report["items"] if i["code"] == "prefix.root_public"]
+            assert_eq(len(found), 1, f"one finding, for the active, not opted-out root manager: {found}")
+            assert_eq(found[0]["status"], "DRIFT", "the root finding is advisory")
+            assert_true(root.name in found[0]["message"], f"the finding names the manager: {found[0]}")
+            assert_true(report["converged"], f"the bucket is still enabled: {report['items']}")
+            pab = [i for i in report["items"] if i["code"] == "public_access_block.off"][0]
+            assert_true(root.name in pab["remedy"],
+                        f"the harden warning names the root public manager: {pab['remedy']}")
+    finally:
+        FileManager.objects.filter(pk__in=[root.pk, inactive.pk, optout.pk]).delete()

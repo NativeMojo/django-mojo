@@ -296,7 +296,7 @@ interrupted anywhere is finished by the next one.
 | Signing key (`CdnSigningKey`) | row saved first; CloudFront name `mojo-fm-key-<pk>` is the CallerReference | RSA-2048, private half in the KMS envelope (`KMS_KEY_ID` required) |
 | Key group | one per deployment, `mojo-fm-<hash>` | CloudFront allows 10 per account, 5 keys each |
 | Origin Access Control | `mojo-fm-oac-<hash of bucket>` | s3, sigv4, always |
-| Distribution | tag `mojo:fileman-bucket=<bucket>` | signed default behavior; one behavior per manager prefix (public unsigned, private signed), longest prefix first; GET/HEAD; HTTPS; CachingOptimized |
+| Distribution | tag `mojo:fileman-bucket=<bucket>` | signed default behavior; one behavior per manager prefix (public unsigned, private signed), longest prefix first; GET/HEAD; HTTPS; CachingOptimized; response headers policy `FILEMAN_CDN_RESPONSE_HEADERS_POLICY` (SimpleCORS by default, see **CORS**) on every behavior |
 | Bucket policy | Sid `AllowCloudFrontServicePrincipalReadOnly_<id>` | merged with a SourceArn condition; a `Principal "*"` statement is reported, never removed |
 | KMS key policy | Sid `AllowCloudFrontDecrypt_<id>` | `kms:Decrypt` only; read-merge-write |
 
@@ -329,7 +329,21 @@ CloudFront's 25-behavior quota); a **private manager under a public
 manager's prefix is refused** — whether CloudFront matches the encoded or
 the decoded path decides if the longer signed pattern could be sidestepped,
 and until a live probe settles that the layout is not allowed. A clone keeps
-its original's visibility.
+its original's visibility. A manager at the **top of the bucket** (no path of
+its own) gets no behavior either: a private one falls under the signed
+default; a public one would get unsigned links the signed default refuses, so
+it keeps its S3 links instead (`uses_cdn` is false). `check` and `enable`
+name each active, not opted-out one as an advisory `DRIFT`
+`prefix.root_public` that does not stop enablement; give it a path of its own
+(`s3://<bucket>/<prefix>`) to deliver it through the CDN. Because it no
+longer counts as CDN-delivered, the S3 public-access audit applies to it as
+it does to an opted-out manager: a personal or group manager at the root that
+`reconcile_fileman_public_access` (or the lazy personal-manager audit) finds
+private behind Block Public Access is recorded `is_public = False`. It is
+then a private manager at the root, so it falls under the signed default:
+once reloaded it delivers through the CDN with signed links. The instance
+that ran the audit keeps its cached S3 resolution until it is reloaded. The
+system manager is never reconciled.
 
 **Links.** `S3StorageBackend.get_url` is the one seam: `expires_in=None`
 is unsigned, otherwise a canned-policy signed URL for
@@ -342,6 +356,30 @@ CDN mode. Signing is local — the signer for a key is cached per process, so
 a link costs one RSA signature, not a KMS decrypt. The `cdn` and
 `cdn_url_expires_in` settings are writable by global file admins
 (`manage_files` / `files`, or a superuser); anyone else sending them gets 403.
+
+**CORS.** Every behavior of a distribution `enable` provisions carries the
+response headers policy named by the global setting
+`FILEMAN_CDN_RESPONSE_HEADERS_POLICY`: AWS's managed SimpleCORS
+(`60669652-455b-4ae9-85a4-c4c02393f86c`) by default, another policy id, or
+`"none"` for no policy (a validator-registered Setting; anything else is a
+400). SimpleCORS answers a request that carries `Origin` with
+`Access-Control-Allow-Origin: *`, so a page on another site (a kiosk) can
+read CDN files with `fetch()`. On a provisioned distribution `check` reports
+a different policy on the default behavior as `DRIFT`
+`distribution.default_behavior.response_headers` and `enable` converges every
+behavior; links keep working meanwhile. **After upgrading, re-run `enable`
+once per bucket**: until then the policy is missing and that drift is
+reported. A BYO distribution keeps whatever policy its own default behavior
+has (no drift is reported for it), and its per-prefix behaviors copy it.
+The visibility sync never reads the setting: it copies the live default
+behavior's policy, so a bad setting can never refuse a manager save. Two
+limits: SimpleCORS adds the header only when the request sends `Origin`, so
+a browser that cached a copy loaded without it (a plain `<img>`) can reuse
+that copy for a later `fetch()` and refuse it — pages that read files
+cross-site must request every load with CORS (`crossorigin="anonymous"`), or
+the deployment attaches its own policy that always sends the header.
+Preflighted and credentialed requests are not covered: `OPTIONS` is not an
+allowed method.
 
 **Bring your own distribution.** `fileman_cdn --manager <id> byo
 --distribution <id> --alias https://media.example.com` registers one you
@@ -358,7 +396,8 @@ adopts an untagged distribution on a bucket: that is a `MANUAL` finding.
   existing objects.
 - Block Public Access and Object Ownership are checked, not changed: turning
   them on bucket-wide breaks the raw-S3 public links of every manager opted
-  out of the CDN. `enable --harden` applies them after naming those managers.
+  out of the CDN, and of every public manager at the top of the bucket.
+  `enable --harden` applies them after naming those managers.
 - A signed link cannot be revoked before it expires except by revoking the
   key (`revoke-key`), which takes minutes to reach the edge and kills every
   link that key signed. Rotation (`rotate-key`) adds a key, switches signing
@@ -381,7 +420,7 @@ adopts an untagged distribution on a bucket: that is a `MANUAL` finding.
 **IAM, by mode** (exact action names; a denial reports the one to grant):
 - links: `kms:Decrypt` on `KMS_KEY_ID`.
 - `check`: `cloudfront:ListDistributions, GetDistribution, GetDistributionConfig, GetOriginAccessControl, ListOriginAccessControls, GetKeyGroup, ListKeyGroups, ListPublicKeys, ListTagsForResource`; `s3:GetBucketLocation, GetBucketPolicy, GetBucketPublicAccessBlock, GetEncryptionConfiguration, GetBucketOwnershipControls`; `kms:DescribeKey, GetKeyPolicy`; `sts:GetCallerIdentity`.
-- `enable`: check + `cloudfront:CreateOriginAccessControl, CreatePublicKey, CreateKeyGroup, UpdateKeyGroup, CreateDistribution, TagResource, UpdateDistribution`; `s3:PutBucketPolicy`; `kms:PutKeyPolicy`; with `--harden` also `s3:PutBucketPublicAccessBlock, PutBucketOwnershipControls`.
+- `enable`: check + `cloudfront:CreateOriginAccessControl, CreatePublicKey, CreateKeyGroup, UpdateKeyGroup, CreateDistribution, TagResource, UpdateDistribution`; `s3:PutBucketPolicy`; `kms:PutKeyPolicy`; with `--harden` also `s3:PutBucketPublicAccessBlock, PutBucketOwnershipControls`. Attaching the response headers policy needs no further action: it is part of `CreateDistribution` / `UpdateDistribution`.
 - cron and revoke: `cloudfront:GetKeyGroup, UpdateKeyGroup`; invalidation: `cloudfront:CreateInvalidation`; `--retire`: `cloudfront:GetDistributionConfig, UpdateDistribution`.
 
 A fleet provisioned by `mojo.deploy.provision` carries all of this on its node
