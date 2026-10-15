@@ -1152,6 +1152,7 @@ def test_guarded_route_scanner_reads_any_spelling(opts):
         "from mojo import decorators as md\n"
         "from mojo.decorators import auth\n"
         "from mojo.decorators.auth import denies_key_backed_session\n"
+        "from mojo.decorators.auth import denies_key_backed_session as guard\n"
         "@md.denies_key_backed_session ()\n"
         "def spaced(request): pass\n"
         "@md.denies_key_backed_session(\n"
@@ -1162,11 +1163,13 @@ def test_guarded_route_scanner_reads_any_spelling(opts):
         "def aliased(request): pass\n"
         "@denies_key_backed_session(deny_user_api_keys=True)\n"
         "def bare(request): pass\n"
+        "@guard(deny_user_api_keys=True)\n"
+        "def renamed(request): pass\n"
         "@md.requires_auth()\n"
         "def unguarded(request): pass\n")
     assert_eq(_guarded_routes_in_text(source, "m"), {
         "m.spaced": False, "m.multiline": True, "m.aliased": False,
-        "m.bare": True},
+        "m.bare": True, "m.renamed": True},
         "the scanner must find the decorator however it is written, and read "
         "deny_user_api_keys from its arguments")
 
