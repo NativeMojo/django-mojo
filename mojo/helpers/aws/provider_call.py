@@ -39,11 +39,14 @@ _MESSAGE_SCRUBS = (
     (re.compile(r"(https?://)[^\s/?#@]+@", re.I), r"\1[redacted]@"),
     # A named credential's value, bare, quoted or JSON-shaped
     # (Token=v, Token='v', "Token": "v"): a quoted value is cut at its
-    # closing quote, so spaces or encoding inside it don't end the match.
+    # unescaped closing quote, so spaces, encoding or an escaped quote
+    # inside it don't end the match; with no closing quote it runs to the
+    # end.  An escaped opening quote (JSON inside a JSON string) counts too.
     (re.compile(r"\b(X-Amz-(?:Signature|Credential|Security-Token|Date)|Signature|Policy|"
                 r"Key-Pair-Id|AWSAccessKeyId|AccessKeyId|SecretAccessKey|SessionToken|Token|"
-                r"Credential|Password|Secret)([\"']?\s*[=:]\s*)"
-                r"(?:\"[^\"]*(?:\"|$)|'[^']*(?:'|$)|[^\s&,;'\"]+)", re.I),
+                r"Credential|Password|Secret)(\\?[\"']?\s*[=:]\s*)"
+                r"(?:\\?\"(?:\\[\s\S]?|[^\"\\])*(?:\"|$)|\\?'(?:\\[\s\S]?|[^'\\])*(?:'|$)"
+                r"|[^\s&,;'\"]+)", re.I),
      r"\1\2[redacted]"),
     (re.compile(r"\b(?:AKIA|ASIA|AROA|AIDA)[A-Z0-9]{12,}\b"), "[redacted]"),
     # Route53 hosted-zone and change ids: dnsman's ACME federation never logs them.

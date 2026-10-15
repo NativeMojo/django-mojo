@@ -155,6 +155,7 @@ def _logged_through_logit(message):
 
 @th.unit_test("provider call: quoted, JSON and percent-encoded credentials are scrubbed through logit")
 def test_quoted_and_encoded_credentials_scrubbed(opts):
+    import json
     import urllib.parse
     encoded = urllib.parse.quote("synthetic+encoded/token/8346" * 3, safe="")
     cases = {
@@ -168,6 +169,14 @@ def test_quoted_and_encoded_credentials_scrubbed(opts):
                          "PASS8346WORD"),
         "bare encoded blob": ("blob " + encoded, encoded),
         "encoded fragment in a bare token": ("SessionToken=" + encoded[:30] + " rest", encoded[:30]),
+        # Brenda's review 110696: an escaped quote must not end the value.
+        "JSON value with an escaped quote": (json.dumps({"Password": 'a"BR8346SYNTHETICREST'}),
+                                             "BR8346SYNTHETICREST"),
+        "single-quoted value with an escaped quote": ("Password='a\\'BR8346SQREST' rejected",
+                                                      "BR8346SQREST"),
+        "JSON inside a JSON string": (json.dumps(json.dumps({"Password": 'a"BR8346DBLREST'})),
+                                      "BR8346DBLREST"),
+        "unclosed quote with a trailing backslash": ('Password="BR8346TAIL\\', "BR8346TAIL"),
     }
     for name, (message, secret) in cases.items():
         error, line = _logged_through_logit(message)
@@ -179,4 +188,6 @@ def test_quoted_and_encoded_credentials_scrubbed(opts):
     assert_true("The parameter TrustedKeyGroups is invalid" in line,
                 f"the diagnostic text stays readable: {line}")
     assert_true("X-Amz-Security-Token=[redacted]" in line, f"the field name stays, its value goes: {line}")
-
+    error, line = _logged_through_logit(json.dumps({"Password": 'x"BR8346NEXT', "Bucket": "keep8346"}))
+    assert_true("BR8346NEXT" not in line and '"Bucket": "keep8346"' in line,
+                f"the escaped value goes, the next field stays: {line}")

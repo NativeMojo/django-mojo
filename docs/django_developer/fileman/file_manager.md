@@ -326,7 +326,10 @@ signed behavior that trusts no key group, or a recorded key group
 default's) that is neither the default behavior's key group nor one
 `ListKeyGroups` returns. Each is a MANUAL finding (`behaviors.invalid`,
 `key_group.mismatch`) that refuses a tightening save like any CloudFront
-refusal; run `enable` to converge the key group. If CloudFront refuses anyway,
+refusal; run `enable` to converge the key group. Only a `ListKeyGroups`
+listing read to its end proves a key group absent: one cut short (100 pages,
+or a repeated marker) reports nothing, and the sync sends the update and lets
+CloudFront judge. If CloudFront refuses anyway,
 `fileman.log` carries AWS's scrubbed message and request id (see
 [AWS provider calls](../aws/aws_check.md)).
 
