@@ -14,8 +14,9 @@ Chat integrates with the existing User/Group/Member permission system.
 
 These are stored in `member.permissions` at the group level.
 
-No permission sends a message on its own: sending, editing and reacting need
-an active `ChatMembership` row in the room (see the table at the end).
+No permission sends a message on its own: sending and editing need an active
+`ChatMembership` row in the room, and reacting needs an active or muted one
+(see the table at the end).
 
 ### System-level
 
