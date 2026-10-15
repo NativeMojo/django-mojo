@@ -2,8 +2,11 @@
 
 Callers supply the IAM action because botocore operation names are not a
 reliable IAM-action mapping.  Raw provider messages are deliberately never
-stored, returned, or logged: they can contain credentials, signed URLs, and
-request parameters.
+stored or returned: they can contain credentials, signed URLs, and request
+parameters.  The operator log alone gets a scrubbed copy (signatures,
+credentials, tokens, URL query strings and long opaque blobs removed, cut to
+256 characters), because the code by itself rarely says which argument AWS
+refused (maestro #8346).
 """
 
 import re
@@ -27,6 +30,31 @@ _DENIED = {
 }
 _RETRYABLE = {"RequestLimitExceeded", "RequestTimeout", "ServiceUnavailable", "SlowDown",
               "Throttling", "ThrottlingException", "TooManyRequestsException"}
+_MESSAGE_LIMIT = 256
+_MESSAGE_SCRUBS = (
+    # A presigned or signed URL's query string carries the signature,
+    # credential scope and session token.
+    (re.compile(r"(https?://[^\s?#]+)[?#]\S*", re.I), r"\1?[redacted]"),
+    # URL userinfo (user:password@host).
+    (re.compile(r"(https?://)[^\s/?#@]+@", re.I), r"\1[redacted]@"),
+    # A named credential's value, bare, quoted or JSON-shaped
+    # (Token=v, Token='v', "Token": "v"): a quoted value is cut at its
+    # unescaped closing quote, so spaces, encoding or an escaped quote
+    # inside it don't end the match; with no closing quote it runs to the
+    # end.  An escaped opening quote (JSON inside a JSON string) counts too.
+    (re.compile(r"\b(X-Amz-(?:Signature|Credential|Security-Token|Date)|Signature|Policy|"
+                r"Key-Pair-Id|AWSAccessKeyId|AccessKeyId|SecretAccessKey|SessionToken|Token|"
+                r"Credential|Password|Secret)(\\?[\"']?\s*[=:]\s*)"
+                r"(?:\\?\"(?:\\[\s\S]?|[^\"\\])*(?:\"|$)|\\?'(?:\\[\s\S]?|[^'\\])*(?:'|$)"
+                r"|[^\s&,;'\"]+)", re.I),
+     r"\1\2[redacted]"),
+    (re.compile(r"\b(?:AKIA|ASIA|AROA|AIDA)[A-Z0-9]{12,}\b"), "[redacted]"),
+    # Route53 hosted-zone and change ids: dnsman's ACME federation never logs them.
+    (re.compile(r"\b[ZC][A-Z0-9]{9,31}\b"), "[redacted]"),
+    (re.compile(r"-----BEGIN [A-Z ]+-----.*?(?:-----END [A-Z ]+-----|$)", re.S), "[redacted]"),
+    # Long opaque blobs, percent-encoded or not.
+    (re.compile(r"(?:[A-Za-z0-9+/_=-]|%[0-9A-Fa-f]{2}){40,}"), "[redacted]"),
+)
 _MUTATION_PREFIXES = (
     "create_", "delete_", "put_", "set_", "subscribe", "tag_", "untag_",
     "update_", "verify_",
@@ -45,16 +73,32 @@ def _safe_request_id(value):
     return value if _SAFE_REQUEST_ID.fullmatch(value) else ""
 
 
+def _safe_message(value):
+    """A provider message fit for the operator log only, never the wire or a row."""
+    value = str(value or "")[:4096]
+    for pattern, replacement in _MESSAGE_SCRUBS:
+        value = pattern.sub(replacement, value)
+    value = " ".join(value.split())
+    if len(value) > _MESSAGE_LIMIT:
+        value = value[:_MESSAGE_LIMIT - 3] + "..."
+    return value
+
+
 def _safe_action(value):
     value = str(value or "")[:128]
     return value if _SAFE_ACTION.fullmatch(value) else ""
 
 
 class ProviderCallError(Exception):
-    """Wire-safe provider failure with no reference to the raw exception."""
+    """Wire-safe provider failure with no reference to the raw exception.
+
+    ``provider_message`` is the scrubbed AWS message for the operator log;
+    ``detail()`` never includes it, so it reaches no API response or row.
+    """
 
     def __init__(self, operation, provider_code="provider_error", iam_action="",
-                 request_id="", retryable=False, mutation_state="none", denied=False):
+                 request_id="", retryable=False, mutation_state="none", denied=False,
+                 provider_message=""):
         self.operation = str(operation or "aws")[:80]
         self.provider_code = _safe_code(provider_code)
         self.iam_action = _safe_action(iam_action)
@@ -63,6 +107,7 @@ class ProviderCallError(Exception):
         self.denied = bool(denied or self.provider_code in _DENIED)
         self.mutation_state = mutation_state if mutation_state in (
             "none", "attempted", "unknown") else "unknown"
+        self.provider_message = _safe_message(provider_message)
         super().__init__("AWS provider operation failed")
 
     def __str__(self):
@@ -87,6 +132,7 @@ def map_error(exc, operation, iam_action="", mutation=False):
         return exc
     code = "provider_error"
     request_id = ""
+    message = ""
     retryable = False
     denied = False
     if isinstance(exc, (NoCredentialsError, PartialCredentialsError)):
@@ -102,13 +148,14 @@ def map_error(exc, operation, iam_action="", mutation=False):
         code = error.get("Code") or metadata.get("HTTPStatusCode") or "provider_error"
         denied = metadata.get("HTTPStatusCode") == 403 or str(code) in _DENIED
         request_id = metadata.get("RequestId") or metadata.get("RequestID") or ""
+        message = error.get("Message") or ""
         retryable = str(code) in _RETRYABLE or metadata.get("HTTPStatusCode") in (
             429, 500, 502, 503, 504)
     elif isinstance(exc, BotoCoreError):
         code = "provider_error"
     state = "unknown" if mutation and retryable else "attempted" if mutation else "none"
     return ProviderCallError(
-        operation, code, iam_action, request_id, retryable, state, denied)
+        operation, code, iam_action, request_id, retryable, state, denied, message)
 
 
 def safe_error_detail(exc, operation="aws", iam_action=""):
@@ -127,12 +174,14 @@ class ProviderCaller:
             return callback()
         except Exception as exc:
             error = map_error(exc, operation, iam_action, mutation)
+            # Rendered here: logit's Logger joins arguments with newlines
+            # rather than %-formatting them, which split the fields from
+            # their names.
             self.logger.warning(
                 "AWS provider operation failed operation=%s provider_code=%s "
-                "iam_action=%s request_id=%s mutation_state=%s",
-                error.operation, error.provider_code, error.iam_action or "-",
-                error.request_id or "-", error.mutation_state,
-            )
+                "iam_action=%s request_id=%s mutation_state=%s provider_message=%r" % (
+                    error.operation, error.provider_code, error.iam_action or "-",
+                    error.request_id or "-", error.mutation_state, error.provider_message or "-"))
             # Do not retain the raw botocore exception as a chained cause.
             # Tracebacks and later ``logger.exception`` calls must remain safe.
             raise error from None

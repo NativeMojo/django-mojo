@@ -319,6 +319,20 @@ opted out, because the distribution still serves the bucket. Private→public
 converges after the write. The sync rewrites cache behaviors only — never
 `Enabled`, the origin or a BYO distribution's own settings.
 
+Before it sends the update, the sync checks what CloudFront would otherwise
+reject with a bare `InvalidArgument`: two behaviors with one path pattern, a
+signed behavior that trusts no key group, or a recorded key group
+(`CdnDistribution.key_group_id`, which the sync prefers over the live
+default's) that is neither the default behavior's key group nor one
+`ListKeyGroups` returns. Each is a MANUAL finding (`behaviors.invalid`,
+`key_group.mismatch`) that refuses a tightening save like any CloudFront
+refusal; run `enable` to converge the key group. Only a `ListKeyGroups`
+listing read to its end proves a key group absent: one cut short (100 pages,
+or a repeated marker) reports nothing, and the sync sends the update and lets
+CloudFront judge. If CloudFront refuses anyway,
+`fileman.log` carries AWS's scrubbed message and request id (see
+[AWS provider calls](../aws/aws_check.md)).
+
 **Behaviors are planned fail-closed.** Every S3 manager on the bucket counts
 (active or not, opted out or not); where two share a prefix, signed wins;
 a prefix containing `*`, `?` or any character CloudFront could not match
