@@ -656,12 +656,13 @@ Use this to set the initial state of your toggle UI. Any key not present or set 
 Category permissions cover most use cases. Fine-grained permissions exist for when you need read-only access or scoped access within a domain. You do **not** need to show these in a standard admin UI — they are for special cases.
 
 Protected machine grants are not ordinary fine-grained toggles. `geoip_sync`,
-`dnsman_acme_federation`, `edge_node`, and `mojosec_ingest` are protected from
-group administrators; provision them only in a platform key-management
-workflow. Their normal member assignment paths require matching global `sys.*`
+`dnsman_acme_federation`, `edge_node`, `mojosec_ingest`, `admin_compliance`,
+and `admin_verify` are protected from group administrators; provision them only
+in a platform key-management workflow. Their normal member assignment paths require matching global `sys.*`
 grants, and a global `manage_users` / `manage_groups` administrator can also
-assign them. They authorize fleet federation, private edge material, or
-host-security ingestion. In particular, the
+assign them. The first four authorize fleet federation, private edge
+material, or host-security ingestion; `admin_compliance` and `admin_verify` let
+a key write a group's protected settings. In particular, the
 [ACME hub](../dnsman/README.md#acme-delegation-hub-optional) is machine-only:
 even a JWT user holding similarly named permissions cannot call its
 `/api/dnsman/acme/*` routes.

@@ -42,13 +42,18 @@ Requires `manage_group`, `manage_groups`, or the combined `groups` permission (g
 | `permissions` | No | JSON **object** of granted permissions (default: empty). Must be a real object — any other shape, including a JSON-encoded string, is rejected with `400` |
 | `limits` | No | Positive per-key hard limits: `{endpoint_key: {"limit": N, "window": minutes}}`; use `"api"` for the global dispatcher ceiling |
 
-Four machine permissions are protected from ordinary group administrators:
-`geoip_sync`, `dnsman_acme_federation`, `edge_node`, and `mojosec_ingest`. On
-the normal member assignment path each requires its corresponding global
-`sys.*` grant; a platform `manage_users` / `manage_groups` administrator can
-also provision them through the global key-admin override. Do not present them
-as routine tenant permission toggles. They authorize fleet-wide federation,
-private edge material, or host-security ingestion rather than tenant CRUD. The
+Six permissions are protected from ordinary group administrators:
+`geoip_sync`, `dnsman_acme_federation`, `edge_node`, `mojosec_ingest`,
+`admin_compliance`, and `admin_verify`. On the normal member assignment path
+each requires its corresponding global `sys.*` grant; a platform
+`manage_users` / `manage_groups` administrator can also provision them through
+the global key-admin override. A member-level manager can neither grant nor
+revoke them, so hide them from tenant permission editors. Do not present them
+as routine tenant permission toggles. The first four authorize fleet-wide
+federation, private edge material, or host-security ingestion rather than
+tenant CRUD; `admin_compliance` and `admin_verify` let a key write a group's
+protected settings. A key that acts as a member never writes protected
+settings, whatever it carries. The
 ACME hub additionally accepts only an active project's ApiKey carrying
 `dnsman_acme_federation` — JWT users and group tokens cannot call it. See
 [dnsman](../dnsman/README.md#acme-delegation-hub-optional) and
