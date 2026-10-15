@@ -236,12 +236,15 @@ def _handle_edit(user, data, *, publisher=None):
     if not msg:
         return {"type": "error", "error": "Message not found"}
 
-    # Check permission: author or room admin/moderator
-    is_author = msg.user_id == user.pk
-    if not is_author:
-        membership = ChatMembership.objects.filter(room=msg.room, user=user).first()
-        if not membership or not membership.is_admin:
-            return {"type": "error", "error": "Cannot edit this message"}
+    # The editor -- author or room admin alike -- needs an active membership,
+    # the same bar as send (#8345): a removed, banned or muted member edits
+    # nothing. Checked before rules, save and publish, so a refusal writes and
+    # broadcasts nothing. One answer for every refusal.
+    membership = ChatMembership.objects.filter(room=msg.room, user=user).first()
+    if not membership or not membership.can_send:
+        return {"type": "error", "error": "Cannot edit this message"}
+    if msg.user_id != user.pk and not membership.is_admin:
+        return {"type": "error", "error": "Cannot edit this message"}
 
     # Room rules
     rule_errors = check_rules(msg.room, body, msg.kind)
