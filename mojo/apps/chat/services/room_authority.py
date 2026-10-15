@@ -92,16 +92,20 @@ _BROKEN = object()
 
 # --- values ----------------------------------------------------------------
 
+# Longer digit strings are no rule value; int() of a very long one raises.
+MAX_DIGITS = 12
+
+
 def _int_value(value):
-    """An int from an int or a string of digits; None for anything else
-    (booleans included)."""
+    """An int from an int or a string of ASCII digits (at most MAX_DIGITS);
+    None for anything else (booleans, '²' and other Unicode digits included)."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
         return value
     if isinstance(value, str):
         text = value.strip()
-        if text.isdigit():
+        if text.isascii() and text.isdigit() and len(text) <= MAX_DIGITS:
             return int(text)
     return None
 
@@ -158,7 +162,8 @@ def validate_rules(incoming, *, replace=False):
 
 
 def _stored_ttl(value):
-    """An already-stored TTL for comparison: non-integer or negative is 0."""
+    """An already-stored TTL for comparison: unparseable or negative is 0
+    (unset), so writing 0 over a bad stored value always succeeds."""
     ttl = _int_value(value)
     return ttl if ttl is not None and ttl > 0 else 0
 

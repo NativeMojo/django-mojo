@@ -241,13 +241,14 @@ def on_chat_room_remove_member(request):
 
     _deny_cross_tenant_room(request, room)
 
-    _refuse_banned(request, room)
-    room_authority.require(request, room, "member_remove",
-                           target=_target_membership(request, room))
+    user_id = reachability.parse_user_id(request.DATA.get("user_id"))
+    if user_id is None:
+        return ChatRoom.rest_error_response(request, 400, error="Invalid user_id")
 
-    membership = ChatMembership.objects.filter(
-        room=room, user_id=request.DATA.user_id,
-    ).first()
+    _refuse_banned(request, room)
+    # One lookup: the membership the rule judges is the one changed below.
+    membership = _target_membership(room, user_id)
+    room_authority.require(request, room, "member_remove", target=membership)
     if not membership:
         return ChatRoom.rest_error_response(request, 404, error="Member not found")
 
@@ -268,13 +269,14 @@ def on_chat_room_mute_member(request):
 
     _deny_cross_tenant_room(request, room)
 
-    _refuse_banned(request, room)
-    room_authority.require(request, room, "member_mute",
-                           target=_target_membership(request, room))
+    user_id = reachability.parse_user_id(request.DATA.get("user_id"))
+    if user_id is None:
+        return ChatRoom.rest_error_response(request, 400, error="Invalid user_id")
 
-    membership = ChatMembership.objects.filter(
-        room=room, user_id=request.DATA.user_id,
-    ).first()
+    _refuse_banned(request, room)
+    # One lookup: the membership the rule judges is the one changed below.
+    membership = _target_membership(room, user_id)
+    room_authority.require(request, room, "member_mute", target=membership)
     if not membership:
         return ChatRoom.rest_error_response(request, 404, error="Member not found")
 
@@ -294,13 +296,14 @@ def on_chat_room_ban_member(request):
 
     _deny_cross_tenant_room(request, room)
 
-    _refuse_banned(request, room)
-    room_authority.require(request, room, "member_ban",
-                           target=_target_membership(request, room))
+    user_id = reachability.parse_user_id(request.DATA.get("user_id"))
+    if user_id is None:
+        return ChatRoom.rest_error_response(request, 400, error="Invalid user_id")
 
-    membership = ChatMembership.objects.filter(
-        room=room, user_id=request.DATA.user_id,
-    ).first()
+    _refuse_banned(request, room)
+    # One lookup: the membership the rule judges is the one changed below.
+    membership = _target_membership(room, user_id)
+    room_authority.require(request, room, "member_ban", target=membership)
     if not membership:
         return ChatRoom.rest_error_response(request, 404, error="Member not found")
 
@@ -414,11 +417,9 @@ def on_chat_room_online(request):
     return {"status": True, "data": online_users}
 
 
-def _target_membership(request, room):
-    """The member_* target's membership in `room`, or None."""
-    user_id = reachability.parse_user_id(request.DATA.get("user_id"))
-    if user_id is None:
-        return None
+def _target_membership(room, user_id):
+    """The member_* target's membership in `room`, or None. `user_id` is
+    already parsed: the views never query with the raw request value."""
     return ChatMembership.objects.filter(room=room, user_id=user_id).first()
 
 

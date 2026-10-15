@@ -399,6 +399,68 @@ def test_member_operations_follow_role_order(opts):
 
 @th.tier("core")
 @th.django_unit_test()
+def test_member_target_is_resolved_once(opts):
+    """10b. The owner's id sent as an int, a float or a decimal string never
+    lets A remove, mute or ban the owner: the membership the rule judges is
+    the one changed (Brenda's finding on f26e1582)."""
+    from mojo.apps.chat.models import ChatMembership
+    _reset(opts)
+    _login(opts, "a")
+    owner = opts.o.pk
+    before = ChatMembership.objects.filter(room=opts.room, user=opts.o).values(
+        "pk", "role", "status").first()
+    for op in ("remove", "mute", "ban"):
+        for target, allowed in ((owner, (403,)), (float(owner), (400, 403)),
+                                (f"{owner}.0", (400, 403))):
+            resp = opts.client.post(f"/api/chat/room/member/{op}",
+                                    {"room_id": opts.room.pk, "user_id": target})
+            assert_true(resp.status_code in allowed,
+                        f"A may not {op} the owner sent as {target!r}: expected {allowed}, got {resp.status_code}: {resp.json}")
+            after = ChatMembership.objects.filter(room=opts.room, user=opts.o).values(
+                "pk", "role", "status").first()
+            assert_eq(after, before, f"the owner's membership is unchanged after {op} with {target!r}")
+    _reset(opts)
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_digit_lookalikes_are_named_errors(opts):
+    """4b. '²' (a Unicode digit) and a 4,400-digit value give the named
+    "Invalid rule" 400 on room/rules and on PUT room/<pk>, and change nothing."""
+    _reset(opts)
+    _login(opts, "s")
+    for value in ("\u00b2", "9" * 4400):
+        for route in ("rules", "put"):
+            before = _rules(opts)
+            if route == "rules":
+                resp = _post_rules(opts, max_message_length=value)
+            else:
+                resp = _put(opts, {"rules": {"max_message_length": value}})
+            label = f"{route} max_message_length={value[:8]!r} (len {len(value)})"
+            assert_eq(resp.status_code, 400, f"{label} is refused with 400, got {resp.status_code}: {resp.json}")
+            error = str((resp.json or {}).get("error", ""))
+            assert_true("Invalid rule 'max_message_length'" in error,
+                        f"{label}: the 400 is the named rule error, got {error!r}")
+            assert_eq(_rules(opts), before, f"{label} left the rules unchanged")
+    _reset(opts)
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_bad_stored_ttl_counts_as_unset(opts):
+    """5b. A TTL stored as '²' by server code counts as unset: A turning
+    disappearing messages off (0) succeeds and repairs the row."""
+    from mojo.apps.chat.models.room import DEFAULT_RULES
+    _reset(opts, rules=dict(DEFAULT_RULES, disappearing_ttl="\u00b2"))
+    _login(opts, "a")
+    resp = _post_rules(opts, disappearing_ttl=0)
+    assert_eq(resp.status_code, 200, f"A may set ttl 0 over a bad stored value, got {resp.status_code}: {resp.json}")
+    assert_eq(_rules(opts).get("disappearing_ttl"), 0, "ttl 0 is stored")
+    _reset(opts)
+
+
+@th.tier("core")
+@th.django_unit_test()
 def test_orm_writes_are_not_caught(opts):
     """11. Server code writes through the ORM with no request, and during a
     request for another room, with values stored as given."""

@@ -102,7 +102,8 @@ afterwards, so there it can only narrow. The module ships
 [Services](services.md#room-authority--who-may-run-a-room-admin-operation).
 
 There is no batch path: `ChatRoom` does not set `CAN_BATCH`. A consumer that
-sets it sends batch rows through the same `room/<pk>` view.
+sets it gets batch writes on `room` (no pk), which this rule never sees; only
+RestMeta perms gate those rows.
 
 ## How Permission Checks Work
 
