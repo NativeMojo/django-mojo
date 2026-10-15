@@ -815,10 +815,13 @@ sign-in detail of the caller: `generate_api_key`, writes to
 `/api/account/api_keys` (revoke, `is_active`, `allowed_ips`, `label`),
 passkeys, the authenticator (TOTP and recovery codes), email, phone and
 username changes, the sign-in hand-off, session revoke, sign-out telemetry,
-OAuth connection writes and OAuth consent approval. Those need a signed-in
+OAuth connection writes and OAuth consent approval. An administrator's per-user
+key is also refused on three operator routes that hand out a sign-in or a key
+secret: `account/admin/user/password/reset`, `account/admin/user/password/temporary`
+and `account/admin/apikey/action`. Those need a signed-in
 session. Otherwise revoking a leaked key would not end the access: the holder
 could mint a replacement first. These routes carry
-`@md.denies_key_backed_session(deny_user_api_keys=True)`; the operator routes
+`@md.denies_key_backed_session(deny_user_api_keys=True)`; the other operator routes
 behind the same decorator still admit a per-user key, and
 `tests/test_security/security_events.py` pins which is which.
 

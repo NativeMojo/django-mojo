@@ -80,7 +80,9 @@ def denies_key_backed_session(methods=None, deny_user_api_keys=False):
     or widen the person's other keys, or move their email, phone, passkeys or
     authenticator, and revoking it would no longer end the access (#7635).
     Turn it on for every route that creates, changes or revokes a credential
-    or sign-in detail of the CALLER; tests/test_security/security_events.py
+    or sign-in detail of the CALLER, and for an operator route that hands out
+    a sign-in or a key secret for someone else (admin temporary password,
+    reset link, API-key rotation); tests/test_security/security_events.py
     pins which guarded routes refuse per-user keys and which admit them.
 
     For endpoints that change how a user AUTHENTICATES — registering a passkey,
