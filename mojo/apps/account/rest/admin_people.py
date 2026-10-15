@@ -14,7 +14,7 @@ def _secret_response(data):
 
 
 @md.POST("account/admin/user/password/reset")
-@md.denies_key_backed_session()
+@md.denies_key_backed_session(deny_user_api_keys=True)
 @md.requires_fresh_auth(seconds=600)
 @md.requires_global_perms("users", "manage_users")
 @md.requires_params("user")
@@ -23,7 +23,7 @@ def on_admin_user_password_reset(request):
 
 
 @md.POST("account/admin/user/password/temporary")
-@md.denies_key_backed_session()
+@md.denies_key_backed_session(deny_user_api_keys=True)
 @md.requires_fresh_auth(seconds=600)
 @md.requires_global_perms("users", "manage_users")
 @md.requires_params("user")
@@ -52,7 +52,7 @@ def on_admin_permission_bundles_save(request):
 
 
 @md.POST("account/admin/apikey/action")
-@md.denies_key_backed_session()
+@md.denies_key_backed_session(deny_user_api_keys=True)
 @md.requires_fresh_auth(seconds=600)
 @md.requires_auth()
 @md.requires_params("api_key", "action")
