@@ -181,10 +181,10 @@ def on_chat_room_leave(request):
 def on_chat_room_add_member(request):
     """Add a member to a group or channel room. Requires admin role or manage_chat permission.
 
-    The target must pass the reachability rule (services/reachability.py),
-    including the fixed rule that a group room only takes members of its
-    group. Room-side answers come first; every target-side refusal is the one
-    404 "User not found", with no row written and no system message.
+    The target must pass the reachability rule (services/reachability.py):
+    with no hook, any active user, in or outside the room's group. Room-side
+    answers come first; every target-side refusal is the one 404 "User not
+    found", with no row written and no system message.
     """
     room = ChatRoom.objects.filter(pk=request.DATA.room_id).first()
     if not room:

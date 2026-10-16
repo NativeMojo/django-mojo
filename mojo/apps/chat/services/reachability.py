@@ -5,30 +5,29 @@ One rule, asked at every client door that brings another account into a room:
 `POST dm`, `POST room/member/add`. Server code that creates rooms or
 memberships through the ORM never passes through here.
 
-Default rule (no hook configured):
+Default rule (no hook configured): any active user, as in 1.35.3 (#8386). A
+group room takes members from outside its group, and an adder outside it.
 
-- A caller holding the GLOBAL `manage_chat` (a superuser implies it) reaches
-  any active user — but never through a session that assumes a member
-  (`is_override_user_session`), the same discipline as `_check_room_admin`.
-- Otherwise caller and target must share an active group: both hold an active
-  DIRECT `GroupMember` row in the same effectively active group. Inherited
-  (parent-chain) membership does not count; a hook can add it.
-
-Group-room integrity is fixed and no hook can loosen it: for a room with a
-`group`, the target must be an effective active member of that group, and so
-must the caller unless it holds the global `manage_chat` (non-override).
+Opt-in shared-group rule: `require_shared_group`. A caller holding the GLOBAL
+`manage_chat` (a superuser implies it) reaches any active user, but never
+through a session that assumes a member (`is_override_user_session`), the same
+discipline as `_check_room_admin`. Otherwise caller and target must share an
+active group: both hold an active DIRECT `GroupMember` row in the same
+effectively active group. Inherited (parent-chain) membership does not count.
 
 Hook: `CHAT_REACHABILITY_HANDLER = "myapp.chat.can_reach"` in the Django
 settings FILE, called as `handler(user, target, room)` (room is None for a DM)
 and reaching only when it returns True. It is read with `settings.get_static`,
 never from a database Setting row, so nobody holding `manage_settings` can
 point it at importable code. It fails closed: a load error, a non-callable or
-an exception refuses. `default_can_reach`, `allow_all` and `deny_all` ship for
-composition.
+an exception refuses. `require_shared_group`, `allow_all` and `deny_all` ship
+for composition; a project that wants group rooms to take only their group's
+members checks `room.group` in its own hook.
 
 Every target-side refusal answers with `refuse(request)`: one status and one
-body for a missing, inactive, own, absent or unreachable id, so the answer is
-no user-id oracle.
+body for a missing, inactive, own, absent or refused id. With no hook any
+active id is reachable, so a DM that opens tells the caller the id is an
+active account.
 """
 from mojo.helpers import logit, modules
 from mojo.helpers.request import is_override_user_session
@@ -107,8 +106,9 @@ def shares_group(user, target_id):
     return any(gm.group.is_effectively_active() for gm in shared)
 
 
-def default_can_reach(user, target, room=None):
-    """The framework's rule, for a hook to call before its own checks."""
+def require_shared_group(user, target, room=None):
+    """The opt-in shared-group rule: global `manage_chat`, else a shared
+    active group. Point `CHAT_REACHABILITY_HANDLER` here to switch it on."""
     if target is None or not target.is_active:
         return False
     if has_global_reach(user):
@@ -117,7 +117,7 @@ def default_can_reach(user, target, room=None):
 
 
 def allow_all(user, target, room=None):
-    """Reach any active user (1.35.3 behaviour); group-room integrity still applies."""
+    """Reach any active user: the same as having no hook (1.35.3 behaviour)."""
     return True
 
 
@@ -160,16 +160,12 @@ def _load_target(target_id):
     return User.objects.filter(pk=target_id, is_active=True).first()
 
 
-def _in_room_group(user, room):
-    return room.group.get_member_for_user(user, check_parents=True) is not None
-
-
 def reachable_user(request, target_id, room=None, *, handler=_UNSET, path=_UNSET):
     """Return the active User `target_id` if the caller may put them in a chat
     with them (in `room`, or a DM when None), else None.
 
-    The caller's own id is the view's to refuse first. Group-room integrity
-    runs after the rule whichever rule answered.
+    The caller's own id is the view's to refuse first. With no hook any
+    active user is reachable.
     """
     caller = request.user
     func = _handler(handler=handler, path=path)
@@ -177,14 +173,7 @@ def reachable_user(request, target_id, room=None, *, handler=_UNSET, path=_UNSET
         return None
 
     if func is None:
-        if has_global_reach(caller, request):
-            target = _load_target(target_id)
-        elif shares_group(caller, target_id):
-            # Loaded only after a hit, so missing and unrelated ids run the
-            # same statements.
-            target = _load_target(target_id)
-        else:
-            return None
+        target = _load_target(target_id)
         if target is None:
             return None
     else:
@@ -197,12 +186,6 @@ def reachable_user(request, target_id, room=None, *, handler=_UNSET, path=_UNSET
             logger.error(f"chat: {HANDLER_KEY} raised, refusing: {e}")
             return None
         if allowed is not True:
-            return None
-
-    if room is not None and room.group_id:
-        if not _in_room_group(target, room):
-            return None
-        if not has_global_reach(caller, request) and not _in_room_group(caller, room):
             return None
     return target
 

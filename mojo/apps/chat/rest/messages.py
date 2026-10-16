@@ -109,10 +109,11 @@ def on_chat_dm(request):
     the history stays in the old room, `/api/chat/rooms` lists both, and
     neither party learns why the thread went blank.
 
-    A NEW room needs the reachability rule (services/reachability.py). Every
-    target-side refusal -- no id, a bad id, the caller's own, a missing,
-    inactive or unreachable user -- is the one 404 "User not found", with no
-    row written, so the answer reveals nothing about which ids exist.
+    A NEW room needs the reachability rule (services/reachability.py); with no
+    hook that is any active user. Every target-side refusal -- no id, a bad id,
+    the caller's own, a missing, inactive or refused user -- is the one 404
+    "User not found", with no row written. A DM that opens does tell the
+    caller the id is an active account.
     """
     # A DM room is groupless by construction, so no confined credential
     # (ApiKey / GroupScopedToken) may open or reach one — the same
