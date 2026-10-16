@@ -10,11 +10,8 @@ Returns rooms the authenticated user is a member of.
 
 ### `POST /api/chat/room` — Create a room
 
-Any authenticated user can create a groupless room. A room in a group needs
-the creator to hold `chat` or `manage_chat` in that group (a member grant or
-the global one, never through an assumed-member session); otherwise 403 and no
-row. This covers the group a request is bound to as well as an explicit
-`group` field.
+Any authenticated user can create a room, groupless or in a group, as in
+1.35.3. The owner is always the creator; a body `user` is ignored.
 
 ```json
 {"name": "My Room", "kind": "group", "group": 5}
@@ -64,9 +61,8 @@ Cannot leave DM rooms. Publishes `chat_member_left` `{room_id, user_id}` after t
 
 Requires room admin (not banned) or `manage_chat` permission, then the
 [reachability rule](permissions.md#who-a-caller-may-put-in-a-chat-reachability):
-the caller and the target share an active group (or the caller holds the
-global `manage_chat`, or the project's hook allows it), and a room with a
-`group` only takes members of that group.
+with no hook, any active user, including one outside the room's `group`.
+A project's hook may narrow it.
 
 ```json
 {"room_id": 5, "user_id": 42}
@@ -75,7 +71,7 @@ global `manage_chat`, or the project's hook allows it), and a room with a
 Room-side answers come first and are unchanged: 404 `"Room not found"`, 403
 for another tenant's room, 400 for a direct room, 403 for a non-admin. After
 that, every target-side refusal — no `user_id`, a bad one, your own, a
-missing, inactive or unreachable user — is 404 `"User not found"`, with no
+missing, inactive or refused user — is 404 `"User not found"`, with no
 membership and no system message written. A banned member is reactivated only
 when an active admin adds them and they are still reachable.
 
@@ -212,15 +208,14 @@ Moderator-only. Returns flagged messages for review.
 
 Returns the pair's existing direct room if one exists, otherwise creates one
 when the [reachability rule](permissions.md#who-a-caller-may-put-in-a-chat-reachability)
-allows it: by default the two share an active group, or the caller holds the
-global `manage_chat`.
+allows it: by default any active user, as in 1.35.3.
 
 ```json
 {"user_id": 42}
 ```
 
 Every refusal about the target — no `user_id`, a bad one, your own, a missing,
-inactive or unreachable user, a hook error — is the same 404
+inactive or refused user, a hook error — is the same 404
 `{"error": "User not found"}`, with no room written. (A DM to yourself used to
 be 400 `"Cannot DM yourself"`.) The existing-room lookups run before the rule,
 so a pair already sharing a direct room always gets it back.

@@ -484,11 +484,12 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   `handler(user, target, room) -> bool`, read from the Django settings file
   only (`settings.get_static`; a database Setting row is ignored), default
   unset. Decides who `POST dm` (a new room) and `POST room/member/add` may
-  reach. Unset means the caller and target must share an active group, or the
-  caller holds the global `manage_chat`. Only `True` reaches; an unloadable
-  path, a non-callable or an exception refuses. A group room still only takes
-  members of its group. `mojo.apps.chat.services.reachability.allow_all`
-  restores the pre-#8345 reach; `.deny_all` turns off client DMs and adds. See
+  reach. Unset means any active user, as in 1.35.3. Only `True` reaches; an
+  unloadable path, a non-callable or an exception refuses.
+  `mojo.apps.chat.services.reachability.require_shared_group` limits it to
+  users who share an active group (or a global `manage_chat` holder);
+  `.allow_all` is the same as unset; `.deny_all` turns off client DMs and
+  adds. See
   [Chat permissions](../chat/permissions.md#who-a-caller-may-put-in-a-chat-reachability).
 - `CHAT_ROOM_AUTHORITY_HANDLER` — dotted path to
   `handler(user, room, action, context) -> bool`, read from the Django

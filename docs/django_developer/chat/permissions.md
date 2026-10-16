@@ -8,7 +8,7 @@ Chat integrates with the existing User/Group/Member permission system.
 
 | Permission | What it grants |
 |-----------|---------------|
-| `chat` | Read a group-linked room's history and members, join its channels, create a room in the group |
+| `chat` | Read a group-linked room's history and members, join its channels |
 | `manage_chat` | Delete rooms, manage membership, update rules |
 | `moderate_chat` | Flag messages, mute/ban users |
 
@@ -20,10 +20,10 @@ No permission sends a message on its own: sending and editing need an active
 
 ### System-level
 
-Users with `manage_chat` in `user.permissions` have global access. That
-grant also reaches any active user through the reachability rule below, but
-never through a session that assumes a member (an override ApiKey or a group
-token).
+Users with `manage_chat` in `user.permissions` have global access. Under the
+opt-in `require_shared_group` reachability rule below, that grant also reaches
+any active user, but never through a session that assumes a member (an
+override ApiKey or a group token).
 
 ## Who a caller may put in a chat (reachability)
 
@@ -32,24 +32,30 @@ rule, in `mojo/apps/chat/services/reachability.py`: may this caller put this
 person in a chat with them? Server code that creates rooms or memberships
 through the ORM is never checked.
 
-- **Default:** caller and target share an active group — both hold an active
-  direct `GroupMember` row in the same effectively active group. Inherited
+- **Default:** any active user, as in 1.35.3. A room with a `group` takes
+  members from outside that group, and an admin outside it may add them.
+- **Opt-in shared-group rule:** set `CHAT_REACHABILITY_HANDLER =
+  "mojo.apps.chat.services.reachability.require_shared_group"`. Caller and
+  target must then share an active group — both hold an active direct
+  `GroupMember` row in the same effectively active group; inherited
   (parent-chain) membership does not count. A global `manage_chat` holder
   reaches any active user.
-- **Group rooms (fixed):** a room with a `group` only takes members of that
-  group, and its admin must be one too unless they hold the global
-  `manage_chat`. No hook can loosen this.
 - **Hook:** `CHAT_REACHABILITY_HANDLER` in the Django settings file (never a
   database Setting) names `handler(user, target, room)`; `room` is None for a
   DM. Only a return of `True` reaches. A load error, a non-callable or an
-  exception refuses. The module ships `default_can_reach` (the default rule,
-  to compose with), `allow_all` (the pre-#8345 reach; group rooms still
-  apply) and `deny_all` (no client DMs or adds).
+  exception refuses. The module ships `require_shared_group`, `allow_all`
+  (the same as no hook) and `deny_all` (no client DMs or adds). A project
+  that wants a group room to take only its group's members checks it in its
+  hook, e.g. `if room is not None and room.group and
+  room.group.get_member_for_user(target, check_parents=True) is None:
+  return False`.
 - **One refusal:** every target-side refusal — no id, a bad id, the caller's
-  own, a missing, inactive or unreachable user, a hook error — is the same
-  404 `"User not found"`, with nothing written, so the answer reveals no user
-  ids. A custom hook runs after the target is loaded, so its timing is the
-  consumer's to keep even.
+  own, a missing or inactive user, a hook refusal or error — is the same 404
+  `"User not found"`, with nothing written. With no hook a DM that opens
+  tells the caller the id is an active account, so active ids can be found
+  one DM at a time; a project that minds sets `require_shared_group` or
+  `deny_all`. A custom hook runs after the target is loaded, so its timing is
+  the consumer's to keep even.
 
 A pair that already shares a direct room gets it back from `dm` without the
 rule: both are members already.
