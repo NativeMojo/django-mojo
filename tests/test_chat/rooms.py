@@ -40,7 +40,7 @@ def setup_chat_rooms(opts):
     opts.admin_user.save()
     opts.admin_user.add_permission("manage_chat")
 
-    # Opening a DM or adding a member needs a shared group (#8345).
+    # The users share a group; a DM or a member add no longer needs one (#8386).
     from mojo.apps.account.models import Group
     Group.objects.filter(name="test-chat-rooms-shared-group").delete()
     opts.shared_group = Group.objects.create(name="test-chat-rooms-shared-group")

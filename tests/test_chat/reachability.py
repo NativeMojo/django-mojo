@@ -1,10 +1,11 @@
 """
-Who a caller may put in a chat with them (maestro #8345): `POST dm`,
+Who a caller may put in a chat with them (maestro #8345, #8386): `POST dm`,
 `POST room/member/add` and the room-create door.
 
 Fixtures: A and B share group G; A and D share group H, D is in no other
 group; C shares nothing with anyone; Z is inactive (shares G); S holds the
-global manage_chat. Group-room integrity: a G room only takes members of G.
+global manage_chat. With no hook any active user is reachable and a G room
+takes outsiders, as in 1.35.3; `require_shared_group` is the opt-in limit.
 
 The hook (`CHAT_REACHABILITY_HANDLER`) is exercised in-process through the
 keyword-only `handler=` / `path=` seams on `reachable_user`: this package is
@@ -54,7 +55,7 @@ def setup_reachability(opts):
     opts.g = Group.objects.create(name=GROUPS["g"])
     opts.h = Group.objects.create(name=GROUPS["h"])
     opts.j = Group.objects.create(name=GROUPS["j"])
-    # A may chat in G (room create); B is a plain member.
+    # A holds chat in G; B is a plain member.
     opts.g.add_member(opts.a).add_permission("chat")
     opts.g.add_member(opts.b)
     opts.g.add_member(opts.z)
@@ -116,7 +117,7 @@ def test_dm_shared_group_opens_room(opts):
 @th.tier("core")
 @th.django_unit_test()
 def test_dm_refusals_are_uniform(opts):
-    """Unrelated, missing, own, absent, non-numeric, zero and inactive ids all
+    """Missing, own, absent, non-numeric, zero, inactive and boolean ids all
     get the one answer the missing id gets, and nothing is written."""
     _drop_direct(opts.a)
     _login(opts, "a")
@@ -126,7 +127,6 @@ def test_dm_refusals_are_uniform(opts):
 
     before = _counts()
     cases = {
-        "unrelated": {"user_id": opts.c.pk},
         "own id": {"user_id": opts.a.pk},
         "absent": {},
         "non-numeric": {"user_id": "abc"},
@@ -142,9 +142,28 @@ def test_dm_refusals_are_uniform(opts):
 
 @th.tier("core")
 @th.django_unit_test()
+def test_dm_any_active_user(opts):
+    """With no hook A may DM C, who shares no group with A (1.35.3); the
+    inactive Z still gets the uniform refusal."""
+    from mojo.apps.chat.models import ChatMembership
+    _drop_direct(opts.a, opts.c)
+    _login(opts, "a")
+    resp = opts.client.post("/api/chat/dm", {"user_id": opts.c.pk})
+    assert_eq(resp.status_code, 200, f"A may DM C with no shared group, got {resp.status_code}: {resp.json}")
+    members = set(ChatMembership.objects.filter(
+        room_id=resp.json.data.id).values_list("user_id", flat=True))
+    assert_eq(members, {opts.a.pk, opts.c.pk}, f"the DM holds exactly A and C, got {members}")
+
+    expected = _answer(opts.client.post("/api/chat/dm", {"user_id": opts.missing_id}))
+    got = _answer(opts.client.post("/api/chat/dm", {"user_id": opts.z.pk}))
+    assert_eq(got, expected, f"an inactive user still answers like a missing id: {got} vs {expected}")
+
+
+@th.tier("core")
+@th.django_unit_test()
 def test_dm_reuses_existing_room_without_rule(opts):
-    """A pair that already shares a direct room gets it back even when the
-    rule would not let them open a new one."""
+    """A pair that already shares a direct room gets that room back, and
+    nothing is written."""
     from mojo.apps.chat.models import ChatMembership, ChatRoom
     _drop_direct(opts.a, opts.c)
     room = ChatRoom.objects.create(kind="direct", user=opts.a)
@@ -171,20 +190,34 @@ def test_dm_global_manage_chat_reaches_anyone(opts):
 @th.tier("core")
 @th.django_unit_test()
 def test_override_session_gets_no_bypass(opts):
-    """A credential that assumes S never inherits S's global reach."""
+    """Under the opt-in `require_shared_group`, a credential that assumes S
+    never inherits S's global reach. With no hook it reaches C like anyone."""
     from mojo.apps.chat.services import reachability
+    from mojo.models.rest import ACTIVE_REQUEST
+    rule = reachability.require_shared_group
     plain = _request(opts.s)
     assumed = _request(opts.s, api_key=SimpleNamespace(override_user=True))
-    got = reachability.reachable_user(plain, opts.c.pk, handler=None)
-    assert_eq(getattr(got, "pk", None), opts.c.pk, "S's own session reaches C")
-    assert_true(reachability.reachable_user(assumed, opts.c.pk, handler=None) is None,
-                "an assumed-member session must not reach C through S's global grant")
+    for request, reaches, label in ((plain, True, "S's own session"),
+                                    (assumed, False, "an assumed-member session")):
+        # The hook reads the request the framework is serving, as it would live.
+        token = ACTIVE_REQUEST.set(request)
+        try:
+            got = reachability.reachable_user(request, opts.c.pk, handler=rule)
+        finally:
+            ACTIVE_REQUEST.reset(token)
+        if reaches:
+            assert_eq(getattr(got, "pk", None), opts.c.pk, f"{label} reaches C under the opt-in rule")
+        else:
+            assert_true(got is None, f"{label} must not reach C through S's global grant")
+    got = reachability.reachable_user(assumed, opts.c.pk, handler=None)
+    assert_eq(getattr(got, "pk", None), opts.c.pk, "with no hook an assumed-member session reaches C")
 
 
 @th.tier("core")
 @th.django_unit_test()
 def test_hook_decides_and_fails_closed(opts):
-    """The hook replaces the default rule; anything but True refuses."""
+    """The hook replaces the default rule; anything but True refuses; the
+    opt-in `require_shared_group` restores the shared-group limit."""
     from mojo.apps.chat.services import reachability
 
     def boom(user, target, room):
@@ -204,19 +237,25 @@ def test_hook_decides_and_fails_closed(opts):
                 "an unimportable hook path refuses")
     assert_true(reach(req, opts.b.pk, path="mojo.apps.chat.services.reachability.HANDLER_KEY") is None,
                 "a hook path naming a non-callable refuses")
-    got = reach(req, opts.b.pk, path="mojo.apps.chat.services.reachability.default_can_reach")
-    assert_eq(getattr(got, "pk", None), opts.b.pk, "a hook path loads and answers (the default rule)")
+    path = "mojo.apps.chat.services.reachability.require_shared_group"
+    got = reach(req, opts.b.pk, path=path)
+    assert_eq(getattr(got, "pk", None), opts.b.pk, "require_shared_group lets A reach B (shared G)")
+    assert_true(reach(req, opts.c.pk, path=path) is None,
+                "require_shared_group refuses A -> C (no shared group)")
 
     room = _room(opts, "hook-g", opts.a, group=opts.g)
-    assert_true(reach(req, opts.c.pk, room=room, handler=reachability.allow_all) is None,
-                "no hook can put an outsider in a group room")
+    for label, kwargs in (("allow_all", {"handler": reachability.allow_all}),
+                          ("no hook", {"handler": None})):
+        got = reach(req, opts.c.pk, room=room, **kwargs)
+        assert_eq(getattr(got, "pk", None), opts.c.pk, f"{label} lets A put C in a G room")
 
 
 @th.tier("core")
 @th.django_unit_test()
 def test_member_add_groupless_room(opts):
-    """A's groupless room: B (shares G) is added; every other target gets the
-    uniform refusal and nothing is written."""
+    """A's groupless room: B and C (no shared group) are added; missing, own,
+    absent, inactive and bad ids get the uniform refusal and nothing is
+    written."""
     from mojo.apps.chat.models import ChatMembership
     room = _room(opts, "add-groupless", opts.a)
     _login(opts, "a")
@@ -226,7 +265,7 @@ def test_member_add_groupless_room(opts):
     assert_eq(expected[1].get("error"), "User not found", f"refusal body, got {expected}")
 
     before = _counts()
-    for label, extra in {"unrelated": {"user_id": opts.c.pk}, "own id": {"user_id": opts.a.pk},
+    for label, extra in {"own id": {"user_id": opts.a.pk},
                          "absent": {}, "inactive": {"user_id": opts.z.pk},
                          "non-numeric": {"user_id": "abc"}}.items():
         got = _answer(opts.client.post("/api/chat/room/member/add", {"room_id": room.pk, **extra}))
@@ -237,39 +276,43 @@ def test_member_add_groupless_room(opts):
     assert_eq(resp.status_code, 200, f"A may add B, got {resp.status_code}: {resp.json}")
     assert_true(ChatMembership.objects.filter(room=room, user=opts.b, status="active").exists(),
                 "B is now an active member")
+    resp = opts.client.post("/api/chat/room/member/add", {"room_id": room.pk, "user_id": opts.c.pk})
+    assert_eq(resp.status_code, 200, f"A may add C with no shared group, got {resp.status_code}: {resp.json}")
+    assert_true(ChatMembership.objects.filter(room=room, user=opts.c, status="active").exists(),
+                "C is now an active member")
 
 
 @th.tier("core")
 @th.django_unit_test()
-def test_member_add_group_room_integrity(opts):
-    """A G room takes members of G only: A shares H with D, yet cannot add D
-    to it; even S's global grant cannot add C."""
+def test_member_add_group_room_takes_outsiders(opts):
+    """A G room takes members from outside G (1.35.3): A adds D, who is not
+    in G; A adds B; S adds C."""
     from mojo.apps.chat.models import ChatMembership
     room = _room(opts, "add-g", opts.a, group=opts.g)
     _login(opts, "a")
     resp = opts.client.post("/api/chat/room/member/add", {"room_id": room.pk, "user_id": opts.d.pk})
-    assert_eq(resp.status_code, 404, f"D is outside G: refused, got {resp.status_code}: {resp.json}")
-    assert_eq(resp.json.get("error"), "User not found", "the uniform refusal")
-    assert_true(not ChatMembership.objects.filter(room=room, user=opts.d).exists(), "D was not added")
+    assert_eq(resp.status_code, 200, f"A may add D from outside G, got {resp.status_code}: {resp.json}")
+    assert_true(ChatMembership.objects.filter(room=room, user=opts.d, status="active").exists(), "D was added")
 
     resp = opts.client.post("/api/chat/room/member/add", {"room_id": room.pk, "user_id": opts.b.pk})
     assert_eq(resp.status_code, 200, f"B is in G: added, got {resp.status_code}: {resp.json}")
 
     _login(opts, "s")
     resp = opts.client.post("/api/chat/room/member/add", {"room_id": room.pk, "user_id": opts.c.pk})
-    assert_eq(resp.status_code, 404, f"global manage_chat cannot add an outsider to a G room, got {resp.status_code}")
-    assert_true(not ChatMembership.objects.filter(room=room, user=opts.c).exists(), "C was not added")
+    assert_eq(resp.status_code, 200, f"S may add C to a G room, got {resp.status_code}: {resp.json}")
+    assert_true(ChatMembership.objects.filter(room=room, user=opts.c, status="active").exists(), "C was added")
 
 
 @th.tier("core")
 @th.django_unit_test()
-def test_member_add_owner_outside_group_refused(opts):
-    """A room already in a group its owner is not a member of (the old
-    cross-group create) gives that owner no way to add the group's members."""
+def test_member_add_by_owner_outside_group(opts):
+    """The owner of a G room who is not in G adds B, as in 1.35.3."""
+    from mojo.apps.chat.models import ChatMembership
     room = _room(opts, "add-foreign", opts.c, group=opts.g)
     _login(opts, "c")
     resp = opts.client.post("/api/chat/room/member/add", {"room_id": room.pk, "user_id": opts.b.pk})
-    assert_eq(resp.status_code, 404, f"an owner outside G cannot add B, got {resp.status_code}: {resp.json}")
+    assert_eq(resp.status_code, 200, f"an owner outside G may add B, got {resp.status_code}: {resp.json}")
+    assert_true(ChatMembership.objects.filter(room=room, user=opts.b, status="active").exists(), "B was added")
 
 
 @th.tier("core")
@@ -298,15 +341,17 @@ def test_banned_member_readded_and_banned_admin_powerless(opts):
 
 @th.tier("core")
 @th.django_unit_test()
-def test_room_create_needs_the_group(opts):
-    """REST create in a group the caller cannot chat in is refused with no
-    row; in G it works; a body `user` never changes the owner."""
+def test_room_create_any_group_owner_is_creator(opts):
+    """REST create in J, a group A is not in, works as in 1.35.3; in G it
+    works; a body `user` never changes the owner."""
     from mojo.apps.chat.models import ChatRoom
     _login(opts, "a")
     name = ROOM_PREFIX + "create-j"
     resp = opts.client.post("/api/chat/room", {"name": name, "kind": "group", "group": opts.j.pk})
-    assert_eq(resp.status_code, 403, f"A is not in J: refused, got {resp.status_code}: {resp.json}")
-    assert_true(not ChatRoom.objects.filter(name=name).exists(), "no room was created in J")
+    assert_eq(resp.status_code, 200, f"A may create in J, got {resp.status_code}: {resp.json}")
+    room = ChatRoom.objects.get(name=name)
+    assert_eq(room.group_id, opts.j.pk, "the room is in J")
+    assert_eq(room.user_id, opts.a.pk, "the owner is A")
 
     for label, owner_field in (("real", opts.c.pk), ("missing", opts.missing_id)):
         name = f"{ROOM_PREFIX}create-g-{label}"

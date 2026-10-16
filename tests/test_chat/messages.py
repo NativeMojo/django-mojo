@@ -55,7 +55,7 @@ def setup_messages(opts):
     opts.dm_user.is_email_verified = True
     opts.dm_user.save()
 
-    # Opening a DM needs a shared group (#8345): put the users in one.
+    # The users share a group; opening a DM no longer needs one (#8386).
     from mojo.apps.account.models import Group
     Group.objects.filter(name="test-msg-shared-group").delete()
     opts.shared_group = Group.objects.create(name="test-msg-shared-group")

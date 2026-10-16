@@ -47,7 +47,8 @@ def _dm(opts, target):
 @th.django_unit_test()
 def test_settings_hook_controls_the_dm_door(opts):
     """deny_all refuses A -> B (shared group); allow_all lets A reach C (no
-    shared group); with the setting gone the default refuses A -> C again."""
+    shared group); require_shared_group refuses A -> C and lets A reach B;
+    with the setting gone the default reaches C again (1.35.3)."""
     with th.server_settings(CHAT_REACHABILITY_HANDLER=f"{HOOKS}.deny_all"):
         resp = _dm(opts, opts.b)
         assert_eq(resp.status_code, 404, f"deny_all refuses A -> B, got {resp.status_code}: {resp.json}")
@@ -55,5 +56,11 @@ def test_settings_hook_controls_the_dm_door(opts):
     with th.server_settings(CHAT_REACHABILITY_HANDLER=f"{HOOKS}.allow_all"):
         resp = _dm(opts, opts.c)
         assert_eq(resp.status_code, 200, f"allow_all lets A reach C, got {resp.status_code}: {resp.json}")
+    with th.server_settings(CHAT_REACHABILITY_HANDLER=f"{HOOKS}.require_shared_group"):
+        resp = _dm(opts, opts.c)
+        assert_eq(resp.status_code, 404, f"require_shared_group refuses A -> C, got {resp.status_code}: {resp.json}")
+        assert_eq(resp.json.error, "User not found", "with the uniform refusal")
+        resp = _dm(opts, opts.b)
+        assert_eq(resp.status_code, 200, f"require_shared_group lets A reach B, got {resp.status_code}: {resp.json}")
     resp = _dm(opts, opts.c)
-    assert_eq(resp.status_code, 404, f"the default rule refuses A -> C again, got {resp.status_code}")
+    assert_eq(resp.status_code, 200, f"with no setting A reaches C, got {resp.status_code}: {resp.json}")
