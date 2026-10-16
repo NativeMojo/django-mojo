@@ -490,6 +490,19 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   members of its group. `mojo.apps.chat.services.reachability.allow_all`
   restores the pre-#8345 reach; `.deny_all` turns off client DMs and adds. See
   [Chat permissions](../chat/permissions.md#who-a-caller-may-put-in-a-chat-reachability).
+- `CHAT_ROOM_AUTHORITY_HANDLER` — dotted path to
+  `handler(user, room, action, context) -> bool`, read from the Django
+  settings file only (`settings.get_static`; a database Setting row is
+  ignored), default unset. Decides the room-admin REST operations: `room/rules`,
+  `room/join`, `room/leave`, `room/member/remove|mute|ban` and PUT/DELETE on
+  `room/<pk>`. Unset means the built-in rule: global `manage_chat` to turn
+  disappearing messages on or shorten them; role order for member
+  operations. Only `True` allows; an unloadable path, a
+  non-callable, an exception or any other return refuses. Value validation and
+  the banned-caller refusal run first and no hook changes them.
+  `mojo.apps.chat.services.room_authority.deny_all` refuses every one of these
+  REST operations; server code is unaffected. See
+  [Chat permissions](../chat/permissions.md#who-may-run-a-room-admin-operation-room-authority).
 
 ### CODE
 

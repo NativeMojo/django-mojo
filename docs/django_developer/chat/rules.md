@@ -16,6 +16,37 @@ longer carries its own copy. `chat_edit` still enforces `check_rules` and
 | `disappearing_ttl` | `0` | Seconds until messages auto-delete. 0 = off. |
 | `rate_limit` | `10` | Max messages per user per second |
 
+### Who may change a rule
+
+`POST room/rules` and a `rules` value in PUT `room/<pk>` both check every
+value first, for every caller, and answer 400 naming the key and its range.
+Nothing is written.
+
+| Key | Accepted |
+|---|---|
+| `disappearing_ttl` | `0` (off), or 3,600 to 31,536,000 seconds (1 hour to 365 days) |
+| `max_message_length` | 1 to 4,000 |
+| `rate_limit` | 1 to 100 per second, or `0` (off) |
+| `allow_urls`, `allow_media`, `allow_phone_numbers` | `true` / `false`, or the strings `"true"` / `"false"` |
+
+- Integers may arrive as a string of digits; a boolean is never an integer.
+  Values are stored normalised (`"1000"` as `1000`, `"false"` as `false`).
+- Only the keys a write carries are checked; with PUT `"__replace": true`,
+  the whole new dict. A room already holding a bad stored value can still
+  change other keys. Unknown keys pass through unread.
+- A PUT `rules` that is not an object (or a JSON string of one) is 400.
+- **Turning disappearing messages on, or shortening the TTL, needs the global
+  `manage_chat`** by default. A room admin may lengthen the TTL or turn it off. A project changes this with
+  `CHAT_ROOM_AUTHORITY_HANDLER` (see
+  [Permissions](permissions.md#who-may-run-a-room-admin-operation-room-authority)).
+- Server code writing `room.rules` through the ORM is not checked.
+
+To find rooms that already carry a TTL (read-only):
+
+```python
+ChatRoom.objects.filter(rules__has_key="disappearing_ttl").values("pk", "group_id", "rules")
+```
+
 ## Content Guard Integration
 
 Every classified send and edit calls the chat adapter:
