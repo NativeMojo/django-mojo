@@ -22,15 +22,13 @@ member (`is_override_user_session`), the same discipline as
 `_check_room_admin`.
 
 - `rules`: `_check_room_admin` passes. Tightening `disappearing_ttl` (turning
-  it on or shortening it) and setting `rate_limit` to 0 need global
-  `manage_chat`.
+  it on or shortening it) needs global `manage_chat`.
 - `update`: an active or muted owner/admin membership, or `manage_chat` /
-  `comms` in the room's group or globally. Rules changes follow `rules`;
-  changing `kind` or `group` needs global `manage_chat`. RestMeta
-  `SAVE_PERMS` still runs afterwards.
+  `comms` in the room's group or globally. Rules changes follow `rules`.
+  RestMeta `SAVE_PERMS` still runs afterwards.
 - `delete`: allowed here; RestMeta `DELETE_PERMS` decides afterwards.
-- `join`: a channel with no group needs global `manage_chat`. A group
-  channel keeps its group check in the view, which no hook loosens.
+- `join`: allowed here. A group channel keeps its group check in the view,
+  which no hook loosens.
 - `leave`: allowed.
 - `member_remove`: `_check_room_admin` passes and role order holds.
 - `member_mute`, `member_ban`: `_check_room_moderator` passes and role order
@@ -305,15 +303,11 @@ def _role_order(request, room, target):
 
 
 def _rules_allowed(request, changes):
-    """The rule-value part of the default: tightening `disappearing_ttl` and
-    turning rate limiting off need global `manage_chat`."""
+    """The rule-value part of the default: tightening `disappearing_ttl`
+    needs global `manage_chat`."""
     if "disappearing_ttl" in changes:
         old, new = changes["disappearing_ttl"]
         if is_tightening(old, new) and not _global(request, "manage_chat"):
-            return False
-    if "rate_limit" in changes:
-        old, new = changes["rate_limit"]
-        if _int_value(new) == 0 and not _global(request, "manage_chat"):
             return False
     return True
 
@@ -333,16 +327,10 @@ def default_verdict(request, room, action, *, target=None, changes=None):
         )
         if not allowed:
             return False
-        if ("kind" in changes or "group" in changes) and not _global(request, "manage_chat"):
-            return False
         return _rules_allowed(request, changes)
     if action == "delete":
         return True
-    if action == "join":
-        if room.group_id is None:
-            return _global(request, "manage_chat")
-        return True
-    if action == "leave":
+    if action in ("join", "leave"):
         return True
     if action == "member_remove":
         return (_passes(_check_room_admin, request, room)

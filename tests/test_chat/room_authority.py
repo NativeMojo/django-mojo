@@ -178,7 +178,7 @@ def test_ttl_loosening_stays_with_admins(opts):
 @th.django_unit_test()
 def test_rule_values_are_validated(opts):
     """4. Bad values answer 400 and change nothing, even for S; the range
-    edges are accepted; rate_limit 0 is S's alone."""
+    edges are accepted."""
     _reset(opts)
     _login(opts, "s")
     bad = {
@@ -200,14 +200,6 @@ def test_rule_values_are_validated(opts):
         assert_eq(resp.status_code, 200, f"disappearing_ttl={ttl} is accepted, got {resp.status_code}: {resp.json}")
         assert_eq(_rules(opts).get("disappearing_ttl"), ttl, f"disappearing_ttl={ttl} saved")
 
-    _reset(opts)
-    _login(opts, "a")
-    resp = _post_rules(opts, rate_limit=0)
-    assert_eq(resp.status_code, 403, f"A may not turn rate limiting off, got {resp.status_code}: {resp.json}")
-    _login(opts, "s")
-    resp = _post_rules(opts, rate_limit=0)
-    assert_eq(resp.status_code, 200, f"S may turn rate limiting off, got {resp.status_code}: {resp.json}")
-
 
 @th.tier("core")
 @th.django_unit_test()
@@ -227,8 +219,8 @@ def test_legacy_bad_value_does_not_block_other_keys(opts):
 @th.tier("core")
 @th.django_unit_test()
 def test_put_room_follows_the_rule(opts):
-    """6. PUT room/<pk>: safe rules pass; tightening, bad rules, kind and
-    group changes, a banned or departed owner and an outsider are refused."""
+    """6. PUT room/<pk>: safe rules pass; tightening, bad rules, a banned or
+    departed owner and an outsider are refused."""
     from mojo.apps.chat.models import ChatMembership
     _reset(opts)
     _login(opts, "o")
@@ -247,13 +239,6 @@ def test_put_room_follows_the_rule(opts):
     assert_eq(_rules(opts).get("disappearing_ttl"), 0, "no refused PUT changed the TTL")
     assert_true(isinstance(_rules(opts), dict), "no refused PUT replaced the rules")
 
-    resp = _put(opts, {"kind": "channel"})
-    assert_eq(resp.status_code, 403, f"O may not change the kind, got {resp.status_code}: {resp.json}")
-    resp = _put(opts, {"group": None})
-    assert_eq(resp.status_code, 403, f"O may not detach the group, got {resp.status_code}: {resp.json}")
-    opts.room.refresh_from_db()
-    assert_eq((opts.room.kind, opts.room.group_id), ("group", opts.h.pk), "kind and group unchanged")
-
     ChatMembership.objects.filter(room=opts.room, user=opts.o).update(status="banned")
     resp = _put(opts, {"name": ROOM_PREFIX + "r-banned"})
     assert_eq(resp.status_code, 403, f"a banned owner loses PUT, got {resp.status_code}: {resp.json}")
@@ -266,13 +251,6 @@ def test_put_room_follows_the_rule(opts):
     assert_eq(resp.status_code, 403, f"an outsider may not PUT, got {resp.status_code}: {resp.json}")
     opts.room.refresh_from_db()
     assert_eq(opts.room.name, ROOM_PREFIX + "r", "no refused PUT renamed the room")
-
-    _reset(opts)
-    _login(opts, "s")
-    resp = _put(opts, {"kind": "channel"})
-    assert_eq(resp.status_code, 200, f"S may change the kind, got {resp.status_code}: {resp.json}")
-    opts.room.refresh_from_db()
-    assert_eq(opts.room.kind, "channel", "S's kind change saved")
     _reset(opts)
 
 
@@ -301,27 +279,15 @@ def test_delete_room_unchanged(opts):
 
 @th.tier("core")
 @th.django_unit_test()
-def test_join_groupless_channel_needs_global_manage_chat(opts):
-    """8. A channel with no group: M and X are refused with no row written, S
-    joins; an H member joins H's channel; an override session and a banned
-    member are refused."""
+def test_join_keeps_its_fixed_checks(opts):
+    """8. An override session may not join a channel with no group; an H
+    member joins H's channel; a banned member is refused."""
     from mojo.apps.chat.models import ChatMembership
     ChatMembership.objects.filter(room__in=[opts.channel, opts.group_channel]).delete()
-    for name, user in (("m", opts.m), ("x", opts.x)):
-        _login(opts, name)
-        resp = opts.client.post("/api/chat/room/join", {"room_id": opts.channel.pk})
-        assert_eq(resp.status_code, 403, f"{name} may not join a groupless channel, got {resp.status_code}: {resp.json}")
-        assert_true(not ChatMembership.objects.filter(room=opts.channel, user=user).exists(),
-                    f"{name}'s refused join wrote no membership")
-
     resp = opts.client.post(
         "/api/chat/room/join", {"room_id": opts.channel.pk},
         headers={"Authorization": f"apikey {opts.override_token}"})
     assert_eq(resp.status_code, 403, f"an override session may not join, got {resp.status_code}: {resp.json}")
-
-    _login(opts, "s")
-    resp = opts.client.post("/api/chat/room/join", {"room_id": opts.channel.pk})
-    assert_eq(resp.status_code, 200, f"S may join, got {resp.status_code}: {resp.json}")
 
     _login(opts, "m")
     resp = opts.client.post("/api/chat/room/join", {"room_id": opts.group_channel.pk})

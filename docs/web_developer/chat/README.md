@@ -61,7 +61,7 @@ doesn't.
 
 **Turning on disappearing messages is a platform decision.** By default only
 a platform chat admin (the global `manage_chat`) may turn `disappearing_ttl`
-on or shorten it, or set `rate_limit` to `0`; a room admin gets 403. A room
+on or shorten it; a room admin gets 403. A room
 admin may still lengthen the TTL or turn it off. Hide or explain the control
 rather than letting the 403 surprise the user.
 
@@ -69,12 +69,8 @@ rather than letting the 403 surprise the user.
 (403). The owner may act on admins; anyone may remove themself. A banned
 member can only leave.
 
-**Changing a room's kind or group** through PUT `room/<pk>` needs the global
-`manage_chat` (403 otherwise). A banned owner, or one who left the room,
-cannot update it.
-
-**Joining a channel with no group** needs the global `manage_chat`; others get
-403. Members of a groupless channel arrive through `room/member/add`.
+A banned owner, or one who left the room, cannot update it through PUT
+`room/<pk>`.
 
 A project can change any of these defaults on the server, except the value
 checks and the banned-caller refusal.
@@ -480,4 +476,4 @@ language sends do not reach that path. No new error-code scheme is introduced.
 |------|------|---------|----------|
 | `direct` | Auto (DM endpoint) | From join date | 1:1 private messages |
 | `group` | Invite only | From join date | Teams, support |
-| `channel` | Self-join (in its group; a groupless channel: platform chat admins only) | Full | Announcements, community |
+| `channel` | Self-join | Full | Announcements, community |

@@ -30,7 +30,7 @@ creator: a `user` field in the body is ignored.
 Passes the [room-authority rule](permissions.md#who-may-run-a-room-admin-operation-room-authority)
 first, then RestMeta `SAVE_PERMS`. An active or muted owner or admin, or a
 `manage_chat` / `comms` holder, may change `name`, `metadata` and safe
-`rules`. Changing `kind` or `group` needs the global `manage_chat`. A banned
+`rules`; `kind` and `group` are left to `SAVE_PERMS`. A banned
 owner, or one who left the room, gets 403. A `rules` value is validated like
 `room/rules` (400 naming the key); one that is not an object is 400.
 
@@ -44,9 +44,9 @@ the delete commits, so open sockets drop the topic at once.
 ### `POST /api/chat/room/join` — Join a channel
 
 Only works for `kind="channel"`. For group-linked channels, checks group
-permission. A channel **with no group** needs the global `manage_chat` unless
-the project's authority hook allows the join (403 and no row otherwise). A
-banned member gets 403.
+permission. A channel with no group is open to any signed-in user unless the
+project's authority hook refuses the join (403 and no row). A banned member
+gets 403.
 
 ```json
 {"room_id": 5}
@@ -112,8 +112,7 @@ Requires room admin or `manage_chat` permission. Merges provided keys into
 existing rules. Every value is checked first: a bad one is 400 naming the key
 and its range, with nothing written (ranges in
 [Rules](rules.md#who-may-change-a-rule)). Turning `disappearing_ttl` on or
-shortening it, and setting `rate_limit` to `0`, need the global `manage_chat`
-(403 otherwise).
+shortening it needs the global `manage_chat` (403 otherwise).
 
 ```json
 {"room_id": 5, "allow_urls": false, "max_message_length": 1000}
@@ -193,10 +192,10 @@ Two callers are deliberately not bound: `channel` rooms (public, full history to
 every member), and the `manage_chat` moderator read path, which has no
 membership row and therefore no `joined_at` to be bound by.
 
-**Channel history is unbounded.** A member of a channel reads its whole
-history. Joining a channel with no `group` needs the global `manage_chat`
-unless the project's authority hook allows it; its members otherwise arrive
-through `room/member/add`.
+**Channel history is unbounded, and a groupless channel is open.** Any
+signed-in user can join a channel with no `group` (`POST room/join`) and then
+read its whole history. Put anything not meant for every account in a group
+room, a group-linked channel, or a direct room.
 
 The same three bounds — unflagged, join cutoff, disappearing-message TTL — live
 in `mojo.apps.chat.services.messages.visible_messages(room, membership)`. Every

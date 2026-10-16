@@ -496,9 +496,8 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   ignored), default unset. Decides the room-admin REST operations: `room/rules`,
   `room/join`, `room/leave`, `room/member/remove|mute|ban` and PUT/DELETE on
   `room/<pk>`. Unset means the built-in rule: global `manage_chat` to turn
-  disappearing messages on or shorten them, to set `rate_limit` to `0`, to
-  change a room's `kind` or `group` and to join a groupless channel; role
-  order for member operations. Only `True` allows; an unloadable path, a
+  disappearing messages on or shorten them; role order for member
+  operations. Only `True` allows; an unloadable path, a
   non-callable, an exception or any other return refuses. Value validation and
   the banned-caller refusal run first and no hook changes them.
   `mojo.apps.chat.services.room_authority.deny_all` refuses every one of these

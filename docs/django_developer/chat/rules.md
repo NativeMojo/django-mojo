@@ -36,8 +36,7 @@ Nothing is written.
   change other keys. Unknown keys pass through unread.
 - A PUT `rules` that is not an object (or a JSON string of one) is 400.
 - **Turning disappearing messages on, or shortening the TTL, needs the global
-  `manage_chat`** by default, as does setting `rate_limit` to `0`. A room
-  admin may lengthen the TTL or turn it off. A project changes this with
+  `manage_chat`** by default. A room admin may lengthen the TTL or turn it off. A project changes this with
   `CHAT_ROOM_AUTHORITY_HANDLER` (see
   [Permissions](permissions.md#who-may-run-a-room-admin-operation-room-authority)).
 - Server code writing `room.rules` through the ORM is not checked.

@@ -99,7 +99,7 @@ def on_chat_room_join(request):
             raise merrors.PermissionDeniedException()
 
     _refuse_banned(request, room)
-    # A channel with no group needs global manage_chat unless the hook allows.
+    # Allowed by default; a project hook may narrow it.
     room_authority.require(request, room, "join")
 
     membership, created = ChatMembership.objects.get_or_create(
@@ -321,8 +321,8 @@ def on_chat_room_update_rules(request):
     """Update room rules. Requires admin role or manage_chat permission.
 
     Every value is checked first (400 naming the key and its range). Turning
-    disappearing messages on or shortening them, and turning rate limiting
-    off, need global manage_chat by default (services/room_authority.py).
+    disappearing messages on or shortening them needs global manage_chat by
+    default (services/room_authority.py).
     """
     room = ChatRoom.objects.filter(pk=request.DATA.room_id).first()
     if not room:

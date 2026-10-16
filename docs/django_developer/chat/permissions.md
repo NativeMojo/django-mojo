@@ -73,10 +73,10 @@ through a session that assumes a member (an override ApiKey or a group token).
 
 | Operation | Default |
 |---|---|
-| `room/rules` | Room admin (not banned) or `manage_chat` in the group or globally. Turning disappearing messages on or shortening them, and setting `rate_limit` to `0`, need the **global** `manage_chat`. |
-| PUT `room/<pk>` | An active or muted owner/admin membership, or `manage_chat` / `comms` in the room's group or globally. Rules changes follow the `rules` row. Changing `kind` or `group` needs the global `manage_chat`. `name` and `metadata` stay as before. RestMeta `SAVE_PERMS` still runs afterwards. |
+| `room/rules` | Room admin (not banned) or `manage_chat` in the group or globally. Turning disappearing messages on or shortening them needs the **global** `manage_chat`. |
+| PUT `room/<pk>` | An active or muted owner/admin membership, or `manage_chat` / `comms` in the room's group or globally. Rules changes follow the `rules` row. `name`, `metadata`, `kind` and `group` stay as before. RestMeta `SAVE_PERMS` still runs afterwards. |
 | DELETE `room/<pk>` | Unchanged: RestMeta `DELETE_PERMS` (`manage_chat` globally or in the room's group). |
-| `room/join` | A channel **with no group** needs the global `manage_chat`. A group channel still needs `chat` or `manage_chat` in its group, and no hook loosens that. |
+| `room/join` | Unchanged: a channel with no group is open to any signed-in user. A group channel still needs `chat` or `manage_chat` in its group, and no hook loosens that. |
 | `room/leave` | Unchanged. |
 | `room/member/remove` | Room admin or `manage_chat`, and role order. |
 | `room/member/mute`, `ban` | Room admin, `moderate_chat` or `manage_chat`, and role order. |
@@ -121,7 +121,7 @@ RestMeta perms gate those rows.
 ### Room-level roles
 
 - **owner** — full control (set via RestMeta OWNER_FIELD; always the creator),
-  except deleting the room (`DELETE_PERMS`) and changing its `kind` or `group`
+  except deleting the room (`DELETE_PERMS`)
 - **admin** — can manage members below the owner, update rules, edit/flag messages
 - **member** — can send messages, react, read
 
