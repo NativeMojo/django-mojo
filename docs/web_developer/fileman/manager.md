@@ -14,7 +14,37 @@ FileManagers are storage backend configurations. Admins create and manage them; 
 
 ## Permissions
 
-- `view_fileman` or `manage_files`
+- Read: `view_fileman`, `manage_files` or `files`
+- Create and update: `manage_files` or `files`, in the manager's group or on the user record
+
+### Where a manager may point
+
+A manager with no S3 key of its own runs on the platform's keys, and a manager
+with a `parent` runs on its top parent's keys and settings. Unless the caller
+holds `manage_files` or `files` on the **user record** (or is a superuser), a
+create or update that changes `backend_type`, `backend_url`, `parent`, `group`,
+`is_public`, `base_path`, `temp_upload_path`, `endpoint_url`, `aws_key` or
+`aws_secret` is refused with 403 when the saved manager would:
+
+- run on borrowed keys and point outside its group's storage folder (the
+  folders of the group's server-provisioned managers);
+- borrow the keys of another group's or a user's manager;
+- have a `backend_url` path with an empty, `.` or `..` part, or a backslash;
+- on a filesystem manager, use a `temp_upload_path` outside its group's
+  storage folder; or
+- move a manager below it (a child, or a child's child) onto borrowed keys
+  outside its group's folder, for example by changing the parent's `parent`,
+  keys, `backend_type`, `base_path` or `group`. The refused manager and its
+  descendants are not written. A related record posted as a nested object is
+  saved first, under its own permission and storage checks, and is not rolled
+  back (framework-wide).
+
+A manager on its own S3 key, or an S3 manager under a same-group parent on its
+own S3 key, may point anywhere that key reaches. A `file://` manager under such
+a parent never uses the key, so it must stay inside the group's folder.
+People, API keys and group tokens holding the same grant get the same answer. A key that acts as a member carries only
+that member's grant in the group. Updates that change none of those fields
+(a rename, a description) are not checked.
 
 ## Creating a FileManager
 
@@ -42,6 +72,7 @@ FileManagers are storage backend configurations. Admins create and manage them; 
 | `aws_secret` | Write-only input | Secret access key accepted on create or update. Never returned. |
 | `aws_key_masked` | Response only | Masked access-key hint. Only the last four characters of a long value remain visible. |
 | `aws_secret_masked` | Response only | Masked secret hint. Only the last four characters of a long value remain visible. |
+| `credentials` | Response only, detail (`default`) graph | Whose keys the manager runs on: `own` (its own S3 key), `parent` (its top parent's own S3 key) or `platform`. Carries no key material. Not on the `list` graph. |
 
 FileManager list and detail responses, including managers nested in File
 responses, omit `aws_key` and `aws_secret`. They return only the masked fields:

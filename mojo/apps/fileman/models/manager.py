@@ -42,7 +42,7 @@ class FileManager(MojoSecrets, MojoModel):
         GRAPHS = {
             "default": {
                 "extra": ["aws_region", "aws_key_masked", "aws_secret_masked", "allowed_origins",
-                          "assume_role_arn", "has_external_id", "cdn"],
+                          "assume_role_arn", "has_external_id", "cdn", "credentials"],
                 "fields": [
                     "created", "id", "name", "use", "backend_type", "backend_url",
                     "is_active", "is_default", "is_public"],
@@ -580,6 +580,239 @@ class FileManager(MojoSecrets, MojoModel):
             branch="fileman_assume_role_setting",
         )
 
+    # --- storage containment (maestro #7990) ---
+    # A manager reaches what its top parent's keys reach, at the location its
+    # own backend_url and the top parent's settings name. A group-level file
+    # grant may not aim borrowed keys (the platform's or another manager's)
+    # outside the group's own folder.
+
+    PARENT_WALK_LIMIT = 16
+    STORAGE_WATCHED_FIELDS = ("backend_type", "backend_url", "parent_id", "group_id", "is_public")
+    STORAGE_WATCHED_SETTINGS = ("base_path", "temp_upload_path", "endpoint_url", "aws_key", "aws_secret")
+
+    def _has_platform_file_grant(self):
+        """True for a superuser, or a user holding `manage_files`/`files` on the
+        user record. A key that assumes a member carries only that member's
+        group-level grant (rest.py), so it never counts here; a reference-mode
+        key is not a User and gets its group-level answer too."""
+        from mojo.helpers.request import is_override_user_session, is_request_user
+
+        request = self.active_request
+        actor = self.active_user
+        if request is None or actor is None:
+            return False
+        if is_override_user_session(request) or not is_request_user(request):
+            return False
+        if getattr(actor, "is_superuser", False):
+            return True
+        return bool(actor.has_permission(list(self.CDN_ADMIN_PERMS)))
+
+    def _top_parent(self):
+        """The row whose keys and settings the backend uses (primary_parent),
+        with a bounded walk: REST skips only a direct self-reference."""
+        node = self
+        seen = {id(self)} if self.pk is None else {self.pk}
+        for _ in range(self.PARENT_WALK_LIMIT):
+            parent = node.parent
+            if parent is None:
+                return node
+            key = parent.pk if parent.pk is not None else id(parent)
+            if key in seen:
+                raise me.ValueException("File manager parents form a cycle")
+            seen.add(key)
+            node = parent
+        raise me.ValueException("File manager parent chain is too deep")
+
+    def _runs_on_own_key(self):
+        """An S3 store that is its own top parent and holds its own key pair.
+        A filesystem store never uses a key, so it is never "own key"."""
+        if self._top_parent() is not self or not self.is_s3:
+            return False
+        if not self.get_secret("aws_key") or not self.get_secret("aws_secret"):
+            return False
+        return not self.uses_platform_credentials()
+
+    def _location(self):
+        """Where the backend would read and write, the way it reads it: the
+        backend type and URL of this row, the settings of the top parent."""
+        store = self._top_parent().secrets or {}
+        purl = urlparse(self.backend_url or "")
+        root = (purl.path or "").strip("/")
+        if self.is_file_system:
+            # The host part of a file:// URL is ignored by the backend.
+            base = os.path.realpath(store.get("base_path") or "/tmp/fileman")
+            return (self.FILE_SYSTEM, base, "", root)
+        return (self.backend_type, purl.netloc, store.get("endpoint_url") or "", root)
+
+    def _group_storage_roots(self):
+        """The locations of the group's anchors: group managers with no user
+        whose parent is system-scoped, the shape get_for_group provisions.
+        Read from the database, so an unsaved edit cannot move them; never
+        through group.get_uuid(), which writes the Group."""
+        if self.group_id is None:
+            return []
+        anchors = FileManager.objects.filter(
+            group_id=self.group_id, user=None,
+            parent__isnull=False, parent__user=None, parent__group=None,
+        ).select_related("parent")
+        return [anchor._location() for anchor in anchors]
+
+    @staticmethod
+    def _location_within(location, root):
+        if location[:3] != root[:3]:
+            return False
+        path, root_path = location[3], root[3]
+        return not root_path or path == root_path or path.startswith(root_path + "/")
+
+    def _storage_unchanged(self):
+        stored = FileManager.objects.filter(pk=self.pk).first()
+        if stored is None:
+            return False
+        if any(getattr(self, name) != getattr(stored, name) for name in self.STORAGE_WATCHED_FIELDS):
+            return False
+        return all(self.get_secret(key) == stored.get_secret(key)
+                   for key in self.STORAGE_WATCHED_SETTINGS)
+
+    def _refuse_storage(self, reason):
+        raise me.PermissionDeniedException(
+            reason=reason,
+            model_name="FileManager",
+            event_type="user_permission_denied",
+            branch="fileman_storage_outside_group",
+        )
+
+    def _require_contained_storage(self, created):
+        """A group-level grant may not aim borrowed keys outside the group's folder.
+
+        Platform-wide file admins and superusers pass. Everyone else — a
+        person, an API key or a group token, on the same grant — may save a
+        manager that runs on its own S3 key anywhere, and one on the
+        platform's or a same-group parent's keys only inside one of the
+        group's anchors. Direct ORM use (bootstrap, clone, get_for_*) does
+        not come through here.
+        """
+        request = self.active_request
+        if request is None:
+            # The middleware sets the active request on every HTTP call, so
+            # none means server code calling the hook directly.
+            return
+        if self._has_platform_file_grant():
+            return
+        stored_group_id = None
+        if not created:
+            stored_group_id = FileManager.objects.filter(pk=self.pk).values_list(
+                "group_id", flat=True).first()
+        if created or stored_group_id != self.group_id:
+            original_group = getattr(request, "group", None)
+            try:
+                allowed = self.rest_check_permission(request, "SAVE_PERMS", self)
+            finally:
+                request.group = original_group
+            if not allowed:
+                self._refuse_storage("A file manager can only be saved into a group you manage files in")
+        if not created and self._storage_unchanged():
+            return
+        stored = None if created else FileManager.objects.filter(pk=self.pk).first()
+        self._require_contained_reach(stored)
+        if not created:
+            # A descendant runs on this row's keys and settings, so an edit
+            # here can move it too (review 113553).
+            for node, before in self._storage_descendants():
+                if self._reach_of(node) != self._reach_of(before):
+                    node._require_contained_reach(before)
+
+    def _require_contained_reach(self, before):
+        """Where this row, as it now stands, may point. `before` is the stored
+        copy (None when new): a value already stored is judged only when the
+        save changes it."""
+        path = urlparse(self.backend_url or "").path or ""
+        segments = path.strip("/").split("/") if path.strip("/") else []
+        if "\\" in path or any(seg in ("", ".", "..") for seg in segments):
+            self._refuse_storage("A file manager's path may not contain empty, '.' or '..' parts")
+        self._require_contained_temp_path(before)
+        if self._runs_on_own_key():
+            return
+        top = self._top_parent()
+        if top is not self:
+            own_key_parent = (top.group_id == self.group_id and top.user_id is None
+                              and top._runs_on_own_key())
+            if own_key_parent and self.is_s3:
+                # Only an S3 child uses the parent's key; any other backend
+                # falls through to the folder check.
+                return
+            if not own_key_parent and (top.group_id is not None or top.user_id is not None):
+                self._refuse_storage("A file manager can only borrow keys from its own group")
+        location = self._location()
+        if not any(self._location_within(location, root) for root in self._group_storage_roots()):
+            self._refuse_storage(
+                "A file manager on borrowed keys must stay inside its group's storage folder")
+
+    def _effective_temp_path(self):
+        """The temp_upload_path the filesystem backend reads (the top parent's),
+        or None when unset and the backend's default applies."""
+        if not self.is_file_system:
+            return None
+        return self._top_parent().get_secret("temp_upload_path") or None
+
+    def _require_contained_temp_path(self, before):
+        """The filesystem backend creates folders at temp_upload_path and prunes
+        the old ones, so a changed value must sit in one of the group's folders."""
+        effective = self._effective_temp_path()
+        if not effective or effective == (before._effective_temp_path() if before else None):
+            return
+        path = os.path.realpath(effective)
+        folders = [os.path.join(root[1], root[3]) for root in self._group_storage_roots()
+                   if root[0] == self.FILE_SYSTEM]
+        if not any(path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+                   for folder in folders):
+            self._refuse_storage(
+                "A file manager's temp_upload_path must stay inside its group's storage folder")
+
+    def _storage_descendants(self):
+        """Every row under this one, each as (node, before): `node` reaches this
+        unsaved row through its parent chain, `before` is a fresh copy whose
+        chain reads the database. Bounded and cycle-safe like _top_parent."""
+        out = []
+        frontier = [self]
+        seen = {self.pk}
+        for _ in range(self.PARENT_WALK_LIMIT):
+            by_pk = {node.pk: node for node in frontier}
+            children = list(FileManager.objects.filter(parent_id__in=list(by_pk)).exclude(pk__in=seen))
+            if not children:
+                return out
+            for child in children:
+                seen.add(child.pk)
+                child.parent = by_pk[child.parent_id]
+                out.append((child, FileManager.objects.get(pk=child.pk)))
+            frontier = children
+        if FileManager.objects.filter(parent_id__in=[n.pk for n in frontier]).exclude(pk__in=seen).exists():
+            raise me.ValueException("File manager children are nested too deep")
+        return out
+
+    @staticmethod
+    def _reach_of(node):
+        """What a save can change about a row's reach: whose keys (the label and
+        the top parent that holds them, with its owner), where, and the temp
+        folder its backend uses. A key rotation on the same top parent keeps
+        the same answer."""
+        try:
+            top = node._top_parent()
+            return (node.credentials, top.pk, top.group_id, top.user_id,
+                    node._location(), node._effective_temp_path())
+        except me.ValueException:
+            return None
+
+    @property
+    def credentials(self):
+        """Whose keys this manager runs on: "own", "parent" or "platform". Never key material."""
+        try:
+            top = self._top_parent()
+        except me.ValueException:
+            return "platform"
+        if top is self:
+            return "own" if self._runs_on_own_key() else "platform"
+        return "parent" if top._runs_on_own_key() else "platform"
+
     def set_allowed_origins(self, origins):
         if isinstance(origins, str) and "," in origins:
             origins = [origin.strip() for origin in origins.split(',')]
@@ -890,6 +1123,7 @@ class FileManager(MojoSecrets, MojoModel):
         # defaults below cannot change the answer — a created store with no
         # key of its own is on platform credentials either way.
         self._require_superuser_for_platform_role(created)
+        self._require_contained_storage(created)
         self._require_cdn_admin_for_settings(created)
         self._validate_cdn_settings()
         self._tighten_cdn_before_save(created)
