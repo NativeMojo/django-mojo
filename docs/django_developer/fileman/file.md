@@ -128,6 +128,7 @@ When `mojo.apps.shortlink` is installed and shortlinks are enabled (global `FILE
 When shortlinks are disabled or the app is not installed, behavior is identical to the pre-shortlink implementation:
 - Public files return a permanent CDN/storage URL (cached in `download_url`)
 - Private files return a time-limited presigned URL (TTL from `urls_expire_in` FileManager setting)
+- Private files on a CDN manager return a signed CDN link; an explicitly set `urls_expire_in` also bounds its lifetime (the shorter of it and `cdn_url_expires_in`, default 7 days)
 
 For user-scoped S3 storage, “public” means the FileManager has current,
 conclusive storage evidence. `get_for_user()` can establish policy-level

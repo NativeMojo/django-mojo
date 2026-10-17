@@ -709,7 +709,7 @@ class File(models.Model, MojoModel):
             if manager.is_public:
                 return manager.backend.get_url(self.storage_file_path)
             return manager.backend.get_url(
-                self.storage_file_path, cdn.link_expires_in(manager))
+                self.storage_file_path, cdn.link_lifetime(manager))
         effective_public = manager.ensure_public_access_audited(
             file_path=self.storage_file_path,
         )

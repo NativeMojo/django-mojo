@@ -10,6 +10,7 @@ and that signed links verify against the test's own public key.
 
 import base64
 import json
+import time
 from datetime import datetime, timedelta, timezone
 
 from testit import helpers as th
@@ -206,10 +207,10 @@ def test_private_manager_signed_link_verifies(opts):
     before = datetime.now(tz=timezone.utc)
     url = f.get_direct_download_url()
     expires = _verify_signed(url, f"https://{CDN_HOST}/{f.storage_file_path}".replace(" ", "%20"))
-    floor = cdn.ceil_to_hour(before + timedelta(seconds=cdn.DEFAULT_EXPIRES_IN)).timestamp()
-    assert_true(abs(expires - floor) <= 3600,
-                f"default lifetime must be ~7 days rounded up to the hour, got {expires - before.timestamp()} s")
-    assert_eq(expires % 3600, 0, "Expires must sit on an hour boundary")
+    lifetime = cdn.DEFAULT_EXPIRES_IN
+    assert_true(before.timestamp() + lifetime // 2 <= expires
+                <= datetime.now(tz=timezone.utc).timestamp() + lifetime,
+                f"default lifetime must be ~7 days and never past it, got {expires - before.timestamp()} s")
     assert_true(expires - before.timestamp() > 7 * 86400 - 3600,
                 "a CDN lifetime must be allowed to exceed what S3 presigning permits")
     # Repeated calls inside the hour give the same URL (client caches keep working).
@@ -231,14 +232,14 @@ def test_lifetime_rules(opts):
     # An explicit caller value (the token download route passes 3600) is kept.
     short = fm.backend.get_url(key, 3600)
     expires = _verify_signed(short, f"https://{CDN_HOST}/fileman/p/q%3Fr.mp4")
-    assert_true(expires <= cdn.ceil_to_hour(now + timedelta(seconds=3600)).timestamp(),
+    assert_true(now.timestamp() + 1800 <= expires <= time.time() + 3600,
                 "an explicit 3600 s request must not become a week-long link")
 
     # Above the cap is clamped to the cap.
     cap = cdn.max_expires_in()
     long = fm.backend.get_url(key, cap * 10)
     expires = _verify_signed(long, f"https://{CDN_HOST}/fileman/p/q%3Fr.mp4")
-    assert_true(expires <= cdn.ceil_to_hour(now + timedelta(seconds=cap)).timestamp(),
+    assert_true(now.timestamp() + cap // 2 <= expires <= time.time() + cap,
                 "a lifetime above FILEMAN_CDN_MAX_EXPIRES_IN must be clamped")
 
     # A manager setting drives File links.
@@ -248,7 +249,7 @@ def test_lifetime_rules(opts):
     f = _file(fm, user=opts.superuser)
     expires = _verify_signed(f.get_direct_download_url(),
                              f"https://{CDN_HOST}/{f.storage_file_path}".replace(" ", "%20"))
-    assert_true(abs(expires - cdn.ceil_to_hour(now + timedelta(days=2)).timestamp()) <= 3600,
+    assert_true(now.timestamp() + 86400 <= expires <= time.time() + 2 * 86400,
                 "cdn_url_expires_in must set the File link lifetime")
     fm.set_setting("cdn_url_expires_in", None)
     fm.save()

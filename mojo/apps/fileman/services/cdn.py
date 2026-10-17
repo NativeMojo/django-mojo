@@ -5,8 +5,10 @@ A `CdnDistribution` row describes CloudFront in front of ONE bucket; every S3
 file manager on that bucket delivers through it unless the manager (or its
 top parent) sets `cdn = "off"`. Public managers hand out unsigned CDN URLs
 that never expire; private managers hand out CloudFront canned-policy signed
-URLs whose lifetime is the manager's `cdn_url_expires_in` (default 7 days)
-capped by the platform's `FILEMAN_CDN_MAX_EXPIRES_IN` (default 90 days).
+URLs whose lifetime is the shorter of the manager's `cdn_url_expires_in`
+(default 7 days) and its `urls_expire_in` when that is set (maestro #8487),
+capped by the platform's `FILEMAN_CDN_MAX_EXPIRES_IN` (default 90 days). A
+signed link's expiry is never later than now + its lifetime.
 
 Provisioning (creating the distribution and its policies) lives beside this
 in `cdn_provision.py`; this module is what the request path touches, so it
@@ -149,10 +151,31 @@ def clamp_lifetime(expires_in):
     return max(MIN_EXPIRES_IN, min(requested, cap))
 
 
-def link_expires_in(manager):
-    """What File/FileRendition pass for a private manager in CDN mode."""
-    configured = manager.get_setting(CDN_EXPIRES_KEY)
-    return clamp_lifetime(configured if configured not in (None, "") else None)
+def _set_seconds(value):
+    """A positive integer setting, or None when unset or unusable."""
+    if value in (None, "") or isinstance(value, bool):
+        return None
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
+
+
+def link_lifetime(manager):
+    """What File/FileRendition pass for a private manager in CDN mode.
+
+    The shorter of `cdn_url_expires_in` and `urls_expire_in`, counting only
+    a value set on the manager or its top parent (no defaults), so a manager
+    that set neither keeps the 7-day default. Clamped to [60 s, cap].
+    """
+    values = [seconds for seconds in (_set_seconds(manager.get_setting(CDN_EXPIRES_KEY)),
+                                      _set_seconds(manager.get_setting("urls_expire_in")))
+              if seconds is not None]
+    return clamp_lifetime(min(values) if values else None)
+
+
+link_expires_in = link_lifetime
 
 
 # ----------------------------------------------------------------------
@@ -214,8 +237,20 @@ def ceil_to_hour(moment):
 
 
 def expiry_for(expires_in, now=None):
+    """The signed expiry for a lifetime: never later than now + lifetime.
+
+    Floored to a step of about a tenth of the lifetime (60 s to an hour) so
+    repeated calls inside a step give the same URL and client caches keep
+    working, but never earlier than now + half the lifetime.
+    """
     now = now or datetime.now(tz=timezone.utc)
-    return ceil_to_hour(now + timedelta(seconds=clamp_lifetime(expires_in)))
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    lifetime = clamp_lifetime(expires_in)
+    step = min(3600, max(MIN_EXPIRES_IN, lifetime // 10))
+    end = now.timestamp() + lifetime
+    floored = datetime.fromtimestamp(math.floor(end / step) * step, tz=timezone.utc)
+    return max(floored, now + timedelta(seconds=lifetime // 2))
 
 
 def generate_private_key_pem():
@@ -309,7 +344,7 @@ def cdn_url(distribution, file_path, expires_in=None, signer=None, now=None):
     """The link a backend hands out in CDN mode.
 
     `expires_in=None` → unsigned (a public manager). Otherwise a signed link
-    for `clamp_lifetime(expires_in)` seconds, rounded up to the hour. With
+    for `clamp_lifetime(expires_in)` seconds, never past it (`expiry_for`). With
     no signer available the unsigned URL is returned: a private prefix's
     cache behavior requires a signature at the edge, so nothing leaks — the
     link just fails until a key exists, which `check_cdn` reports.

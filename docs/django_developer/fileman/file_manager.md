@@ -473,11 +473,18 @@ system manager is never reconciled.
 **Links.** `S3StorageBackend.get_url` is the one seam: `expires_in=None`
 is unsigned, otherwise a canned-policy signed URL for
 `min(expires_in, FILEMAN_CDN_MAX_EXPIRES_IN)` seconds (cap default 90 days,
-a validator-registered Setting), rounded up to the hour so links are stable
-inside an hour. `File`/`FileRendition` pass the manager's
-`cdn_url_expires_in` (default 7 days) for a private manager; the token
-download route keeps its 3600 s; the `download_url` cache is never used in
-CDN mode. Signing is local — the signer for a key is cached per process, so
+a validator-registered Setting). The signed expiry is never later than
+now + that lifetime: it is floored to a step of about a tenth of the lifetime
+(60 s to an hour) so links are stable inside a step, and never earlier than
+now + half the lifetime. `File`/`FileRendition` pass `cdn.link_lifetime(manager)`
+for a private manager: the shorter of `cdn_url_expires_in` and `urls_expire_in`,
+counting only a value set on the manager or its top parent, so a manager that
+set neither keeps 7 days and a manager with `urls_expire_in = 300` gets
+5-minute CDN links. The token download route keeps its 3600 s; the
+`download_url` cache is never used in CDN mode. For short-lived delivery a
+manager sets `urls_expire_in` (or a global file admin sets a short
+`cdn_url_expires_in`), or a global file admin sets `cdn = "off"` so every
+generic path presigns S3 for `urls_expire_in`. Signing is local — the signer for a key is cached per process, so
 a link costs one RSA signature, not a KMS decrypt. The `cdn` and
 `cdn_url_expires_in` settings are writable by global file admins
 (`manage_files` / `files`, or a superuser); anyone else sending them gets 403.
