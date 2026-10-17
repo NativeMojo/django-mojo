@@ -1,7 +1,8 @@
 from .anthropic import AnthropicProvider
+from .bedrock import BedrockProvider
 
 
-PROVIDERS = {"anthropic": AnthropicProvider}
+PROVIDERS = {"anthropic": AnthropicProvider, "bedrock": BedrockProvider}
 
 
 def get_provider(name, **kwargs):
