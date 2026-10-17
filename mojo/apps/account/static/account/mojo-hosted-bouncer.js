@@ -75,7 +75,7 @@
     var form = doc.getElementById('mbg-review-form'), ticket = doc.getElementById('mbg-review-ticket');
     var behavior = {mouse_move_count: 0, touch_event_count: 0, keystroke_count: 0, activation_count: 0};
     var token = new URLSearchParams(root.location.search).get('token');
-    if (token && token.indexOf('pr:') === 0) {
+    if (token && (token.indexOf('pr:') === 0 || token.indexOf('iv:') === 0)) {
       try { root.sessionStorage.setItem('mat_reset_token', token); }
       catch (_) { resetFallback = true; }
     }
