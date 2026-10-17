@@ -1336,7 +1336,11 @@ def test_challenge_preserves_reset_token(opts):
                 "rendered challenge must load its hosted storage/navigation controller")
     assert_true("sessionStorage.setItem('mat_reset_token'" in source and 'root.location.search' in source,
                 "hosted controller must stash the arriving reset token")
-    assert_true("'pr:'" in source, "only password-reset tokens may enter this stash")
+    stash = re.search(r"if \(token && (.*?)\) \{\s*try \{ root\.sessionStorage\.setItem\('mat_reset_token'", source, re.S)
+    assert_true(stash is not None, "the stash must sit behind a token-prefix condition")
+    prefixes = set(re.findall(r"'([a-z]+:)'", stash.group(1)))
+    assert_eq(prefixes, {'pr:', 'iv:'},
+              "only password-reset (pr:) and invite (iv:) tokens may enter this stash")
     assert_true(source.index("sessionStorage.setItem('mat_reset_token'") < source.index('root.location.replace'),
                 "reset stash must precede navigation; executed storage/refusal behavior is covered by the browser matrix")
 
@@ -1375,3 +1379,75 @@ def test_cold_click_fix_is_template_only(opts):
                 "the fix is template-side by design: no auth route, no "
                 "forwarding allowlist entry, and no token added to any query "
                 "string the server emits")
+
+
+def _token_detection(html):
+    """The page script from the URL-token check through the stash fallback."""
+    start = html.index('var urlToken = cfg.params.get("token");')
+    return html[start:html.index('(function () {', start)]
+
+
+@th.django_unit_test("login.html opens setPassword for an iv: invite token, from the URL or the stash")
+def test_login_engages_set_password_for_invite_token(opts):
+    html = _render('account/login.html', group=opts.group)
+    detection = _token_detection(html)
+
+    url_branch = detection.split('} else if (readResetToken())', 1)
+    assert_true(len(url_branch) == 2,
+                "login.html must keep the stash fallback after the URL-token branch")
+    condition = url_branch[0].split('{', 1)[0]
+    assert_true('indexOf("iv:") === 0' in condition and 'indexOf("pr:") === 0' in condition,
+                f"the URL-token branch must accept iv: as well as pr: tokens, got: {condition.strip()}")
+    assert_true('cfg.params.delete("token")' in url_branch[0] and 'history.replaceState' in url_branch[0],
+                "an iv: token must be stripped from the address bar like a pr: token")
+    for name, branch in (("URL", url_branch[0]), ("stash", url_branch[1])):
+        assert_true('showView("setPassword")' in branch,
+                    f"the {name} branch must open the set-password view")
+        assert_true('showSetPasswordCopy(' in branch,
+                    f"the {name} branch must choose invite or reset copy from the token it found")
+
+
+@th.django_unit_test("login.html carries the invite copy and maps the invite token errors")
+def test_login_invite_copy_and_error_mapping(opts):
+    html = _render('account/login.html', group=opts.group)
+
+    for text in ("Accept your invitation",
+                 "Choose a password to finish setting up your account.",
+                 "Choose a password to accept your invitation."):
+        assert_true(text in html, f"login.html must carry the invite copy {text!r}")
+    assert_true('"Please set your new password."' in html,
+                "the pr: reset copy must stay as it is")
+
+    expired = "This invitation link has expired. Ask the person who invited you to send a new one."
+    used = "This invitation has already been used. Sign in, or use Forgot password if you need a new password."
+    invalid = "This invitation link isn't valid. Ask the person who invited you to send a new one."
+    errors = html.split('var INVITE_TOKEN_ERRORS = {', 1)
+    assert_true(len(errors) == 2, "login.html must declare the invite token error map")
+    table = errors[1].split('};', 1)[0]
+    expected = {
+        "Expired token": expired,
+        "Token already used": used,
+        "Invalid token": invalid,
+        "Invalid token signature": invalid,
+        "Invalid token format": invalid,
+        "Invalid token kind": invalid,
+        "Account is disabled": invalid,
+    }
+    for server, copy in expected.items():
+        line = re.search(r'"%s":\s*(\w+|"[^"]*")' % re.escape(server), table)
+        assert_true(line is not None, f"the invite error map must cover the server error {server!r}")
+        value = line.group(1)
+        if not value.startswith('"'):
+            const = re.search(r'var %s = "([^"]*)";' % value, html)
+            assert_true(const is not None, f"{value} must be declared in login.html")
+            value = const.group(1)
+        else:
+            value = value.strip('"')
+        assert_eq(value.replace("\\'", "'"), copy,
+                  f"{server!r} must map to the invite copy")
+
+    handler = html.split('onForm("form-set-password"', 1)[1].split('onForm("form-magic"', 1)[0]
+    catch = handler.split('.catch(function (err) {', 1)[1]
+    assert_true('INVITE_TOKEN_ERRORS' in catch and 'showView(PRIMARY)' in catch
+                and 'attemptedResetToken = null' in catch,
+                "a mapped invite error must drop the token and land the person on sign-in")

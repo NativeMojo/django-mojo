@@ -460,3 +460,56 @@ def test_garbage_token_error_message(opts):
               f"garbage token should return 400, got {resp.status_code}")
     assert_eq(resp.response.error, "Invalid token format",
               f"expected 'Invalid token format', got '{resp.response.error}'")
+
+
+# ---------------------------------------------------------------------------
+# Maestro #1955 — a disabled account cannot set a password from an emailed link
+# ---------------------------------------------------------------------------
+
+def _disabled_user(opts):
+    from mojo.apps.account.models import User
+
+    User.objects.filter(pk=opts.user_id).update(last_login=None, is_active=False)
+    return User.objects.get(pk=opts.user_id)
+
+
+def _assert_disabled_refusal(opts, user, tok, verify, label):
+    from mojo.apps.account.models import User
+
+    password_before = user.password
+    try:
+        resp = opts.client.post("/api/auth/password/reset/token", {
+            "token": tok,
+            "new_password": STRONG_PASSWORD,
+        })
+        assert_eq(resp.status_code, 403,
+                  f"a disabled account's {label} token must be refused with 403, "
+                  f"got {resp.status_code}: {resp.response.data}")
+        assert_eq(resp.response.error, "Account is disabled",
+                  f"expected 'Account is disabled', got '{resp.response.error}'")
+        user.refresh_from_db()
+        assert_eq(user.password, password_before,
+                  f"no password may be set on a disabled account from a {label} token")
+    finally:
+        User.objects.filter(pk=user.pk).update(is_active=True)
+    # Re-activated, the same link still verifies: the refusal did not use it up.
+    verify(tok, consume=False)
+
+
+@th.django_unit_test("invite_flow: a disabled account's iv: token is refused and not used up")
+def test_disabled_account_invite_token_refused(opts):
+    from mojo.apps.account.utils import tokens
+
+    user = _disabled_user(opts)
+    tok = tokens.generate_invite_token(user)
+    _assert_disabled_refusal(opts, user, tok, tokens.verify_invite_token, "iv:")
+
+
+@th.django_unit_test("invite_flow: a disabled account's pr: token is refused and not used up")
+def test_disabled_account_reset_token_refused(opts):
+    from mojo.apps.account.utils import tokens
+
+    user = _disabled_user(opts)
+    tok = tokens.generate_password_reset_token(user)
+    _assert_disabled_refusal(opts, user, tok, tokens.verify_password_reset_token, "pr:")
+
