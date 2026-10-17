@@ -194,6 +194,7 @@ def test_unsupported_inputs_never_reach_converse(opts):
             {"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}}]}]},
         {"system": [{"cachePoint": {"type": "default"}}]},
         {"timeout": 0}, {"timeout": True}, {"timeout": float("inf")},
+        {"timeout": 10 ** 1000},
     ]
     for kwargs in cases:
         client = _Client()

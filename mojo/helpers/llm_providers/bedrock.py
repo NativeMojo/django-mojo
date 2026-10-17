@@ -157,7 +157,13 @@ class BedrockProvider(ProviderAdapter):
                 "type": "enabled", "maxReasoningEffort": reasoning_effort}}
         timeout = 60 if timeout is None else timeout
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) \
-                or not math.isfinite(timeout) or timeout <= 0:
+                or timeout <= 0:
+            raise ProviderError("provider_rejected")
+        try:
+            finite_timeout = math.isfinite(timeout)
+        except OverflowError:
+            finite_timeout = False
+        if not finite_timeout:
             raise ProviderError("provider_rejected")
         if self.client is None and (not isinstance(self.region, str)
                                     or not REGION_PATTERN.fullmatch(self.region)):
