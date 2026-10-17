@@ -1154,7 +1154,11 @@ user.send_invite()  # builds token URL, sends invite email
 
 `send_invite()` accepts optional `request` and `group` kwargs for multi-tenant URL resolution (see [Token URLs](#token-urls) below). They can only *select* a frontend: the invite link lands on the inviting group's `webapp_base_url` when that group is in the tenant tree that owns the account (`user.org`), or when the operator listed that origin. Otherwise it lands on the account's home frontend or `WEBAPP_BASE_URL`. Set `user.org` before `send_invite()` if the invite must land on a tenant's own frontend.
 
-User clicks the link → `POST /api/auth/invite/accept` with the token → JWT issued, email verified.
+User clicks the link → the hosted `/auth` page opens "Accept your invitation" → they choose a password, which is sent with the token to `POST /api/auth/password/reset/token` → password set, email verified, JWT issued. A disabled account is refused with 403 and the link stays unused.
+
+The email names the inviting group when `send_invite(group=...)` is given one (`Group.invite` and `GroupMember.send_invite` both do). A deployment that already has an `invite` EmailTemplate row keeps its stored wording; edit that row to adopt the new copy.
+
+`POST /api/auth/invite/accept` remains for SPAs that accept without setting a password. It uses the token up, so the same token can no longer set a password afterwards; the person uses Forgot password to get one.
 
 ### Pattern B — Custom registration
 
@@ -1280,7 +1284,8 @@ REQUIRE_GROUP_ON_REGISTRATION = True   # default False
 | Enable built-in registration | `ALLOW_USER_REGISTRATION = True` |
 | Create a user | `User(...).save()` + `user.save_password()` |
 | Send invite link | `user.send_invite(request=request)` — the request selects among configured frontends, it cannot add one (see [Token URLs](#token-urls)) |
-| Accept invite + set password | `POST /api/auth/invite/accept` |
+| Accept invite + set password | `POST /api/auth/password/reset/token` with the `iv:` token (what the hosted `/auth` page does) |
+| Accept invite without a password | `POST /api/auth/invite/accept` (uses the token up) |
 | Send email verify link | `POST /api/auth/email/verify/send` |
 | Confirm email verify | `POST /api/auth/email/verify` |
 | Require verified email before login | `REQUIRE_VERIFIED_EMAIL = True` |

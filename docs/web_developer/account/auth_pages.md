@@ -76,6 +76,7 @@ again in N minutes."; see
 |-------|---------|
 | `?token=ml:...` | Magic login token — auto-consumed on page load |
 | `?token=pr:...` | Password reset token — opens "Set New Password" view |
+| `?token=iv:...` | Invite token — opens the same view as "Accept your invitation"; submitting it sets the password and signs the person in |
 | `?code=...&state=...` | OAuth callback — auto-completes the OAuth flow |
 | `?redirect=<url>` | Custom redirect after login (also `?next=` or `?returnTo=`). Preserved through the bouncer challenge **and** the OAuth provider round-trip. Only `http`/`https` URLs and same-origin relative paths are accepted — see below. |
 | `?back=<url>` | Override the destination back link. Relative and absolute HTTP(S) values are accepted; script/data schemes are ignored. |
@@ -617,7 +618,7 @@ and response contract; this flow introduces no new CORS allowlist.
 
 A password-reset link opened by someone with no session hits the challenge
 page before `/auth`, and the redirect that follows drops the `token` query
-parameter. The challenge page stashes a `pr:` token in
+parameter. The challenge page stashes a `pr:` (or invite `iv:`) token in
 `sessionStorage["mat_reset_token"]` before redirecting, and `/auth` reads it
 back — so the visitor lands directly on "set your new password" rather than on
 a sign-in form.
@@ -640,3 +641,6 @@ What this means for you:
   page still works — the token is held in page memory for that.
 - Nothing about this changes the token itself or any API call: the reset is
   still submitted the same way, with the same `pr:` token.
+- An invite (`iv:`) link takes the same path. An expired, used or invalid
+  invite is reported in plain words when the person presses the button, and
+  the page returns to sign-in.

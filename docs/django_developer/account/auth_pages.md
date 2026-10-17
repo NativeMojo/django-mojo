@@ -428,7 +428,7 @@ Emailed `ev:`/`ec:`/`dv:` links point at these paths directly (see
 old `/auth?flow=…&token=…` shape, so `on_login_page` calls
 `token_landing.landing_redirect(request)` immediately after the `DISABLE_LOGIN`
 check and 302s them to the right landing. That has to happen server-side and
-before the bouncer: the challenge page stashes only `pr:` tokens, so a cold
+before the bouncer: the challenge page stashes only `pr:` and `iv:` tokens, so a cold
 visitor's `ev:`/`ec:`/`dv:` token would otherwise be destroyed. Routing keys on
 the **token prefix**, never on `flow=` — `flow` is read nowhere in the
 framework and is attacker-supplied. `ml:`, `pr:`, `iv:` and token-less requests
@@ -453,10 +453,11 @@ Methods rendered are those listed in the resolved auth config's
 - `magic` — send a one-click sign-in email
 - Forgot password (code or link method; auto-routes via SMS when identity is phone)
 - Reset code entry / set new password (from `?token=pr:...`)
+- Accept an invitation: choose a password (from `?token=iv:...`)
 
 #### A reset link survives a cold bouncer challenge
 
-A `pr:` link handed to somebody with **no session** does not land on `/auth`
+A `pr:` reset or `iv:` invite link handed to somebody with **no session** does not land on `/auth`
 first — it lands on the bouncer challenge page, which then redirects to
 `/auth` **without** the `token` query parameter. The server's forwarding
 allowlist does not carry `token`, deliberately: adding it would put a live
@@ -466,7 +467,7 @@ So the token makes the hop through `sessionStorage` instead, which survives a
 same-origin, same-tab navigation — which is exactly what that redirect is:
 
 1. The hosted challenge client reads `token` from `window.location.search`, and
-   if it starts with `pr:`, stashes it as `sessionStorage["mat_reset_token"]`
+   if it starts with `pr:` or `iv:`, stashes it as `sessionStorage["mat_reset_token"]`
    **before** its redirect.
 2. `login.html`, at its token-detection point, falls back to that key when the
    URL carries no token: the guarded `readResetToken()` helper
@@ -498,6 +499,18 @@ the visitor with "already used" instead of a login form; that was observed
 live. The token stays in a page-closure variable for the rest of that page
 load, so the weak-password retry — which the server deliberately does not burn
 the token on — still works.
+
+**An invite link uses the same view.** An `iv:` token, from the URL or the
+stash, opens the set-password view titled "Accept your invitation". Submitting
+it calls `POST /api/auth/password/reset/token`, which sets the password, marks
+the email verified and signs the person in. When that call refuses the link,
+the page says so and lands on sign-in: `Expired token` → "This invitation link
+has expired…", `Token already used` → "This invitation has already been
+used…", and `Invalid token…` or `Account is disabled` → "This invitation link
+isn't valid…". A weak password keeps the form and the token for a retry, as it
+does for `pr:`. A dead link is reported when the person presses the button, not
+when the page opens. The endpoint refuses a disabled account before writing
+anything, for `pr:` and `iv:` alike, so the link stays unused.
 
 Template overrides must retain the hosted client's handoff, confirmed-cookie
 fallback, and login page's guarded token handling for first-click reset links.
