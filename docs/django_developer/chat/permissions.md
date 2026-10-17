@@ -140,8 +140,8 @@ A **banned** owner or admin has no room authority. A **muted** one keeps it
 - Custom endpoints: `@md.requires_auth()` + the room-authority rule above, whose
   default calls `_check_room_admin` / `_check_room_moderator`
 - **CREATE_PERMS = ["authenticated"]** — any logged-in user can create a
-  groupless room. A room in a group needs the creator to hold `chat` or
-  `manage_chat` there (`ChatRoom.on_rest_pre_save`), else 403 and no row.
+  room, with or without a group; no `chat` or `manage_chat` is needed in the
+  group (`ChatRoom.on_rest_pre_save` only sets the default rules).
   A body `user` is ignored (`NO_SAVE_FIELDS`): the owner is the creator.
 
 ### Muted vs Banned
