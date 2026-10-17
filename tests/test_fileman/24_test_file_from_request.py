@@ -341,3 +341,79 @@ def test_no_id_unchanged(opts):
         expected = FileManager.get_for_user_group(user=request.user, group=request.group, use="")
         got = FileManager.get_from_request(request)
         assert_eq(got and got.pk, expected and expected.pk, f"{label}: the no-id path is unchanged")
+
+
+# ---------------------------------------------------------------------------
+# Review 113641 coverage (Rick's disposition 113648).
+# ---------------------------------------------------------------------------
+
+def _refused_with(request, text, label):
+    from mojo import errors as me
+    from mojo.apps.fileman.models import FileManager
+
+    try:
+        got = FileManager.get_from_request(request)
+    except me.PermissionDeniedException as exc:
+        assert_true(text in str(exc), f"{label}: refused for the wrong reason: {exc}")
+        return
+    assert_true(False, f"{label}: must be refused, got manager {got and got.pk}")
+
+
+def _scratch_manager(opts, name, **scope):
+    from mojo.apps.fileman.models import FileManager
+
+    FileManager.objects.filter(name=f"{PREFIX}{name}").delete()
+    manager = FileManager(name=f"{PREFIX}{name}", backend_type="file",
+                          backend_url=f"file:///{PREFIX}{name}", is_public=False,
+                          is_active=True, **scope)
+    manager.set_secrets({"base_path": tempfile.mkdtemp(prefix=PREFIX), "use_shortlinks": False})
+    manager.save()
+    return manager
+
+
+@th.django_unit_test("unchanged: create_from_file with no storage named, for a person, a key and a group token")
+def test_no_id_create_from_file(opts):
+    from mojo.apps.fileman.models import File, FileManager
+
+    for label, request in (
+            ("person", _person(opts, MEMBER, group="a")),
+            ("key without grants", _key(opts, opts.key_ref)),
+            ("group token", _token(opts))):
+        expected = FileManager.get_for_user_group(user=request.user, group=request.group, use="")
+        assert_true(expected is not None, f"{label}: the fixture must have a default storage")
+        row = File.create_from_file(_upload(f"{PREFIX}noid_{label[:3]}.txt"), "file", request=request)
+        assert_eq(row.file_manager_id, expected.pk,
+                  f"{label}: a file with no storage named must land where it did before")
+
+
+@th.django_unit_test("branch: a member names A's storage with a different purpose and no group: refused")
+def test_purpose_mismatch_without_group(opts):
+    _refused_with(_person(opts, MEMBER, data={"file_manager": opts.fm_a, "use": "invoices"}),
+                  "purpose does not match", "use=invoices on a general storage")
+
+
+@th.django_unit_test("branch: storage in a group whose parent is inactive: refused")
+def test_inactive_group_ancestor(opts):
+    from mojo.apps.account.models import Group
+
+    Group.objects.filter(name__in=[f"{PREFIX}dead_child", f"{PREFIX}dead"]).delete()
+    dead = Group(name=f"{PREFIX}dead", is_active=False)
+    dead.save()
+    child = Group(name=f"{PREFIX}dead_child", parent=dead)
+    child.save()
+    child.add_member(_user(opts, MEMBER)).save()
+    manager = _scratch_manager(opts, "dead_child", group=child)
+    _refused_with(_person(opts, MEMBER, data={"file_manager": manager.id}),
+                  "File manager is unavailable", "member of a group under an inactive parent")
+    _refused_with(_person(opts, ADMIN, data={"file_manager": manager.id}),
+                  "File manager is unavailable", "global file admin, inactive ancestor")
+
+
+@th.django_unit_test("branch: keys and tokens name a storage scoped to both a user and a group: refused")
+def test_key_mixed_scope(opts):
+    manager = _scratch_manager(opts, "mixed", user=_user(opts, MEMBER), group=_group(opts, "a"))
+    for label, request in (
+            ("override key", _key(opts, opts.key_override, data={"file_manager": manager.id})),
+            ("reference key", _key(opts, opts.key_ref, data={"file_manager": manager.id})),
+            ("group token", _token(opts, data={"file_manager": manager.id}))):
+        _refused_with(request, "File manager is unavailable", label)
