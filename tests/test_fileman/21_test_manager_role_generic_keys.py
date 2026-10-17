@@ -98,6 +98,22 @@ def setup_role_generic_keys(opts):
     system.set_secrets({"aws_key": PLATFORM_KEY, "aws_secret": PLATFORM_SECRET})
     system.save()
 
+    # The group's storage folders (#7990): a store on platform keys stays
+    # inside one. One for the filesystem creates, one holding the S3 prefix
+    # the stores below use. Never contacted.
+    system_s3 = FileManager(name="fm_rolegen_system_s3", backend_type="s3",
+                            backend_url="s3://rolegen-bucket", is_active=True,
+                            is_default=False)
+    system_s3.set_secrets({"aws_key": PLATFORM_KEY, "aws_secret": PLATFORM_SECRET})
+    system_s3.save()
+    for parent, url in ((system, f"file://{group.get_uuid()}"),
+                        (system_s3, "s3://rolegen-bucket/fileman")):
+        anchor = FileManager(name=f"fm_rolegen_anchor_{parent.backend_type}", group=group,
+                             parent=parent, backend_type=parent.backend_type,
+                             backend_url=url, is_active=True, is_public=False)
+        anchor.set_secrets(dict(parent.secrets))
+        anchor.save()
+
     opts.group_id = group.id
     opts.member_user_id = member_user.id
 
