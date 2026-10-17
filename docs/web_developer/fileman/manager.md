@@ -28,12 +28,18 @@ create or update that changes `backend_type`, `backend_url`, `parent`, `group`,
 
 - run on borrowed keys and point outside its group's storage folder (the
   folders of the group's server-provisioned managers);
-- borrow the keys of another group's or a user's manager; or
-- have a `backend_url` path with an empty, `.` or `..` part, or a backslash.
+- borrow the keys of another group's or a user's manager;
+- have a `backend_url` path with an empty, `.` or `..` part, or a backslash;
+- on a filesystem manager, use a `temp_upload_path` outside its group's
+  storage folder; or
+- move a manager below it (a child, or a child's child) onto borrowed keys
+  outside its group's folder, for example by changing the parent's `parent`,
+  keys, `backend_type` or `base_path`. Nothing is saved.
 
-A manager on its own S3 key, or under a same-group parent on its own S3 key,
-may point anywhere that key reaches. People, API keys and group tokens holding
-the same grant get the same answer. A key that acts as a member carries only
+A manager on its own S3 key, or an S3 manager under a same-group parent on its
+own S3 key, may point anywhere that key reaches. A `file://` manager under such
+a parent never uses the key, so it must stay inside the group's folder.
+People, API keys and group tokens holding the same grant get the same answer. A key that acts as a member carries only
 that member's grant in the group. Updates that change none of those fields
 (a rename, a description) are not checked.
 

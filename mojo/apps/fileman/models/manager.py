@@ -712,22 +712,91 @@ class FileManager(MojoSecrets, MojoModel):
                 self._refuse_storage("A file manager can only be saved into a group you manage files in")
         if not created and self._storage_unchanged():
             return
+        stored = None if created else FileManager.objects.filter(pk=self.pk).first()
+        self._require_contained_reach(stored)
+        if not created:
+            # A descendant runs on this row's keys and settings, so an edit
+            # here can move it too (review 113553).
+            for node, before in self._storage_descendants():
+                if self._reach_of(node) != self._reach_of(before):
+                    node._require_contained_reach(before)
+
+    def _require_contained_reach(self, before):
+        """Where this row, as it now stands, may point. `before` is the stored
+        copy (None when new): a value already stored is judged only when the
+        save changes it."""
         path = urlparse(self.backend_url or "").path or ""
         segments = path.strip("/").split("/") if path.strip("/") else []
         if "\\" in path or any(seg in ("", ".", "..") for seg in segments):
             self._refuse_storage("A file manager's path may not contain empty, '.' or '..' parts")
+        self._require_contained_temp_path(before)
         if self._runs_on_own_key():
             return
         top = self._top_parent()
         if top is not self:
-            if top.group_id == self.group_id and top.user_id is None and top._runs_on_own_key():
+            own_key_parent = (top.group_id == self.group_id and top.user_id is None
+                              and top._runs_on_own_key())
+            if own_key_parent and self.is_s3:
+                # Only an S3 child uses the parent's key; any other backend
+                # falls through to the folder check.
                 return
-            if top.group_id is not None or top.user_id is not None:
+            if not own_key_parent and (top.group_id is not None or top.user_id is not None):
                 self._refuse_storage("A file manager can only borrow keys from its own group")
         location = self._location()
         if not any(self._location_within(location, root) for root in self._group_storage_roots()):
             self._refuse_storage(
                 "A file manager on borrowed keys must stay inside its group's storage folder")
+
+    def _effective_temp_path(self):
+        """The temp_upload_path the filesystem backend reads (the top parent's),
+        or None when unset and the backend's default applies."""
+        if not self.is_file_system:
+            return None
+        return self._top_parent().get_secret("temp_upload_path") or None
+
+    def _require_contained_temp_path(self, before):
+        """The filesystem backend creates folders at temp_upload_path and prunes
+        the old ones, so a changed value must sit in one of the group's folders."""
+        effective = self._effective_temp_path()
+        if not effective or effective == (before._effective_temp_path() if before else None):
+            return
+        path = os.path.realpath(effective)
+        folders = [os.path.join(root[1], root[3]) for root in self._group_storage_roots()
+                   if root[0] == self.FILE_SYSTEM]
+        if not any(path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+                   for folder in folders):
+            self._refuse_storage(
+                "A file manager's temp_upload_path must stay inside its group's storage folder")
+
+    def _storage_descendants(self):
+        """Every row under this one, each as (node, before): `node` reaches this
+        unsaved row through its parent chain, `before` is a fresh copy whose
+        chain reads the database. Bounded and cycle-safe like _top_parent."""
+        out = []
+        frontier = [self]
+        seen = {self.pk}
+        for _ in range(self.PARENT_WALK_LIMIT):
+            by_pk = {node.pk: node for node in frontier}
+            children = list(FileManager.objects.filter(parent_id__in=list(by_pk)).exclude(pk__in=seen))
+            if not children:
+                return out
+            for child in children:
+                seen.add(child.pk)
+                child.parent = by_pk[child.parent_id]
+                out.append((child, FileManager.objects.get(pk=child.pk)))
+            frontier = children
+        if FileManager.objects.filter(parent_id__in=[n.pk for n in frontier]).exclude(pk__in=seen).exists():
+            raise me.ValueException("File manager children are nested too deep")
+        return out
+
+    @staticmethod
+    def _reach_of(node):
+        """What a save can change about a row's reach: whose keys, where, and
+        the temp folder its backend uses."""
+        try:
+            return (node.credentials, node._location(), node._effective_temp_path())
+        except me.ValueException:
+            return None
 
     @property
     def credentials(self):

@@ -54,10 +54,25 @@ nothing. Otherwise the first match wins:
 5. **Own key: allowed.** `_runs_on_own_key()`: the row is its own top parent,
    is S3, holds a key and secret, and `uses_platform_credentials()` is false.
    A filesystem row is never "own key".
-6. **Same-group parent on its own S3 key: allowed.**
+6. **S3 child of a same-group parent on its own S3 key: allowed.** The
+   exemption covers S3 children only: a `file://` (or other) child never uses
+   that key, so it goes on to step 8 at its effective location.
 7. A top parent in another group, or a user's manager, is refused.
 8. **Platform keys:** the row's `_location()` must lie inside one of the
    group's storage roots, else 403 with branch `fileman_storage_outside_group`.
+
+Between steps 4 and 5, a changed effective `temp_upload_path` on a filesystem
+row (the top parent's setting; the filesystem backend creates and prunes
+folders there) must resolve inside the filesystem folder of one of the
+group's anchors. Unset keeps the backend's default.
+
+An update that passes these steps then walks the row's descendants (bounded
+at 16 levels, cycle-safe), with the edited, unsaved row in their parent
+chain. Edits that change a descendant's reach are checked too: a descendant
+whose credentials, location or temp folder this save changes must pass steps
+4 to 8 in its new state, or the whole save is refused with the same 403 and
+nothing is written. Descendants the save leaves unchanged are not judged, so
+a parent of an existing out-of-folder row can still be edited.
 
 `_location()` reads the way the backend reads: backend type and URL from the
 row, settings from the top parent (`primary_settings`). S3 is `(bucket,
