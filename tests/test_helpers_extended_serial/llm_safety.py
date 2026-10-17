@@ -136,6 +136,35 @@ def _assert_budget_total(case, total):
 
 
 @th.django_unit_test()
+def test_bedrock_breaker_persistence_failure_after_dispatch_keeps_provider_error(opts):
+    from mojo.apps.account.models import LLMRequest
+    from mojo.apps.account.services import llm_safety
+    from mojo.helpers import llm
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    with _guard_case() as case:
+        client = mock.Mock()
+        client.converse.return_value = _bedrock_reply()
+        factory = lambda name, **kwargs: BedrockProvider(client=client, **kwargs)
+        with mock.patch.object(llm_safety, "_breaker_success",
+                               side_effect=RuntimeError("private database detail")), \
+                mock.patch.object(llm_safety, "invoke", side_effect=lambda *args, **kwargs:
+                                  _run_guard(case, factory)):
+            try:
+                llm.call([{"role": "user", "content": "hello"}], feature="assistant")
+                assert False, "a lost post-dispatch breaker update cannot report a successful completion"
+            except llm.LLMExecutionError as error:
+                assert error.code == "provider_failed" and str(error) == "provider_failed", \
+                    f"post-dispatch persistence must retain safe provider provenance, got {error.code}"
+        assert client.converse.call_count == 1, "post-dispatch persistence failure must never replay inference"
+        row = LLMRequest.objects.get(operation=case["marker"])
+        assert row.status == "started", "an unfinalized ledger must retain uncertainty instead of invented success"
+        _assert_budget_total(case, 13)
+        assert all(case["redis"].zcard(key) == 0 for key in _case_keys(case)[:2]), \
+            "post-dispatch persistence failure must still release concurrency after reconciling observed tokens"
+
+
+@th.django_unit_test()
 def test_bedrock_readiness_declares_chain_without_sdk_or_anthropic_keys(opts):
     from mojo.apps.account.services import llm_safety
 

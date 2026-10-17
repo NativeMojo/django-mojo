@@ -709,7 +709,12 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         "input_tokens", "output_tokens", "cache_read_input_tokens",
         "cache_creation_input_tokens"))
     release_permit(redis, permit, actual_tokens=actual_tokens)
-    _breaker_success(provider_name, fingerprint, generation, breaker_owner)
+    try:
+        _breaker_success(provider_name, fingerprint, generation, breaker_owner)
+    except Exception:
+        if provider_name == "bedrock":
+            _deny("provider_failed")
+        raise
     elapsed = int((time.monotonic() - started) * 1000)
     try:
         updated = LLMRequest.objects.filter(pk=ledger.pk, status="started").update(
