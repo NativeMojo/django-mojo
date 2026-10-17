@@ -9,6 +9,22 @@ LLM-powered admin assistant accessed via REST. Send natural language queries abo
 - Tool access depends on the user's additional permissions (see [Permission Mapping](#permission-mapping))
 - `POST /api/assistant` and `POST /api/assistant/context` are gated with `@md.requires_global_perms('view_admin', 'assistant')` — the permission must be a **global** grant on the User; a group/member-scoped grant does not authorize these endpoints (individual tool calls were already global-only, since tools check `user.has_permission()` directly)
 
+### Provider routing
+
+The installation's static safety policy owns provider, model, credential,
+region, and allowed reasoning effort. REST and WebSocket inputs add no
+provider-options or AWS-credential fields. The tool-enabled Admin Assistant
+continues to use its Anthropic route; the optional Bedrock Nova 2 Lite route
+is text-only and cannot satisfy the Assistant's tool capability requirement.
+
+A host application can use the guarded Bedrock helper from its own job
+handler without asking end users for an AI subscription or computer setup.
+That requires deliberate server configuration and owner policy activation;
+it adds no public endpoint or default enablement here. Bedrock readiness is
+declarative and does not prove AWS credentials, IAM, model, or region access.
+See [the backend contract](../../django_developer/helpers/llm.md#bedrock-reasoning)
+and [owner setup guidance](../account/admin_portal/assistant.md).
+
 ## Endpoints
 
 | Endpoint | Purpose |

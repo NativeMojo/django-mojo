@@ -4,9 +4,9 @@ Every external framework LLM request passes through a provider-neutral,
 fail-closed boundary before network I/O. `mojo.helpers.llm.call()` and `ask()`
 remain the public facade. Anthropic credentials, SDK calls, bounded one-page
 model discovery, prompt-cache arguments, response conversion, and provider
-error reduction live in the Anthropic adapter. This release deliberately has
-no second production provider adapter and no automatic provider or credential
-failover.
+error reduction live in the Anthropic adapter. A deliberately configured AWS
+Bedrock route supports bounded Nova 2 Lite text reasoning. Neither adapter
+provides automatic provider or credential failover.
 
 ## Complete policy example
 
@@ -93,10 +93,10 @@ route owns the guarded model; an explicit `model=` is accepted only when it
 exactly matches the route. `credential: "admin"` requires
 `LLM_ADMIN_API_KEY`; it never silently falls back to the handler credential.
 
-Each installation needs its own provider credential. Provider-organization
-caps remain the final cross-installation backstop. Central billing, dynamic
-provider-credit changes, price tables, a second provider, automatic failover,
-and production-data cleanup are non-goals.
+Each installation supplies its exact Anthropic credential or AWS role/profile
+chain. Provider-account caps remain the final cross-installation backstop.
+Central billing, dynamic provider-credit changes, price tables, automatic
+failover, and production-data cleanup are non-goals.
 
 ## Host features
 
@@ -130,6 +130,66 @@ deploy. The allowed `context` keys are `job_id`, `incident_id`,
 `conversation_id`, `file_id` and `operation_id`; `conversation_id` must be an
 integer.
 
+## Bedrock routes
+
+Add the host feature, route, and envelope to the complete static policy above:
+
+```python
+LLM_HOST_FEATURES = ["my_maestro_reasoning"]
+LLM_SAFETY_POLICY["routes"]["my_maestro_reasoning"] = {
+    "provider": "bedrock",
+    "model": "us.amazon.nova-2-lite-v1:0",
+    "credential": "aws",
+    "capabilities": ["text"],
+    "region": "us-east-1",
+    "reasoning_efforts": ["off", "low", "medium"],
+}
+LLM_SAFETY_POLICY["features"]["my_maestro_reasoning"] = {
+    **_LLM_LIMITS, "max_loop_calls": 1,
+}
+```
+
+Bedrock requires exactly these six route keys, `credential="aws"`, and
+`capabilities=["text"]`. Allowed models are exactly
+`us.amazon.nova-2-lite-v1:0`, `eu.amazon.nova-2-lite-v1:0`,
+`jp.amazon.nova-2-lite-v1:0`, and `global.amazon.nova-2-lite-v1:0`.
+`reasoning_efforts` must be a nonempty, unique list drawn from `off`, `low`,
+and `medium`. Region syntax is checked locally; AWS authorizes the actual
+profile/region combination. Choose a source region supported by that exact
+profile in the [AWS Nova 2 Lite region table](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-lite.html).
+The framework does not enable Bedrock or activate this example policy by default.
+
+The adapter uses `mojo.helpers.aws.client.get_client` with the existing default
+AWS role/profile chain, including an operator's `AWS_PROFILE`. It pins SigV4,
+the policy region, AWS endpoint resolution, and one SDK attempt (no SDK
+retries). No AWS key, profile, endpoint, or arbitrary provider options come
+from callers. Unattended deployments need a working non-interactive role or
+profile; interactive MFA and credential-process workflows are outside this
+cloud route's supported deployment contract.
+
+Converse requires `bedrock:InvokeModel`. Authorize the selected inference
+profile resource **and** its destination foundation-model resources, with
+organizational region controls permitting that profile's routing. For the US
+profile called from `us-east-1`, destinations currently include `us-east-1`,
+`us-east-2`, and `us-west-2`; other profiles/source regions differ. Follow
+[AWS inference-profile permissions](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-prereq.html)
+and the linked region table when granting access.
+
+`route_state()` is declarative: `credential_configured=True` for a valid AWS
+route means the installation chain was selected. Neither that nor `ready=True`
+resolves credentials, constructs an AWS client, checks IAM/model access, or
+makes a billed request. Only an authorized guarded invocation proves access.
+All Bedrock routes use one installation-chain accounting identity; refreshing
+role credentials does not reset budgets or the circuit. The two Anthropic key
+settings are never read to resolve a Bedrock credential.
+
+See [the call and response contract](../helpers/llm.md#bedrock-reasoning).
+The adapter supports text only, suppresses reasoning content from the final
+answer, and retains billed reasoning within `usage.output_tokens`. It sends
+no explicit cache controls, guardrail configuration, or application content
+filter. Anthropic tool routes, key probes, and model discovery retain their
+existing contracts.
+
 ## Policy agreement and rollout
 
 Calls require the static policy hash to equal the single authoritative primary
@@ -145,10 +205,10 @@ Use this rollout sequence:
    remains true.
 3. In either Admin bundle, fresh-auth as the installation owner and choose
    **Activate deployed policy**. This writes and audits the expected hash.
-4. Verify candidate credentials if needed, reset breakers only after their
-   cause is corrected, then remove the static `LLM_EMERGENCY_STOP=True` from
-   deployment configuration and redeploy. Clearing only the database checkbox
-   cannot override a static true value.
+4. Verify Anthropic candidate credentials if needed, reset breakers only after
+   their cause is corrected, then remove the static `LLM_EMERGENCY_STOP=True`
+   from deployment configuration and redeploy. Clearing only the database
+   checkbox cannot override a static true value.
 
 If nodes disagree, calls fail with `policy_mixed`. Restore one identical policy
 on every node, keep the stop on, activate that deployed policy again, and then
@@ -164,10 +224,32 @@ permits, creates `LLMRequest(status="started")`, and only then invokes the
 provider. Multi-call agents use one operation id for the entire loop; callers
 cannot provide a trusted ordinal to reset the limit.
 
+The operation counter TTL is the smaller timeout times the smaller loop cap,
+plus 60 seconds (`timeout_seconds * max_loop_calls + 60`). A stable id binds
+calls within that window; it is not durable idempotency across delayed job
+retries. Application jobs must bound their durable attempts separately.
+
 Redis uses owner-token leases for shared and per-feature concurrency. Request
 and token keys include their minute/hour/day epoch. Only the current owner can
 release a lease or reconcile its exact epoch, and reconciliation saturates at
 zero. A late release cannot free newer work or decrement a newer epoch.
+
+Admission leases expire after the smaller timeout plus 30 seconds. Bedrock
+client creation and credential resolution occur after the permit and started
+ledger. Its connect/read socket timeouts are not a hard elapsed deadline or
+remote cancellation: credential refresh and I/O may outlive the admission
+lease. These concurrency caps bound admission leases, not every still-running
+AWS request.
+
+Bedrock success and failed answers with validated token evidence reconcile
+the reservation using all four usage classes, including billed reasoning and
+implicit cache usage. If spend is unknown, the failure releases concurrency
+but retains the full token reservation for its budget windows; missing usage
+is never treated as zero. Existing Anthropic failure accounting is unchanged.
+Bedrock authentication, throttling, timeout, unavailable, and server failures
+count toward the circuit. Unusable output (`provider_rejected`, including an
+AWS `content_filtered` result) does not open it and releases a half-open probe
+as healthy. This does not add content filtering to the application.
 
 Ledger rows store scalar context ids, provider/model, one-way credential
 fingerprint, provider request id, token classes, duration, state, and safe code.
@@ -244,8 +326,8 @@ Fresh-auth literal-owner actions use `POST /api/account/admin/assistant`:
 {"action": "reset_breaker", "provider": "anthropic"}
 ```
 
-Omit `provider` to reset every breaker. A reset increments its generation and
-does not change either emergency stop.
+`provider` may be `anthropic` or `bedrock`; omit it to reset every breaker.
+A reset increments its generation and does not change either emergency stop.
 
 ```json
 {"action": "historical_triage", "before": "2026-08-31T00:00:00Z", "limit": 20}
@@ -259,7 +341,10 @@ settings or model REST.
 ## Candidate and stored verification
 
 Only a supplied, not-yet-stored candidate may make a provider request while
-stopped. That private configuration probe is fixed to one `Reply OK` text
+stopped. Candidate/stored key verification and catalogue discovery remain
+Anthropic-only; a Bedrock configuration or discovery route is refused before
+SDK construction. The candidate exception never probes the AWS credential
+chain. That private configuration probe is fixed to one `Reply OK` text
 request, the configuration route/model, four output tokens, no system prompt,
 tools, images, cache, caller context, or pagination. Its concurrency lease is
 installation-wide across every candidate fingerprint. Owner/fresh-auth and
@@ -296,3 +381,12 @@ not permission to bypass budgets or breakers. Authentication, billing/spend,
 budget, and emergency-stop signals never trigger provider or credential
 failover. Assistant messages, scheduled task results, incidents, ledgers, and
 attempts persist only these safe codes or fixed messages.
+
+For Bedrock, every failure after dispatch uses a `provider_*` code, including
+unusable final output or uncertain persistence. An ambiguous provider result
+may still be billed and must not trigger an automatic retry, even when a
+socket timeout or `retry_after` is reported. AWS credential/access failures
+reduce to `provider_authentication`; throttling to `provider_rate_limited`;
+timeouts to `provider_timeout`; service/5xx failures to `provider_unavailable`;
+validation or unusable output to `provider_rejected`; other failures to
+`provider_failed`. Raw SDK messages and response bodies never cross the boundary.

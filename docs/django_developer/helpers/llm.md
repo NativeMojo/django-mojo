@@ -1,7 +1,7 @@
 # LLM Helper — Django Developer Reference
 
-Provider-neutral LLM facade with Anthropic as the sole production adapter in
-this release. Production requests use the mandatory
+Provider-neutral LLM facade with Anthropic and a text-only AWS Bedrock Nova 2
+Lite adapter. Production requests use the mandatory
 [LLM safety boundary](../security/llm_safety.md).
 
 ```python
@@ -9,6 +9,10 @@ from mojo.helpers import llm
 ```
 
 ## API Key
+
+These key helpers, verification, and model discovery remain Anthropic-only.
+Bedrock uses the server's AWS role/profile chain; see
+[Bedrock reasoning](#bedrock-reasoning).
 
 ```python
 key = llm.get_api_key()
@@ -85,10 +89,11 @@ response = llm.call(
     tools=[...],           # optional tool definitions
     model="claude-sonnet-5",  # optional; must exactly match the policy route
     max_tokens=4096,       # optional
+    reasoning_effort="off",  # default; Anthropic accepts only off
     feature="assistant",  # required for framework callers
     context={"conversation_id": 42, "operation_id": "stable-loop-uuid"},
 )
-# Returns dict (response.model_dump() from anthropic SDK)
+# Returns a normalized response dict, including content and usage
 ```
 
 Raises `LLMExecutionError(code, retry_after=None)` when policy, controls,
@@ -99,6 +104,69 @@ unguessable `operation_id`; the guard increments it atomically. Omitted
 explicit features are refused.
 A host app adds its own feature names with `LLM_HOST_FEATURES`; see
 [Host features](../security/llm_safety.md#host-features).
+
+## Bedrock reasoning
+
+A deployment may deliberately add a Bedrock text route for a host feature;
+see the [policy and AWS requirements](../security/llm_safety.md#bedrock-routes).
+There is no default Bedrock route or automatic provider/credential fallback.
+The installation supplies AWS access, so end users need no individual AI
+subscription or computer setup.
+
+```python
+response = llm.call(
+    messages=[{"role": "user", "content": "Compare these two designs: ..."}],
+    system="Return a concise final answer.",
+    feature="my_maestro_reasoning",
+    operation="reason",
+    context={"job_id": queue_job.id, "operation_id": str(personal_job.uid)},
+    max_tokens=4096,
+    reasoning_effort="low",
+)
+answer = "\n".join(block["text"] for block in response["content"])
+usage = response["usage"]
+```
+
+`ask(..., reasoning_effort="low")` also returns final text. The keyword-only
+effort defaults to `off`; Bedrock permits only the route's declared subset of
+`off`, `low`, and `medium`. Off omits extended thinking; low/medium send the
+fixed reasoning configuration. High effort is unsupported because this
+adapter always sends an output cap. `max_tokens` must be a positive integer
+within both policy caps and the adapter ceiling of 65000, including billed
+reasoning.
+
+Messages have exactly `role` (`user` or `assistant`) and `content`; content is
+a nonblank string or a nonempty list of `{"type": "text", "text": "..."}`
+blocks with nonblank text.
+System content accepts the same text forms. Tools, images, streaming,
+arbitrary model fields, and explicit cache controls are unsupported. The
+adapter sends no Bedrock guardrail configuration or application content filter.
+
+The response has `provider="bedrock"`, the pinned `model`, AWS request `id`,
+`stop_reason`, final `content` text blocks, and these usage classes:
+
+| Field | Meaning |
+|---|---|
+| `input_tokens` | Input outside the cache classes |
+| `cache_read_input_tokens` | Implicit cache reads |
+| `cache_creation_input_tokens` | Implicit cache writes |
+| `output_tokens` | All billed output, including reasoning |
+
+Total input is the sum of the three input classes. Reasoning/redacted blocks
+never become answer text; there is no separate exact reasoning-token count
+to add to output. `end_turn` is complete; a text-bearing `max_tokens` result
+is partial. Empty, reasoning-only, filtered, malformed, over-cap, or over-1-MiB
+final output raises a safe provider error, retaining any validated billed
+usage in the ledger. No explicit cache checkpoints are sent, but implicit
+cache usage is still accounted for.
+
+An application-owned handler published with the existing `jobs.publish` can
+make this call; keep AWS credentials out of browser input, job payloads, and
+logs. Reuse one stable operation id for one durable application job;
+different jobs from the same spoken turn need different ids. The operation
+counter expires, so durable attempts need their own bounds. Socket timeouts
+do not guarantee cancellation, and ambiguous `provider_*` failures must not
+be automatically replayed; see [retry semantics](../security/llm_safety.md#stable-failures-and-retry-semantics).
 
 ## `model_choices()` — picker suggestions
 

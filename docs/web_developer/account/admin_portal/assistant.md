@@ -17,6 +17,13 @@ the settings cache: the framework's `push_to_cache` writes the decrypted value
 into Redis exactly as it does for every other secret setting, so Redis holds a
 live credential.
 
+The key editor, candidate/stored key checks, and model catalogue remain
+Anthropic-only. Optional Bedrock Nova 2 Lite text reasoning is configured by
+the deployment's static safety policy and uses the server's AWS role/profile
+chain. There are no AWS-key fields, provider-options input, or Bedrock
+credential probe in these endpoints, and no default Bedrock enablement. A
+Bedrock route cannot supply the tool-enabled Admin Assistant's capabilities.
+
 ---
 
 ## `GET /api/account/admin/assistant`
@@ -116,6 +123,15 @@ of any kind.
 | `safety` | Bounded aggregate usage and breaker rows; no per-row records or fingerprints |
 | `mcp` | Remote agent access — see below |
 
+For an explicitly configured Bedrock route, `credential` is `aws`.
+`credential_configured=true` declares that the installation's AWS chain was
+selected; `ready=true` adds policy agreement and a cleared emergency stop.
+Neither value resolves credentials or proves IAM, model, or region access,
+and drawing the page never invokes Bedrock. Only an authorized guarded call
+proves access. AWS setup requires `bedrock:InvokeModel` for the selected
+inference profile and destination foundation models, from a supported source
+region; see [the deployment contract](../../../django_developer/security/llm_safety.md#bedrock-routes).
+
 `verify.code` is one of `verified`, `invalid_key`, `unreachable`,
 `not_configured`, and `verify.message` is the fixed sentence for that code. No
 provider response body, exception text, or key fragment ever appears there.
@@ -213,6 +229,10 @@ service re-proves active literal-owner authority; REST also requires fresh
 authentication. A configuration route with capabilities `["text"]` is
 sufficient.
 
+The configuration route must be Anthropic. A Bedrock configuration route is
+refused before any candidate/stored probe; the emergency-stop exception never
+tests the AWS chain. Model catalogue refresh likewise remains Anthropic-only.
+
 ### `action: "save"`
 
 ```json
@@ -254,8 +274,9 @@ deployment emergency stop on until every node has the same policy.
 {"action": "reset_breaker", "provider": "anthropic"}
 ```
 
-`provider` may be omitted to reset all breakers. The action increments breaker
-generations and does not clear either emergency stop.
+`provider` accepts `anthropic` or `bedrock`, or may be omitted to reset all
+breakers. The action increments breaker generations and does not clear either
+emergency stop.
 
 ```json
 {"action": "historical_triage",
