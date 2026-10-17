@@ -34,7 +34,10 @@ create or update that changes `backend_type`, `backend_url`, `parent`, `group`,
   storage folder; or
 - move a manager below it (a child, or a child's child) onto borrowed keys
   outside its group's folder, for example by changing the parent's `parent`,
-  keys, `backend_type` or `base_path`. Nothing is saved.
+  keys, `backend_type`, `base_path` or `group`. The refused manager and its
+  descendants are not written. A related record posted as a nested object is
+  saved first, under its own permission and storage checks, and is not rolled
+  back (framework-wide).
 
 A manager on its own S3 key, or an S3 manager under a same-group parent on its
 own S3 key, may point anywhere that key reaches. A `file://` manager under such

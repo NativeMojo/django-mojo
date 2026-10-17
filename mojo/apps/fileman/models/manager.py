@@ -791,10 +791,14 @@ class FileManager(MojoSecrets, MojoModel):
 
     @staticmethod
     def _reach_of(node):
-        """What a save can change about a row's reach: whose keys, where, and
-        the temp folder its backend uses."""
+        """What a save can change about a row's reach: whose keys (the label and
+        the top parent that holds them, with its owner), where, and the temp
+        folder its backend uses. A key rotation on the same top parent keeps
+        the same answer."""
         try:
-            return (node.credentials, node._location(), node._effective_temp_path())
+            top = node._top_parent()
+            return (node.credentials, top.pk, top.group_id, top.user_id,
+                    node._location(), node._effective_temp_path())
         except me.ValueException:
             return None
 

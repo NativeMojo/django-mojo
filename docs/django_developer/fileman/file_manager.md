@@ -69,10 +69,15 @@ group's anchors. Unset keeps the backend's default.
 An update that passes these steps then walks the row's descendants (bounded
 at 16 levels, cycle-safe), with the edited, unsaved row in their parent
 chain. Edits that change a descendant's reach are checked too: a descendant
-whose credentials, location or temp folder this save changes must pass steps
-4 to 8 in its new state, or the whole save is refused with the same 403 and
-nothing is written. Descendants the save leaves unchanged are not judged, so
-a parent of an existing out-of-folder row can still be edited.
+whose credentials, key source (the top parent that holds the keys, and that
+row's group and user), location or temp folder this save changes must pass
+steps 4 to 8 in its new state, or the save is refused with the same 403: the
+refused manager and its descendants are not written. A related record posted
+as a nested object is saved first, under its own permission and storage
+checks, and is not rolled back (framework-wide). Descendants the save leaves
+unchanged are not judged, so a parent of an existing out-of-folder row can
+still be edited, and rotating the key pair on the same own-key parent does
+not re-judge its children.
 
 `_location()` reads the way the backend reads: backend type and URL from the
 row, settings from the top parent (`primary_settings`). S3 is `(bucket,
