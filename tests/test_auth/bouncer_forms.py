@@ -1420,7 +1420,8 @@ def test_login_invite_copy_and_error_mapping(opts):
 
     expired = "This invitation link has expired. Ask the person who invited you to send a new one."
     used = "This invitation has already been used. Sign in, or use Forgot password if you need a new password."
-    invalid = "This invitation link isn't valid. Ask the person who invited you to send a new one."
+    invalid = ("This invitation link isn't valid any more. If you've already accepted it, sign in. "
+               "Otherwise ask the person who invited you to send a new one.")
     errors = html.split('var INVITE_TOKEN_ERRORS = {', 1)
     assert_true(len(errors) == 2, "login.html must declare the invite token error map")
     table = errors[1].split('};', 1)[0]
@@ -1431,6 +1432,9 @@ def test_login_invite_copy_and_error_mapping(opts):
         "Invalid token signature": invalid,
         "Invalid token format": invalid,
         "Invalid token kind": invalid,
+        # A tampered token can fail on its kind too (tokens.py); never show the raw string.
+        "Token kind mismatch": invalid,
+        "Unknown token kind": invalid,
         "Account is disabled": invalid,
     }
     for server, copy in expected.items():

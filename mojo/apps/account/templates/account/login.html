@@ -280,7 +280,7 @@
     function isInviteToken(token) { return !!token && token.indexOf("iv:") === 0; }
     var INVITE_EXPIRED = "This invitation link has expired. Ask the person who invited you to send a new one.";
     var INVITE_USED = "This invitation has already been used. Sign in, or use Forgot password if you need a new password.";
-    var INVITE_INVALID = "This invitation link isn't valid. Ask the person who invited you to send a new one.";
+    var INVITE_INVALID = "This invitation link isn't valid any more. If you've already accepted it, sign in. Otherwise ask the person who invited you to send a new one.";
     var INVITE_TOKEN_ERRORS = {
         "Expired token": INVITE_EXPIRED,
         "Token already used": INVITE_USED,
@@ -288,6 +288,8 @@
         "Invalid token signature": INVITE_INVALID,
         "Invalid token format": INVITE_INVALID,
         "Invalid token kind": INVITE_INVALID,
+        "Token kind mismatch": INVITE_INVALID,
+        "Unknown token kind": INVITE_INVALID,
         "Account is disabled": INVITE_INVALID
     };
     function showSetPasswordCopy(token) {
