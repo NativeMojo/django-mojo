@@ -28,6 +28,83 @@ Behavior on REST create (`POST /api/fileman/manager`):
 
 A manager created with **no `user` and no `group`** is system-scoped — it is eligible to become the system default that `get_for_user` / `get_for_group` derive every other manager from. `FileManager.on_rest_pre_save` rejects this via REST unless the requester is a superuser, raising `PermissionDeniedException` (HTTP 403). Direct ORM creation (`FileManager.objects.create(...)`, bootstrap code, the internal `get_for_*` provisioning helpers) does not go through `on_rest_pre_save` and bypasses this guard.
 
+### Managers on borrowed keys stay inside their group's folder
+
+`SAVE_PERMS` is `["manage_files", "files"]`, so a group-level grant can create
+and edit managers. `FileManager._require_contained_storage(created)`, called
+from `on_rest_pre_save` after the role rule and before the CDN steps, limits
+where such a manager may point. With no active request (server code calling
+the hook directly; the middleware sets one on every HTTP call) it does
+nothing. Otherwise the first match wins:
+
+1. **Platform file grant: allowed.** A superuser, or a `User` request holding
+   `manage_files` or `files` on the user record (`_has_platform_file_grant`).
+   A key that assumes a member (`override_user` ApiKey, group token) never
+   counts here: it carries only the member's in-group grant, as in `rest.py`.
+   A reference-mode key gets its group-level answer.
+2. **Create, or `group` changed:** the final row must pass
+   `rest_check_permission(request, "SAVE_PERMS", self)`; `request.group` is
+   restored afterwards.
+3. **Update changing none of the watched fields: allowed.** Watched:
+   `backend_type`, `backend_url`, `parent`, `group`, `is_public`, and the
+   settings `base_path`, `temp_upload_path`, `endpoint_url`, `aws_key`,
+   `aws_secret`, compared with the stored row.
+4. A `backend_url` path with an empty, `.` or `..` segment or a backslash is
+   refused.
+5. **Own key: allowed.** `_runs_on_own_key()`: the row is its own top parent,
+   is S3, holds a key and secret, and `uses_platform_credentials()` is false.
+   A filesystem row is never "own key".
+6. **Same-group parent on its own S3 key: allowed.**
+7. A top parent in another group, or a user's manager, is refused.
+8. **Platform keys:** the row's `_location()` must lie inside one of the
+   group's storage roots, else 403 with branch `fileman_storage_outside_group`.
+
+`_location()` reads the way the backend reads: backend type and URL from the
+row, settings from the top parent (`primary_settings`). S3 is `(bucket,
+endpoint_url, path)`; filesystem is `(resolved base_path, path)`, ignoring the
+URL's host part. Inside means same backend, bucket or base path and endpoint,
+and a path equal to the root's or under it.
+
+**Anchors.** A group's roots are the locations of its **anchors**: group rows
+with no user whose parent is system-scoped — the shape `get_for_group`
+provisions. Only server code or a platform grant can make one, because a
+member cannot attach a system-scoped parent. Roots are read from the database
+(an unsaved edit cannot move them) and never from `Group.uuid`, which is not
+unique and a group admin can rewrite. A group with no anchor has no folder, so
+a member-made manager there must use its own S3 key. On a flat `file://`
+deployment every anchor has the empty path, so every group shares one folder
+and nothing new is refused.
+
+The parent walk (`_top_parent`) is bounded at 16 steps and a cycle raises
+`ValueException`. The read-only `credentials` field (`own`, `parent`,
+`platform`) is on the `default` graph only.
+
+Direct ORM use — `get_for_*`, bootstrap, `on_action_clone`, `save()` — does not
+come through `on_rest_pre_save` and is unchanged; a clone copies its source's
+location. Existing rows are not migrated. From this release a group-level
+holder can no longer repoint an out-of-folder row or make it public. To list
+the rows on borrowed keys that sit outside their group's folder (read-only):
+
+```python
+from mojo.apps.fileman.models import FileManager
+
+for fm in FileManager.objects.filter(group__isnull=False, user=None):
+    if fm._runs_on_own_key():
+        continue
+    top = fm._top_parent()
+    if top is not fm:
+        if top.group_id == fm.group_id and top.user_id is None and top._runs_on_own_key():
+            continue
+        foreign = top.group_id is not None or top.user_id is not None
+    else:
+        foreign = False
+    location = fm._location()
+    if foreign or not any(fm._location_within(location, root) for root in fm._group_storage_roots()):
+        print(fm.pk, fm.group_id, fm.name, fm.backend_url)
+        # Opt in to switch it off:
+        # fm.is_active = False; fm.save(update_fields=["is_active", "modified"])
+```
+
 ## Getting the Right FileManager
 
 ```python

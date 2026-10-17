@@ -691,9 +691,13 @@ class FileManager(MojoSecrets, MojoModel):
         group's anchors. Direct ORM use (bootstrap, clone, get_for_*) does
         not come through here.
         """
+        request = self.active_request
+        if request is None:
+            # The middleware sets the active request on every HTTP call, so
+            # none means server code calling the hook directly.
+            return
         if self._has_platform_file_grant():
             return
-        request = self.active_request
         stored_group_id = None
         if not created:
             stored_group_id = FileManager.objects.filter(pk=self.pk).values_list(
@@ -701,11 +705,9 @@ class FileManager(MojoSecrets, MojoModel):
         if created or stored_group_id != self.group_id:
             original_group = getattr(request, "group", None)
             try:
-                allowed = request is not None and self.rest_check_permission(
-                    request, "SAVE_PERMS", self)
+                allowed = self.rest_check_permission(request, "SAVE_PERMS", self)
             finally:
-                if request is not None:
-                    request.group = original_group
+                request.group = original_group
             if not allowed:
                 self._refuse_storage("A file manager can only be saved into a group you manage files in")
         if not created and self._storage_unchanged():
