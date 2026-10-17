@@ -1400,6 +1400,9 @@ def on_user_password_reset_code(request):
 def on_user_password_reset_token(request):
     """Set a password from an invite (iv:) or password-reset (pr:) token.
 
+    A disabled account is refused before anything is written, so the token
+    stays unused and no password is set.
+
     The token is checked without consumption before strength validation, then
     consumed while the User row is locked. A weak password therefore does not
     burn the credential — the user can retry the same emailed link with a
@@ -1416,12 +1419,17 @@ def on_user_password_reset_token(request):
         raise merrors.ValueException("Invalid token kind")
 
     user = verify(token, consume=False)
+    # A disabled account sets no password and keeps its link unused (#1955).
+    if not user.is_active:
+        raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
     user.check_password_strength(new_password)
 
     with transaction.atomic():
         locked = User.objects.select_for_update().filter(pk=user.pk).first()
         if locked is None:
             raise merrors.ValueException("Invalid token")
+        if not locked.is_active:
+            raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
         verified = verify(token, consume=True)
         if verified.pk != locked.pk:
             raise merrors.ValueException("Invalid token")
@@ -1679,9 +1687,11 @@ def on_email_verify_confirm_post(request):
 def on_invite_accept(request):
     """
     Accept an invite token.
-    Marks email as verified and issues a JWT.
-    If the user has no password yet, the client should prompt them to set one
-    via POST /api/auth/password/reset/token (the invite token is the same shape).
+    Marks email as verified and issues a JWT, using the token up.
+    Accepting does not set a password, and once it has run the same token can
+    no longer set one: a client that wants the invitee to choose a password
+    sends the token to POST /api/auth/password/reset/token instead (the hosted
+    /auth page does), or has them use Forgot password afterwards.
     """
     from mojo.apps.account.utils import tokens as tok_utils
     token = request.DATA.get("token")

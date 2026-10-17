@@ -667,7 +667,7 @@ names (`client_id`, `response_type`, `scope`, `code_challenge`,
 All values are encoded with `urlencode`; they cannot alter the server-selected
 root-relative destination path. Undeclared parameters (including `utm_*`) are
 not forwarded. Contact and passkey pages and OAuth-consent destinations do not
-receive registration extras. Password-reset tokens retain the same-tab
+receive registration extras. Password-reset (`pr:`) and invite (`iv:`) tokens retain the same-tab
 `mat_reset_token` handoff, with a confirmed-cookie reload of the original URL
 when storage is unavailable; see [Auth Pages](auth_pages.md#a-reset-link-survives-a-cold-bouncer-challenge).
 Redirect canonicalization is unchanged. Contact challenges preserve a valid

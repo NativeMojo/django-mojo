@@ -113,7 +113,7 @@
 
 {% endif %}
 
-<!-- VIEW: Set New Password (from pr: reset link or tp: login challenge) -->
+<!-- VIEW: Set New Password (from pr: reset link, iv: invite link or tp: login challenge) -->
 <div id="view-set-password" class="mat-view">
     <p class="mat-view-title" id="set-password-title">Set Your New Password</p>
     <p class="mat-view-sub" id="set-password-help">Choose a strong password for your account.</p>
@@ -246,7 +246,7 @@
     // not a session. Keep it in this page closure only — never browser storage.
     var forcedPasswordToken = null;
 
-    // The bouncer's stashed pr: token, once an attempt has been made with it.
+    // The bouncer's stashed pr: or iv: token, once an attempt has been made with it.
     // sessionStorage holds it only until the FIRST redemption attempt resolves
     // — success or failure — because the stash has to be single use exactly
     // like the token inside it. A failed attempt that left the stash behind
@@ -275,14 +275,41 @@
         m.showMessage("You need to replace your temporary password before continuing.", "info");
     };
 
+    // An invite (iv:) link redeems through the same set-password view and
+    // endpoint as a reset (pr:) link; only the copy differs.
+    function isInviteToken(token) { return !!token && token.indexOf("iv:") === 0; }
+    var INVITE_EXPIRED = "This invitation link has expired. Ask the person who invited you to send a new one.";
+    var INVITE_USED = "This invitation has already been used. Sign in, or use Forgot password if you need a new password.";
+    var INVITE_INVALID = "This invitation link isn't valid any more. If you've already accepted it, sign in. Otherwise ask the person who invited you to send a new one.";
+    var INVITE_TOKEN_ERRORS = {
+        "Expired token": INVITE_EXPIRED,
+        "Token already used": INVITE_USED,
+        "Invalid token": INVITE_INVALID,
+        "Invalid token signature": INVITE_INVALID,
+        "Invalid token format": INVITE_INVALID,
+        "Invalid token kind": INVITE_INVALID,
+        "Token kind mismatch": INVITE_INVALID,
+        "Unknown token kind": INVITE_INVALID,
+        "Account is disabled": INVITE_INVALID
+    };
+    function showSetPasswordCopy(token) {
+        if (isInviteToken(token)) {
+            $("set-password-title").textContent = "Accept your invitation";
+            $("set-password-help").textContent = "Choose a password to finish setting up your account.";
+            m.showMessage("Choose a password to accept your invitation.", "info");
+        } else {
+            m.showMessage("Please set your new password.", "info");
+        }
+    }
+
     var urlToken = cfg.params.get("token");
-    if (urlToken && urlToken.indexOf("pr:") === 0) {
+    if (urlToken && (urlToken.indexOf("pr:") === 0 || urlToken.indexOf("iv:") === 0)) {
         attemptedResetToken = urlToken;
         try { sessionStorage.setItem("mat_reset_token", urlToken); } catch (_) {}
         cfg.params.delete("token");
         history.replaceState({}, "", cfg.params.toString() ? location.pathname + "?" + cfg.params.toString() : location.pathname);
         showView("setPassword");
-        m.showMessage("Please set your new password.", "info");
+        showSetPasswordCopy(urlToken);
     } else if (readResetToken()) {
         // The token is not in the URL because the bouncer challenge page
         // bounced this visitor on their way here and dropped it — it stashed
@@ -291,7 +318,7 @@
         // no session; the reset handler further down already reads the same
         // key, it was simply never arrived at.
         showView("setPassword");
-        m.showMessage("Please set your new password.", "info");
+        showSetPasswordCopy(readResetToken());
     }
 
     (function () {
@@ -489,7 +516,17 @@
                 // stash is spent whether the server accepted it or not.
                 clearResetToken();
                 m.setLoading(btn, false);
-                m.showMessage(MojoAuth.getError(err) || "Could not set your new password.", "error");
+                var error = MojoAuth.getError(err);
+                // A dead invite link cannot be retried: say why, drop it and
+                // land on sign-in. A weak password keeps the form and token.
+                if (!forcedPasswordToken && isInviteToken(token) &&
+                        Object.prototype.hasOwnProperty.call(INVITE_TOKEN_ERRORS, error)) {
+                    attemptedResetToken = null;
+                    showView(PRIMARY);
+                    m.showMessage(INVITE_TOKEN_ERRORS[error], "error");
+                    return;
+                }
+                m.showMessage(error || "Could not set your new password.", "error");
             });
     });
 

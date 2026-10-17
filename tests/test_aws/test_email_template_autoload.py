@@ -317,3 +317,64 @@ def test_missing_only_installer_is_concurrency_idempotent(opts):
         "Concurrent missing-only installers must converge on one unique template row"
     assert sum("password_reset_code" in result["created"] for result in results) == 1, \
         f"Exactly one concurrent installer should report the create: {results}"
+
+
+def _render_invite_seed(context):
+    """Render the shipped `invite` seed, never the stored row (Maestro #1955)."""
+    from mojo.apps.aws.models import EmailTemplate
+    from mojo.apps.aws.services.email_templates import load_shipped_templates
+
+    row = {r["name"]: r for r in load_shipped_templates()}["invite"]
+    template = EmailTemplate(
+        name="invite",
+        subject_template=row["subject_template"],
+        text_template=row["text_template"],
+        html_template=row["html_template"],
+    )
+    return (template.render_subject(context), template.render_text(context),
+            template.render_html(context))
+
+
+# The emailed link is normally a short link; one with no `&` keeps autoescape out of it.
+INVITE_LINK = "https://app.autoload-invite.example/s/abc123"
+
+
+@th.django_unit_test()
+def test_invite_seed_names_the_inviting_group(opts):
+    subject, text, html = _render_invite_seed({
+        "user": {"display_name": "Pat"},
+        "group": {"name": "Acme Field Team"},
+        "token_url": INVITE_LINK,
+    })
+    th.assert_eq(subject, "You're invited to Acme Field Team",
+                 f"the subject must name the inviting group, got {subject!r}")
+    for label, body in (("text", text), ("html", html)):
+        th.assert_in("Acme Field Team", body, f"the {label} body must name the inviting group")
+        th.assert_in(INVITE_LINK, body, f"the {label} body must carry the absolute link")
+        th.assert_in("choose a password", body,
+                     f"the {label} body must say the link opens a page to choose a password")
+
+
+@th.django_unit_test()
+def test_invite_seed_without_a_group(opts):
+    subject, text, html = _render_invite_seed({
+        "user": {"display_name": "Pat"},
+        "token_url": INVITE_LINK,
+    })
+    th.assert_eq(subject, "You're invited",
+                 f"with no group the subject must not end in a stray 'to', got {subject!r}")
+    for label, body in (("text", text), ("html", html)):
+        th.assert_in("You've been invited to join.", body,
+                     f"the {label} body must read cleanly with no group")
+        th.assert_true("join ." not in body and "to join  " not in body,
+                       f"the {label} body must leave no gap where the group name would be")
+        th.assert_in(INVITE_LINK, body, f"the {label} body must still carry the link")
+
+
+@th.django_unit_test()
+def test_invite_seed_documents_group_context(opts):
+    from mojo.apps.aws.services.email_templates import load_shipped_templates
+
+    row = {r["name"]: r for r in load_shipped_templates()}["invite"]
+    th.assert_in("group", row["metadata"].get("context_keys", []),
+                 "the invite seed metadata must list its group context")
