@@ -456,3 +456,198 @@ def test_member_clone_keeps_location(opts):
     assert_true(clone is not None, "the clone must exist")
     assert_eq((clone.backend_url, clone.group_id),
               (opts.anchor_a_fs.backend_url, opts.group_a), "the clone keeps the location")
+
+
+# ---------------------------------------------------------------------------
+# Review 113553 corrections (Rick's decision 113556).
+# C1: the own-key parent exemption covers S3 children only.
+# C2: a save may not give an existing descendant new reach.
+# C3: a changed temp_upload_path stays inside the group's folder.
+# ---------------------------------------------------------------------------
+
+A_OWN = {"aws_key": "AKIAFMSCOPEAOWN", "aws_secret": "a-own-secret",
+         "endpoint_url": CLOSED_ENDPOINT}
+
+
+def _own_parent(opts, name, backend_url, **settings):
+    return _orm_manager(opts, name, backend_url, secrets={**A_OWN, **settings})
+
+
+def _case_fs_child_of_own_key(opts, who):
+    """R1: a file:// child of an own-key S3 parent never uses that key."""
+    from mojo.apps.fileman.models import File
+
+    parent = _own_parent(opts, f"r1p_{who}", f"s3://{BUCKET}/tenants/{opts.uuid_a}/p",
+                         base_path=opts.tmpdir)
+    headers = _as(opts, who)
+    resp = _create(opts, f"r1_{who}", {"backend_type": "file", "backend_url": opts.b_root,
+                                      "parent": parent.id}, headers)
+    child = _row(f"r1_{who}")
+    if child is not None:
+        opts.client.post(
+            "/api/fileman/file",
+            data={"file_manager": child.id, "group": opts.group_a,
+                  "filename": f"{PREFIX}r1.txt"},
+            files={"file": (f"{PREFIX}r1.txt", b"R1", "text/plain")}, headers=headers)
+        intact = _b_intact(opts)
+        File.objects.filter(file_manager=child).delete()
+        for name in os.listdir(opts.b_folder):
+            if name != "b.txt":
+                path = os.path.join(opts.b_folder, name)
+                if os.path.isfile(path):
+                    os.remove(path)
+        child.delete()
+    else:
+        intact = _b_intact(opts)
+    assert_eq(resp.status_code, 403,
+              f"{who}: a file:// child of an own-key S3 parent at B's folder must be "
+              f"refused, got HTTP {resp.status_code}: {resp.response}")
+    assert_true(child is None, f"{who}: a refused create must leave no row")
+    assert_true(intact, f"{who}: B's folder must be unchanged")
+
+
+@th.django_unit_test("R1. member creates a file:// child of an own-key S3 parent at B's folder: refused")
+def test_r1_fs_child_of_own_key(opts):
+    _case_fs_child_of_own_key(opts, MEMBER)
+
+
+@th.django_unit_test("R1b. member moves an own-key parent's base_path so its file:// child lands in B: refused")
+def test_r1b_parent_base_path_moves_child(opts):
+    parent = _own_parent(opts, "r1bp", f"s3://{BUCKET}/tenants/{opts.uuid_a}/p",
+                         base_path=opts.tmpdir)
+    _orm_manager(opts, "r1b_child", f"{opts.a_root}/r1b", parent=parent)
+    before = _snapshot(parent.pk)
+    _login(opts, MEMBER)
+    resp = opts.client.post(f"/api/fileman/manager/{parent.pk}",
+                            {"settings": {"base_path": opts.b_folder}})
+    assert_eq(resp.status_code, 403,
+              f"moving the child into B through its parent must be refused, got HTTP "
+              f"{resp.status_code}: {resp.response}")
+    assert_eq(_snapshot(parent.pk), before, "the refused edit must store nothing")
+
+
+def _s3_parent_with_child_in_b(opts, name, parent_url, **settings):
+    parent = _own_parent(opts, f"{name}p", parent_url, **settings)
+    child = _orm_manager(opts, f"{name}_child", f"s3://{BUCKET}/tenants/{opts.uuid_b}/c",
+                         parent=parent)
+    assert_eq(child.credentials, "parent", "the child starts on its parent's own key")
+    return parent, child
+
+
+def _refused_parent_edit(opts, who, parent, child, body, label):
+    from mojo.apps.fileman.models import FileManager
+
+    before = _snapshot(parent.pk)
+    headers = _as(opts, who)
+    resp = opts.client.post(f"/api/fileman/manager/{parent.pk}", body, headers=headers)
+    assert_eq(resp.status_code, 403,
+              f"{who}: {label} must be refused, got HTTP {resp.status_code}: {resp.response}")
+    assert_eq(_snapshot(parent.pk), before, f"{who}: the refused edit must store nothing")
+    assert_eq(FileManager.objects.get(pk=child.pk).credentials, "parent",
+              f"{who}: the child must still run on the parent's own key")
+
+
+def _case_reparent_onto_platform(opts, who):
+    """R2: Brenda's sequence: re-parenting P puts its child on platform keys in B."""
+    parent, child = _s3_parent_with_child_in_b(
+        opts, f"r2_{who}", f"s3://{BUCKET}/tenants/{opts.uuid_a}/p")
+    _refused_parent_edit(opts, who, parent, child, {
+        "parent": opts.anchor_a_s3.id,
+        "backend_url": f"s3://{BUCKET}/tenants/{opts.uuid_a}/converted"},
+        "re-parenting onto A's platform anchor")
+
+
+@th.django_unit_test("R2. member re-parents an own-key parent onto A's anchor; its child in B goes platform: refused")
+def test_r2_reparent_onto_platform(opts):
+    _case_reparent_onto_platform(opts, MEMBER)
+
+
+@th.django_unit_test("R2b. member clears an own-key parent's keys; its child in B goes platform: refused")
+def test_r2b_clear_parent_keys(opts):
+    parent, child = _s3_parent_with_child_in_b(
+        opts, "r2b", f"s3://{BUCKET}/tenants/{opts.uuid_a}/p")
+    _refused_parent_edit(opts, MEMBER, parent, child,
+                         {"settings": {"aws_key": "", "aws_secret": ""}}, "clearing the keys")
+
+
+@th.django_unit_test("R2c. member turns an own-key parent into file://; its child in B goes platform: refused")
+def test_r2c_parent_to_filesystem(opts):
+    # P's own path sits inside A's filesystem folder, so P itself passes.
+    parent, child = _s3_parent_with_child_in_b(
+        opts, "r2c", f"s3://{BUCKET}/fm_scope/{opts.uuid_a}/p", base_path=opts.tmpdir)
+    _refused_parent_edit(opts, MEMBER, parent, child, {"backend_type": "file"},
+                         "switching the parent to file://")
+
+
+def _case_temp_outside(opts, who):
+    """R3: the filesystem backend creates and prunes folders at temp_upload_path."""
+    fm = _orm_manager(opts, f"r3t_{who}", f"{opts.a_root}/r3t",
+                      secrets={"base_path": opts.tmpdir})
+    before = _snapshot(fm.pk)
+    outside = os.path.join(tempfile.mkdtemp(prefix=f"{PREFIX}outside_"), "chosen")
+    headers = _as(opts, who)
+    resp = opts.client.post(f"/api/fileman/manager/{fm.pk}",
+                            {"settings": {"temp_upload_path": outside}}, headers=headers)
+    assert_eq(resp.status_code, 403,
+              f"{who}: temp_upload_path outside A's folder must be refused, got HTTP "
+              f"{resp.status_code}: {resp.response}")
+    assert_eq(_snapshot(fm.pk), before, f"{who}: the refused edit must store nothing")
+
+
+@th.django_unit_test("R3. member sets temp_upload_path outside A's folder: refused")
+def test_r3_temp_upload_path_outside(opts):
+    _case_temp_outside(opts, MEMBER)
+
+
+@th.django_unit_test("R9. A's key with `files` gets the member's answers for R1, R2 and R3")
+def test_r9_key_same_answers(opts):
+    _case_fs_child_of_own_key(opts, "key")
+    _case_reparent_onto_platform(opts, "key")
+    _case_temp_outside(opts, "key")
+
+
+@th.django_unit_test("control: member creates an S3 child of an own-key S3 parent at any prefix")
+def test_s3_child_of_own_key_anywhere(opts):
+    parent = _own_parent(opts, "own_s3p", f"s3://{BUCKET}/tenants/{opts.uuid_a}/p")
+    _login(opts, MEMBER)
+    resp = _create(opts, "own_s3_child", {"backend_type": "s3",
+                                          "backend_url": f"s3://{BUCKET}/tenants/{opts.uuid_b}/c",
+                                          "parent": parent.id})
+    # The closed endpoint may fail the save after the check; only the
+    # containment refusal is wrong here.
+    assert_true(resp.status_code != 403,
+                f"an S3 child on its parent's own key is not contained, got HTTP "
+                f"{resp.status_code}: {resp.response}")
+
+
+@th.django_unit_test("control: member renames an own-key parent whose child points into B")
+def test_parent_rename_with_child_in_b(opts):
+    parent, _ = _s3_parent_with_child_in_b(opts, "rename_p", f"s3://{BUCKET}/tenants/{opts.uuid_a}/p")
+    _login(opts, MEMBER)
+    resp = opts.client.post(f"/api/fileman/manager/{parent.pk}", {"name": f"{PREFIX}rename_p2"})
+    assert_eq(resp.status_code, 200, f"a rename changes no reach: {resp.response}")
+
+
+@th.django_unit_test("control: member swaps an own-key parent's key pair; its child stays on the parent")
+def test_parent_key_swap(opts):
+    from mojo.apps.fileman.models import FileManager
+
+    parent, child = _s3_parent_with_child_in_b(opts, "swap", f"s3://{BUCKET}/tenants/{opts.uuid_a}/p")
+    _login(opts, MEMBER)
+    resp = opts.client.post(f"/api/fileman/manager/{parent.pk}",
+                            {"settings": {"aws_key": "AKIAFMSCOPEASWAP",
+                                          "aws_secret": "a-swap-secret"}})
+    assert_eq(resp.status_code, 200, f"another own key leaves the child's reach alone: {resp.response}")
+    assert_eq(FileManager.objects.get(pk=child.pk).credentials, "parent",
+              "the child still runs on its parent's own key")
+
+
+@th.django_unit_test("control: member sets temp_upload_path inside A's folder")
+def test_temp_upload_path_inside(opts):
+    fm = _orm_manager(opts, "temp_in", f"{opts.a_root}/temp_in",
+                      secrets={"base_path": opts.tmpdir})
+    inside = os.path.join(opts.tmpdir, "fm_scope", opts.uuid_a, "uploads")
+    _login(opts, MEMBER)
+    resp = opts.client.post(f"/api/fileman/manager/{fm.pk}",
+                            {"settings": {"temp_upload_path": inside}})
+    assert_eq(resp.status_code, 200, f"a temp folder inside A's folder is fine: {resp.response}")
