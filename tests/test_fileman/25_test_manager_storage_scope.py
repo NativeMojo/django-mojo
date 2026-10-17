@@ -32,7 +32,8 @@ PASSWORD = "fm-scope-pass-99!"
 MEMBER = "fm_scope_member"    # `files` in A; plain member with `view_fileman` in B
 STAFF = "fm_scope_staff"      # `manage_files` on the user record
 SUPER = "fm_scope_super"
-USERS = [MEMBER, STAFF, SUPER]
+BOTH = "fm_scope_both"        # `files` in A and in B
+USERS = [MEMBER, STAFF, SUPER, BOTH]
 
 PLATFORM_KEY = "AKIAFMSCOPEPLATFORM"
 PLATFORM_SECRET = "fm-scope-platform-secret-value"
@@ -93,6 +94,10 @@ def setup_manager_storage_scope(opts):
     member_b = group_b.add_member(users[MEMBER])
     member_b.add_permission("view_fileman")
     member_b.save()
+    for group in (group_a, group_b):
+        both = group.add_member(users[BOTH])
+        both.add_permission("files")
+        both.save()
 
     opts.tmpdir = tempfile.mkdtemp(prefix=PREFIX)
     opts.uuid_a = group_a.get_uuid()
@@ -651,3 +656,55 @@ def test_temp_upload_path_inside(opts):
     resp = opts.client.post(f"/api/fileman/manager/{fm.pk}",
                             {"settings": {"temp_upload_path": inside}})
     assert_eq(resp.status_code, 200, f"a temp folder inside A's folder is fine: {resp.response}")
+
+
+# ---------------------------------------------------------------------------
+# Review 113582 corrections (Rick's decision 113585).
+# R4: a descendant is re-judged when its key source changes, even if its
+# credentials label stays "parent".
+# R5: a nested related save followed by a refused descendant check leaves the
+# manager and its descendants unwritten. The nested row's own save is #7690.
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("R4. caller with files in A and B moves an own-key parent under B's own-key manager: refused")
+def test_r4_parent_moves_to_other_group_key(opts):
+    from mojo.apps.fileman.models import FileManager
+
+    parent = _own_parent(opts, "r4p", f"s3://{BUCKET}/tenants/{opts.uuid_a}/p")
+    child = _orm_manager(opts, "r4_child", f"s3://{BUCKET}/tenants/{opts.uuid_a}/c",
+                         parent=parent)
+    assert_eq(child._top_parent().pk, parent.pk, "the child starts on P's own key")
+    before = _snapshot(parent.pk)
+    _login(opts, BOTH)
+    resp = opts.client.post(f"/api/fileman/manager/{parent.pk}",
+                            {"group": opts.group_b, "parent": opts.b_own.id})
+    assert_eq(resp.status_code, 403,
+              f"moving P under B's key would put its child in A on B's key, got HTTP "
+              f"{resp.status_code}: {resp.response}")
+    assert_eq(_snapshot(parent.pk), before, "the refused edit must store nothing")
+    child = FileManager.objects.get(pk=child.pk)
+    assert_eq((child.parent_id, child._top_parent().pk), (parent.pk, parent.pk),
+              "the child must still run on P's own key")
+
+
+@th.django_unit_test("R5. nested parent rename, then a move that puts a grandchild on platform keys: refused")
+def test_r5_nested_related_save_then_refusal(opts):
+    parent = _own_parent(opts, "r5p", f"s3://{BUCKET}/tenants/{opts.uuid_a}/p")
+    middle = _orm_manager(opts, "r5_x", f"s3://{BUCKET}/tenants/{opts.uuid_a}/x",
+                          parent=parent)
+    leaf = _orm_manager(opts, "r5_y", f"s3://{BUCKET}/tenants/{opts.uuid_b}/y",
+                        parent=middle)
+    before = (_snapshot(middle.pk), _snapshot(leaf.pk))
+    _login(opts, MEMBER)
+    # Key order matters: the nested `parent` object saves X's current parent
+    # first, then `parent_id` re-points X. Nothing is asserted about that
+    # nested save (#7690).
+    resp = opts.client.post(f"/api/fileman/manager/{middle.pk}", {
+        "parent": {"name": f"{PREFIX}r5p_renamed"},
+        "parent_id": opts.anchor_a_s3.id,
+        "backend_url": f"s3://{BUCKET}/tenants/{opts.uuid_a}/x2"})
+    assert_eq(resp.status_code, 403,
+              f"the move puts X's child in B on platform keys, got HTTP "
+              f"{resp.status_code}: {resp.response}")
+    assert_eq((_snapshot(middle.pk), _snapshot(leaf.pk)), before,
+              "X and its descendants must be unchanged")
