@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import secrets
 import time
 
@@ -15,6 +16,16 @@ from mojo.helpers.settings import settings
 
 POLICY_KEYS = frozenset({"version", "routes", "shared", "features", "breaker"})
 ROUTE_KEYS = frozenset({"provider", "model", "credential", "capabilities"})
+BEDROCK_ROUTE_KEYS = ROUTE_KEYS | {"region", "reasoning_efforts"}
+BEDROCK_MODELS = frozenset(
+    f"{prefix}.amazon.nova-2-lite-v1:0" for prefix in ("us", "eu", "jp", "global"))
+AWS_REGION_PATTERN = re.compile(r"^[a-z]{2}(?:-[a-z]+)+-[1-9][0-9]*$")
+REASONING_EFFORTS = frozenset({"off", "low", "medium"})
+BEDROCK_CREDENTIAL_IDENTITY = "installation-aws-chain"
+BEDROCK_HEALTH_FAILURES = frozenset({
+    "provider_authentication", "provider_rate_limited", "provider_timeout",
+    "provider_unavailable",
+})
 LIMIT_KEYS = frozenset({
     "requests_minute", "requests_hour", "requests_day", "tokens_minute",
     "tokens_hour", "tokens_day", "concurrency", "max_input_bytes",
@@ -154,20 +165,35 @@ def parse_policy(raw=None):
     from mojo.helpers.llm import feature_names
     names = feature_names()
     for feature, route in routes.items():
-        if feature not in names or not isinstance(route, dict) \
-                or set(route) != ROUTE_KEYS:
+        if feature not in names or not isinstance(route, dict):
             _deny("policy_invalid")
-        if route["provider"] != "anthropic":
+        provider = route.get("provider")
+        route_keys = BEDROCK_ROUTE_KEYS if provider == "bedrock" else ROUTE_KEYS
+        if set(route) != route_keys:
+            _deny("policy_invalid")
+        if provider not in ("anthropic", "bedrock"):
             _deny("provider_unsupported")
-        if route["credential"] not in {"admin", "handler"}:
-            _deny("policy_invalid")
         if not isinstance(route["model"], str) or not route["model"].strip():
             _deny("policy_invalid")
         capabilities = route["capabilities"]
         if not isinstance(capabilities, list) or not capabilities \
+                or any(not isinstance(item, str) for item in capabilities) \
                 or len(capabilities) != len(set(capabilities)) \
                 or any(item not in {"text", "tools", "images", "prompt_cache", "models"}
                        for item in capabilities):
+            _deny("policy_invalid")
+        if provider == "bedrock":
+            efforts = route["reasoning_efforts"]
+            if route["credential"] != "aws" or capabilities != ["text"] \
+                    or route["model"] not in BEDROCK_MODELS \
+                    or not isinstance(route["region"], str) \
+                    or not AWS_REGION_PATTERN.fullmatch(route["region"]) \
+                    or not isinstance(efforts, list) or not efforts \
+                    or any(not isinstance(item, str) or item not in REASONING_EFFORTS
+                           for item in efforts) \
+                    or len(efforts) != len(set(efforts)):
+                _deny("policy_invalid")
+        elif route["credential"] not in ("admin", "handler"):
             _deny("policy_invalid")
     for feature, limits in features.items():
         if feature not in names:
@@ -290,6 +316,10 @@ def route_state(feature):
 
 
 def _credential(route):
+    if route.get("provider") == "bedrock":
+        # Declarative installation identity, not an SDK credential lookup.
+        # Role refresh must not reset the installation's budgets or circuit.
+        return BEDROCK_CREDENTIAL_IDENTITY
     key = "LLM_ADMIN_API_KEY" if route["credential"] == "admin" \
         else "LLM_HANDLER_API_KEY"
     credential = settings.get(key, None)
@@ -522,10 +552,11 @@ def _candidate_envelopes(policy):
 
 
 def _execute(messages, system, tools, model, max_tokens, feature, operation,
-             context, provider_factory=None, redis=None, policy_raw=None):
+             context, reasoning_effort="off", provider_factory=None, redis=None,
+             policy_raw=None):
     from mojo.apps.account.models import LLMRequest
     from mojo.helpers.llm_providers import get_provider
-    from mojo.helpers.llm_providers.base import ProviderError
+    from mojo.helpers.llm_providers.base import ProviderError, validated_usage
 
     policy = parse_policy(policy_raw)
     route = policy["routes"].get(feature)
@@ -539,6 +570,12 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
             _deny("emergency_stopped")
         if model is not None and model != route["model"]:
             _deny("model_mismatch")
+        if not isinstance(reasoning_effort, str) \
+                or reasoning_effort not in REASONING_EFFORTS \
+                or (provider_name == "anthropic" and reasoning_effort != "off") \
+                or (provider_name == "bedrock" and
+                    reasoning_effort not in route["reasoning_efforts"]):
+            _deny("capability_unsupported")
         context = context or {}
         scalar_context = _context_fields(context)
         serialized = json.dumps(
@@ -549,6 +586,8 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
             _deny("input_too_large")
         output_cap = min(policy["shared"]["max_output_tokens"],
                          limits["max_output_tokens"])
+        if provider_name == "bedrock":
+            output_cap = min(output_cap, 65000)
         if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) \
                 or max_tokens <= 0 or max_tokens > output_cap:
             _deny("output_too_large")
@@ -557,10 +596,13 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
             _deny("credential_missing")
         fingerprint = credential_fingerprint(provider_name, credential)
         factory = provider_factory or get_provider
-        adapter = factory(provider_name, api_key=credential)
+        if provider_name == "bedrock":
+            adapter = factory(provider_name, region=route["region"])
+        else:
+            adapter = factory(provider_name, api_key=credential)
         if adapter is None:
             _deny("provider_unsupported")
-        cache_enabled = bool(settings.get(
+        cache_enabled = provider_name != "bedrock" and bool(settings.get(
             "LLM_ADMIN_PROMPT_CACHE_ENABLED", True, kind="bool"))
         required = _required_capabilities(messages, tools, cache_enabled)
         if not required.issubset(set(route["capabilities"])) \
@@ -593,12 +635,47 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         release_permit(redis, permit)
         _blocked(provider_name, feature, "ledger_unavailable")
     try:
-        response = adapter.call(
+        call_kwargs = dict(
             messages=messages, system=system, tools=tools, model=route["model"],
             max_tokens=max_tokens, cache_enabled=cache_enabled,
             timeout=min(policy["shared"]["timeout_seconds"], limits["timeout_seconds"]))
+        if provider_name == "bedrock":
+            call_kwargs["reasoning_effort"] = reasoning_effort
+        response = adapter.call(**call_kwargs)
+        if provider_name == "bedrock" and (
+                not isinstance(response, dict) or
+                validated_usage(response.get("usage")) is None):
+            raise ProviderError("provider_rejected")
     except ProviderError as err:
         elapsed = int((time.monotonic() - started) * 1000)
+        if provider_name == "bedrock":
+            code = err.code
+            if not isinstance(code, str) or code not in SAFE_CODES \
+                    or not code.startswith("provider_"):
+                code = "provider_failed"
+            failed_usage = validated_usage(getattr(err, "usage", None))
+            actual_tokens = sum(failed_usage.values()) if failed_usage is not None \
+                else reserved_tokens
+            fields = dict(
+                status="failed", error_code=code,
+                provider_request_id=str(err.request_id or "")[:128], duration_ms=elapsed,
+                finished_at=timezone.now())
+            if failed_usage is not None:
+                fields.update(failed_usage)
+            try:
+                if code in BEDROCK_HEALTH_FAILURES:
+                    _breaker_failure(
+                        provider_name, fingerprint, generation, breaker_owner, code, policy)
+                else:
+                    _breaker_success(provider_name, fingerprint, generation, breaker_owner)
+                LLMRequest.objects.filter(pk=ledger.pk).update(**fields)
+            except Exception:
+                _deny("provider_failed")
+            finally:
+                release_permit(redis, permit, actual_tokens=actual_tokens)
+            _record_metrics(provider_name, feature, "failed",
+                            sum(failed_usage.values()) if failed_usage is not None else 0)
+            _deny(code, retry_after=getattr(err, "retry_after", None))
         _breaker_failure(
             provider_name, fingerprint, generation, breaker_owner, err.code, policy)
         LLMRequest.objects.filter(pk=ledger.pk).update(
@@ -609,12 +686,22 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         _record_metrics(provider_name, feature, "failed")
         _deny(err.code, retry_after=getattr(err, "retry_after", None))
     except Exception:
-        LLMRequest.objects.filter(pk=ledger.pk).update(
-            status="failed", error_code="provider_failed", finished_at=timezone.now())
-        release_permit(redis, permit)
-        _breaker_failure(
-            provider_name, fingerprint, generation, breaker_owner,
-            "provider_failed", policy)
+        if provider_name == "bedrock":
+            try:
+                LLMRequest.objects.filter(pk=ledger.pk).update(
+                    status="failed", error_code="provider_failed", finished_at=timezone.now())
+                _breaker_success(provider_name, fingerprint, generation, breaker_owner)
+            except Exception:
+                _deny("provider_failed")
+            finally:
+                release_permit(redis, permit, actual_tokens=reserved_tokens)
+        else:
+            LLMRequest.objects.filter(pk=ledger.pk).update(
+                status="failed", error_code="provider_failed", finished_at=timezone.now())
+            release_permit(redis, permit)
+            _breaker_failure(
+                provider_name, fingerprint, generation, breaker_owner,
+                "provider_failed", policy)
         _record_metrics(provider_name, feature, "failed")
         _deny("provider_failed")
     usage = response.get("usage") or {}
@@ -624,34 +711,43 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
     release_permit(redis, permit, actual_tokens=actual_tokens)
     _breaker_success(provider_name, fingerprint, generation, breaker_owner)
     elapsed = int((time.monotonic() - started) * 1000)
-    updated = LLMRequest.objects.filter(pk=ledger.pk, status="started").update(
-        status="succeeded", finished_at=timezone.now(), duration_ms=elapsed,
-        provider_request_id=str(response.get("id") or "")[:128],
-        input_tokens=max(0, int(usage.get("input_tokens", 0) or 0)),
-        output_tokens=max(0, int(usage.get("output_tokens", 0) or 0)),
-        cache_read_input_tokens=max(0, int(usage.get("cache_read_input_tokens", 0) or 0)),
-        cache_creation_input_tokens=max(
-            0, int(usage.get("cache_creation_input_tokens", 0) or 0)))
+    try:
+        updated = LLMRequest.objects.filter(pk=ledger.pk, status="started").update(
+            status="succeeded", finished_at=timezone.now(), duration_ms=elapsed,
+            provider_request_id=str(response.get("id") or "")[:128],
+            input_tokens=max(0, int(usage.get("input_tokens", 0) or 0)),
+            output_tokens=max(0, int(usage.get("output_tokens", 0) or 0)),
+            cache_read_input_tokens=max(0, int(usage.get("cache_read_input_tokens", 0) or 0)),
+            cache_creation_input_tokens=max(
+                0, int(usage.get("cache_creation_input_tokens", 0) or 0)))
+    except Exception:
+        if provider_name == "bedrock":
+            _deny("provider_failed")
+        raise
     if updated != 1:
-        _blocked(provider_name, feature, "ledger_persistence_unknown")
+        _blocked(provider_name, feature, "provider_failed" if provider_name == "bedrock"
+                 else "ledger_persistence_unknown")
     _record_metrics(provider_name, feature, "succeeded", actual_tokens)
     return response
 
 
 def invoke(messages, system=None, tools=None, model=None, max_tokens=4096, *,
-           feature, operation, context=None):
+           feature, operation, context=None, reasoning_effort="off"):
     """The only production message execution entry point."""
     return _execute(
-        messages, system, tools, model, max_tokens, feature, operation, context)
+        messages, system, tools, model, max_tokens, feature, operation, context,
+        reasoning_effort=reasoning_effort)
 
 
 def execute_guarded_for_test(messages, *, feature, operation="test", context=None,
                              system=None, tools=None, model=None, max_tokens=4,
-                             provider_factory, redis, policy_raw):
+                             reasoning_effort="off", provider_factory, redis,
+                             policy_raw):
     """Explicit test-only injection; every production guard still executes."""
     return _execute(
         messages, system, tools, model, max_tokens, feature, operation, context,
-        provider_factory=provider_factory, redis=redis, policy_raw=policy_raw)
+        reasoning_effort=reasoning_effort, provider_factory=provider_factory,
+        redis=redis, policy_raw=policy_raw)
 
 
 def _fixed_configuration_probe_core(actor, credential, identity, operation):
@@ -680,6 +776,8 @@ def _fixed_configuration_probe_core(actor, credential, identity, operation):
     try:
         if route is None or limits is None:
             _deny("route_missing")
+        if provider != "anthropic":
+            _deny("provider_unsupported")
         _policy_agreement(policy)
         if not recovery_probe and emergency_stopped():
             _deny("emergency_stopped")
@@ -841,6 +939,8 @@ def discover_models():
     try:
         if route is None or limits is None:
             _deny("route_missing")
+        if provider != "anthropic":
+            _deny("provider_unsupported")
         _policy_agreement(policy)
         if emergency_stopped():
             _deny("emergency_stopped")
@@ -957,7 +1057,7 @@ def reset_breakers(actor, provider=None):
     system_settings.require_system_admin(actor)
     rows = LLMCircuitBreaker.objects.all()
     if provider is not None:
-        if provider != "anthropic":
+        if provider not in {"anthropic", "bedrock"}:
             raise ValueError("Unsupported provider")
         rows = rows.filter(provider=provider)
     count = rows.update(

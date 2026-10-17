@@ -30,6 +30,87 @@ def _policy():
     }
 
 
+def _bedrock_policy():
+    policy = _policy()
+    policy["routes"]["unattributed"] = {
+        "provider": "bedrock", "model": "us.amazon.nova-2-lite-v1:0",
+        "credential": "aws", "capabilities": ["text"],
+        "region": "us-east-1", "reasoning_efforts": ["off", "low", "medium"],
+    }
+    return policy
+
+
+@th.django_unit_test()
+def test_bedrock_policy_binds_profile_region_and_efforts(opts):
+    from mojo.apps.account.services import llm_safety
+
+    original = llm_safety.parse_policy(_bedrock_policy())
+    for prefix in ("us", "eu", "jp", "global"):
+        raw = _bedrock_policy()
+        raw["routes"]["unattributed"]["model"] = f"{prefix}.amazon.nova-2-lite-v1:0"
+        parsed = llm_safety.parse_policy(raw)
+        assert parsed["routes"] == raw["routes"], \
+            f"the explicit Nova profile must survive parsing: {raw['routes']}"
+    for field, value in (("region", "us-west-2"),
+                         ("reasoning_efforts", ["off", "low"])):
+        raw = _bedrock_policy()
+        raw["routes"]["unattributed"][field] = value
+        assert llm_safety.parse_policy(raw)["hash"] != original["hash"], \
+            f"changing Bedrock {field} must require fresh policy agreement"
+
+
+@th.django_unit_test()
+def test_bedrock_policy_rejects_unapproved_routes(opts):
+    from mojo.apps.account.services import llm_safety
+
+    mutations = [
+        ("credential", "admin"), ("credential", "handler"),
+        ("model", "amazon.nova-2-lite-v1:0"),
+        ("model", "us.amazon.nova-lite-v1:0"),
+        ("model", "arn:aws:bedrock:us-east-1:123456789012:inference-profile/example"),
+        ("capabilities", ["text", "prompt_cache"]), ("capabilities", ["tools"]),
+        ("capabilities", ["text", "text"]), ("capabilities", [["text"]]),
+        ("region", ""), ("region", " us-east-1"), ("region", "US-EAST-1"),
+        ("region", "https://bedrock.example"), ("region", "us-east-1\n"),
+        ("reasoning_efforts", []), ("reasoning_efforts", ["off", "off"]),
+        ("reasoning_efforts", ["high"]), ("reasoning_efforts", [True]),
+        ("reasoning_efforts", "low"),
+    ]
+    for field, value in mutations:
+        raw = _bedrock_policy()
+        raw["routes"]["unattributed"][field] = value
+        try:
+            llm_safety.parse_policy(raw)
+            assert False, f"unapproved Bedrock {field}={value!r} was accepted"
+        except llm_safety.LLMSafetyError as err:
+            assert err.code == "policy_invalid", \
+                f"invalid Bedrock {field} must use policy_invalid, got {err.code}"
+
+
+@th.django_unit_test()
+def test_provider_route_shapes_remain_exact(opts):
+    from mojo.apps.account.services import llm_safety
+
+    for provider, extra in (("anthropic", "region"), ("bedrock", "endpoint_url")):
+        raw = _policy() if provider == "anthropic" else _bedrock_policy()
+        raw["routes"]["unattributed"][extra] = "us-east-1"
+        try:
+            llm_safety.parse_policy(raw)
+            assert False, f"{provider} accepted the unknown route key {extra}"
+        except llm_safety.LLMSafetyError as err:
+            assert err.code == "policy_invalid", \
+                f"unknown {provider} route keys must be policy_invalid, got {err.code}"
+    for required in ("region", "reasoning_efforts"):
+        raw = _bedrock_policy()
+        del raw["routes"]["unattributed"][required]
+        try:
+            llm_safety.parse_policy(raw)
+            assert False, f"Bedrock accepted missing route key {required}"
+        except llm_safety.LLMSafetyError as err:
+            assert err.code == "policy_invalid", \
+                f"missing Bedrock {required} must be policy_invalid, got {err.code}"
+
+
 @th.django_unit_test()
 def test_policy_is_exact_and_provider_explicit(opts):
     from mojo.apps.account.services import llm_safety
@@ -158,6 +239,10 @@ def test_public_call_has_no_adapter_bypass_parameters(opts):
         f"public call must not accept a provider client, got {tuple(call_parameters)}"
     assert "candidate" not in invoke_parameters and "allow_stopped" not in invoke_parameters, \
         f"production invoke must expose no stopped-state bypass, got {tuple(invoke_parameters)}"
+    for function in (llm.call, llm.ask, llm_safety.invoke):
+        effort = inspect.signature(function).parameters["reasoning_effort"]
+        assert effort.default == "off" and effort.kind == inspect.Parameter.KEYWORD_ONLY, \
+            f"{function.__name__} reasoning effort must be keyword-only with default off"
 
 
 @th.django_unit_test()
