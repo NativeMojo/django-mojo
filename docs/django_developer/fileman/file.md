@@ -65,6 +65,10 @@ def on_upload(request):
     return instance.on_rest_get(request)
 ```
 
+With `request=`, a storage id in the body (`file_manager` and its aliases) is
+used only when the caller may use that storage, else 403; with none, the
+caller's own storage is used (see `FileManager.get_from_request`).
+
 ### Option 2: Initiated Upload (recommended)
 
 1. POST normalized filename, MIME type, size, and optional manager/group/use
@@ -243,9 +247,12 @@ group's object. On a REST create `on_rest_pre_save` picks the manager with
 `FileManager.resolve_for_file_create(request)` and sets the file's `group` to the
 manager's group. That runs only when the record has no manager yet: server code
 that sets `file_manager` before calling `on_rest_pre_save({}, True)`, and
-`create_from_file`, keep the manager and group they were given and are not
-checked. To register an object that already exists in storage, do it from
-server code, never over REST.
+`create_from_file(file_manager=...)`, keep the manager and group they were
+given — the caller's server code is trusted. `create_from_file(request=...)`
+and the `on_rest_save_file` fallback pick the manager with
+`FileManager.get_from_request(request)`, which checks a storage id named in the
+body. To register an object that already exists in storage, do it from server
+code, never over REST.
 
 ## Metadata
 

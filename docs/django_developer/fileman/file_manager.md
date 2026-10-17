@@ -40,6 +40,17 @@ fm = FileManager.get_from_request(request)
 fm = FileManager.get_for_user_group(user, group)
 ```
 
+`get_from_request` honours a manager named in the body (`fileman`,
+`filemanager`, `file_manager`, `manager`, `file_manager_id`) only when the
+caller may use it, else `403 File manager is unavailable` (an unknown or
+malformed id too). A person needs what `authorize_for_upload` requires; with no
+`group` in the body, a group manager is checked by active membership of its
+group (with parents) or a global `manage_files`/`files` grant. An `ApiKey` or
+group token may name a group manager in a group it covers (`is_group_allowed`,
+no permission grant needed), and a key acting as a member that member's own
+manager; never a system manager. With no id, it resolves the caller's
+user/group manager as before.
+
 Upload initiation must use `FileManager.resolve_for_upload(request)`, not a
 bare primary-key lookup. The resolver applies the upload authorization truth
 table before any `File` or upload capability is created:

@@ -818,6 +818,57 @@ class FileManager(MojoSecrets, MojoModel):
             raise me.PermissionDeniedException("File manager is unavailable")
         return file_manager
 
+    @classmethod
+    def _authorize_named_manager(cls, request, fm_id):
+        """The manager a request names by id, if the caller may use it.
+
+        People get the upload rule (`authorize_for_upload`), except that a
+        member naming a group manager without sending `group` is checked by
+        active membership of that manager's group. An ApiKey or group token
+        may name a group manager in a group it covers (`is_group_allowed`, the
+        dispatcher's own bound — no permission grant, as for an unnamed
+        manager), and a key acting as a member that member's own manager.
+        """
+        from mojo.helpers.request import (
+            is_override_user_session, is_request_user, restricted_identity)
+
+        unavailable = me.PermissionDeniedException("File manager is unavailable")
+        try:
+            manager = cls.objects.select_related("user", "group").get(pk=int(fm_id))
+        except (TypeError, ValueError, cls.DoesNotExist):
+            raise unavailable
+        if not manager.is_active:
+            raise unavailable
+        if manager.group_id is not None and not manager.group.is_effectively_active():
+            raise unavailable
+
+        ident = restricted_identity(request)
+        if ident is not None:
+            if manager.group_id is not None and manager.user_id is None:
+                if ident.is_group_allowed(manager.group):
+                    return manager
+            elif (manager.user_id is not None and manager.group_id is None
+                  and is_override_user_session(request)
+                  and manager.user_id == getattr(request.user, "id", None)):
+                return manager
+            raise unavailable
+
+        actor = getattr(request, "user", None)
+        if actor is None or not is_request_user(request):
+            raise unavailable
+        if "group" in request.DATA or manager.group_id is None or manager.user_id is not None:
+            manager.authorize_for_upload(request)
+            return manager
+        requested_use = request.DATA.get(["use", "fileman_use", "file_manager_use"], "")
+        supplied_use = any(key in request.DATA for key in ("use", "fileman_use", "file_manager_use"))
+        if supplied_use and manager.use != requested_use:
+            raise me.PermissionDeniedException("File manager purpose does not match the request")
+        if actor.has_permission(["manage_files", "files"]):
+            return manager
+        if manager.group.get_member_for_user(actor, check_parents=True) is None:
+            raise me.PermissionDeniedException("Active group membership is required")
+        return manager
+
     def on_rest_created(self):
         self._update_default()
 
@@ -1327,10 +1378,15 @@ class FileManager(MojoSecrets, MojoModel):
 
     @classmethod
     def get_from_request(cls, request):
-        """Get the file manager from the request"""
+        """Get the file manager from the request.
+
+        A manager named by id in the body is returned only when the caller
+        may use it (`_authorize_named_manager`); otherwise 403. With no id,
+        the caller's own user/group manager is resolved as before.
+        """
         fm_id = request.DATA.get(["fileman", "filemanager", "file_manager", "manager", "file_manager_id"])
         if fm_id:
-            return cls.objects.get(pk=fm_id)
+            return cls._authorize_named_manager(request, fm_id)
         use = request.DATA.get(["use", "fileman_use", "file_manager_use"], "")
         if getattr(request.DATA, "use_groups_fileman", False) and request.group:
             return cls.get_for_user_group(group=request.group, use=use)
