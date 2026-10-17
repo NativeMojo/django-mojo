@@ -406,9 +406,9 @@ def get_model(use="general"):
 # ---------------------------------------------------------------------------
 
 def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
-         feature=None, operation="call", context=None):
+         feature=None, operation="call", context=None, reasoning_effort="off"):
     """
-    Call the Anthropic messages API.
+    Call the installation's exact policy route.
 
     Returns the response as a dict (via model_dump()) including ``usage``.
     Raises on API errors — callers handle their own error logic.
@@ -435,7 +435,7 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
         result = llm_safety.invoke(
             messages, system=system, tools=tools, model=model,
             max_tokens=max_tokens, feature=normalize_feature(feature),
-            operation=operation, context=context)
+            operation=operation, context=context, reasoning_effort=reasoning_effort)
     except llm_safety.LLMSafetyError as err:
         raise LLMExecutionError(err.code, retry_after=err.retry_after) from None
     except Exception:
@@ -444,7 +444,8 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
     # Warn once per worker if caching is enabled but produced no cache activity.
     # Typically means the prefix is below the model's minimum cacheable size
     # (1024 tokens for Sonnet, 4096 for Opus).
-    _warn_zero_cache(result, resolved_model, cache_enabled)
+    if result.get("provider") != "bedrock":
+        _warn_zero_cache(result, resolved_model, cache_enabled)
 
     return result
 
@@ -463,7 +464,7 @@ def _warn_zero_cache(result, resolved_model, cache_enabled):
 
 
 def ask(prompt, system=None, model=None, max_tokens=4096, *, feature=None,
-        operation="ask", context=None):
+        operation="ask", context=None, reasoning_effort="off"):
     """
     One-shot LLM question — send a prompt, get a string back.
 
@@ -473,7 +474,8 @@ def ask(prompt, system=None, model=None, max_tokens=4096, *, feature=None,
     messages = [{"role": "user", "content": prompt}]
     response = call(
         messages, system=system, model=model, max_tokens=max_tokens,
-        feature=feature, operation=operation, context=context)
+        feature=feature, operation=operation, context=context,
+        reasoning_effort=reasoning_effort)
     # Extract text from response content blocks
     parts = []
     for block in response.get("content", []):
