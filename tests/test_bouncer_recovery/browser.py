@@ -238,6 +238,11 @@ def test_browser_interaction_matrix(opts):
             confirm()
             time.sleep(0.4)
             assert state['visits'].count('/auth?token=pr%3Afixture-reset') == before + 1, 'storage-refused reset recovery must reload the original URL exactly once'
+            fresh('success', '?token=iv%3Afixture-invite')
+            before = state['visits'].count('/auth?token=iv%3Afixture-invite')
+            confirm()
+            time.sleep(0.4)
+            assert state['visits'].count('/auth?token=iv%3Afixture-invite') == before + 1, 'storage-refused invite recovery must reload the original URL exactly once'
             page.call('Page.removeScriptToEvaluateOnNewDocument', {'identifier': script['identifier']})
             fresh()
             providers = page.evaluate("""(async()=>{
@@ -305,6 +310,29 @@ def test_browser_interaction_matrix(opts):
                   return {sent,clean,completed};
                 })()""")
                 assert reset['sent'] == ['pr:first-click', 'pr:first-click'] and reset['clean'] and reset['completed'], f'weak-password retry must retain only page memory and finish even when storage is refused (blocked={blocked}): {reset}'
+                # An invite (iv:) link opens the same view with invite copy, and a
+                # dead invite lands on sign-in with a plain message (#1955).
+                if blocked:
+                    page.call('Page.navigate', {'url': f'http://127.0.0.1:{server.server_port}/real-login?token=iv%3Afirst-click'})
+                else:
+                    page.call('Page.navigate', {'url': f'http://127.0.0.1:{server.server_port}/real-login'})
+                    page.wait("!!window._mat", 'login page before the stash')
+                    page.evaluate("sessionStorage.setItem('mat_reset_token','iv:first-click');true")
+                    page.call('Page.navigate', {'url': f'http://127.0.0.1:{server.server_port}/real-login'})
+                page.wait("!!window._mat && document.getElementById('view-set-password').classList.contains('is-active')", 'first-click invite form')
+                assert page.evaluate("document.getElementById('set-password-title').textContent==='Accept your invitation' && !location.search.includes('token')"), f'an invite link must open the invite copy with its token removed from the URL (blocked={blocked})'
+                invite = page.evaluate("""(async()=>{
+                  const sent=[];
+                  MojoAuth.resetWithToken=(token,password)=>{sent.push(token);return Promise.reject({error:'Expired token'})};
+                  document.getElementById('set-password-new').value='Stronger-Password-4309!';
+                  document.getElementById('set-password-confirm').value='Stronger-Password-4309!';
+                  document.getElementById('form-set-password').dispatchEvent(new Event('submit',{cancelable:true,bubbles:true}));
+                  await new Promise(r=>setTimeout(r,20));
+                  let clean=true;try{clean=sessionStorage.getItem('mat_reset_token')===null}catch(_){}
+                  return {sent,clean,signin:document.getElementById('view-signin').classList.contains('is-active'),
+                          message:document.getElementById('mat-message').textContent};
+                })()""")
+                assert invite['sent'] == ['iv:first-click'] and invite['clean'] and invite['signin'] and 'invitation link has expired' in invite['message'], f'an expired invite must land on sign-in with the invite message (blocked={blocked}): {invite}'
                 if init:
                     page.call('Page.removeScriptToEvaluateOnNewDocument', {'identifier': init['identifier']})
             page.call('Emulation.setScriptExecutionDisabled', {'value': True})
