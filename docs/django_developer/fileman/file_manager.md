@@ -477,10 +477,12 @@ a validator-registered Setting). The signed expiry is never later than
 now + that lifetime: it is floored to a step of about a tenth of the lifetime
 (60 s to an hour) so links are stable inside a step, and never earlier than
 now + half the lifetime. `File`/`FileRendition` pass `cdn.link_lifetime(manager)`
-for a private manager: the shorter of `cdn_url_expires_in` and `urls_expire_in`,
-counting only a value set on the manager or its top parent, so a manager that
-set neither keeps 7 days and a manager with `urls_expire_in = 300` gets
-5-minute CDN links. The token download route keeps its 3600 s; the
+for a private manager: `cdn_url_expires_in` (or 7 days when unset) is the
+ceiling, and `urls_expire_in`, when set on the manager or its top parent, can
+only shorten it. A manager that set neither keeps 7 days, a manager with
+`urls_expire_in = 300` gets 5-minute CDN links, and `urls_expire_in = 30 days`
+still gets 7. A fractional value is floored; zero, a negative or a
+non-numeric value counts as unset. The token download route keeps its 3600 s; the
 `download_url` cache is never used in CDN mode. For short-lived delivery a
 manager sets `urls_expire_in` (or a global file admin sets a short
 `cdn_url_expires_in`), or a global file admin sets `cdn = "off"` so every

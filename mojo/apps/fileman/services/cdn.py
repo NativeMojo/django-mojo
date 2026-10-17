@@ -152,27 +152,35 @@ def clamp_lifetime(expires_in):
 
 
 def _set_seconds(value):
-    """A positive integer setting, or None when unset or unusable."""
+    """A positive number of seconds from a setting, or None when unset or unusable.
+
+    A finite number (or numeric string) is floored, with values between 0
+    and 1 counting as 1; zero, negative, non-finite, bool or non-numeric
+    values count as unset.
+    """
     if value in (None, "") or isinstance(value, bool):
         return None
     try:
-        seconds = int(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
-    return seconds if seconds > 0 else None
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return max(1, math.floor(number))
 
 
 def link_lifetime(manager):
     """What File/FileRendition pass for a private manager in CDN mode.
 
-    The shorter of `cdn_url_expires_in` and `urls_expire_in`, counting only
-    a value set on the manager or its top parent (no defaults), so a manager
-    that set neither keeps the 7-day default. Clamped to [60 s, cap].
+    The ceiling is `cdn_url_expires_in` when set, else the 7-day default;
+    an explicitly set `urls_expire_in` (own or top parent) can only shorten
+    it. Clamped to [60 s, cap].
     """
-    values = [seconds for seconds in (_set_seconds(manager.get_setting(CDN_EXPIRES_KEY)),
-                                      _set_seconds(manager.get_setting("urls_expire_in")))
-              if seconds is not None]
-    return clamp_lifetime(min(values) if values else None)
+    configured = _set_seconds(manager.get_setting(CDN_EXPIRES_KEY))
+    ceiling = configured if configured is not None else DEFAULT_EXPIRES_IN
+    urls_expire_in = _set_seconds(manager.get_setting("urls_expire_in"))
+    lifetime = min(ceiling, urls_expire_in) if urls_expire_in is not None else ceiling
+    return clamp_lifetime(lifetime)
 
 
 link_expires_in = link_lifetime

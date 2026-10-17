@@ -108,9 +108,9 @@ The `user` field is **not** auto-stamped on create. Omitting `user` (or sending 
 
 An S3 manager whose bucket has CDN delivery enabled hands out CloudFront
 links instead of S3 links: a public manager's links are plain and never
-expire; a private manager's links are signed and expire after the shorter of the manager's
-`cdn_url_expires_in` and its `urls_expire_in`, when either is set (default
-7 days, platform cap 90 days). A link never outlives that setting. Clients treat
+expire; a private manager's links are signed and expire after the manager's `cdn_url_expires_in`
+(default 7 days, platform cap 90 days), or its `urls_expire_in` when that is
+set and shorter. A link never outlives that setting. Clients treat
 both as opaque and re-fetch a signed link before it expires, or use the
 shortlink, which re-signs on every click.
 
@@ -143,9 +143,9 @@ Two manager settings, both for **global file admins** (`manage_files` /
 `files`, which a superuser implies; the group-level grant is not enough), both
 S3 only: `cdn` (`"off"` opts this manager, and its children, out of its
 bucket's CDN) and `cdn_url_expires_in` (seconds, 60 to the platform cap). A
-private manager's signed CDN links live the shorter of `cdn_url_expires_in`
-and `urls_expire_in`, so `urls_expire_in` can shorten CDN links but never
-lengthen them. A
+private manager's signed CDN links live `cdn_url_expires_in` (or 7 days),
+shortened to `urls_expire_in` when that is set and shorter: `urls_expire_in`
+can shorten CDN links but never lengthen them. A
 caller without that permission sending either gets 403; a non-S3 manager gets
 400.
 

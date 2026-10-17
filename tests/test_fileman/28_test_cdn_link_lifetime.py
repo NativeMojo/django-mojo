@@ -83,6 +83,14 @@ def setup_cdn_link_lifetime(opts):
     opts.optout = _make_manager("optout", BUCKET, False, cdn="off", urls_expire_in=300)
     parent = FileManager.objects.get(pk=_make_manager("parent", BUCKET, False, urls_expire_in=300))
     opts.child = _make_manager("child", BUCKET, False, parent=parent)
+    opts.urls30d = _make_manager("urls30d", BUCKET, False, urls_expire_in=30 * DAY)
+    parent30d = FileManager.objects.get(pk=_make_manager("parent30d", BUCKET, False,
+                                                         urls_expire_in=30 * DAY))
+    opts.child30d = _make_manager("child30d", BUCKET, False, parent=parent30d)
+    opts.frac_num = _make_manager("fracnum", BUCKET, False, urls_expire_in=300.5)
+    opts.frac_text = _make_manager("fractext", BUCKET, False, urls_expire_in="300.5")
+    opts.unset_values = [_make_manager(f"unset{index}", BUCKET, False, urls_expire_in=value)
+                         for index, value in enumerate(("abc", 0, -5))]
     opts.shortlinked = _make_manager("shortlinked", BUCKET, False, urls_expire_in=300)
     fm = FileManager.objects.get(pk=opts.shortlinked)
     fm.set_setting("use_shortlinks", True)
@@ -251,6 +259,40 @@ def test_shortlink_resolve_uses_shorter_lifetime(opts):
     destination = link.resolve()
     after = time.time()
     _assert_within(destination, before, after, 300, "shortlink resolve")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN lifetime: urls_expire_in above 7 days cannot lengthen the default CDN lifetime")
+def test_urls_expire_in_cannot_lengthen_default(opts):
+    for pk, label in ((opts.urls30d, "own urls_expire_in=30 d"),
+                      (opts.child30d, "inherited urls_expire_in=30 d")):
+        fm = _manager(pk)
+        f = _file(fm, opts.superuser)
+        before = time.time()
+        direct = f.get_direct_download_url()
+        graphed = f.to_dict(graph="default")["url"]
+        after = time.time()
+        _assert_within(direct, before, after, 7 * DAY, f"{label}, direct")
+        _assert_within(graphed, before, after, 7 * DAY, f"{label}, default graph")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN lifetime: a fractional urls_expire_in is floored, an unusable one counts as unset")
+def test_fractional_and_unusable_values(opts):
+    for pk, label in ((opts.frac_num, "300.5"), (opts.frac_text, '"300.5"')):
+        fm = _manager(pk)
+        f = _file(fm, opts.superuser)
+        before = time.time()
+        url = f.get_direct_download_url()
+        after = time.time()
+        _assert_within(url, before, after, 300, f"urls_expire_in={label}")
+    for pk, label in zip(opts.unset_values, ('"abc"', "0", "-5")):
+        fm = _manager(pk)
+        f = _file(fm, opts.superuser)
+        before = time.time()
+        url = f.get_direct_download_url()
+        after = time.time()
+        _assert_within(url, before, after, 7 * DAY, f"urls_expire_in={label} counts as unset")
 
 
 # ----------------------------------------------------------------------
