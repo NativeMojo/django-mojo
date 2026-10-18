@@ -1,7 +1,7 @@
 # LLM Helper — Django Developer Reference
 
-Provider-neutral LLM facade with Anthropic and a text-only AWS Bedrock Nova 2
-Lite adapter. Production requests use the mandatory
+Provider-neutral LLM facade with Anthropic and an AWS Bedrock Nova 2 Lite
+adapter (text, plus validated image input on an image route). Production requests use the mandatory
 [LLM safety boundary](../security/llm_safety.md).
 
 ```python
@@ -138,7 +138,10 @@ reasoning.
 Messages have exactly `role` (`user` or `assistant`) and `content`; content is
 a nonblank string or a nonempty list of `{"type": "text", "text": "..."}`
 blocks with nonblank text.
-System content accepts the same text forms. Tools, images, streaming,
+On a route that admits `images`, a user message may also carry image blocks
+from `llm.image_block()`; see
+[Image input](../security/llm_safety.md#image-input).
+System content accepts the same text forms. Tools, streaming,
 arbitrary model fields, and explicit cache controls are unsupported. The
 adapter sends no Bedrock guardrail configuration or application content filter.
 

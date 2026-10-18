@@ -5,7 +5,8 @@ fail-closed boundary before network I/O. `mojo.helpers.llm.call()` and `ask()`
 remain the public facade. Anthropic credentials, SDK calls, bounded one-page
 model discovery, prompt-cache arguments, response conversion, and provider
 error reduction live in the Anthropic adapter. A deliberately configured AWS
-Bedrock route supports bounded Nova 2 Lite text reasoning. Neither adapter
+Bedrock route supports bounded Nova 2 Lite text reasoning and, when the route
+admits `images`, validated image input. Neither adapter
 provides automatic provider or credential failover.
 
 ## Complete policy example
@@ -150,7 +151,8 @@ LLM_SAFETY_POLICY["features"]["my_maestro_reasoning"] = {
 ```
 
 Bedrock requires exactly these six route keys, `credential="aws"`, and
-`capabilities=["text"]`. Allowed models are exactly
+`capabilities` of exactly `["text"]` or, to admit image input, `text` plus
+`images` in either order (see [Image input](#image-input)). Allowed models are exactly
 `us.amazon.nova-2-lite-v1:0`, `eu.amazon.nova-2-lite-v1:0`,
 `jp.amazon.nova-2-lite-v1:0`, and `global.amazon.nova-2-lite-v1:0`.
 `reasoning_efforts` must be a nonempty, unique list drawn from `off`, `low`,
@@ -184,11 +186,58 @@ role credentials does not reset budgets or the circuit. The two Anthropic key
 settings are never read to resolve a Bedrock credential.
 
 See [the call and response contract](../helpers/llm.md#bedrock-reasoning).
-The adapter supports text only, suppresses reasoning content from the final
+The adapter accepts text, plus image blocks in user messages on an image
+route, returns text only, suppresses reasoning content from the final
 answer, and retains billed reasoning within `usage.output_tokens`. It sends
 no explicit cache controls, guardrail configuration, or application content
 filter. Anthropic tool routes, key probes, and model discovery retain their
 existing contracts.
+
+## Image input
+
+A caller passes an image as validated bytes, never a URL. Build the block with
+the facade helper and send it in a user message:
+
+```python
+from mojo.helpers import llm
+
+block = llm.image_block(png_bytes, "image/png")  # raises llm.ImageInputError
+response = llm.call(
+    [{"role": "user", "content": [block, {"type": "text", "text": "Describe this screenshot."}]}],
+    feature="my_maestro_reasoning", operation="screenshot_describe",
+    context={"operation_id": operation_id}, max_tokens=1024)
+```
+
+The block is `{"type": "image", "source": {"type": "base64", "media_type": ...,
+"data": ...}}`, the same shape the Anthropic adapter takes. To admit it on a
+Bedrock route, set `"capabilities": ["text", "images"]`. That changes the policy
+hash, so update `LLM_SAFETY_POLICY_EXPECTED_HASH` with it; an existing
+`["text"]` policy parses and hashes exactly as before.
+
+Before any byte cap, permit, ledger row or adapter, the guard checks every image
+in the request, for any provider:
+
+- Media types are `image/png`, `image/jpeg`, `image/gif` and `image/webp`. The
+  data must be strict base64, and its magic bytes and parsed header must match
+  the media type. Only the header is parsed; pixels are not decoded here.
+- At most 5 images, 5 MiB each (raw) and 20 MiB in total, each side at most
+  8000 px. These are framework constants in `mojo.helpers.llm_images`.
+- Images belong only as top-level blocks of a user message. An image in an
+  assistant message, `system`, a tool definition or nested inside another
+  block is refused.
+- A route without `images` refuses an image with `capability_unsupported`. A
+  malformed, mismatched or misplaced image is `image_invalid`; one over a count,
+  size or side limit is `input_too_large`.
+
+The operator's `max_input_bytes` still bounds the request text: image data is
+blanked when the guard sizes the request, and each image adds 1600 tokens to
+the permit reservation. Actual billed usage reconciles the permit as for text.
+Nova bills a flat 230 input tokens per image, included in `input_tokens`.
+GIF and WebP animations are accepted; Nova reads the first frame.
+
+Nothing fetches an image from a URL or storage, and no log line carries image
+data. A caller may say it inspected an image only after `call` returns; every
+refusal is raised before dispatch or recorded on the ledger as failed.
 
 ## Policy agreement and rollout
 
@@ -368,6 +417,7 @@ provider rate-limit response. Stable codes are:
   `emergency_stopped`, `control_state_unknown`, `credential_missing`,
   `provider_unsupported`, `capability_unsupported`, `model_mismatch`,
   `context_invalid`, `operation_invalid`, `triage_incomplete`.
+- Image input: `image_invalid`.
 - Limits/persistence: `input_too_large`, `output_too_large`, `loop_limit`,
   `budget_exhausted`, `concurrency_exhausted`, `permit_unavailable`,
   `ledger_unavailable`, `ledger_persistence_unknown`.
