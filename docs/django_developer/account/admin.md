@@ -80,8 +80,9 @@ portal-mojo 0.2.18 adds, over the previously packaged 0.2.8 build:
 - Storage → Media rendering keeps Save and Reset disabled until the current override is read.
 - The file-manager detail shows the manager's CDN status (not enabled, or its
   address, public or signed links, and deploying or ready). Storage managers
-  get Check CDN, Enable CDN… and Disable CDN… actions, each behind a confirm
-  that says what changes in AWS, with results shown as a findings list.
+  get Check CDN, Enable CDN… and Disable CDN… actions; Check CDN runs directly,
+  while Enable and Disable require a confirm that says what changes in AWS.
+  Results show as a findings list.
 - Member admission and member-detail saves are fenced to their owner: an
   account or active-group change ends the operation, and a late result cannot
   reach a later account's cache or notices.
