@@ -18,6 +18,11 @@ New in this build:
   requires system-level permissions to manage members and shows no role presets.
 - **Storage → Media rendering** for rendition settings.
 - Storage → Media rendering keeps Save and Reset disabled until the current override is read.
+- The file-manager detail shows CDN status, and storage managers get Check CDN,
+  Enable CDN… and Disable CDN… actions, each behind a confirm, with results
+  shown as a findings list.
+- Member admission and member-detail saves are fenced to their owner: switching
+  account or active group ends the operation, and its late result is dropped.
 
 Added in the earlier 0.2.8 build:
 
