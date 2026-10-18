@@ -16,14 +16,14 @@ Compiled assets use a relative base; Portal API requests always use same-origin
 
 ## Pinned identity and offline replacement
 
-The current artifact is portal-mojo **0.2.16**, source revision
-`949e6aabc452a437e07e465aab8738db23a6e17c` (the `v0.2.16` tag on GitHub),
+The current artifact is portal-mojo **0.2.18**, source revision
+`60c2f40c2b9c8f79bad328c4897bb10bea4b9979` (the `v0.2.18` tag on GitHub),
 built clean with Node **24.21.0** / npm **11.19.0** and lockfile SHA-256
-`c8f07c485d2e45d7b689a03a8cea214be144f6089b6133b04d9241cac7250cf8`.
+`291fc4f7bd7f55a38e264847650d38c08cb229b18e685e792c606b1c4118351a`.
 Its 127-file inventory includes the Vite manifest and lazy chunks.
 The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 
-`b8786967302bfe27c4cca986b9a565fb81879e27bc753ad310b56b058fbc35ab`
+`2ef2bf81d681cdb0ab2b94197a1f6b33391b4bc0f7dc39349287282f331a1b58`
 
 This pin comes from a clean local canonical build of the released tag, so the
 sidebar version and the npm release agree. portal-mojo promises identical bytes
@@ -37,7 +37,7 @@ Stop processes serving/importing the checkout before replacing the artifact:
 ```bash
 uv run python scripts/vendor_admin_portal.py \
   --source /absolute/path/to/verified/dist/admin \
-  --expected-manifest-sha256 b8786967302bfe27c4cca986b9a565fb81879e27bc753ad310b56b058fbc35ab
+  --expected-manifest-sha256 2ef2bf81d681cdb0ab2b94197a1f6b33391b4bc0f7dc39349287282f331a1b58
 uv run python scripts/vendor_admin_portal.py --check
 ```
 
@@ -64,7 +64,7 @@ startup and delivers only its validated allowlist. Provenance and
 
 ## Included Portal behavior
 
-portal-mojo 0.2.16 adds, over the previously packaged 0.2.8 build:
+portal-mojo 0.2.18 adds, over the previously packaged 0.2.8 build:
 
 - **Users → Sys Perms** lists every system permission a user holds, including
   keys outside the built-in catalog, and can grant or remove such custom keys.
@@ -73,8 +73,11 @@ portal-mojo 0.2.16 adds, over the previously packaged 0.2.8 build:
   replace or clear it.
 - Detail-modal overview cards (users, groups, members, devices, GeoIP) are
   compact single-line KPIs.
-- Members: group-local write gates and invite role presets.
+- Members: the member panels export group-local write gates and invite role
+  presets for a product's own tenant composition. They are opt-in APIs: the
+  packaged Admin keeps its system-level member gates and offers no role presets.
 - **Storage → Media rendering** edits rendition settings.
+- Storage → Media rendering keeps Save and Reset disabled until the current override is read.
 - Charts handle sparse timestamp histories and long or formatted axis labels.
 - Session, realtime and active-group handling survive transient token-refresh
   and read failures instead of signing out or dropping the group.

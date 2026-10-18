@@ -1,10 +1,10 @@
 # Packaged Admin Security client
 
-The packaged Portal is **portal-mojo 0.2.16**, source revision
-`949e6aabc452a437e07e465aab8738db23a6e17c` (the `v0.2.16` tag).
+The packaged Portal is **portal-mojo 0.2.18**, source revision
+`60c2f40c2b9c8f79bad328c4897bb10bea4b9979` (the `v0.2.18` tag).
 
-- Manifest SHA-256: `b8786967302bfe27c4cca986b9a565fb81879e27bc753ad310b56b058fbc35ab`
-- Lockfile SHA-256: `c8f07c485d2e45d7b689a03a8cea214be144f6089b6133b04d9241cac7250cf8`
+- Manifest SHA-256: `2ef2bf81d681cdb0ab2b94197a1f6b33391b4bc0f7dc39349287282f331a1b58`
+- Lockfile SHA-256: `291fc4f7bd7f55a38e264847650d38c08cb229b18e685e792c606b1c4118351a`
 - Inventory: 127 files
 
 New in this build:
@@ -13,8 +13,11 @@ New in this build:
   custom keys outside the catalog, and can grant or remove them.
 - Clicking the user avatar replaces or clears it.
 - Compact overview cards in the user, group, member, device and GeoIP modals.
-- Members: group-local write gates and invite role presets.
+- Members: group-local write gates and invite role presets are available to
+  products that compose the member panels themselves. The packaged Admin still
+  requires system-level permissions to manage members and shows no role presets.
 - **Storage → Media rendering** for rendition settings.
+- Storage → Media rendering keeps Save and Reset disabled until the current override is read.
 
 Added in the earlier 0.2.8 build:
 
