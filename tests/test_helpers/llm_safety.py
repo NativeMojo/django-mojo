@@ -88,6 +88,38 @@ def test_bedrock_policy_rejects_unapproved_routes(opts):
 
 
 @th.django_unit_test()
+def test_bedrock_route_may_admit_images_explicitly(opts):
+    from mojo.apps.account.services import llm_safety
+
+    text_only = llm_safety.parse_policy(_bedrock_policy())
+    hashes = set()
+    for capabilities in (["text", "images"], ["images", "text"]):
+        raw = _bedrock_policy()
+        raw["routes"]["unattributed"]["capabilities"] = capabilities
+        parsed = llm_safety.parse_policy(raw)
+        assert parsed["routes"]["unattributed"]["capabilities"] == capabilities, \
+            f"an explicit Bedrock image route must parse unchanged, got {parsed['routes']}"
+        assert parsed["hash"] != text_only["hash"], \
+            "admitting images must change the policy hash so the operator re-agrees"
+        hashes.add(parsed["hash"])
+    assert len(hashes) == 2, "capability order is part of the exact policy text"
+    assert llm_safety.parse_policy(_bedrock_policy())["hash"] == text_only["hash"], \
+        "an existing text-only Bedrock policy must hash exactly as before"
+    for capabilities in (["text", "tools"], ["images"], ["text", "images", "images"],
+                         ["text", "images", "tools"], ["text", "images", "prompt_cache"]):
+        raw = _bedrock_policy()
+        raw["routes"]["unattributed"]["capabilities"] = capabilities
+        try:
+            llm_safety.parse_policy(raw)
+            assert False, f"Bedrock accepted capabilities {capabilities}"
+        except llm_safety.LLMSafetyError as err:
+            assert err.code == "policy_invalid", \
+                f"Bedrock capabilities {capabilities} must be policy_invalid, got {err.code}"
+    assert "image_invalid" in llm_safety.SAFE_CODES, \
+        "image_invalid must cross the guard as a stable safe code"
+
+
+@th.django_unit_test()
 def test_provider_route_shapes_remain_exact(opts):
     from mojo.apps.account.services import llm_safety
 

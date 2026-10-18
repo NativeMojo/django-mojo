@@ -826,3 +826,132 @@ def test_malformed_emergency_controls_fail_closed_before_provider(opts):
             "malformed database stop reached a provider adapter"
     finally:
         Setting.objects.filter(key="LLM_EMERGENCY_STOP", group=None).delete()
+
+
+def _image_policy():
+    raw = _guard_policy()
+    raw["routes"]["assistant"]["capabilities"] = ["text", "images"]
+    return raw
+
+
+def _png(size=(4, 3), noise=False):
+    import io
+    import os
+    from PIL import Image
+
+    out = io.BytesIO()
+    if noise:
+        image = Image.frombytes("RGB", size, os.urandom(size[0] * size[1] * 3))
+    else:
+        image = Image.new("RGB", size, (30, 160, 90))
+    image.save(out, format="PNG")
+    return out.getvalue()
+
+
+def _image_messages(raw, count=1):
+    from mojo.helpers.llm_images import image_block
+
+    block = image_block(raw, "image/png")
+    return [{"role": "user", "content": [block] * count + [
+        {"type": "text", "text": "Describe this screenshot."}]}]
+
+
+@th.django_unit_test()
+def test_text_only_route_refuses_images_before_adapter_or_ledger(opts):
+    from mojo.apps.account.models import LLMRequest
+
+    with _guard_case() as case:
+        factory = mock.Mock(side_effect=AssertionError("an image reached a text-only adapter"))
+        _assert_denied("capability_unsupported", lambda: _run_guard(
+            case, factory, messages=_image_messages(_png())))
+        assert factory.call_count == 0 and not LLMRequest.objects.filter(
+            operation=case["marker"]).exists(), \
+            "a text-only route must refuse an image before any adapter or ledger row"
+
+
+@th.django_unit_test()
+def test_image_route_dispatches_bytes_and_records_exact_usage(opts):
+    import json
+    from mojo.apps.account.models import LLMRequest
+    from mojo.helpers.llm_images import IMAGE_RESERVED_TOKENS
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    raw = _png(size=(64, 64), noise=True)
+    messages = _image_messages(raw, count=2)
+    assert len(json.dumps(messages)) > 4096, \
+        "fixture must exceed the policy byte cap so blanked sizing is exercised"
+    with _guard_case(_image_policy()) as case:
+        client = mock.Mock()
+        client.converse.return_value = _bedrock_reply()
+        reserved = []
+
+        def client_factory(service, **kwargs):
+            row = LLMRequest.objects.get(operation=case["marker"])
+            reserved.append(row.reserved_tokens)
+            return client
+
+        factory = lambda name, **kwargs: BedrockProvider(client_factory=client_factory, **kwargs)
+        response = _run_guard(case, factory, messages=messages)
+        sizing = json.loads(json.dumps(messages))
+        for block in sizing[0]["content"][:2]:
+            block["source"]["data"] = ""
+        expected = len(json.dumps(
+            {"messages": sizing, "system": None, "tools": None},
+            separators=(",", ":")).encode("utf-8")) + 8 + 2 * IMAGE_RESERVED_TOKENS
+        assert reserved == [expected], \
+            f"the permit must reserve blanked bytes + max_tokens + {IMAGE_RESERVED_TOKENS} per image, got {reserved} vs {expected}"
+        wire = client.converse.call_args.kwargs["messages"][0]["content"]
+        assert wire[:2] == [{"image": {"format": "png", "source": {"bytes": raw}}}] * 2 \
+            and wire[2] == {"text": "Describe this screenshot."}, \
+            "both images must reach Converse as validated raw bytes, then the text"
+        row = LLMRequest.objects.get(operation=case["marker"])
+        assert response["provider"] == "bedrock" and row.status == "succeeded" \
+            and (row.input_tokens, row.output_tokens, row.cache_read_input_tokens,
+                 row.cache_creation_input_tokens) == (7, 3, 2, 1), \
+            f"an image call must keep the exact succeeded ledger usage, got {row.status}"
+        _assert_budget_total(case, 13)
+
+
+@th.django_unit_test()
+def test_image_provider_failure_keeps_returned_usage(opts):
+    from mojo.apps.account.models import LLMRequest
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    with _guard_case(_image_policy()) as case:
+        client = mock.Mock()
+        client.converse.return_value = _bedrock_reply(stop="content_filtered")
+        factory = lambda name, **kwargs: BedrockProvider(client=client, **kwargs)
+        _assert_denied("provider_rejected", lambda: _run_guard(
+            case, factory, messages=_image_messages(_png())))
+        row = LLMRequest.objects.get(operation=case["marker"])
+        assert row.status == "failed" and row.error_code == "provider_rejected" \
+            and (row.input_tokens, row.output_tokens) == (7, 3), \
+            f"a billed image failure must keep its usage on the failed ledger, got {row.status}"
+        _assert_budget_total(case, 13)
+
+
+@th.django_unit_test()
+def test_invalid_images_deny_before_adapter_or_ledger(opts):
+    from mojo.apps.account.models import LLMRequest
+    from mojo.helpers.llm_images import MAX_IMAGES
+
+    raw = _png()
+    forged = _image_messages(raw)
+    forged[0]["content"][0]["source"]["media_type"] = "image/jpeg"
+    misplaced = [{"role": "assistant", "content": _image_messages(raw)[0]["content"]},
+                 {"role": "user", "content": "And now?"}]
+    with _guard_case(_image_policy()) as case:
+        factory = mock.Mock(side_effect=AssertionError("an invalid image reached the adapter"))
+        cases = [
+            ("image_invalid", {"messages": forged}),
+            ("image_invalid", {"messages": misplaced}),
+            ("image_invalid", {"messages": [{"role": "user", "content": [
+                {"type": "image", "source": "unsupported"}]}]}),
+            ("image_invalid", {"system": _image_messages(raw)[0]["content"][:1]}),
+            ("input_too_large", {"messages": _image_messages(raw, count=MAX_IMAGES + 1)}),
+        ]
+        for code, arguments in cases:
+            _assert_denied(code, lambda: _run_guard(case, factory, **arguments))
+        assert factory.call_count == 0 and not LLMRequest.objects.filter(
+            operation=case["marker"]).exists(), \
+            "image refusals must happen before any adapter or ledger row"

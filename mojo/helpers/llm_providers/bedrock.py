@@ -1,4 +1,4 @@
-"""Bounded Nova 2 Lite text calls through AWS Bedrock Converse."""
+"""Bounded Nova 2 Lite text and image calls through AWS Bedrock Converse."""
 
 import math
 import re
@@ -33,13 +33,21 @@ def _usage(response):
     })
 
 
-def _text_blocks(content):
+def _content_blocks(content, allow_images=False):
     if isinstance(content, str):
         content = [{"type": "text", "text": content}]
     if not isinstance(content, list) or not content:
         raise ProviderError("provider_rejected")
     result = []
     for block in content:
+        if allow_images and isinstance(block, dict) and block.get("type") == "image":
+            from mojo.helpers.llm_images import ImageInputError, decode_image_block
+            try:
+                fmt, raw = decode_image_block(block)
+            except ImageInputError:
+                raise ProviderError("provider_rejected") from None
+            result.append({"image": {"format": fmt, "source": {"bytes": raw}}})
+            continue
         if not isinstance(block, dict) or set(block) != {"type", "text"} \
                 or block.get("type") != "text" \
                 or not isinstance(block.get("text"), str) or not block["text"].strip():
@@ -50,7 +58,7 @@ def _text_blocks(content):
 
 class BedrockProvider(ProviderAdapter):
     name = "bedrock"
-    capabilities = frozenset({"text"})
+    capabilities = frozenset({"text", "images"})
 
     def __init__(self, region=None, client=None, client_factory=None):
         # Construction precedes guard admission; credentials and SDK clients
@@ -147,11 +155,13 @@ class BedrockProvider(ProviderAdapter):
                     or message.get("role") not in ("user", "assistant"):
                 raise ProviderError("provider_rejected")
             translated.append({"role": message["role"],
-                               "content": _text_blocks(message["content"])})
+                               "content": _content_blocks(
+                                   message["content"],
+                                   allow_images=message["role"] == "user")})
         request = {"modelId": model, "messages": translated,
                    "inferenceConfig": {"maxTokens": max_tokens}}
         if system is not None and system != "":
-            request["system"] = _text_blocks(system)
+            request["system"] = _content_blocks(system)
         if reasoning_effort != "off":
             request["additionalModelRequestFields"] = {"reasoningConfig": {
                 "type": "enabled", "maxReasoningEffort": reasoning_effort}}

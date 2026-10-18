@@ -42,7 +42,7 @@ SAFE_CODES = frozenset({
     "breaker_half_open", "breaker_open", "budget_exhausted",
     "capability_unsupported", "concurrency_exhausted", "context_invalid",
     "control_state_unknown", "credential_missing", "emergency_stopped",
-    "input_too_large", "ledger_persistence_unknown", "ledger_unavailable",
+    "image_invalid", "input_too_large", "ledger_persistence_unknown", "ledger_unavailable",
     "loop_limit", "model_mismatch", "operation_invalid", "output_too_large",
     "permit_unavailable", "policy_invalid", "policy_mixed",
     "provider_authentication", "provider_billing_exhausted", "provider_failed",
@@ -184,7 +184,8 @@ def parse_policy(raw=None):
             _deny("policy_invalid")
         if provider == "bedrock":
             efforts = route["reasoning_efforts"]
-            if route["credential"] != "aws" or capabilities != ["text"] \
+            if route["credential"] != "aws" \
+                    or set(capabilities) not in ({"text"}, {"text", "images"}) \
                     or route["model"] not in BEDROCK_MODELS \
                     or not isinstance(route["region"], str) \
                     or not AWS_REGION_PATTERN.fullmatch(route["region"]) \
@@ -578,8 +579,22 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
             _deny("capability_unsupported")
         context = context or {}
         scalar_context = _context_fields(context)
+        image_count = 0
+        sized_messages = messages
+        if _contains_image(messages) or _contains_image(system) \
+                or _contains_image(tools):
+            if "images" not in route["capabilities"]:
+                _deny("capability_unsupported")
+            from mojo.helpers.llm_images import ImageInputError, collect_images
+            try:
+                image_count, sized_messages = collect_images(
+                    messages, system=system, tools=tools)
+            except ImageInputError as err:
+                _deny(err.code)
+        # Image data is bounded by llm_images constants; the operator's byte
+        # cap and the token reservation size the request with it blanked.
         serialized = json.dumps(
-            {"messages": messages, "system": system, "tools": tools},
+            {"messages": sized_messages, "system": system, "tools": tools},
             separators=(",", ":"), default=str).encode("utf-8")
         max_input = min(policy["shared"]["max_input_bytes"], limits["max_input_bytes"])
         if len(serialized) > max_input:
@@ -616,6 +631,9 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         generation, breaker_owner = _breaker_lease(
             provider_name, fingerprint, policy)
         reserved_tokens = len(serialized) + max_tokens
+        if image_count:
+            from mojo.helpers.llm_images import IMAGE_RESERVED_TOKENS
+            reserved_tokens += image_count * IMAGE_RESERVED_TOKENS
         permit = acquire_permit(
             redis, provider_name, fingerprint, feature, policy["shared"],
             limits, reserved_tokens)

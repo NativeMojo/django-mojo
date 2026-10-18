@@ -16,6 +16,12 @@ Usage:
     response = llm.call(
         messages, system="You are...", tools=[...], feature="assistant")
 
+    # Image input: validated bytes become a canonical block (no URL fetch)
+    block = llm.image_block(png_bytes, "image/png")  # raises llm.ImageInputError
+    response = llm.call(
+        [{"role": "user", "content": [block, {"type": "text", "text": "Describe it."}]}],
+        feature="assistant")
+
     # API key helpers
     key = llm.get_api_key()
     ok, error = llm.verify_api_key()
@@ -33,6 +39,8 @@ import time
 import warnings
 
 from mojo.helpers import logit
+from mojo.helpers.llm_images import ImageInputError as ImageInputError
+from mojo.helpers.llm_images import image_block as image_block
 from mojo.helpers.settings import settings
 
 logger = logit.get_logger(__name__, "llm.log")

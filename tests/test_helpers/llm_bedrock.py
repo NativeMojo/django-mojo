@@ -86,8 +86,8 @@ def test_registry_adds_bedrock_without_constructing_any_sdk(opts):
         and anthropic.api_key == "test-only-placeholder" and anthropic.client is None, \
         "the Anthropic constructor contract must remain unchanged and lazy"
     assert get_provider("unknown") is None, "unknown provider names must remain unsupported"
-    assert bedrock.capabilities == frozenset({"text"}), \
-        f"initial Bedrock adapter must advertise only text, got {bedrock.capabilities}"
+    assert bedrock.capabilities == frozenset({"text", "images"}), \
+        f"the Bedrock adapter must advertise text and images only, got {bedrock.capabilities}"
 
 
 @th.django_unit_test()
@@ -333,3 +333,93 @@ def test_sdk_errors_are_safe_bounded_and_never_use_guard_refusal_codes(opts):
             assert str(err) == code and "secret" not in str(err) and err.usage is None, \
                 f"SDK error leaked raw text or invented billing evidence: {err}"
             assert len(client.calls) == 1, "one accounted adapter call must make no hidden retry"
+
+
+def _png():
+    import io
+    from PIL import Image
+
+    out = io.BytesIO()
+    Image.new("RGB", (4, 3), (10, 120, 200)).save(out, format="PNG")
+    return out.getvalue()
+
+
+@th.django_unit_test()
+def test_image_blocks_become_converse_bytes(opts):
+    from mojo.helpers.llm_images import image_block
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    raw = _png()
+    client = _Client()
+    messages = [{"role": "user", "content": [
+        image_block(raw, "image/png"), {"type": "text", "text": "Describe this screenshot."}]}]
+    result = BedrockProvider(client=client).call(messages, MODEL, 32)
+    sent = client.calls[0]["messages"]
+    assert sent == [{"role": "user", "content": [
+        {"image": {"format": "png", "source": {"bytes": raw}}},
+        {"text": "Describe this screenshot."}]}], \
+        "an image block must reach Converse as raw bytes in an ImageBlock, then the text"
+    assert result["content"] == [{"type": "text", "text": "Final answer"}], \
+        f"image requests must normalize text output as before, got {result['content']}"
+
+
+@th.django_unit_test()
+def test_text_only_requests_are_unchanged_by_image_support(opts):
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    client = _Client()
+    BedrockProvider(client=client).call(
+        [{"role": "user", "content": "Hello"},
+         {"role": "assistant", "content": [{"type": "text", "text": "Hi"}]},
+         {"role": "user", "content": "Again"}],
+        MODEL, 32, system="Be brief")
+    assert client.calls == [{
+        "modelId": MODEL,
+        "messages": [{"role": "user", "content": [{"text": "Hello"}]},
+                     {"role": "assistant", "content": [{"text": "Hi"}]},
+                     {"role": "user", "content": [{"text": "Again"}]}],
+        "inferenceConfig": {"maxTokens": 32},
+        "system": [{"text": "Be brief"}]}], \
+        f"text-only Converse requests must be byte-identical, got {client.calls}"
+
+
+@th.django_unit_test()
+def test_invalid_or_misplaced_images_never_reach_converse(opts):
+    import base64
+    from mojo.helpers.llm_images import image_block
+
+    block = image_block(_png(), "image/png")
+    forged = {"type": "image", "source": {
+        "type": "base64", "media_type": "image/jpeg",
+        "data": block["source"]["data"]}}
+    secret = base64.b64encode(b"\x89PNG\r\n\x1a\nPRIVATE").decode("ascii")
+    broken = {"type": "image", "source": dict(block["source"], data=secret)}
+    cases = [
+        {"messages": [{"role": "user", "content": [forged]}]},
+        {"messages": [{"role": "user", "content": [broken]}]},
+        {"messages": [{"role": "assistant", "content": [block]}]},
+        {"system": [block]},
+    ]
+    for kwargs in cases:
+        client = _Client()
+        err = _call_rejected(client, **kwargs)
+        assert client.calls == [], f"an invalid image reached Converse: {list(kwargs)}"
+        assert secret not in f"{err!r} {err}" and "PRIVATE" not in f"{err!r} {err}", \
+            "a rejected image must not be echoed in the provider error"
+
+
+@th.django_unit_test()
+def test_image_requests_use_the_route_region(opts):
+    from mojo.helpers.llm_images import image_block
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    clients = []
+
+    def factory(service, **kwargs):
+        clients.append((service, kwargs["region"]))
+        return _Client()
+
+    messages = [{"role": "user", "content": [image_block(_png(), "image/png")]}]
+    BedrockProvider(region="eu-west-1", client_factory=factory).call(messages, MODEL, 32)
+    assert clients == [("bedrock-runtime", "eu-west-1")], \
+        f"an image request must use only the route's region, got {clients}"
