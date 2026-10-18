@@ -955,3 +955,35 @@ def test_invalid_images_deny_before_adapter_or_ledger(opts):
         assert factory.call_count == 0 and not LLMRequest.objects.filter(
             operation=case["marker"]).exists(), \
             "image refusals must happen before any adapter or ledger row"
+
+
+@th.django_unit_test()
+def test_anthropic_image_route_validates_before_adapter_and_passes_base64(opts):
+    from mojo.apps.account.models import LLMRequest
+
+    raw = _guard_policy("anthropic")
+    raw["routes"]["assistant"]["capabilities"] = ["text", "images", "prompt_cache"]
+    with _guard_case(raw) as case:
+        adapter = mock.Mock()
+        adapter.supports.return_value = True
+        adapter.call.return_value = {
+            "id": "anthropic-image-request", "provider": "anthropic",
+            "content": [{"type": "text", "text": "a red square"}],
+            "usage": {"input_tokens": 5, "output_tokens": 2}}
+        factory = mock.Mock(return_value=adapter)
+        forged = _image_messages(_png())
+        forged[0]["content"][0]["source"]["media_type"] = "image/webp"
+        _assert_denied("image_invalid", lambda: _run_guard(case, factory, messages=forged))
+        assert factory.call_count == 0 and adapter.call.call_count == 0 \
+            and not LLMRequest.objects.filter(operation=case["marker"]).exists(), \
+            "an invalid Anthropic image must be refused before the adapter or the ledger"
+
+        messages = _image_messages(_png())
+        expected = __import__("copy").deepcopy(messages)
+        _run_guard(case, factory, messages=messages)
+        sent = adapter.call.call_args.kwargs["messages"]
+        assert sent == expected and sent[0]["content"][0]["source"]["type"] == "base64", \
+            "a valid image must reach the Anthropic adapter unchanged, as its base64 block"
+        row = LLMRequest.objects.get(operation=case["marker"])
+        assert row.status == "succeeded", \
+            f"a valid Anthropic image call must record a succeeded ledger, got {row.status}"

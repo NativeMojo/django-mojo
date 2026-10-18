@@ -169,3 +169,21 @@ def test_errors_never_carry_image_data(opts):
     text = f"{err!r} {err} {err.args}"
     assert data not in text and "PRIVATE" not in text, \
         "an image refusal must carry only its safe code, never the data"
+
+
+@th.django_unit_test()
+def test_decompression_bomb_header_is_input_too_large(opts):
+    import struct
+    import zlib
+    from mojo.helpers.llm_images import image_block
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(
+            ">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    # Header-only PNG declaring 20000 x 20000; no pixels are allocated.
+    raw = b"\x89PNG\r\n\x1a\n" + chunk(
+        b"IHDR", struct.pack(">IIBBBBB", 20000, 20000, 8, 2, 0, 0, 0)) \
+        + chunk(b"IDAT", b"") + chunk(b"IEND", b"")
+    assert len(raw) < 100, "the bomb fixture must stay a tiny header-only file"
+    _refused("input_too_large", lambda: image_block(raw, "image/png"))

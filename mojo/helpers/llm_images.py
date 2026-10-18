@@ -54,6 +54,8 @@ def _check_image(fmt, raw):
             with Image.open(io.BytesIO(raw), formats=[expected]) as image:
                 actual = image.format
                 width, height = image.size
+    except Image.DecompressionBombError:
+        raise ImageInputError("input_too_large") from None
     except Exception:
         raise ImageInputError("image_invalid") from None
     if actual != expected or width <= 0 or height <= 0:
