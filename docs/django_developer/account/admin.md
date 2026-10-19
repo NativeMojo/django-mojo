@@ -17,18 +17,20 @@ Compiled assets use a relative base; Portal API requests always use same-origin
 ## Pinned identity and offline replacement
 
 The current artifact is portal-mojo **0.2.18**, source revision
-`60c2f40c2b9c8f79bad328c4897bb10bea4b9979` (the `v0.2.18` tag on GitHub),
+`9aee005308d3b6f220dfa78493f1df4ae4b30fd8`,
 built clean with Node **24.21.0** / npm **11.19.0** and lockfile SHA-256
 `291fc4f7bd7f55a38e264847650d38c08cb229b18e685e792c606b1c4118351a`.
-Its 127-file inventory includes the Vite manifest and lazy chunks.
+Its 128-file inventory includes the Vite manifest and lazy chunks.
 The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 
-`2ef2bf81d681cdb0ab2b94197a1f6b33391b4bc0f7dc39349287282f331a1b58`
+`ee17a868e91f6ff4b885ee36cafd78d62d6d717a5667149a8344e9704acf0895`
 
-This pin comes from a clean local canonical build of the released tag, so the
-sidebar version and the npm release agree. portal-mojo promises identical bytes
-on one platform only, so a CI build of the same revision may carry a different
-hash; tell two bundles apart by source revision and manifest SHA-256.
+This pin comes from a clean canonical build verified against the artifact from
+[Portal CI run 39336711554](https://github.com/NativeMojo/portal-mojo/actions/runs/39336711554).
+It includes Assistant Setup changes after the `v0.2.18` tag; the source revision
+and manifest digest identify this bundle, while the sidebar still shows 0.2.18.
+portal-mojo promises identical bytes on one platform only, so another platform's
+build of the same revision may carry a different hash.
 The complete artifact includes hidden `.vite` content; verify the manifest
 digest before vendoring it.
 
@@ -37,7 +39,7 @@ Stop processes serving/importing the checkout before replacing the artifact:
 ```bash
 uv run python scripts/vendor_admin_portal.py \
   --source /absolute/path/to/verified/dist/admin \
-  --expected-manifest-sha256 2ef2bf81d681cdb0ab2b94197a1f6b33391b4bc0f7dc39349287282f331a1b58
+  --expected-manifest-sha256 ee17a868e91f6ff4b885ee36cafd78d62d6d717a5667149a8344e9704acf0895
 uv run python scripts/vendor_admin_portal.py --check
 ```
 
@@ -63,6 +65,12 @@ startup and delivers only its validated allowlist. Provenance and
 `.vite/manifest.json` ship in the package but return HTTP 404.
 
 ## Included Portal behavior
+
+This canonical build adds **Assistant → Setup**, an owner-only page for the
+encrypted, write-only API key and Assistant enablement. It supports automatic
+latest compatible Sonnet selection or a manual model pin, and shows the exact
+resolved runtime model and catalogue freshness. Provider catalogue discovery
+stays on the backend; see the [Assistant setup API](admin_portal/assistant.md).
 
 portal-mojo 0.2.18 adds, over the previously packaged 0.2.8 build:
 

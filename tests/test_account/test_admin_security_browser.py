@@ -266,6 +266,13 @@ def test_admin_security_real_chrome(opts):
                     lazy = next(name for name in identity["allowlist"] if name.endswith(".js") and "index-" not in name)
                     assert cdp.evaluate(f"fetch({json.dumps(root_path + 'v2/' + lazy)}).then(r=>r.status)") == 200, "protected lazy chunk unavailable"
                     assert cdp.evaluate("fetch('admin-artifact.json').then(r=>r.status)") == 404, "provenance was deliverable"
+                    # Exercise the vendored Setup route against the real passive
+                    # backend read, without discovering models or touching keys.
+                    cdp.evaluate("location.hash='/assistant/setup';true")
+                    cdp.wait("!!document.querySelector('#assistant-replacement-key')", "Assistant Setup")
+                    runtime_model = cdp.evaluate("""fetch('/api/account/admin/assistant',{headers:{Authorization:'Bearer '+(sessionStorage.getItem('access_token')||localStorage.getItem('access_token'))}}).then(r=>r.json()).then(body=>body.data.model.effective||body.data.route.model||'Unavailable')""")
+                    assert cdp.evaluate("document.querySelector('.assistant-setup-facts code').textContent") == runtime_model, "Setup resolved model differs from the backend route"
+                    assert cdp.evaluate("document.querySelector('#assistant-replacement-key').type==='password' && document.querySelector('#assistant-replacement-key').value===''") is True, "Setup did not keep the replacement key empty and write-only"
                     before = len(_json(origin + "/__rider/state", time.monotonic() + 2))
                     deadline = time.monotonic() + 10
                     while time.monotonic() < deadline:

@@ -1,13 +1,23 @@
 # Packaged Admin Security client
 
 The packaged Portal is **portal-mojo 0.2.18**, source revision
-`60c2f40c2b9c8f79bad328c4897bb10bea4b9979` (the `v0.2.18` tag).
+`9aee005308d3b6f220dfa78493f1df4ae4b30fd8`, a clean canonical build verified
+against Portal CI run 39336711554. It includes changes after the `v0.2.18` tag;
+the source revision and manifest digest identify this exact bundle.
 
-- Manifest SHA-256: `2ef2bf81d681cdb0ab2b94197a1f6b33391b4bc0f7dc39349287282f331a1b58`
+- Manifest SHA-256: `ee17a868e91f6ff4b885ee36cafd78d62d6d717a5667149a8344e9704acf0895`
 - Lockfile SHA-256: `291fc4f7bd7f55a38e264847650d38c08cb229b18e685e792c606b1c4118351a`
-- Inventory: 127 files
+- Inventory: 128 files
 
 New in this build:
+
+- **Assistant → Setup** is an owner-only page for the encrypted, write-only API
+  key, enablement, automatic latest compatible Sonnet selection and manual model
+  pins. It shows the resolved runtime model and catalogue freshness, using the
+  [Assistant setup API](admin_portal/assistant.md); the browser never discovers provider models
+  directly.
+
+Included from the earlier 0.2.18 build:
 
 - **Users → Sys Perms** shows every system permission a user holds, including
   custom keys outside the catalog, and can grant or remove them.
