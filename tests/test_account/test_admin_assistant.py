@@ -319,8 +319,23 @@ def test_assistant_bundle_uses_exact_route_readiness(opts):
         "rendered and synchronized readiness do not both use the exact route"
     assert "state.enabled && state.key.configured" not in code, \
         "legacy key presence can still override route readiness"
-    assert "state.model.effective" not in code and "SOURCE_COPY" in code, \
-        "the bundle still renders a legacy effective model"
+    assert "SOURCE_COPY" in code, \
+        "credential source copy is no longer table-driven"
+    assert "Legacy picker pin" not in code, \
+        "the bundle still renders the legacy picker-pin copy"
+    # The effective model is the server's selection (#8757: the same selector
+    # the invocation snapshots). The bundle must render it as given, never
+    # rebuild it from the stored pin, which the pin input legitimately reads.
+    start = code.find("Effective model:")
+    assert start >= 0, "the bundle does not render the server's effective model"
+    end = code.find("saveModel", start)
+    assert end > start, "the effective model line is not followed by the model save control"
+    effective_line = code[start:end]
+    assert "state.model.effective" in effective_line, \
+        "the effective model line does not read the server's state.model.effective"
+    assert "state.model.selected" not in effective_line \
+        and "state.model.choices" not in effective_line, \
+        "the effective model line derives a model client-side instead of the server's selection"
     assert "fallback:" not in code, \
         "the exact credential display still advertises handler fallback"
     assert "state.route.provider" in code and "state.route.credential" in code \
