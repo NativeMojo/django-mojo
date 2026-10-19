@@ -1,6 +1,6 @@
 """
-#8648 — a nested User shows its account fields only to a viewer who could
-GET /api/user/<pk> for that user.
+#8648: a nested User shows its account privileges and sign-in settings only
+to a viewer who could GET /api/user/<pk> for that user.
 
 Before the fix GroupMember's `default` graph nested User `default` for every
 `view_members` holder, so a plain member read other members' `permissions`,
@@ -9,9 +9,10 @@ Before the fix GroupMember's `default` graph nested User `default` for every
 
 The rule now: the user themselves, a holder of the global `view_users`,
 `manage_users` or `users`, and a superuser get the nested User graph the
-parent names. Everyone else gets User's NESTED_VIEW_GRAPH (identity only),
-whatever graph the parent names (`default`, `basic`, ...). Filters, search
-and sort that cross into User follow the same rule.
+parent names. Everyone else gets that same graph minus User's
+NESTED_PRIVATE_FIELDS, whatever graph the parent names. Every other field,
+email and names included, is unchanged. Filters and search that cross into
+User's NESTED_PRIVATE_LOOKUPS follow the same rule.
 """
 import uuid as _uuid
 
@@ -27,13 +28,12 @@ VIEWER = f"{PREFIX}viewer@test.com"        # member-level view_members only
 ACCOUNT = f"{PREFIX}account@test.com"      # view_members + GLOBAL view_users
 MANAGER = f"{PREFIX}manager@test.com"      # member-level manage_group only
 MEMBER_VU = f"{PREFIX}member_vu@test.com"  # member-level view_members + view_users
+SUPER = f"{PREFIX}super@test.com"          # superuser, not a member
 DEVICES = f"{PREFIX}devices@test.com"      # GLOBAL view_devices only
 INVITEE = f"{PREFIX}invitee@test.com"      # invited by MANAGER
 
-# The identity graph with Ian's choices 1-5 applied (see the plan on #8648).
-IDENTITY_KEYS = {"id", "uuid", "username", "display_name", "is_active", "avatar"}
-NEVER_KEYS = {"permissions", "is_superuser", "requires_mfa",
-              "requires_password_change", "has_password", "has_passkey", "metadata"}
+PRIVATE_KEYS = {"permissions", "is_superuser", "requires_mfa",
+                "requires_password_change", "has_password", "has_passkey", "metadata"}
 
 
 def _login(opts, email):
@@ -74,18 +74,29 @@ def _list_members(opts, extra=""):
     return {row["user"]["id"]: row["user"] for row in resp.response.data}
 
 
-def _assert_identity(user_dict, who):
+def _graph_keys(user_id, graph):
+    """The keys User `graph` renders, with no request bound (unchanged output)."""
+    from mojo.apps.account.models import User
+    return set(User.objects.get(pk=user_id).to_dict(graph=graph).keys())
+
+
+def _assert_stripped(user_dict, who, graph="default"):
     keys = set(user_dict.keys())
-    leaked = keys & NEVER_KEYS
+    expected = _graph_keys(user_dict["id"], graph) - PRIVATE_KEYS
+    leaked = keys & PRIVATE_KEYS
     assert not leaked, f"{who}: the nested user must not carry {sorted(leaked)}, got keys {sorted(keys)}"
-    assert keys == IDENTITY_KEYS, \
-        f"{who}: the nested user must be exactly the identity graph {sorted(IDENTITY_KEYS)}, got {sorted(keys)}"
+    assert keys == expected, \
+        f"{who}: the nested user must be User {graph} minus the private keys; " \
+        f"missing {sorted(expected - keys)}, extra {sorted(keys - expected)}"
 
 
-def _assert_full(user_dict, who):
+def _assert_full(user_dict, who, graph="default"):
     keys = set(user_dict.keys())
-    missing = NEVER_KEYS - keys
-    assert not missing, f"{who}: the full nested user must keep {sorted(missing)}, got keys {sorted(keys)}"
+    expected = _graph_keys(user_dict["id"], graph)
+    assert keys == expected, \
+        f"{who}: the full nested user must be User {graph} unchanged; " \
+        f"missing {sorted(expected - keys)}, extra {sorted(keys - expected)}"
+    assert PRIVATE_KEYS & expected, f"{who}: User {graph} must carry private keys for this test to mean anything"
 
 
 @th.django_unit_setup()
@@ -124,12 +135,19 @@ def setup_nested_user_visibility(opts):
     member_vu = _make_user(MEMBER_VU)
     _join(member_vu, group, ["view_members", "view_users"])
 
+    _make_user(SUPER, is_superuser=True)
+
     devices = _make_user(DEVICES, permissions={"view_devices": True})
     opts.devices_id = devices.pk
 
     RegisteredDevice.objects.create(
         user=target, device_id=f"{PREFIX}target_dev", device_token=f"{PREFIX}tok_t",
         platform="web", device_name=f"{PREFIX}target device")
+    # A second device of the same user: two rows nesting one user in one
+    # response exercise the shared request cache.
+    RegisteredDevice.objects.create(
+        user=target, device_id=f"{PREFIX}target_dev2", device_token=f"{PREFIX}tok_t2",
+        platform="web", device_name=f"{PREFIX}target device 2")
     RegisteredDevice.objects.create(
         user=devices, device_id=f"{PREFIX}devices_dev", device_token=f"{PREFIX}tok_d",
         platform="web", device_name=f"{PREFIX}devices device")
@@ -147,32 +165,36 @@ def setup_nested_user_visibility(opts):
     opts.book_id = book.pk
 
 
-@th.django_unit_test("case 1: a view_members-only member gets other members' identity only")
+@th.django_unit_test("case 1: a view_members-only member gets other members without the private fields")
 def test_list_view_members_only(opts):
     _login(opts, VIEWER)
     users = _list_members(opts)
     assert opts.target_id in users, f"the target member must be listed, got ids {sorted(users)}"
-    _assert_identity(users[opts.target_id], "view_members viewer, list")
+    _assert_stripped(users[opts.target_id], "view_members viewer, list")
+    resp = opts.client.get(f"/api/group/member?group={opts.group_id}&size=100")
+    row = next(r for r in resp.response.data if r["user"]["id"] == opts.target_id)
+    assert "permissions" in row and "metadata" in row, \
+        f"the member row's own permissions and metadata stay, got keys {sorted(row.keys())}"
 
 
-@th.django_unit_test("case 2: the single-row read gives a view_members-only member identity only")
+@th.django_unit_test("case 2: the single-row read withholds the private fields from a view_members-only member")
 def test_single_row_view_members_only(opts):
     _login(opts, VIEWER)
     resp = opts.client.get(f"/api/group/member/{opts.target_member_id}?group={opts.group_id}")
     assert resp.status_code == 200, \
         f"single-row read must succeed, got {resp.status_code}: {opts.client.last_response.body}"
-    _assert_identity(resp.response.data["user"], "view_members viewer, single row")
+    _assert_stripped(resp.response.data["user"], "view_members viewer, single row")
 
 
-@th.django_unit_test("case 3: one response holds the caller's own full row and others' identity")
-def test_self_full_others_identity(opts):
+@th.django_unit_test("case 3: one response holds the caller's own full row and others stripped")
+def test_self_full_others_stripped(opts):
     _login(opts, VIEWER)
     users = _list_members(opts)
     _assert_full(users[opts.viewer_id], "the viewer's own row")
-    _assert_identity(users[opts.target_id], "another member's row in the same response")
+    _assert_stripped(users[opts.target_id], "another member's row in the same response")
 
 
-@th.django_unit_test("case 4: a global view_users holder keeps the full nested user")
+@th.django_unit_test("case 4: a global view_users holder and a superuser keep the full nested user")
 def test_global_view_users_full(opts):
     _login(opts, ACCOUNT)
     users = _list_members(opts)
@@ -180,59 +202,96 @@ def test_global_view_users_full(opts):
     assert users[opts.target_id]["permissions"].get("view_logs") is True, \
         f"the account viewer must see the target's real permissions, got {users[opts.target_id]['permissions']!r}"
 
+    _login(opts, SUPER)
+    users = _list_members(opts)
+    _assert_full(users[opts.target_id], "superuser")
 
-@th.django_unit_test("case 5: a manage_group holder gets identity on the list and on invite")
+
+@th.django_unit_test("case 5: a manage_group holder gets others stripped on the list and on invite")
 def test_manage_group_list_and_invite(opts):
     from mojo.apps.account.models import User
     _login(opts, MANAGER)
     users = _list_members(opts)
-    _assert_identity(users[opts.target_id], "manage_group viewer, list")
+    _assert_stripped(users[opts.target_id], "manage_group viewer, list")
 
     User.objects.filter(email=INVITEE).delete()
     resp = opts.client.post("/api/group/member/invite",
                             {"email": INVITEE, "group": opts.group_id})
     assert resp.status_code == 200, \
         f"invite must succeed for a manage_group holder, got {resp.status_code}: {opts.client.last_response.body}"
-    _assert_identity(resp.response.data["user"], "manage_group viewer, invite response")
+    _assert_stripped(resp.response.data["user"], "manage_group viewer, invite response")
 
 
 @th.django_unit_test("case 6: member-level view_users does not give the full view")
-def test_member_level_view_users_identity(opts):
+def test_member_level_view_users_stripped(opts):
     _login(opts, MEMBER_VU)
     users = _list_members(opts)
-    _assert_identity(users[opts.target_id], "member-level view_users viewer")
+    _assert_stripped(users[opts.target_id], "member-level view_users viewer")
 
 
-@th.django_unit_test("case 7: RegisteredDevice ?graph=full — owner full, others identity")
+@th.django_unit_test("case 7: RegisteredDevice ?graph=full: owner full, two rows of another user stripped")
 def test_registered_device_graph_full(opts):
     _login(opts, DEVICES)
     resp = opts.client.get(f"/api/account/devices/push?graph=full&size=100&search={PREFIX}")
     assert resp.status_code == 200, \
         f"device list must succeed for view_devices, got {resp.status_code}: {opts.client.last_response.body}"
-    by_owner = {row["user"]["id"]: row["user"] for row in resp.response.data}
+    rows = resp.response.data
+    by_owner = {row["user"]["id"]: row["user"] for row in rows}
     assert opts.target_id in by_owner and opts.devices_id in by_owner, \
         f"both test devices must be listed, got owners {sorted(by_owner)}"
     _assert_full(by_owner[opts.devices_id], "the caller's own device")
-    _assert_identity(by_owner[opts.target_id], "another user's device under ?graph=full")
+    target_rows = [row["user"] for row in rows if row["user"]["id"] == opts.target_id]
+    assert len(target_rows) == 2, f"both of the target's devices must be listed, got {len(target_rows)}"
+    for index, user in enumerate(target_rows):
+        _assert_stripped(user, f"another user's device {index + 1} under ?graph=full")
 
 
-@th.django_unit_test("case 8: filters into User fields outside identity are ignored for view_members, applied for account viewers")
+PRIVATE_FILTERS = ("user__is_superuser=True", "user__requires_mfa=True",
+                   "user__requires_password_change=True", "user__passkeys__isnull=False",
+                   "user__totp__is_enabled=True")
+
+
+def _member_count(opts, extra=""):
+    resp = opts.client.get(f"/api/group/member?group={opts.group_id}&_mode=count{extra}")
+    assert resp.status_code == 200, \
+        f"member count must succeed, got {resp.status_code}: {opts.client.last_response.body}"
+    return resp.response["count"]
+
+
+@th.django_unit_test("case 8: filters into the private user fields are ignored for view_members, applied for account viewers")
 def test_filter_oracle(opts):
     _login(opts, VIEWER)
     everyone = _list_members(opts)
-    filtered = _list_members(opts, "&user__requires_mfa=True")
-    assert set(filtered) == set(everyone), \
-        f"user__requires_mfa must be dropped for a view_members viewer: {sorted(filtered)} vs {sorted(everyone)}"
-    sorted_by_login = _list_members(opts, "&sort=-user__last_login")
-    assert set(sorted_by_login) == set(everyone), "a sort into User must not change the rows"
+    for probe in PRIVATE_FILTERS:
+        filtered = _list_members(opts, f"&{probe}")
+        assert set(filtered) == set(everyone), \
+            f"{probe} must be dropped for a view_members viewer: {sorted(filtered)} vs {sorted(everyone)}"
+    total = _member_count(opts)
+    assert _member_count(opts, "&user__is_superuser=True") == total, \
+        "_mode=count must drop user__is_superuser for a view_members viewer"
+    by_email = _list_members(opts, f"&user__email={TARGET}")
+    assert set(by_email) == {opts.target_id}, \
+        f"an email filter still applies for a view_members viewer, got {sorted(by_email)}"
+    searched = _list_members(opts, f"&search={TARGET}")
+    assert opts.target_id in searched and len(searched) < len(everyone), \
+        f"search by email still works for a view_members viewer, got {sorted(searched)}"
+    resp = opts.client.get(f"/api/group?id={opts.group_id}&members__user__is_superuser=True")
+    assert resp.status_code == 200, \
+        f"group list must succeed for a member, got {resp.status_code}: {opts.client.last_response.body}"
+    assert [g["id"] for g in resp.response.data] == [opts.group_id], \
+        "the reverse form members__user__is_superuser must be dropped for a non-account viewer"
 
     _login(opts, ACCOUNT)
     filtered = _list_members(opts, "&user__requires_mfa=True")
     assert set(filtered) == {opts.target_id}, \
-        f"the account viewer's filter must apply, got {sorted(filtered)}"
+        f"the account viewer's requires_mfa filter must apply, got {sorted(filtered)}"
+    assert _list_members(opts, "&user__is_superuser=True") == {}, \
+        "the account viewer's is_superuser filter must apply"
+    assert _member_count(opts, "&user__is_superuser=True") == 0, \
+        "the account viewer's _mode=count filter must apply"
 
 
-@th.django_unit_test("case 9: an ApiKey gets identity; a group token gets its own row full")
+@th.django_unit_test("case 9: an ApiKey gets others stripped; a group token gets its own row full")
 def test_apikey_and_group_token(opts):
     from mojo.apps.account.models import User, Group
     from mojo.apps.account.services import group_token
@@ -243,7 +302,7 @@ def test_apikey_and_group_token(opts):
     assert resp.status_code == 200, \
         f"the ApiKey must list members, got {resp.status_code}: {opts.client.last_response.body}"
     users = {row["user"]["id"]: row["user"] for row in resp.response.data}
-    _assert_identity(users[opts.target_id], "ApiKey holding view_users/manage_users")
+    _assert_stripped(users[opts.target_id], "ApiKey holding view_users/manage_users")
 
     token = group_token.mint(User.objects.get(pk=opts.viewer_id), Group.objects.get(pk=opts.group_id))
     resp = opts.client.get(f"/api/group/member?group={opts.group_id}&size=100",
@@ -252,10 +311,10 @@ def test_apikey_and_group_token(opts):
         f"the group token must list members, got {resp.status_code}: {opts.client.last_response.body}"
     users = {row["user"]["id"]: row["user"] for row in resp.response.data}
     _assert_full(users[opts.viewer_id], "group token, its own row")
-    _assert_identity(users[opts.target_id], "group token, another member")
+    _assert_stripped(users[opts.target_id], "group token, another member")
 
 
-@th.django_unit_test("case 10: a docit Page read by a plain member nests its people as identity")
+@th.django_unit_test("case 10: a docit Page read by a plain member nests its people stripped")
 def test_docit_page_member_viewer(opts):
     _login(opts, VIEWER)
     resp = opts.client.get(f"/api/docit/page?group={opts.group_id}&book={opts.book_id}&graph=default")
@@ -264,10 +323,10 @@ def test_docit_page_member_viewer(opts):
     rows = resp.response.data
     assert rows, "the test page must be listed"
     for field in ("user", "created_by", "modified_by"):
-        _assert_identity(rows[0][field], f"docit Page.{field} (nested basic)")
+        _assert_stripped(rows[0][field], f"docit Page.{field} (nested basic)", graph="basic")
 
 
-@th.django_unit_test("case 11: a CSV dotted path into User outside identity is written empty for a non-account viewer")
+@th.django_unit_test("case 11: a CSV dotted path into the private user fields is written empty for a non-account viewer")
 def test_csv_dotted_user_path(opts):
     import csv
     import io
@@ -276,7 +335,7 @@ def test_csv_dotted_user_path(opts):
     from mojo.models.rest import ACTIVE_REQUEST
     from mojo.serializers.formats.csv import CsvFormatter
 
-    fields = ["id", "user.username", "user.requires_mfa", "user.email"]
+    fields = ["id", "user.username", "user.requires_mfa", "user.metadata.note", "user.email"]
     queryset = GroupMember.objects.filter(pk=opts.target_member_id)
 
     def export(request):
@@ -292,13 +351,28 @@ def test_csv_dotted_user_path(opts):
                       api_key=None, group_token=None)
 
     row = export(request_for(opts.viewer_id))
-    assert row[1] == TARGET, f"the username stays in the export, got row {row!r}"
+    assert row[1] == TARGET and row[4] == TARGET, \
+        f"the username and email stay in the export, got row {row!r}"
     assert row[2] == "" and row[3] == "", \
-        f"requires_mfa and email must be written empty for a view_members viewer, got row {row!r}"
+        f"requires_mfa and metadata.note must be written empty for a view_members viewer, got row {row!r}"
 
     row = export(request_for(opts.account_id))
-    assert row[2] == "True" and row[3] == TARGET, \
+    assert row[2] == "True" and row[3] == "private" and row[4] == TARGET, \
         f"a global view_users viewer keeps the full export, got row {row!r}"
 
     row = export(None)
-    assert row[3] == TARGET, f"no request (a job or the shell) leaves the export unchanged, got row {row!r}"
+    assert row[2] == "True" and row[3] == "private", \
+        f"no request (a job or the shell) leaves the export unchanged, got row {row!r}"
+
+
+@th.django_unit_test("case 12: with no request bound a nested user keeps every field")
+def test_no_request_unchanged(opts):
+    from mojo.apps.account.models import GroupMember
+    from mojo.models.rest import ACTIVE_REQUEST
+
+    token = ACTIVE_REQUEST.set(None)
+    try:
+        data = GroupMember.objects.get(pk=opts.target_member_id).to_dict()
+    finally:
+        ACTIVE_REQUEST.reset(token)
+    _assert_full(data["user"], "no request (a job, an email, the shell)")
