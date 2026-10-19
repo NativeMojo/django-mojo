@@ -84,6 +84,15 @@ provider and exact discovery credential fingerprint. Discovery must use the
 same credential identity as the automatic Assistant. Normal owner/bootstrap
 GETs inspect cached state and never contact a provider.
 
+`llm_safety.route_state("assistant")` keeps `ready` strict: it requires a
+currently usable resolved ID. Its additive `can_invoke` field reports passive
+admission after policy agreement, stop and exact credential checks, allowing
+cold or expired automatic routes to reach the invocation guard. The normal
+agent, streamed agent, socket handler and Admin bootstrap use admission;
+none performs discovery during preflight or GET. `assistant_setup.is_ready()`
+is the enabled/bootstrap admission predicate. The invocation guard remains
+the authority for resolution, budgets, permits and the actual model.
+
 A complete catalogue is fresh for 24 hours. On expiry the first authorized
 invocation may refresh; an explicit owner refresh can bypass freshness. A
 failed or incomplete attempt may retain last-good data until seven days from

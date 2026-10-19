@@ -220,12 +220,17 @@ def read_verify_state(key=VERIFY_STATE_KEY):
 
 
 def is_ready():
-    """The one cheap boolean the Admin bootstrap needs."""
+    """Passive bootstrap admission, including cold delegated model routes.
+
+    Detailed setup route.ready still requires an actual resolved model. The
+    composer must remain reachable so the guarded first turn can discover it.
+    """
     if not settings.get(ENABLED_KEY, False, kind="bool"):
         return False
     try:
         from mojo.apps.account.services import llm_safety
-        return llm_safety.route_state("assistant")["ready"]
+        route = llm_safety.route_state("assistant")
+        return route.get("can_invoke", route["ready"])
     except Exception:
         return False
 

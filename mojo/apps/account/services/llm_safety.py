@@ -365,7 +365,9 @@ def model_selection_state(policy=None, *, refresh=False, credential=None, redis=
                         policy["features"]["assistant"]["max_output_tokens"]),
                     images="images" in route["capabilities"])
                 if not result["effective"] and not result["discovery"]["error_code"]:
-                    result["discovery"]["error_code"] = "no_compatible_model"
+                    result["discovery"]["error_code"] = (
+                        "no_compatible_model" if result["discovery"]["status"] in {"fresh", "stale"}
+                        else "catalogue_unavailable")
                 result["choices"] = [{"id": row["id"],
                                       "label": row["display_name"] or row["id"]}
                                      for row in catalogue["models"][:40]]
@@ -384,9 +386,14 @@ def model_selection_state(policy=None, *, refresh=False, credential=None, redis=
 
 
 def route_state(feature, selection=None):
-    """Safe passive readiness, retaining a resolved model when other guards deny."""
+    """Passive resolved readiness and admission to the guarded invocation path.
+
+    An automatic route can admit a turn while its catalogue is cold/expired.
+    Only the invocation guard may refresh and prove a usable runtime model.
+    """
     result = {"feature": feature, "provider": "", "model": "", "credential": "",
-              "credential_configured": False, "ready": False, "error": ""}
+              "credential_configured": False, "ready": False, "can_invoke": False,
+              "error": ""}
     try:
         policy = parse_policy()
         route = policy["routes"].get(feature)
@@ -402,6 +409,10 @@ def route_state(feature, selection=None):
         result["credential_configured"] = bool(_credential(route))
         if emergency_stopped():
             _deny("emergency_stopped")
+        # Invocation admission deliberately precedes resolved-model readiness:
+        # a cold automatic route must reach _execute to populate its catalogue.
+        # No discovery, permit or provider request happens on this passive read.
+        result["can_invoke"] = result["credential_configured"]
         if not effective:
             code = (selection or {}).get("discovery", {}).get("error_code")
             _deny(code or "catalogue_unavailable")

@@ -309,7 +309,13 @@ selection. Normal and streamed loops snapshot that ID per guarded invocation
 for mismatch checks, ledger and provider.
 
 Owner setup supports explicit `set_model_selection` pin/auto actions. Plain
-GET is passive. Catalogue freshness is 24 hours, with failed-refresh last-good
+GET is passive. Passive `route.ready` requires a currently resolved usable
+model, while `route.can_invoke` admits valid/agreed, unstopped, credentialed
+routes to guarded invocation. Normal/stream agent preflights, the socket
+handler and the Admin bootstrap use this admission so the first turn can
+populate a cold/expired automatic catalogue. `assistant_setup.is_ready()`
+reports enabled bootstrap admission; it does not fetch a model or certify
+resolved readiness. Catalogue freshness is 24 hours, with failed-refresh last-good
 use bounded to seven days from success; complete success with no compatible
 model invalidates selection immediately. Runtime expiry and explicit refresh
 use the same credential-scoped cache, Redis owner lock/cooldown and guarded

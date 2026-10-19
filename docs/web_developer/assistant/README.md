@@ -19,7 +19,13 @@ metadata. Existing fixed policies and Bedrock routes retain their exact
 model. Opt-in requires deployment and normal owner policy activation; inspect
 or clear any legacy pin first. Dateless IDs are pinned releases, not floating
 aliases. Both normal and streamed loops use the same resolved ID in provider
-calls and ledger. Owner setup offers an explicit pin/auto action, passive
+calls and ledger. Normal/stream entry and the socket handler admit a valid,
+agreed, unstopped route with its exact credential even while its automatic
+catalogue is cold/expired, so the first guarded invocation can resolve it.
+Owner diagnostics keep strict `route.ready` and expose separate passive
+`route.can_invoke`; the bootstrap's Assistant ready capability enables this
+invocation admission. No bootstrap/GET/preflight performs discovery.
+Owner setup offers an explicit pin/auto action, passive
 reads, 24-hour discovery freshness, seven-day maximum last-good use after
 failures, and truthful explicit refresh outcomes under bounded pagination
 and safety budgets; see [the owner contract](../account/admin_portal/assistant.md).

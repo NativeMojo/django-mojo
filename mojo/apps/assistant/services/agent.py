@@ -1372,7 +1372,7 @@ def run_assistant(
 
     from mojo.apps.account.services import llm_safety
     route = llm_safety.route_state("assistant")
-    if not route["ready"]:
+    if not route.get("can_invoke", route["ready"]):
         return {"error": route.get("error") or "credential_missing",
                 "status_code": 503}
 
@@ -1644,7 +1644,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
 
     from mojo.apps.account.services import llm_safety
     route = llm_safety.route_state("assistant")
-    if not route["ready"]:
+    if not route.get("can_invoke", route["ready"]):
         return {"error": route.get("error") or "credential_missing"}
 
     try:

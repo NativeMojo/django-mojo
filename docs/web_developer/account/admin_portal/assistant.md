@@ -138,7 +138,16 @@ of any kind.
 The additive fields keep `schema_version: 2`; clients detect `model.editable`
 by presence. `route.model` equals `model.effective`, including when stops or
 missing controls prevent readiness. An unavailable/expired automatic model
-has empty `effective` and cannot be ready. Fixed/pinned models do not depend
+has empty `effective` and cannot be ready. Additive `route.can_invoke` reports
+passive invocation admission: policy agreed, stop clear and exact credential
+present. It can be true while a cold/expired automatic route is not yet ready;
+that allows the composer/socket to reach the guard that discovers and selects
+the model. The bootstrap Assistant `ready` capability means this enabled
+invocation admission, so it must not be replaced with strict `route.ready`
+when deciding whether a first turn is possible. Neither predicate performs
+provider work during GET/preflight; the guard still owns resolution, limits
+and the actual model. Fixed/Bedrock admission behavior remains unchanged.
+Fixed/pinned models do not depend
 on catalogue availability; discovery may be `not_applicable`.
 
 Only `routes.assistant.model="auto:sonnet"` on Anthropic delegates selection.

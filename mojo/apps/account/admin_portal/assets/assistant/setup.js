@@ -418,7 +418,7 @@ export function mountSetup({ctx, panel, onBack}) {
     const current = ctx.features?.assistant?.capabilities;
     if (!current) return;
     const ready = Boolean(state.assistant_installed && state.realtime_installed
-      && state.enabled && state.route?.ready);
+      && state.enabled && (state.route?.can_invoke ?? state.route?.ready));
     const mcp = Boolean(state.assistant_installed && state.mcp?.enabled && state.mcp?.url);
     if (current.ready === ready && current.mcp === mcp) return;
     // Re-read the bootstrap rather than trusting this page's arithmetic: the
