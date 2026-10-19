@@ -46,7 +46,27 @@ def test_people_capability_and_bundle_contract(opts):
         "bundle application must diff managed keys without replacing unknown permissions"
     assert endpoint.count("@md.requires_fresh_auth(seconds=600)") == 4, \
         "temporary/reset, bundle-write, and API-key actions need explicit 600s freshness"
-    assert endpoint.count("@md.denies_key_backed_session()") == 5, \
+    routes = (
+        ('@md.POST("account/admin/user/password/reset")', True),
+        ('@md.POST("account/admin/user/password/temporary")', True),
+        ('@md.GET("account/admin/people/permission-bundles")', False),
+        ('@md.POST("account/admin/people/permission-bundles")', False),
+        ('@md.POST("account/admin/apikey/action")', True),
+    )
+    for route, strict in routes:
+        start = endpoint.find(route)
+        assert start != -1, f"People endpoint {route} is missing"
+        end = endpoint.find("\ndef ", start)
+        block = endpoint[start:end]
+        assert "@md.denies_key_backed_session(" in block, \
+            f"{route} must reject key-backed sessions"
+        if strict:
+            assert "@md.denies_key_backed_session(deny_user_api_keys=True)" in block, \
+                f"{route} acts on credentials and must also reject user API keys"
+        else:
+            assert "@md.denies_key_backed_session()" in block, \
+                f"{route} must use the plain key-backed session guard"
+    assert endpoint.count("@md.denies_key_backed_session(") == 5, \
         "every People custom endpoint must reject key-backed sessions"
     assert 'ApiKey.rest_check_permission_or_raise(request, "SAVE_PERMS", api_key)' in endpoint, \
         "API-key actions must use model security against the selected credential"
