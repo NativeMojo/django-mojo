@@ -175,6 +175,16 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         ]
         NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
         SENSITIVE_FIELDS = ["password", "auth_key", "onetime_code"]
+        # Account privileges and sign-in settings: kept out of a user nested
+        # inside another row (a member list, a device, a page) for a viewer
+        # who could not GET /api/user/<pk> for that user (#8648). The
+        # serializer drops these output keys, CSV writes them as "", and the
+        # filter guard in mojo.models.rest drops these lookups past a relation.
+        NESTED_PRIVATE_FIELDS = ["permissions", "is_superuser", "requires_mfa",
+                                 "requires_password_change", "has_password",
+                                 "has_passkey", "metadata"]
+        NESTED_PRIVATE_LOOKUPS = ["is_superuser", "requires_mfa",
+                                  "requires_password_change", "passkeys", "totp"]
         # auth_key and last_activity must never be writable via REST by anyone.
         # auth_key is the JWT signing secret — writing it is a session-invalidation
         # attack vector. last_activity is a server-managed audit timestamp.
@@ -1349,6 +1359,48 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if "owner" in perms and self.is_request_user():
             return True
         return request.user.has_permission(perms)
+
+    def rest_nested_full_view(self, request):
+        """True when `request` may see this user's NESTED_PRIVATE_FIELDS when
+        the user is nested in another row (#8648).
+
+        The rule is the one GET /api/user/<pk> applies. The self check and
+        the account check read only `request`, never ACTIVE_REQUEST: a
+        streamed CSV body is written after the request context var is reset,
+        or under another request. No request gives False; the
+        serializer never asks without one. Side-effect free.
+        """
+        if request is None:
+            return False
+        confined = (getattr(request, "group_token", None) is not None
+                    or getattr(request, "api_key", None) is not None)
+        perms = type(self).RestMeta.VIEW_PERMS
+        if confined:
+            return bool(self.check_edit_permission(perms, request))
+        if self.is_request_user(request):
+            return True
+        return type(self).rest_viewer_has_account_view(request)
+
+    @classmethod
+    def rest_viewer_has_account_view(cls, request):
+        """True when `request` may read every user's account fields (#8648).
+
+        The instance-free form of rest_nested_full_view, for the filter guard
+        and the serializer's persistent-cache rule: a lookup crosses into User
+        for every row at once, so `owner` cannot apply. ApiKeys and group
+        tokens follow check_edit_permission's confinement.
+        """
+        if getattr(request, "group_token", None) is not None:
+            return False
+        perms = [p for p in cls.RestMeta.VIEW_PERMS if p != "owner"]
+        api_key = getattr(request, "api_key", None)
+        if api_key is not None:
+            return bool(cls.get_rest_meta_prop("ALLOW_API_KEY_GLOBAL", False)
+                        and api_key.has_permission(perms))
+        user = getattr(request, "user", None)
+        if not getattr(user, "is_authenticated", False):
+            return False
+        return bool(user.has_permission(perms))
 
     def on_action_send_invite(self, value):
         self.send_invite()

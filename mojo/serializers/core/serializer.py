@@ -58,6 +58,15 @@ SERIALIZE_DATETIME_TO_FLOAT = settings.get_static('SERIALIZE_DATETIME_TO_FLOAT',
 SERIALIZE_DATETIME_TO_ISO = settings.get_static('SERIALIZE_DATETIME_TO_ISO', False)
 
 
+def _active_request():
+    """The request being served, from mojo.models.rest.ACTIVE_REQUEST.
+
+    Imported late: mojo.models.rest imports this package at load time.
+    """
+    from mojo.models.rest import ACTIVE_REQUEST
+    return ACTIVE_REQUEST.get()
+
+
 class OptimizedGraphSerializer:
     """
     Ultra-fast serializer with intelligent caching and query optimization.
@@ -70,7 +79,7 @@ class OptimizedGraphSerializer:
     - Memory-efficient QuerySet handling
     """
 
-    def __init__(self, instance, graph="default", many=False, request=None, bypass_cache=False, simple_mode=False, **kwargs):
+    def __init__(self, instance, graph="default", many=False, request=None, bypass_cache=False, simple_mode=False, nested=False, **kwargs):
         """
         Initialize optimized serializer.
 
@@ -80,9 +89,12 @@ class OptimizedGraphSerializer:
         :param request: Django request object (for compatibility)
         :param bypass_cache: Skip all caching operations for performance testing
         :param simple_mode: Behave exactly like simple serializer (no cache overhead at all)
+        :param nested: This serializer renders a related object inside another
+            row; see _nested_view
         :param kwargs: Additional options (cache, etc.)
         """
         self.graph = graph
+        self.nested = nested
         self.request = request
         self.instance = instance
         self.many = many
@@ -94,6 +106,10 @@ class OptimizedGraphSerializer:
         self.simple_mode = simple_mode or bypass_cache  # simple_mode implies bypass_cache
         self._cache_backend = None
         self._request_cache = None
+        # Whether the bound viewer lacks the account view; resolved once per
+        # serializer tree and shared with nested serializers (see
+        # _viewer_restricted).
+        self._restricted_viewer = None
 
         # Handle QuerySet detection - same as simple serializer
         if isinstance(instance, QuerySet):
@@ -124,6 +140,53 @@ class OptimizedGraphSerializer:
 
     def _serialize_instance_cached(self, obj):
         """
+        Serialize single instance; a nested row is passed through _nested_view.
+        """
+        data = self._serialize_instance_cached_raw(obj)
+        if self.nested:
+            return self._nested_view(obj, data)
+        return data
+
+    def _nested_view(self, obj, data):
+        """`data` without the model's NESTED_PRIVATE_FIELDS when the viewer may
+        not read `obj` in full (#8648).
+
+        Nested graphs carry no permission of their own (#2102), so a model
+        whose rows show another person's account (User) declares the private
+        keys and a `rest_nested_full_view(request)` hook. Every nested graph
+        name is covered. It runs on the return of every cache exit and always
+        builds a new dict, so a cached entry is never changed. No active
+        request (jobs, emails, shell) leaves the output unchanged.
+        """
+        private = getattr(getattr(obj, "RestMeta", None), "NESTED_PRIVATE_FIELDS", None)
+        if not private or not isinstance(data, dict):
+            return data
+        if not any(key in data for key in private):
+            return data
+        request = _active_request()
+        if request is None or obj.rest_nested_full_view(request):
+            return data
+        return {key: value for key, value in data.items() if key not in private}
+
+    def _viewer_restricted(self):
+        """True when a request is bound and its viewer lacks the account view.
+
+        Such a viewer never reads or writes the persistent cache: a parent
+        entry with a nested user inside would otherwise carry one viewer's
+        rendering to another (#8648). The request cache is per tree and stays.
+        """
+        if self._restricted_viewer is None:
+            restricted = False
+            request = _active_request()
+            if request is not None:
+                from django.contrib.auth import get_user_model
+                hook = getattr(get_user_model(), "rest_viewer_has_account_view", None)
+                restricted = hook is not None and not hook(request)
+            self._restricted_viewer = restricted
+        return self._restricted_viewer
+
+    def _serialize_instance_cached_raw(self, obj):
+        """
         Serialize single instance with intelligent caching.
         """
         # Simple mode: behave exactly like simple serializer
@@ -149,6 +212,8 @@ class OptimizedGraphSerializer:
 
         # Check if persistent caching is configured
         cache_ttl = get_model_cache_ttl(obj, self.graph)
+        if cache_ttl > 0 and self._viewer_restricted():
+            cache_ttl = 0
         cached_result = None
 
         if cache_ttl > 0:
@@ -284,18 +349,20 @@ class OptimizedGraphSerializer:
                     # Single related object (incl. a REVERSE OneToOne) - share
                     # request cache for performance. Must precede the many
                     # branch; see SINGLE_RELATIONS.
-                    related_serializer = OptimizedGraphSerializer(related_obj, graph=sub_graph, bypass_cache=self.bypass_cache)
+                    related_serializer = OptimizedGraphSerializer(related_obj, graph=sub_graph, bypass_cache=self.bypass_cache, nested=True)
                     # Share the request cache to avoid re-serializing same objects
                     related_serializer._request_cache = self._request_cache
+                    related_serializer._restricted_viewer = self._restricted_viewer
                     data[field_name] = related_serializer._serialize_instance_cached(related_obj)
 
                 elif isinstance(field, MANY_RELATIONS) or hasattr(related_obj, 'all'):
                     # Many-to-many or reverse relationship - share request cache
                     if hasattr(related_obj, 'all'):
                         related_qset = related_obj.all()
-                        related_serializer = OptimizedGraphSerializer(related_qset, graph=sub_graph, many=True, bypass_cache=self.bypass_cache)
+                        related_serializer = OptimizedGraphSerializer(related_qset, graph=sub_graph, many=True, bypass_cache=self.bypass_cache, nested=True)
                         # Share the request cache to avoid re-serializing same objects
                         related_serializer._request_cache = self._request_cache
+                        related_serializer._restricted_viewer = self._restricted_viewer
                         data[field_name] = related_serializer.serialize()
                     else:
                         data[field_name] = []

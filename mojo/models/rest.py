@@ -205,6 +205,39 @@ def is_sensitive_filter_path(model, key):
     return False
 
 
+def is_viewer_restricted_path(model, key, request):
+    """True when an ORM lookup path crosses a relation into a model that
+    declares NESTED_PRIVATE_LOOKUPS, names one of them, and the viewer lacks
+    that model's account view (#8648).
+
+    The filter and search twin of the serializer's nested strip:
+    `?user__requires_mfa=True` on the member list would otherwise tell the
+    viewer which members have a field they are not shown. A deny-list, so
+    email, username and name filters and search are untouched. Membership is
+    tested before the segment is resolved, so an unresolvable private name is
+    still refused. Only a hop INTO such a model is checked; the served
+    model's own fields are gated by its own read. No request (a job or the
+    shell building filters) leaves the path alone.
+    """
+    if request is None:
+        return False
+    current = model
+    for index, part in enumerate(key.split("__")):
+        if current is None:
+            return False
+        if index > 0:
+            private = getattr(getattr(current, "RestMeta", None), "NESTED_PRIVATE_LOOKUPS", None)
+            if (private and part in private
+                    and not current.rest_viewer_has_account_view(request)):
+                return True
+        try:
+            field = current._meta.get_field(part)
+        except Exception:
+            return False
+        current = getattr(field, "related_model", None) if field.is_relation else None
+    return False
+
+
 def _warn_can_save_deprecated(cls_name):
     if cls_name in _DEPRECATED_CAN_SAVE_WARNED:
         return
@@ -1530,6 +1563,11 @@ class MojoModel:
                 logit.warn(f"dropped sensitive filter on {cls.__name__}: {key}")
                 cls._report_sensitive_probe(request, key)
                 continue
+            # A field the viewer is not shown on a nested User is not
+            # filterable by them either (#8648). Dropped silently, with no
+            # incident: ordinary portal searches reach here.
+            if is_viewer_restricted_path(cls, key, request):
+                continue
 
             # Determine if this is an exclusion filter
             is_exclusion = key.endswith("__not") or key.endswith("__not_in")
@@ -1733,6 +1771,7 @@ class MojoModel:
         # AGGREGATION_FIELDS cannot widen past the sensitive gate.
         search_fields = [
             f for f in search_fields if not is_sensitive_filter_path(cls, f)
+            and not is_viewer_restricted_path(cls, f, request)
         ]
         if not search_fields:
             # Nothing left to match against. Returning `queryset` unchanged

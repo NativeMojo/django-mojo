@@ -162,7 +162,7 @@ def serialize_instance(instance, request=None, graph_override=None):
     name = resolve_graph(
         instance.__class__, request=request, graph_override=graph_override,
         instance=instance)
-    return instance.to_dict(graph=name)
+    return _with_viewer(request, lambda: instance.to_dict(graph=name))
 
 
 def serialize_queryset(queryset, request=None, graph_override=None):
@@ -179,4 +179,18 @@ def serialize_queryset(queryset, request=None, graph_override=None):
             "cannot be serialized for the assistant")
     name = resolve_graph(
         model, request=request, graph_override=graph_override)
-    return model.queryset_to_dict(queryset, graph=name)
+    return _with_viewer(request, lambda: model.queryset_to_dict(queryset, graph=name))
+
+
+def _with_viewer(request, render):
+    """Run `render` with `request` bound as ACTIVE_REQUEST: nested rows read
+    their viewer from it (#8648), and an executor thread may carry a stale one.
+    A None request binds nothing, so it never masks a bound HTTP request."""
+    if request is None:
+        return render()
+    from mojo.models.rest import ACTIVE_REQUEST
+    token = ACTIVE_REQUEST.set(request)
+    try:
+        return render()
+    finally:
+        ACTIVE_REQUEST.reset(token)
