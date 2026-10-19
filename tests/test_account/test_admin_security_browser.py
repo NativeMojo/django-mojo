@@ -72,24 +72,35 @@ class CDP:
                 return message.get("result", {})
         raise AssertionError(f"CDP command deadline expired: {method}")
 
-    def evaluate(self, expression):
-        result = self.call("Runtime.evaluate", {
+    def _evaluate_raw(self, expression):
+        return self.call("Runtime.evaluate", {
             "expression": expression, "returnByValue": True,
             "awaitPromise": True, "userGesture": True,
             # CDP defaults to bypassing unsafe-eval CSP checks. Acceptance
             # probes must exercise the page's policy, not debugger privileges.
             "allowUnsafeEvalBlockedByCSP": False,
         })
+
+    def evaluate(self, expression):
+        result = self._evaluate_raw(expression)
         assert "exceptionDetails" not in result, result.get("exceptionDetails")
         return result.get("result", {}).get("value")
 
     def wait(self, expression, label):
+        # A page that has not loaded yet (document.body still null) throws;
+        # keep polling until the deadline instead of failing at once (#8599).
         deadline = time.monotonic() + 8
+        last_error = None
         while time.monotonic() < deadline:
-            if self.evaluate(expression):
+            result = self._evaluate_raw(expression)
+            details = result.get("exceptionDetails")
+            if details:
+                last_error = (details.get("exception") or {}).get("description") or details.get("text")
+            elif result.get("result", {}).get("value"):
                 return
             time.sleep(0.05)
-        raise AssertionError(f"Chrome did not render {label} before the deadline")
+        raise AssertionError(f"Chrome did not render {label} before the deadline"
+                             + (f"; last evaluation error: {last_error}" if last_error else ""))
 
 
 def _stop(process):
