@@ -1364,9 +1364,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         """True when `request` may see this user's NESTED_PRIVATE_FIELDS when
         the user is nested in another row (#8648).
 
-        The rule is the one GET /api/user/<pk> applies. The self check comes
-        first and takes `request` explicitly: a streamed CSV body is written
-        after the request context var is reset. No request gives False; the
+        The rule is the one GET /api/user/<pk> applies. The self check and
+        the account check read only `request`, never ACTIVE_REQUEST: a
+        streamed CSV body is written after the request context var is reset,
+        or under another request. No request gives False; the
         serializer never asks without one. Side-effect free.
         """
         if request is None:
@@ -1378,7 +1379,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             return bool(self.check_edit_permission(perms, request))
         if self.is_request_user(request):
             return True
-        return bool(self.check_edit_permission(perms, request))
+        return type(self).rest_viewer_has_account_view(request)
 
     @classmethod
     def rest_viewer_has_account_view(cls, request):

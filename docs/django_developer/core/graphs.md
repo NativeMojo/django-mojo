@@ -184,7 +184,9 @@ The rules:
 
 - **Who sees a nested User in full:** exactly who could `GET /api/user/<pk>`
   for that user: the user themselves; a holder of the global `view_users`,
-  `manage_users` or `users`; a superuser. The hook uses
+  `manage_users` or `users`; a superuser. The hook reads only the `request`
+  it is given, never the bound one, so a streamed CSV is judged by the
+  request it was created for. ApiKeys and group tokens go through
   `User.check_edit_permission(VIEW_PERMS, request)`, so ApiKeys are refused,
   even on their own user, and a group token sees only its own user, on GET.
 - **Everyone else** gets the same graph without the seven keys. The keys are
