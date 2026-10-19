@@ -58,6 +58,15 @@ SERIALIZE_DATETIME_TO_FLOAT = settings.get_static('SERIALIZE_DATETIME_TO_FLOAT',
 SERIALIZE_DATETIME_TO_ISO = settings.get_static('SERIALIZE_DATETIME_TO_ISO', False)
 
 
+def _active_request():
+    """The request being served, from mojo.models.rest.ACTIVE_REQUEST.
+
+    Imported late: mojo.models.rest imports this package at load time.
+    """
+    from mojo.models.rest import ACTIVE_REQUEST
+    return ACTIVE_REQUEST.get()
+
+
 class OptimizedGraphSerializer:
     """
     Ultra-fast serializer with intelligent caching and query optimization.
@@ -70,7 +79,7 @@ class OptimizedGraphSerializer:
     - Memory-efficient QuerySet handling
     """
 
-    def __init__(self, instance, graph="default", many=False, request=None, bypass_cache=False, simple_mode=False, **kwargs):
+    def __init__(self, instance, graph="default", many=False, request=None, bypass_cache=False, simple_mode=False, nested=False, **kwargs):
         """
         Initialize optimized serializer.
 
@@ -80,9 +89,12 @@ class OptimizedGraphSerializer:
         :param request: Django request object (for compatibility)
         :param bypass_cache: Skip all caching operations for performance testing
         :param simple_mode: Behave exactly like simple serializer (no cache overhead at all)
+        :param nested: This serializer renders a related object inside another
+            row; see _effective_graph
         :param kwargs: Additional options (cache, etc.)
         """
         self.graph = graph
+        self.nested = nested
         self.request = request
         self.instance = instance
         self.many = many
@@ -126,18 +138,22 @@ class OptimizedGraphSerializer:
         """
         Serialize single instance with intelligent caching.
         """
+        graph = self._effective_graph(obj)
+
         # Simple mode: behave exactly like simple serializer
         if self.simple_mode:
-            return self._serialize_instance_direct(obj)
+            return self._serialize_instance_direct(obj, graph)
 
         # Skip all caching if bypass_cache is enabled
         if self.bypass_cache:
-            return self._serialize_instance_direct(obj)
+            return self._serialize_instance_direct(obj, graph)
 
-        # Always do request-scoped caching for performance
-        cache_key = get_cache_key(obj, self.graph)
+        # Always do request-scoped caching for performance. The key carries the
+        # effective graph, so a full and an identity rendering of one row never
+        # share an entry.
+        cache_key = get_cache_key(obj, graph)
         if not cache_key:
-            return self._serialize_instance_direct(obj)
+            return self._serialize_instance_direct(obj, graph)
 
         # Initialize request cache only when needed
         if self._request_cache is None:
@@ -148,7 +164,7 @@ class OptimizedGraphSerializer:
             return self._request_cache[cache_key]
 
         # Check if persistent caching is configured
-        cache_ttl = get_model_cache_ttl(obj, self.graph)
+        cache_ttl = get_model_cache_ttl(obj, graph)
         cached_result = None
 
         if cache_ttl > 0:
@@ -163,7 +179,7 @@ class OptimizedGraphSerializer:
                 return cached_result
 
         # Serialize the result
-        result = self._serialize_instance_direct(obj)
+        result = self._serialize_instance_direct(obj, graph)
 
         # Always store in request cache (provides performance gain even when TTL=0)
         self._request_cache[cache_key] = result
@@ -174,10 +190,34 @@ class OptimizedGraphSerializer:
 
         return result
 
-    def _serialize_instance_direct(self, obj):
+    def _effective_graph(self, obj):
+        """The graph `obj` is rendered with: the asked-for one, or the model's
+        NESTED_VIEW_GRAPH for a nested row its viewer may not read in full.
+
+        Nested graphs carry no permission of their own (#2102), so a model
+        whose rows show another person's account (User) declares
+        RestMeta.NESTED_VIEW_GRAPH and a `rest_nested_full_view(request)` hook.
+        Every nested graph name is swapped, whatever the parent asked for
+        (#8648). The top-level row is never swapped: its read is already
+        gated. No active request (jobs, emails, shell) means no swap.
+        """
+        if not self.nested:
+            return self.graph
+        rest_meta = getattr(obj, "RestMeta", None)
+        nested_graph = getattr(rest_meta, "NESTED_VIEW_GRAPH", None)
+        if not nested_graph or nested_graph not in (getattr(rest_meta, "GRAPHS", None) or {}):
+            return self.graph
+        request = _active_request()
+        if request is None or obj.rest_nested_full_view(request):
+            return self.graph
+        return nested_graph
+
+    def _serialize_instance_direct(self, obj, graph=None):
         """
         Direct serialization using RestMeta.GRAPHS configuration.
         """
+        if graph is None:
+            graph = self._effective_graph(obj)
         # No RestMeta/GRAPHS at all — or an empty GRAPHS map — is a model that
         # opts out of graph-based serialization: whole-object output is its
         # deliberate, VIEW_PERMS-gated API. This branch stays forgiving.
@@ -187,9 +227,9 @@ class OptimizedGraphSerializer:
                 logger.warning(f"RestMeta.GRAPHS not found for {obj.__class__.__name__}")
             return self._fallback_serialization(obj)
 
-        graph_config = obj.RestMeta.GRAPHS.get(self.graph)
+        graph_config = obj.RestMeta.GRAPHS.get(graph)
         if graph_config is None:
-            if self.graph != "default":
+            if graph != "default":
                 graph_config = obj.RestMeta.GRAPHS.get("default")
 
             if graph_config is None:
@@ -202,7 +242,7 @@ class OptimizedGraphSerializer:
                 # ships a partial graph set with no `default`: a server
                 # misconfiguration. Fail loud rather than expose everything.
                 raise me.RestErrorException(
-                    f"{obj.__class__.__name__} has no '{self.graph}' graph and "
+                    f"{obj.__class__.__name__} has no '{graph}' graph and "
                     "no 'default' graph to fall back to")
 
         # Serialize based on graph configuration
@@ -284,7 +324,7 @@ class OptimizedGraphSerializer:
                     # Single related object (incl. a REVERSE OneToOne) - share
                     # request cache for performance. Must precede the many
                     # branch; see SINGLE_RELATIONS.
-                    related_serializer = OptimizedGraphSerializer(related_obj, graph=sub_graph, bypass_cache=self.bypass_cache)
+                    related_serializer = OptimizedGraphSerializer(related_obj, graph=sub_graph, bypass_cache=self.bypass_cache, nested=True)
                     # Share the request cache to avoid re-serializing same objects
                     related_serializer._request_cache = self._request_cache
                     data[field_name] = related_serializer._serialize_instance_cached(related_obj)
@@ -293,7 +333,7 @@ class OptimizedGraphSerializer:
                     # Many-to-many or reverse relationship - share request cache
                     if hasattr(related_obj, 'all'):
                         related_qset = related_obj.all()
-                        related_serializer = OptimizedGraphSerializer(related_qset, graph=sub_graph, many=True, bypass_cache=self.bypass_cache)
+                        related_serializer = OptimizedGraphSerializer(related_qset, graph=sub_graph, many=True, bypass_cache=self.bypass_cache, nested=True)
                         # Share the request cache to avoid re-serializing same objects
                         related_serializer._request_cache = self._request_cache
                         data[field_name] = related_serializer.serialize()

@@ -127,6 +127,24 @@ GET /api/group?kind=organization&sort=name
 
 ## Group Membership
 
+### What a Member Row Shows About Its User
+
+Every member row (`/api/group/member` list and single row, the invite
+response) nests its `user`. Who sees how much of it (#8648):
+
+- **Your own row, and every row for a global `view_users`, `manage_users` or
+  `users` holder or a superuser:** the full user (`permissions`, `metadata`,
+  `requires_mfa`, `has_passkey`, ...), as `GET /api/user/<pk>` shows it.
+- **Everyone else** (`view_members`, `manage_group`, member-level grants of any
+  kind, API keys): identity only: `id, uuid, username, display_name,
+  is_active, avatar`, plus the contact, birthday, activity, verification and
+  org fields the framework keeps for other members.
+- Filters, search and sort on `user__<field>` for a field you are not shown
+  are ignored (`?user__requires_mfa=True` returns the unfiltered list).
+
+The same rule applies to a user nested in any other row (devices, docit
+pages, a consumer app's own models).
+
 ### Get My Membership
 
 **GET** `/api/group/<id>/member`

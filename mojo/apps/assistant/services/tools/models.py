@@ -805,7 +805,14 @@ def _tool_query_model(params, user):
     graph, err = _resolve_assistant_graph(model, request, user, model_label, "query_model")
     if err:
         return err
-    results = model.queryset_to_dict(queryset[:limit], graph=graph)
+    # Nested rows (a member's user) read the viewer from ACTIVE_REQUEST
+    # (#8648): bind this tool's request, as the save tool does below.
+    from mojo.models.rest import ACTIVE_REQUEST
+    token = ACTIVE_REQUEST.set(request)
+    try:
+        results = model.queryset_to_dict(queryset[:limit], graph=graph)
+    finally:
+        ACTIVE_REQUEST.reset(token)
     total = queryset.count()
 
     logger.info("query_model", model_label, f"results={len(results)}", f"total={total}", f"user={user.id}")
@@ -1685,12 +1692,16 @@ def _tool_export_data(params, user):
     # Generate CSV — every row goes through the selected graph first, so its
     # excludes, extras and nested shapes are already applied. The formatter
     # only ever sees those dictionaries, never a model instance.
+    from mojo.models.rest import ACTIVE_REQUEST
+    token = ACTIVE_REQUEST.set(request)
     try:
         rows = model.queryset_to_dict(export_qs, graph=graph)
         csv_data = _rows_to_csv(rows, columns)
     except Exception as e:
         logger.warning("export_data csv error", model_label, str(e))
         return {"error": "CSV generation failed"}
+    finally:
+        ACTIVE_REQUEST.reset(token)
 
     row_count = len(rows)
 

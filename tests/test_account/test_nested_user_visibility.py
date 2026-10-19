@@ -265,3 +265,40 @@ def test_docit_page_member_viewer(opts):
     assert rows, "the test page must be listed"
     for field in ("user", "created_by", "modified_by"):
         _assert_identity(rows[0][field], f"docit Page.{field} (nested basic)")
+
+
+@th.django_unit_test("case 11: a CSV dotted path into User outside identity is written empty for a non-account viewer")
+def test_csv_dotted_user_path(opts):
+    import csv
+    import io
+    from objict import objict
+    from mojo.apps.account.models import User, GroupMember
+    from mojo.models.rest import ACTIVE_REQUEST
+    from mojo.serializers.formats.csv import CsvFormatter
+
+    fields = ["id", "user.username", "user.requires_mfa", "user.email"]
+    queryset = GroupMember.objects.filter(pk=opts.target_member_id)
+
+    def export(request):
+        token = ACTIVE_REQUEST.set(request)
+        try:
+            text = CsvFormatter().serialize_queryset(queryset, fields=fields, raw_data=True)
+        finally:
+            ACTIVE_REQUEST.reset(token)
+        return list(csv.reader(io.StringIO(text)))[1]
+
+    def request_for(user_id):
+        return objict(user=User.objects.get(pk=user_id), method="GET",
+                      api_key=None, group_token=None)
+
+    row = export(request_for(opts.viewer_id))
+    assert row[1] == TARGET, f"the username stays in the export, got row {row!r}"
+    assert row[2] == "" and row[3] == "", \
+        f"requires_mfa and email must be written empty for a view_members viewer, got row {row!r}"
+
+    row = export(request_for(opts.account_id))
+    assert row[2] == "True" and row[3] == TARGET, \
+        f"a global view_users viewer keeps the full export, got row {row!r}"
+
+    row = export(None)
+    assert row[3] == TARGET, f"no request (a job or the shell) leaves the export unchanged, got row {row!r}"

@@ -9,6 +9,13 @@ from mojo.helpers import logit
 logger = logit.get_logger("csv_formatter", "csv_formatter.log")
 
 
+def _active_request():
+    """The request being served. Imported late: mojo.models.rest imports the
+    serializers package at load time."""
+    from mojo.models.rest import ACTIVE_REQUEST
+    return ACTIVE_REQUEST.get()
+
+
 class CsvFormatter:
     """
     Advanced CSV formatter with streaming support and RestMeta.GRAPHS integration.
@@ -46,6 +53,10 @@ class CsvFormatter:
         :param timezone: Timezone string for datetime localization (e.g., 'America/New_York')
         :return: HttpResponse or StreamingHttpResponse
         """
+        # Captured now: a streamed body is written after the view returns, when
+        # the request context is already gone.
+        self._viewer_request = _active_request()
+
         # Determine if we should stream based on queryset size
         should_stream = stream and queryset.count() > self.streaming_threshold
 
@@ -260,6 +271,8 @@ class CsvFormatter:
             for i, field_part in enumerate(parts):
                 if current is None:
                     return None
+                if i > 0 and self._hidden_from_viewer(current, field_part):
+                    return ""
 
                 # Check if this is a model field using get_model_field
                 field = None
@@ -309,6 +322,22 @@ class CsvFormatter:
         except Exception as e:
             logger.warning(f"Error accessing nested field '{field_path}': {e}")
             return None
+
+    def _hidden_from_viewer(self, obj, field_name):
+        """True when `obj` was reached through a relation, declares a
+        NESTED_VIEW_GRAPH, `field_name` is outside it and the viewer may not
+        read `obj` in full: the CSV twin of the serializer swap (#8648). No
+        request (a job, the shell) hides nothing."""
+        request = getattr(self, "_viewer_request", None)
+        if request is None or not hasattr(obj, "rest_nested_full_view"):
+            return False
+        rest_meta = getattr(obj, "RestMeta", None)
+        name = getattr(rest_meta, "NESTED_VIEW_GRAPH", None)
+        graph = (getattr(rest_meta, "GRAPHS", None) or {}).get(name) if name else None
+        if graph is None:
+            return False
+        allowed = set(graph.get("fields") or ()) | set((graph.get("graphs") or {}).keys())
+        return field_name not in allowed and not obj.rest_nested_full_view(request)
 
     def _process_field_value(self, value, field_name, localize=None, timezone=None):
         """

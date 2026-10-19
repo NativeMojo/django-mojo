@@ -205,6 +205,48 @@ def is_sensitive_filter_path(model, key):
     return False
 
 
+def _nested_view_fields(model):
+    """The field and relation names `model`'s NESTED_VIEW_GRAPH serves, or
+    None when the model declares none."""
+    rest_meta = getattr(model, "RestMeta", None)
+    name = getattr(rest_meta, "NESTED_VIEW_GRAPH", None)
+    graph = (getattr(rest_meta, "GRAPHS", None) or {}).get(name) if name else None
+    if graph is None:
+        return None
+    return set(graph.get("fields") or ()) | set((graph.get("graphs") or {}).keys())
+
+
+def is_viewer_restricted_path(model, key, request):
+    """True when an ORM lookup path crosses a relation into a model the viewer
+    may only see as its NESTED_VIEW_GRAPH, and then names a field outside it.
+
+    The filter, search and sort twin of the serializer's nested-graph swap
+    (#8648): `?user__requires_mfa=True` on the member list would otherwise
+    still sort members by a field the viewer is no longer shown. Only a hop
+    INTO such a model is checked; the served model's own fields are gated by
+    its own read. A trailing lookup token (in / icontains / isnull) is not a
+    field and ends the walk unrestricted, as in is_sensitive_filter_path.
+    No request (a job or the shell building filters) leaves the path alone.
+    """
+    if request is None:
+        return False
+    current = model
+    for index, part in enumerate(key.split("__")):
+        if current is None:
+            return False
+        try:
+            field = current._meta.get_field(part)
+        except Exception:
+            return False
+        if index > 0:
+            allowed = _nested_view_fields(current)
+            if (allowed is not None and part not in allowed
+                    and not current.rest_viewer_has_account_view(request)):
+                return True
+        current = getattr(field, "related_model", None) if field.is_relation else None
+    return False
+
+
 def _warn_can_save_deprecated(cls_name):
     if cls_name in _DEPRECATED_CAN_SAVE_WARNED:
         return
@@ -1530,6 +1572,11 @@ class MojoModel:
                 logit.warn(f"dropped sensitive filter on {cls.__name__}: {key}")
                 cls._report_sensitive_probe(request, key)
                 continue
+            # A field the viewer is not shown on a nested User is not
+            # filterable by them either (#8648). Dropped silently, with no
+            # incident: ordinary portal searches reach here.
+            if is_viewer_restricted_path(cls, key, request):
+                continue
 
             # Determine if this is an exclusion filter
             is_exclusion = key.endswith("__not") or key.endswith("__not_in")
@@ -1733,6 +1780,7 @@ class MojoModel:
         # AGGREGATION_FIELDS cannot widen past the sensitive gate.
         search_fields = [
             f for f in search_fields if not is_sensitive_filter_path(cls, f)
+            and not is_viewer_restricted_path(cls, f, request)
         ]
         if not search_fields:
             # Nothing left to match against. Returning `queryset` unchanged
@@ -1836,7 +1884,7 @@ class MojoModel:
         # learns the relative order of values they cannot read. Ignored rather
         # than rejected, matching how this method already treats an unknown
         # sort field one line above.
-        if is_sensitive_filter_path(cls, bare):
+        if is_sensitive_filter_path(cls, bare) or is_viewer_restricted_path(cls, bare, request):
             return queryset
         descending = sort_field.startswith('-')
         field = cls.get_model_field(bare)

@@ -162,7 +162,14 @@ def serialize_instance(instance, request=None, graph_override=None):
     name = resolve_graph(
         instance.__class__, request=request, graph_override=graph_override,
         instance=instance)
-    return instance.to_dict(graph=name)
+    # Nested rows read the viewer from ACTIVE_REQUEST (#8648); bind ours so a
+    # stale request from another executor thread is never the one consulted.
+    from mojo.models.rest import ACTIVE_REQUEST
+    token = ACTIVE_REQUEST.set(request)
+    try:
+        return instance.to_dict(graph=name)
+    finally:
+        ACTIVE_REQUEST.reset(token)
 
 
 def serialize_queryset(queryset, request=None, graph_override=None):
@@ -179,4 +186,9 @@ def serialize_queryset(queryset, request=None, graph_override=None):
             "cannot be serialized for the assistant")
     name = resolve_graph(
         model, request=request, graph_override=graph_override)
-    return model.queryset_to_dict(queryset, graph=name)
+    from mojo.models.rest import ACTIVE_REQUEST
+    token = ACTIVE_REQUEST.set(request)
+    try:
+        return model.queryset_to_dict(queryset, graph=name)
+    finally:
+        ACTIVE_REQUEST.reset(token)

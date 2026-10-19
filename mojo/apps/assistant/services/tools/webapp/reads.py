@@ -409,17 +409,27 @@ def _tool_check_webapp_health(params, user):
 def _tool_get_webapp_deploy_history(params, user):
     from mojo.apps.edge.models import WebAppDeployment, WebAppRelease
 
+    from mojo.models.rest import ACTIVE_REQUEST
+    from mojo.apps.assistant.services.tools.models import _build_request
+
     web_app = common.webapp_for(user, params.get("webapp"))
-    releases = [
-        row.to_dict(graph="basic")
-        for row in WebAppRelease.objects.filter(webapp=web_app).order_by(
-            "-created")[:RELEASES_LIMIT]
-    ]
-    deployments = [
-        row.to_dict(graph="list")
-        for row in WebAppDeployment.objects.filter(webapp=web_app).select_related(
-            "release", "previous_release").order_by("-created")[:DEPLOYMENTS_LIMIT]
-    ]
+    # Nested people (a release's created_by) read the viewer from
+    # ACTIVE_REQUEST (#8648); bind this caller rather than whatever request
+    # the executor thread last carried.
+    token = ACTIVE_REQUEST.set(_build_request(user))
+    try:
+        releases = [
+            row.to_dict(graph="basic")
+            for row in WebAppRelease.objects.filter(webapp=web_app).order_by(
+                "-created")[:RELEASES_LIMIT]
+        ]
+        deployments = [
+            row.to_dict(graph="list")
+            for row in WebAppDeployment.objects.filter(webapp=web_app).select_related(
+                "release", "previous_release").order_by("-created")[:DEPLOYMENTS_LIMIT]
+        ]
+    finally:
+        ACTIVE_REQUEST.reset(token)
     return {
         "webapp": web_app.pk,
         "current_release": web_app.current_release_id,

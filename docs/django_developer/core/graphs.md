@@ -162,7 +162,50 @@ Nested graphs are **not** permission-gated: a graph's field lists and its nested
 `graphs` are developer-authored config trusted like the fields themselves. Keep
 sensitive related data out of a nested graph (the convention is to snapshot the
 needed fields rather than nest — see `incident/models/event.py`), or gate the
-top-level graph that pulls it in.
+top-level graph that pulls it in. The one exception is a model that declares
+`NESTED_VIEW_GRAPH`, below.
+
+### `NESTED_VIEW_GRAPH`: Nested People Show Only What Their Viewer May Read
+
+A model whose rows describe a person's account declares
+`RestMeta.NESTED_VIEW_GRAPH` and an instance hook
+`rest_nested_full_view(request)`. When a row of that model is rendered
+**nested** inside another row, the serializer serves `NESTED_VIEW_GRAPH` in
+place of whatever graph the parent named, unless the hook returns True for
+the active request. Only `account.User` declares it today (`nested_identity`,
+#8648).
+
+- **Who sees a nested User in full:** exactly who could `GET /api/user/<pk>`
+  for that user: the user themselves; a holder of the global `view_users`,
+  `manage_users` or `users`; a superuser. The hook is
+  `User.check_edit_permission(VIEW_PERMS, request)`, so ApiKeys are refused and
+  a group token sees only its own user, on GET.
+- **Everyone else** gets `nested_identity`: `id, uuid, username,
+  display_name, is_active, avatar`, plus the field groups the product kept
+  (module constants `NESTED_CONTACT_FIELDS`, `NESTED_DOB_FIELDS`,
+  `NESTED_ACTIVITY_FIELDS`, `NESTED_VERIFICATION_FIELDS`, `NESTED_ORG_GRAPH`
+  in `account/models/user.py`). Never `permissions`, `is_superuser`,
+  `requires_mfa`, `requires_password_change`, `has_password`, `has_passkey` or
+  `metadata`.
+- **Every nested graph name is swapped**, `basic` included, on every model
+  that nests User (`GroupMember.user`, `RegisteredDevice.user`, docit
+  `created_by`, a consumer app's own FKs). A `?graph=` override on the parent
+  cannot widen it: the nested name comes from the parent's config.
+- **The top-level row is never swapped.** `GET /api/user` and
+  `/api/user/<pk>` are gated by User's own `VIEW_PERMS` as before.
+- **No active request, no swap.** Jobs, emails and the shell serialize as
+  before. Code that serializes on a request's behalf outside the REST
+  middleware (the assistant tools do) must bind `ACTIVE_REQUEST` around the
+  call.
+- **Filters, search and sort follow the same rule.** A lookup that crosses a
+  relation into User and names a field outside `nested_identity` is dropped
+  silently for a viewer without the global account view
+  (`?user__requires_mfa=True`, `sort=user__last_login`, a `user__email`
+  search field when email is withheld). No incident is reported.
+- **CSV:** a dotted `FORMATS` path into User outside `nested_identity`
+  (`user.email`) is written as an empty cell for such a viewer.
+- **Cache:** the effective graph name is part of the serializer cache key, so
+  a full and an identity rendering of one user never share an entry.
 
 ## The `ai` Graph: What the Assistant Reads
 

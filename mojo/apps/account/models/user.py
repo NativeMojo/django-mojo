@@ -95,6 +95,20 @@ INVITE_CACHE_SECRETS = ("invite_token", "invite_jti", "invite_ts")
 METRICS_TIMEZONE = settings.get_static("METRICS_TIMEZONE", "America/Los_Angeles")
 METRICS_TRACK_USER_ACTIVITY = settings.get_static("METRICS_TRACK_USER_ACTIVITY", False)
 
+# What another person sees of a user nested inside some other row (a member
+# list, a device, a docit page) when they could not GET /api/user/<pk> for that
+# user (#8648). The serializer swaps every nested User graph for
+# NESTED_VIEW_GRAPH below; the filter, search and sort guard in mojo.models.rest
+# allows only these fields past a relation into User. Each group is one
+# product decision, kept separate; an empty tuple withholds it. Constants, not
+# settings: this is framework policy.
+NESTED_IDENTITY_FIELDS = ("id", "uuid", "username", "display_name", "is_active")
+NESTED_CONTACT_FIELDS = ()        # choice 1: email, phone_number, first_name, last_name
+NESTED_DOB_FIELDS = ()            # choice 2: dob
+NESTED_ACTIVITY_FIELDS = ()       # choice 3: last_login, last_activity, is_online
+NESTED_VERIFICATION_FIELDS = ()   # choice 4: is_email_verified, is_phone_verified, is_dob_verified
+NESTED_ORG_GRAPH = None           # choice 5: "basic" to nest org
+
 class CustomUserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:
@@ -296,8 +310,20 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 "graphs": {
                     "avatar": "basic"
                 }
+            },
+            "nested_identity": {
+                "fields": list(
+                    NESTED_IDENTITY_FIELDS + NESTED_CONTACT_FIELDS + NESTED_DOB_FIELDS
+                    + NESTED_ACTIVITY_FIELDS + NESTED_VERIFICATION_FIELDS),
+                "graphs": dict(
+                    {"avatar": "basic"},
+                    **({"org": NESTED_ORG_GRAPH} if NESTED_ORG_GRAPH else {}))
             }
         }
+        # A nested User is served this graph instead of the one its parent
+        # names unless rest_nested_full_view() says the viewer may read the
+        # whole account (#8648).
+        NESTED_VIEW_GRAPH = "nested_identity"
 
     def __str__(self):
         return self.email
@@ -1349,6 +1375,43 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if "owner" in perms and self.is_request_user():
             return True
         return request.user.has_permission(perms)
+
+    def rest_nested_full_view(self, request):
+        """True when `request` may see this user nested in full (#8648).
+
+        The rule is the one GET /api/user/<pk> already applies, so a nested
+        user shows what its viewer could read directly and nothing more. No
+        request (jobs, emails, shell) leaves serialization unchanged; the
+        serializer never calls this without one. Side-effect free.
+        """
+        if request is None:
+            return False
+        confined = (getattr(request, "group_token", None) is not None
+                    or getattr(request, "api_key", None) is not None)
+        if not confined and not getattr(getattr(request, "user", None), "is_authenticated", False):
+            return False
+        return bool(self.check_edit_permission(type(self).RestMeta.VIEW_PERMS, request))
+
+    @classmethod
+    def rest_viewer_has_account_view(cls, request):
+        """True when `request` may read every user's account fields (#8648).
+
+        The instance-free half of rest_nested_full_view, for the filter,
+        search and sort guard: a lookup crosses into User for every row at
+        once, so `owner` cannot apply. ApiKeys and group tokens follow
+        check_edit_permission's confinement.
+        """
+        if getattr(request, "group_token", None) is not None:
+            return False
+        perms = [p for p in cls.RestMeta.VIEW_PERMS if p != "owner"]
+        api_key = getattr(request, "api_key", None)
+        if api_key is not None:
+            return bool(cls.get_rest_meta_prop("ALLOW_API_KEY_GLOBAL", False)
+                        and api_key.has_permission(perms))
+        user = getattr(request, "user", None)
+        if not getattr(user, "is_authenticated", False):
+            return False
+        return bool(user.has_permission(perms))
 
     def on_action_send_invite(self, value):
         self.send_invite()
