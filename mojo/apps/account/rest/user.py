@@ -1307,7 +1307,7 @@ def on_user_forgot(request, *, send_sms=None, send_email=None):
                     sender = send_sms if send_sms is not None else phonehub.send_sms
                     sender(
                         user.phone_number,
-                        f"Your password reset code is: {code}")
+                        f"Your password reset code is: {code}", secret=code)
                 except Exception as exc:
                     user.report_incident(
                         f"SMS reset code send failed: {exc}",
@@ -1558,7 +1558,7 @@ def on_magic_login_send(request, *, send=None):
                 # incident write must not 500 the endpoint either, because that
                 # would restore exactly the differential this closes.
                 try:
-                    sms = sender(normalized, f"Your login link: {login_url}")
+                    sms = sender(normalized, f"Your login link: {login_url}", secret=login_url)
                     if not sms_delivery.was_accepted(sms):
                         user.report_incident(
                             "magic login SMS send failed",
@@ -2376,7 +2376,7 @@ def on_phone_change_request(request, *, send=None):
     session_token, otp = tok_utils.generate_phone_change_token(user, normalized)
 
     try:
-        sms = sender(normalized, f"Your phone change verification code is: {otp}")
+        sms = sender(normalized, f"Your phone change verification code is: {otp}", secret=otp)
     except Exception:
         logit.exception(f"phone change SMS transport raised for user {user.pk}")
         sms = None

@@ -165,7 +165,7 @@ def on_phone_verify_send(request, *, send=None):
     sender = send if send is not None else phonehub.send_sms
     code = tokens.generate_phone_verify_code(user)
     try:
-        sms = sender(normalized, f"Your verification code is: {code}")
+        sms = sender(normalized, f"Your verification code is: {code}", secret=code)
     except Exception:
         logit.exception(f"phone verify SMS transport raised for user {user.pk}")
         sms = None

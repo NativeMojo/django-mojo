@@ -71,7 +71,7 @@ def _send_otp(user, request=None, *, send=None, length=None):
 
     sender = send if send is not None else phonehub.send_sms
     try:
-        sms = sender(user.phone_number, _otp_sms_body(code, request))
+        sms = sender(user.phone_number, _otp_sms_body(code, request), secret=code)
         if not sms_delivery.was_accepted(sms):
             logit.error("account.sms", f"Failed to send SMS OTP to {user.phone_number}")
             user.report_incident("SMS OTP send failed", "sms:send_failed", level=6)
@@ -294,7 +294,7 @@ def on_phone_register_start(request, *, send=None):
 
     sender = send if send is not None else phonehub.send_sms
     try:
-        sms = sender(phone, _otp_sms_body(code, request))
+        sms = sender(phone, _otp_sms_body(code, request), secret=code)
     except Exception as e:
         logit.error("account.sms", f"phone_register: SMS exception for {phone}: {e}")
         sms = None
