@@ -15,10 +15,11 @@ downstream apps must not invent their own.
 import datetime
 import json
 import time
+from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import FieldError, ValidationError
 from django.db import Error as DBError, models as dm
-from django.db.models import Count, Sum, Avg, Min, Max
+from django.db.models import Count, Sum, Avg, Min, Max, F, Value
 from django.db.models.functions import (
     TruncMinute, TruncHour, TruncDay, TruncWeek, TruncMonth,
 )
@@ -223,19 +224,31 @@ def _agg_top(cls, request, queryset):
 
     size = _resolve_int(request.DATA.get("_size"), default=10, cap=TOP_CAP)
     min_count = _resolve_int(request.DATA.get("_min_count"), default=1, cap=None)
+    min_value = _resolve_number(request.DATA.get("_min_value"))
 
-    annotations = {"value": AGG_FUNCS[agg_name](agg_target)}
+    # `_min_count` counts rows per group for every `_agg`; `_min_value`
+    # is the separate, signed threshold on the aggregate value.
+    annotations = {
+        "value": AGG_FUNCS[agg_name](agg_target),
+        "_row_n": Count("pk"),
+    }
     dt_field = _first_datetime_field(cls)
     if dt_field and dt_field != group_field:
         annotations["first_seen"] = Min(dt_field)
         annotations["last_seen"] = Max(dt_field)
 
-    rows = (
+    qs = (
         queryset.values(group_field)
         .annotate(**annotations)
-        .filter(value__gte=min_count)
-        .order_by("-value")[:size]
+        .filter(_row_n__gte=min_count)
     )
+    if min_value is not None:
+        # A typed expression, not a plain int: Django checks a plain int
+        # against the INPUT column's range, but SUM(integer) is wider, so a
+        # threshold past that range would empty or ignore the filter. The
+        # database compares the real aggregate with the exact number.
+        qs = qs.filter(value__gte=Value(min_value, output_field=dm.DecimalField()))
+    rows = qs.order_by(F("value").desc(nulls_last=True))[:size]
 
     data = []
     for row in rows:
@@ -531,6 +544,20 @@ def _resolve_int(value, default, cap):
     if cap is not None and n > cap:
         return cap
     return n
+
+
+def _resolve_number(value):
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise me.ValueException(f"_min_value must be a number, got {value!r}")
+    try:
+        d = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        raise me.ValueException(f"_min_value must be a number, got {value!r}")
+    if not d.is_finite():
+        raise me.ValueException(f"_min_value must be a number, got {value!r}")
+    return d
 
 
 def _datetime_field(cls, name):
