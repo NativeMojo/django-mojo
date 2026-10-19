@@ -254,10 +254,66 @@ def desired_behaviors(managers, origin_id, key_group_id):
     return plan_behaviors(managers, origin_id, key_group_id)["behaviors"]
 
 
+# Legacy cache settings CloudFront refuses next to a CachePolicyId.
+_LEGACY_CACHE_KEYS = ("ForwardedValues", "MinTTL", "DefaultTTL", "MaxTTL")
+_OWNED_BEHAVIOR_KEYS = ("PathPattern", "TargetOriginId", "ViewerProtocolPolicy", "AllowedMethods",
+                        "Compress", "TrustedSigners", "TrustedKeyGroups")
+
+
+def _merge_behavior(live, planned, keep_cache_policy=False):
+    """`planned` written over a copy of the `live` behavior: only the keys
+    fileman owns change; functions, origin request policy and the rest of
+    the live behavior are kept (UpdateDistribution is a full replace). A
+    BYO distribution keeps its own cache policy (maestro #8652)."""
+    if not isinstance(live, dict):
+        return planned
+    merged = json.loads(json.dumps(live))
+    for key in _OWNED_BEHAVIOR_KEYS:
+        if key in planned:
+            merged[key] = planned[key]
+    if planned.get("ResponseHeadersPolicyId"):
+        merged["ResponseHeadersPolicyId"] = planned["ResponseHeadersPolicyId"]
+    else:
+        merged.pop("ResponseHeadersPolicyId", None)
+    if not keep_cache_policy:
+        merged["CachePolicyId"] = planned["CachePolicyId"]
+    if merged.get("CachePolicyId"):
+        for key in _LEGACY_CACHE_KEYS:
+            merged.pop(key, None)
+    return merged
+
+
+def _merge_behaviors(live_items, planned, keep_cache_policy=False):
+    """The planned per-prefix list, in its order and count; a planned
+    behavior whose PathPattern is live starts from the live item."""
+    live_by_pattern = {item.get("PathPattern"): item for item in live_items or [] if isinstance(item, dict)}
+    return [_merge_behavior(live_by_pattern.get(b.get("PathPattern")), b, keep_cache_policy)
+            for b in planned]
+
+
+def _owned_origin_index(items, domain, origin_id=None):
+    """The live origin fileman converges: the one with `origin_id`, else the
+    one serving `domain`, else the first."""
+    for match in (lambda o: origin_id and o.get("Id") == origin_id,
+                  lambda o: o.get("DomainName") == domain):
+        for index, origin in enumerate(items):
+            if isinstance(origin, dict) and match(origin):
+                return index
+    return 0
+
+
 def distribution_config(bucket, region, oac_id, key_group_id, behaviors, caller_reference,
-                        enabled=True, current=None, response_headers_policy_id=None):
+                        enabled=True, current=None, response_headers_policy_id=None,
+                        origin_id=None, keep_cache_policy=False):
     """The full DistributionConfig we converge to. With `current`, fields we
-    do not own (aliases, certificate, price class, logging...) are kept."""
+    do not own (aliases, certificate, price class, logging...) are kept, and
+    the live origin and behaviors are merged into, not replaced: only the
+    keys fileman owns change, every other origin is kept, and the origin
+    keeps its live Id (maestro #8652)."""
+    if isinstance(current, dict):
+        return _merged_distribution_config(
+            bucket, region, oac_id, key_group_id, behaviors, enabled, current,
+            response_headers_policy_id, origin_id, keep_cache_policy)
     origin_id = f"s3-{bucket}"
     config = {
         "CallerReference": caller_reference,
@@ -277,13 +333,42 @@ def distribution_config(bucket, region, oac_id, key_group_id, behaviors, caller_
         "IsIPV6Enabled": True,
     }
     config["CacheBehaviors"] = {"Quantity": len(behaviors), "Items": list(behaviors)}
-    if isinstance(current, dict):
-        merged = dict(current)
-        for key in ("Enabled", "Origins", "DefaultCacheBehavior", "CacheBehaviors"):
-            merged[key] = config[key]
-        merged.setdefault("Comment", config["Comment"])
-        return merged
     return config
+
+
+def _merged_distribution_config(bucket, region, oac_id, key_group_id, behaviors, enabled, current,
+                                response_headers_policy_id, origin_id, keep_cache_policy):
+    merged = json.loads(json.dumps(current))
+    domain = origin_domain(bucket, region)
+    items = list((merged.get("Origins") or {}).get("Items") or [])
+    if items:
+        index = _owned_origin_index(items, domain, origin_id)
+        origin = items[index]
+    else:
+        index, origin = 0, {"Id": origin_id or f"s3-{bucket}"}
+        items.append(origin)
+    origin_id = origin.get("Id") or origin_id or f"s3-{bucket}"
+    origin["Id"] = origin_id
+    origin["DomainName"] = domain
+    origin["OriginAccessControlId"] = oac_id
+    s3_config = origin.get("S3OriginConfig") if isinstance(origin.get("S3OriginConfig"), dict) else {}
+    s3_config["OriginAccessIdentity"] = ""
+    origin["S3OriginConfig"] = s3_config
+    # CloudFront refuses an origin without CustomHeaders on update.
+    origin.setdefault("CustomHeaders", {"Quantity": 0, "Items": []})
+    items[index] = origin
+    merged["Origins"] = {"Quantity": len(items), "Items": items}
+    default = _behavior(origin_id, key_group_id, signed=True,
+                        response_headers_policy_id=response_headers_policy_id)
+    merged["DefaultCacheBehavior"] = _merge_behavior(merged.get("DefaultCacheBehavior"), default,
+                                                     keep_cache_policy)
+    planned = [dict(b, TargetOriginId=origin_id) for b in behaviors]
+    live_items = (merged.get("CacheBehaviors") or {}).get("Items") or []
+    items = _merge_behaviors(live_items, planned, keep_cache_policy)
+    merged["CacheBehaviors"] = {"Quantity": len(items), "Items": items}
+    merged["Enabled"] = bool(enabled)
+    merged.setdefault("Comment", f"django-mojo fileman {bucket}")
+    return merged
 
 
 def _behaviors_match(current, desired):
@@ -1035,7 +1120,8 @@ class CdnProvisioner:
         new_config = distribution_config(
             self.bucket, region, origin.get("OriginAccessControlId") or self.observed.get("oac_id"),
             key_group_id, desired, config.get("CallerReference"), enabled=True,
-            current=config, response_headers_policy_id=policy)
+            current=config, response_headers_policy_id=policy,
+            origin_id=origin_id, keep_cache_policy=byo)
         self.actions.append(report.Action(STEP_DISTRIBUTION, "modify", dist_id,
                                           "converge behaviors and enablement"))
         updated = self._call(STEP_DISTRIBUTION, "cloudfront.update_distribution",
@@ -1094,7 +1180,8 @@ class CdnProvisioner:
         if not self._signed_behaviors_writable(cf, plan["behaviors"], default_groups):
             return
         new_config = dict(config)
-        new_config["CacheBehaviors"] = {"Quantity": len(plan["behaviors"]), "Items": plan["behaviors"]}
+        items = _merge_behaviors(current, plan["behaviors"], keep_cache_policy=row.source == "byo")
+        new_config["CacheBehaviors"] = {"Quantity": len(items), "Items": items}
         self.actions.append(report.Action(STEP_DISTRIBUTION, "modify", row.distribution_id,
                                           "converge cache behaviors"))
         updated = self._call(STEP_DISTRIBUTION, "cloudfront.update_distribution",
