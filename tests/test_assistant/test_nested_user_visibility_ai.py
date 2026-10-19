@@ -106,3 +106,41 @@ def test_export_data_group_member_stripped(opts):
     assert TARGET in text, f"the member's email stays in the export: {text!r}"
     for key in PRIVATE_KEYS:
         assert key not in text, f"the export must not carry {key}: {text!r}"
+
+
+@th.django_unit_test("serialize_instance binds its own viewer over a stale request and restores it")
+def test_serialize_instance_viewer_binding(opts):
+    from objict import objict
+    from mojo.apps.account.models import User, GroupMember
+    from mojo.apps.assistant.services import model_serialization
+    from mojo.models.rest import ACTIVE_REQUEST
+
+    def request_for(user):
+        return objict(user=user, method="GET", api_key=None, group_token=None,
+                      DATA=objict(), group=None)
+
+    admin = User.objects.create_user(username=f"{PREFIX}admin@test.com",
+                                     email=f"{PREFIX}admin@test.com", password="x" * 16)
+    admin.permissions = {"view_users": True}
+    admin.save()
+    stale, viewer = request_for(admin), request_for(opts.viewer)
+    member = GroupMember.objects.get(user_id=opts.target_id, group_id=opts.group_id)
+
+    token = ACTIVE_REQUEST.set(stale)
+    try:
+        user = model_serialization.serialize_instance(member, request=viewer)["user"]
+        restored = ACTIVE_REQUEST.get()
+    finally:
+        ACTIVE_REQUEST.reset(token)
+    assert not set(user) & PRIVATE_KEYS, \
+        f"the caller's request must replace a stale account viewer, got {sorted(set(user) & PRIVATE_KEYS)}"
+    assert restored is stale, "the stale request must be bound again afterwards"
+
+    token = ACTIVE_REQUEST.set(viewer)
+    try:
+        user = model_serialization.serialize_instance(member, request=None)["user"]
+        restored = ACTIVE_REQUEST.get()
+    finally:
+        ACTIVE_REQUEST.reset(token)
+    assert not set(user) & PRIVATE_KEYS, "request=None must keep the bound viewer"
+    assert restored is viewer, "request=None must leave the binding as it was"

@@ -376,3 +376,105 @@ def test_no_request_unchanged(opts):
     finally:
         ACTIVE_REQUEST.reset(token)
     _assert_full(data["user"], "no request (a job, an email, the shell)")
+
+
+def _stream_csv(queryset, fields, captured, ambient):
+    """A streamed CSV export created while `captured` is bound, read while
+    `ambient` is bound: the body is written after the request ends."""
+    import csv
+    import io
+    from mojo.models.rest import ACTIVE_REQUEST
+    from mojo.serializers.formats.csv import CsvFormatter
+
+    token = ACTIVE_REQUEST.set(captured)
+    try:
+        response = CsvFormatter(streaming_threshold=0).serialize_queryset(queryset, fields=fields)
+    finally:
+        ACTIVE_REQUEST.reset(token)
+    assert response.streaming, "the export must stream for this test to mean anything"
+    token = ACTIVE_REQUEST.set(ambient)
+    try:
+        body = b"".join(response.streaming_content).decode()
+    finally:
+        ACTIVE_REQUEST.reset(token)
+    return list(csv.reader(io.StringIO(body)))[1:]
+
+
+def _request_for(user_id):
+    from objict import objict
+    from mojo.apps.account.models import User
+    return objict(user=User.objects.get(pk=user_id), method="GET",
+                  api_key=None, group_token=None)
+
+
+STREAM_FIELDS = ["user.email", "user.requires_mfa", "user.metadata.note"]
+
+
+@th.django_unit_test("case 13: a streamed CSV captured for a restricted viewer stays stripped when read under the target's request")
+def test_csv_stream_other_ambient(opts):
+    from mojo.apps.account.models import GroupMember
+
+    queryset = GroupMember.objects.filter(pk=opts.target_member_id)
+    rows = _stream_csv(queryset, STREAM_FIELDS,
+                       _request_for(opts.viewer_id), _request_for(opts.target_id))
+    assert rows[0][0] == TARGET, f"the email stays in the export, got row {rows[0]!r}"
+    assert rows[0][1:] == ["", ""], \
+        f"the target's requires_mfa and metadata.note must stay empty for the captured viewer, " \
+        f"whoever is bound when the body is written; got row {rows[0]!r}"
+
+
+@th.django_unit_test("case 14: a streamed CSV captured for a restricted viewer stays stripped when read with no request")
+def test_csv_stream_no_ambient(opts):
+    from mojo.apps.account.models import GroupMember
+
+    queryset = GroupMember.objects.filter(pk=opts.target_member_id)
+    rows = _stream_csv(queryset, STREAM_FIELDS, _request_for(opts.viewer_id), None)
+    assert rows[0][1:] == ["", ""], \
+        f"the target's requires_mfa and metadata.note must stay empty, got row {rows[0]!r}"
+
+
+@th.django_unit_test("case 15: a streamed CSV keeps the viewer's own row full when read with no request")
+def test_csv_stream_self_full(opts):
+    from mojo.apps.account.models import GroupMember, User
+
+    User.objects.filter(pk=opts.viewer_id).update(requires_mfa=True)
+    try:
+        queryset = GroupMember.objects.filter(user_id=opts.viewer_id, group_id=opts.group_id)
+        rows = _stream_csv(queryset, ["user.email", "user.requires_mfa"],
+                           _request_for(opts.viewer_id), None)
+    finally:
+        User.objects.filter(pk=opts.viewer_id).update(requires_mfa=False)
+    assert rows == [[VIEWER, "True"]], f"the viewer's own row must stay full, got {rows!r}"
+
+
+@th.django_unit_test("case 16: an ApiKey acting as its own user still gets its own nested row stripped")
+def test_apikey_acting_as_self(opts):
+    from objict import objict
+    from mojo.apps.account.models import GroupMember
+    from mojo.models.rest import ACTIVE_REQUEST
+
+    request = _request_for(opts.viewer_id)
+    request.api_key = objict(has_permission=lambda perms: True)
+    member = GroupMember.objects.get(user_id=opts.viewer_id, group_id=opts.group_id)
+    token = ACTIVE_REQUEST.set(request)
+    try:
+        user = member.to_dict()["user"]
+    finally:
+        ACTIVE_REQUEST.reset(token)
+    _assert_stripped(user, "ApiKey request whose user is the nested user")
+
+
+@th.django_unit_test("case 17: _stats drops a private user predicate for a view_members viewer and keeps the email one")
+def test_stats_bundles(opts):
+    import json
+    _login(opts, VIEWER)
+    total = _member_count(opts)
+    resp = opts.client.get("/api/group/member", params={
+        "group": opts.group_id, "_mode": "count",
+        "_stats": json.dumps({"hidden": {"user__is_superuser": True},
+                              "email": {"user__email": TARGET}}),
+    })
+    assert resp.status_code == 200, \
+        f"the count must succeed, got {resp.status_code}: {opts.client.last_response.body}"
+    assert resp.response.get("stats") == {"hidden": total, "email": 1}, \
+        f"the hidden bundle must count every member and the email bundle one, got {resp.response!r}"
