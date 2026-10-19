@@ -205,28 +205,19 @@ def is_sensitive_filter_path(model, key):
     return False
 
 
-def _nested_view_fields(model):
-    """The field and relation names `model`'s NESTED_VIEW_GRAPH serves, or
-    None when the model declares none."""
-    rest_meta = getattr(model, "RestMeta", None)
-    name = getattr(rest_meta, "NESTED_VIEW_GRAPH", None)
-    graph = (getattr(rest_meta, "GRAPHS", None) or {}).get(name) if name else None
-    if graph is None:
-        return None
-    return set(graph.get("fields") or ()) | set((graph.get("graphs") or {}).keys())
-
-
 def is_viewer_restricted_path(model, key, request):
-    """True when an ORM lookup path crosses a relation into a model the viewer
-    may only see as its NESTED_VIEW_GRAPH, and then names a field outside it.
+    """True when an ORM lookup path crosses a relation into a model that
+    declares NESTED_PRIVATE_LOOKUPS, names one of them, and the viewer lacks
+    that model's account view (#8648).
 
-    The filter, search and sort twin of the serializer's nested-graph swap
-    (#8648): `?user__requires_mfa=True` on the member list would otherwise
-    still tell the viewer which members have a field they are not shown. Only a hop
-    INTO such a model is checked; the served model's own fields are gated by
-    its own read. A trailing lookup token (in / icontains / isnull) is not a
-    field and ends the walk unrestricted, as in is_sensitive_filter_path.
-    No request (a job or the shell building filters) leaves the path alone.
+    The filter and search twin of the serializer's nested strip:
+    `?user__requires_mfa=True` on the member list would otherwise tell the
+    viewer which members have a field they are not shown. A deny-list, so
+    email, username and name filters and search are untouched. Membership is
+    tested before the segment is resolved, so an unresolvable private name is
+    still refused. Only a hop INTO such a model is checked; the served
+    model's own fields are gated by its own read. No request (a job or the
+    shell building filters) leaves the path alone.
     """
     if request is None:
         return False
@@ -234,15 +225,15 @@ def is_viewer_restricted_path(model, key, request):
     for index, part in enumerate(key.split("__")):
         if current is None:
             return False
+        if index > 0:
+            private = getattr(getattr(current, "RestMeta", None), "NESTED_PRIVATE_LOOKUPS", None)
+            if (private and part in private
+                    and not current.rest_viewer_has_account_view(request)):
+                return True
         try:
             field = current._meta.get_field(part)
         except Exception:
             return False
-        if index > 0:
-            allowed = _nested_view_fields(current)
-            if (allowed is not None and part not in allowed
-                    and not current.rest_viewer_has_account_view(request)):
-                return True
         current = getattr(field, "related_model", None) if field.is_relation else None
     return False
 
@@ -1884,7 +1875,7 @@ class MojoModel:
         # learns the relative order of values they cannot read. Ignored rather
         # than rejected, matching how this method already treats an unknown
         # sort field one line above.
-        if is_sensitive_filter_path(cls, bare) or is_viewer_restricted_path(cls, bare, request):
+        if is_sensitive_filter_path(cls, bare):
             return queryset
         descending = sort_field.startswith('-')
         field = cls.get_model_field(bare)

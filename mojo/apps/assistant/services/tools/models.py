@@ -425,8 +425,9 @@ def _resolve_group_by_field(model, name):
     return field.name
 
 
-def _validate_filter_keys(model, filters, valid_fields, user, model_label):
+def _validate_filter_keys(model, filters, valid_fields, user, model_label, request=None):
     """Validate filter keys against model fields. Returns error dict or None."""
+    from mojo.models.rest import is_viewer_restricted_path
     # ORM lookup suffixes that are not field names
     ORM_SUFFIXES = {"in", "not", "not_in", "isnull", "gte", "gt", "lte", "lt",
                     "exact", "iexact", "contains", "icontains", "startswith",
@@ -449,6 +450,12 @@ def _validate_filter_keys(model, filters, valid_fields, user, model_label):
 
         if base not in valid_fields:
             return {"error": f"Unknown field '{base}' on {model_label}"}
+
+        # A nested user's account fields are not filterable by a viewer who
+        # is not shown them, the REST filter guard's rule (#8648). No incident.
+        if is_viewer_restricted_path(model, key, request):
+            named = next((s for s in reversed(parts) if s not in ORM_SUFFIXES), key)
+            return {"error": f"Filtering on '{named}' is not available"}
 
     return None
 
@@ -737,7 +744,7 @@ def _tool_query_model(params, user):
 
     # Validate filter keys
     valid_fields = _get_valid_field_names(model)
-    filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label)
+    filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label, request=request)
     if filter_err:
         return filter_err
 
@@ -1279,7 +1286,7 @@ def _tool_aggregate_model(params, user):
     # Validate filters
     valid_fields = _get_valid_field_names(model)
     if filters:
-        filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label)
+        filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label, request=request)
         if filter_err:
             return filter_err
 
@@ -1607,7 +1614,7 @@ def _tool_export_data(params, user):
     # Validate filters
     valid_fields = _get_valid_field_names(model)
     if filters:
-        filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label)
+        filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label, request=request)
         if filter_err:
             return filter_err
 

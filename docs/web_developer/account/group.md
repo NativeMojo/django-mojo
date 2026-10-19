@@ -133,14 +133,18 @@ Every member row (`/api/group/member` list and single row, the invite
 response) nests its `user`. Who sees how much of it (#8648):
 
 - **Your own row, and every row for a global `view_users`, `manage_users` or
-  `users` holder or a superuser:** the full user (`permissions`, `metadata`,
-  `requires_mfa`, `has_passkey`, ...), as `GET /api/user/<pk>` shows it.
+  `users` holder or a superuser:** the full user, as before.
 - **Everyone else** (`view_members`, `manage_group`, member-level grants of any
-  kind, API keys): identity only: `id, uuid, username, display_name,
-  is_active, avatar`, plus the contact, birthday, activity, verification and
-  org fields the framework keeps for other members.
-- Filters, search and sort on `user__<field>` for a field you are not shown
-  are ignored (`?user__requires_mfa=True` returns the unfiltered list).
+  kind, API keys): the same user without `permissions`, `is_superuser`,
+  `requires_mfa`, `requires_password_change`, `has_password`, `has_passkey`
+  and `metadata`. Those keys are absent, not null. Email, names, phone,
+  activity and verification fields are unchanged.
+- The member row's own `permissions` and `metadata` (the member's group role)
+  are not affected.
+- Filters on `user__is_superuser`, `user__requires_mfa`,
+  `user__requires_password_change`, `user__passkeys` and `user__totp` are
+  ignored for those viewers (`?user__requires_mfa=True` returns the
+  unfiltered list). Email and name filters and search still work.
 
 The same rule applies to a user nested in any other row (devices, docit
 pages, a consumer app's own models).

@@ -90,7 +90,7 @@ class OptimizedGraphSerializer:
         :param bypass_cache: Skip all caching operations for performance testing
         :param simple_mode: Behave exactly like simple serializer (no cache overhead at all)
         :param nested: This serializer renders a related object inside another
-            row; see _effective_graph
+            row; see _nested_view
         :param kwargs: Additional options (cache, etc.)
         """
         self.graph = graph
@@ -106,6 +106,10 @@ class OptimizedGraphSerializer:
         self.simple_mode = simple_mode or bypass_cache  # simple_mode implies bypass_cache
         self._cache_backend = None
         self._request_cache = None
+        # Whether the bound viewer lacks the account view; resolved once per
+        # serializer tree and shared with nested serializers (see
+        # _viewer_restricted).
+        self._restricted_viewer = None
 
         # Handle QuerySet detection - same as simple serializer
         if isinstance(instance, QuerySet):
@@ -136,24 +140,67 @@ class OptimizedGraphSerializer:
 
     def _serialize_instance_cached(self, obj):
         """
+        Serialize single instance; a nested row is passed through _nested_view.
+        """
+        data = self._serialize_instance_cached_raw(obj)
+        if self.nested:
+            return self._nested_view(obj, data)
+        return data
+
+    def _nested_view(self, obj, data):
+        """`data` without the model's NESTED_PRIVATE_FIELDS when the viewer may
+        not read `obj` in full (#8648).
+
+        Nested graphs carry no permission of their own (#2102), so a model
+        whose rows show another person's account (User) declares the private
+        keys and a `rest_nested_full_view(request)` hook. Every nested graph
+        name is covered. It runs on the return of every cache exit and always
+        builds a new dict, so a cached entry is never changed. No active
+        request (jobs, emails, shell) leaves the output unchanged.
+        """
+        private = getattr(getattr(obj, "RestMeta", None), "NESTED_PRIVATE_FIELDS", None)
+        if not private or not isinstance(data, dict):
+            return data
+        if not any(key in data for key in private):
+            return data
+        request = _active_request()
+        if request is None or obj.rest_nested_full_view(request):
+            return data
+        return {key: value for key, value in data.items() if key not in private}
+
+    def _viewer_restricted(self):
+        """True when a request is bound and its viewer lacks the account view.
+
+        Such a viewer never reads or writes the persistent cache: a parent
+        entry with a nested user inside would otherwise carry one viewer's
+        rendering to another (#8648). The request cache is per tree and stays.
+        """
+        if self._restricted_viewer is None:
+            restricted = False
+            request = _active_request()
+            if request is not None:
+                from django.contrib.auth import get_user_model
+                hook = getattr(get_user_model(), "rest_viewer_has_account_view", None)
+                restricted = hook is not None and not hook(request)
+            self._restricted_viewer = restricted
+        return self._restricted_viewer
+
+    def _serialize_instance_cached_raw(self, obj):
+        """
         Serialize single instance with intelligent caching.
         """
-        graph = self._effective_graph(obj)
-
         # Simple mode: behave exactly like simple serializer
         if self.simple_mode:
-            return self._serialize_instance_direct(obj, graph)
+            return self._serialize_instance_direct(obj)
 
         # Skip all caching if bypass_cache is enabled
         if self.bypass_cache:
-            return self._serialize_instance_direct(obj, graph)
+            return self._serialize_instance_direct(obj)
 
-        # Always do request-scoped caching for performance. The key carries the
-        # effective graph, so a full and an identity rendering of one row never
-        # share an entry.
-        cache_key = get_cache_key(obj, graph)
+        # Always do request-scoped caching for performance
+        cache_key = get_cache_key(obj, self.graph)
         if not cache_key:
-            return self._serialize_instance_direct(obj, graph)
+            return self._serialize_instance_direct(obj)
 
         # Initialize request cache only when needed
         if self._request_cache is None:
@@ -164,7 +211,9 @@ class OptimizedGraphSerializer:
             return self._request_cache[cache_key]
 
         # Check if persistent caching is configured
-        cache_ttl = get_model_cache_ttl(obj, graph)
+        cache_ttl = get_model_cache_ttl(obj, self.graph)
+        if cache_ttl > 0 and self._viewer_restricted():
+            cache_ttl = 0
         cached_result = None
 
         if cache_ttl > 0:
@@ -179,7 +228,7 @@ class OptimizedGraphSerializer:
                 return cached_result
 
         # Serialize the result
-        result = self._serialize_instance_direct(obj, graph)
+        result = self._serialize_instance_direct(obj)
 
         # Always store in request cache (provides performance gain even when TTL=0)
         self._request_cache[cache_key] = result
@@ -190,34 +239,10 @@ class OptimizedGraphSerializer:
 
         return result
 
-    def _effective_graph(self, obj):
-        """The graph `obj` is rendered with: the asked-for one, or the model's
-        NESTED_VIEW_GRAPH for a nested row its viewer may not read in full.
-
-        Nested graphs carry no permission of their own (#2102), so a model
-        whose rows show another person's account (User) declares
-        RestMeta.NESTED_VIEW_GRAPH and a `rest_nested_full_view(request)` hook.
-        Every nested graph name is swapped, whatever the parent asked for
-        (#8648). The top-level row is never swapped: its read is already
-        gated. No active request (jobs, emails, shell) means no swap.
-        """
-        if not self.nested:
-            return self.graph
-        rest_meta = getattr(obj, "RestMeta", None)
-        nested_graph = getattr(rest_meta, "NESTED_VIEW_GRAPH", None)
-        if not nested_graph or nested_graph not in (getattr(rest_meta, "GRAPHS", None) or {}):
-            return self.graph
-        request = _active_request()
-        if request is None or obj.rest_nested_full_view(request):
-            return self.graph
-        return nested_graph
-
-    def _serialize_instance_direct(self, obj, graph=None):
+    def _serialize_instance_direct(self, obj):
         """
         Direct serialization using RestMeta.GRAPHS configuration.
         """
-        if graph is None:
-            graph = self._effective_graph(obj)
         # No RestMeta/GRAPHS at all — or an empty GRAPHS map — is a model that
         # opts out of graph-based serialization: whole-object output is its
         # deliberate, VIEW_PERMS-gated API. This branch stays forgiving.
@@ -227,9 +252,9 @@ class OptimizedGraphSerializer:
                 logger.warning(f"RestMeta.GRAPHS not found for {obj.__class__.__name__}")
             return self._fallback_serialization(obj)
 
-        graph_config = obj.RestMeta.GRAPHS.get(graph)
+        graph_config = obj.RestMeta.GRAPHS.get(self.graph)
         if graph_config is None:
-            if graph != "default":
+            if self.graph != "default":
                 graph_config = obj.RestMeta.GRAPHS.get("default")
 
             if graph_config is None:
@@ -242,7 +267,7 @@ class OptimizedGraphSerializer:
                 # ships a partial graph set with no `default`: a server
                 # misconfiguration. Fail loud rather than expose everything.
                 raise me.RestErrorException(
-                    f"{obj.__class__.__name__} has no '{graph}' graph and "
+                    f"{obj.__class__.__name__} has no '{self.graph}' graph and "
                     "no 'default' graph to fall back to")
 
         # Serialize based on graph configuration
@@ -327,6 +352,7 @@ class OptimizedGraphSerializer:
                     related_serializer = OptimizedGraphSerializer(related_obj, graph=sub_graph, bypass_cache=self.bypass_cache, nested=True)
                     # Share the request cache to avoid re-serializing same objects
                     related_serializer._request_cache = self._request_cache
+                    related_serializer._restricted_viewer = self._restricted_viewer
                     data[field_name] = related_serializer._serialize_instance_cached(related_obj)
 
                 elif isinstance(field, MANY_RELATIONS) or hasattr(related_obj, 'all'):
@@ -336,6 +362,7 @@ class OptimizedGraphSerializer:
                         related_serializer = OptimizedGraphSerializer(related_qset, graph=sub_graph, many=True, bypass_cache=self.bypass_cache, nested=True)
                         # Share the request cache to avoid re-serializing same objects
                         related_serializer._request_cache = self._request_cache
+                        related_serializer._restricted_viewer = self._restricted_viewer
                         data[field_name] = related_serializer.serialize()
                     else:
                         data[field_name] = []

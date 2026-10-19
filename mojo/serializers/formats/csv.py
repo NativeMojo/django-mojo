@@ -324,20 +324,17 @@ class CsvFormatter:
             return None
 
     def _hidden_from_viewer(self, obj, field_name):
-        """True when `obj` was reached through a relation, declares a
-        NESTED_VIEW_GRAPH, `field_name` is outside it and the viewer may not
-        read `obj` in full: the CSV twin of the serializer swap (#8648). No
-        request (a job, the shell) hides nothing."""
+        """True when `obj` was reached through a relation, `field_name` is one
+        of its NESTED_PRIVATE_FIELDS or NESTED_PRIVATE_LOOKUPS, and the viewer
+        may not read `obj` in full: the CSV twin of the serializer's nested
+        strip (#8648). No request (a job, the shell) hides nothing."""
         request = getattr(self, "_viewer_request", None)
         if request is None or not hasattr(obj, "rest_nested_full_view"):
             return False
         rest_meta = getattr(obj, "RestMeta", None)
-        name = getattr(rest_meta, "NESTED_VIEW_GRAPH", None)
-        graph = (getattr(rest_meta, "GRAPHS", None) or {}).get(name) if name else None
-        if graph is None:
-            return False
-        allowed = set(graph.get("fields") or ()) | set((graph.get("graphs") or {}).keys())
-        return field_name not in allowed and not obj.rest_nested_full_view(request)
+        private = set(getattr(rest_meta, "NESTED_PRIVATE_FIELDS", None) or ())
+        private |= set(getattr(rest_meta, "NESTED_PRIVATE_LOOKUPS", None) or ())
+        return field_name in private and not obj.rest_nested_full_view(request)
 
     def _process_field_value(self, value, field_name, localize=None, timezone=None):
         """
