@@ -70,13 +70,21 @@ class AnthropicProvider(ProviderAdapter):
             self._raise_safe(err)
 
     def list_models(self, timeout=None):
-        """Return one bounded page; pagination is a separately-accounted operation."""
+        """Compatibility helper returning one page's model list."""
+        return self.list_models_page(timeout=timeout)["data"]
+
+    def list_models_page(self, timeout=None, after_id=None):
+        """Exactly one bounded page; the guard accounts pagination separately."""
         try:
             kwargs = {"limit": 100}
             if timeout is not None:
                 kwargs["timeout"] = timeout
+            if after_id is not None:
+                kwargs["after_id"] = after_id
             page = self._client().models.list(**kwargs)
-            return [model.model_dump(mode="json") for model in page.data]
+            return {"data": [model.model_dump(mode="json") for model in page.data],
+                    "has_more": page.has_more,
+                    "last_id": getattr(page, "last_id", None)}
         except Exception as err:
             self._raise_safe(err)
 

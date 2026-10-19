@@ -278,3 +278,26 @@ def test_zero_usage_warning_fires_once(opts):
         f"WARNING should fire exactly once across 2 zero-cache calls, got {len(warnings)}: "
         f"{[r.getMessage() for r in warnings]}",
     )
+
+
+@th.django_unit_test()
+@th.requires_app('mojo.apps.assistant')
+def test_normal_agent_leaves_resolved_model_to_shared_guard(opts):
+    from mojo.apps.account.services import llm_safety
+    from mojo.apps.assistant.services import agent
+    from mojo.helpers.settings import settings
+    original = settings.get
+    reply = _canned_response('guard-selected answer')
+    reply['model'] = 'opaque-provider-successor'
+    with mock.patch.object(settings, 'get', side_effect=lambda name, *args, **kwargs:
+                           True if name == 'LLM_ADMIN_ENABLED' else original(name, *args, **kwargs)), \
+            mock.patch.object(llm_safety, 'route_state', return_value={'ready': True}), \
+            mock.patch.object(llm_safety, 'invoke', return_value=reply) as guarded:
+        result = agent.run_assistant(opts.user, 'Use the current model')
+    assert 'error' not in result and guarded.call_count == 1, \
+        'normal Assistant loop must use the shared guarded call exactly once for a terminal turn'
+    assert guarded.call_args.kwargs['feature'] == 'assistant' \
+        and guarded.call_args.kwargs.get('model') is None, \
+        'normal transport must not substitute a legacy/default model for the guarded resolver'
+    assert guarded.call_args.kwargs['context']['operation_id'], \
+        'normal loop must keep its stable operation identity through the shared guard'

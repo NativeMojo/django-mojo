@@ -113,7 +113,8 @@ export function mountSetup({ctx, panel, onBack}) {
     const clearKey = h('input', {type: 'checkbox'});
     const listId = 'assistant-model-choices';
     const model = h('input', {type: 'text', list: listId, value: state.model.selected || '',
-      placeholder: 'Automatic', autocomplete: 'off', spellcheck: 'false'});
+      placeholder: 'Automatic', autocomplete: 'off', spellcheck: 'false',
+      disabled: state.model.editable === false});
     const choices = h('datalist', {id: listId},
       ...(state.model.choices || []).map((choice) => h('option', {
         value: choice.id, label: choice.label})));
@@ -140,13 +141,13 @@ export function mountSetup({ctx, panel, onBack}) {
       const payload = {
         action: 'save',
         enabled: enabled.checked,
-        model: model.value.trim(),
         clear_api_key: clearKey.checked,
         clear_handler_api_key: clearHandlerKey.checked,
         mcp_enabled: mcpEnabled.checked,
         emergency_stop: emergencyStop.checked,
         autonomous_triage: autonomousTriage.checked,
       };
+      if (!('editable' in state.model)) payload.model = model.value.trim();
       // A key field is omitted rather than sent empty: an empty string is not
       // a credential, and "leave it alone" must not read as "store nothing".
       if (apiKey.value) payload.api_key = apiKey.value;
@@ -175,9 +176,25 @@ export function mountSetup({ctx, panel, onBack}) {
     verifyAssistant.addEventListener('click', (event) => runAction(
       event.currentTarget, checkKey('assistant', apiKey), {pendingLabel: 'Checking…'}));
 
+    const saveModel = h('button', {class: 'button ghost compact', type: 'button',
+      disabled: !state.model.editable}, 'Save model selection');
+    saveModel.addEventListener('click', (event) => runAction(event.currentTarget, async () => {
+      const value = model.value.trim();
+      const payload = value
+        ? {action: 'set_model_selection', mode: 'pinned', model: value}
+        : {action: 'set_model_selection', mode: 'auto'};
+      const result = await api(ENDPOINT, {method: 'POST', body: JSON.stringify(payload)});
+      toast('Model selection saved.');
+      await syncReadiness(result.state);
+      paint(result.state);
+    }, {pendingLabel: 'Saving…'}));
+
     refresh.addEventListener('click', (event) => runAction(event.currentTarget, async () => {
       // The one control allowed to reach the provider for the model catalogue.
       const fresh = await api(`${ENDPOINT}?refresh=models`);
+      toast(fresh.model.refresh?.ok ? 'Model list refreshed.'
+        : `Model refresh failed (${fresh.model.refresh?.code || 'unavailable'}).`,
+      {tone: fresh.model.refresh?.ok ? 'success' : 'danger'});
       paint(fresh);
     }, {announceLabel: 'Refreshing the model list'}));
 
@@ -333,7 +350,10 @@ export function mountSetup({ctx, panel, onBack}) {
 
       h('h4', {text: 'Model'}),
       h('label', {class: 'field'}, h('span', {text: 'Model'}), model, choices,
-        h('small', {text: `Legacy picker pin. Guarded route model: ${state.route?.model || 'unavailable'}`})),
+        h('small', {text: `Effective model: ${state.model.effective || 'unavailable'} · `
+          + `${state.model.mode || 'fixed'} · catalogue ${state.model.discovery?.status || 'unavailable'}`
+          + (state.model.restriction ? ` · ${state.model.restriction}` : '')})),
+      state.model.editable ? saveModel : null,
       h('div', {class: 'assistant-setup-row'},
         h('div', {}, h('span', {text: 'Re-read the model catalogue from the provider.'})),
         refresh),

@@ -12,7 +12,18 @@ LLM-powered admin assistant accessed via REST. Send natural language queries abo
 ### Provider routing
 
 The installation's static safety policy owns provider, model, credential,
-region, and allowed reasoning effort. REST and WebSocket inputs add no
+region, and allowed reasoning effort. An explicitly delegated Anthropic
+Assistant policy (`auto:sonnet`) resolves one model per guarded invocation:
+owner pin, deployment pin, then newest compatible active Sonnet by provider
+metadata. Existing fixed policies and Bedrock routes retain their exact
+model. Opt-in requires deployment and normal owner policy activation; inspect
+or clear any legacy pin first. Dateless IDs are pinned releases, not floating
+aliases. Both normal and streamed loops use the same resolved ID in provider
+calls and ledger. Owner setup offers an explicit pin/auto action, passive
+reads, 24-hour discovery freshness, seven-day maximum last-good use after
+failures, and truthful explicit refresh outcomes under bounded pagination
+and safety budgets; see [the owner contract](../account/admin_portal/assistant.md).
+REST and WebSocket inputs add no
 provider-options or AWS-credential fields. The tool-enabled Admin Assistant
 continues to use its Anthropic route; the optional Bedrock Nova 2 Lite route
 is text-only and cannot satisfy the Assistant's tool capability requirement.

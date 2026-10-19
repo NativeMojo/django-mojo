@@ -826,3 +826,177 @@ def test_malformed_emergency_controls_fail_closed_before_provider(opts):
             "malformed database stop reached a provider adapter"
     finally:
         Setting.objects.filter(key="LLM_EMERGENCY_STOP", group=None).delete()
+
+
+def _auto_policy():
+    raw = _guard_policy('anthropic')
+    raw['routes']['assistant']['model'] = 'auto:sonnet'
+    raw['routes']['model_discovery'] = dict(
+        provider='anthropic', model='catalogue-accounting', credential='admin',
+        capabilities=['models'])
+    raw['features']['model_discovery'] = dict(raw['shared'], max_loop_calls=5)
+    raw['shared']['max_loop_calls'] = 10
+    return raw
+
+
+def _auto_row(identifier='opaque-current', **values):
+    row = dict(id=identifier, display_name='Provider title', line='sonnet',
+               lifecycle='active', created_at='2026-10-18T00:00:00Z', max_tokens=128,
+               capabilities={'image_input': {'supported': True}})
+    row.update(values)
+    return row
+
+
+class _AutoAdapter:
+    def __init__(self, pages=None):
+        self.pages = pages or [{'data': [_auto_row()], 'has_more': False, 'last_id': 'opaque-current'}]
+        self.requests = []
+        self.messages = []
+
+    def supports(self, capability):
+        return True
+
+    def list_models_page(self, **kwargs):
+        self.requests.append(kwargs)
+        page = self.pages[len(self.requests) - 1]
+        if isinstance(page, Exception):
+            raise page
+        return page
+
+    def call(self, **kwargs):
+        self.messages.append(kwargs)
+        return {'id': 'response', 'content': [{'type': 'text', 'text': 'done'}],
+                'usage': {'input_tokens': 4, 'output_tokens': 2}}
+
+
+def _clear_auto_catalogue(case):
+    keys = list(case['redis'].scan_iter(
+        match=f"mojo:llm:catalogue:v2:*:anthropic:{case['fingerprint']}*", count=1000))
+    if keys:
+        case['redis'].delete(*keys)
+    from mojo.apps.account.models import LLMRequest
+    LLMRequest.objects.filter(credential_fingerprint=case['fingerprint'],
+                              feature='model_discovery').delete()
+
+
+@th.django_unit_test()
+def test_auto_runtime_snapshots_provider_ledger_and_mismatch_once(opts):
+    from mojo.apps.account.models import LLMRequest
+    from mojo.apps.account.services import llm_safety
+    adapter = _AutoAdapter()
+    with _guard_case(_auto_policy()) as case, \
+            mock.patch.object(llm_safety, 'assistant_pin', return_value=('', 'automatic')):
+        factory = lambda name, **kwargs: adapter
+        try:
+            result = _run_guard(case, factory)
+            row = LLMRequest.objects.get(operation=case['marker'])
+            assert row.model == adapter.messages[0]['model'] == result['model'] == 'opaque-current', \
+                'the invocation must snapshot one resolved ID for ledger, adapter and diagnostics'
+            assert len(adapter.requests) == 1, 'first invocation must refresh the complete catalogue once'
+            _assert_denied('model_mismatch', lambda: _run_guard(
+                case, factory, model='auto:sonnet'))
+            assert len(adapter.messages) == 1, 'delegation token/caller override must not reach message transport'
+            assert len(adapter.requests) == 1, 'a fresh cache must be reused across normal invocations'
+        finally:
+            _clear_auto_catalogue(case)
+
+
+@th.django_unit_test()
+def test_pinned_auto_runtime_is_offline_and_fixed_policy_still_wins(opts):
+    from mojo.apps.account.services import llm_safety
+    with _guard_case(_auto_policy()) as case, \
+            mock.patch.object(llm_safety, 'assistant_pin', return_value=('owner-known', 'admin')):
+        adapter = _AutoAdapter()
+        result = _run_guard(case, lambda name, **kwargs: adapter)
+        assert result['model'] == 'owner-known' and not adapter.requests, \
+            'an owner manual pin must be callable without any catalogue availability'
+    with _guard_case(_guard_policy('anthropic')) as case, \
+            mock.patch.object(llm_safety, 'assistant_pin', return_value=('inert-pin', 'admin')):
+        adapter = _AutoAdapter()
+        result = _run_guard(case, lambda name, **kwargs: adapter)
+        assert result['model'] == 'claude-test' and not adapter.requests, \
+            'literal policy must remain authoritative over legacy owner/deployment pins'
+
+
+@th.django_unit_test()
+def test_discovery_pagination_accounts_every_page_under_one_operation(opts):
+    from mojo.apps.account.models import LLMRequest
+    from mojo.apps.account.services import llm_safety
+    pages = [{'data': [_auto_row('cursor-one')], 'has_more': True, 'last_id': 'cursor-one'},
+             {'data': [_auto_row('opaque-next')], 'has_more': False, 'last_id': 'opaque-next'}]
+    with _guard_case(_auto_policy()) as case:
+        adapter = _AutoAdapter(pages)
+        try:
+            rows = llm_safety.discover_models(
+                policy_raw=case['raw'], redis=case['redis'],
+                provider_factory=lambda name, **kwargs: adapter,
+                expected_fingerprint=case['fingerprint'])
+            ledgers = list(LLMRequest.objects.filter(
+                feature='model_discovery', credential_fingerprint=case['fingerprint']))
+            assert len(rows) == len(ledgers) == len(adapter.requests) == 2, \
+                'each provider page must consume a permit and durable ledger row'
+            assert len({row.job_id for row in ledgers}) == 1 and ledgers[0].job_id, \
+                'all pages must carry one stable operation ID rather than resetting loop counters'
+            assert adapter.requests[0]['after_id'] is None \
+                and adapter.requests[1]['after_id'] == 'cursor-one', \
+                'the guard must explicitly advance the provider cursor'
+            assert all(0 < request['timeout'] <= 10 for request in adapter.requests), \
+                'each page timeout must fit the remaining total deadline/policy caps'
+        finally:
+            _clear_auto_catalogue(case)
+
+
+@th.django_unit_test()
+def test_discovery_repeated_cursor_page_cap_budget_and_failure_are_incomplete(opts):
+    from mojo.apps.account.services import llm_safety
+    from mojo.helpers.llm_providers.base import ProviderError
+    variants = [
+        ([{'data': [_auto_row()], 'has_more': True, 'last_id': None}], 'catalogue_incomplete'),
+        ([{'data': [_auto_row()], 'has_more': True, 'last_id': 'same'}] * 2,
+         'catalogue_incomplete'),
+        ([{'data': [_auto_row(f'c{i}')], 'has_more': True, 'last_id': f'c{i}'}
+          for i in range(5)], 'catalogue_incomplete'),
+        ([ProviderError('provider_timeout')], 'provider_timeout'),
+    ]
+    for pages, expected in variants:
+        with _guard_case(_auto_policy()) as case:
+            adapter = _AutoAdapter(pages)
+            try:
+                _assert_denied(expected, lambda: llm_safety.discover_models(
+                    policy_raw=case['raw'], redis=case['redis'],
+                    provider_factory=lambda name, **kwargs: adapter))
+                assert len(adapter.requests) <= 5, 'a refresh cannot exceed the hard five-page cap'
+            finally:
+                _clear_auto_catalogue(case)
+    raw = _auto_policy()
+    raw['features']['model_discovery']['max_loop_calls'] = 1
+    with _guard_case(raw) as case:
+        adapter = _AutoAdapter([
+            {'data': [_auto_row()], 'has_more': True, 'last_id': 'cursor'},
+            {'data': [], 'has_more': False, 'last_id': None}])
+        try:
+            _assert_denied('loop_limit', lambda: llm_safety.discover_models(
+                policy_raw=case['raw'], redis=case['redis'],
+                provider_factory=lambda name, **kwargs: adapter))
+            assert len(adapter.requests) == 1, 'smaller installed loop budgets must stop pagination'
+        finally:
+            _clear_auto_catalogue(case)
+
+
+@th.django_unit_test()
+def test_auto_mismatched_discovery_credential_denies_without_models_transport(opts):
+    from mojo.apps.account.services import llm_safety
+    from mojo.helpers import llm
+    raw = _auto_policy()
+    raw['routes']['model_discovery']['credential'] = 'handler'
+    with _guard_case(raw) as case, \
+            mock.patch.object(llm_safety, 'assistant_pin', return_value=('', 'automatic')):
+        original = llm_safety._credential
+        with mock.patch.object(llm_safety, '_credential', side_effect=lambda route:
+                               'different-credential' if route['credential'] == 'handler'
+                               else original(route)):
+            adapter = _AutoAdapter()
+            _assert_denied('credential_mismatch', lambda: _run_guard(
+                case, lambda name, **kwargs: adapter))
+            assert not adapter.requests and not adapter.messages, \
+                'discovery must never run under a different identity from the runtime route'

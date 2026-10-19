@@ -231,7 +231,7 @@ read *and* write — see
 |---|---|---|
 | `LLM_ADMIN_ENABLED` | `assistant_setup` | Plain global `Setting` row |
 | `LLM_ADMIN_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row — the Assistant's own key, optional |
-| `LLM_ADMIN_MODEL` | `assistant_setup` | Plain legacy picker pin; absent means no pin. The guarded route owns its runtime model |
+| `LLM_ADMIN_MODEL` | `assistant_setup` | Owner pin on `auto:sonnet` routes; inert legacy pin on fixed routes |
 | `LLM_ADMIN_VERIFY_STATE` | `assistant_setup` | How the STORED Assistant key last checked |
 | `LLM_HANDLER_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row — the **platform** key |
 | `LLM_HANDLER_VERIFY_STATE` | `assistant_setup` | How the STORED platform key last checked |
@@ -297,8 +297,27 @@ assistant route credential: admin   -> LLM_ADMIN_API_KEY (Admin row, then deploy
 incident route credential: handler -> LLM_HANDLER_API_KEY (Admin row, then deployment file)
 ```
 
-The safety-policy route owns both credential target and model. A caller may
-omit `model=` or supply the exact route model; it cannot select another model.
+The safety-policy route owns the credential target and either an exact fixed
+model or explicit `auto:sonnet` delegation for the Anthropic Assistant.
+Delegated routes prefer owner-stored `LLM_ADMIN_MODEL`, then a deployment-file
+pin, then the newest compatible active Sonnet by provider line/lifecycle,
+release timestamp, output cap and required image metadata. Existing literal
+policies remain fixed until deployment and owner hash activation; inspect or
+clear legacy pins before opting in. Modern dateless IDs are pinned releases.
+A caller omits `model=` or echoes the actual resolved ID; it cannot override
+selection. Normal and streamed loops snapshot that ID per guarded invocation
+for mismatch checks, ledger and provider.
+
+Owner setup supports explicit `set_model_selection` pin/auto actions. Plain
+GET is passive. Catalogue freshness is 24 hours, with failed-refresh last-good
+use bounded to seven days from success; complete success with no compatible
+model invalidates selection immediately. Runtime expiry and explicit refresh
+use the same credential-scoped cache, Redis owner lock/cooldown and guarded
+five-page/500-entry/20-second maximum. Every page uses its own permit/ledger
+and the same operation ID; installed smaller budgets remain binding. Refresh
+outcomes describe the actual attempt even while a stale model remains usable.
+See [the helper](../helpers/llm.md#model-selection) and
+[owner API](../../web_developer/account/admin_portal/assistant.md).
 `state()` reports `key` and `handler_key` independently as `admin`,
 `deployment`, or `none`, with a four-character hint and never the value.
 The stable low-level `llm.get_api_key()` helper retains its legacy resolution
@@ -329,7 +348,7 @@ credential nobody proved.
 |---|---|---|
 | `LLM_ADMIN_ENABLED` | `False` | Feature flag — must be True for the assistant to work |
 | `LLM_ADMIN_API_KEY` | `None` | Admin credential used only by policy routes declaring `credential: "admin"` |
-| `LLM_ADMIN_MODEL` | (unset) | Legacy picker pin; guarded calls use the exact safety-policy route model |
+| `LLM_ADMIN_MODEL` | (unset) | Owner pin on delegated `auto:sonnet`; fixed policies keep legacy pins inert |
 | `LLM_ADMIN_MAX_TURNS` | `25` | Max tool-calling turns per request |
 | `LLM_ADMIN_MAX_HISTORY` | `50` | Max messages loaded as conversation context |
 | `LLM_ADMIN_MAX_PARALLEL_TOOLS` | `4` | Max concurrent threads for parallel tool execution |

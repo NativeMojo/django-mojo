@@ -48,7 +48,9 @@ SAFE_CODES = frozenset({
     "provider_authentication", "provider_billing_exhausted", "provider_failed",
     "provider_rate_limited", "provider_rejected", "provider_timeout",
     "provider_unavailable", "provider_unsupported", "route_missing",
-    "safety_unavailable", "triage_incomplete",
+    "safety_unavailable", "triage_incomplete", "credential_mismatch",
+    "catalogue_unavailable", "catalogue_incomplete", "no_compatible_model",
+    "refresh_in_progress", "refresh_throttled",
 })
 
 
@@ -175,6 +177,10 @@ def parse_policy(raw=None):
             _deny("provider_unsupported")
         if not isinstance(route["model"], str) or not route["model"].strip():
             _deny("policy_invalid")
+        if route["model"].startswith("auto:") and not (
+                route["model"] == "auto:sonnet" and feature == "assistant"
+                and provider == "anthropic"):
+            _deny("policy_invalid")
         capabilities = route["capabilities"]
         if not isinstance(capabilities, list) or not capabilities \
                 or any(not isinstance(item, str) for item in capabilities) \
@@ -286,33 +292,125 @@ def autonomous_triage_state():
         return False, None
 
 
-def route_state(feature):
-    """Safe effective route/readiness data without credential material."""
+def delegates_model(route):
+    return route.get("provider") == "anthropic" and route.get("model") == "auto:sonnet"
+
+
+def assistant_pin():
+    """Authoritative primary pin read; malformed/duplicate active controls deny."""
+    from mojo.apps.account.models import Setting
+    rows = list(Setting.objects.using("default").filter(
+        key="LLM_ADMIN_MODEL", group=None).order_by("pk")[:2])
+    if len(rows) > 1:
+        _deny("control_state_unknown")
+    stored = rows[0].get_value() if rows else None
+    deployed = settings.get_static("LLM_ADMIN_MODEL", None)
+    for value, source in ((stored, "admin"), (deployed, "deployment")):
+        if value in (None, ""):
+            continue
+        from mojo.helpers.llm_catalogue import model_id
+        if not model_id(value) or value.startswith("auto:"):
+            _deny("control_state_unknown")
+        return value, source
+    return "", "automatic"
+
+
+def model_selection_state(policy=None, *, refresh=False, credential=None, redis=None,
+                          loader=None):
+    """Passive by default. This is the same selector the invocation snapshots."""
+    from mojo.helpers import llm
+    from mojo.helpers.llm_catalogue import select_sonnet
+    result = {
+        "selected": "", "effective": "", "source": "policy", "choices": [],
+        "mode": "fixed", "editable": False, "policy_model": "",
+        "restriction": "policy_unavailable",
+        "discovery": {"status": "not_applicable", "fetched_at": None,
+                      "attempted_at": None, "expires_at": None,
+                      "max_stale_at": None, "error_code": ""},
+        "refresh": {"attempted": False, "ok": None, "code": ""},
+    }
+    # Preserve the legacy echo even when policy is temporarily unavailable.
+    # This value has no runtime authority on any nondelegating route.
+    try:
+        from mojo.apps.account.services.assistant_setup import _stored_value
+        legacy = _stored_value("LLM_ADMIN_MODEL")
+        if not isinstance(legacy, str) or not legacy.strip():
+            legacy = settings.get_static("LLM_ADMIN_MODEL", None)
+        result["selected"] = legacy.strip() if isinstance(legacy, str) else ""
+    except Exception:
+        pass
+    try:
+        policy = policy or parse_policy()
+        route = policy["routes"].get("assistant")
+        if route is None:
+            _deny("route_missing")
+        result.update(policy_model=route["model"], effective=route["model"],
+                      restriction="fixed_policy" if route["provider"] == "anthropic"
+                      else "provider_unsupported")
+        if delegates_model(route):
+            result.update(selected="", effective="", editable=True, mode="auto",
+                          source="automatic", restriction="")
+            pin, source = assistant_pin()
+            if pin:
+                result.update(selected=pin, effective=pin, mode="pinned", source=source,
+                              restriction="deployment_pin"
+                              if settings.get_static("LLM_ADMIN_MODEL", None) else "")
+            else:
+                catalogue = llm.catalogue_state(
+                    policy=policy, credential=credential or _credential(route),
+                    redis=redis, refresh=refresh, force=False, loader=loader)
+                result.update(discovery=catalogue["discovery"], refresh=catalogue["refresh"])
+                result["effective"] = select_sonnet(
+                    catalogue["models"], min(policy["shared"]["max_output_tokens"],
+                        policy["features"]["assistant"]["max_output_tokens"]),
+                    images="images" in route["capabilities"])
+                if not result["effective"] and not result["discovery"]["error_code"]:
+                    result["discovery"]["error_code"] = "no_compatible_model"
+                result["choices"] = [{"id": row["id"],
+                                      "label": row["display_name"] or row["id"]}
+                                     for row in catalogue["models"][:40]]
+        return result
+    except LLMSafetyError as error:
+        result["discovery"]["error_code"] = error.code
+        if result["editable"]:
+            result["discovery"]["status"] = "unavailable"
+        return result
+    except Exception:
+        result["effective"] = "" if result["editable"] else result["effective"]
+        result["discovery"]["error_code"] = "control_state_unknown"
+        if result["editable"]:
+            result["discovery"]["status"] = "unavailable"
+        return result
+
+
+def route_state(feature, selection=None):
+    """Safe passive readiness, retaining a resolved model when other guards deny."""
+    result = {"feature": feature, "provider": "", "model": "", "credential": "",
+              "credential_configured": False, "ready": False, "error": ""}
     try:
         policy = parse_policy()
         route = policy["routes"].get(feature)
         if route is None:
             _deny("route_missing")
+        effective = route["model"]
+        if feature == "assistant":
+            selection = selection or model_selection_state(policy)
+            effective = selection["effective"]
+        result.update(provider=route["provider"], model=effective,
+                      credential=route["credential"])
         _policy_agreement(policy)
-        configured = bool(_credential(route))
-        stopped = emergency_stopped()
-        return {
-            "feature": feature, "provider": route["provider"],
-            "model": route["model"], "credential": route["credential"],
-            "credential_configured": configured, "ready": configured and not stopped,
-            "error": "emergency_stopped" if stopped else "",
-        }
+        result["credential_configured"] = bool(_credential(route))
+        if emergency_stopped():
+            _deny("emergency_stopped")
+        if not effective:
+            code = (selection or {}).get("discovery", {}).get("error_code")
+            _deny(code or "catalogue_unavailable")
+        result["ready"] = result["credential_configured"]
     except LLMSafetyError as err:
-        return {
-            "feature": feature, "provider": "", "model": "", "credential": "",
-            "credential_configured": False, "ready": False, "error": err.code,
-        }
+        result["error"] = err.code
     except Exception:
-        return {
-            "feature": feature, "provider": "", "model": "", "credential": "",
-            "credential_configured": False, "ready": False,
-            "error": "safety_unavailable",
-        }
+        result["error"] = "safety_unavailable"
+    return result
 
 
 def _credential(route):
@@ -568,7 +666,7 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         _policy_agreement(policy)
         if emergency_stopped():
             _deny("emergency_stopped")
-        if model is not None and model != route["model"]:
+        if not delegates_model(route) and model is not None and model != route["model"]:
             _deny("model_mismatch")
         if not isinstance(reasoning_effort, str) \
                 or reasoning_effort not in REASONING_EFFORTS \
@@ -609,6 +707,26 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
                 or any(not adapter.supports(item) for item in required):
             _deny("capability_unsupported")
         redis = redis or get_connection()
+        resolved_model = route["model"]
+        if delegates_model(route):
+            selection = model_selection_state(
+                policy, refresh=True, credential=credential, redis=redis,
+                loader=lambda: discover_models(
+                    expected_policy_hash=policy["hash"],
+                    expected_fingerprint=fingerprint,
+                    provider_factory=factory, redis=redis, policy_raw=policy_raw))
+            resolved_model = selection["effective"]
+            if not resolved_model:
+                _deny(selection["discovery"]["error_code"] or "catalogue_unavailable")
+            # Discovery may span several requests; prove current controls again
+            # before the actual inference permit and durable message ledger.
+            _policy_agreement(policy)
+            if emergency_stopped():
+                _deny("emergency_stopped")
+            if _credential(route) != credential:
+                _deny("credential_mismatch")
+        if model is not None and model != resolved_model:
+            _deny("model_mismatch")
         operation_id = context.get("operation_id") or secrets.token_hex(16)
         _count_operation(
             redis, provider_name, fingerprint, feature, operation_id,
@@ -628,7 +746,7 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
     try:
         ledger = LLMRequest.objects.create(
             feature=feature, operation=str(operation)[:64], provider=provider_name,
-            model=route["model"], credential_fingerprint=fingerprint,
+            model=resolved_model, credential_fingerprint=fingerprint,
             policy_hash=policy["hash"], reserved_tokens=reserved_tokens,
             **scalar_context)
     except Exception:
@@ -636,7 +754,7 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         _blocked(provider_name, feature, "ledger_unavailable")
     try:
         call_kwargs = dict(
-            messages=messages, system=system, tools=tools, model=route["model"],
+            messages=messages, system=system, tools=tools, model=resolved_model,
             max_tokens=max_tokens, cache_enabled=cache_enabled,
             timeout=min(policy["shared"]["timeout_seconds"], limits["timeout_seconds"]))
         if provider_name == "bedrock":
@@ -733,6 +851,7 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         _blocked(provider_name, feature, "provider_failed" if provider_name == "bedrock"
                  else "ledger_persistence_unknown")
     _record_metrics(provider_name, feature, "succeeded", actual_tokens)
+    response["model"] = resolved_model
     return response
 
 
@@ -930,13 +1049,15 @@ def verify_stored_key(target="admin"):
         None, credential, fingerprint, f"stored_{target}_key_probe")
 
 
-def discover_models():
-    """One guarded, bounded provider catalogue request."""
+def _discover_models_page(*, after_id, operation_id, deadline,
+                          expected_policy_hash=None, expected_fingerprint=None,
+                          provider_factory=None, redis=None, policy_raw=None):
+    """Each page independently proves policy, stop, credential, budget and ledger."""
     from mojo.apps.account.models import LLMRequest
     from mojo.helpers.llm_providers import get_provider
     from mojo.helpers.llm_providers.base import ProviderError
 
-    policy = parse_policy()
+    policy = parse_policy(policy_raw)
     feature = "model_discovery"
     route = policy["routes"].get(feature)
     limits = policy["features"].get(feature)
@@ -946,19 +1067,26 @@ def discover_models():
             _deny("route_missing")
         if provider != "anthropic":
             _deny("provider_unsupported")
+        if expected_policy_hash is not None and policy["hash"] != expected_policy_hash:
+            _deny("policy_mixed")
         _policy_agreement(policy)
         if emergency_stopped():
             _deny("emergency_stopped")
         credential = _credential(route)
         fingerprint = credential_fingerprint(provider, credential)
-        adapter = get_provider(provider, api_key=credential)
+        if expected_fingerprint is not None and fingerprint != expected_fingerprint:
+            _deny("credential_mismatch")
+        adapter = (provider_factory or get_provider)(provider, api_key=credential)
         if adapter is None or "models" not in route["capabilities"] \
                 or not adapter.supports("models"):
             _deny("capability_unsupported")
-        redis = get_connection()
+        redis = redis or get_connection()
         _count_operation(
-            redis, provider, fingerprint, feature, secrets.token_hex(16),
+            redis, provider, fingerprint, feature, operation_id,
             policy["shared"], limits)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _deny("provider_timeout")
         generation, owner = _breaker_lease(provider, fingerprint, policy)
         permit = acquire_permit(
             redis, provider, fingerprint, feature, policy["shared"], limits, 1)
@@ -969,14 +1097,15 @@ def discover_models():
         ledger = LLMRequest.objects.create(
             feature=feature, operation="model_discovery", provider=provider,
             model=route["model"], credential_fingerprint=fingerprint,
-            policy_hash=policy["hash"], reserved_tokens=1)
+            policy_hash=policy["hash"], reserved_tokens=1, job_id=operation_id)
     except Exception:
         release_permit(redis, permit)
         _blocked(provider, feature, "ledger_unavailable")
     started = time.monotonic()
     try:
-        models = adapter.list_models(timeout=min(
-            policy["shared"]["timeout_seconds"], limits["timeout_seconds"]))
+        models = adapter.list_models_page(after_id=after_id, timeout=min(
+            deadline - time.monotonic(), policy["shared"]["timeout_seconds"],
+            limits["timeout_seconds"]))
     except ProviderError as err:
         _breaker_failure(provider, fingerprint, generation, owner, err.code, policy)
         LLMRequest.objects.filter(pk=ledger.pk).update(
@@ -992,11 +1121,52 @@ def discover_models():
         _deny("provider_failed")
     release_permit(redis, permit)
     _breaker_success(provider, fingerprint, generation, owner)
-    LLMRequest.objects.filter(pk=ledger.pk).update(
+    updated = LLMRequest.objects.filter(pk=ledger.pk, status="started").update(
         status="succeeded", finished_at=timezone.now(),
         duration_ms=int((time.monotonic() - started) * 1000))
+    if updated != 1:
+        _deny("ledger_persistence_unknown")
     _record_metrics(provider, feature, "succeeded")
     return models
+
+
+def discover_models(*, expected_policy_hash=None, expected_fingerprint=None,
+                    provider_factory=None, redis=None, policy_raw=None):
+    """Complete catalogue, at most five separately guarded pages in 20 seconds."""
+    policy = parse_policy(policy_raw)
+    limits = policy["features"].get("model_discovery")
+    route = policy["routes"].get("model_discovery")
+    if limits is None or route is None:
+        _deny("route_missing")
+    if route["provider"] != "anthropic":
+        _deny("provider_unsupported")
+    if expected_fingerprint is None:
+        expected_fingerprint = credential_fingerprint("anthropic", _credential(route))
+    deadline = time.monotonic() + min(
+        20, policy["shared"]["timeout_seconds"], limits["timeout_seconds"])
+    operation_id = secrets.token_hex(16)
+    rows, seen, after_id = [], set(), None
+    from mojo.helpers.llm_catalogue import model_id
+    for page_number in range(5):
+        page = _discover_models_page(
+            after_id=after_id, operation_id=operation_id, deadline=deadline,
+            expected_policy_hash=expected_policy_hash or policy["hash"],
+            expected_fingerprint=expected_fingerprint, provider_factory=provider_factory,
+            redis=redis, policy_raw=policy_raw)
+        if time.monotonic() > deadline:
+            _deny("provider_timeout")
+        if not isinstance(page, dict) or not isinstance(page.get("data"), list) \
+                or len(page["data"]) > 100 or type(page.get("has_more")) is not bool:
+            _deny("catalogue_incomplete")
+        rows.extend(page["data"])
+        if not page["has_more"]:
+            return rows
+        cursor = page.get("last_id")
+        if not page["data"] or not model_id(cursor) or cursor in seen:
+            _deny("catalogue_incomplete")
+        seen.add(cursor)
+        after_id = cursor
+    _deny("catalogue_incomplete")
 
 
 def repair_started(max_age_seconds=300, limit=100):

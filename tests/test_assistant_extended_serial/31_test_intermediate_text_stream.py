@@ -389,3 +389,34 @@ def test_terminal_response_still_fires(opts):
         result.get("message_id") is not None,
         "Terminal return must include message_id for the final assistant Message",
     )
+
+
+@th.django_unit_test()
+@th.requires_app('mojo.apps.assistant')
+def test_stream_agent_leaves_resolved_model_to_shared_guard(opts):
+    from mojo.apps.account.services import llm_safety
+    from mojo.apps.assistant.models import Conversation, Message
+    from mojo.apps.assistant.services.agent import run_assistant_ws
+    Conversation.objects.filter(user=opts.user, title='auto-sonnet-stream').delete()
+    conv = Conversation.objects.create(user=opts.user, title='auto-sonnet-stream')
+    Message.objects.create(conversation=conv, role='user', content='Use the current model')
+    reply = {'id': 'stream-guard', 'model': 'opaque-provider-successor',
+             'stop_reason': 'end_turn', 'content': [{'type': 'text', 'text': 'resolved answer'}],
+             'usage': {'input_tokens': 4, 'output_tokens': 2}}
+    events, on_event = _capture_events()
+    try:
+        with _enable_assistant(), \
+                mock.patch.object(llm_safety, 'invoke', return_value=reply) as guarded:
+            result = run_assistant_ws(opts.user, 'Use the current model', conv.pk, on_event=on_event)
+        assert 'error' not in result and guarded.call_count == 1, \
+            'stream Assistant loop must use the same guarded call once for a terminal turn'
+        assert guarded.call_args.kwargs['feature'] == 'assistant' \
+            and guarded.call_args.kwargs.get('model') is None, \
+            'stream transport must leave model resolution to the shared guard'
+        assert guarded.call_args.kwargs['context']['operation_id'], \
+            'stream loop must retain its operation identity through the guarded resolver'
+        assert Message.objects.filter(conversation=conv, role='assistant',
+                                      content__contains='resolved answer').exists(), \
+            'the guard-selected streamed answer must still persist through the normal Message path'
+    finally:
+        conv.delete()

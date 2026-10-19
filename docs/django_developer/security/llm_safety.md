@@ -32,7 +32,7 @@ _LLM_LIMITS = {
 LLM_SAFETY_POLICY = {
     "version": 1,
     "routes": {
-        "assistant": {"provider": "anthropic", "model": "claude-sonnet-5",
+        "assistant": {"provider": "anthropic", "model": "auto:sonnet",
                       "credential": "admin",
                       "capabilities": ["text", "tools", "images", "prompt_cache"]},
         "incident_triage": {"provider": "anthropic", "model": "claude-sonnet-5",
@@ -72,7 +72,7 @@ LLM_SAFETY_POLICY = {
         "configuration": {**_LLM_LIMITS, "concurrency": 1,
                           "max_output_tokens": 16, "max_loop_calls": 1},
         "model_discovery": {**_LLM_LIMITS, "concurrency": 1,
-                            "max_output_tokens": 16, "max_loop_calls": 1},
+                            "max_output_tokens": 16, "max_loop_calls": 5},
         "unattributed": {**_LLM_LIMITS, "concurrency": 1,
                          "max_loop_calls": 1},
     },
@@ -90,7 +90,14 @@ feature caps are both enforced for request windows, token windows,
 concurrency, input bytes, output tokens, timeout, and loop calls. A request's
 tools, images, and enabled prompt cache must be declared by its route. The
 route owns the guarded model; an explicit `model=` is accepted only when it
-exactly matches the route. `credential: "admin"` requires
+exactly matches the resolved runtime ID. Only `assistant` on Anthropic may
+use `model="auto:sonnet"`; other feature/provider routes reject delegation.
+Literal policy routes remain fixed. The delegated priority is owner-stored
+`LLM_ADMIN_MODEL`, file-owned `LLM_ADMIN_MODEL`, then the newest compatible
+active Sonnet from metadata. No handler model/key fallback is allowed.
+Inspect/clear old legacy pins before opting in, deploy the policy change, and
+activate the new hash normally. No installed policy is rewritten automatically.
+`credential: "admin"` requires
 `LLM_ADMIN_API_KEY`; it never silently falls back to the handler credential.
 
 Each installation supplies its exact Anthropic credential or AWS role/profile
@@ -354,9 +361,28 @@ Checking a stored credential targets exactly `admin` or `handler`, never
 fallback resolution. It is an ordinary guarded call, is refused while stopped,
 uses the configuration route/model and accounting, and forces prompt caching
 off. Candidate probes require owner authority in the service as well as the
-fresh-auth owner REST boundary. Model discovery is one page of at most 100
-models with the policy timeout and one permit/ledger; it does not paginate
-invisibly.
+fresh-auth owner REST boundary. Model discovery traverses at most five pages
+of 100 entries under a total deadline of 20 seconds or the smaller configured
+shared/discovery timeout. Each page re-proves current controls/credential,
+counts the same operation ID, and obtains its own breaker lease, permit and
+ledger. A smaller installed `max_loop_calls` stops pagination safely; this
+feature never increases deployment budgets. Partial traversal is a failure.
+
+The shared catalogue is namespaced by version, policy hash, provider and exact
+credential fingerprint. Assistant and discovery credentials must match.
+Metadata explicitly declares active Sonnet line, release instant, adequate
+output cap and image support when required; no family/version guessing or
+invented client-tool metadata is used. Complete success with no compatible
+model invalidates old selection. Freshness is 24 hours, bounded last-good use
+is seven days from success after failed/incomplete refresh, and expired data
+cannot make an automatic route ready. A 30-second Redis NX owner-token lock
+and 60-second attempt cooldown bound refresh work; unknown coordination
+cannot issue a request. The process-local fallback shares these deadlines.
+Ordinary setup/bootstrap reads are passive. First authorized calls after
+expiry or explicit owner refresh perform refreshes, with no background job or
+SDK retry. The response reports the actual refresh outcome independently of
+usable stale data. See [selection/cache details](../helpers/llm.md#catalogue-cache)
+and the [additive schema-2 owner API](../../web_developer/account/admin_portal/assistant.md).
 
 ## Stable failures and retry semantics
 
@@ -367,7 +393,9 @@ provider rate-limit response. Stable codes are:
 - Controls/policy: `policy_invalid`, `policy_mixed`, `route_missing`,
   `emergency_stopped`, `control_state_unknown`, `credential_missing`,
   `provider_unsupported`, `capability_unsupported`, `model_mismatch`,
-  `context_invalid`, `operation_invalid`, `triage_incomplete`.
+  `context_invalid`, `operation_invalid`, `triage_incomplete`, `credential_mismatch`,
+  `catalogue_unavailable`, `catalogue_incomplete`, `no_compatible_model`,
+  `refresh_in_progress`, `refresh_throttled`.
 - Limits/persistence: `input_too_large`, `output_too_large`, `loop_limit`,
   `budget_exhausted`, `concurrency_exhausted`, `permit_unavailable`,
   `ledger_unavailable`, `ledger_persistence_unknown`.

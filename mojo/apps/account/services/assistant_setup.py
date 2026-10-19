@@ -6,7 +6,7 @@ re-implements credential resolution:
 
     LLM_ADMIN_ENABLED          feature flag
     LLM_ADMIN_API_KEY          the Assistant's own credential (optional)
-    LLM_ADMIN_MODEL            legacy picker pin; guarded route owns runtime model
+    LLM_ADMIN_MODEL            owner pin on explicitly delegated Assistant routes
     LLM_ADMIN_VERIFY_STATE     how the STORED Assistant credential last verified
     LLM_HANDLER_API_KEY        the PLATFORM credential for safety-policy
                                routes that explicitly select ``handler``
@@ -184,21 +184,18 @@ def _handler_key_state():
 
 
 def _model_state(refresh=False, route=None):
-    pinned = _stored_value(MODEL_KEY)
-    if isinstance(pinned, str):
-        pinned = pinned.strip()
-    source = "admin" if pinned else ""
-    if not pinned:
-        deployed = settings.get_static(MODEL_KEY, None)
-        if isinstance(deployed, str) and deployed.strip():
-            pinned, source = deployed.strip(), "deployment"
-    route = route or {}
-    return {
-        "selected": pinned or "",
-        "effective": route.get("model") or "",
-        "source": source or "automatic",
-        "choices": llm.model_choices(refresh=refresh),
-    }
+    from mojo.apps.account.services import llm_safety
+    refresh_result = None
+    if refresh:
+        # Refresh is an explicit request even when a manual model is active;
+        # its outcome is independent of whether a last-good model is usable.
+        refresh_result = llm.catalogue_state(refresh=True, force=True)
+    result = llm_safety.model_selection_state()
+    if refresh_result is not None:
+        result["refresh"] = refresh_result["refresh"]
+        if result["mode"] == "auto":
+            result["discovery"] = refresh_result["discovery"]
+    return result
 
 
 def read_verify_state(key=VERIFY_STATE_KEY):
@@ -526,13 +523,14 @@ def state(refresh=False, check=False):
         static_stop = llm_safety.emergency_stop_static()
     except Exception:
         static_stop = True
-    route = llm_safety.route_state("assistant")
+    model = _model_state(refresh=refresh)
+    route = llm_safety.route_state("assistant", selection=model)
     return {
         "schema_version": SCHEMA_VERSION,
         "enabled": bool(settings.get(ENABLED_KEY, False, kind="bool")),
         "key": _key_state(),
         "handler_key": _handler_key_state(),
-        "model": _model_state(refresh=refresh, route=route),
+        "model": model,
         "verify": read_verify_state(VERIFY_STATE_KEY),
         "handler_verify": read_verify_state(HANDLER_VERIFY_STATE_KEY),
         "emergency_stop": effective_stop,
@@ -760,7 +758,10 @@ def _credential_edit(actor, label, candidate, clear):
     return candidate, verified
 
 
-def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
+MODEL_UNSET = object()
+
+
+def save(actor, *, enabled, model=MODEL_UNSET, api_key=None, clear_api_key=False,
          handler_api_key=None, clear_handler_api_key=False, mcp_enabled=None,
          emergency_stop=None, autonomous_triage=None):
     """Apply one owner edit atomically, or refuse the whole thing.
@@ -787,19 +788,32 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
         raise merrors.ValueException("emergency_stop must be true or false")
     if autonomous_triage is not None and not isinstance(autonomous_triage, bool):
         raise merrors.ValueException("autonomous_triage must be true or false")
-    model = normalize_model(model)
+    if model is not MODEL_UNSET:
+        model = normalize_model(model)
     candidate, verified = _credential_edit(actor, "api_key", api_key, clear_api_key)
     handler_candidate, handler_verified = _credential_edit(
         actor, "handler_api_key", handler_api_key, clear_handler_api_key)
 
     from mojo.apps.account.models import User
-    changed = ["enabled", "model"]
+    changed = ["enabled"]
     with transaction.atomic():
         # One installation-wide lock: two owners can only ever race on one
         # credential, and the loser reads the truth back immediately because
         # both actions return the fresh state().
         User.objects.select_for_update().order_by("pk").first()
         system_settings.require_system_admin(actor)
+        # Compare a legacy echo under the SAME lock as the protected pin
+        # writer. A stale browser cannot clear or replace a concurrent pin.
+        try:
+            policy_route = llm_safety.parse_policy()["routes"].get("assistant", {})
+        except llm_safety.LLMSafetyError:
+            policy_route = {}
+        delegated = llm_safety.delegates_model(policy_route)
+        if delegated and model is not MODEL_UNSET:
+            current, _ = llm_safety.assistant_pin()
+            if model != current:
+                raise merrors.ValueException(
+                    "Use set_model_selection to change the Assistant model")
         if clear_api_key:
             _clear_value(API_KEY)
             _clear_value(VERIFY_STATE_KEY)
@@ -836,10 +850,12 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
             _log_switch(actor, mcp_enabled)
             # "Flip on, check now" must never show yesterday's answer.
             transaction.on_commit(_discovery_cache_delete)
-        if model:
-            _write_value(MODEL_KEY, model)
-        else:
-            _clear_value(MODEL_KEY)
+        if not delegated and model is not MODEL_UNSET:
+            if model:
+                _write_value(MODEL_KEY, model)
+            else:
+                _clear_value(MODEL_KEY)
+            changed.append("model")
         _audit(actor, changed, "saved")
 
     # The key that was just stored IS the stored key, so its verification is
@@ -848,6 +864,41 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
         _write_verify_state(verified, VERIFY_STATE_KEY)
     if handler_verified is not None:
         _write_verify_state(handler_verified, HANDLER_VERIFY_STATE_KEY)
+    return state()
+
+
+def set_model_selection(actor, *, mode, model=MODEL_UNSET):
+    """Sole active pin writer. No discovery/network validation is needed."""
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import llm_safety
+    system_settings.require_system_admin(actor)
+    if mode not in ("auto", "pinned"):
+        raise merrors.ValueException("mode must be auto or pinned")
+    if mode == "auto" and model is not MODEL_UNSET:
+        raise merrors.ValueException("Automatic selection does not accept model")
+    if mode == "pinned":
+        model = normalize_model(None if model is MODEL_UNSET else model)
+        if not model:
+            raise merrors.ValueException("A pinned model identifier is required")
+    with transaction.atomic():
+        User.objects.select_for_update().order_by("pk").first()
+        system_settings.require_system_admin(actor)
+        try:
+            route = llm_safety.parse_policy()["routes"].get("assistant", {})
+        except llm_safety.LLMSafetyError:
+            raise merrors.ValueException("The deployment model policy is unavailable") from None
+        if not llm_safety.delegates_model(route):
+            raise merrors.ValueException(
+                "This deployment policy fixes the model; model selection is unavailable")
+        deployed = settings.get_static(MODEL_KEY, None)
+        if mode == "auto" and deployed:
+            raise merrors.ValueException(
+                "Remove LLM_ADMIN_MODEL from deployment settings before selecting automatic mode")
+        if mode == "pinned":
+            _write_value(MODEL_KEY, model)
+        else:
+            _clear_value(MODEL_KEY)
+        _audit(actor, ["model_selection", mode], "saved")
     return state()
 
 
