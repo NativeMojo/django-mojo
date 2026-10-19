@@ -1560,3 +1560,47 @@ def test_enable_config_matches_botocore_shape(opts):
     result = ParamValidator().validate(
         {"Id": row.distribution_id, "IfMatch": "E-1", "DistributionConfig": sent}, shape)
     assert_true(not result.has_errors(), f"the sent config must match CloudFront's shape: {result.generate_report()}")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8652: owned viewer protocol and methods overwrite conflicting live values")
+def test_enable_overwrites_conflicting_owned_keys(opts):
+    wide = {"Quantity": 3, "Items": ["GET", "HEAD", "OPTIONS"],
+            "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]}}
+
+    def live(cfg):
+        for behavior in (cfg["DefaultCacheBehavior"], cfg["CacheBehaviors"]["Items"][0]):
+            behavior["ViewerProtocolPolicy"] = "allow-all"
+            behavior["AllowedMethods"] = json.loads(json.dumps(wide))
+
+    sent, _row = _enable_over_live(opts, live)
+    planned = {"Quantity": 2, "Items": ["GET", "HEAD"],
+               "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]}}
+    for name, behavior in (("default", sent["DefaultCacheBehavior"]),
+                           (sent["CacheBehaviors"]["Items"][0]["PathPattern"], sent["CacheBehaviors"]["Items"][0])):
+        assert_eq(behavior["ViewerProtocolPolicy"], "redirect-to-https",
+                  f"{name}: the planned viewer protocol replaces allow-all")
+        assert_eq(behavior["AllowedMethods"], planned, f"{name}: the planned GET/HEAD replaces the wider methods")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8652: a BYO default with legacy cache settings and no cache policy keeps them")
+def test_enable_keeps_byo_legacy_cache_settings(opts):
+    from mojo.apps.fileman.services import cdn_provision
+    _reset(opts)
+    aws = _FakeAws()
+    _byo_distribution(aws, POLICY_Y)
+    default = aws.distributions["EBYO"]["DistributionConfig"]["DefaultCacheBehavior"]
+    default.pop("CachePolicyId")
+    legacy = {"ForwardedValues": {"QueryString": False, "Cookies": {"Forward": "none"}},
+              "MinTTL": 0, "DefaultTTL": 86400, "MaxTTL": 31536000}
+    default.update(json.loads(json.dumps(legacy)))
+    row = cdn_provision.register_byo(_fresh(opts.public), "EBYO", "https://media.example.com")
+    row.key_group_id = "KGBYO"
+    row.save()
+    report = _provisioner(_fresh(opts.public), aws, apply=True).run()
+    assert_true("update_distribution" in aws.mutations, f"enable writes the behaviors: {report['items']}")
+    sent = aws.distributions["EBYO"]["DistributionConfig"]["DefaultCacheBehavior"]
+    for key, value in legacy.items():
+        assert_eq(sent.get(key), value, f"the BYO default keeps its legacy {key}")
+    assert_true("CachePolicyId" not in sent, f"no cache policy is added to a BYO default: {sent}")
