@@ -222,7 +222,7 @@ def is_viewer_restricted_path(model, key, request):
 
     The filter, search and sort twin of the serializer's nested-graph swap
     (#8648): `?user__requires_mfa=True` on the member list would otherwise
-    still sort members by a field the viewer is no longer shown. Only a hop
+    still tell the viewer which members have a field they are not shown. Only a hop
     INTO such a model is checked; the served model's own fields are gated by
     its own read. A trailing lookup token (in / icontains / isnull) is not a
     field and ends the walk unrestricted, as in is_sensitive_filter_path.
