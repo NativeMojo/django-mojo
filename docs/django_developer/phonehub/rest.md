@@ -135,7 +135,12 @@ Send an SMS message.
 }
 ```
 
-`from_number`, `group`, and `metadata` are optional.
+`from_number`, `group`, `metadata` and `secret` are optional.
+
+`secret` is a code or link inside `body` (a string of at most 2048
+characters; any other value is ignored). The full body is sent, and the
+stored row and this response carry it as `[redacted]`. A django-mojo instance
+using this one as its mojo relay sends it for every sign-in text.
 
 **Response:**
 ```json

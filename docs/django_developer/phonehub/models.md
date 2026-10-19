@@ -144,7 +144,7 @@ from mojo.apps.phonehub.models import SMS
 | `provider_message_id` | CharField(100) | Provider SID/message ID |
 | `error_code` | CharField(50) | Provider error code on failure |
 | `error_message` | TextField | Provider error message on failure |
-| `metadata` | JSONField | Arbitrary metadata dict |
+| `metadata` | JSONField | Arbitrary metadata dict. On a relay send, `remote` holds only `id`, `status` and `from_number` |
 | `is_test` | BooleanField | True if sent to a test number (`+1555...`) |
 | `sent_at` | DateTimeField | When status changed to `sent` |
 | `delivered_at` | DateTimeField | When status changed to `delivered` |
@@ -185,6 +185,33 @@ sms = SMS.send(
     from_number="+18005551234",
 )
 ```
+
+#### Sign-in secrets: `secret=`
+
+`SMS.send(..., secret=None)` and `phonehub.send_sms(..., secret=None)` take
+the code or link inside the body. The provider is sent the full body; the
+stored row keeps `secret` replaced by `[redacted]`
+(`"Your login link: [redacted]"`). A secret that is not in the body (a changed
+template) stores `[redacted]` alone. With no secret the body is stored
+unchanged, as before.
+
+The six auth senders pass it: SMS login, phone sign-up, password reset, login
+link, phone change and phone verification. On the mojo relay path the secret
+is also sent to the relay (`secret` on `sms/send`), so an upgraded relay
+stores its own row masked. An older relay ignores the field and keeps the
+full text until it upgrades.
+
+On a relay send, `metadata['remote']` keeps only `id`, `status` and
+`from_number` from the relay's reply (`REMOTE_METADATA_KEYS`), never the
+relay's body or recipient.
+
+**Existing rows:** `python manage.py mask_sms_secrets` counts the rows it
+would change (dry run, the default); `--apply` writes. It masks the text after
+the four auth prefixes (`Your verification code is: `, `Your password reset
+code is: `, `Your login link: `, `Your phone change verification code is: `)
+and cuts every row's `metadata['remote']` to the same three keys. It works in
+pk batches of 500, is idempotent, and prints counts only. Run it on each
+instance, relays included.
 
 #### Twilio sender/credential resolution
 

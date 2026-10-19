@@ -17,11 +17,15 @@ from mojo.helpers.settings import settings
 PROVIDER = "mojo"
 
 
-def send_sms(body, to_number, from_number=None, base_url=None, api_key=None, timeout=None):
+def send_sms(body, to_number, from_number=None, base_url=None, api_key=None, timeout=None,
+             secret=None):
     """
     POST to a remote django-mojo instance's /api/phonehub/sms/send endpoint
     and translate its response into the twilio-style objict the dispatcher
     expects.
+
+    `secret` (a code or link inside `body`) is sent along so the remote
+    stores its own row masked. An older remote ignores the field.
 
     Returns objict({
         sent:     bool,
@@ -49,6 +53,8 @@ def send_sms(body, to_number, from_number=None, base_url=None, api_key=None, tim
     payload = {"to_number": to_number, "body": body}
     if from_number:
         payload["from_number"] = from_number
+    if secret:
+        payload["secret"] = secret
 
     try:
         response = requests.post(
