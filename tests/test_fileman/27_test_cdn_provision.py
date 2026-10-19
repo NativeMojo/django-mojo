@@ -1364,3 +1364,199 @@ def test_signed_behavior_shape_guards(opts):
         assert_true(not ok and ("MANUAL", "behaviors.invalid") in codes, f"{name} is refused: {codes}")
         assert_true("distribution" in prov.blocked, f"{name} blocks the distribution step")
         assert_eq(pager.markers, [], f"{name} lists no key groups")
+
+
+# ----------------------------------------------------------------------
+# enable on an existing distribution merges into the live config (#8652)
+# ----------------------------------------------------------------------
+
+FUNCTION_ARN = f"arn:aws:cloudfront::{ACCOUNT}:function/fm-rewrite"
+ORIGIN_REQUEST_POLICY = "88a5eaf4-2fd4-4709-b370-b4c650ea3fcf"
+CACHING_DISABLED = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+
+
+def _functions():
+    return {"Quantity": 1, "Items": [{"FunctionARN": FUNCTION_ARN, "EventType": "viewer-request"}]}
+
+
+def _live_origin_fields(origin):
+    """The fields GetDistributionConfig returns on a live S3 origin that
+    fileman does not own."""
+    origin["CustomHeaders"] = {"Quantity": 1, "Items": [{"HeaderName": "X-Origin-Token", "HeaderValue": "t"}]}
+    origin["ConnectionAttempts"] = 3
+    origin["ConnectionTimeout"] = 10
+    origin["OriginShield"] = {"Enabled": True, "OriginShieldRegion": REGION}
+    origin["OriginPath"] = ""
+    origin["S3OriginConfig"]["OriginReadTimeout"] = 30
+
+
+def _live_default_fields(default):
+    default["FunctionAssociations"] = _functions()
+    default["LambdaFunctionAssociations"] = {"Quantity": 0}
+    default["OriginRequestPolicyId"] = ORIGIN_REQUEST_POLICY
+    default["FieldLevelEncryptionId"] = ""
+    default["SmoothStreaming"] = False
+    default["ForwardedValues"] = {"QueryString": False, "Cookies": {"Forward": "none"}}
+    default["MinTTL"] = 0
+    default["DefaultTTL"] = 86400
+    default["MaxTTL"] = 31536000
+    default["TrustedSigners"] = {"Enabled": True, "Quantity": 1, "Items": ["self"]}
+
+
+def _enable_over_live(opts, live):
+    """Provision, let `live(cfg)` add what an operator or AWS put on the live
+    config, disable it (drift), re-run enable, and return what was sent."""
+    from mojo.apps.fileman.models import CdnDistribution
+    _reset(opts)
+    aws = _FakeAws()
+    _provisioner(_fresh(opts.public), aws, apply=True).run()
+    row = CdnDistribution.objects.get(bucket_name=BUCKET)
+    cfg = aws.distributions[row.distribution_id]["DistributionConfig"]
+    live(cfg)
+    cfg["Enabled"] = False
+    aws.mutations.clear()
+    report = _provisioner(_fresh(opts.public), aws, apply=True).run()
+    assert_eq(aws.mutations, ["update_distribution"], f"the drift is converged by one update: {report['items']}")
+    return aws.distributions[row.distribution_id]["DistributionConfig"], row
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8652: enable keeps every live origin field and sets only the ones fileman owns")
+def test_enable_keeps_live_origin_fields(opts):
+    sent, row = _enable_over_live(opts, lambda cfg: _live_origin_fields(cfg["Origins"]["Items"][0]))
+    origin = sent["Origins"]["Items"][0]
+    assert_eq(origin.get("CustomHeaders"),
+              {"Quantity": 1, "Items": [{"HeaderName": "X-Origin-Token", "HeaderValue": "t"}]},
+              "the origin's custom headers survive the update")
+    assert_eq(origin.get("ConnectionAttempts"), 3, "ConnectionAttempts survives")
+    assert_eq(origin.get("ConnectionTimeout"), 10, "ConnectionTimeout survives")
+    assert_eq(origin.get("OriginShield"), {"Enabled": True, "OriginShieldRegion": REGION}, "OriginShield survives")
+    assert_eq(origin.get("OriginPath"), "", "OriginPath survives")
+    assert_eq(origin["S3OriginConfig"].get("OriginReadTimeout"), 30, "OriginReadTimeout survives")
+    assert_eq(origin["DomainName"], f"{BUCKET}.s3.{REGION}.amazonaws.com", "the owned domain is set")
+    assert_eq(origin["OriginAccessControlId"], row.oac_id, "the owned OAC is set")
+    assert_eq(origin["S3OriginConfig"]["OriginAccessIdentity"], "", "no legacy OAI")
+    assert_eq(sent["Enabled"], True, "enable re-enables the distribution")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8652: enable keeps every other origin and the live origin count")
+def test_enable_keeps_other_origins(opts):
+    other = {"Id": "logs-origin", "DomainName": "logs.example.test", "CustomHeaders": {"Quantity": 0},
+             "CustomOriginConfig": {"HTTPPort": 80, "HTTPSPort": 443, "OriginProtocolPolicy": "https-only"}}
+
+    def live(cfg):
+        cfg["Origins"]["Items"].append(json.loads(json.dumps(other)))
+        cfg["Origins"]["Quantity"] = 2
+
+    sent, _row = _enable_over_live(opts, live)
+    assert_eq(sent["Origins"]["Quantity"], 2, "the origin count is the live one")
+    assert_eq(len(sent["Origins"]["Items"]), 2, "both origins are sent")
+    assert_eq(sent["Origins"]["Items"][1], other, "the origin fileman does not own is sent unchanged")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8652: enable keeps the live default's extra fields, drops legacy cache keys, owns signing")
+def test_enable_merges_default_behavior(opts):
+    def live(cfg):
+        _live_default_fields(cfg["DefaultCacheBehavior"])
+        cfg["CacheBehaviors"]["Items"][0]["FunctionAssociations"] = _functions()
+
+    sent, row = _enable_over_live(opts, live)
+    default = sent["DefaultCacheBehavior"]
+    assert_eq(default.get("FunctionAssociations"), _functions(), "the live viewer function survives")
+    assert_eq(default.get("LambdaFunctionAssociations"), {"Quantity": 0}, "LambdaFunctionAssociations survives")
+    assert_eq(default.get("OriginRequestPolicyId"), ORIGIN_REQUEST_POLICY, "the origin request policy survives")
+    assert_eq(default.get("SmoothStreaming"), False, "SmoothStreaming survives")
+    for legacy in ("ForwardedValues", "MinTTL", "DefaultTTL", "MaxTTL"):
+        assert_true(legacy not in default, f"legacy {legacy} is removed next to a cache policy: {default}")
+    from mojo.apps.fileman.services.cdn_provision import CACHING_OPTIMIZED_POLICY_ID
+    assert_eq(default["CachePolicyId"], CACHING_OPTIMIZED_POLICY_ID, "a provisioned default uses CachingOptimized")
+    assert_eq(default["TrustedSigners"], {"Enabled": False, "Quantity": 0}, "legacy trusted signers are overwritten")
+    assert_eq(default["TrustedKeyGroups"], {"Enabled": True, "Quantity": 1, "Items": [row.key_group_id]},
+              "the default trusts the deployment key group")
+    assert_eq(default["ViewerProtocolPolicy"], "redirect-to-https", "the viewer protocol is owned")
+    first = sent["CacheBehaviors"]["Items"][0]
+    assert_eq(first.get("FunctionAssociations"), _functions(),
+              f"a per-prefix behavior keeps its live function: {first['PathPattern']}")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8652: a BYO origin Id is kept and every behavior targets it")
+def test_enable_keeps_byo_origin_id(opts):
+    from mojo.apps.fileman.services import cdn_provision
+    _reset(opts)
+    aws = _FakeAws()
+    _byo_distribution(aws, POLICY_Y)
+    cfg = aws.distributions["EBYO"]["DistributionConfig"]
+    cfg["Origins"]["Items"][0]["Id"] = "custom-origin"
+    cfg["DefaultCacheBehavior"]["TargetOriginId"] = "custom-origin"
+    cfg["DefaultCacheBehavior"]["CachePolicyId"] = CACHING_DISABLED
+    row = cdn_provision.register_byo(_fresh(opts.public), "EBYO", "https://media.example.com")
+    row.key_group_id = "KGBYO"
+    row.save()
+    report = _provisioner(_fresh(opts.public), aws, apply=True).run()
+    assert_true("update_distribution" in aws.mutations, f"enable writes the behaviors: {report['items']}")
+    sent = aws.distributions["EBYO"]["DistributionConfig"]
+    assert_eq([o["Id"] for o in sent["Origins"]["Items"]], ["custom-origin"], "the live origin Id is kept")
+    assert_eq(sent["DefaultCacheBehavior"]["TargetOriginId"], "custom-origin", "the default targets the kept origin")
+    assert_eq(sent["DefaultCacheBehavior"]["CachePolicyId"], CACHING_DISABLED, "a BYO default keeps its own cache policy")
+    assert_true(sent["CacheBehaviors"]["Items"], "the per-prefix behaviors are written")
+    for behavior in sent["CacheBehaviors"]["Items"]:
+        assert_eq(behavior["TargetOriginId"], "custom-origin", f"{behavior['PathPattern']} targets the kept origin")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8652: a live origin without CustomHeaders gets the empty list CloudFront requires")
+def test_enable_adds_missing_custom_headers(opts):
+    def live(cfg):
+        cfg["Origins"]["Items"][0].pop("CustomHeaders", None)
+
+    sent, _row = _enable_over_live(opts, live)
+    assert_eq(sent["Origins"]["Items"][0].get("CustomHeaders"), {"Quantity": 0, "Items": []},
+              "a missing CustomHeaders is sent as an empty list")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8652: the visibility sync keeps a matching behavior's live extra fields")
+def test_sync_keeps_live_behavior_fields(opts):
+    from mojo.apps.fileman.models import CdnDistribution
+    _reset(opts)
+    aws = _FakeAws()
+    _provisioner(_fresh(opts.public), aws, apply=True).run()
+    row = CdnDistribution.objects.get(bucket_name=BUCKET)
+    pattern = f"fileman/{PREFIX}public/*"
+    cfg = aws.distributions[row.distribution_id]["DistributionConfig"]
+    for behavior in cfg["CacheBehaviors"]["Items"]:
+        if behavior["PathPattern"] == pattern:
+            behavior["FunctionAssociations"] = _functions()
+            behavior["OriginRequestPolicyId"] = ORIGIN_REQUEST_POLICY
+    fm = _fresh(opts.public)
+    fm._cdn_provision_kwargs = _seams(aws)
+    fm.is_public = False
+    fm.on_rest_pre_save({"is_public": True}, False)  # raises if the sync is refused
+    cfg = aws.distributions[row.distribution_id]["DistributionConfig"]
+    flipped = [b for b in cfg["CacheBehaviors"]["Items"] if b["PathPattern"] == pattern]
+    assert_eq(len(flipped), 1, f"the flipped prefix still has one behavior: {cfg['CacheBehaviors']}")
+    assert_eq(flipped[0]["TrustedKeyGroups"]["Enabled"], True, "the flip signed the prefix")
+    assert_eq(flipped[0].get("FunctionAssociations"), _functions(), "the live function survives the sync")
+    assert_eq(flipped[0].get("OriginRequestPolicyId"), ORIGIN_REQUEST_POLICY,
+              "the live origin request policy survives the sync")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8652: the config enable sends validates against botocore's CloudFront model")
+def test_enable_config_matches_botocore_shape(opts):
+    import botocore.session
+    from botocore.validate import ParamValidator
+
+    def live(cfg):
+        _live_origin_fields(cfg["Origins"]["Items"][0])
+        _live_default_fields(cfg["DefaultCacheBehavior"])
+
+    sent, row = _enable_over_live(opts, live)
+    model = botocore.session.get_session().get_service_model("cloudfront")
+    shape = model.operation_model("UpdateDistribution").input_shape
+    result = ParamValidator().validate(
+        {"Id": row.distribution_id, "IfMatch": "E-1", "DistributionConfig": sent}, shape)
+    assert_true(not result.has_errors(), f"the sent config must match CloudFront's shape: {result.generate_report()}")
