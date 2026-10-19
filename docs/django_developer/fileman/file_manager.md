@@ -401,6 +401,10 @@ upload credentials; `--profile` runs under an operator's boto3 profile.
 additively, like `mojo/deploy/provision`: create what is missing, never
 delete, no waiters, no state file. A second run creates nothing; a run
 interrupted anywhere is finished by the next one.
+On an existing distribution, `enable` and the visibility sync keep the
+distribution's own origin and behavior settings (custom headers, timeouts,
+Origin Shield, other origins, functions, origin request policy, a BYO cache
+policy and origin Id) and change only the keys fileman owns.
 
 | Resource | Identity | Notes |
 |---|---|---|
