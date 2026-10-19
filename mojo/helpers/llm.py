@@ -27,18 +27,16 @@ Settings used:
     LLM_HANDLER_MODEL      # second-tier pin
 """
 
-import json
 import re
-import time
 import warnings
 
 from mojo.helpers import logit
 from mojo.helpers.settings import settings
+from mojo.helpers.llm_catalogue import Catalogue
 
 logger = logit.get_logger(__name__, "llm.log")
 
-# In-memory fallback cache when Redis is unavailable
-_mem_cache = {"models": None, "fetched_at": 0}
+_catalogue = Catalogue()
 
 # Process-level guard so the "caching enabled but prefix too short" warning
 # fires once per worker instead of on every call.
@@ -109,9 +107,8 @@ def normalize_feature(feature):
 CACHE_KEY = "mojo:llm:models"
 CACHE_TTL = 86400  # 24 hours
 
-# Hardcoded fallbacks if the API is unreachable. Aliases, not dated snapshots —
-# an alias follows the latest build and doesn't retire on a snapshot's schedule.
-# Revisit when a new generation ships.
+# Legacy use-case fallbacks only. These IDs are pinned snapshots, not floating
+# aliases. The guarded automatic Assistant route never consumes these values.
 _FALLBACKS = {
     "powerful": "claude-opus-4-8",
     "general": "claude-sonnet-5",
@@ -172,73 +169,49 @@ def verify_api_key(target="admin"):
 # Model discovery
 # ---------------------------------------------------------------------------
 
-def _fetch_models_from_api():
-    """Fetch the full model list from Anthropic's /v1/models endpoint."""
+def catalogue_state(*, policy=None, credential=None, redis=None, refresh=False,
+                    force=False, loader=None):
+    """One scoped catalogue for runtime, owner diagnostics and legacy helpers."""
+    from mojo.apps.account.services import llm_safety
+    from mojo.helpers.llm_catalogue import safe_code
     try:
-        from mojo.apps.account.services import llm_safety
-        return llm_safety.discover_models()
-    except Exception:
-        logger.warning("LLM model catalogue request failed")
-        return None
+        policy = policy or llm_safety.parse_policy()
+        discovery = policy["routes"].get("model_discovery")
+        if discovery is None:
+            llm_safety._deny("route_missing")
+        if discovery["provider"] != "anthropic":
+            llm_safety._deny("provider_unsupported")
+        exact = llm_safety._credential(discovery)
+        if credential is not None and credential != exact:
+            llm_safety._deny("credential_mismatch")
+        fingerprint = llm_safety.credential_fingerprint("anthropic", exact)
+        key = f"mojo:llm:catalogue:v2:{policy['hash']}:anthropic:{fingerprint}"
+        if redis is None:
+            from mojo.helpers.redis import get_connection
+            try:
+                redis = get_connection()
+            except Exception:
+                redis = None
+        return _catalogue.state(
+            redis, key, refresh=refresh, force=force,
+            loader=loader or (lambda: llm_safety.discover_models(
+                expected_policy_hash=policy["hash"], expected_fingerprint=fingerprint)))
+    except Exception as error:
+        code = safe_code(error)
+        return {"models": [], "discovery": {
+            "status": "unavailable", "fetched_at": None, "attempted_at": None,
+            "expires_at": None, "max_stale_at": None, "error_code": code},
+            "refresh": {"attempted": False, "ok": False if refresh else None,
+                        "code": code if refresh else ""}}
 
 
 def _cache_get():
-    """Try to read cached models from Redis, fall back to in-memory."""
-    try:
-        from mojo.helpers.redis import get_connection
-        r = get_connection()
-        raw = r.get(CACHE_KEY)
-        if raw:
-            return json.loads(raw)
-    except Exception:
-        pass
-    # In-memory fallback
-    if _mem_cache["models"] and (time.time() - _mem_cache["fetched_at"]) < CACHE_TTL:
-        return _mem_cache["models"]
-    return None
-
-
-def _cache_set(models):
-    """Store models in Redis (with TTL) and in-memory."""
-    _mem_cache["models"] = models
-    _mem_cache["fetched_at"] = time.time()
-    try:
-        payload = json.dumps(models)
-    except TypeError as err:
-        # Would otherwise disable the shared cache silently — say so.
-        logger.warning(f"Model list is not JSON-serializable, skipping Redis cache: {err}")
-        return
-    try:
-        from mojo.helpers.redis import get_connection
-        r = get_connection()
-        r.setex(CACHE_KEY, CACHE_TTL, payload)
-    except Exception as err:
-        # Redis being unavailable is expected — the in-memory cache covers it.
-        logger.debug(f"Redis model cache write skipped: {err}")
+    return catalogue_state()["models"] or None
 
 
 def get_models(force_refresh=False):
-    """
-    Return the list of available Anthropic models.
-
-    Cached for 24 hours in Redis (falls back to in-memory).
-    Pass force_refresh=True to bypass cache.
-    """
-    if not force_refresh:
-        cached = _cache_get()
-        if cached:
-            return cached
-
-    models = _fetch_models_from_api()
-    if models:
-        _cache_set(models)
-        return models
-
-    # If API call failed, try stale cache
-    if _mem_cache["models"]:
-        return _mem_cache["models"]
-
-    return None
+    """Bounded complete catalogue; refresh on expiry, using stored credentials."""
+    return catalogue_state(refresh=True, force=force_refresh)["models"] or None
 
 
 def _is_dated_snapshot(model_id):
@@ -336,8 +309,8 @@ def model_choices(refresh=False, loader=None):
         loader = (lambda: get_models(force_refresh=True)) if refresh else _cache_get
     try:
         models = loader()
-    except Exception as err:
-        logger.warning(f"Model catalogue unavailable for the picker: {str(err)[:200]}")
+    except Exception:
+        logger.warning("Model catalogue unavailable for the picker")
         models = None
 
     entries = []
@@ -364,7 +337,7 @@ def model_choices(refresh=False, loader=None):
     return choices
 
 
-def get_model(use="general"):
+def get_model(use="general", *, loader=None, pin_loader=None):
     """
     Return the best model ID for a given use case.
 
@@ -379,9 +352,10 @@ def get_model(use="general"):
         3. Hardcoded fallback
     """
     # 1. Check for explicit pin
-    pinned = settings.get("LLM_ADMIN_MODEL", None)
+    read_pin = pin_loader or settings.get
+    pinned = read_pin("LLM_ADMIN_MODEL", None)
     if not pinned:
-        pinned = settings.get("LLM_HANDLER_MODEL", None)
+        pinned = read_pin("LLM_HANDLER_MODEL", None)
     if pinned:
         return pinned
 
@@ -391,7 +365,7 @@ def get_model(use="general"):
         logger.warning(f"Unknown model tier '{use}' — using 'general'")
         use = "general"
         family_keyword = _USE_TO_FAMILY[use]
-    models = get_models()
+    models = (loader or get_models)()
     if models:
         best = _pick_best_model(models, family_keyword)
         if best:
@@ -445,7 +419,7 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
     # Typically means the prefix is below the model's minimum cacheable size
     # (1024 tokens for Sonnet, 4096 for Opus).
     if result.get("provider") != "bedrock":
-        _warn_zero_cache(result, resolved_model, cache_enabled)
+        _warn_zero_cache(result, result.get("model") or resolved_model, cache_enabled)
 
     return result
 

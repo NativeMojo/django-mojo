@@ -121,16 +121,6 @@ DATED_ONLY_MODELS = [
 ]
 
 
-def _clear_redis_model_cache():
-    """Drop the shared model-list key; no-op when Redis is unavailable."""
-    try:
-        from mojo.helpers.redis import get_connection
-        from mojo.helpers.llm import CACHE_KEY
-        get_connection().delete(CACHE_KEY)
-    except Exception:
-        pass
-
-
 @th.django_unit_test()
 def test_pick_best_model_sonnet(opts):
     """_pick_best_model returns the short alias for sonnet"""
@@ -283,10 +273,6 @@ def test_get_model_fallback(opts):
     """get_model returns a valid model for each use case"""
     from mojo.helpers import llm
 
-    # Clear any cached models
-    llm._mem_cache["models"] = None
-    llm._mem_cache["fetched_at"] = 0
-
     result = llm.get_model("fast")
     assert "haiku" in result, f"Expected haiku for 'fast', got {result}"
 
@@ -300,32 +286,14 @@ def test_get_model_fallback(opts):
 
 @th.django_unit_test()
 def test_get_model_with_cache(opts):
-    """get_model uses cached models when available"""
-    import time
+    """Legacy use-case selection can use a test-owned catalogue."""
     from mojo.helpers import llm
-
-    # _cache_get checks Redis before the in-memory cache, so clear the shared
-    # key first — otherwise a real model list left there by an earlier run
-    # would be returned instead of the fixture seeded below.
-    _clear_redis_model_cache()
-
-    # Seed the in-memory cache
-    llm._mem_cache["models"] = SAMPLE_MODELS
-    llm._mem_cache["fetched_at"] = time.time()
-
-    try:
-        result = llm.get_model("powerful")
-        assert result == "claude-opus-4-6", f"Expected claude-opus-4-6, got {result}"
-
-        result = llm.get_model("general")
-        assert result == "claude-sonnet-4-6", f"Expected claude-sonnet-4-6, got {result}"
-
-        result = llm.get_model("fast")
-        assert result == "claude-haiku-4-5", f"Expected claude-haiku-4-5, got {result}"
-    finally:
-        # Clean up cache
-        llm._mem_cache["models"] = None
-        llm._mem_cache["fetched_at"] = 0
+    for use, expected in (("powerful", "claude-opus-4-6"),
+                          ("general", "claude-sonnet-4-6"),
+                          ("fast", "claude-haiku-4-5")):
+        result = llm.get_model(use, loader=lambda: SAMPLE_MODELS,
+                               pin_loader=lambda key, default: None)
+        assert result == expected, f"expected {expected} for {use}, got {result}"
 
 
 @th.django_unit_test()
@@ -338,30 +306,6 @@ def test_get_api_key_resolution(opts):
     # We can't assert None because the test env might have a key configured
     # Just verify it returns a string or None
     assert result is None or isinstance(result, str), f"Expected str or None, got {type(result)}"
-
-
-@th.django_unit_test()
-def test_cache_expiry(opts):
-    """Stale in-memory cache is not used"""
-    import time
-    from mojo.helpers import llm
-
-    # Set cache with old timestamp (expired)
-    llm._mem_cache["models"] = SAMPLE_MODELS
-    llm._mem_cache["fetched_at"] = time.time() - 100000  # way past 24h
-
-    try:
-        cached = llm._cache_get()
-        # Should not return the stale in-memory cache
-        # (might return Redis cache if available, but not the stale mem cache)
-        if cached == SAMPLE_MODELS:
-            # Only OK if Redis had it
-            pass
-        # Either None or Redis-sourced is fine
-        assert cached is None or isinstance(cached, list), f"Expected None or list, got {type(cached)}"
-    finally:
-        llm._mem_cache["models"] = None
-        llm._mem_cache["fetched_at"] = 0
 
 
 @th.django_unit_test()
@@ -473,22 +417,11 @@ def test_real_get_model_auto_detect(opts):
     if not llm.get_api_key():
         return  # skip without key
 
-    # Clear cache to force API call
-    llm._mem_cache["models"] = None
-    llm._mem_cache["fetched_at"] = 0
-
-    try:
-        model = llm.get_model("general")
-        assert "sonnet" in model, f"Expected sonnet for 'general', got: {model}"
-
-        model = llm.get_model("fast")
-        assert "haiku" in model, f"Expected haiku for 'fast', got: {model}"
-
-        model = llm.get_model("powerful")
-        assert "opus" in model, f"Expected opus for 'powerful', got: {model}"
-    finally:
-        llm._mem_cache["models"] = None
-        llm._mem_cache["fetched_at"] = 0
+    models = llm.get_models(force_refresh=True)
+    assert models is not None, "real discovery must yield a catalogue"
+    for use, family in (("general", "sonnet"), ("fast", "haiku"), ("powerful", "opus")):
+        result = llm.get_model(use, loader=lambda: models)
+        assert family in result, f"Expected {family} for {use}, got {result}"
 
 
 @th.tier("slow")
@@ -502,3 +435,173 @@ def test_real_ask(opts):
 
     result = llm.ask("What is 2+2? Reply with just the number.", model=llm.get_model("fast"))
     assert "4" in result, f"Expected '4' in response, got: {result}"
+
+
+class _CatalogueRedis:
+    """Per-test Redis-shaped coordination and expiry, never a global patch."""
+
+    def __init__(self, clock):
+        self.clock = clock
+        self.values = {}
+        self.expires = {}
+        self.fail = False
+
+    def get(self, key):
+        if self.fail:
+            raise RuntimeError('private Redis detail')
+        if self.expires.get(key, float('inf')) <= self.clock():
+            self.values.pop(key, None)
+        return self.values.get(key)
+
+    def set(self, key, value, nx=False, ex=None):
+        if self.fail:
+            raise RuntimeError('private Redis detail')
+        if nx and self.get(key) is not None:
+            return False
+        self.values[key] = value
+        if ex is not None:
+            self.expires[key] = self.clock() + ex
+        return True
+
+    def eval(self, script, count, key, token):
+        if self.get(key) == token:
+            self.values.pop(key, None)
+            return 1
+        return 0
+
+
+def _catalogue_model(identifier='opaque-next', created='2026-10-18T12:00:00Z', **values):
+    entry = dict(id=identifier, display_name='Provider name', created_at=created,
+                 line='sonnet', lifecycle='active', max_tokens=8192,
+                 capabilities={'image_input': {'supported': True}})
+    entry.update(values)
+    return entry
+
+
+def _catalogue_case():
+    from mojo.helpers.llm_catalogue import Catalogue
+    now = [1800000000]
+    clock = lambda: now[0]
+    return Catalogue(clock=clock), _CatalogueRedis(clock), now
+
+
+@th.django_unit_test()
+def test_automatic_sonnet_uses_metadata_release_and_real_instants(opts):
+    from mojo.helpers.llm_catalogue import select_sonnet
+    rows = [
+        _catalogue_model('misleading-sonnet-999', line='opus'),
+        _catalogue_model('renamed-one', '2026-10-17T00:00:00Z'),
+        _catalogue_model('renamed-two', '2026-10-18T00:00:00+02:00'),
+        _catalogue_model('renamed-three', '2026-10-17T23:00:00Z'),
+    ]
+    assert select_sonnet(rows, 8192, images=True) == 'renamed-three', \
+        'opaque successor IDs must rank by release instants rather than family spelling/version'
+    rows.append(_catalogue_model('renamed-four', '2026-10-19T00:00:00Z'))
+    assert select_sonnet(rows, 8192, images=True) == 'renamed-four', \
+        'a compatible future Sonnet release must be adopted without hardcoded ID changes'
+
+
+@th.django_unit_test()
+def test_automatic_sonnet_excludes_incomplete_retired_or_conflicting_metadata(opts):
+    from mojo.helpers.llm_catalogue import select_sonnet
+    invalid = [
+        {'line': None}, {'lifecycle': 'deprecated'}, {'lifecycle': 'retired'},
+        {'created_at': '1970-01-01T00:00:00Z'}, {'created_at': 'bad'},
+        {'created_at': '2026-10-18T00:00:00'}, {'created_at': 10**500},
+        {'max_tokens': True}, {'max_tokens': None}, {'max_tokens': 4096},
+        {'capabilities': None}, {'capabilities': {'image_input': {'supported': 'true'}}},
+        {'id': ' '}, {'id': 'x' * 129},
+    ]
+    for changes in invalid:
+        assert select_sonnet([_catalogue_model(**changes)], 8192, images=True) == '', \
+            f'incomplete or incompatible model must not be selected: {changes}'
+    conflict = [_catalogue_model('duplicate'), _catalogue_model('duplicate', lifecycle='retired')]
+    assert select_sonnet(conflict, 4) == '', 'conflicting duplicate IDs must be excluded'
+    assert select_sonnet([None, [], {}, _catalogue_model('valid')], 4) == 'valid', \
+        'malformed entries must not hide an independently valid candidate'
+
+
+@th.django_unit_test()
+def test_catalogue_first_refresh_advancing_clock_and_passive_fresh_hit(opts):
+    from mojo.helpers.llm_catalogue import select_sonnet
+    catalogue, redis, now = _catalogue_case()
+    calls = []
+
+    def load():
+        calls.append(True)
+        now[0] += 2
+        return [_catalogue_model()]
+
+    passive = catalogue.state(redis, 'first', loader=load)
+    assert not calls and passive['discovery']['status'] == 'unavailable', \
+        'ordinary reads must never contact the provider'
+    first = catalogue.state(redis, 'first', loader=load, refresh=True)
+    assert first['refresh']['ok'] is True and first['discovery']['status'] == 'fresh', \
+        'a real-time first refresh must immediately be usable even when time advances during I/O'
+    assert select_sonnet(first['models'], 8192, images=True) == 'opaque-next', \
+        'the first authorized invocation must be able to resolve its newly fetched model'
+    hit = catalogue.state(redis, 'first', loader=load, refresh=True)
+    assert len(calls) == 1 and hit['refresh']['attempted'] is False, \
+        'a fresh runtime cache hit must spend no models request'
+    now[0] += 61
+    explicit = catalogue.state(redis, 'first', loader=load, refresh=True, force=True)
+    assert len(calls) == 2 and explicit['refresh']['ok'] is True, \
+        'explicit refresh may refresh a fresh cache after cooldown'
+
+
+@th.django_unit_test()
+def test_catalogue_failure_age_bound_success_invalidates_and_secret_free_errors(opts):
+    from mojo.helpers.llm_catalogue import FRESH_SECONDS, MAX_STALE_SECONDS
+    catalogue, redis, now = _catalogue_case()
+    first = catalogue.state(redis, 'age', loader=lambda: [_catalogue_model()], refresh=True)
+    fetched = first['discovery']['fetched_at']
+    now[0] += FRESH_SECONDS + 1
+
+    def fail():
+        raise RuntimeError('private provider key/body must never escape')
+
+    stale = catalogue.state(redis, 'age', loader=fail, refresh=True)
+    assert stale['refresh'] == {'attempted': True, 'ok': False, 'code': 'catalogue_unavailable'}, \
+        'a failed refresh must report that attempt rather than claim stale fallback is success'
+    assert stale['discovery']['status'] == 'stale' and stale['models'], \
+        'a failed refresh may retain usable last-good data'
+    assert stale['discovery']['fetched_at'] == fetched, 'failed refresh must not extend success time'
+    now[0] += 61
+    retired = catalogue.state(redis, 'age', loader=lambda: [
+        _catalogue_model(lifecycle='retired')], refresh=True, force=True)
+    from mojo.helpers.llm_catalogue import select_sonnet
+    assert retired['refresh']['ok'] is True and not select_sonnet(retired['models'], 4), \
+        'complete success invalidates a previously eligible model immediately'
+    now[0] += MAX_STALE_SECONDS
+    expired = catalogue.state(redis, 'age')
+    assert expired['models'] == [] and expired['discovery']['status'] == 'unavailable', \
+        'no model may remain effective after seven days from the successful catalogue'
+    assert 'private' not in str(stale), 'raw provider errors must not enter diagnostic/cache state'
+
+
+@th.django_unit_test()
+def test_catalogue_lock_cooldown_corruption_namespaces_and_redis_outage(opts):
+    catalogue, redis, now = _catalogue_case()
+    calls = []
+    load = lambda: calls.append(True) or [_catalogue_model()]
+    redis.set('busy:lock', 'other-owner', ex=30)
+    busy = catalogue.state(redis, 'busy', loader=load, refresh=True)
+    assert busy['refresh']['code'] == 'refresh_in_progress' and not calls, \
+        'single-flight losers must not issue a provider request or wait'
+    assert redis.get('busy:lock') == 'other-owner', 'losers cannot release another owner lock'
+    catalogue.state(redis, 'one', loader=load, refresh=True)
+    throttled = catalogue.state(redis, 'one', loader=load, refresh=True, force=True)
+    assert throttled['refresh']['code'] == 'refresh_throttled' and len(calls) == 1, \
+        'explicit refresh must not bypass the attempt cooldown'
+    assert catalogue.state(redis, 'different-credential-or-policy')['models'] == [], \
+        'a rotated credential/policy namespace cannot borrow prior identity state'
+    redis.set('broken', '{malformed')
+    assert catalogue.state(redis, 'broken')['models'] == [], 'corrupt cache must never invent models'
+    redis.fail = True
+    fallback = catalogue.state(redis, 'one', loader=load, refresh=True, force=True)
+    assert len(calls) == 1 and fallback['models'], \
+        'Redis outage may use bounded local last-good data but cannot authorize provider work'
+    assert fallback['refresh']['code'] == 'control_state_unknown', \
+        'unknown coordination must be reported explicitly'
+    now[0] += 8 * 86400
+    assert catalogue.state(redis, 'one')['models'] == [], 'local fallback must obey the same age bound'

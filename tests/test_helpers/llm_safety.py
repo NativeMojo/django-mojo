@@ -352,3 +352,31 @@ def test_host_feature_names_are_validated(opts):
         except ImproperlyConfigured as err:
             assert "LLM_HOST_FEATURES" in str(err), \
                 f"the error for {label} must name the setting, got {err}"
+
+
+@th.django_unit_test()
+def test_auto_sonnet_delegation_is_exactly_anthropic_assistant(opts):
+    from mojo.apps.account.services import llm_safety
+    for feature in ('assistant', 'configuration', 'model_discovery', 'unattributed'):
+        raw = _policy()
+        route = raw['routes'].pop('unattributed')
+        route['model'] = 'auto:sonnet'
+        raw['routes'][feature] = route
+        raw['features'] = {feature: _limits()}
+        if feature == 'assistant':
+            assert llm_safety.parse_policy(raw)['routes'][feature]['model'] == 'auto:sonnet', \
+                'explicit Anthropic Assistant delegation must parse without widening route keys'
+        else:
+            try:
+                llm_safety.parse_policy(raw)
+                assert False, f'{feature} must reject automatic Assistant delegation'
+            except llm_safety.LLMSafetyError as error:
+                assert error.code == 'policy_invalid', f'invalid delegation must fail safely: {error.code}'
+    for value in ('auto:opus', 'auto:', 'auto:sonnet-new'):
+        raw = _policy()
+        raw['routes']['unattributed']['model'] = value
+        try:
+            llm_safety.parse_policy(raw)
+            assert False, f'unsupported delegation {value} must fail closed'
+        except llm_safety.LLMSafetyError as error:
+            assert error.code == 'policy_invalid', f'bad token used wrong safe code: {error.code}'

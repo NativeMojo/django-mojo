@@ -251,11 +251,11 @@ def _handle_message(user, data, request_id=None, _reporter=None):
         content=message,
     )
 
-    # Pre-flight uses the exact guarded route; legacy key fallback is not
-    # authority to admit a turn.
+    # Pre-flight proves invocation admission, allowing cold automatic routes
+    # to reach the guard that alone may discover and resolve their model.
     from mojo.apps.account.services import llm_safety
     route = llm_safety.route_state("assistant")
-    if not route["ready"]:
+    if not route.get("can_invoke", route["ready"]):
         code = route.get("error") or "credential_missing"
         logger.error("assistant: guarded route unavailable code=%s", code)
         return _response_with_request_id({

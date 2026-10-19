@@ -40,7 +40,8 @@ single round-trip can pre-filter and aggregate at the same time.
 | `_agg_field` | string | `top` (when `_agg` ≠ `count`), `summary` (always when `_agg` ≠ `count`) | Numeric field the agg function operates on. Ignored for `_agg=count`. |
 | `_bucket` | enum: `minute` / `hour` / `day` / `week` / `month` | `histogram` | Bucket size for time-series aggregation. |
 | `_size` | int (default 10, hard cap 100) | `top` | Max rows. Bare `size` stays for `_mode=list`. |
-| `_min_count` | int (default 1) | `top`, `distinct` | Drop rows whose `value` is below this. Filters long-tail noise. |
+| `_min_count` | int (default 1, ≥ 0) | `top`, `distinct` | Minimum number of **rows** per group; groups with fewer are dropped. Filters long-tail noise. Independent of `_agg`. |
+| `_min_value` | number (signed; no default) | `top` | Drop groups whose aggregate `value` is below this. Omit it to keep every group, including negative, zero and fractional values. |
 | `_stats` | JSON object (default cap 12 bundles) | `count` | Named filter bundles → one count each, AND-ed onto the current filters. See [`_mode=count`](#mode_count) below. |
 
 ## Response shapes
@@ -130,10 +131,11 @@ GET /api/incident/event?category=ossec&_mode=count
 ```
 
 - `value` (not `count`) so the shape is identical across `_agg=count`/`sum`/`avg`/`min`/`max`.
-- `data` sorted descending by `value`.
+- `data` sorted descending by `value`; groups whose `value` is null (e.g. `_agg=sum` over a field that is null on every row of the group) sort last.
 - `key` is **always a string** (numeric/datetime fields stringified) so clients can use it as a `<select>` value or URL filter param without typecasting.
 - `first_seen` / `last_seen` (unix seconds) appear when the model has a datetime column (`created` is preferred). Skipped entirely when the model has no datetime to surface.
 - NULL keys appear as `key: "null"` (string).
+- **Behaviour change (#8607).** Top mode used to compare `_min_count` with `value`, so with `sum`/`avg`/`min`/`max` the default (`_min_count=1`) dropped every group below 1 (negative, zero, fractional or null); an explicit `_min_count=0` kept zero and positive fractions but still dropped negative and null groups; and an explicit `_min_count=N` acted as a value threshold. It now counts rows, so `_min_count=0` keeps every group; use `_min_value=N` for a value threshold, which can also be negative.
 
 ### `_mode=distinct`
 

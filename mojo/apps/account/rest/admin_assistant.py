@@ -68,6 +68,17 @@ def on_admin_assistant_mutate(request):
         return {"schema_version": assistant_setup.SCHEMA_VERSION,
                 "verified": True, "result": result,
                 "state": assistant_setup.state()}
+    if action == "set_model_selection":
+        mode = request.DATA.get("mode")
+        expected = {"action", "mode", "model"} if mode == "pinned" else {"action", "mode"}
+        if keys != expected:
+            raise merrors.ValueException(
+                "Model selection requires action, mode, and model only when pinned")
+        saved = assistant_setup.set_model_selection(
+            request.user, mode=mode,
+            model=request.DATA.get("model") if "model" in keys else assistant_setup.MODEL_UNSET)
+        return {"schema_version": assistant_setup.SCHEMA_VERSION,
+                "saved": True, "state": saved}
     if action == "save":
         if keys - {"action", "enabled", "model", "api_key", "clear_api_key",
                    "handler_api_key", "clear_handler_api_key", "mcp_enabled",
@@ -79,7 +90,7 @@ def on_admin_assistant_mutate(request):
         saved = assistant_setup.save(
             request.user,
             enabled=request.DATA.get("enabled") is True,
-            model=request.DATA.get("model"),
+            model=request.DATA.get("model") if "model" in keys else assistant_setup.MODEL_UNSET,
             api_key=request.DATA.get("api_key"),
             clear_api_key=request.DATA.get("clear_api_key") is True,
             handler_api_key=request.DATA.get("handler_api_key"),
@@ -138,5 +149,5 @@ def on_admin_assistant_mutate(request):
         return {"schema_version": assistant_setup.SCHEMA_VERSION,
                 "revoked": revoked, "state": assistant_setup.state()}
     raise merrors.ValueException(
-        "action must be verify, save, activate_policy, reset_breaker, historical_triage, "
+        "action must be verify, save, set_model_selection, activate_policy, reset_breaker, historical_triage, "
         "revoke_grant, or revoke_all_grants")

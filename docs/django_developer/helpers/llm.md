@@ -46,28 +46,79 @@ configuration reads:
 | `"general"` | Sonnet |
 | `"fast"` | Haiku |
 
-Guarded calls use the model owned by their policy route. `model=` may only
-repeat that exact model; it cannot select a different route model. The tier
-helpers do not override policy.
+Guarded calls use the exact literal model from their policy, except for the
+explicit Anthropic Assistant delegation `routes.assistant.model="auto:sonnet"`.
+Only that token enables automatic selection. Existing literal policies remain
+fixed until a deployment change and normal owner policy-hash activation.
+Inspect or clear any existing `LLM_ADMIN_MODEL` before opting in: it becomes
+an active pin on the delegated route.
 
-### How auto-detect ranks models
+On a delegated route the priority is owner-stored `LLM_ADMIN_MODEL`, then
+file-owned `LLM_ADMIN_MODEL`, then discovery. `LLM_HANDLER_MODEL` and the
+handler credential never substitute for this route. Literal policy and
+Bedrock models remain authoritative over legacy pins. `model=` can only
+repeat the resolved ID; it cannot override selection. One invocation snapshots
+that ID for mismatch checks, ledger, adapter and returned `model`, including
+calls from the streamed Assistant loop.
 
-Within the tier's family, the newest model wins, decided by the `created_at` timestamp the API returns — **not** by the shape of the model ID. A short alias (`claude-opus-4-8`) always beats a dated snapshot (`claude-opus-4-8-20260720`), even a newer one, because the alias follows the latest build. When a family has no alias, the newest snapshot is used.
+Automatic selection requires explicit provider metadata: `line="sonnet"`,
+`lifecycle="active"`, a real timezone-aware `created_at` release timestamp,
+adequate positive `max_tokens` for the effective configured output cap, and
+`capabilities.image_input.supported=true` if the route delegates images.
+Missing/unknown metadata and conflicting duplicate IDs are excluded. Newest
+release instant wins, with opaque ID as the deterministic tie breaker; names
+and version numbers do not choose the family. Client tools and prompt caching
+remain controlled by the existing policy and adapter capability checks; the
+Models API does not advertise a general client-tool support flag.
 
-ID length is deliberately not part of the ranking. Every alias within a generation is the same width (`claude-opus-4-1`, `claude-opus-4-8`), so it says nothing about recency.
+Modern dateless IDs are pinned release snapshots, not floating aliases.
+`get_model(use)` retains its older naming/alias preference and fallback IDs
+for legacy configuration callers only. It never selects the guarded automatic
+Assistant model; use `llm_safety.model_selection_state()` for passive runtime
+diagnostics.
 
-### Cache
+### Catalogue cache
 
-Model lists are cached in Redis (`mojo:llm:models`, 24h TTL) and shared across
-workers. If Redis is unavailable, a per-process in-memory cache is used
-instead. A refresh performs one guarded, timed page of at most 100 models—no
-unaccounted pagination. Call `get_models(force_refresh=True)` to bypass the
-cache.
+All catalogue consumers share a versioned cache scoped by policy hash,
+provider and exact discovery credential fingerprint. Discovery must use the
+same credential identity as the automatic Assistant. Normal owner/bootstrap
+GETs inspect cached state and never contact a provider.
+
+`llm_safety.route_state("assistant")` keeps `ready` strict: it requires a
+currently usable resolved ID. Its additive `can_invoke` field reports passive
+admission after policy agreement, stop and exact credential checks, allowing
+cold or expired automatic routes to reach the invocation guard. The normal
+agent, streamed agent, socket handler and Admin bootstrap use admission;
+none performs discovery during preflight or GET. `assistant_setup.is_ready()`
+is the enabled/bootstrap admission predicate. The invocation guard remains
+the authority for resolution, budgets, permits and the actual model.
+
+A complete catalogue is fresh for 24 hours. On expiry the first authorized
+invocation may refresh; an explicit owner refresh can bypass freshness. A
+failed or incomplete attempt may retain last-good data until seven days from
+its original success. Failures never extend that deadline. Expired data gives
+no effective automatic model. A successful complete catalogue that contains
+no compatible active Sonnet immediately invalidates the old selection.
+
+Redis coordinates a 30-second owner-token `SET NX EX` lock and 60-second
+attempt cooldown. Losers use usable cached data or return unavailable without
+waiting. A bounded process-local last-good cache follows the same age bounds;
+unknown Redis coordination never authorizes an uncontrolled network request.
+Refreshes use at most five pages of 100 models/500 total and a total deadline
+of the smaller of 20 seconds, discovery timeout and shared timeout. Each page
+passes safety controls, operation counting, breaker, permit and durable ledger
+independently, with one operation ID across pages. Missing/repeated cursors,
+a page failure, deadline or smaller installed loop budget make the refresh
+incomplete. SDK retries stay disabled; there is no background scheduler.
 
 ```python
-models = llm.get_models()               # cached model list (list of dicts)
-models = llm.get_models(force_refresh=True)  # force API call
+models = llm.get_models()  # shared cache; coordinated refresh on expiry
+models = llm.get_models(force_refresh=True)  # still obeys lock/cooldown/safety
 ```
+
+Owner refresh reports that request's result in `model.refresh`: a usable
+last-good model never turns a failed attempt into success. See the exact
+[owner API](../../web_developer/account/admin_portal/assistant.md).
 
 ## Quick Calls
 
@@ -87,7 +138,7 @@ response = llm.call(
     messages=[{"role": "user", "content": "Hello"}],
     system="You are a helpful assistant.",
     tools=[...],           # optional tool definitions
-    model="claude-sonnet-5",  # optional; must exactly match the policy route
+    # model omitted: policy literal or delegated resolved ID owns selection
     max_tokens=4096,       # optional
     reasoning_effort="off",  # default; Anthropic accepts only off
     feature="assistant",  # required for framework callers
@@ -182,9 +233,10 @@ families and sorted newest-first by the same `_rank_key` `get_model()` uses. The
 label is the API's `display_name`, or the id when it has none.
 
 **It never returns an empty list.** When the catalogue is unavailable — no key
-yet, or the API is unreachable — it returns the three `_FALLBACKS` aliases,
-which is exactly what resolution would fall back to anyway. A picker with
-nothing in it looks broken.
+yet, or the API is unreachable — it returns the three legacy `_FALLBACKS` IDs,
+for legacy use-case callers only. The owner setup contract uses known
+metadata choices (which may be empty), and automatic runtime never uses
+hardcoded fallback IDs.
 
 It reads the cache by default and does **not** fetch: a settings page that
 fetched on every render would spend a provider round trip to draw a dropdown.
@@ -202,7 +254,7 @@ good re-save whenever the cache has lapsed and the API is down.
 |---|---|
 | `LLM_ADMIN_API_KEY` | Checked first by `get_api_key()` |
 | `LLM_HANDLER_API_KEY` | Fallback — the platform key, settable from the built-in Admin's Assistant setup |
-| `LLM_ADMIN_MODEL` | If set, `get_model()` returns this (explicit pin) |
+| `LLM_ADMIN_MODEL` | Owner/file manual pin on a delegated Assistant route; legacy `get_model()` pin |
 | `LLM_HANDLER_MODEL` | Second-tier pin |
 | `LLM_SAFETY_POLICY` | Required file-owned provider routes and cost envelopes |
 | `LLM_SAFETY_POLICY_EXPECTED_HASH` | Protected owner-activated DB agreement; never edit directly |

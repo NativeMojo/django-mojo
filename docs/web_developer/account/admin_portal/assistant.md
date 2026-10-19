@@ -48,7 +48,13 @@ of any kind.
       "selected": "claude-sonnet-5",
       "effective": "claude-sonnet-5",
       "source": "admin",
-      "choices": [{"id": "claude-sonnet-5", "label": "Claude Sonnet 5"}]
+      "choices": [{"id": "claude-sonnet-5", "label": "Claude Sonnet 5"}],
+      "mode": "pinned", "editable": true, "policy_model": "auto:sonnet",
+      "restriction": "",
+      "discovery": {"status": "not_applicable", "fetched_at": null,
+                    "attempted_at": null, "expires_at": null,
+                    "max_stale_at": null, "error_code": ""},
+      "refresh": {"attempted": false, "ok": null, "code": ""}
     },
     "verify": {"ok": true, "code": "verified",
                "message": "Anthropic accepted this key.",
@@ -108,10 +114,16 @@ of any kind.
 | `key.hint` | The last four characters, or `""` when the value is too short to hint at safely |
 | `key.source` | Exact Admin-target provenance: `admin` (stored here) · `deployment` (the settings file) · `none` |
 | `handler_key` | The **platform** key, `LLM_HANDLER_API_KEY` — available only to policy routes declaring `credential: "handler"`; it never substitutes for an Admin-routed feature. Same `configured` / `hint` / `source` shape; `source` is `admin` · `deployment` · `none` |
-| `model.selected` | The legacy picker pin; `""` means no legacy pin |
+| `model.selected` | Applicable owner/deployment pin; empty for automatic. Fixed routes preserve the inert legacy value for old clients; use `mode` to identify policy authority |
 | `model.effective` | The exact guarded Assistant route model |
-| `model.source` | Provenance for the legacy picker pin: `admin` · `deployment` · `automatic` (no pin) |
-| `model.choices` | Picker suggestions only. Never validated against — the list is network-dependent |
+| `model.source` | `admin` · `deployment` · `automatic` · `policy`; fixed policies report `policy` |
+| `model.choices` | At most 40 suggestions from known provider metadata; may be empty. Saving a manual pin does not require catalogue verification |
+| `model.mode` | `auto` · `pinned` · `fixed` |
+| `model.editable` | Whether policy explicitly delegates the Anthropic Assistant route |
+| `model.policy_model` | Exact policy literal or `auto:sonnet`; empty for unavailable policy |
+| `model.restriction` | Empty, `fixed_policy`, `provider_unsupported`, `deployment_pin`, or `policy_unavailable` |
+| `model.discovery` | `status`: `fresh` · `stale` · `unavailable` · `not_applicable`; UTC ISO timestamps or null for `fetched_at`, `attempted_at`, `expires_at`, `max_stale_at`; bounded `error_code` |
+| `model.refresh` | Actual requested refresh outcome; ordinary reads: `{attempted:false,ok:null,code:""}` |
 | `verify` | How the **stored** Assistant credential last checked. `ok` is `null` when it never has |
 | `handler_verify` | The same record for the stored platform key |
 | `emergency_stop` | Effective deployment OR authoritative database stop |
@@ -122,6 +134,50 @@ of any kind.
 | `autonomous_triage_activated_at` | Primary-DB no-history watermark, or `null` |
 | `safety` | Bounded aggregate usage and breaker rows; no per-row records or fingerprints |
 | `mcp` | Remote agent access — see below |
+
+The additive fields keep `schema_version: 2`; clients detect `model.editable`
+by presence. `route.model` equals `model.effective`, including when stops or
+missing controls prevent readiness. An unavailable/expired automatic model
+has empty `effective` and cannot be ready. Additive `route.can_invoke` reports
+passive invocation admission: policy agreed, stop clear and exact credential
+present. It can be true while a cold/expired automatic route is not yet ready;
+that allows the composer/socket to reach the guard that discovers and selects
+the model. The bootstrap Assistant `ready` capability means this enabled
+invocation admission, so it must not be replaced with strict `route.ready`
+when deciding whether a first turn is possible. Neither predicate performs
+provider work during GET/preflight; the guard still owns resolution, limits
+and the actual model. Fixed/Bedrock admission behavior remains unchanged.
+Fixed/pinned models do not depend
+on catalogue availability; discovery may be `not_applicable`.
+
+Only `routes.assistant.model="auto:sonnet"` on Anthropic delegates selection.
+Existing literal policy models remain fixed, including Bedrock. The delegated
+priority is owner-stored `LLM_ADMIN_MODEL`, file-owned `LLM_ADMIN_MODEL`, then
+newest compatible active Sonnet by explicit provider line/lifecycle/release,
+output-cap and required image metadata. No ID-name guessing or hardcoded
+newest model is used. Modern dateless IDs are pinned releases, not floating
+aliases. Before opting in, inspect/clear legacy pins, deploy the new policy,
+and activate its hash normally. No installed policy is rewritten.
+
+Catalogue cache identity includes policy hash, provider and exact discovery
+credential fingerprint; discovery and runtime credentials must match. It is
+fresh for 24 hours. Failed/incomplete refreshes may retain last-good data for
+seven days from its original success, without extending that deadline.
+Complete success with no compatible model invalidates the old selection.
+A stale usable automatic route may be ready, with `status:"stale"`.
+Normal GET never makes provider requests. First authorized calls after expiry
+and explicit owner refreshes share a Redis 30-second owner lock and 60-second
+cooldown, at most five pages of 100/500 entries, and a 20-second or smaller
+policy deadline. Each page passes its own safety/permit/ledger and shares
+one operation ID; smaller installed loop budgets remain binding. No SDK
+retries or scheduler are added, and Redis coordination failure cannot issue
+an uncontrolled request.
+
+`GET ?refresh=models` reports that request truthfully: complete success has
+`attempted:true,ok:true,code:""`; a failed fetch has `attempted:true,ok:false`
+and a safe code even if cached data remains usable. Lock/cooldown denial has
+`attempted:false,ok:false` and `refresh_in_progress`/`refresh_throttled`.
+Never show a success toast merely because `model.effective` is nonempty.
 
 For an explicitly configured Bedrock route, `credential` is `aws`.
 `credential_configured=true` declares that the installation's AWS chain was
@@ -245,7 +301,7 @@ tests the AWS chain. Model catalogue refresh likewise remains Anthropic-only.
 | Field | Rules |
 |---|---|
 | `enabled` | Boolean. Required |
-| `model` | Legacy picker pin: `""` clears it; otherwise `^[a-z0-9][a-z0-9.\-]{0,80}$`. Required. The safety-policy route still owns the guarded runtime model |
+| `model` | Optional. On delegated routes omit it; old clients may echo the current `selected` as a no-op. A differing echo is rejected under the installation lock with an instruction to use `set_model_selection`. Nondelegating policies retain the inert legacy writer (`""` clears) |
 | `api_key` | Optional. The Assistant's own key. **Omit it to leave the stored credential alone** — an empty string is not "store nothing", so send nothing |
 | `clear_api_key` | Optional boolean. Removes the stored Assistant key. Cannot be combined with `api_key` |
 | `handler_api_key` | Optional. The **platform** key (`LLM_HANDLER_API_KEY`). Same omit-to-keep rule |
@@ -258,6 +314,31 @@ tests the AWS chain. Model catalogue refresh likewise remains Anthropic-only.
 authorized security readers. `hours` is clamped to 1–168. It returns schema version 2 and
 bounded provider/feature/status aggregates and breaker counts, never per-row
 ledger/circuit/attempt records or credential fingerprints.
+
+### `action: "set_model_selection"`
+
+Use a separate request to change active model selection:
+
+```json
+{"action":"set_model_selection","mode":"pinned","model":"opaque-model-id"}
+```
+
+```json
+{"action":"set_model_selection","mode":"auto"}
+```
+
+Exact keys only. Pinned requires a nonblank structurally valid ID matching
+`^[a-z0-9][a-z0-9.\-]{0,80}$`; auto forbids a `model` key. This uses the
+existing owner/fresh-interactive-auth/same-origin boundary, installation
+lock, protected settings writer, cache invalidation and audit. No network
+validation is required to save a known manual pin. The answer is
+`{schema_version:2,saved:true,state:<passive fresh state>}`.
+Fixed/unsupported policy routes reject the action. A nonblank deployment
+`LLM_ADMIN_MODEL` can be overridden by an owner pin but cannot be cleared
+by deleting the database row: `restriction:"deployment_pin"` remains visible
+even during the owner override, and Auto is rejected with a readable
+instruction to remove the deployment pin. Generic Save omits model on capable
+clients; an omitted/equal old-client echo cannot race and overwrite a pin.
 
 ### LLM safety actions
 
