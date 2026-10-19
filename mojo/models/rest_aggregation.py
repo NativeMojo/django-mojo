@@ -14,13 +14,12 @@ downstream apps must not invent their own.
 """
 import datetime
 import json
-import math
 import time
 from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import FieldError, ValidationError
 from django.db import Error as DBError, models as dm
-from django.db.models import Count, Sum, Avg, Min, Max, F
+from django.db.models import Count, Sum, Avg, Min, Max, F, Value
 from django.db.models.functions import (
     TruncMinute, TruncHour, TruncDay, TruncWeek, TruncMonth,
 )
@@ -244,7 +243,11 @@ def _agg_top(cls, request, queryset):
         .filter(_row_n__gte=min_count)
     )
     if min_value is not None:
-        qs = qs.filter(value__gte=_threshold_for(qs, min_value))
+        # A typed expression, not a plain int: Django checks a plain int
+        # against the INPUT column's range, but SUM(integer) is wider, so a
+        # threshold past that range would empty or ignore the filter. The
+        # database compares the real aggregate with the exact number.
+        qs = qs.filter(value__gte=Value(min_value, output_field=dm.DecimalField()))
     rows = qs.order_by(F("value").desc(nulls_last=True))[:size]
 
     data = []
@@ -554,17 +557,6 @@ def _resolve_number(value):
         raise me.ValueException(f"_min_value must be a number, got {value!r}")
     if not d.is_finite():
         raise me.ValueException(f"_min_value must be a number, got {value!r}")
-    return d
-
-
-def _threshold_for(qs, d):
-    # Django truncates a Decimal compared with an integer column, so a
-    # fractional threshold is rounded up to keep `value >= d` exact.
-    output = qs.query.annotations["value"].output_field
-    if isinstance(output, dm.IntegerField):
-        return math.ceil(d)
-    if isinstance(output, dm.FloatField):
-        return float(d)
     return d
 
 

@@ -135,7 +135,7 @@ GET /api/incident/event?category=ossec&_mode=count
 - `key` is **always a string** (numeric/datetime fields stringified) so clients can use it as a `<select>` value or URL filter param without typecasting.
 - `first_seen` / `last_seen` (unix seconds) appear when the model has a datetime column (`created` is preferred). Skipped entirely when the model has no datetime to surface.
 - NULL keys appear as `key: "null"` (string).
-- **Behaviour change (#8607).** Top mode used to compare `_min_count` with `value`, so with `sum`/`avg`/`min`/`max` a group below 1 (negative, zero, fractional or null) was dropped, by default and at `_min_count=0` alike, and an explicit `_min_count=N` acted as a value threshold. It now counts rows; use `_min_value=N` for a value threshold, which can also be negative.
+- **Behaviour change (#8607).** Top mode used to compare `_min_count` with `value`, so with `sum`/`avg`/`min`/`max` the default (`_min_count=1`) dropped every group below 1 (negative, zero, fractional or null); an explicit `_min_count=0` kept zero and positive fractions but still dropped negative and null groups; and an explicit `_min_count=N` acted as a value threshold. It now counts rows, so `_min_count=0` keeps every group; use `_min_value=N` for a value threshold, which can also be negative.
 
 ### `_mode=distinct`
 

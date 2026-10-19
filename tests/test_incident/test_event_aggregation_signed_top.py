@@ -47,7 +47,7 @@ def _reset_admin(username, password):
 @th.django_unit_setup()
 def setup_event_aggregation_signed_top(opts):
     from mojo.apps.incident.models import Event
-    Event.objects.filter(category__in=[CAT_SUM, CAT_AVG, CAT_MINMAX, CAT_NULL]).delete()
+    Event.objects.filter(category__in=[CAT_SUM, CAT_AVG, CAT_MINMAX, CAT_NULL, CAT_WIDE, CAT_ZERO]).delete()
     _reset_admin(TEST_USER, TEST_PWORD)
     opts.user_name = TEST_USER
     opts.pword = TEST_PWORD
@@ -189,3 +189,76 @@ def test_sum_top_values_add_up_to_summary(opts):
 def test_sum_top_small_size_keeps_highest(opts):
     keys = [k for k, _ in _pairs(_sum_top(opts, _size=3))]
     assert keys == [A, B, Z], f"_size=3 must keep the three highest, got {keys}"
+
+
+
+CAT_WIDE = "evt_aggsig:wide"
+CAT_ZERO = "evt_aggsig:zero"
+W_POS, W_NEG, W_SMALL, W_NULL = "10.9.4.1", "10.9.4.2", "10.9.4.3", "10.9.4.4"
+
+
+def _wide_keys(opts, **params):
+    # SUM over an IntegerField is wider than the column: 2 x 2e9 does not
+    # fit int32. Every threshold must compare against the real sum.
+    _seed(CAT_WIDE, [(W_POS, [2000000000, 2000000000]),
+                     (W_NEG, [-2000000000, -2000000000]),
+                     (W_SMALL, [7]),
+                     (W_NULL, [None])], field="uid")
+    return [k for k, _ in _pairs(_top(opts, CAT_WIDE, _agg="sum", _agg_field="uid", **params))]
+
+
+@th.django_unit_test()
+def test_sum_top_wide_sums_present_at_defaults(opts):
+    _wide_keys(opts)
+    pairs = _pairs(_top(opts, CAT_WIDE, _agg="sum", _agg_field="uid"))
+    assert pairs == [(W_POS, 4000000000), (W_SMALL, 7), (W_NEG, -4000000000), (W_NULL, None)], (
+        f"wide sums must be present at the defaults, got {pairs}"
+    )
+
+
+@th.django_unit_test()
+def test_sum_top_min_value_above_input_integer_range(opts):
+    keys = _wide_keys(opts, _min_value=3000000000)
+    assert keys == [W_POS], f"_min_value=3e9 must keep only the 4e9 sum, got {keys}"
+    keys = _wide_keys(opts, _min_value=5000000000)
+    assert keys == [], f"_min_value=5e9 must drop the 4e9 sum, got {keys}"
+
+
+@th.django_unit_test()
+def test_sum_top_min_value_below_input_integer_range(opts):
+    keys = _wide_keys(opts, _min_value=-3000000000)
+    assert keys == [W_POS, W_SMALL], f"_min_value=-3e9 must drop the -4e9 sum, got {keys}"
+    keys = _wide_keys(opts, _min_value=-5000000000)
+    assert keys == [W_POS, W_SMALL, W_NEG], (
+        f"_min_value=-5e9 must keep the -4e9 sum and drop the null group, got {keys}"
+    )
+
+
+@th.django_unit_test()
+def test_sum_top_min_value_beyond_bigint(opts):
+    keys = _wide_keys(opts, _min_value="1e20")
+    assert keys == [], f"_min_value=1e20 must be an empty result, got {keys}"
+    keys = _wide_keys(opts, _min_value="-1e20")
+    assert keys == [W_POS, W_SMALL, W_NEG], (
+        f"_min_value=-1e20 must keep every non-null group, got {keys}"
+    )
+
+
+@th.django_unit_test()
+def test_avg_top_min_value_fractional(opts):
+    _seed(CAT_AVG, [("10.9.1.1", [0, 1]), ("10.9.1.2", [-1, 0]), ("10.9.1.3", [1, 2])])
+    keys = [k for k, _ in _pairs(_top(opts, CAT_AVG, _agg="avg", _agg_field="level",
+                                      _min_value="0.25"))]
+    assert keys == ["10.9.1.3", "10.9.1.1"], f"avg >= 0.25 must keep 1.5 and 0.5, got {keys}"
+    keys = [k for k, _ in _pairs(_top(opts, CAT_AVG, _agg="avg", _agg_field="level",
+                                      _min_value="-0.5"))]
+    assert keys == ["10.9.1.3", "10.9.1.1", "10.9.1.2"], f"avg >= -0.5 must keep -0.5, got {keys}"
+
+
+@th.django_unit_test()
+def test_sum_top_explicit_min_count_zero_keeps_every_group(opts):
+    _seed(CAT_ZERO, [("10.9.5.1", [-5]), ("10.9.5.2", [0]), ("10.9.5.3", [None])], field="uid")
+    pairs = _pairs(_top(opts, CAT_ZERO, _agg="sum", _agg_field="uid", _min_count=0))
+    assert pairs == [("10.9.5.2", 0), ("10.9.5.1", -5), ("10.9.5.3", None)], (
+        f"_min_count=0 must keep negative, zero and null groups, got {pairs}"
+    )
