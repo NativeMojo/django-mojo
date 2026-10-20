@@ -69,8 +69,28 @@ def _login(opts, name):
 
 
 def _counts():
+    """Track every row attributable to this module, including wrong-room writes.
+
+    Other framework packages create chat fixtures concurrently. Room names
+    alone miss unnamed REST DMs, while just the requested room misses a write
+    routed to a different room. Include the module's users, groups and all
+    rooms touched by those users before counting their related rows.
+    """
+    from django.db.models import Q
+    from mojo.apps.account.models import Group, User
     from mojo.apps.chat.models import ChatMembership, ChatMessage, ChatRoom
-    return (ChatRoom.objects.count(), ChatMembership.objects.count(), ChatMessage.objects.count())
+    users = User.objects.filter(email__in=EMAILS.values()).values("pk")
+    groups = Group.objects.filter(name__in=GROUPS.values()).values("pk")
+    member_rooms = ChatMembership.objects.filter(user_id__in=users).values("room_id")
+    authored_rooms = ChatMessage.objects.filter(user_id__in=users).values("room_id")
+    rooms = ChatRoom.objects.filter(
+        Q(name__startswith=ROOM_PREFIX) | Q(user_id__in=users) | Q(group_id__in=groups)
+        | Q(pk__in=member_rooms) | Q(pk__in=authored_rooms)).values("pk")
+    return (
+        rooms.count(),
+        ChatMembership.objects.filter(Q(room_id__in=rooms) | Q(user_id__in=users)).count(),
+        ChatMessage.objects.filter(Q(room_id__in=rooms) | Q(user_id__in=users)).count(),
+    )
 
 
 def _room(opts, label, owner, group=None, members=()):
@@ -175,6 +195,39 @@ def test_dm_reuses_existing_room_without_rule(opts):
     assert_eq(resp.status_code, 200, f"an existing DM is returned, got {resp.status_code}: {resp.json}")
     assert_eq(resp.json.data.id, room.pk, "the existing room comes back")
     assert_eq(_counts(), before, "reuse writes nothing")
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_write_guard_ignores_parallel_fixtures_but_catches_wrong_room(opts):
+    """Unrelated traffic is harmless; this module's misplaced writes still fail."""
+    from mojo.apps.account.models import Group, User
+    from mojo.apps.chat.models import ChatMembership, ChatMessage, ChatRoom
+    email = "reachability-unrelated-counts@example.com"
+    name = "reachability-unrelated-counts"
+    ChatRoom.objects.filter(name=name).delete()
+    User.objects.filter(email=email).delete()
+    Group.objects.filter(name=name).delete()
+    before = _counts()
+    outsider = User.objects.create(username=email, email=email)
+    group = Group.objects.create(name=name)
+    room = ChatRoom.objects.create(name=name, user=outsider, group=group)
+    try:
+        ChatMembership.objects.create(room=room, user=outsider)
+        ChatMessage.objects.create(room=room, user=outsider, body="another package's fixture")
+        assert_eq(_counts(), before, "unrelated parallel room, membership and message inserts must not trip the reachability write guard")
+        misplaced_member = ChatMembership.objects.create(room=room, user=opts.a)
+        assert_true(_counts() != before, "a fixture user's membership inserted in the wrong unrelated room must still trip the write guard")
+        misplaced_member.delete()
+        assert_eq(_counts(), before, "removing the attributable write must restore the guard baseline despite unrelated fixtures")
+        misplaced_message = ChatMessage.objects.create(room=room, user=opts.a, body="misrouted fixture write")
+        assert_true(_counts()[2] > before[2], "a fixture user's message inserted in the wrong unrelated room must still trip the message write guard")
+        misplaced_message.delete()
+        assert_eq(_counts(), before, "unrelated fixtures alone must remain outside the write guard after a misplaced message is removed")
+    finally:
+        room.delete()
+        group.delete()
+        outsider.delete()
 
 
 @th.tier("core")
