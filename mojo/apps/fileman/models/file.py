@@ -977,14 +977,21 @@ class File(models.Model, MojoModel):
         return False
 
     def on_rest_save_file(self, name, file):
+        req = self.active_request
+        if (req and self.pk and getattr(self, "file_manager", None)
+                and not getattr(self, "_created_from_file", False)):
+            # Replacing a stored File's bytes needs the upload rule for its
+            # storage, checked before anything changes.
+            self.file_manager.require_write_right(req)
         self.content_type = file.content_type
         self.category = utils.get_file_category(self.content_type)
         self.set_filename(file.name)
         self.file_size = getattr(file, "size", None)
         if not getattr(self, "file_manager", None):
-            req = self.active_request
             if req:
                 self.file_manager = FileManager.get_from_request(req)
+                if self.file_manager is not None:
+                    self.file_manager.require_write_right(req)
             else:
                 self.file_manager = FileManager.get_for_user_group(self.user, self.group)
         self.generate_storage_filename()
@@ -998,6 +1005,8 @@ class File(models.Model, MojoModel):
         if file_manager is None:
             if request:
                 file_manager = FileManager.get_from_request(request)
+                if file_manager is not None:
+                    file_manager.require_write_right(request)
             else:
                 file_manager = FileManager.get_for_user_group(user, group)
         instance = cls()
@@ -1011,7 +1020,9 @@ class File(models.Model, MojoModel):
         instance.on_rest_pre_save({}, True)
         instance.save()
 
-        # now we need to upload the file
+        # now we need to upload the file; its storage was checked above, so
+        # this is not a replacement of an existing File's bytes
+        instance._created_from_file = True
         instance.on_rest_save_file(name, file)
 
         return instance
@@ -1065,9 +1076,16 @@ class File(models.Model, MojoModel):
         if actor is None and group is None:
             raise me.PermissionDeniedException("File upload scope unavailable")
 
+        if group is not None and FileManager._existing_for_group(group) is None:
+            # Refuse before get_for_user_group creates the group's storage.
+            if not FileManager._may_create_for(request, group, inline=True):
+                raise me.PermissionDeniedException("File upload scope unavailable")
         file_manager = FileManager.get_for_user_group(user=actor, group=group)
         if file_manager is None:
             raise me.ValueException("File storage unavailable")
+        if group is not None:
+            # The caller's own user storage (group None) is unchanged.
+            file_manager.require_write_right(request, inline=True)
         ext = mimetypes.guess_extension(mime_type) or ""
         file_obj = io.BytesIO(file_bytes)
         file_obj.name = f"{related_field_name}{ext}"
