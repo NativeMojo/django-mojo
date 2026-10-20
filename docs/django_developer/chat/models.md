@@ -113,6 +113,8 @@ at every severity; consumer display/notification policy belongs to
   null and initially count as read. Returned in both REST graphs, history,
   send acknowledgments and new-message events. Clients cannot set it or move
   a message's room through REST; cursor ORM identity changes require maintenance.
+  History, send acks and new-message events also carry the room's `generation`
+  so sequence comparisons remain inside one numbering version.
 - `created` — timestamp
 
 **Cursor constraint:** partial unique `(room, room_seq)` where `room_seq IS NOT

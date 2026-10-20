@@ -20,7 +20,7 @@ Flow:
    whitelists the kind, validates `metadata`, applies the rate limit, the room
    rules, the card payload rules and moderation, persists the row and publishes
    to `chat:5`
-6. Return ack with `message_id`, `room_id`, `room_seq`, `kind`, `metadata`, `created`,
+6. Return ack with `message_id`, `room_id`, `room_seq`, `generation`, `kind`, `metadata`, `created`,
    `moderation_decision`, `moderation_reasons`, `moderation_score`
 
 `_handle_send` owns the frame shape, the membership checks and the `client_key`
@@ -127,10 +127,12 @@ fresh, retry and unique-constraint-race acks. Language scores, including
 `high_severity`, succeed; real non-language errors still echo valid keys.
 
 `room_seq` is the persisted cursor arrival sequence, or null for old/legacy
-rows. Cursor creation atomically advances the author's seat through the new
+rows; `generation` identifies the room's numbering version. Cursor creation
+atomically advances the author's seat through the new
 sequence, acknowledging older arrivals. Message/read publication waits for
-the outermost commit; a deduped retry keeps the original PK/sequence and does
-not advance again. See [Cursor Read State](read_state.md).
+the outermost commit; a deduped retry returns the existing PK and current
+sequence/generation and does not advance again. Compare sequences only within
+one generation. See [Cursor Read State](read_state.md).
 
 **Test seam.** `_handle_send(user, data, *, publisher=None)` takes an optional
 `publisher` callable with the same signature as `publish_topic(topic, payload)`.

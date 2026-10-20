@@ -177,8 +177,10 @@ publication. Trusted `ChatMessage.objects.create` and new instance `save`
 share atomic numbering and own-send advancement, but do not supply the send
 service's content policy or generic new-message broadcast. Existing edits
 keep their identity and do not allocate another number. WebSocket
-`client_key` retries retain the original PK/sequence and produce no duplicate
-message or sender advancement.
+`client_key` retries return the existing PK and durable sequence/generation;
+they produce no duplicate message or sender advancement. Message frames,
+send acks and history rows carry `generation` alongside `room_seq`, so a
+sequence remains bound to its numbering version after maintenance.
 
 Cursor mode rejects message `bulk_create` and room/sequence identity updates;
 use the maintenance API for imports or relocation. Membership room/user
@@ -195,7 +197,7 @@ file writer and membership bulk door before activation.
 | Function | Contract |
 |---|---|
 | `snapshot_rooms(room_ids)` | Versioned JSON provenance: room generations, PK-to-room routing and membership context; no stale unread set |
-| `relocate_messages(room_ids, message_rooms)` | Move a `{message_pk: destination_room_pk}` mapping; return the pre-operation snapshot |
+| `relocate_messages(room_ids, message_rooms, *, arrival_message_ids=None)` | Move a `{message_pk: destination_room_pk}` mapping; return the pre-operation snapshot |
 | `restore_snapshot(snapshot)` | Restore named message routing using current unread identities; unnamed messages stay where they are |
 | `import_snapshot(snapshot)` | Validate v1, or adapt explicit v0 routing context; does not mutate read state |
 
@@ -208,11 +210,21 @@ authorize a reset. Incompatible snapshots fail before mutation. Route new
 stragglers explicitly with `relocate_messages` if they are absent from the
 snapshot.
 
+When a straggler arrived after its source seats disappeared, the host may
+explicitly designate it in `arrival_message_ids`. Every designated ID must be
+live, mapped and inside the affected rooms. Each entitled destination seat
+except the author gains that exact unread identity, unioned with its current
+unread set. The author's other unread messages remain unread. No other
+absent-source history is inferred unread. This optional arrival policy is
+separate from preserving existing unread state.
+
 Maintenance locks all rooms in PK order, then their seats, including banned
 seats. It captures current extant unread IDs with join entitlement but without
 display/TTL filtering, moves and resequences all affected history in message
 PK order, increments each room's generation, and encodes the preserved set as
-head prefix plus sparse exceptions. Actual acknowledgment identity/time is
+head prefix plus sparse exceptions. The final destination join bound is
+applied before exceptions are created (channels remain unbounded); entitled
+flagged/expired rows are retained. Actual acknowledgment identity/time is
 retained only in the room that still contains that message. This preserves
 merge → read → revert: reads since the snapshot remain read. Restoring old
 unread flags/cursors would resurrect them and is unsupported.

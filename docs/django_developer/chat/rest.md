@@ -145,7 +145,8 @@ fixed here, not in `ChatMessage.RestMeta.GRAPHS`:
     "status": true,
     "data": [
         {
-            "id": 482, "room_seq": 100, "user_id": 7, "body": "hello", "kind": "text",
+            "id": 482, "room_seq": 100, "generation": 1,
+            "user_id": 7, "body": "hello", "kind": "text",
             "edited_at": null, "moderation_decision": "allow",
             "moderation_reasons": [], "moderation_score": 0,
             "created": "2026-08-30T12:00:00+00:00",
@@ -164,8 +165,10 @@ fixed here, not in `ChatMessage.RestMeta.GRAPHS`:
 every flagged row. Treat `client_key` as room-visible. `metadata` is always an object
 (`{}` when empty).
 
-`room_seq` is the cursor arrival sequence, or null for old/legacy rows. It is
-server-owned; clients continue to use message IDs for pagination and reads.
+`room_seq` is the cursor arrival sequence, or null for old/legacy rows.
+`generation` binds it to the room's numbering version; compare sequences only
+within one generation. Both are server-owned; clients continue to use message
+IDs for pagination and reads.
 
 All rows carry persisted `moderation_decision`, `moderation_reasons` and
 `moderation_score`. Numeric 0 is clean; null means legacy/unscored. Existing

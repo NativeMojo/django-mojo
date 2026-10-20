@@ -88,7 +88,8 @@ author one. `system` likewise.
 An outer rollback emits no message frame. Cursor inserts also atomically
 allocate `room_seq` and acknowledge the author's older arrivals; see
 [Cursor Read State](read_state.md). History, send acks and new-message frames
-carry the authoritative `room_seq` (null for old/legacy rows). Deferred cursor
+carry the authoritative `room_seq` (null for old/legacy rows) plus room
+`generation`; compare sequences only within that generation. Deferred cursor
 callbacks are discarded if maintenance changes the numbering generation.
 
 Step 6 runs only for client-authored sends: its purpose is stopping a *client*

@@ -81,7 +81,7 @@ checks and the banned-caller refusal.
 
 Pagination: pass `limit` (max 200) and `before` (message ID cursor).
 
-Each history row is `{id, room_seq, user_id, body, kind, edited_at, moderation_decision,
+Each history row is `{id, room_seq, generation, user_id, body, kind, edited_at, moderation_decision,
 moderation_reasons, moderation_score, created, metadata, client_key}`. `client_key` carries the key on your own messages and is `null`
 on everyone else's — but **do not treat that as privacy**: your key is broadcast to every
 room subscriber on the live `chat_message` frame by design. A `client_key` must be an
@@ -90,8 +90,9 @@ not show the room. `metadata` is an object (`{}` when empty) — see
 [Message metadata](#message-metadata).
 
 `room_seq` is a server-assigned room-local arrival sequence in cursor mode,
-or null on old/legacy messages. Continue using message IDs for pagination and
-read requests; never submit your own sequence.
+or null on old/legacy messages. `generation` binds it to the room's numbering
+version; compare sequences only within one generation. Continue using message
+IDs for pagination and read requests; never submit your own sequence.
 
 `/api/chat/room/flagged` now includes `metadata` on each row too, so a moderator
 sees the payload a card or file message carried.
@@ -229,7 +230,8 @@ Send via the existing realtime WebSocket connection. All require authentication.
 ```
 Response:
 ```json
-{"type": "chat_message_ack", "message_id": 123, "room_id": 5, "room_seq": 100,
+{"type": "chat_message_ack", "message_id": 123, "room_id": 5,
+ "room_seq": 100, "generation": 1,
  "kind": "text", "metadata": {}, "created": "...", "client_key": "01J8Z0K3Q0X",
  "moderation_decision": "allow", "moderation_reasons": [], "moderation_score": 0}
 ```
@@ -409,7 +411,7 @@ the send frame.
 
 | Event type | Description |
 |-----------|-------------|
-| `chat_message` | New message `{message_id, room_id, room_seq, user_id, body, kind, metadata, created, client_key?, moderation_decision, moderation_reasons, moderation_score}` — `client_key` is present only when the sender supplied one |
+| `chat_message` | New message `{message_id, room_id, room_seq, generation, user_id, body, kind, metadata, created, client_key?, moderation_decision, moderation_reasons, moderation_score}` — `client_key` is present only when the sender supplied one |
 | `chat_message_edited` | Message edited `{message_id, room_id, user_id, body, edited_at, moderation_decision, moderation_reasons, moderation_score}` |
 | `chat_message_flagged` | Message flagged (hide it) `{message_id}` |
 | `chat_reaction` | Reaction changed `{message_id, user_id, emoji, action}` — `action` is `added`/`removed`; not sent for a no-op |
