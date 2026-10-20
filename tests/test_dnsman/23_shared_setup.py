@@ -596,6 +596,9 @@ def test_rest_readiness_and_prerequisite_envelope(opts):
     assert connect.status_code == 503 and connect.response.error_code == "hub_unconfigured" and connect.response.data.version == 1, "explicit action prerequisite failure must use normal false envelope with Readiness"
     forged = opts.client.post("/api/dnsman/delegation/request", dict(delegation=1, force=True, api_key="fake-do-not-echo"))
     assert forged.status_code == 400 and "fake-do-not-echo" not in str(forged.response), "forged mutation inputs must fail shape validation without credential reflection"
+    giant_id = opts.client.get("/api/dnsman/delegation/plan?domain=" + "9" * 5000)
+    giant_size = opts.client.get("/api/dnsman/delegation/group-choice?size=" + "9" * 5000)
+    assert giant_id.status_code == giant_size.status_code == 400, "oversized integer shapes must be bounded 400 errors before conversion or remote I/O"
     assert [model.objects.count() for model in (AcmeAccount, AcmeDelegation, Certificate)] == before, "read/configuration refusal must leave all local account/connection/certificate counts unchanged"
     user.delete()
 
@@ -823,3 +826,211 @@ def test_request_worker_lock_order(opts):
         assert result["operation"]["outcome"] == "already_queued" and not published, "Request must observe active advisory ownership before locking Certificate rows or queuing duplicates"
     thread.join(6)
     assert not thread.is_alive() and not errors, f"Request must release the active issuer without deadlock: {errors}"
+
+
+BUSY_CHANNEL = "testit_dnsman_cert_jobs"
+
+
+def _issuer_fixture(env, syncs):
+    from mojo.apps.dnsman.services import certs
+    helpers = importlib.import_module("test_dnsman.6_certs_service")
+    chain, _leaf = helpers._make_chain([env.target.name, f"*.{env.target.name}"])
+    ca = helpers.FakeAcmeClient([env.target.name, env.target.name], chain=chain)
+    def store_key(certificate, pem):
+        certificate._get_kms = lambda: helpers.FakeKMS()
+        certificate.mojo_secrets = None
+        certificate.set_private_key_pem(pem)
+    return partial(certs.issue, acme=lambda: (None, ca), hub_client=env.hub,
+                   resolve_cname=lambda *args: objict(ok=True), store_key=store_key,
+                   wait_for_txt=lambda name, values, **kwargs: (True, values),
+                   sync=lambda certificate: syncs.append(certificate.pk)), ca
+
+
+def _execute_job_thread(job_id, errors):
+    from django.db import close_old_connections
+    from mojo.apps.jobs.job_engine import JobEngine
+    close_old_connections()
+    try:
+        engine = JobEngine(channels=[BUSY_CHANNEL], runner_id=f"shared-{uuid.uuid4().hex}-engine", max_workers=1)
+        engine.execute_job(BUSY_CHANNEL, job_id)
+    except Exception as error:
+        errors.append((type(error).__name__, str(error)))
+    finally:
+        close_old_connections()
+
+
+@th.django_unit_test("Request releases temporary issue ownership before an on_commit worker can claim its job")
+def test_request_on_commit_handoff(opts):
+    from django.db import transaction
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.dnsman.services import certs, delegation_setup as setup
+    env = fixture()
+    row = verified(env)
+    cert = cert_for(env, due=True)
+    syncs, errors, job_ids = [], [], []
+    issuer, ca = _issuer_fixture(env, syncs)
+    _RENEW[cert.pk] = issuer
+    def publish(func, certificate):
+        job_id = certs.publish_job(f"{__name__}._renew_handler", certificate, channel=BUSY_CHANNEL)
+        job_ids.append(job_id)
+        def worker_at_commit():
+            thread = threading.Thread(target=_execute_job_thread, args=(job_id, errors))
+            thread.start()
+            thread.join(6)
+            assert not thread.is_alive(), "commit-exposed worker must complete while on_commit is still running"
+        transaction.on_commit(worker_at_commit)
+        return job_id
+    try:
+        result = setup.request(row, client=env.hub, custody=lambda certificate: True, publish=publish)
+        cert.refresh_from_db()
+        job = Job.objects.get(pk=job_ids[0])
+        assert not errors and ca.orders and syncs == [cert.pk] and job.status == "completed", f"on_commit must expose work after temporary advisory release, never swallow renewal as skipped: {errors}, job={job.status}, orders={ca.orders}"
+        assert cert.cert_pem.startswith("-----BEGIN CERTIFICATE-----") and result["certificate"]["id"] == cert.pk, "same-lineage material must actually renew before reporting successful worker completion"
+    finally:
+        _RENEW.pop(cert.pk, None)
+        Job.objects.filter(pk__in=job_ids).delete()
+
+
+@th.django_unit_test("a job already queued during Connect retries busy ownership and recovers after exhaustion")
+def test_connect_queued_job_busy_recovery(opts):
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.dnsman.services import certs, delegation_setup as setup
+    env = fixture()
+    cert = cert_for(env, due=True)
+    syncs, errors = [], []
+    issuer, ca = _issuer_fixture(env, syncs)
+    _RENEW[cert.pk] = issuer
+    path = f"{__name__}._renew_handler"
+    root_id = certs.publish_job(path, cert, channel=BUSY_CHANNEL)
+    assert Job.objects.get(pk=root_id).max_retries == 0, "fixture must begin with the deployment's existing zero-retry job policy"
+    def cleanup(domain, certificates, old):
+        # Every execution is a real engine dispatch while Connect owns its
+        # temporary advisory guard. Force the bounded budget to exhaustion.
+        for unused in range(certs.ISSUE_BUSY_RETRIES):
+            thread = threading.Thread(target=_execute_job_thread, args=(root_id, errors))
+            thread.start()
+            thread.join(5)
+            assert not thread.is_alive(), "busy worker must return without waiting on Connect's Domain"
+    ids = [root_id]
+    try:
+        prepared = setup.connect(env.target, env.hub.target, client=env.hub, cleanup=cleanup, custody=lambda current: True)
+        root = Job.objects.get(pk=root_id)
+        assert not errors and root.status == "failed" and root.last_error == certs.ISSUE_BUSY_ERROR and root.max_retries == certs.ISSUE_BUSY_RETRIES, "busy must durably receive only its bounded retry budget, never report successful skipped issuance"
+        cert.refresh_from_db()
+        assert cert.attempts == 0 and cert.renew_after is not None and not ca.orders, "busy collisions must not consume CA attempts, alter material or reset certificate backoff"
+        from mojo.apps.dnsman.models import AcmeDelegation
+        row = AcmeDelegation.objects.get(pk=prepared["connection"]["id"])
+        env.hub.grant(row)
+        setup.connect(env.target, env.hub.target, client=env.hub, custody=lambda current: True)
+        setup.check(row, client=env.hub, custody=lambda current: True, probe=lambda *args: objict(ok=True))
+        recovered = certs.renew_due(publish=lambda func, current, **kwargs: certs.publish_job(path, current, channel=BUSY_CHANNEL) if current.pk == cert.pk else "unrelated-not-queued")
+        root.refresh_from_db()
+        leaf_id = root.metadata["retried_as"]
+        ids.append(leaf_id)
+        leaf = Job.objects.get(pk=leaf_id)
+        assert leaf_id != root_id and leaf.status == "pending" and leaf.payload == {"certificate": cert.pk}, "existing cron and Jobs retry replacement must recover an exhausted busy idempotency key"
+        thread = threading.Thread(target=_execute_job_thread, args=(leaf_id, errors))
+        thread.start()
+        thread.join(6)
+        leaf.refresh_from_db()
+        cert.refresh_from_db()
+        assert not errors and leaf.status == "completed" and ca.orders and syncs == [cert.pk] and cert.status == "active", "recovered leaf must actually renew the same certificate after temporary ownership ends"
+    finally:
+        _RENEW.pop(cert.pk, None)
+        Job.objects.filter(pk__in=ids).delete()
+
+
+@th.django_unit_test("concurrent terminal-busy recovery creates one leaf and respects terminal operator decisions")
+def test_busy_recovery_serializes_and_preserves_holds(opts):
+    from concurrent.futures import ThreadPoolExecutor
+    from django.db import close_old_connections
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.dnsman.services import certs
+    env = fixture()
+    cert = cert_for(env, due=True)
+    path = f"{__name__}._renew_handler"
+    root_id = certs.publish_job(path, cert, channel=BUSY_CHANNEL)
+    Job.objects.filter(pk=root_id).update(status="failed", last_error=certs.ISSUE_BUSY_ERROR, max_retries=certs.ISSUE_BUSY_RETRIES)
+    def recover():
+        close_old_connections()
+        try:
+            return certs.publish_job(path, cert, channel=BUSY_CHANNEL)
+        finally:
+            close_old_connections()
+    ids = [root_id]
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda unused: recover(), range(2)))
+        assert results[0] == results[1] and results[0] != root_id, "concurrent retry requests must serialize one actual replacement leaf"
+        ids.append(results[0])
+        leaf = Job.objects.get(pk=results[0])
+        assert leaf.metadata.get("retried_from") == root_id, "Jobs must preserve its existing retry linkage"
+        for state, error in (("canceled", certs.ISSUE_BUSY_ERROR), ("completed", certs.ISSUE_BUSY_ERROR), ("failed", "ordinary_ca_failure")):
+            Job.objects.filter(pk=leaf.pk).update(status=state, last_error=error)
+            before = Job.objects.filter(payload__certificate=cert.pk).count()
+            assert certs.publish_job(path, cert, channel=BUSY_CHANNEL) == leaf.pk, f"{state} leaf must remain the authoritative stop condition"
+            assert Job.objects.filter(payload__certificate=cert.pk).count() == before, "recovery must not bypass cancellation, successful completion or CA backoff"
+        from mojo.helpers import dates
+        Job.objects.filter(pk=leaf.pk).update(status="expired", last_error=certs.ISSUE_BUSY_ERROR,
+                                              expires_at=dates.utcnow() - timedelta(seconds=1))
+        fresh_id = certs.publish_job(path, cert, channel=BUSY_CHANNEL)
+        ids.append(fresh_id)
+        fresh = Job.objects.get(pk=fresh_id)
+        assert fresh_id != leaf.pk and fresh.status == "pending" and fresh.expires_at > dates.utcnow(), "an expired busy retry must get the existing Jobs replacement's fresh lifetime"
+    finally:
+        Job.objects.filter(pk__in=ids).delete()
+
+
+@th.django_unit_test("existing renewal cron recovers only initial pending certificates with terminal busy jobs")
+def test_pending_busy_cron_recovery(opts):
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.dnsman.services import certs
+    env = fixture()
+    cert = cert_for(env)
+    cert.status = "pending"
+    cert.save(update_fields=["status"])
+    root_id = certs.publish_job(certs.ISSUE_JOB, cert, channel=BUSY_CHANNEL)
+    Job.objects.filter(pk=root_id).update(status="failed", last_error=certs.ISSUE_BUSY_ERROR, max_retries=certs.ISSUE_BUSY_RETRIES)
+    ids = [root_id]
+    try:
+        result = certs.renew_due(publish=lambda func, current, **kwargs: certs.publish_job(func, current, channel=BUSY_CHANNEL) if current.pk == cert.pk else "unrelated-not-queued")
+        root = Job.objects.get(pk=root_id)
+        leaf_id = root.metadata["retried_as"]
+        ids.append(leaf_id)
+        assert cert.pk in result.certificates and Job.objects.get(pk=leaf_id).status == "pending", "pending initial issuance must not remain stranded after bounded busy exhaustion"
+        Job.objects.filter(pk=leaf_id).update(status="failed", last_error="ordinary_ca_failure")
+        before = Job.objects.filter(payload__certificate=cert.pk).count()
+        certs.renew_due(publish=lambda func, current, **kwargs: certs.publish_job(func, current, channel=BUSY_CHANNEL) if current.pk == cert.pk else "unrelated-not-queued")
+        assert Job.objects.filter(payload__certificate=cert.pk).count() == before, "initial CA failure must not become a generic cron retry through a busy ancestor"
+    finally:
+        Job.objects.filter(pk__in=ids).delete()
+
+
+@th.django_unit_test("a prior busy retry budget cannot turn CA failure into immediate job retries")
+def test_busy_budget_preserves_ca_backoff(opts):
+    from mojo.apps.jobs.models import Job, JobEvent
+    from mojo.apps.dnsman.services import certs
+    from mojo.helpers import dates
+    env = fixture()
+    verified(env)
+    cert = cert_for(env, due=True)
+    calls, errors = [], []
+    def reject_ca():
+        calls.append("CA")
+        raise RuntimeError("stub CA refused issuance")
+    _RENEW[cert.pk] = partial(certs.issue, hub_client=env.hub, acme=reject_ca,
+                              resolve_cname=lambda *args: objict(ok=True))
+    root_id = certs.publish_job(f"{__name__}._renew_handler", cert, channel=BUSY_CHANNEL)
+    Job.objects.filter(pk=root_id).update(max_retries=certs.ISSUE_BUSY_RETRIES)
+    try:
+        thread = threading.Thread(target=_execute_job_thread, args=(root_id, errors))
+        thread.start()
+        thread.join(6)
+        job = Job.objects.get(pk=root_id)
+        cert.refresh_from_db()
+        assert not thread.is_alive() and not errors and job.status == "failed" and job.attempt == 1, "ordinary CA failure must be terminal at the Jobs boundary even with a prior busy budget"
+        assert calls == ["CA"] and not JobEvent.objects.filter(job=job, event="retry").exists(), "a CA rejection must not be retried immediately by Jobs"
+        assert cert.attempts == 1 and cert.renew_after > dates.utcnow() and cert.status == "active" and cert.mojo_secrets == "preserved-encrypted-key", "certificate backoff and valid serving custody must remain the owners after CA failure"
+    finally:
+        _RENEW.pop(cert.pk, None)
+        Job.objects.filter(pk=root_id).delete()

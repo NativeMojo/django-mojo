@@ -39,10 +39,23 @@ def _run(job, what, issuer=None):
         return f"completed:missing={pk}"
 
     result = (issuer or certs.issue)(cert)
+    if result.get("busy"):
+        from mojo.apps.jobs.models import Job
+        # Only a lock collision receives Jobs retries. Persist the ceiling
+        # before raising: old already-queued jobs may have max_retries=0.
+        Job.objects.filter(pk=job.pk).exclude(max_retries=certs.ISSUE_BUSY_RETRIES).update(
+            max_retries=certs.ISSUE_BUSY_RETRIES)
+        error = me.ValueException(certs.ISSUE_BUSY_ERROR)
+        error.retryable = True
+        raise error
     if not result.ok:
-        raise me.ValueException(
+        error = me.ValueException(
             f"dnsman: {what} failed for certificate {cert.pk} "
             f"({cert.common_name}): {result.error}")
+        # _record_issue_failure already owns certificate backoff. A prior busy
+        # collision must not turn the job's new retry budget into CA retries.
+        error.retryable = False
+        raise error
     return f"completed:certificate={cert.pk}"
 
 

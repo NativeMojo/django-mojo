@@ -175,32 +175,38 @@ def _proof_failure(row, code):
     row.last_error_code = code
 
 
+class _BindingChanged(Exception):
+    pass
+
+
 @contextmanager
 def _lifecycle_locks(row):
-    """One order for local lifecycle writers: Domain, Group, Delegation.
+    """Lock Domain, Group, Delegation, retrying an intervening first binding.
 
-    A certificate-only Domain may be created while an unbound caller is
-    waiting for Group. Detect that binding change and retry after releasing
-    every lock, rather than taking a new Domain lock in the inverse order.
+    A savepoint rollback releases acquired locks even when our caller owns an
+    outer transaction; a normal continue would retain them until its commit.
     """
     from mojo.apps.account.models import Group
     from mojo.apps.dnsman.models import AcmeDelegation, Domain
     for unused in range(3):
-        with transaction.atomic():
-            snapshot = AcmeDelegation.objects.values(
-                "domain_id", "domain_name", "group_id").get(pk=row.pk)
-            domains = Domain.objects.select_for_update()
-            domain = domains.filter(pk=snapshot["domain_id"]).first() if snapshot["domain_id"] else domains.filter(name=snapshot["domain_name"]).first()
-            group = Group.objects.select_for_update().filter(pk=snapshot["group_id"]).first()
-            stored = AcmeDelegation.objects.select_for_update().get(pk=row.pk)
-            if stored.domain_id != snapshot["domain_id"]:
-                continue
-            if stored.domain_id is None:
-                current_id = Domain.objects.filter(name=stored.domain_name).values_list("pk", flat=True).first()
-                if current_id != (domain.pk if domain else None):
-                    continue
-            yield stored, group, domain
-            return
+        try:
+            with transaction.atomic():
+                snapshot = AcmeDelegation.objects.values(
+                    "domain_id", "domain_name", "group_id").get(pk=row.pk)
+                domains = Domain.objects.select_for_update()
+                domain = domains.filter(pk=snapshot["domain_id"]).first() if snapshot["domain_id"] else domains.filter(name=snapshot["domain_name"]).first()
+                group = Group.objects.select_for_update().filter(pk=snapshot["group_id"]).first()
+                stored = AcmeDelegation.objects.select_for_update().get(pk=row.pk)
+                if stored.domain_id != snapshot["domain_id"]:
+                    raise _BindingChanged()
+                if stored.domain_id is None:
+                    current_id = Domain.objects.filter(name=stored.domain_name).values_list("pk", flat=True).first()
+                    if current_id != (domain.pk if domain else None):
+                        raise _BindingChanged()
+                yield stored, group, domain
+                return
+        except _BindingChanged:
+            continue
     raise me.ValueException("The ACME connection changed; retry setup", code=409, status=409)
 
 

@@ -1133,3 +1133,23 @@ material; repair configuration, alias and trust or explicitly restart an
 eligible connection. Do not delete/retire a row to regain direct renewal or
 downgrade workers. A return to direct DNS is a separately authorized handover.
 This feature does not authorize live production changes or lift a hold.
+
+### Temporary certificate ownership and queued workers
+
+Setup releases temporary issue advisory locks while the Domain transaction is
+still held, before commit callbacks expose a new job. A worker that encounters
+any temporary owner reports the fixed `dnsman_certificate_busy` outcome instead
+of completing a skipped renewal. Its existing Job receives a durable ceiling
+of eight busy retries, including jobs originally configured with zero retries.
+Only that lock collision is retryable at the Jobs boundary: CA/validation
+failures retain certificate backoff and valid serving material.
+
+If busy retries exhaust (or expire while busy), the existing certificate cron
+can recover due renewals and initial pending issuance through the existing Jobs
+replacement-retry service. Root/leaf locks serialize one exact replacement;
+consumer profile, function, certificate id and channel stay fixed. Recovery
+follows the actual replacement leaf and stops for cancellation, completion or a
+different failure. It does not revive an operator-canceled job. Readiness keeps
+serving validity separate, reports an exhausted busy worker as failed and points
+to `repair_worker`; a canceled job directs inspection and Request returns
+`job_held` without changing it. No extra scheduler or installer is introduced.

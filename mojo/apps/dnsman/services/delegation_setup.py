@@ -54,7 +54,7 @@ def _id(value):
         raise me.ValueException("A positive integer id is required")
     if hasattr(value, "pk"):
         value = value.pk
-    if not isinstance(value, (int, str)) or not str(value).isdigit() or not 1 <= int(value) <= 9223372036854775807:
+    if not isinstance(value, (int, str)) or len(str(value)) > 19 or not str(value).isdigit() or not 1 <= int(value) <= 9223372036854775807:
         raise me.ValueException("A positive integer id is required")
     return int(value)
 
@@ -111,6 +111,8 @@ def resolve_target(domain=None, group=None, name=None, actor=None, write=False):
             raise me.ValueException("DNS target not found", code=404, status=404)
         _require(actor, group, write)
         normalized = naming.normalize_domain(name)
+        if len(normalized) > 253:
+            raise me.ValueException("A normalized apex name of at most 253 characters is required")
         row = Domain.objects.select_related("group").filter(name=normalized).first()
         if row is not None and row.group_id != group.pk:
             raise me.PermissionDeniedException("DNS setup is not available for this target")
@@ -304,6 +306,10 @@ def _renewal(cert, row, certificate, blocked):
         state = "issuing"
     elif job and job.status in ("pending", "running"):
         state = "queued" if job.status == "pending" else "issuing"
+    elif job and job.status == "failed" and job.last_error == certs.ISSUE_BUSY_ERROR:
+        state = "failed"
+    elif job and job.status in ("canceled", "expired") and cert.renew_after and cert.renew_after <= dates.utcnow():
+        state = "blocked"
     elif cert.not_after and cert.not_after <= dates.utcnow():
         state = "expired"
     elif cert.last_error and cert.status == "active":
@@ -315,7 +321,8 @@ def _renewal(cert, row, certificate, blocked):
     else:
         state = "unknown"
     return dict(state=state, next_attempt_at=_iso(cert.renew_after), attempts=cert.attempts,
-                error_code=(row.last_error_code if row and row.last_error_code in ERRORS else "issuance_failed") if cert.last_error else None,
+                error_code="certificate_busy" if job and job.last_error == certs.ISSUE_BUSY_ERROR else (
+                    (row.last_error_code if row and row.last_error_code in ERRORS else "issuance_failed") if cert.last_error else None),
                 cleanup_pending=bool(row and row.cleanup_challenge_ref),
                 job=dict(id=job.pk, state=job.status) if job else None, worker_version=None)
 
@@ -330,6 +337,8 @@ def plan(target, allocation_ref=None, actor=None, client=None, custody=None, ope
     client = client or acme_hub_client
     if allocation_ref is not None:
         allocation_ref = naming.normalize_domain(allocation_ref)
+        if len(allocation_ref) > 253:
+            raise me.ValueException("An allocation target of at most 253 characters is required")
     row = _current(target)
     caps, participant, failure = None, None, None
     trust = dict(state="not_requested" if row is None else "unknown", can_publish=False, can_withdraw=False)
@@ -392,8 +401,10 @@ def plan(target, allocation_ref=None, actor=None, client=None, custody=None, ope
         next_code, next_actor = "restore_custody", "deployment_operator"
     elif renewal["state"] in ("queued", "issuing"):
         next_code, next_actor = "wait_for_job", "project_operator"
-    elif renewal["state"] in ("failed", "expired", "retrying"):
+    elif renewal["state"] == "blocked":
         next_code, next_actor = "inspect_failure", "project_operator"
+    elif renewal["state"] in ("failed", "expired", "retrying"):
+        next_code, next_actor = ("repair_worker", "deployment_operator") if renewal["error_code"] == "certificate_busy" else ("inspect_failure", "project_operator")
     elif cert is None:
         next_code, next_actor = "request", "project_operator"
     connection = dict(id=row.pk, mode=row.connection_mode, state=row.state, client_ref=str(row.client_ref),
@@ -413,7 +424,8 @@ def plan(target, allocation_ref=None, actor=None, client=None, custody=None, ope
                                   can_restart=bool(write and row and row.connection_mode == "shared" and (trust["state"] == "revoked" or row.state == "pending" and not row.hub_participant_ref)),
                                   can_check=bool(write and row and row.hub_participant_ref and row.connection_mode == "shared" and trust["state"] == "active"),
                                   can_request=bool(write and verified and not row.cleanup_challenge_ref and not (
-                                      certificate and cert.status == "active" and certificate["material_state"] != "available"))),
+                                      certificate and cert.status == "active" and certificate["material_state"] != "available")
+                                      and not (renewal["job"] and renewal["job"]["state"] == "canceled"))),
                 next_action=dict(code=next_code, actor=next_actor),
                 connection_request=_descriptor(row) if write and row and row.connection_mode == "shared" else None,
                 operation=operation or dict(action="plan", outcome="observed", changed=False))
@@ -460,8 +472,8 @@ def _prepare(target, allocation_ref, consumer, actor, restart, cleanup=None):
     from mojo.apps.account.models import Group
     from mojo.apps.dnsman.models import AcmeDelegation, Certificate, Domain
     from mojo.apps.dnsman.services import certs
-    with ExitStack() as stack:
-        with transaction.atomic():
+    with transaction.atomic():
+        with ExitStack() as stack:
             # Domain first, NO Certificate row locks before trying all advisory
             # locks. An issuer owns its advisory lock before joined row locks.
             domain = Domain.objects.select_for_update().filter(name=target.name).first()
@@ -521,6 +533,8 @@ def connect(target, allocation_ref, actor=None, restart=False, client=None, cust
     if type(restart) is not bool or not isinstance(allocation_ref, str):
         raise me.ValueException("An allocation_ref and boolean restart are required")
     allocation_ref = naming.normalize_domain(allocation_ref)
+    if len(allocation_ref) > 253:
+        raise me.ValueException("An allocation target of at most 253 characters is required")
     client = client or acme_hub_client
     try:
         caps, unused = _preflight(target, client, allocation_ref)
@@ -621,8 +635,8 @@ def request(row, actor=None, client=None, custody=None, publish=None):
         if row.cleanup_challenge_ref:
             raise SetupError("cleanup_pending")
         names = [target.name, f"*.{target.name}"]
-        with ExitStack() as stack:
-            with transaction.atomic():
+        with transaction.atomic():
+            with ExitStack() as stack:
                 Domain.objects.select_for_update().get(pk=target.domain.pk)
                 target = _refresh(target, actor, write=True)
                 current_route = delegation.routing_for_domain(target.domain)
@@ -653,8 +667,11 @@ def request(row, actor=None, client=None, custody=None, publish=None):
                 else:
                     certs.request_certificate(target.domain, names=names, publish=publish)
                     outcome = "queued"
-        return plan(target, actor=actor, client=client, custody=custody,
-                    operation=dict(action="request", outcome=outcome, changed=outcome == "queued"))
+        result = plan(target, actor=actor, client=client, custody=custody,
+                      operation=dict(action="request", outcome=outcome, changed=outcome == "queued"))
+        if result["renewal"]["job"] and result["renewal"]["job"]["state"] == "canceled":
+            result["operation"].update(outcome="job_held", changed=False)
+        return result
     except SetupError as error:
         raise _error_with_plan(error, target, actor, client, custody)
 
@@ -664,7 +681,7 @@ def group_choices(actor, id=None, search="", start=0, size=25):
     if not isinstance(search, str) or len(search) > 100:
         raise me.ValueException("Invalid DNS group query")
     for value, lower, upper in ((start, 0, 100000), (size, 1, 50)):
-        if isinstance(value, bool) or not isinstance(value, (str, int)) or not str(value).isdigit() or not lower <= int(value) <= upper:
+        if isinstance(value, bool) or not isinstance(value, (str, int)) or len(str(value)) > 6 or not str(value).isdigit() or not lower <= int(value) <= upper:
             raise me.ValueException("Invalid DNS group query")
     start, size = int(start), int(size)
     query = Group.objects.filter(is_active=True)
