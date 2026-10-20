@@ -235,8 +235,13 @@ def _parse_rest_bool(value, label):
         f"Invalid boolean for {label}: {value!r}", code=400, status=400)
 
 
-def _normalize_scalar(field, value, label):
-    """Coerce ONE filter value to `field`'s Python type."""
+def _normalize_scalar(field, value, label, typed=True):
+    """Coerce ONE filter value to `field`'s Python type.
+
+    `typed` is False under a text lookup (startswith, icontains, ...): an
+    integer column then keeps the caller's text, so `?id__startswith=026`
+    still means the pattern "026", not 26.
+    """
     internal = field.get_internal_type()
     if internal == "BooleanField":
         # ?flag=null has always meant False on a top-level Boolean; kept.
@@ -250,13 +255,14 @@ def _normalize_scalar(field, value, label):
             return value
         try:
             return dates.parse_datetime(value)
-        except (TypeError, ValueError, OverflowError):
+        except (TypeError, ValueError, OverflowError, OSError):
+            # OSError: an out-of-range epoch number (fromtimestamp, EOVERFLOW).
             raise me.ValueException(
                 f"Invalid date for {label}: {value!r}", code=400, status=400)
-    # Integer columns: a numeric string becomes an int; anything else goes to
-    # the ORM unchanged, which answers 400 for a typed lookup and still serves
-    # text lookups such as ?code__startswith=12.
-    if internal.endswith("IntegerField") or internal.endswith("AutoField"):
+    # Integer columns under a typed lookup: a numeric string becomes an int;
+    # anything else goes to the ORM unchanged, which answers 400. Text lookups
+    # keep the string as sent.
+    if typed and (internal.endswith("IntegerField") or internal.endswith("AutoField")):
         if isinstance(value, str) and value.strip().lstrip("-").isdigit():
             return int(value)
     return value
@@ -265,9 +271,9 @@ def _normalize_scalar(field, value, label):
 def _normalize_field_value(field, value, label, lookup=None):
     """Normalize a filter value for `field`, per element for a list.
 
-    `lookup` is a date-component lookup token (month, year, ...) or None.
-    A list stays a list: turning `?flag__in=true,false` into one bool was the
-    500 behind #8556.
+    `lookup` is a date-component lookup token (month, year, ...), a text
+    lookup token (startswith, icontains, ...) or None. A list stays a list:
+    turning `?flag__in=true,false` into one bool was the 500 behind #8556.
     """
     if lookup in _DATE_COMPONENT_LOOKUPS:
         try:
@@ -277,9 +283,10 @@ def _normalize_field_value(field, value, label, lookup=None):
         except (TypeError, ValueError):
             raise me.ValueException(
                 f"Invalid value for {label}: {value!r}", code=400, status=400)
+    typed = lookup is None or lookup in _TYPED_LOOKUPS
     if isinstance(value, list):
-        return [_normalize_scalar(field, v, label) for v in value]
-    return _normalize_scalar(field, value, label)
+        return [_normalize_scalar(field, v, label, typed) for v in value]
+    return _normalize_scalar(field, value, label, typed)
 
 
 def _split_in_value(value):
@@ -1551,6 +1558,8 @@ class MojoModel:
         """Coerce a raw query-param value to the right Python type for filter().
 
         ``lookup`` is the trailing ``__<suffix>`` token from the filter key.
+        Under a text lookup (``startswith``, ``icontains``, ...) an integer
+        column keeps the value as sent.
         When it names a date-component lookup (``year``, ``month``, ``day``,
         ``quarter``, …), the value is coerced to int (or list-of-int for
         ``__in``) instead of being parsed as a datetime — this lets
@@ -1565,7 +1574,7 @@ class MojoModel:
             return _normalize_field_value(
                 None, value, f"{field_name}__{lookup}", lookup=lookup)
         field = cls.get_model_field(field_name)
-        return _normalize_field_value(field, value, field_name)
+        return _normalize_field_value(field, value, field_name, lookup=lookup)
 
     @classmethod
     def _report_sensitive_probe(cls, request, key):
@@ -1738,6 +1747,12 @@ class MojoModel:
                     if part in _DATE_COMPONENT_LOOKUPS:
                         normalized_lookup = part
                         break
+                if normalized_lookup is None:
+                    # A text lookup (startswith, icontains, ...) is passed on
+                    # so an integer column keeps the caller's pattern.
+                    normalized_lookup = next(
+                        (part for part in key.split("__")[1:]
+                         if part not in _TYPED_LOOKUPS), None)
                 target_dict[key] = cls.normalize_rest_value(
                     request, field_name, value, lookup=normalized_lookup,
                 )

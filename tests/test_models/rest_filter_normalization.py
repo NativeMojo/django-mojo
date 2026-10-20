@@ -222,9 +222,11 @@ HUGE_TIMESTAMP = "100000000000000000"
 
 @th.django_unit_test("REST: an out-of-range numeric date is a 400 on list and count")
 def test_numeric_date_out_of_range(opts):
-    for key in ("user__last_login__gte", "expires_at__in"):
-        _expect_400(opts, {key: HUGE_TIMESTAMP}, key)
-        _expect_400(opts, {key: HUGE_TIMESTAMP, "_mode": "count"}, key)
+    # A relation path's 400 names the whole key; a top-level one names the field.
+    for key, needle in (("user__last_login__gte", "user__last_login__gte"),
+                        ("expires_at__in", "expires_at")):
+        _expect_400(opts, {key: HUGE_TIMESTAMP}, needle)
+        _expect_400(opts, {key: HUGE_TIMESTAMP, "_mode": "count"}, needle)
 
 
 @th.django_unit_test("REST: _stats nulls an out-of-range numeric date chip and keeps its sibling")

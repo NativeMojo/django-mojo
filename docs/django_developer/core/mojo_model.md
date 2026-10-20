@@ -215,10 +215,13 @@ before `filter()` sees it. The list path, `_mode=count` and `_stats` share it.
   in any case, a real bool, or int 0/1. Anything else raises
   `ValueException` (400) naming the key. `__isnull` uses the same parser.
   `?flag=null` on a Boolean still means False.
-- **Dates** go through `dates.parse_datetime`; an unparseable value is a 400.
-  Date-component lookups (`__month`, `__year`, ...) are coerced to int, as
-  before. **Integers:** a numeric string becomes an int; anything else reaches
-  the ORM unchanged, which answers 400 for a typed lookup.
+- **Dates** go through `dates.parse_datetime`; an unparseable value, including
+  an epoch number too large for a date, is a 400. Date-component lookups
+  (`__month`, `__year`, ...) are coerced to int, as before. **Integers:** under
+  exact, `__in` and the comparisons a numeric string becomes an int; anything
+  else reaches the ORM unchanged, which answers 400. Under a text lookup
+  (`__startswith`, `__icontains`, ...) the value is passed as sent, so
+  `?id__startswith=026` is the pattern "026", not 26.
 - **Relation paths** (`?user__is_active=true`) are converted through the field
   the path ends on, for exact, `__in`, `__not`, `__not_in`, comparisons and
   date components only. A path ending on the relation itself (pk compare), a

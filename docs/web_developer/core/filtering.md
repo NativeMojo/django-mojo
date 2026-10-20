@@ -71,8 +71,8 @@ GET /api/account/notification?is_unread__not_in=true     # read only
 | Field type | Accepted values (any case, surrounding spaces ignored) |
 |---|---|
 | Boolean | `true` `1` `t` `y` `yes` `on` / `false` `0` `f` `n` `no` `off`, or a JSON boolean, or `0`/`1` |
-| Date / DateTime | an ISO date or datetime, or epoch seconds |
-| Integer | a whole number |
+| Date / DateTime | an ISO date or datetime, or epoch seconds within the date range |
+| Integer | a whole number (text lookups such as `__startswith` take the text as sent) |
 
 A value the field cannot take is a **400** naming the key, on the list and on
 `_mode=count`:
