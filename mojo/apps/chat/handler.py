@@ -69,6 +69,7 @@ def _send_ack(msg, room, client_key):
         "type": "chat_message_ack",
         "message_id": msg.pk,
         "room_id": room.pk,
+        "room_seq": msg.room_seq,
         "kind": msg.kind,
         "metadata": msg.metadata,
         "moderation_decision": msg.moderation_decision,
@@ -475,7 +476,8 @@ def _handle_read(user, data, *, publisher=None):
     it unset and the realtime publisher is used.
     """
     from .models import ChatRoom, ChatMembership
-    from .services.read_state import mark_read
+    from .services.read_state import mark_through
+    from .services.backend import read_backend
 
     room_id = data.get("room_id")
     up_to_message_id = data.get("up_to_message_id")
@@ -498,11 +500,12 @@ def _handle_read(user, data, *, publisher=None):
     if not membership:
         return {"type": "error", "error": "Not a member of this room"}
 
-    target = mark_read(room, user, membership, up_to_message_id)
+    result = mark_through(room, user, membership, up_to_message_id, publisher=publisher)
+    target = result.target
 
     # Publish the RESOLVED id, and only when something resolved -- the sender's
     # read indicator must not be whatever integer the reader sent.
-    if target is not None and room.kind in ("direct", "group"):
+    if read_backend() == "legacy" and target is not None and room.kind in ("direct", "group"):
         from mojo.apps.realtime import publish_topic
         publish = publisher or publish_topic
         publish(room.topic, {
@@ -516,4 +519,6 @@ def _handle_read(user, data, *, publisher=None):
         "type": "chat_read_ack",
         "room_id": room.pk,
         "up_to_message_id": target.pk if target else None,
+        "position": result.position,
+        "changed": result.changed,
     }
