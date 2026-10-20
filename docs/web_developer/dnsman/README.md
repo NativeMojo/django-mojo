@@ -54,7 +54,7 @@ UI must gate on these, or it renders controls that 403.**
   With no `?group=` it addresses the house contact and additionally requires a
   platform admin. See [the registrant contact](#the-registrant-contact).
 
-The `/acme/*` hub endpoints are a separate machine-only surface. They accept
+The legacy `/acme/delegation` and `/acme/challenge/*` hub endpoints are a separate machine-only surface. They accept
 only an `Authorization: apikey …` credential whose underlying key carries the
 protected `dnsman_acme_federation` permission and whose project is active. JWT
 users, group tokens, anonymous requests, permissionless keys, and acting-user
@@ -780,3 +780,124 @@ decide which rows can offer a retire button (only those with a covering
 replacement), shows how many addresses move to the replacement before
 confirming, and calls `certificate/retire`. The flat list stays read-only
 metadata plus `remove-failed` for dead attempts.
+
+
+## Shared validation v2
+
+All new routes below are `POST /api/dnsman/acme/<path>`, read exact JSON request
+shapes and return the normal `{status:true,code:200,data:...}` envelope. They
+share the existing strict ACME rate bucket (429 plus Retry-After). Authentication
+runs before request validation. A protected active federation ApiKey identifies
+its **original** group, ignoring acting users and claimed groups; the group and
+ancestors must be active. GroupScopedToken is always refused.
+
+A controller is that original project key for its existing allocation, or a
+genuine hub platform superuser using normal session authentication. DNS/security/
+Sites managers and key-administration privileges alone cannot grant issuance
+trust. A human controller cannot implicitly publish as a recipient.
+
+`allocation_ref` is the normalized existing target FQDN: public, immutable and
+never a bearer credential. Lookups, recipient recognition, grant and join never
+allocate another target or modify the public CNAME.
+
+| Path | Exact request | Response data / authorization |
+|---|---|---|
+| `capabilities` | `{}` | `{version:2,shared_validation:true,consumer_project_uuid:string|null,can_consume:boolean,can_manage_trust:boolean,trust_scope:"apex_and_wildcard"}`. Protected keys: true/true/own UUID; true human superuser: false/true/null; other authenticated humans: false/false/null. Hub configuration failure is 503. Eligibility is not row authority. |
+| `consumer/lookup` | `{domain,allocation_ref?,cursor?}` | Own `ParticipantDTO` page for the exact domain/optional target, including revoked tombstones. Empty for unknown or foreign allocations. No DNS probe or write. Protected key only. |
+| `consumer/status` | `{client_ref}` | Own `ParticipantDTO` plus `alias:AliasDTO`, resolved before DNS lookup. Unknown/foreign refs are identical 404. Protected key only. |
+| `consumer/join` | `{allocation_ref,client_ref,domain}` | Exact legacy `{client_ref,domain,source,target}` after verifying an existing active grant (or exact owner binding), stored zone and one-hop CNAME. No creation, adoption or allocate fallback. Protected key only. |
+| `allocation/list` | `{domain,cursor?}` | Exact-domain `AllocationDTO` page, filtered by controller authority before pagination. A true hub superuser may resolve all matching existing allocations. |
+| `trust/list` | `{allocation_ref,cursor?}` | `ControllerParticipantDTO` page including owner/revoked rows. Exact allocation controller only. |
+| `trust/recipient` | `{allocation_ref,consumer_project_uuid}` | `{consumer_project_uuid,label,active:true}` for one effectively active group, after controller check. Label max200; no group directory or key-existence oracle. |
+| `trust/grant` | `{connection_request}` | `ControllerParticipantDTO`. Controller, matching domain/target, exact one-hop alias and active recipient required. Exact active retry returns the same row. |
+| `trust/revoke` | `{allocation_ref,participant_ref}` | Revoked `ControllerParticipantDTO` after durable revocation and union cleanup. Owner revocation is refused. No alias proof; provider failures return503 while revocation persists. Retry/sweep repairs cleanup. |
+
+`ParticipantDTO` has **exactly**:
+
+```text
+allocation_ref, participant_ref, client_ref, domain, source, target, role,
+trust_state, scope, can_publish, can_withdraw, revoked_at
+```
+
+`participant_ref` is a UUID; `allocation_ref == target`,
+`source == "_acme-challenge." + domain`, `role` is `owner|trusted`,
+`trust_state` is `active|revoked`, `scope` is exactly `[domain,"*."+domain]`,
+and `revoked_at` is an ISO timestamp or null. `can_publish` and `can_withdraw`
+describe the current caller's authority, not provider/DNS success. An active
+protected same-project key can withdraw after trust revocation; it cannot publish
+under a revoked grant. `ControllerParticipantDTO` adds exactly
+`consumer_project_uuid` and `consumer_label` (max200). Consumer DTOs reveal no
+other consumer identity, lease refs or values.
+
+`AllocationDTO` has exactly
+`{allocation_ref,domain,source,target,owner_project_uuid,can_manage_trust:true}`.
+`AliasDTO` has exactly
+`{state,observed_target,one_hop,checked_at}`. State is `match|mismatch|lookup_failed`;
+a matching safe single target has `one_hop:true`; target chaining has false;
+missing/multiple source targets have null/null. Lookup failures have null/null
+and expose no resolver raw error. `checked_at` is ISO. This is a CNAME observation,
+not TXT/certificate convergence.
+
+Pages have exactly `{items:[...],next_cursor:null|string}`, maximum20 ordered by
+pk. Cursor is a positive decimal pk string; every exact domain/allocation and
+authority filter applies before cursor and limit. Forging a cursor cannot widen
+access.
+
+### Trust handshake and custody
+
+Cold preflight calls capabilities and own lookup before creating a local row.
+An old hub's capabilities404 means `shared_validation_unsupported`, never
+permission to allocate a new target for a used CNAME. Connect preparation
+persists a fresh local ref and exports this exact nonsecret object:
+
+```json
+{"version":1,"consumer_project_uuid":"0123456789abcdef0123456789abcdef",
+ "client_ref":"persisted-local-ref","domain":"customer.example",
+ "allocation_ref":"existing-target.acme-hub.example.net"}
+```
+
+The controller recognizes the exact recipient and explicitly grants **apex and
+wildcard certificate issuance authority**. The project rechecks and joins with
+that same stored ref. Anyone obtaining that authority can hold an independent
+certificate/private key for the domain, enabling impersonation; present that
+scope before granting. Descriptor knowledge alone grants nothing. A consumer
+lacking authority copies its request and awaits the controller; do not ask it to
+mint privileged keys or edit database rows. Hub URL/key are existing file-only
+server configuration and are never browser inputs or read back.
+
+Revocation is permanent; a revoked ref never reactivates or rebinds. Fresh
+regrant needs a new persisted local ref and participant namespace. Old retries
+can affect only their old namespace. Equal challenge refs across projects are
+isolated and Route53 receives the deduplicated live union. Revocation blocks new
+accepted publish intent and removes only that participant's desired leases; it
+does not revoke issued certificates or undo an already-accepted CA request.
+
+Inactive/expired/revoked keys never authenticate, even for cleanup. An active
+rotated protected key in the original group may withdraw revoked leases without
+CNAME proof. Otherwise expiry (default900s, clamp60–86400s), the five-minute sweep
+and provider availability bound cleanup. Ambiguous failures remain durable and
+retryable; do not promise cleanup through a provider outage.
+
+### Safe shared-operation errors
+
+Normal failure envelopes carry these exact machine tokens; use product copy
+for display and never persist arbitrary remote error prose:
+
+| HTTP | Error |
+|---|---|
+| 400 | `acme_invalid_request` (shape/normalization/version) |
+| 403 | `acme_not_authorized` (auth/controller denial, identical for unknown/foreign allocation) |
+| 404 | `acme_not_authorized` (unknown/foreign consumer-local ref) |
+| 403 | `acme_trust_revoked` (only after proving own revoked participant) |
+| 409 | `acme_reference_conflict` (permanent conflicting/revoked binding; fresh ref required) |
+| 400 | `acme_alias_mismatch` |
+| 503 | `acme_alias_lookup_failed` |
+| 503 | `acme_hub_unavailable` |
+
+Legacy owner request/response keys, statuses and error behavior remain
+compatible. A trusted revoked publish can return `acme_trust_revoked`.
+Do not add participant metadata to legacy four/six-field replies or `/dnsman/config`.
+Upgrade the hub after draining **all old HTTP writers and sweep workers**, then
+migrate/backfill before resuming new writers. Old downstream clients work with
+the upgraded hub; mixed old/new hub binaries do not. Do not downgrade after
+trusted rows exist. See the [framework rollout guide](../../django_developer/dnsman/AcmeFederation.md#coordinated-hub-rollout).

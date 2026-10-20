@@ -18,6 +18,9 @@ class AcmeHubChallengeLease(models.Model, MojoModel):
     allocation = models.ForeignKey(
         "dnsman.AcmeHubDelegation", related_name="challenge_leases",
         on_delete=models.PROTECT)
+    participant = models.ForeignKey(
+        "dnsman.AcmeHubParticipant", related_name="challenge_leases",
+        on_delete=models.PROTECT)
     challenge_ref = models.CharField(max_length=128)
     record_values = models.JSONField(default=list)
     state = models.CharField(max_length=24, default=STATE_PENDING, db_index=True)
@@ -29,8 +32,8 @@ class AcmeHubChallengeLease(models.Model, MojoModel):
         db_table = "dnsman_acme_hub_challenge_lease"
         constraints = [
             models.UniqueConstraint(
-                fields=["allocation", "challenge_ref"],
-                name="dnsman_acme_hub_alloc_challenge_uniq"),
+                fields=["participant", "challenge_ref"],
+                name="dnsman_acme_hub_part_challenge_uniq"),
         ]
         indexes = [
             models.Index(fields=["allocation", "state"]),
