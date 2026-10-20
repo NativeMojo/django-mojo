@@ -1379,6 +1379,15 @@ def _functions():
     return {"Quantity": 1, "Items": [{"FunctionARN": FUNCTION_ARN, "EventType": "viewer-request"}]}
 
 
+def _assert_neutral(behavior, label):
+    assert_eq(behavior.get("SmoothStreaming"), False, f"{label}: SmoothStreaming is false")
+    assert_eq(behavior.get("FieldLevelEncryptionId"), "", f"{label}: field-level encryption is unset")
+    assert_eq(behavior.get("LambdaFunctionAssociations"), {"Quantity": 0},
+              f"{label}: no Lambda@Edge function is associated")
+    assert_eq(behavior.get("FunctionAssociations"), {"Quantity": 0},
+              f"{label}: no CloudFront function is associated")
+
+
 def _live_origin_fields(origin):
     """The fields GetDistributionConfig returns on a live S3 origin that
     fileman does not own."""
@@ -1421,6 +1430,86 @@ def _enable_over_live(opts, live):
 
 
 @th.tier("core")
+@th.django_unit_test("CDN #8810: enable gives a newly added behavior CloudFront's neutral fields")
+def test_enable_new_behavior_has_neutral_fields(opts):
+    import botocore.session
+    from botocore.validate import ParamValidator
+
+    pattern = f"fileman/{PREFIX}private/*"
+
+    def live(cfg):
+        items = [item for item in cfg["CacheBehaviors"]["Items"] if item["PathPattern"] != pattern]
+        cfg["CacheBehaviors"] = {"Quantity": len(items), "Items": items}
+
+    sent, row = _enable_over_live(opts, live)
+    added = [item for item in sent["CacheBehaviors"]["Items"] if item["PathPattern"] == pattern]
+    assert_eq(len(added), 1, f"the missing private behavior is added once: {sent['CacheBehaviors']}")
+    _assert_neutral(added[0], pattern)
+    assert_eq(added[0]["TrustedKeyGroups"],
+              {"Enabled": True, "Quantity": 1, "Items": [row.key_group_id]},
+              "the added private behavior trusts the deployment key group")
+    model = botocore.session.get_session().get_service_model("cloudfront")
+    shape = model.operation_model("UpdateDistribution").input_shape
+    result = ParamValidator().validate(
+        {"Id": row.distribution_id, "IfMatch": "E-1", "DistributionConfig": sent}, shape)
+    assert_true(not result.has_errors(), f"the update payload matches CloudFront's shape: {result.generate_report()}")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8810: a fresh distribution carries neutral behaviors and origin headers")
+def test_fresh_distribution_has_neutral_fields(opts):
+    import botocore.session
+    from botocore.validate import ParamValidator
+
+    from mojo.apps.fileman.models import CdnDistribution
+    _reset(opts)
+    aws = _FakeAws()
+    _provisioner(_fresh(opts.public), aws, apply=True).run()
+    row = CdnDistribution.objects.get(bucket_name=BUCKET)
+    distribution = aws.distributions[row.distribution_id]
+    cfg = distribution["DistributionConfig"]
+    _assert_neutral(cfg["DefaultCacheBehavior"], "default behavior")
+    for behavior in cfg["CacheBehaviors"]["Items"]:
+        _assert_neutral(behavior, behavior["PathPattern"])
+    assert_eq(cfg["Origins"]["Items"][0].get("CustomHeaders"), {"Quantity": 0, "Items": []},
+              "a fresh S3 origin carries CloudFront's empty custom headers")
+    model = botocore.session.get_session().get_service_model("cloudfront")
+    shape = model.operation_model("CreateDistributionWithTags").input_shape
+    result = ParamValidator().validate({"DistributionConfigWithTags": {
+        "DistributionConfig": cfg,
+        "Tags": {"Items": aws.tags[distribution["ARN"]]},
+    }}, shape)
+    assert_true(not result.has_errors(), f"the create payload matches CloudFront's shape: {result.generate_report()}")
+
+
+@th.tier("core")
+@th.django_unit_test("CDN #8810: visibility sync gives a newly added behavior neutral fields")
+def test_sync_new_behavior_has_neutral_fields(opts):
+    from mojo.apps.fileman.models import CdnDistribution, FileManager
+    _reset(opts)
+    aws = _FakeAws()
+    _provisioner(_fresh(opts.public), aws, apply=True).run()
+    row = CdnDistribution.objects.get(bucket_name=BUCKET)
+    cfg = aws.distributions[row.distribution_id]["DistributionConfig"]
+    before = {item["PathPattern"]: json.loads(json.dumps(item)) for item in cfg["CacheBehaviors"]["Items"]}
+    name = f"{PREFIX}neutral"
+    pattern = f"fileman/{name}/*"
+    try:
+        fm = FileManager(name=name, backend_type="s3", backend_url=f"s3://{BUCKET}/fileman/{name}",
+                         is_active=True, is_default=False, is_public=True)
+        fm._cdn_provision_kwargs = _seams(aws)
+        fm.save()
+        fm._loosen_cdn_after_save({}, True)
+        cfg = aws.distributions[row.distribution_id]["DistributionConfig"]
+        after = {item["PathPattern"]: item for item in cfg["CacheBehaviors"]["Items"]}
+        _assert_neutral(after[pattern], pattern)
+        for live_pattern, behavior in before.items():
+            assert_eq(after.get(live_pattern), behavior, f"{live_pattern} is left unchanged")
+    finally:
+        FileManager.objects.filter(name=name).delete()
+
+
+@th.tier("core")
 @th.django_unit_test("CDN #8652: enable keeps every live origin field and sets only the ones fileman owns")
 def test_enable_keeps_live_origin_fields(opts):
     sent, row = _enable_over_live(opts, lambda cfg: _live_origin_fields(cfg["Origins"]["Items"][0]))
@@ -1460,14 +1549,18 @@ def test_enable_keeps_other_origins(opts):
 def test_enable_merges_default_behavior(opts):
     def live(cfg):
         _live_default_fields(cfg["DefaultCacheBehavior"])
-        cfg["CacheBehaviors"]["Items"][0]["FunctionAssociations"] = _functions()
+        cfg["DefaultCacheBehavior"]["SmoothStreaming"] = True
+        first = cfg["CacheBehaviors"]["Items"][0]
+        first["SmoothStreaming"] = True
+        first["FieldLevelEncryptionId"] = "fle-1"
+        first["FunctionAssociations"] = _functions()
 
     sent, row = _enable_over_live(opts, live)
     default = sent["DefaultCacheBehavior"]
     assert_eq(default.get("FunctionAssociations"), _functions(), "the live viewer function survives")
     assert_eq(default.get("LambdaFunctionAssociations"), {"Quantity": 0}, "LambdaFunctionAssociations survives")
     assert_eq(default.get("OriginRequestPolicyId"), ORIGIN_REQUEST_POLICY, "the origin request policy survives")
-    assert_eq(default.get("SmoothStreaming"), False, "SmoothStreaming survives")
+    assert_eq(default.get("SmoothStreaming"), True, "the live default's SmoothStreaming value survives")
     for legacy in ("ForwardedValues", "MinTTL", "DefaultTTL", "MaxTTL"):
         assert_true(legacy not in default, f"legacy {legacy} is removed next to a cache policy: {default}")
     from mojo.apps.fileman.services.cdn_provision import CACHING_OPTIMIZED_POLICY_ID
@@ -1477,6 +1570,9 @@ def test_enable_merges_default_behavior(opts):
               "the default trusts the deployment key group")
     assert_eq(default["ViewerProtocolPolicy"], "redirect-to-https", "the viewer protocol is owned")
     first = sent["CacheBehaviors"]["Items"][0]
+    assert_eq(first.get("SmoothStreaming"), True, "the live per-prefix SmoothStreaming value survives")
+    assert_eq(first.get("FieldLevelEncryptionId"), "fle-1",
+              "the live per-prefix field-level encryption survives")
     assert_eq(first.get("FunctionAssociations"), _functions(),
               f"a per-prefix behavior keeps its live function: {first['PathPattern']}")
 
@@ -1529,6 +1625,7 @@ def test_sync_keeps_live_behavior_fields(opts):
     cfg = aws.distributions[row.distribution_id]["DistributionConfig"]
     for behavior in cfg["CacheBehaviors"]["Items"]:
         if behavior["PathPattern"] == pattern:
+            behavior["SmoothStreaming"] = True
             behavior["FunctionAssociations"] = _functions()
             behavior["OriginRequestPolicyId"] = ORIGIN_REQUEST_POLICY
     fm = _fresh(opts.public)
@@ -1539,6 +1636,7 @@ def test_sync_keeps_live_behavior_fields(opts):
     flipped = [b for b in cfg["CacheBehaviors"]["Items"] if b["PathPattern"] == pattern]
     assert_eq(len(flipped), 1, f"the flipped prefix still has one behavior: {cfg['CacheBehaviors']}")
     assert_eq(flipped[0]["TrustedKeyGroups"]["Enabled"], True, "the flip signed the prefix")
+    assert_eq(flipped[0].get("SmoothStreaming"), True, "the live SmoothStreaming value survives the sync")
     assert_eq(flipped[0].get("FunctionAssociations"), _functions(), "the live function survives the sync")
     assert_eq(flipped[0].get("OriginRequestPolicyId"), ORIGIN_REQUEST_POLICY,
               "the live origin request policy survives the sync")

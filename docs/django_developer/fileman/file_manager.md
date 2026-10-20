@@ -440,6 +440,9 @@ On an existing distribution, `enable` and the visibility sync keep the
 distribution's own origin and behavior settings (custom headers, timeouts,
 Origin Shield, other origins, functions, origin request policy, a BYO cache
 policy and origin Id) and change only the keys fileman owns.
+A behavior fileman adds where none is live (a new prefix, or a new distribution)
+is sent with CloudFront's neutral values (`SmoothStreaming` false, no field-level
+encryption, no Lambda@Edge or CloudFront functions); a live behavior keeps its own.
 
 | Resource | Identity | Notes |
 |---|---|---|

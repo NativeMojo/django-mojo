@@ -191,6 +191,12 @@ def _behavior(origin_id, key_group_id, signed, path_pattern=None, response_heade
         "TrustedKeyGroups": (
             {"Enabled": True, "Quantity": 1, "Items": [key_group_id]} if signed
             else {"Enabled": False, "Quantity": 0}),
+        # CloudFront refuses a new behavior without these, although its API reference marks them optional
+        # (#8810). Not owned: a live behavior keeps its own (`_merge_behavior`).
+        "SmoothStreaming": False,
+        "FieldLevelEncryptionId": "",
+        "LambdaFunctionAssociations": {"Quantity": 0},
+        "FunctionAssociations": {"Quantity": 0},
     }
     if response_headers_policy_id:
         behavior["ResponseHeadersPolicyId"] = response_headers_policy_id
@@ -323,6 +329,7 @@ def distribution_config(bucket, region, oac_id, key_group_id, behaviors, caller_
             "Id": origin_id,
             "DomainName": origin_domain(bucket, region),
             "OriginAccessControlId": oac_id,
+            "CustomHeaders": {"Quantity": 0, "Items": []},
             "S3OriginConfig": {"OriginAccessIdentity": ""},
         }]},
         "DefaultCacheBehavior": _behavior(origin_id, key_group_id, signed=True,
