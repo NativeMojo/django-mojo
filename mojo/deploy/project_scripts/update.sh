@@ -88,6 +88,23 @@ OUTCOME_ROOT="$TRANSACTION_ROOT/public"
 LOCK_FILE="$TRANSACTION_ROOT/update.lock"
 ROLLING_BACK=0
 
+# Root enrollment is separate from package installation. Never execute code
+# from a candidate package to decide whether saved recovery is compatible.
+acme_floor_guard() {
+    local phase="$1"
+    if [ ! -e "$TRANSACTION_ROOT/acme-hub-floor.json" ] && \
+            [ ! -L "$TRANSACTION_ROOT/acme-hub-floor.json" ]; then
+        return 0
+    fi
+    local helper="/usr/local/libexec/mojo-acme-hub-upgrade" helper_owner helper_mode
+    [ ! -L "$helper" ] && [ -f "$helper" ] && [ -x "$helper" ] || return 1
+    helper_owner="$(stat -c '%u' "$helper" 2>/dev/null || stat -f '%u' "$helper")"
+    helper_mode="$(stat -c '%a' "$helper" 2>/dev/null || stat -f '%Lp' "$helper")"
+    [ "$helper_owner" = "$RUN_UID" ] && (( (8#$helper_mode & 022) == 0 )) || return 1
+    printf '{"phase":"%s","framework":"%s"}\n' "$phase" "${FRAMEWORK:-}" | \
+        "$helper" --updater-check >/dev/null
+}
+
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() {
     echo "[$(date '+%H:%M:%S')] FATAL: $*" >&2
@@ -180,7 +197,11 @@ install_manifest() {
     local manifest="${1:-}"
     [ -n "$manifest" ] || return 0
     log "Installing declared dependencies"
-    python3 -m pip install -r "$manifest"
+    if [ -f "$ACTIVE/acme_framework_constraint.txt" ]; then
+        python3 -m pip install --constraint "$ACTIVE/acme_framework_constraint.txt" -r "$manifest"
+    else
+        python3 -m pip install -r "$manifest"
+    fi
 }
 
 read_previous_type() {
@@ -303,6 +324,7 @@ rollback_transaction() {
     # publishing its app-readable result, finish that atomic publication;
     # rolling back a healthy candidate here would make identity and code lie.
     if [ -f "$ACTIVE/activation_succeeded" ]; then
+        acme_floor_guard publication || return 1
         log "Finishing successful deployment publication"
         refresh_mojosec candidate || :
         publish_success || return 1
@@ -317,6 +339,9 @@ rollback_transaction() {
         return 0
     fi
 
+    # Validate every saved baseline byte before candidate rollback hooks or
+    # reinstalling requirements/framework/lifecycle. On refusal retain ACTIVE.
+    acme_floor_guard rollback || return 1
     log "Rolling back candidate lifecycle"
     if [ -x "$ACTIVE/candidate_post.sh" ]; then
         MOJO_DEPLOY_ROLLBACK=1 bash "$ACTIVE/candidate_post.sh" \
@@ -327,7 +352,12 @@ rollback_transaction() {
     cd "$PROJ_PATH"
     git_project checkout --force "$previous_sha" || return 1
     if [ -f "$ACTIVE/previous_requirements.txt" ]; then
-        python3 -m pip install -r "$ACTIVE/previous_requirements.txt" || return 1
+        if [ -f "$ACTIVE/acme_previous_framework_constraint.txt" ]; then
+            python3 -m pip install --constraint "$ACTIVE/acme_previous_framework_constraint.txt" \
+                -r "$ACTIVE/previous_requirements.txt" || return 1
+        else
+            python3 -m pip install -r "$ACTIVE/previous_requirements.txt" || return 1
+        fi
     fi
     python3 -m pip install "django-mojo==$previous_framework" || return 1
 
@@ -463,6 +493,13 @@ else
     flock 9
 fi
 
+# A stale admitted parent may launch after losing its DB session. The durable
+# floor is checked under the actual root lock, before cleanup or recovery.
+if ! acme_floor_guard admit; then
+    echo "FATAL: shared ACME floor refused deployment; transaction retained" >&2
+    exit 1
+fi
+
 for preparing in "$TRANSACTION_ROOT"/preparing.*; do
     [ -d "$preparing" ] || continue
     rm -rf -- "$preparing"
@@ -510,6 +547,10 @@ if [ "$PREVIOUS_NODE_TYPE" != "api" ] && [ "$PREVIOUS_NODE_TYPE" != "code" ]; th
     chmod 0700 "$PREPARING/previous_profile.sh"
 fi
 mv -- "$PREPARING" "$ACTIVE"
+if ! acme_floor_guard snapshot; then
+    echo "FATAL: shared ACME rollback baseline unavailable; transaction retained" >&2
+    exit 1
+fi
 
 trap 'rollback_and_exit $?' ERR
 trap 'rollback_and_exit 143' TERM HUP
@@ -542,6 +583,7 @@ fi
 installed_candidate_framework="$(installed_framework)"
 valid_version "$installed_candidate_framework" || die "cannot read candidate django-mojo version"
 printf '%s\n' "$installed_candidate_framework" > "$ACTIVE/candidate_framework"
+acme_floor_guard candidate || die "shared ACME candidate identity unavailable"
 
 # Resolve only after installing the requested framework. A release replacing
 # broken deployment code executes its own post-deploy body, not N-1's.
