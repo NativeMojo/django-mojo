@@ -34,6 +34,7 @@ response, because the WebSocket dispatcher shares this code and
 ``infrastructure.refuse()`` returns a ``JsonResponse``.
 """
 import hashlib
+import inspect
 import json
 import re
 import uuid as uuid_module
@@ -312,7 +313,7 @@ def safe_summary(entry, params, user):
     return logit.mask_sensitive_data(text.strip())[:MAX_SUMMARY_CHARS]
 
 
-def run_preview(entry, params, user):
+def run_preview(entry, params, user, request_meta=None):
     """Call a tool's read-only ``preview``. ``None`` when it declares none.
 
     A raising preview is a REFUSAL, not a crash — it is the supported place for
@@ -324,7 +325,8 @@ def run_preview(entry, params, user):
     if preview is None:
         return None
     try:
-        result = preview(params, user)
+        kwargs = {"request_meta": request_meta} if "request_meta" in inspect.signature(preview).parameters else {}
+        result = preview(params, user, **kwargs)
     except (ValueError, PermissionError) as exc:
         raise PreviewFailed(_bounded_text(str(exc) or GENERIC_PRECONDITION))
     except Exception:
@@ -477,7 +479,7 @@ def propose(user, conversation, tool_name, entry, raw_args,
         return {"error": str(exc)}, None
 
     try:
-        preview = run_preview(entry, args, user)
+        preview = run_preview(entry, args, user, request_meta=request_meta)
     except PreviewFailed as exc:
         return {"error": str(exc)}, None
 
@@ -627,7 +629,7 @@ def resolve(user, action_id, decision, request=None, conversation_id=None,
         _fail_permission(row, live_user, "group_inactive", _reporter=_reporter)
 
     _require_fresh_auth(entry, row, live_user, request, _reporter=_reporter)
-    _require_bound_revision(entry, row, live_user, _reporter=_reporter)
+    _require_bound_revision(entry, row, live_user, _reporter=_reporter, request_meta=request_meta)
 
     # Single-use consumption. The expiry predicate rides along so the atomic
     # claim and the lazy effective_state() can never disagree, and so the sweep
@@ -747,12 +749,12 @@ def _require_fresh_auth(entry, row, live_user, request, _reporter=None):
         raise ApprovalRefused(CODE_REAUTH)
 
 
-def _require_bound_revision(entry, row, live_user, _reporter=None):
+def _require_bound_revision(entry, row, live_user, _reporter=None, request_meta=None):
     """Re-run a plan/apply tool's preview and refuse when the revision moved."""
     if entry.get("preview") is None:
         return
     try:
-        fresh = run_preview(entry, row.args or {}, live_user)
+        fresh = run_preview(entry, row.args or {}, live_user, request_meta=request_meta)
     except PreviewFailed as exc:
         _deny(live_user, row, CODE_PRECONDITION, _reporter=_reporter)
         raise ApprovalRefused(CODE_PRECONDITION, str(exc))

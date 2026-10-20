@@ -33,7 +33,8 @@ mojo/apps/dnsman/
     registrar.py   search / quote / purchase / poll / WHOIS / privacy
     certs.py       ACME DNS-01 issuance, renewal, revocation, sync broadcast
     acme_hub.py    optional delegated DNS-01 target allocation + lease reconciliation
-    delegation.py  downstream tenant allocation, proof, tombstone + Domain binding
+    delegation.py  downstream proof, immutable tombstones + canonical certificate routing
+    delegation_setup.py  read-only readiness, shared connection preparation/join/check/request
     email.py       provider-dispatched SES record application
   rest/          thin handlers — this is where permissions are enforced
   cronjobs.py    thin dispatchers — poll registrations / ACME leases (5m),
@@ -132,9 +133,12 @@ Eligible rows match `Group.is_effectively_active(max_depth=8)` in one lazy
 queryset — self plus ancestor hops 1 through 8 are checked, while hop 9 is
 deliberately outside the shared contract.
 
-**`services/*.py` perform no permission checks.** Gating lives entirely in
-`rest/`. This is what lets the certificate service plant challenge records with
-no user in scope, and it means every custom REST handler must call
+Provider and certificate mechanism services perform no request permission checks.
+Their REST callers gate access explicitly. Shared setup is the exception: its
+`delegation_setup` entry points resolve the exact target and repeat actor/tenant
+authority before remote I/O, so REST, CLI and assistant tools use one boundary.
+The certificate mechanism can still plant challenge records with no user in
+scope. Every custom REST handler must call
 `rest_check_permission_or_raise` itself — `@md.uses_model_security` does not
 gate a custom pk-fetching endpoint.
 
@@ -252,9 +256,12 @@ Two details that break naive implementations:
 unconfigured deployment cannot burn production rate limits. Going live is a
 deliberate settings change.
 
-Delegation is opt-in. A pending allocation never changes direct issuance.
-After first verification routing is sticky; broken proof fails closed without
-Route53/GoDaddy fallback. The v1 profile is exactly apex plus wildcard, with
+Delegation is opt-in. A legacy `allocated` pending row is inert. A prepared
+`shared` connection immediately guards certificate routing, including while
+awaiting trust; failed or revoked shared trust cannot fall back to direct TXT
+writes. After verification routing remains sticky through broken and retired
+tombstones. See [shared setup](AcmeFederation.md#supported-project-setup) for the
+explicit prepare, grant, connect, check and request flow. The v1 profile is exactly apex plus wildcard, with
 both digests published through the challenge-specific hub client and withdrawn
 from a durable cleanup intent in `finally`. Duplicate requests/jobs serialize,
 and a failed delegated renewal preserves still-valid material with bounded

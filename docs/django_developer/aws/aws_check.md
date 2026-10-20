@@ -94,7 +94,9 @@ repair for an interrupted create/tag operation: ownership must be proven by
 replaced.
 
 `--check` and `--apply` are mutually exclusive; `--yes` requires `--apply`.
-JSON mode is read-only and cannot be combined with apply, yes or probe flags.
+Legacy `--json` is read-only and cannot be combined with apply, yes or probe
+flags. `--output-json` also emits the versioned report and may accompany an
+explicit shared DNS action with `--apply`; it does not itself authorize writes.
 A non-TTY invocation is audit-only unless `--apply --yes` is explicit; an S3
 probe also requires apply authorization.
 
@@ -525,3 +527,47 @@ Use `aws-check` to get a deployment working and keep it wired up. Use
 `check_setup` to answer "is this whole account set up sanely", especially
 before a security review — and note that its topology assertions are off unless
 you ask for them.
+
+### Explicit shared-validation actions
+
+For a domain whose public CNAME already points to a shared allocation, select
+one explicit action instead of the legacy allocate-and-bootstrap path:
+
+```bash
+python manage.py aws-check --section dns --dns-action plan --dns-domain customer.example --dns-group 7 --output-json
+python manage.py aws-check --section dns --dns-action connect --dns-domain customer.example --dns-group 7 --dns-allocation existing-target.acme-hub.example.net --apply --yes --output-json
+```
+
+Connect prepares the exact public descriptor. Export `connection_request` from
+the returned readiness to the allocation controller. After the controller grants
+it, replay the same Connect command with the same domain/group/allocation; the
+local ref is retained. Then run each chosen action separately:
+
+```bash
+python manage.py aws-check --section dns --dns-action check --dns-domain customer.example --dns-group 7 --apply --yes --output-json
+python manage.py aws-check --section dns --dns-action request --dns-domain customer.example --dns-group 7 --apply --yes --output-json
+python manage.py aws-check --section dns --dns-action plan --dns-domain customer.example --dns-group 7 --output-json
+```
+
+`plan` is strictly read-only. `connect`, `check` and `request` require explicit
+`--apply` and the existing confirmation, or `--yes`; a TTY's implicit apply mode
+does not authorize them. The selected action does not automatically chain into
+another action or issue a certificate during plan/check. `--dns-allocation` is
+the public existing target FQDN, never a URL or key. `--dns-restart` explicitly
+prepares a fresh immutable ref only for the permitted revoked/unjoined recovery
+cases and requires another controller grant. It does not replace the target.
+
+`--output-json` emits the existing `schema_version:1` report, with the exact
+Readiness v1 object at `items[].details.shared_setup` on the
+`code:"dns.shared_setup"` item. It may accompany
+an explicitly authorized mutation. Legacy `--json` remains strictly read-only;
+its prohibition on `--apply`, `--yes` and probe flags is unchanged. Absent
+`--dns-action`, existing audit/bootstrap behavior is preserved. This shared DNS
+path needs no AWS credentials and uses only the installation's server-held hub
+configuration. No CLI option accepts or prints hub credentials.
+
+Use `next_action` and separate certificate/renewal states to diagnose an
+interrupted or failed run. Repeating Connect retains the persisted request;
+an unsupported old hub never falls back to allocation. See the full
+[prepare/grant/replay flow](../dnsman/AcmeFederation.md#supported-project-setup),
+including the required API/worker upgrade and rollback restrictions.

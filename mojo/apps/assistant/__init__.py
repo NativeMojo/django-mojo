@@ -42,6 +42,7 @@ DOMAIN_DESCRIPTIONS = {
     "skills": "Save, find, and manage learned multi-step procedures",
     "cloud": "Cloud and fleet operations: platform/dashboard health, fleet and capacity state, managed-engine upgrades, framework version, recorded drift, CloudWatch metrics, and System Setup readiness (read-only). Mutating tools mirror the built-in Admin's deploy recovery, framework update, engine upgrade and capacity controls behind the same gates plus an operator approval.",
     "webapp": "Set up, inspect, troubleshoot and operate web apps: guided setup, addresses and certificates, serving and routes, deployment history and evidence, rollback, take offline and delete. Deploy-key creation, domain purchase and build upload are Admin-only handoffs.",
+    "dns": "Inspect shared wildcard validation readiness, prepare a public connection request for an existing allocation, connect after controller trust, verify the unchanged CNAME and request a local apex-plus-wildcard certificate. Changes require operator approval; hub trust and credentials remain deployment/controller operations.",
 }
 
 
