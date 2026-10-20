@@ -1139,8 +1139,9 @@ This feature does not authorize live production changes or lift a hold.
 Setup releases temporary issue advisory locks while the Domain transaction is
 still held, before commit callbacks expose a new job. A worker that encounters
 any temporary owner reports the fixed `dnsman_certificate_busy` outcome instead
-of completing a skipped renewal. Its existing Job receives a durable ceiling
-of eight busy retries, including jobs originally configured with zero retries.
+of completing a skipped renewal. Its existing Job receives a durable Jobs
+retry budget of 8, including jobs originally configured with zero retries
+(at most eight busy attempts).
 Only that lock collision is retryable at the Jobs boundary: CA/validation
 failures retain certificate backoff and valid serving material.
 
@@ -1151,5 +1152,6 @@ consumer profile, function, certificate id and channel stay fixed. Recovery
 follows the actual replacement leaf and stops for cancellation, completion or a
 different failure. It does not revive an operator-canceled job. Readiness keeps
 serving validity separate, reports an exhausted busy worker as failed and points
-to `repair_worker`; a canceled job directs inspection and Request returns
-`job_held` without changing it. No extra scheduler or installer is introduced.
+to `repair_worker`. Request returns `job_held` without changing a preserved
+canceled, expired non-busy or differently failed job. No extra scheduler or
+installer is introduced.

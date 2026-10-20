@@ -622,6 +622,7 @@ def check(row, actor=None, client=None, custody=None, probe=None):
 
 def request(row, actor=None, client=None, custody=None, publish=None):
     from mojo.apps.dnsman.models import Certificate, Domain
+    from mojo.apps.jobs.models import Job
     from mojo.apps.dnsman.services import certs
     row = resolve_connection(row, actor=actor, write=True)
     target = _row_target(row, actor)
@@ -665,12 +666,19 @@ def request(row, actor=None, client=None, custody=None, publish=None):
                 elif any(cert.status in ("pending", "issuing") for cert in rows):
                     outcome = "already_queued"
                 else:
-                    certs.request_certificate(target.domain, names=names, publish=publish)
-                    outcome = "queued"
+                    publication = {}
+                    def publish_requested(func, certificate):
+                        job_id = (publish or certs.publish_job)(func, certificate)
+                        # Inspect the returned id before commit exposes new
+                        # work. A preserved terminal id did not enqueue work;
+                        # a new job may legitimately finish during on_commit.
+                        publication["held"] = isinstance(job_id, str) and Job.objects.filter(
+                            pk=job_id, status__in=("canceled", "expired", "failed")).exists()
+                        return job_id
+                    certs.request_certificate(target.domain, names=names, publish=publish_requested)
+                    outcome = "job_held" if publication.get("held") else "queued"
         result = plan(target, actor=actor, client=client, custody=custody,
                       operation=dict(action="request", outcome=outcome, changed=outcome == "queued"))
-        if result["renewal"]["job"] and result["renewal"]["job"]["state"] == "canceled":
-            result["operation"].update(outcome="job_held", changed=False)
         return result
     except SetupError as error:
         raise _error_with_plan(error, target, actor, client, custody)

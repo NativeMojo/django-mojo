@@ -831,6 +831,35 @@ def test_request_worker_lock_order(opts):
 BUSY_CHANNEL = "testit_dnsman_cert_jobs"
 
 
+@th.django_unit_test("Request reports preserved terminal jobs without claiming queued work")
+def test_request_preserved_terminal_job_outcomes(opts):
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.dnsman.services import certs, delegation_setup as setup
+    from mojo.helpers import dates
+    env = fixture()
+    row = verified(env)
+    cert = cert_for(env, due=True)
+    before = dict(cert.__dict__)
+    job_id = certs.publish_job(certs.RENEW_JOB, cert, channel=BUSY_CHANNEL)
+    try:
+        for state, error in (("expired", ""), ("failed", "ordinary_ca_failure"),
+                             ("canceled", certs.ISSUE_BUSY_ERROR)):
+            Job.objects.filter(pk=job_id).update(status=state, last_error=error,
+                                                expires_at=dates.utcnow() - timedelta(seconds=1))
+            count = Job.objects.filter(payload__certificate=cert.pk).count()
+            result = setup.request(row, client=env.hub, custody=lambda certificate: True,
+                publish=lambda func, certificate: certs.publish_job(func, certificate, channel=BUSY_CHANNEL))
+            job = Job.objects.get(pk=job_id)
+            cert.refresh_from_db()
+            assert result["operation"] == dict(action="request", outcome="job_held", changed=False), f"preserved {state} job must not claim it queued work"
+            assert result["renewal"]["job"] == dict(id=job_id, state=state), "Readiness must retain the actual terminal job identity and state"
+            assert job.status == state and job.last_error == error and Job.objects.filter(payload__certificate=cert.pk).count() == count, "Request must preserve cancellation, unrelated failure and expiration without publishing a replacement"
+            for field in ("id", "cert_pem", "mojo_secrets", "renew_after", "attempts", "modified"):
+                assert getattr(cert, field) == before[field], f"held work must preserve Certificate.{field}"
+    finally:
+        Job.objects.filter(pk=job_id).delete()
+
+
 def _issuer_fixture(env, syncs):
     from mojo.apps.dnsman.services import certs
     helpers = importlib.import_module("test_dnsman.6_certs_service")
