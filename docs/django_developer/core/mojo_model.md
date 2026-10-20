@@ -203,6 +203,37 @@ ability to find one and re-enable it. Framework-wide there is exactly one
 declaration, `account.Notification` (`{"is_unread": True}`): read
 notifications are noise for the bell, and `mark_read` is a by-pk POST action.
 
+### Filter value normalization
+
+`MojoModel.build_rest_filters` converts every filter value to its field's type
+before `filter()` sees it. The list path, `_mode=count` and `_stats` share it.
+
+- **Per element.** An `__in` / `__not_in` value is split (query string) or
+  wrapped (JSON scalar) into a list, and each element is converted on its own;
+  the list stays a list.
+- **One strict boolean parser.** `true 1 t y yes on` / `false 0 f n no off`
+  in any case, a real bool, or int 0/1. Anything else raises
+  `ValueException` (400) naming the key. `__isnull` uses the same parser.
+  `?flag=null` on a Boolean still means False.
+- **Dates** go through `dates.parse_datetime`; an unparseable value is a 400.
+  Date-component lookups (`__month`, `__year`, ...) are coerced to int, as
+  before. **Integers:** a numeric string becomes an int; anything else reaches
+  the ORM unchanged, which answers 400 for a typed lookup.
+- **Relation paths** (`?user__is_active=true`) are converted through the field
+  the path ends on, for exact, `__in`, `__not`, `__not_in`, comparisons and
+  date components only. A path ending on the relation itself (pk compare), a
+  text lookup and an explicit null are left as sent. The conversion runs only
+  after the sensitive-field and viewer-restricted guards have passed the key,
+  reads only `_meta`, and changes only the value's type: never the key, the
+  queryset or the caller's access.
+
+`normalize_rest_value(cls, request, field_name, value, lookup=None)` keeps its
+signature and stays the per-model override point for top-level fields; it now
+returns a list for a list. A consumer override whose only job was mapping
+Boolean strings (for example a garbage-to-False shim on a member or device
+list) is redundant and can be removed. Note the framework answers a malformed
+Boolean with a 400 rather than False.
+
 ### Aggregation modes
 
 Every list endpoint also accepts a `_mode` query parameter that

@@ -86,9 +86,9 @@ def _get(opts, params):
 def _expect_400(opts, params, needle):
     resp = _get(opts, params)
     assert_eq(resp.status_code, 400,
-              f"{params} must be a client error, got {resp.status_code}: {resp.body}")
-    assert_true(needle in str(resp.body),
-                f"the 400 for {params} should name {needle!r}, got {resp.body}")
+              f"{params} must be a client error, got {resp.status_code}: {resp.response}")
+    assert_true(needle in str(resp.response),
+                f"the 400 for {params} should name {needle!r}, got {resp.response}")
 
 
 @th.django_unit_setup()
@@ -129,7 +129,7 @@ def setup_rest_filter_normalization(opts):
 @th.django_unit_test("REST: ?is_unread__in=true,false returns both states")
 def test_bool_in_both(opts):
     resp = _get(opts, {"is_unread__in": "true,false"})
-    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.body}")
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.response}")
     titles = _titles(resp)
     assert_eq(titles, ["rfn-a", "rfn-b", "rfn-c"],
               f"both states, own rows only, default suppressed; got {titles}")
@@ -138,7 +138,7 @@ def test_bool_in_both(opts):
 @th.django_unit_test("REST: ?is_unread__not_in=true excludes unread rows")
 def test_bool_not_in(opts):
     resp = _get(opts, {"is_unread__not_in": "true"})
-    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.body}")
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.response}")
     titles = _titles(resp)
     assert_eq(titles, ["rfn-b"], f"only the read row should remain, got {titles}")
 
@@ -146,7 +146,7 @@ def test_bool_not_in(opts):
 @th.django_unit_test("REST: ?is_unread__in=false is not inverted")
 def test_bool_in_false(opts):
     resp = _get(opts, {"is_unread__in": "false"})
-    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.body}")
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.response}")
     titles = _titles(resp)
     assert_eq(titles, ["rfn-b"], f"__in=false must select read rows only, got {titles}")
 
@@ -163,7 +163,7 @@ def test_bool_malformed_single(opts):
 @th.django_unit_test("REST: ?user__is_active=true normalizes through User.is_active")
 def test_relation_bool(opts):
     resp = _get(opts, {"user__is_active": "true"})
-    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.body}")
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.response}")
     titles = _titles(resp)
     assert_eq(titles, ["rfn-a", "rfn-c"],
               f"own unread rows (is_unread default still applies), got {titles}")
@@ -172,7 +172,7 @@ def test_relation_bool(opts):
 @th.django_unit_test("REST: ?user__is_active__in=true,false normalizes per element")
 def test_relation_bool_in(opts):
     resp = _get(opts, {"user__is_active__in": "true,false"})
-    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.body}")
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.response}")
     titles = _titles(resp)
     assert_eq(titles, ["rfn-a", "rfn-c"], f"own unread rows, got {titles}")
 
@@ -190,7 +190,7 @@ def test_relation_date_malformed(opts):
 @th.django_unit_test("REST: ?expires_at__in=<iso>,<iso> parses each date")
 def test_datetime_in(opts):
     resp = _get(opts, {"expires_at__in": f"{EXPIRES_A},{EXPIRES_B}", "_no_defaults": "1"})
-    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.body}")
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.response}")
     titles = _titles(resp)
     assert_eq(titles, ["rfn-a", "rfn-b"], f"both dated rows, got {titles}")
 
@@ -199,7 +199,7 @@ def test_datetime_in(opts):
 def test_stats_bundles(opts):
     stats = {"both": {"is_unread__in": [True, False]}, "bad": {"is_unread": "maybe"}}
     resp = _get(opts, {"_mode": "count", "_stats": json.dumps(stats), "_no_defaults": "1"})
-    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.body}")
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.response}")
     got = resp.response.get("stats") or {}
     assert_eq(got.get("both"), 3, f"the Boolean list chip must count own rows, got {got}")
     assert_true("bad" in got and got["bad"] is None,
@@ -210,7 +210,7 @@ def test_stats_bundles(opts):
 def test_integer_in_malformed(opts):
     resp = _get(opts, {"id__in": "1,x"})
     assert_eq(resp.status_code, 400,
-              f"id__in=1,x must be a client error, got {resp.status_code}: {resp.body}")
+              f"id__in=1,x must be a client error, got {resp.status_code}: {resp.response}")
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +281,7 @@ def test_guarded_paths_still_dropped(opts):
         resp = _get(opts, params)
         assert_eq(resp.status_code, 200,
                   f"{params} must be dropped silently (200), never a 400 oracle; "
-                  f"got {resp.status_code}: {resp.body}")
+                  f"got {resp.status_code}: {resp.response}")
         titles = _titles(resp)
         assert_eq(titles, ["rfn-a", "rfn-c"], f"{params} must not filter anything, got {titles}")
     filters, _ = _parse(opts, {"user__requires_mfa": "maybe", "user__auth_key": "x"})
