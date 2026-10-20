@@ -151,9 +151,8 @@ no permission grant needed), and a key acting as a member that member's own
 manager; never a system manager. With no id, it resolves the caller's
 user/group manager as before, except that storage a group does not have yet is
 created from a request only for an active member of that group (parents
-walked) or a holder of a global `manage_files`, `files` or `manage_group`
-grant. An `ApiKey` or group token needs the `FileManager` SAVE_PERMS check
-there. Anyone else gets 403 (`File manager is unavailable`) before any row, or
+walked) or a holder of a global `manage_files` or `files` grant. An `ApiKey`
+or group token needs the `FileManager` SAVE_PERMS check there. Anyone else gets 403 (`File manager is unavailable`) before any row, or
 the group's `uuid`, is written.
 
 A purpose (`use`) must be a plain short name: 1-64 letters, digits, `_` or

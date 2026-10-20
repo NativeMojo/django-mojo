@@ -979,7 +979,8 @@ class FileManager(MojoSecrets, MojoModel):
         """
         if value is None or value == "":
             return ""
-        if not isinstance(value, str) or not USE_RE.match(value):
+        # fullmatch on the value as sent: `$` alone would let a final newline through.
+        if not isinstance(value, str) or not USE_RE.fullmatch(value):
             raise me.ValueException("use must be 1-64 letters, digits, '_' or '-'")
         if from_request and value in FILEMAN_RESERVED_USES:
             raise me.PermissionDeniedException("File manager is unavailable")
@@ -1678,7 +1679,7 @@ class FileManager(MojoSecrets, MojoModel):
         """Whether this request may cause storage to be created for `group`.
 
         A person: an active member of the group (parents walked), or a holder
-        of a global files or group-admin grant; on the inline path a global
+        of a global `manage_files`/`files` grant; on the inline path a global
         `manage_groups`/`groups` grant too. An ApiKey or group token: on the
         general file endpoint the SAVE_PERMS check it gets after resolution;
         on the inline path the dispatcher's own bound (`is_group_allowed`).
@@ -1698,7 +1699,7 @@ class FileManager(MojoSecrets, MojoModel):
         actor = getattr(request, "user", None)
         if actor is None or not is_request_user(request):
             return False
-        perms = ["manage_files", "files", "manage_group"]
+        perms = ["manage_files", "files"]
         if inline:
             perms += ["manage_groups", "groups"]
         if actor.has_permission(perms):
