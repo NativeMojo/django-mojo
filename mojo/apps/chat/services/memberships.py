@@ -28,13 +28,15 @@ def save_membership(member, args, kwargs, *, backend=None):
 
 
 def create_memberships(queryset, members, kwargs, *, backend=None):
+    queryset._for_write = True
+    alias = queryset.db
     if read_backend(backend) != "cursor":
         return models.QuerySet.bulk_create(queryset, members, **kwargs)
     from ..models import ChatRoom
     if kwargs.get("update_conflicts"):
         raise ValueError("Cursor membership bulk upsert is unsupported")
-    with transaction.atomic(using=queryset.db):
-        rooms = {r.pk: r for r in ChatRoom.objects.select_for_update().filter(
+    with transaction.atomic(using=alias):
+        rooms = {r.pk: r for r in ChatRoom.objects.using(alias).select_for_update().filter(
             pk__in={m.room_id for m in members}).order_by("pk")}
         for member in members:
             _initialize(member, rooms[member.room_id].message_seq)

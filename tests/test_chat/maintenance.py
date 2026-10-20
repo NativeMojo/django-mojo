@@ -126,3 +126,53 @@ def test_initial_activation_is_idempotent_after_new_cursor_send(opts):
     fresh = _create(second)
     assert activate_initial([first.pk, second.pk]) == 0, "A new numbered room must already be activated so reruns never clear its unread arrivals"
     assert unread_counts(user, backend="cursor")[second.pk].unread_count == 1, "Activation rerun must preserve legitimate postactivation unread state"
+
+
+@th.django_unit_test()
+def test_explicit_straggler_arrivals_without_source_memberships(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.chat.models import ChatMembership
+    from mojo.apps.chat.services.maintenance import relocate_messages
+    from mojo.apps.chat.services.read_state import unread_message_ids
+    first, second, reader, source_seat, reader_seat = _two_rooms("absent-source")
+    email = "cursor-straggler-author@example.com"
+    User.objects.filter(email=email).delete()
+    author = User.objects.create_user(username=email, email=email, password="TestPass1!")
+    author_seat = ChatMembership.objects.create(room=second, user=author, read_backend="cursor")
+    existing = _create(second)
+    source_seat.delete()
+    late = _create(first, author)
+    history = _create(first)
+    relocate_messages([first.pk, second.pk], {late.pk: second.pk, history.pk: second.pk},
+                      arrival_message_ids=[late.pk], publisher=False)
+    reader_seat.refresh_from_db(); author_seat.refresh_from_db()
+    candidates = [existing.pk, late.pk, history.pk]
+    assert unread_message_ids(reader_seat, candidates) == {existing.pk, late.pk}, "Explicit straggler must be a new destination arrival even when source seats no longer exist"
+    assert unread_message_ids(author_seat, candidates) == {existing.pk}, "Straggler author must keep other unread identities without counting their own new arrival"
+    assert reader_seat.unread_exception_count == 2 and author_seat.unread_exception_count == 1, "Arrival exceptions and cached counts must match exactly"
+    try:
+        relocate_messages([first.pk, second.pk], {}, arrival_message_ids=[late.pk], publisher=False)
+        assert False, "Arrival IDs outside the explicit movement mapping must be rejected"
+    except ValueError:
+        pass
+
+
+@th.django_unit_test()
+def test_destination_join_boundary_filters_retained_unread(opts):
+    from datetime import timedelta
+    from mojo.helpers import dates
+    from mojo.apps.chat.models import ChatMembership, ChatMessage
+    from mojo.apps.chat.services.maintenance import relocate_messages
+    from mojo.apps.chat.services.read_state import unread_message_ids, resolve_read_target
+    first, second, user, source_seat, destination_seat = _two_rooms("destination-join")
+    now = dates.utcnow()
+    ChatMembership.objects.filter(pk=source_seat.pk).update(joined_at=now - timedelta(seconds=10))
+    ChatMembership.objects.filter(pk=destination_seat.pk).update(joined_at=now - timedelta(seconds=5))
+    old, hidden = _create(first), _create(first)
+    ChatMessage.objects.filter(pk=old.pk).update(created=now - timedelta(seconds=7))
+    ChatMessage.objects.filter(pk=hidden.pk).update(created=now - timedelta(seconds=3), is_flagged=True)
+    relocate_messages([first.pk, second.pk], {old.pk: second.pk, hidden.pk: second.pk}, publisher=False)
+    destination_seat.refresh_from_db(); old.refresh_from_db()
+    assert unread_message_ids(destination_seat, [old.pk, hidden.pk]) == {hidden.pk}, "Destination join entitlement must exclude old private history while retaining entitled hidden unread identities"
+    assert destination_seat.unread_exception_count == 1, "Destination cache must count only entitled transported identities"
+    assert resolve_read_target(second, destination_seat, old.pk, backend="cursor") is None, "Excluded prejoin destination identity must remain unacknowledgeable"

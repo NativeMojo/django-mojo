@@ -93,11 +93,13 @@ def _rebuild(rooms, members, unread):
     qs = ChatMessage.objects.filter(room_id__in=[r.pk for r in rooms])
     models.QuerySet.update(qs, room_seq=None)
     mapping = {}
+    created = {}
     for room in rooms:
         messages = list(ChatMessage.objects.filter(room_id=room.pk).order_by("pk"))
         for seq, message in enumerate(messages, 1):
             message.room_seq = seq
             mapping[message.pk] = (room.pk, seq)
+            created[message.pk] = message.created
         # Bypass the public identity guard ONLY inside this locked maintenance path.
         if messages:
             models.QuerySet(model=ChatMessage).bulk_update(messages, ["room_seq"], batch_size=1000)
@@ -118,7 +120,9 @@ def _rebuild(rooms, members, unread):
     exceptions = []
     for member in members:
         ids = [pk for pk in unread.get(member.user_id, ())
-               if pk in mapping and mapping[pk][0] == member.room_id]
+               if pk in mapping and mapping[pk][0] == member.room_id
+               and (room_map[member.room_id].kind == "channel"
+                    or created[pk] >= member.joined_at)]
         member.last_read_seq = room_map[member.room_id].message_seq
         member.unread_exception_count = len(ids)
         # Stored actual facts survive only while the actual message still belongs here.
@@ -149,25 +153,39 @@ def _invalidate(rooms, publisher):
     transaction.on_commit(committed)
 
 
-def relocate_messages(room_ids, message_rooms, *, publisher=None):
+def relocate_messages(room_ids, message_rooms, *, arrival_message_ids=None, publisher=None):
     """Move PK->destination-room mappings and preserve current unread identities.
 
     Caller must create/retain destination seats before calling, and remove old
     seats only after this returns. All supplied rooms are rebuilt in PK order.
+    Hosts may designate live mapped arrival_message_ids when a straggler was
+    written after source seats disappeared: each destination seat except the
+    author gains that exact unread identity, subject to destination entitlement.
+    Other absent-source history is never inferred unread.
     Deleted mappings are harmless; a live mapped message outside locked rooms
     or a destination outside those rooms fails before mutation. Returns the
     PRE-operation versioned snapshot for routing a later restore.
     """
     from ..models import ChatMessage
     routing = {int(pk): int(room) for pk, room in message_rooms.items()}
+    arrivals = {int(pk) for pk in (arrival_message_ids or ())}
+    if not arrivals.issubset(routing):
+        raise ValueError("Maintenance arrivals must be explicitly mapped message IDs")
     with _locked(room_ids) as (rooms, members):
         allowed = {r.pk for r in rooms}
         if any(room not in allowed for room in routing.values()):
             raise ValueError("Maintenance destination is outside locked rooms")
         if ChatMessage.objects.filter(pk__in=routing).exclude(room_id__in=allowed).exists():
             raise ValueError("Maintenance source is outside locked rooms")
+        arrival_authors = dict(ChatMessage.objects.filter(pk__in=arrivals).values_list("pk", "user_id"))
+        if len(arrival_authors) != len(arrivals):
+            raise ValueError("Maintenance arrival messages must exist")
         snapshot = _snapshot(rooms, members)
         unread = _live_unread(rooms, members)
+        for member in members:
+            unread.setdefault(member.user_id, set()).update(
+                pk for pk, author_id in arrival_authors.items()
+                if routing[pk] == member.room_id and member.user_id != author_id)
         # All rows first lose their old sequence; room moves cannot collide.
         models.QuerySet.update(ChatMessage.objects.filter(room_id__in=allowed), room_seq=None)
         destinations = {}

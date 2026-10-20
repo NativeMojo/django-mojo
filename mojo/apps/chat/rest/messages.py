@@ -47,13 +47,14 @@ def on_chat_room_messages(request):
 
     limit = int(request.DATA.get("limit", 50))
     limit = min(limit, 200)
-    messages = list(qs[:limit])
+    messages = list(qs.select_related("room")[:limit])
 
     data = []
     for msg in messages:
         data.append({
             "id": msg.pk,
             "room_seq": msg.room_seq,
+            "generation": msg.room.read_state_generation,
             "user_id": msg.user_id,
             "body": msg.body,
             "kind": msg.kind,

@@ -99,7 +99,7 @@ def test_live_rest_ws_share_cursor_and_configured_hook(opts):
             ws.send_json({"type": "chat_message", "room_id": room.pk,
                           "body": "live cursor", "client_key": "cursor-live"})
             ack = ws.wait_for_types({"chat_message_ack", "error"}, timeout=10).data
-            assert ack.get("type") == "chat_message_ack" and ack.get("room_seq") == 1, f"Live send acknowledgment must expose authoritative sequence: {ack}"
+            assert ack.get("type") == "chat_message_ack" and ack.get("room_seq") == 1 and ack.get("generation") == 1, f"Live send acknowledgment must expose authoritative sequence and generation: {ack}"
             message_id = ack["message_id"]
             ws.send_json({"type": "chat_message", "room_id": room.pk,
                           "body": "live cursor", "client_key": "cursor-live"})
@@ -145,6 +145,15 @@ def test_reader_scope_uses_primary_for_durable_chat_state(opts):
         own = ChatMessage.objects.create(room=room, user=users[0], body="routing",
             read_backend="cursor", read_handler=None, read_publisher=False)
         assert own._state.db == "default", "Custom message create must resolve the write alias even inside a reader scope"
+        seats[1].delete()
+        with use_reader():
+            created = ChatMembership.objects.bulk_create([
+                ChatMembership(room=room, user=users[1])], read_backend="cursor")
+        assert created[0]._state.db == "default" and created[0].last_read_seq == 1, "Bulk memberships must lock and initialize on the same writer alias even in an unpinned reader scope"
+        seats[1] = created[0]
+        # Make the new member's one existing arrival unread for snapshot checks.
+        ChatMembership.objects.filter(pk=seats[1].pk).update(last_read_seq=0)
+        seats[1].refresh_from_db()
         with use_reader(), CaptureQueriesContext(connection) as captured:
             positions = recipient_positions(room, backend="cursor")
             counts = unread_counts(users[1], backend="cursor")

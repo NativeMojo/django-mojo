@@ -350,6 +350,7 @@ def send_message(room, user, body, kind="text", metadata=None, *,
             msg_data.update({
                 "type": "chat_message", "message_id": msg.pk,
                 "room_id": room.pk, "room_seq": msg.room_seq,
+                "generation": getattr(msg, "_chat_read_generation", room.read_state_generation),
                 "user_id": getattr(user, "pk", None),
                 "body": msg.body, "kind": msg.kind, "metadata": msg.metadata,
                 "moderation_decision": msg.moderation_decision,

@@ -70,6 +70,7 @@ def _send_ack(msg, room, client_key):
         "message_id": msg.pk,
         "room_id": room.pk,
         "room_seq": msg.room_seq,
+        "generation": getattr(msg, "_chat_read_generation", msg.room.read_state_generation),
         "kind": msg.kind,
         "metadata": msg.metadata,
         "moderation_decision": msg.moderation_decision,
@@ -170,7 +171,7 @@ def _handle_send(user, data, *, publisher=None):
     # already stored must not be punished for the retry.
     if client_key:
         existing = ChatMessage.objects.filter(
-            room=room, user=user, client_key=client_key).first()
+            room=room, user=user, client_key=client_key).select_related("room").first()
         if existing:
             if existing.body != body or existing.kind != kind:
                 return _send_error(
@@ -200,7 +201,7 @@ def _handle_send(user, data, *, publisher=None):
         # the FK failed). Re-read decides which; either way we return here
         # and never broadcast a second frame for the same message.
         existing = ChatMessage.objects.filter(
-            room=room, user=user, client_key=client_key).first()
+            room=room, user=user, client_key=client_key).select_related("room").first()
         if existing is None:
             return _send_error(client_key, "Could not persist the message")
         if existing.body != body or existing.kind != kind:
