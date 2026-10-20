@@ -40,25 +40,25 @@ def _position(member, room):
 
 
 @use_primary()
-def recipient_positions(room, user_ids=None, message_ids=None, *, backend=None):
-    """User-keyed current snapshots, one SQL query (+ one bounded exception query).
+def positions_for_rooms(room_ids, user_ids=None, message_ids=None, *, backend=None):
+    """(room_id, user_id)-keyed snapshots across rooms in one batched query.
 
     Supply message_ids when testing individual messages below a sparse prefix.
     No per-message hidden query is ever made by message_is_read.
     """
     if read_backend(backend) != "cursor":
-        raise ValueError("recipient_positions requires cursor read state")
+        raise ValueError("positions_for_rooms requires cursor read state")
     from ..models import ChatMembership, ChatUnreadException
     qs = ChatMembership.objects.filter(
-        room_id=getattr(room, "pk", room), status__in=["active", "muted"]
+        room_id__in=room_ids, status__in=["active", "muted"]
     )
     if user_ids is not None:
         qs = qs.filter(user_id__in=user_ids)
     members = list(qs.select_related("room").order_by("pk"))
-    positions = {m.user_id: _position(m, m.room) for m in members}
+    positions = {(m.room_id, m.user_id): _position(m, m.room) for m in members}
     if message_ids is not None:
         checked = list(set(message_ids))
-        sparse = {m.pk: m.user_id for m in members if m.unread_exception_count}
+        sparse = {m.pk: (m.room_id, m.user_id) for m in members if m.unread_exception_count}
         for pos in positions.values():
             pos.checked_message_ids = checked
             pos.unread_exception_message_ids = []
@@ -68,6 +68,12 @@ def recipient_positions(room, user_ids=None, message_ids=None, *, backend=None):
             ).values_list("membership_id", "message_id"):
                 positions[sparse[member_id]].unread_exception_message_ids.append(message_id)
     return positions
+
+
+def recipient_positions(room, user_ids=None, message_ids=None, *, backend=None):
+    """User-keyed one-room wrapper over the batched primary snapshot."""
+    return {user_id: position for (_room_id, user_id), position in positions_for_rooms(
+        [getattr(room, "pk", room)], user_ids, message_ids, backend=backend).items()}
 
 
 @use_primary()
@@ -143,7 +149,8 @@ def _handler(handler):
     return modules.load_function(configured) if configured else None
 
 
-def schedule_read_event(room_id, user_id, facts, changed, *, handler=_UNSET, publisher=None):
+def schedule_read_event(room_id, user_id, facts, changed, *, handler=_UNSET, publisher=None,
+                        include_inactive=False):
     """Publish fresh standing state; immutable actual ack facts never expand.
 
     The service owns the cursor chat_read frame for REST, WS and own sends.
@@ -151,8 +158,16 @@ def schedule_read_event(room_id, user_id, facts, changed, *, handler=_UNSET, pub
     """
     facts = dict(facts)
     def committed():
+        publish_allowed = True
         try:
-            positions = recipient_positions(room_id, [user_id], backend="cursor")
+            if include_inactive:
+                from ..models import ChatMembership
+                member = ChatMembership.objects.using("default").filter(
+                    room_id=room_id, user_id=user_id).select_related("room").first()
+                positions = {user_id: _position(member, member.room)} if member else {}
+                publish_allowed = member is not None and member.status in ("active", "muted")
+            else:
+                positions = recipient_positions(room_id, [user_id], backend="cursor")
         except Exception:
             logger.exception("chat: committed read state unavailable")
             return
@@ -160,7 +175,7 @@ def schedule_read_event(room_id, user_id, facts, changed, *, handler=_UNSET, pub
         if current is None or current.generation != facts["ack_generation"]:
             return
         current.update(facts)
-        if publisher is not False:
+        if publisher is not False and publish_allowed:
             from mojo.apps.realtime import publish_topic
             publish = publisher or publish_topic
             try:

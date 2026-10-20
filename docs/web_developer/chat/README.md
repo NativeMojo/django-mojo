@@ -184,8 +184,11 @@ Positions in read acknowledgments and `/api/chat/unread` rows contain:
 | `read_frontier_message_id` | Stored actual read ID when exceptions are zero, otherwise null |
 
 Successful read results also carry `ack_target_id`, `ack_target_seq`,
-`ack_target_created`, `ack_generation` and `reason` (`explicit`, `own_send` or
-`current_head`). These are the actual acknowledgment facts. The standing
+`ack_target_created`, `ack_generation` and `reason` (`explicit`, `own_send`,
+`current_head` or `join_boundary`). A server ownership/privacy boundary change
+can reconcile unread state with `reason: "join_boundary"` and null target
+ID/sequence/time. It preserves later eligible unread arrivals without making
+older private history newly unread. These are the actual operation facts. The standing
 position can already reflect a later read: do not rewind your UI to a stale
 ack target, or treat a newer standing head as part of that old acknowledgment.
 

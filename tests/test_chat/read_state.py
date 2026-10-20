@@ -167,3 +167,82 @@ def test_corrupt_cursor_is_unavailable_not_zero(opts):
         assert False, "Impossible cursor must raise unavailable state instead of clamping to zero"
     except ReadStateUnavailable:
         pass
+
+
+@th.django_unit_test()
+def test_multiroom_positions_share_one_batched_sparse_detail_query(opts):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+    from mojo.apps.chat.services.read_state import positions_for_rooms, message_is_read
+    from .maintenance import _two_rooms
+    first, second, user, first_member, second_member = _two_rooms("multiroom-positions")
+    a, b = _create(first), _create(first)
+    c, d = _create(second), _create(second)
+    _sparse(first, first_member, [a])
+    _sparse(second, second_member, [d])
+    with CaptureQueriesContext(connection) as captured:
+        positions = positions_for_rooms([second.pk, first.pk], [user.pk], backend="cursor")
+    assert len(captured) == 1 and len(positions) == 2, "Many rooms and peers must share one primary membership-room snapshot query"
+    with CaptureQueriesContext(connection) as captured:
+        positions = positions_for_rooms([second.pk, first.pk], [user.pk],
+            message_ids=[a.pk, b.pk, c.pk, d.pk], backend="cursor")
+        assert not message_is_read(a, positions[(first.pk, user.pk)]) and message_is_read(b, positions[(first.pk, user.pk)]), "First room must use only its own exact sparse exception identities"
+        assert message_is_read(c, positions[(second.pk, user.pk)]) and not message_is_read(d, positions[(second.pk, user.pk)]), "Second room must preserve its independent sparse read status"
+    assert len(captured) == 2, "Multiroom exact eligibility must batch every exception detail into one extra query"
+
+
+@th.django_unit_test()
+def test_join_boundary_preserves_later_hidden_unread_without_resurrection(opts):
+    from datetime import timedelta
+    from mojo.helpers import dates
+    from mojo.apps.chat.models import ChatMembership, ChatMessage
+    from mojo.apps.chat.services.memberships import set_join_boundary
+    from mojo.apps.chat.services.read_state import unread_message_ids, unread_counts
+    room, user, member = _fixture("boundary-preservation")
+    now = dates.utcnow()
+    ChatMembership.objects.filter(pk=member.pk).update(joined_at=now - timedelta(seconds=10))
+    member.refresh_from_db()
+    acknowledged, old, later, hidden = [_create(room) for _ in range(4)]
+    for message, seconds in [(acknowledged, 8), (old, 7), (later, 3), (hidden, 2)]:
+        ChatMessage.objects.filter(pk=message.pk).update(created=now - timedelta(seconds=seconds))
+    ChatMessage.objects.filter(pk=hidden.pk).update(is_flagged=True)
+    _read(room, user, member, acknowledged)
+    room.refresh_from_db()
+    generation = room.read_state_generation
+    calls = []
+    updated = set_join_boundary([member.pk], now - timedelta(seconds=5), backend="cursor",
+                               handler=lambda *a: calls.append(a), publisher=False)
+    member.refresh_from_db(); room.refresh_from_db()
+    assert updated == 1 and member.last_read_seq == 4 and member.unread_exception_count == 2, "Tightened boundary must retain later unread arrivals rather than clear the entire head"
+    assert unread_message_ids(member, [acknowledged.pk, old.pk, later.pk, hidden.pk]) == {later.pk, hidden.pk}, "Boundary must retain entitled hidden rows and discard newly private history"
+    assert member.last_read_message_id is None and member.last_read_at is None, "A previously acknowledged target outside the new private boundary must lose its paired actual facts"
+    assert room.message_seq == 4 and room.read_state_generation == generation, "Seat-only boundary changes must not resequence messages or change room generation"
+    assert len(calls) == 1 and calls[0][2].reason == "join_boundary" and calls[0][2].ack_target_id is None and calls[0][2].ack_target_seq is None, "Boundary reconciliation must carry its reason without fabricating an acknowledgment target"
+    set_join_boundary([member.pk], now - timedelta(seconds=9), backend="cursor", handler=None, publisher=False)
+    member.refresh_from_db()
+    assert unread_message_ids(member, [acknowledged.pk, old.pk, later.pk, hidden.pk]) == {later.pk, hidden.pk}, "Relaxing a private boundary must never resurrect previously read or excluded IDs"
+    newest = _create(room)
+    assert unread_counts(user, backend="cursor")[room.pk].unread_count == 3, "A normal arrival after boundary encoding must add to preserved sparse unread identities"
+
+
+@th.django_unit_test()
+def test_join_boundary_legacy_and_banned_seats(opts):
+    from datetime import timedelta
+    from mojo.helpers import dates
+    from mojo.apps.chat.models import ChatMembership
+    from mojo.apps.chat.services.memberships import set_join_boundary
+    room, user, member = _fixture("boundary-banned")
+    message = _create(room)
+    ChatMembership.objects.filter(pk=member.pk).update(status="banned")
+    calls, frames = [], []
+    boundary = member.joined_at + timedelta(microseconds=1)
+    assert set_join_boundary([member.pk], boundary, backend="cursor",
+        handler=lambda *a: calls.append(a), publisher=lambda *a: frames.append(a)) == 1, "Privacy boundaries must also update banned seats"
+    member.refresh_from_db()
+    assert member.joined_at == boundary and member.unread_exception_count == 1, "Banned seat must retain its entitled later unread arrival"
+    assert len(calls) == 1 and not frames, "Banned seat privacy reconciliation must invoke the server hook without broadcasting a banned user's read frame"
+    previous = (member.last_read_seq, member.unread_exception_count)
+    legacy_boundary = dates.utcnow()
+    assert set_join_boundary([member.pk], legacy_boundary, backend="legacy") == 1, "Legacy backend must retain the joined-at-only setter contract"
+    member.refresh_from_db()
+    assert member.joined_at == legacy_boundary and (member.last_read_seq, member.unread_exception_count) == previous, "Legacy boundary updates must leave cursor fields untouched"

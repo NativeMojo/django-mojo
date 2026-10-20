@@ -32,6 +32,19 @@ Muted members can read. Banned members cannot acknowledge and are omitted from
 normal snapshots; their stored state survives unban. Deleting a membership
 deletes its exceptions; rejoining creates a new head baseline and join bound.
 
+For an ownership/privacy transfer, use the trusted server helper
+`memberships.set_join_boundary(membership_ids, joined_at, *, handler=...,
+publisher=..., backend=...)`; it returns the number of updated seats. It locks
+affected rooms in PK order, then only the targeted seats, and retains current
+unread identities entitled under both the old and new join bounds. Tightening
+therefore preserves later unread arrivals, including hidden/expired rows;
+relaxing never makes old history newly unread. It encodes those seats at the
+current head with sparse exceptions without resequencing messages or changing
+the room generation. Old actual acknowledgment PK/time is cleared if it is
+outside the new non-channel boundary. Channels retain their history exemption.
+Banned seats can receive this trusted privacy update. Legacy mode changes only
+`joined_at`. Do not replace this operation with a blanket current-head clear.
+
 Counts track arrival positions, not the current visible page. Flagging,
 expiry and ordinary physical deletion do not decrement/recycle the room head
 or discard sparse exception count slots. A count can include an invisible or
@@ -49,6 +62,7 @@ All functions below live in `mojo.apps.chat.services.read_state`.
 | `mark_through(room, user, membership, up_to_message_id)` | `objict(target, position, changed)` |
 | `mark_read(room, user, membership, up_to_message_id)` | Compatibility wrapper returning only the target or `None` |
 | `recipient_positions(room, user_ids=None, message_ids=None)` | User-ID-keyed position map |
+| `positions_for_rooms(room_ids, user_ids=None, message_ids=None)` | `(room_id, user_id)`-keyed position map across many rooms |
 | `unread_counts(user, room_ids=None)` | Room-ID-keyed position map |
 | `unread_queryset(membership, queryset=None)` | Room-scoped queryset filtered to exact unread eligibility |
 | `unread_message_ids(membership, message_ids)` | Set of unread IDs from a bounded candidate set |
@@ -85,9 +99,10 @@ acknowledged message PK or timestamp.
 
 ### Position shape
 
-Both batch helpers read membership and room state in one SQL statement;
-`recipient_positions(..., message_ids=[...])` may add one bounded exception
-query. Freshness-critical reads use the primary database. Positions contain:
+The batch helpers read membership and room state in one SQL statement;
+`recipient_positions(..., message_ids=[...])` and `positions_for_rooms` may add
+one bounded exception query across all selected rooms/users. Freshness-critical
+reads use the primary database. Positions contain:
 
 | Field | Meaning |
 |---|---|
@@ -100,8 +115,8 @@ query. Freshness-critical reads use the primary database. Positions contain:
 | `read_frontier_message_id` | `last_read_message_id` when no exceptions remain, otherwise `None` |
 
 Successful acknowledgments add `ack_target_id`, `ack_target_seq`,
-`ack_target_created`, `ack_generation` and `reason` (`explicit`, `own_send` or
-`current_head`). These describe the actual operation. Current-head clears have
+`ack_target_created`, `ack_generation` and `reason` (`explicit`, `own_send`,
+`current_head` or `join_boundary`). These describe the actual operation. Current-head clears have
 no target ID/time. The standing position can be newer than those facts, and a
 maintenance prefix at the head does not prove every earlier message was read.
 Do not substitute `head_seq` or `last_read_message_id` for the actual
@@ -152,7 +167,11 @@ def on_read(room_id, user_id, position, changed):
 ```
 
 The hook runs on commit for successful explicit reads (including valid no-ops),
-own-send advancement and trusted current-head clears. Before calling it, the
+own-send advancement, trusted current-head clears and join-boundary changes.
+Boundary changes carry null target ID/sequence/time and reconcile from current
+eligibility; they do not claim an actual message acknowledgment. The boundary
+hook also runs for banned seats, without broadcasting their read frame.
+Before calling it, the
 service fetches a fresh standing position and combines it with the captured
 `ack_*` facts. Callbacks fetch current state rather than replaying a captured
 count, including when queued callbacks execute in reverse order. A changed

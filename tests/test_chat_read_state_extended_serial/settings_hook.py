@@ -219,3 +219,26 @@ def test_stale_full_saves_preserve_service_state_and_identity(opts):
                 assert False, "Explicit service-field updates and preassigned-PK replacement saves must be rejected"
             except ValueError:
                 pass
+
+
+@th.django_unit_test()
+def test_join_boundary_locks_rooms_then_seats_on_primary(opts):
+    from unittest.mock import patch
+    from datetime import timedelta
+    from django.db import router, connection
+    from django.test.utils import CaptureQueriesContext
+    from mojo.db import use_reader
+    from mojo.db.router import ReaderRouter
+    from mojo.apps.chat.models import ChatRoom, ChatMembership
+    from mojo.apps.chat.services.memberships import set_join_boundary
+    room, users, seats = _fixture("boundary-locks")
+    second = ChatRoom.objects.create(name="cursor-serial-boundary-locks-second")
+    other = ChatMembership.objects.create(room=second, user=users[0], read_backend="cursor")
+    boundary = min(seats[0].joined_at, other.joined_at) - timedelta(seconds=1)
+    with patch.object(router, "routers", [ReaderRouter()]), use_reader(), CaptureQueriesContext(connection) as captured:
+        count = set_join_boundary([other.pk, seats[0].pk], boundary,
+                                 backend="cursor", handler=None, publisher=False)
+    locking = [entry["sql"] for entry in captured if "FOR UPDATE" in entry["sql"]]
+    assert count == 2 and len(locking) == 2, "Multiroom privacy boundary must use one room-lock query followed by one targeted seat-lock query"
+    assert '"chat_chatroom"' in locking[0] and 'ORDER BY "chat_chatroom"."id" ASC' in locking[0], "Affected rooms must lock first in ascending PK order"
+    assert '"chat_chatmembership"' in locking[1] and 'ORDER BY "chat_chatmembership"."room_id" ASC' in locking[1], "Only targeted seats must lock after the sorted rooms"
