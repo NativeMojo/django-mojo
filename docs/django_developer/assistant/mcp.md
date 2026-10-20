@@ -131,6 +131,36 @@ platform LLM credential, so the door has its own switch.
 Grants are **dormant, never revoked**, by a switch-off: re-enabling brings every
 existing connection back.
 
+### Connecting a headless agent
+
+A browser-based sign-in does not suit an agent on a server or over SSH. For that,
+the account app's OAuth device flow (RFC 8628) issues the same `mcp` grant to a
+client with no browser. Full mechanics are in
+[account/oauth_server.md](../account/oauth_server.md#device-authorization-rfc-8628);
+the shape of it:
+
+1. **Enable it in the deployment settings file** — `OAUTH_DEVICE_FLOW_ENABLED =
+   True`. It is off by default, file-only (no database or Admin switch) and needs a
+   restart. `ASSISTANT_MCP_ENABLED` must be on as well, since the door is the
+   resource being protected. Device sign-ins are `mcp`-only unless
+   `OAUTH_DEVICE_ALLOW_API` is also set.
+2. **The agent registers** with the device grant
+   (`urn:ietf:params:oauth:grant-type:device_code` in `grant_types`; no
+   `redirect_uris` needed), calls `device_authorization`, and prints the user code
+   and verification URL.
+3. **A person approves** at that URL, on any device, signed in as themselves and
+   with a login from the last ten minutes. They see where the request came from and
+   choose how long the connection lasts (30, 60 or 90 days, within the deployment's
+   cap). Meanwhile the agent polls the token endpoint.
+4. **The agent receives the grant** and calls `/api/assistant/mcp` with it like any
+   other MCP token.
+
+Approval does not bypass the door's own check: the approving user must still hold
+`view_admin` or `assistant` **at request time** (see "Who refuses what" below),
+and the verification page warns them when they do not. The resulting grant appears
+in the Admin like any other, with `flow = "device_code"`, and is revoked the same
+way.
+
 ---
 
 ## Who refuses what

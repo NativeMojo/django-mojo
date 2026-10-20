@@ -25,6 +25,8 @@ from mojo.helpers import logit
 from mojo.helpers.redis import get_connection
 from mojo.helpers.safe_fetch import safe_fetch
 
+from .resources import DEVICE_GRANT
+
 MAX_REDIRECT_URIS = 10
 MAX_REDIRECT_URI_LENGTH = 2048
 MAX_CLIENT_NAME_LENGTH = 200
@@ -46,7 +48,10 @@ _DUP_SLASH_RE = re.compile(r"/{2,}")
 _WHITESPACE_RE = re.compile(r"\s+")
 
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
-SUPPORTED_GRANT_TYPES = ("authorization_code", "refresh_token")
+SUPPORTED_GRANT_TYPES = ("authorization_code", "refresh_token", DEVICE_GRANT)
+# What a client that names nothing supported is given: the browser flow. The
+# device grant is never implied — a client has to ask for it by name.
+DEFAULT_GRANT_TYPES = ("authorization_code", "refresh_token")
 SUPPORTED_RESPONSE_TYPES = ("code",)
 HTTPS_METADATA_FIELDS = ("client_uri", "logo_uri", "policy_uri", "tos_uri")
 
@@ -162,11 +167,39 @@ def _clean_redirect_uris(value, error_code="invalid_redirect_uri"):
     return cleaned
 
 
-def _intersect(requested, supported):
+def _intersect(requested, supported, default=None):
     """The requested values this server supports, in the server's own order."""
     asked = set(str(item) for item in _as_list(requested))
     kept = [item for item in supported if item in asked]
-    return kept or list(supported)
+    return kept or list(supported if default is None else default)
+
+
+def _grant_types(requested):
+    return _intersect(requested, SUPPORTED_GRANT_TYPES, DEFAULT_GRANT_TYPES)
+
+
+def _redirect_uris_for(grant_types, value, error_code="invalid_redirect_uri"):
+    """Redirect URIs are required by the browser flow, and only by it.
+
+    A device-only client never receives a redirect, so it may register none.
+    Any it does list are still held to the full rules.
+    """
+    if "authorization_code" not in grant_types and not _as_list(value):
+        return []
+    return _clean_redirect_uris(value, error_code=error_code)
+
+
+def client_grant_types(client):
+    """The grant types a client declared.
+
+    A row stored before declarations were kept declared the browser flow, which
+    was all there was — so it can never be read as having asked for the device
+    grant.
+    """
+    declared = (getattr(client, "metadata", None) or {}).get("grant_types")
+    if not isinstance(declared, list):
+        return list(DEFAULT_GRANT_TYPES)
+    return [item for item in declared if item in SUPPORTED_GRANT_TYPES]
 
 
 def register_client(data):
@@ -176,11 +209,15 @@ def register_client(data):
     replaced with ``none`` and echoed, and grant/response types are intersected
     with what the server does. Only a bad ``redirect_uris`` is fatal — that one
     is a security boundary, not a preference.
+
+    The granted types are STORED, not just echoed: the device authorization
+    endpoint serves only a client that asked for the device grant.
     """
     from mojo.apps.account.models.oauth_client import OAuthClient
 
     data = data or {}
-    redirect_uris = _clean_redirect_uris(data.get("redirect_uris"))
+    grant_types = _grant_types(data.get("grant_types"))
+    redirect_uris = _redirect_uris_for(grant_types, data.get("redirect_uris"))
 
     client_name = data.get("client_name") or ""
     if not isinstance(client_name, str):
@@ -203,8 +240,8 @@ def register_client(data):
         value = data.get(field)
         if isinstance(value, str) and value:
             metadata[field] = value[:200]
+    metadata["grant_types"] = grant_types
 
-    grant_types = _intersect(data.get("grant_types"), SUPPORTED_GRANT_TYPES)
     response_types = _intersect(data.get("response_types"), SUPPORTED_RESPONSE_TYPES)
 
     client = OAuthClient(
@@ -342,8 +379,10 @@ def _validate_cimd_document(canonical, status, content_type, body):
     # likes — but it still cannot claim an identity that is not its own.
     if canonical_cimd_url(document.get("client_id")) != canonical:
         raise ClientError("invalid_client", "client metadata document does not name itself")
-    document["redirect_uris"] = _clean_redirect_uris(
-        document.get("redirect_uris"), error_code="invalid_client")
+    document["grant_types"] = _grant_types(document.get("grant_types"))
+    document["redirect_uris"] = _redirect_uris_for(
+        document["grant_types"], document.get("redirect_uris"),
+        error_code="invalid_client")
     return document
 
 
@@ -397,6 +436,7 @@ def _resolve_cimd_client(url, fetcher=None):
         value = document.get(field)
         if isinstance(value, str) and value:
             metadata[field] = clean_text(value, limit=2048)
+    metadata["grant_types"] = document["grant_types"]
 
     client, _created = OAuthClient.objects.get_or_create(
         client_id=canonical, defaults=dict(kind="cimd", is_active=True))

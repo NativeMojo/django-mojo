@@ -246,3 +246,43 @@ def refresh_grace_seconds():
 
 def code_ttl():
     return settings.get_static("OAUTH_CODE_TTL", 300, kind="int")
+
+
+# --- device authorization (RFC 8628) --------------------------------------
+# File-only for the same reason. Switching the flow on, widening it to `api`
+# and lengthening what a device grant may live are deployment decisions.
+
+DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+# The hard ceiling on a device grant, whatever the setting says.
+DEVICE_MAX_TTL_CEILING = 90
+
+
+def _static_int(key, default):
+    try:
+        return int(settings.get_static(key, default, kind="int"))
+    except (TypeError, ValueError):
+        return default
+
+
+def device_flow_enabled():
+    return settings.get_static("OAUTH_DEVICE_FLOW_ENABLED", False, kind="bool")
+
+
+def device_code_ttl():
+    # Capped as well as floored: a pending code is the window for both
+    # phishing and guessing, so no setting may leave one open for hours.
+    return max(60, min(1800, _static_int("OAUTH_DEVICE_CODE_TTL", 600)))
+
+
+def device_interval():
+    return max(1, _static_int("OAUTH_DEVICE_INTERVAL", 5))
+
+
+def device_allow_api():
+    return settings.get_static("OAUTH_DEVICE_ALLOW_API", False, kind="bool")
+
+
+def device_max_ttl_days():
+    """The longest grant the approving person may choose, clamped to 1–90."""
+    return max(1, min(DEVICE_MAX_TTL_CEILING,
+                      _static_int("OAUTH_DEVICE_MAX_TTL_DAYS", 30)))

@@ -1113,7 +1113,7 @@ Social-login (client-side) keys:
 - `OAUTH_STATE_TTL`
 
 Authorization-server keys — see
-[account/oauth_server.md](../account/oauth_server.md). All five are read with
+[account/oauth_server.md](../account/oauth_server.md). All ten are read with
 `get_static`, i.e. the **deployment file only**: a `manage_settings` holder must
 not be able to lengthen a credential lifetime through a database `Setting` row.
 Changing any of them needs a restart.
@@ -1128,6 +1128,19 @@ Changing any of them needs a restart.
   refresh token is forgiven as a lost response before reuse counts as replay
   and revokes the grant family.
 - `OAUTH_CODE_TTL` — int seconds, default `300`. Authorization-code lifetime.
+- `OAUTH_DEVICE_FLOW_ENABLED` — bool, default `False`. Turns on the RFC 8628
+  device authorization grant for headless clients. Off, `device_authorization`
+  and the verification page 404, the token endpoint refuses the device grant, and
+  discovery does not advertise it.
+- `OAUTH_DEVICE_CODE_TTL` — int seconds, default `600`, clamped to `60`–`1800`. How long a
+  device request waits for a person to approve it.
+- `OAUTH_DEVICE_INTERVAL` — int seconds, default `5`, minimum `1`. Minimum wait
+  between a device client's token polls; each `slow_down` adds 5 more.
+- `OAUTH_DEVICE_ALLOW_API` — bool, default `False`. Let device requests ask for
+  the `api` scope. Off, device sign-ins are `mcp`-only.
+- `OAUTH_DEVICE_MAX_TTL_DAYS` — int days, default `30`, clamped to 1–90. The
+  longest grant the approving person may choose (they pick from 30/60/90 within
+  this cap).
 
 The authorization server is inert until `BASE_URL` is set **and** at least one
 registered resource is enabled; until then every endpoint answers 404.

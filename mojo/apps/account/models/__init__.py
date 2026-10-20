@@ -12,6 +12,7 @@ from .oauth import OAuthConnection
 from .oauth_client import OAuthClient
 from .oauth_grant import OAuthGrant
 from .oauth_code import OAuthCode
+from .oauth_device_code import OAuthDeviceCode
 from .notification import Notification
 from .setting import Setting
 from .bouncer_device import BouncerDevice
