@@ -57,7 +57,7 @@ class ChatMessage(models.Model, MojoModel):
         NO_SAVE_FIELDS = [
             "user", "is_flagged", "flagged_by", "flagged_at",
             "moderation_decision", "moderation_reasons", "moderation_score",
-            "client_key", "metadata", "room_seq", "room",
+            "client_key", "metadata", "room_seq",
         ]
         GRAPHS = {
             "list": {

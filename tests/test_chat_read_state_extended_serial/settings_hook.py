@@ -242,3 +242,27 @@ def test_join_boundary_locks_rooms_then_seats_on_primary(opts):
     assert count == 2 and len(locking) == 2, "Multiroom privacy boundary must use one room-lock query followed by one targeted seat-lock query"
     assert '"chat_chatroom"' in locking[0] and 'ORDER BY "chat_chatroom"."id" ASC' in locking[0], "Affected rooms must lock first in ascending PK order"
     assert '"chat_chatmembership"' in locking[1] and 'ORDER BY "chat_chatmembership"."room_id" ASC' in locking[1], "Only targeted seats must lock after the sorted rooms"
+
+
+@th.django_unit_test()
+def test_generic_dict_create_attaches_room_without_permitting_cursor_relocation(opts):
+    from unittest.mock import patch
+    from django.conf import settings as django_settings
+    from mojo.apps.chat.models import ChatMessage, ChatRoom
+    room, users, seats = _fixture("dict-create")
+    with patch.object(django_settings, "CHAT_READ_STATE_BACKEND", "cursor", create=True):
+        destination = ChatRoom.objects.create(name="cursor-serial-dict-create-destination")
+        authored = ChatMessage.create_from_dict(
+            {"room": room.pk, "body": "trusted authored create", "room_seq": 9000}, user=users[0])
+        system = ChatMessage.create_from_dict({"room": room.pk, "body": "trusted system create"})
+        assert authored.room_id == room.pk and authored.room_seq == 1, "Generic trusted creation must attach its required room FK and let the service assign the sequence"
+        assert system.room_id == room.pk and system.room_seq == 2 and system.user_id is None, "Generic system creation must retain its room without inventing a pseudo author"
+        seats[0].refresh_from_db()
+        assert seats[0].last_read_seq == 1 and seats[0].last_read_message_id == authored.pk, "Generic authored creation must retain normal sender advancement"
+        try:
+            authored.update_from_dict({"room": destination.pk, "body": "forbidden relocation"})
+            assert False, "Generic cursor updates must still reject relocation through the model identity guard"
+        except ValueError:
+            pass
+        authored.refresh_from_db()
+        assert authored.room_id == room.pk and authored.room_seq == 1 and authored.body == "trusted authored create", "Rejected generic relocation must leave the committed room, sequence and content intact"
