@@ -38,7 +38,9 @@ OUTSIDER = "fm_gate_outsider"      # member of nothing
 GADMIN = "fm_gate_gadmin"          # member of A with manage_group there, not of B
 GLOBAL_GADMIN = "fm_gate_global"   # global manage_groups, member of nothing
 LEFT = "fm_gate_left"              # owned a File in A, then left A
-USERS = [MEMBER, OUTSIDER, GADMIN, GLOBAL_GADMIN, LEFT]
+SECURITY = "fm_gate_security"      # global security grant only, member of nothing
+FILES_ADMIN = "fm_gate_files"      # global files grant, member of nothing
+USERS = [MEMBER, OUTSIDER, GADMIN, GLOBAL_GADMIN, LEFT, SECURITY, FILES_ADMIN]
 INLINE = "data:text/plain;base64," + base64.b64encode(b"fm gate inline").decode()
 ORIGINAL_BYTES = b"fm gate original"
 
@@ -80,6 +82,10 @@ def setup_create_gate(opts):
     users = {name: make_user(name) for name in USERS}
     users[GLOBAL_GADMIN].add_permission("manage_groups")
     users[GLOBAL_GADMIN].save()
+    users[SECURITY].add_permission("security")
+    users[SECURITY].save()
+    users[FILES_ADMIN].add_permission("files")
+    users[FILES_ADMIN].save()
 
     group_a = Group(name=f"{PREFIX}a")
     group_a.save()
@@ -410,6 +416,36 @@ def test_key_inline_into_own_group(opts):
     with _system_default(opts):
         created = File._inline_rest_file(object(), "media", INLINE, request)
     assert_eq(created.group_id, opts.group_ids["c"], "the key's inline File must land in its group")
+
+
+def _inline_media(opts, username):
+    """Inline incident-style `media` into A, as the related-field path does."""
+    from mojo.apps.fileman.models import File
+
+    request = _request(opts, user=_user(opts, username), group="a")
+    return File._inline_rest_file(object(), "media", INLINE, request)
+
+
+@th.django_unit_test("a non-member with only a global security grant cannot save inline media into a group")
+def test_security_only_inline_media_refused(opts):
+    from mojo import errors as me
+    from mojo.apps.fileman.models import File
+
+    before = File.objects.filter(group_id=opts.group_ids["a"], user_id=opts.user_ids[SECURITY]).count()
+    refused = False
+    try:
+        _inline_media(opts, SECURITY)
+    except me.PermissionDeniedException:
+        refused = True
+    after = File.objects.filter(group_id=opts.group_ids["a"], user_id=opts.user_ids[SECURITY]).count()
+    assert_true(refused, "a global security grant alone must not write inline media into A")
+    assert_eq(after, before, "the refusal must create no File")
+
+
+@th.django_unit_test("control: a non-member with a global files grant still saves inline media into a group")
+def test_files_admin_inline_media(opts):
+    created = _inline_media(opts, FILES_ADMIN)
+    assert_eq(created.group_id, opts.group_ids["a"], "the files holder's inline File must land in A")
 
 
 @th.django_unit_test("a File owner who left the group cannot replace the File's bytes")
