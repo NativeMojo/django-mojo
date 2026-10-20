@@ -39,12 +39,23 @@
 <!-- VIEW: consent, with the facts about the requesting machine -->
 <div id="view-device-consent" class="mat-view">
     <p class="mat-view-title"><span id="device-client-name"></span> wants access</p>
+    {% comment %}
+       First, before any reassuring fact: when a web page started this
+       request, the IP and location below are the reader's OWN browser, so
+       they prove nothing. That is the shape of a phishing link.
+    {% endcomment %}
+    <p class="mat-message is-visible is-error" id="device-browser-warning" style="display:none">
+        <strong>A website started this request, not a device.</strong>
+        If a website or a message sent you here, deny it &mdash; approving
+        would give whoever started it access to your account. The address and
+        location below are your own browser&rsquo;s, so they prove nothing.
+    </p>
     <p class="mat-view-sub">Code <strong id="device-code-echo"></strong> &mdash; make sure it matches the code on your device.</p>
     <p class="mat-view-sub" id="device-client-identity"></p>
     <p class="mat-view-sub">Access to: <span id="device-resource"></span></p>
     <div id="device-access-lines"></div>
     <p class="mat-view-sub">Requested from <span id="device-requester-ip"></span><span id="device-requester-location"></span>, <span id="device-requester-age"></span></p>
-    <p class="mat-view-sub">Device: <span id="device-requester-ua"></span></p>
+    <p class="mat-view-sub">The device describes itself as: <span id="device-requester-ua"></span></p>
     <p class="mat-message is-visible is-error" id="device-network-warning" style="display:none">
         This request came from a different network than the one you're using now.
         If you didn't start it yourself, deny it.
@@ -181,8 +192,10 @@
         setText("device-requester-location", who.location ? " (" + who.location + ")" : "");
         setText("device-requester-age", age(who.age_seconds || 0));
         setText("device-requester-ua", who.user_agent || "unknown");
+        document.getElementById("device-browser-warning").style.display =
+            facts.started_in_browser ? "" : "none";
         document.getElementById("device-network-warning").style.display =
-            facts.network_mismatch ? "" : "none";
+            facts.network_mismatch && !facts.started_in_browser ? "" : "none";
         document.getElementById("device-permission-warning").style.display =
             facts.missing_permission ? "" : "none";
         var select = document.getElementById("device-ttl");

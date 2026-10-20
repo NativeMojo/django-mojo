@@ -669,6 +669,18 @@ permanently raises that row's interval by 5 seconds (capped at 60). Other polls
 answer `authorization_pending`, `access_denied` or `expired_token` per RFC 8628
 §3.5.
 
+**Collection is atomic.** The burn (`approved` → `consumed`), the grant and the
+link back to it commit in one transaction. A concurrent poll waits on the burn's
+row lock, then finds the code consumed with its grant attached, and is sent
+through the replay path — so a thief who races the real client cannot keep the
+grant unremarked. An account or resource switched off after approval still spends
+the code; only the grant is withheld.
+
+**Ending sessions cancels uncollected approvals.** `revoke_all_grants(user=…)` —
+which `User.end_sessions` calls for sign-out-everywhere and password changes —
+first moves that person's `approved` device codes to `denied`. Otherwise the
+device's next poll would mint a grant after the sweep, under the new key.
+
 ### Failed-lookup limits
 
 Every `lookup`, `approve` and `deny` first checks two Redis counters and refuses
@@ -678,7 +690,7 @@ both:
 | Counter | Limit | Window |
 |---|---|---|
 | per signed-in person | 5 | 15 minutes |
-| per requesting IP | 20 | 15 minutes |
+| per requesting IP (per `/64` for IPv6) | 20 | 15 minutes |
 
 Crossing either limit reports an `oauth:device_code_bruteforce` incident (level
 6), once. The limits keep a guesser to a vanishing fraction of the 20^8 code
@@ -692,8 +704,17 @@ cannot choose:
 
 - the client name beside whether anything vouched for it (CIMD URL, or
   "unverified name" for DCR), the access in plain words, and the exact resource;
+- `started_in_browser` — the request carried browser fetch metadata (`Origin` or
+  `Sec-Fetch-*`), recorded on the row as `requester_browser`. A device client
+  never sends those; a phishing page calling `device_authorization` from the
+  victim's own browser always does, and then the requester's IP and location ARE
+  the victim's, so the network check cannot catch it. The page shows a loud
+  warning first and suppresses the network warning. Nothing is refused (Ian,
+  2026-10-20: warn, don't block — consistent with the open-API stance);
 - the requester's **IP, location, user agent and the request's age**. Location is
-  looked up lazily (`GeoLocatedIP`) on the first lookup and cached on the row;
+  looked up lazily (`GeoLocatedIP`) on the first lookup and cached on the row. The
+  user agent is the requester's own claim, kept to 120 characters and labelled as
+  such on the page;
 - a **network-mismatch warning** when the requester's address is not in the same
   `/24` (IPv4) or `/64` (IPv6) as the approver's current request, or either is
   unknown;
@@ -768,7 +789,7 @@ credential lifetime, switch on the device flow or widen it to `api` through a
 | `OAUTH_REFRESH_GRACE_SECONDS` | `30` | Lost-response forgiveness window. |
 | `OAUTH_CODE_TTL` | `300` | Authorization-code lifetime, seconds. |
 | `OAUTH_DEVICE_FLOW_ENABLED` | `False` | Turns the RFC 8628 device flow on. Off, it 404s and is not advertised. |
-| `OAUTH_DEVICE_CODE_TTL` | `600` | How long a device request waits for approval, seconds. Minimum `60`. |
+| `OAUTH_DEVICE_CODE_TTL` | `600` | How long a device request waits for approval, seconds. Clamped to `60`–`1800`. |
 | `OAUTH_DEVICE_INTERVAL` | `5` | Minimum seconds between a device client's polls. Minimum `1`. |
 | `OAUTH_DEVICE_ALLOW_API` | `False` | Let device sign-ins request the `api` scope. Off, they are `mcp`-only. |
 | `OAUTH_DEVICE_MAX_TTL_DAYS` | `30` | Longest grant the approver may choose, days. Clamped to 1–90. |

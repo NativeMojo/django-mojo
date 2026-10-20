@@ -1132,7 +1132,7 @@ Changing any of them needs a restart.
   device authorization grant for headless clients. Off, `device_authorization`
   and the verification page 404, the token endpoint refuses the device grant, and
   discovery does not advertise it.
-- `OAUTH_DEVICE_CODE_TTL` — int seconds, default `600`, minimum `60`. How long a
+- `OAUTH_DEVICE_CODE_TTL` — int seconds, default `600`, clamped to `60`–`1800`. How long a
   device request waits for a person to approve it.
 - `OAUTH_DEVICE_INTERVAL` — int seconds, default `5`, minimum `1`. Minimum wait
   between a device client's token polls; each `slow_down` adds 5 more.

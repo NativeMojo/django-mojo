@@ -58,11 +58,11 @@ def _registry(state=None, prefix=False):
     return registry
 
 
-def _request(data, ip, user=None, token=None, bearer="bearer"):
+def _request(data, ip, user=None, token=None, bearer="bearer", meta=None):
     from django.test import RequestFactory
     from objict import objict
 
-    request = RequestFactory().post("/api/account/oauth/device", data)
+    request = RequestFactory().post("/api/account/oauth/device", data, **(meta or {}))
     request.DATA = objict.fromdict(data)
     request.ip = ip
     request.user_agent = "testit-agent/1.0"
@@ -102,13 +102,13 @@ def _clear_counters(user):
     get_connection().delete(*keys)
 
 
-def _start(ip, cfg=None, registry=None, **data):
+def _start(ip, cfg=None, registry=None, meta=None, **data):
     from mojo.apps.account.services.oauth_server import device
 
     payload = {"client_id": _client_id(), "resource": RESOURCE}
     payload.update(data)
     payload = {k: v for k, v in payload.items() if v is not None}
-    return device.start(_request(payload, ip), ORIGIN,
+    return device.start(_request(payload, ip, meta=meta), ORIGIN,
                         registry=registry or _registry(), cfg=cfg or _cfg())
 
 
@@ -492,6 +492,8 @@ def test_lookup_facts(opts):
                 f"the request's age must be shown, got {facts['requester']['age_seconds']}")
     assert_true(facts["network_mismatch"],
                 "a different network than the approver's must be flagged")
+    assert_true(not facts["started_in_browser"],
+                "a request with no browser fetch metadata came from a device")
     assert_true(facts["missing_permission"],
                 "a person without view_admin or assistant must be warned the tool "
                 "door will refuse them")
@@ -631,3 +633,64 @@ def test_device_page(opts):
 
     assert_eq(_get({}, _cfg(enabled=False)).status_code, 404,
               "with the flow off the page must not be available")
+
+
+@th.tier("core")
+@th.django_unit_test("a request a web page started is flagged on the consent screen")
+def test_browser_started_request_is_flagged(opts):
+    from mojo.apps.account.services.oauth_server import device
+
+    # The phishing shape: the victim's own browser calls device_authorization
+    # from the attacker's page, so the requester facts are the victim's.
+    ip = IPS[10]
+    user = _user()
+    for meta, why in (({"HTTP_ORIGIN": "https://phish.example"}, "an Origin header"),
+                      ({"HTTP_SEC_FETCH_MODE": "cors"}, "Sec-Fetch-Mode"),
+                      ({"HTTP_SEC_FETCH_SITE": "cross-site"}, "Sec-Fetch-Site")):
+        started = _start(ip, meta=meta)
+        request = _request({"user_code": started["user_code"]}, ip, user=user,
+                           token=_session_token(user))
+        facts = device.lookup(request, ORIGIN, registry=_registry(), cfg=_cfg(),
+                              geo_lookup=lambda _ip: "")
+        assert_true(facts["started_in_browser"],
+                    f"a request carrying {why} must be flagged as started by a web page")
+        assert_true(not facts["network_mismatch"],
+                    "the phishing shape shows the approver's own network — which is "
+                    "exactly why the browser flag, not the network check, must catch it")
+
+
+@th.django_unit_test("ending a person's sessions cancels an approval the device has not collected")
+def test_end_sessions_cancels_uncollected_approval(opts):
+    from mojo.apps.account.models import OAuthGrant
+    from mojo.apps.account.services.oauth_server import tokens
+
+    ip = IPS[11]
+    other = _user(OTHER_USER)
+    OAuthGrant.objects.filter(user=other).delete()
+    started = _start(ip)
+    _approve(started["user_code"], ip, user=other)
+
+    tokens.revoke_all_grants(user=other, reason="sessions_ended")
+    _rewind_poll(started["device_code"])
+    assert_eq(_poll_error(started["device_code"], ip), "access_denied",
+              "after the person ends their sessions, the device's next poll must "
+              "be refused rather than mint a grant the sweep never saw")
+    assert_eq(OAuthGrant.objects.filter(user=other).count(), 0,
+              "no grant may be created after the sweep")
+
+
+@th.django_unit_test("failed lookups from IPv6 count against the whole /64")
+def test_ipv6_failures_bucket_by_64(opts):
+    from objict import objict
+    from mojo.apps.account.services.oauth_server import device
+
+    def _key(ip):
+        request = objict(ip=ip, META={}, user=objict(pk=1))
+        return device._failure_keys(request)[1]
+
+    assert_eq(_key("2001:db8:1:2::1"), _key("2001:db8:1:2:ffff:ffff:ffff:fffe"),
+              "two addresses in one /64 must share a failure counter")
+    assert_true(_key("2001:db8:1:2::1") != _key("2001:db8:1:3::1"),
+                "different /64s must not share a failure counter")
+    assert_true(_key("198.51.100.1") != _key("198.51.100.2"),
+                "IPv4 addresses keep their own counters")

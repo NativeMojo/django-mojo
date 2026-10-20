@@ -477,6 +477,24 @@ def _log_bulk_revocation(owners, actor, reason="admin"):
                 "oauth: could not write the bulk grant_revoked audit line")
 
 
+def _cancel_uncollected_device_approvals(user, paths):
+    """Turn this person's approved-but-unpolled device codes into denials.
+
+    An approval becomes a grant only when the device next polls. Without this,
+    a person who approves a phishing request and then signs out everywhere
+    would still hand the attacker a grant on that next poll — minted after the
+    sweep, under the new key, and so untouched by it.
+    """
+    from mojo.apps.account.models.oauth_device_code import OAuthDeviceCode
+
+    pending = OAuthDeviceCode.objects.filter(user=user, status="approved")
+    pks = [pk for pk, resource in pending.values_list("pk", "resource")
+           if _has_path(resource, paths)]
+    if pks:
+        OAuthDeviceCode.objects.filter(pk__in=pks, status="approved").update(
+            status="denied")
+
+
 def revoke_all_grants(actor=None, user=None, resource_path=None, reason="admin"):
     """Revoke every live grant (optionally one user's, or given resource paths).
 
@@ -494,6 +512,8 @@ def revoke_all_grants(actor=None, user=None, resource_path=None, reason="admin")
     from mojo.apps.account.models.oauth_grant import OAuthGrant
 
     paths = _paths(resource_path)
+    if user is not None:
+        _cancel_uncollected_device_approvals(user, paths)
     query = OAuthGrant.objects.filter(is_active=True)
     if user is not None:
         query = query.filter(user=user)

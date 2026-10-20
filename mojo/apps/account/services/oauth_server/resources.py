@@ -269,7 +269,9 @@ def device_flow_enabled():
 
 
 def device_code_ttl():
-    return max(60, _static_int("OAUTH_DEVICE_CODE_TTL", 600))
+    # Capped as well as floored: a pending code is the window for both
+    # phishing and guessing, so no setting may leave one open for hours.
+    return max(60, min(1800, _static_int("OAUTH_DEVICE_CODE_TTL", 600)))
 
 
 def device_interval():

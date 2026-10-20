@@ -17,6 +17,9 @@ it is delivered. What stands against it here, all in one module:
   * the page shows facts about the REQUESTING machine — its IP, location, user
     agent and the request's age — and warns when that network is not the
     approver's own;
+  * a request a web page started (it carries browser fetch metadata) gets a
+    loud warning instead, because then those facts describe the victim's own
+    browser, not a device;
   * a pre-filled code is never approved without the person pressing Approve on
     a screen that repeats it;
   * approval needs an interactive session (the REST layer adds a fresh login);
@@ -145,8 +148,22 @@ def _request_ip(request):
 
 
 def _request_ua(request):
+    # The requester chooses this string, so the page labels it as the device's
+    # own claim and keeps it short enough not to read as an endorsement.
     raw = getattr(request, "user_agent", None) or request.META.get("HTTP_USER_AGENT", "")
-    return clients.clean_text(str(raw or ""), limit=512)
+    return clients.clean_text(str(raw or ""), limit=120)
+
+
+def _from_browser(request):
+    """True when a web page, not a device, sent this request.
+
+    Browsers stamp cross-site and same-site fetches with `Origin` and the
+    `Sec-Fetch-*` headers; a CLI or an agent sends neither. Nothing is refused
+    on it — the page warns the approver (Ian, 2026-10-20).
+    """
+    meta = request.META
+    return bool(meta.get("HTTP_ORIGIN") or meta.get("HTTP_SEC_FETCH_MODE")
+                or meta.get("HTTP_SEC_FETCH_SITE"))
 
 
 # --- 1. the client starts a request ---------------------------------------
@@ -192,7 +209,8 @@ def start(request, origin, registry=None, cfg=None):
                     interval=cfg.interval,
                     expires=now + datetime.timedelta(seconds=cfg.code_ttl),
                     requester_ip=_request_ip(request)[:45] or None,
-                    requester_ua=_request_ua(request))
+                    requester_ua=_request_ua(request),
+                    requester_browser=_from_browser(request))
             user_code = candidate
             break
         except IntegrityError:
@@ -243,8 +261,13 @@ def _require_session(request):
 
 
 def _failure_keys(request):
+    # IPv6 is counted per /64: one host can rotate through a whole /64, so a
+    # per-address key would leave only the per-person cap standing.
+    ip = _request_ip(request)
+    network = _network(ip)
+    bucket = str(network.network_address) if network and network.version == 6 else ip
     return (f"oauth:device:fail:user:{request.user.pk}",
-            f"oauth:device:fail:ip:{_request_ip(request) or 'unknown'}")
+            f"oauth:device:fail:ip:{bucket or 'unknown'}")
 
 
 def _check_failures(request):
@@ -350,6 +373,7 @@ def _consent_facts(request, row, normalized, cfg):
             "age_seconds": max(0, int((now - row.created).total_seconds())),
         },
         "network_mismatch": _different_network(row.requester_ip, _request_ip(request)),
+        "started_in_browser": bool(row.requester_browser),
         # The tool door also requires one of these at request time; saying so
         # now saves the person approving a connection that cannot work.
         "missing_permission": (
@@ -503,26 +527,50 @@ def poll(request, origin, registry=None, cfg=None):
     if row.status == "denied":
         raise DeviceError("access_denied", "the request was denied")
 
-    # Approved. Single use is settled by rowcount: a concurrent poll that loses
-    # gets invalid_grant rather than a second grant.
-    burned = OAuthDeviceCode.objects.filter(
-        pk=row.pk, status="approved").update(status="consumed")
-    if burned != 1:
-        raise DeviceError("invalid_grant", "invalid device code")
-    user = row.user
-    if user is None or not user.is_active:
-        raise DeviceError("invalid_grant", "invalid device code")
-    entry = resources.resolve(resources.resource_path(row.resource), registry)
-    if entry is None or not resources.is_enabled(entry, registry):
-        raise DeviceError("invalid_grant", "invalid device code")
+    return _consume(row, client, registry, cfg)
 
-    days = min(row.grant_ttl_days or lifetime_options(cfg)[0],
-               resources.DEVICE_MAX_TTL_CEILING)
-    scopes = [token for token in (row.scope or "").split() if token]
-    grant = tokens.create_grant(
-        user, client, scopes, row.resource, row.auth_time,
-        flow="device_code", ttl_days=days)
-    OAuthDeviceCode.objects.filter(pk=row.pk).update(grant=grant)
+
+def _consume(row, client, registry, cfg):
+    """Spend an approved device code on exactly one grant.
+
+    Burn, grant and link commit together, so a concurrent poll waits on the
+    burn's row lock and then finds the code consumed WITH its grant attached.
+    Losing that race is therefore treated as what it is — a second presenter
+    of a single-use secret — and goes through the replay path, instead of
+    leaving whichever poll won holding the grant unremarked.
+    """
+    from mojo.apps.account.models.oauth_device_code import OAuthDeviceCode
+
+    lost = refused = False
+    grant = None
+    with transaction.atomic():
+        burned = OAuthDeviceCode.objects.filter(
+            pk=row.pk, status="approved").update(status="consumed")
+        user = row.user
+        entry = resources.resolve(resources.resource_path(row.resource), registry)
+        if burned != 1:
+            lost = True
+        elif (user is None or not user.is_active or entry is None
+              or not resources.is_enabled(entry, registry)):
+            # The account or the resource was switched off after approval.
+            # The code stays spent — only the grant is withheld.
+            refused = True
+        else:
+            days = min(row.grant_ttl_days or lifetime_options(cfg)[0],
+                       resources.DEVICE_MAX_TTL_CEILING)
+            scopes = [token for token in (row.scope or "").split() if token]
+            grant = tokens.create_grant(
+                user, client, scopes, row.resource, row.auth_time,
+                flow="device_code", ttl_days=days)
+            OAuthDeviceCode.objects.filter(pk=row.pk).update(grant=grant)
+    if refused:
+        raise DeviceError("invalid_grant", "invalid device code")
+    if lost:
+        current = OAuthDeviceCode.objects.filter(
+            pk=row.pk).select_related("user", "grant").first()
+        if current is not None and current.status == "consumed":
+            _replay(current)
+        raise DeviceError("invalid_grant", "invalid device code")
     try:
         return tokens.issue_tokens(grant)
     except tokens.RotationLost:

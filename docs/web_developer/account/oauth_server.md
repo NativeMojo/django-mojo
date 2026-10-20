@@ -559,7 +559,13 @@ and for what, before offering Approve and Deny. **A code in the URL only
 pre-fills the box — nothing is approved until the person presses Approve.** To
 help them spot a request they did not start, the page shows where it came from:
 
-- the requesting machine's **IP address, approximate location and user agent**,
+- a **loud warning** when a web page, not a device, started the request (it
+  arrived with browser `Origin` / `Sec-Fetch-*` headers). Then the address and
+  location shown are the person's own browser and prove nothing — the shape of a
+  phishing link. Nothing is refused; the person is told to deny it if a website
+  sent them there;
+- the requesting machine's **IP address, approximate location and user agent**
+  (labelled as the device's own description of itself, at most 120 characters),
   and how long ago it asked;
 - a **warning** when that machine is on a different network (a different `/24`
   for IPv4, `/64` for IPv6) from the one the person is using now;
@@ -598,7 +604,7 @@ anything. Responses use the normal `{status, code, data}` envelope.
 | `400` | The code is unknown, expired, already answered, or malformed — one message for all of them. Or `ttl_days` is not an offered option. |
 | `401` / `403` | No session, an API key or group token, or not an ordinary session token. |
 | `404` | The flow is switched off. |
-| `429` | Too many wrong codes. About **5 per person** and **20 per IP** in 15 minutes, after which every call (right code or wrong) is refused until the window passes. |
+| `429` | Too many wrong codes. About **5 per person** and **20 per IP** (per `/64` for IPv6) in 15 minutes, after which every call (right code or wrong) is refused until the window passes. |
 | `440` | `approve` only: the sign-in is older than 600 seconds. Sign in again and retry with the same code. |
 
 ---

@@ -50,6 +50,11 @@ class OAuthDeviceCode(models.Model, MojoModel):
     requester_ip = models.CharField(max_length=45, null=True, blank=True)
     requester_ua = models.CharField(max_length=512, default="", blank=True)
     requester_geo = models.CharField(max_length=200, default="", blank=True)
+    # The request arrived with browser fetch metadata (Origin / Sec-Fetch-*):
+    # a web page started it, not a device. Approving one is how a phishing
+    # site turns the victim's own browser into the "requester", so the page
+    # says so loudly instead of showing those facts as reassurance.
+    requester_browser = models.BooleanField(default=False)
 
     auth_time = models.BigIntegerField(default=0)
     approved_at = models.DateTimeField(null=True, default=None)
@@ -71,7 +76,8 @@ class OAuthDeviceCode(models.Model, MojoModel):
             "default": {
                 "fields": [
                     "id", "scope", "resource", "status", "expires",
-                    "requester_ip", "requester_geo", "approved_at",
+                    "requester_ip", "requester_geo", "requester_browser",
+                    "approved_at",
                     "grant_ttl_days", "created",
                 ],
             },
