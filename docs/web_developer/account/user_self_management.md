@@ -1742,6 +1742,8 @@ POST /api/filevault/file/<id>/unlock
 
 Then `GET /api/filevault/file/download/<token>`.
 
+Uploading needs active membership of the request's group.
+
 See [FileVault docs](../filevault/README.md) for the full reference.
 
 ---
@@ -1935,7 +1937,7 @@ Refresh the user profile to pick up the updated `is_email_verified` or
 | Record a browser sign-out (audit only) | POST | `/api/account/security-events/logout` | Required |
 | List own files | GET | `/api/fileman/file` | Required |
 | Delete own file | DELETE | `/api/fileman/file/<id>` | Required |
-| Upload encrypted file | POST | `/api/filevault/file/upload` | Required |
+| Upload encrypted file | POST | `/api/filevault/file/upload` | Required + group membership |
 | Download encrypted file (get token) | POST | `/api/filevault/file/<id>/unlock` | Required |
 | View own activity log | GET | `/api/logs` | Required + `view_logs` |
 | Generate QR code | GET/POST | `/api/qrcode` | Public |

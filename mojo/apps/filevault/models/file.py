@@ -143,11 +143,13 @@ class VaultFile(models.Model, MojoModel):
             except Exception:
                 request = None
 
+        group_from_request = False
         if request is not None:
             if user is None:
                 user = getattr(request, "user", None)
             if group is None:
                 group = getattr(request, "group", None)
+                group_from_request = group is not None
             if password is None and hasattr(request, "DATA"):
                 password = request.DATA.get("password", None)
             if description is None and hasattr(request, "DATA"):
@@ -166,6 +168,8 @@ class VaultFile(models.Model, MojoModel):
 
         filename = getattr(file, "name", None) or name
         from mojo.apps.filevault.services import vault as vault_service
+        if group_from_request:
+            vault_service.require_group_writer(request, group)
         return vault_service.upload_file(
             file_obj=file,
             name=filename,

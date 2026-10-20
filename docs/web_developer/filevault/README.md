@@ -7,6 +7,7 @@ FileVault stores files with AES-256-GCM encryption. Files are group-scoped and a
 ## Permissions
 
 - `view_vault` or `manage_vault` — list/view/update/delete vault files within your group
+- **Upload and store** — `file/upload` and `data/store` need active membership of the request's group (parents included) or a global `manage_vault`, `files` or `manage_files` grant. A non-member gets `403` and nothing is saved. API keys and group tokens are confined to their own groups as elsewhere.
 - **Owner or group member, per file** — `unlock` and `password` additionally check that you own the specific file or belong to its group holding `view_vault`/`manage_vault`. Holding the permission alone does not let you reach another group's file by guessing its id — a mismatched id returns `403`.
 
 ## Endpoints
@@ -25,7 +26,8 @@ FileVault stores files with AES-256-GCM encryption. Files are group-scoped and a
 
 **POST** `/api/filevault/file/upload` (multipart/form-data)
 
-Requires `?group=<id>` or group in request context.
+Requires `?group=<id>` or group in request context, and active membership of
+that group (or a global vault or files grant).
 
 ```bash
 curl -X POST \

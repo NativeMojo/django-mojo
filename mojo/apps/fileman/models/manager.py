@@ -15,6 +15,12 @@ from mojo.helpers.aws.provider_call import safe_error_detail
 # "not resolved yet" for the per-instance CDN cache; None is a real answer.
 _CDN_UNRESOLVED = object()
 
+# A storage purpose (`use`) goes into the storage path, so it must be a plain
+# short name: no dot, slash, backslash, space or wildcard (#7981).
+USE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+# Purposes server code owns; a request may not select them.
+FILEMAN_RESERVED_USES = ("filevault",)
+
 class FileManager(MojoSecrets, MojoModel):
     """
     File manager configuration for different storage backends and upload strategies
@@ -964,14 +970,35 @@ class FileManager(MojoSecrets, MojoModel):
         major = mime_type.split("/", 1)[0] + "/*"
         return mime_type in allowed or major in allowed
 
-    def authorize_for_upload(self, request):
-        """Fail closed unless the request may use this exact manager scope."""
+    @classmethod
+    def clean_use(cls, value, from_request=False):
+        """A storage purpose as a plain short name, or "" for none.
+
+        It goes into the storage path, so anything else is refused (400). A
+        purpose server code owns is refused (403) when it comes from a request.
+        """
+        if value is None or value == "":
+            return ""
+        # fullmatch on the value as sent: `$` alone would let a final newline through.
+        if not isinstance(value, str) or not USE_RE.fullmatch(value):
+            raise me.ValueException("use must be 1-64 letters, digits, '_' or '-'")
+        if from_request and value in FILEMAN_RESERVED_USES:
+            raise me.PermissionDeniedException("File manager is unavailable")
+        return value
+
+    @staticmethod
+    def _require_upload_session(request):
         from mojo.helpers.request import is_key_backed_session, is_request_user, restricted_identity
 
         actor = getattr(request, "user", None)
         if (actor is None or not is_request_user(request)
                 or is_key_backed_session(request) or restricted_identity(request) is not None):
             raise me.PermissionDeniedException("A real user session is required for uploads")
+        return actor
+
+    def authorize_for_upload(self, request):
+        """Fail closed unless the request may use this exact manager scope."""
+        actor = self._require_upload_session(request)
         if not self.is_active:
             raise me.PermissionDeniedException("File manager is unavailable")
         if self.group_id and not self.group.is_effectively_active():
@@ -981,7 +1008,8 @@ class FileManager(MojoSecrets, MojoModel):
         supplied_use = "use" in request.DATA or "fileman_use" in request.DATA or "file_manager_use" in request.DATA
         if supplied_group and (request.group is None or self.group_id != request.group.id):
             raise me.PermissionDeniedException("File manager scope does not match the request")
-        requested_use = request.DATA.get(["use", "fileman_use", "file_manager_use"], "")
+        requested_use = self.clean_use(
+            request.DATA.get(["use", "fileman_use", "file_manager_use"], ""), from_request=True)
         if supplied_use and self.use != requested_use:
             raise me.PermissionDeniedException("File manager purpose does not match the request")
 
@@ -1002,6 +1030,9 @@ class FileManager(MojoSecrets, MojoModel):
     @classmethod
     def resolve_for_upload(cls, request):
         """Resolve selectors and apply the upload authorization truth table."""
+        # Before resolution: a key-backed session must never cause storage to
+        # be created on the upload route.
+        cls._require_upload_session(request)
         if "user" in request.DATA or "user_id" in request.DATA:
             raise me.PermissionDeniedException("A user upload scope cannot be selected")
         fm_id = request.DATA.get(["fileman", "filemanager", "file_manager", "manager", "file_manager_id"])
@@ -1092,7 +1123,8 @@ class FileManager(MojoSecrets, MojoModel):
         if "group" in request.DATA or manager.group_id is None or manager.user_id is not None:
             manager.authorize_for_upload(request)
             return manager
-        requested_use = request.DATA.get(["use", "fileman_use", "file_manager_use"], "")
+        requested_use = cls.clean_use(
+            request.DATA.get(["use", "fileman_use", "file_manager_use"], ""), from_request=True)
         supplied_use = any(key in request.DATA for key in ("use", "fileman_use", "file_manager_use"))
         if supplied_use and manager.use != requested_use:
             raise me.PermissionDeniedException("File manager purpose does not match the request")
@@ -1122,6 +1154,8 @@ class FileManager(MojoSecrets, MojoModel):
         # Before _update_default: a refused save must write nothing. The key
         # defaults below cannot change the answer — a created store with no
         # key of its own is on platform credentials either way.
+        if "use" in changed_fields or (created and self.use):
+            self.use = self.clean_use(self.use)
         self._require_superuser_for_platform_role(created)
         self._require_contained_storage(created)
         self._require_cdn_admin_for_settings(created)
@@ -1621,10 +1655,97 @@ class FileManager(MojoSecrets, MojoModel):
         fm_id = request.DATA.get(["fileman", "filemanager", "file_manager", "manager", "file_manager_id"])
         if fm_id:
             return cls._authorize_named_manager(request, fm_id)
-        use = request.DATA.get(["use", "fileman_use", "file_manager_use"], "")
-        if getattr(request.DATA, "use_groups_fileman", False) and request.group:
-            return cls.get_for_user_group(group=request.group, use=use)
-        return cls.get_for_user_group(user=request.user, group=request.group, use=use)
+        use = cls.clean_use(
+            request.DATA.get(["use", "fileman_use", "file_manager_use"], ""), from_request=True)
+        group = getattr(request, "group", None)
+        if not group:
+            return cls.get_for_user_group(user=request.user, use=use)
+        existing = cls._existing_for_group(group, use)
+        if existing is not None:
+            return existing
+        # Nothing exists yet: refuse before get_for_group writes any row
+        # (or the group's uuid) for a caller who may not create it.
+        if not cls._may_create_for(request, group):
+            raise me.PermissionDeniedException(
+                reason="File manager is unavailable",
+                model_name="FileManager",
+                event_type="user_permission_denied",
+                branch="fileman_create_denied",
+            )
+        return cls.get_for_group(group=group, use=use)
+
+    @classmethod
+    def _may_create_for(cls, request, group, inline=False):
+        """Whether this request may cause storage to be created for `group`.
+
+        A person: an active member of the group (parents walked), or a holder
+        of a global `manage_files`/`files` grant; on the inline path a global
+        `manage_groups`/`groups` grant too. An ApiKey or group token: on the
+        general file endpoint the SAVE_PERMS check it gets after resolution;
+        on the inline path the dispatcher's own bound (`is_group_allowed`).
+        """
+        from mojo.helpers.request import is_request_user, restricted_identity
+
+        ident = restricted_identity(request)
+        if ident is not None:
+            if inline:
+                return ident.is_group_allowed(group)
+            original_group = getattr(request, "group", None)
+            try:
+                return cls.rest_check_permission(
+                    request, "SAVE_PERMS", cls(group=group, user=None))
+            finally:
+                request.group = original_group
+        actor = getattr(request, "user", None)
+        if actor is None or not is_request_user(request):
+            return False
+        perms = ["manage_files", "files"]
+        if inline:
+            perms += ["manage_groups", "groups"]
+        if actor.has_permission(perms):
+            return True
+        return group.get_member_for_user(actor, check_parents=True) is not None
+
+    def require_write_right(self, request, inline=False):
+        """The upload rule for a write that names no storage in its body.
+
+        The actor part of `authorize_for_upload` without its body-selector
+        comparisons. An ApiKey or group token may write to group storage in a
+        group it covers, and a key acting as a member to that member's own
+        storage, as `_authorize_named_manager` allows.
+        """
+        from mojo.helpers.request import (
+            is_override_user_session, is_request_user, restricted_identity)
+
+        unavailable = me.PermissionDeniedException("File manager is unavailable")
+        if not self.is_active:
+            raise unavailable
+        if self.group_id and not self.group.is_effectively_active():
+            raise unavailable
+        ident = restricted_identity(request)
+        if ident is not None:
+            if self.group_id is not None and self.user_id is None:
+                if ident.is_group_allowed(self.group):
+                    return
+            elif (self.user_id is not None and self.group_id is None
+                  and is_override_user_session(request)
+                  and self.user_id == getattr(request.user, "id", None)):
+                return
+            raise unavailable
+        actor = getattr(request, "user", None)
+        if actor is None or not is_request_user(request):
+            raise unavailable
+        perms = ["manage_files", "files"]
+        if inline:
+            perms += ["manage_groups", "groups"]
+        if actor.has_permission(perms):
+            return
+        if self.user_id is None and self.group_id is None:
+            raise me.PermissionDeniedException("Global file storage permission is required")
+        if self.user_id is not None and self.user_id != actor.id:
+            raise unavailable
+        if self.group_id is not None and self.group.get_member_for_user(actor, check_parents=True) is None:
+            raise me.PermissionDeniedException("Active group membership is required")
 
     @classmethod
     def get_for_user(cls, user):
@@ -1673,18 +1794,22 @@ class FileManager(MojoSecrets, MojoModel):
         return file_manager
 
     @classmethod
+    def _existing_for_group(cls, group, use=""):
+        # Prefer a manager matching the specific use if provided; otherwise default group manager
+        if use != "":
+            return cls.objects.filter(
+                user=None, group=group, use=use, is_active=True
+            ).first()
+        return cls.objects.filter(
+            user=None, group=group, use=use, is_default=True, is_active=True
+        ).first()
+
+    @classmethod
     def get_for_group(cls, group=None, use=""):
         from django.db import transaction, IntegrityError
 
-        # Prefer a manager matching the specific use if provided; otherwise default group manager
-        if use != "":
-            file_manager = cls.objects.filter(
-                user=None, group=group, use=use, is_active=True
-            ).first()
-        else:
-            file_manager = cls.objects.filter(
-                user=None, group=group, use=use, is_default=True, is_active=True
-            ).first()
+        use = cls.clean_use(use)
+        file_manager = cls._existing_for_group(group, use)
 
         if file_manager is None:
             sys_manager = cls.objects.filter(
