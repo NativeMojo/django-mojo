@@ -46,7 +46,7 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 
 | Field | Description |
 |---|---|
-| `is_whitelisted` | Whitelisted IPs are never blocked, even by auto-escalation |
+| `is_whitelisted` | Whitelisted IPs are never blocked, even by auto-escalation, and are carved out of operator, country and feed sets |
 | `whitelisted_reason` | Why this IP is whitelisted |
 | `whitelisted_until` | When the whitelist expires (`null` = permanent) — mirrors `blocked_until`. An expired whitelist stops suppressing blocks and stops exempting geofence. |
 
@@ -139,6 +139,7 @@ geo.block(reason="repeat_offender")             # Permanent block (no ttl)
 - `block_checked()` returns `status`, `ok`, `owned`, `generation`, `outcome`, and bounded error/evidence fields. Security decisions require `status="verified"`, `ok=true`, and `owned=true`.
 - `block()` preserves the legacy boolean signature: `True` means the desired write was accepted or already desired, not that fleet enforcement verified. Use `block_checked()` whenever the result governs a success transition.
 - Returns `False` if the IP is whitelisted (whitelisting always wins)
+- Refuses unsafe targets before anything is written: `block_checked()` returns `outcome="refused"` with `error.code` `non_global_address`, `protected_config_invalid`, `mojosec_protected_cidrs`, `mojosec_trusted_proxy_cidrs` or `whitelisted` (and `block()` returns `False`). See [Target safety](../deploy/firewall.md#target-safety)
 - `ttl` in seconds. `None` or `0` = permanent (no auto-unblock)
 - `broadcast=False` writes desired-only pending state and returns `unknown` from the checked method
 - Always escalates `threat_level` to at least `high` atomically in the same UPDATE — never downgrades. This ensures every block entry point (admin REST, LLM agent, rule-engine handler, asyncjobs, manual) feeds the federation signal loop without extra code at each call site.

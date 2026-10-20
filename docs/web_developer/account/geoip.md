@@ -125,6 +125,13 @@ Actions are gated by the model's `SAVE_PERMS`: `manage_users`,
 `manage_security`, or `security` — and the combined `users` term (it includes
 `manage_users` by definition).
 
+`block` refuses an address the server must never block, with
+`outcome: "refused"` and `error.code` one of `non_global_address` (private,
+internal, multicast or documentation ranges), `mojosec_protected_cidrs`,
+`mojosec_trusted_proxy_cidrs`, `whitelisted` or `protected_config_invalid`
+(the server's protection settings need fixing). Nothing is changed. Show the
+code to the operator; retrying will not help.
+
 `block`, `unblock`, `whitelist`, and `unwhitelist` return their checked result
 in `action_response`. Treat firewall enforcement as successful only when it has
 `status="verified"`, `ok=true`, and `owned=true`; partial/unknown results leave

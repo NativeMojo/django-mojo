@@ -104,6 +104,55 @@ their safe name; their old IPv6 or malformed member lists are not loaded.
 Present sets still require canonical IPv4 data. Model/save validation is
 unchanged.
 
+## Target safety
+
+No framework path may put a DROP for an unsafe address into the kernel. One
+predicate, `mojo/apps/incident/services/block_safety.py`, decides what is
+unsafe, and it runs at three boundaries:
+
+| Boundary | Where | What happens to an unsafe target |
+|---|---|---|
+| Desired-state write | `GeoLocatedIP._block_checked_locked`, reached by `block`, `block_checked`, the REST `block` action, threat escalation, the `block://` handler, the LLM and assistant tools and MojoSec execution | Refused with its code: no row write, no fence, no push-back, no dispatch |
+| Desired-state build | `firewall_truth.permanent_snapshot`, `geolocated_snapshot_from_row`, `ipset_snapshot_from_row` | A blocked row is planned absent and flagged `firewall_sync_error="unsafe_target: <code>"`, keeping `is_blocked` so an operator can see and unblock it. A set keeps only its safe networks |
+| Dispatch | every present-direction call in `mojo/apps/incident/firewall.py`, the only caller of the root broker | Refused with `{"ok": false, "error": {"code": ...}}` and no broker request. It never repairs. Unblocks and set removals are never refused |
+
+Unsafe, with the refusal code, checked in this order:
+
+| Code | Meaning |
+|---|---|
+| `invalid_network` | Not an address |
+| `unsupported_family` | IPv6 (unchanged) |
+| `non_global_address` | In the pinned table `NON_GLOBAL_V4`: 0/8, 10/8, 100.64/10, 127/8, 169.254/16, 172.16/12, 192.0.0/24, 192.0.2/24, 192.168/16, 198.18/15, 198.51.100/24, 203.0.113/24, 224/4 and 240/4. It is pinned because `ipaddress.is_global` differs between Python versions |
+| `protected_config_invalid` | `MOJOSEC_PROTECTED_CIDRS` or `MOJOSEC_TRUSTED_PROXY_CIDRS` is malformed |
+| `mojosec_protected_cidrs` | Inside `MOJOSEC_PROTECTED_CIDRS` |
+| `mojosec_trusted_proxy_cidrs` | Inside `MOJOSEC_TRUSTED_PROXY_CIDRS` |
+| `whitelisted` | An active whitelist |
+
+Both CIDR settings are file-only and take a list or a comma-separated string of
+at most 64 IPv4 CIDRs; unset or empty means none. Anything else refuses every
+new block, logged with the setting's name. While it is malformed, sync sends no
+present-direction firewall request, so existing kernel state stays as it is
+until the setting is fixed.
+
+**Sets are carved, not refused.** Operator, country and feed sets lose the
+unsafe ranges and every actively whitelisted address before they reach the
+kernel; the rest of the set still blocks. The stored `IPSet.data` keeps the
+operator's list, and the planned count and digest describe what is kept, so
+verification stays truthful. A carve-out is logged and counted as
+`firewall:ipset_carved`. One that would leave more than 250,000 networks
+refuses with `network_limit` rather than truncating. `whitelist()` and
+`unwhitelist()` publish a firewall sync so the carve-out follows at once;
+whitelist expiry is picked up by the hourly sync, and the stale window errs
+toward not blocking.
+
+Upgrading changes enforcement in two ways:
+
+- Blocked rows for non-global, protected or proxy addresses stop being enforced
+  at the next sync and are flagged `unsafe_target`.
+- Sets stop matching protected ranges and actively whitelisted addresses. For
+  example, a whitelisted partner address in a blocked country is no longer
+  dropped by the country set.
+
 ## Deployment and rollback
 
 Deployment retains the stdlib-only `firewall_deploy.py` alongside its previous
