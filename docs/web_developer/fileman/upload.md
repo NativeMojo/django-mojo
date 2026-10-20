@@ -32,6 +32,8 @@ Use this for all uploads. It works for any file size, keeps the API server free,
 ```
 
 Optional selectors are `file_manager` (id), `group` (id), and `use` (string).
+`use` must be 1-64 letters, digits, `_` or `-`, starting with a letter or digit
+(anything else is a 400), and `filevault` is reserved (403).
 Do not send `user` or `metadata`. The filename is reduced to a basename, size
 must be a nonnegative integer (booleans are invalid), and the manager's size,
 extension, and MIME policies are checked before a capability is created.
@@ -196,6 +198,12 @@ Do not use this for anything large or frequently uploaded. Base64 encoding infla
 
 The `avatar` field must be a `ForeignKey` to `fileman.File` on the model.
 
+When the inline file lands in a group's storage (the request's `group`, or
+the scope the model names), the caller needs active membership of that group
+or a global `manage_files`/`files` grant. A global `manage_groups`/`groups`
+grant also passes on this path. Otherwise the request gets 403 and nothing is
+written. A user avatar goes to the caller's own storage and is unaffected.
+
 ---
 
 ## Upload Status Values
@@ -231,6 +239,15 @@ which they have active direct/inherited membership, or a dual-scope manager
 where both constraints match. System-scoped managers require global
 `manage_files`/`files`. API keys and group-scoped tokens cannot initiate
 uploads. Inactive managers and effectively inactive groups fail closed.
+
+Group members may upload to their group's storage, **including public,
+CDN-served storage**. When a group has no storage yet for the default or for
+a `use`, only an active member (parents included) or a global file admin
+causes it to be created. A non-member gets 403 before anything is written.
+
+On S3, `supports_direct_upload` does not change the transfer: without
+server-side encryption the target is a presigned `PUT` URL; with it, a
+presigned `POST` form (`upload_url` plus `fields`).
 
 ## Retry behavior
 

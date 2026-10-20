@@ -88,7 +88,10 @@ valid base64/data URL for compatibility inline creation. Numeric strings,
 booleans, zero/negative ids, objects/lists, and malformed inline data return
 400. Existing references require view access; missing and non-viewable ids both
 return `403 File unavailable`. Clear and replacement only change the relation —
-they never delete the old File.
+they never delete the old File. Inline creation into a group's storage needs
+active membership of that group or a global file grant (see
+[Base64 inline](upload.md#method-3-fallback-base64-inline)); a refusal writes
+nothing.
 
 Incident ticket notes and history entries apply additional completed/active and
 exact parent-group checks, then serialize the attached File with `reference`.
@@ -155,7 +158,13 @@ or user, and then checked:
   `403 File manager is unavailable`.
 
 The file's `group` is set to its storage's group. A refused create stores
-nothing.
+nothing. When the group has no storage yet, a key or token without `files` or
+`manage_files` there is refused before any storage is created.
+
+Replacing an existing File's bytes (`POST /api/fileman/file/<id>` with a file
+part) needs the same rule for that File's storage: an owner who is no longer an
+active member of its group gets 403 and the stored bytes are unchanged. Saves
+without a file part are unaffected.
 
 ## Delete a File
 
