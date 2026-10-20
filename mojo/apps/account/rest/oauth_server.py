@@ -30,8 +30,11 @@ from django.urls.converters import get_converters
 
 from mojo import decorators as md
 from mojo.apps.account.services.oauth_server import (
-    clients, codes, consent, device, discovery, resources, tokens,
+    clients, codes, consent, discovery, resources, tokens,
 )
+# Aliased: rest/__init__ star-imports this module, and a bare `device` would
+# shadow the sibling rest.device module on the package.
+from mojo.apps.account.services.oauth_server import device as device_flow
 
 _ROOT = resources.SERVER_PATH
 
@@ -154,8 +157,8 @@ def on_approve(request):
 @md.strict_rate_limit("oauth_device_authorization", ip_limit=10, ip_window=300)
 def on_device_authorization(request):
     try:
-        return _raw(device.start(request, resources.public_origin()))
-    except device.DeviceError as err:
+        return _raw(device_flow.start(request, resources.public_origin()))
+    except device_flow.DeviceError as err:
         if err.status == 404:
             return _not_found()
         return _oauth_error(err.code, err.description, err.status)
@@ -167,7 +170,7 @@ def on_device_authorization(request):
 @md.strict_rate_limit("oauth_device_page", ip_limit=60,
                       include_request_in_incident=False)
 def on_device_page(request):
-    return device.handle_page(request, resources.public_origin())
+    return device_flow.handle_page(request, resources.public_origin())
 
 
 # The three actions behind the page take exactly the consent page's approve
@@ -180,7 +183,7 @@ def on_device_page(request):
 @md.requires_auth()
 @md.strict_rate_limit("oauth_device_lookup", ip_limit=20)
 def on_device_lookup(request):
-    return device.lookup(request, resources.public_origin())
+    return device_flow.lookup(request, resources.public_origin())
 
 
 @md.POST(f"{_ROOT}/device/approve")
@@ -189,7 +192,7 @@ def on_device_lookup(request):
 @md.requires_fresh_auth(600)
 @md.strict_rate_limit("oauth_device_approve", ip_limit=20)
 def on_device_approve(request):
-    return device.approve(request, resources.public_origin())
+    return device_flow.approve(request, resources.public_origin())
 
 
 @md.POST(f"{_ROOT}/device/deny")
@@ -197,7 +200,7 @@ def on_device_approve(request):
 @md.requires_auth()
 @md.strict_rate_limit("oauth_device_approve", ip_limit=20)
 def on_device_deny(request):
-    return device.deny(request, resources.public_origin())
+    return device_flow.deny(request, resources.public_origin())
 
 
 # --- token issuance -------------------------------------------------------
@@ -267,8 +270,8 @@ def _refresh(request, origin):
 
 def _poll_device(request, origin):
     try:
-        return _raw(device.poll(request, origin))
-    except device.DeviceError as err:
+        return _raw(device_flow.poll(request, origin))
+    except device_flow.DeviceError as err:
         return _oauth_error(err.code, err.description, err.status)
 
 
