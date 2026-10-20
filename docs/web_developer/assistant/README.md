@@ -649,6 +649,46 @@ Users without any of these permissions will receive: `"You don't have permission
 
 If the LLM tries to call a tool the user doesn't have permission for, the tool returns a permission error to the LLM (not to the client), and the LLM explains what permission is needed.
 
+## Job History Tools
+
+`query_job_logs` and `query_job_events` both require `view_jobs`. Pass a string
+`job_id` and an optional integer `limit` (default and maximum: 50), for example
+`{"job_id": "job-id", "limit": 5}`. Each returns an array containing only that
+job's rows, newest row `created` first, or `[]` for an empty history.
+
+| Tool | Row keys | Source |
+|---|---|---|
+| `query_job_logs` | `id`, `job_id`, `level`, `message`, `created` | `level` is `JobLog.kind`; `message` is the log message or `""`, capped at 500 characters |
+| `query_job_events` | `id`, `job_id`, `kind`, `message`, `created` | `kind` is `JobEvent.event`; `message` is the actual `JobEvent.details` value serialized as compact JSON text, capped at 500 characters |
+
+`created` is the row creation timestamp as a string (not the event's `at`
+timestamp). Event JSON uses sorted keys and unescaped Unicode. A truncated
+`message` can be incomplete JSON: render it as display text rather than
+requiring it to parse. Over [MCP](mcp.md#toolscall), these arrays are JSON text
+in `content[0].text` without `structuredContent`.
+
+## Group Reader Tools
+
+Both readers require `view_groups` and an integer `group_id`.
+
+`get_group_detail({"group_id": 3})` returns an object with `id`, `name`,
+`kind`, `is_active`, `parent_id`, `member_count`, `children_count`, `metadata`,
+`created`, and `modified`. Counts include all direct memberships and direct
+children, including inactive rows, and exclude grandchildren. An empty group
+has zero counts. `metadata` includes only `timezone`, `short_name`,
+`description`, `website`, and `industry` when present.
+
+`get_group_members({"group_id": 3, "limit": 5})` returns an array of that
+group's direct memberships, including inactive memberships. Optional integer
+`limit` defaults to 50 and is capped at 50; rows are ordered by membership
+`created` descending, with `[]` when none exist. Each row contains `id`,
+`user_id`, `username`, `display_name`, `is_active`, `permissions`, and `created`
+(the membership creation timestamp as a string). `is_active` describes the
+User; `permissions` is `GroupMember.permissions`, the membership's role data.
+User account permissions, metadata, and sign-in settings are omitted. Over
+[MCP](mcp.md#toolscall), the member array is JSON text in `content[0].text`
+without `structuredContent`; the detail object also has `structuredContent`.
+
 ## Models Domain
 
 Users with `view_admin` can ask the assistant to introspect and query any MojoModel directly. Two tools support this:

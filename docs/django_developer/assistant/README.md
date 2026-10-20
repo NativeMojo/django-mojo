@@ -440,6 +440,20 @@ or override that actor context.
 | `run_job` | `manage_jobs` | Yes | Publish a new job by func+payload (fresh run) or by cloning an existing job as a template |
 | `run_scheduled_task_now` | `manage_jobs` | Yes | Immediately execute a scheduled task regardless of schedule or enabled state |
 
+`query_job_logs` and `query_job_events` require a string `job_id` and accept an
+optional integer `limit` (default and maximum: 50). Both require `view_jobs` and
+return an array containing only that job's rows, ordered by row `created`
+descending; an empty history returns `[]`.
+
+| Tool | Row keys | Model field mapping |
+|---|---|---|
+| `query_job_logs` | `id`, `job_id`, `level`, `message`, `created` | `level` is `JobLog.kind`; `message` is the log message or `""`, capped at 500 characters |
+| `query_job_events` | `id`, `job_id`, `kind`, `message`, `created` | `kind` is `JobEvent.event`; `message` is the actual `JobEvent.details` value serialized as compact JSON text, capped at 500 characters |
+
+`created` is the row creation timestamp as a string, including for events
+(not `JobEvent.at`). Event JSON uses sorted keys and unescaped Unicode.
+Truncation can leave incomplete JSON, so treat `message` as display text.
+
 ### Users Domain (`view_admin` / `manage_users`)
 
 | Tool | Permission | Mutates | Description |
@@ -471,6 +485,23 @@ inventory.
 | `get_group_detail` | `view_groups` | No |
 | `get_group_members` | `view_groups` | No |
 | `get_group_activity` | `view_groups` | No |
+
+`get_group_detail({"group_id": 3})` requires an integer `group_id` and returns
+`id`, `name`, `kind`, `is_active`, `parent_id`, `member_count`,
+`children_count`, `metadata`, `created`, and `modified`. Counts include all
+direct memberships and direct children, including inactive rows; grandchildren
+are excluded. `metadata` includes only `timezone`, `short_name`, `description`,
+`website`, and `industry` when present. An empty group has zero counts.
+
+`get_group_members({"group_id": 3, "limit": 5})` requires an integer
+`group_id`; optional integer `limit` defaults to 50 and is capped at 50. It
+returns only that group's direct membership rows, including inactive
+memberships, newest `created` first, or `[]` when none exist. Each row contains
+`id`, `user_id`, `username`, `display_name`, `is_active`, `permissions`, and
+`created` (the membership creation timestamp as a string). `is_active` describes
+the User, while `permissions` is `GroupMember.permissions`, the membership's
+role data. User account permissions, metadata, and sign-in settings are omitted.
+Both readers require `view_groups`.
 
 ### Metrics Domain (`view_metrics` / `write_metrics` / `view_admin` / `view_security`)
 
