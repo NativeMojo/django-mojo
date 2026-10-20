@@ -219,6 +219,24 @@ def _validate_parameters(data, origin, registry=None):
     except ValueError as err:
         raise RedirectableError("invalid_request", str(err))
 
+    params = validate_scope_resource(data, origin, registry)
+    return {
+        "state": state or "",
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "scope": params["scope"],
+        "granted": params["granted"],
+        "resource": params["resource"],
+        "entry": params["entry"],
+    }
+
+
+def validate_scope_resource(data, origin, registry=None):
+    """The requested scope and the resource it binds to, or RedirectableError.
+
+    Shared by the browser consent flow and the device flow, so both grant
+    exactly what the enabled resources offer and bind it by the same rule.
+    """
     raw_scope = data.get("scope")
     if isinstance(raw_scope, (list, tuple)):
         raise RedirectableError("invalid_request", "scope must be a single value")
@@ -241,13 +259,26 @@ def _validate_parameters(data, origin, registry=None):
 
     entry, resource = _resolve_resource(origin, data, granted, registry)
     return {
-        "state": state or "",
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
         "scope": scope,
         "granted": granted,
         "resource": resource,
         "entry": entry,
+    }
+
+
+def consent_context(client, granted, resource):
+    """The facts every consent screen shows about who is asking for what.
+
+    A name is whatever the client typed, so it always sits beside the fact it
+    cannot forge: whether anything vouched for it.
+    """
+    return {
+        "client_name": client.client_name or client.client_id,
+        "client_id": client.client_id,
+        "access_lines": _access_lines(granted),
+        "requested_resource": resource,
+        "client_verified_url": client.client_id if client.kind == "cimd" else "",
+        "client_unverified": client.kind != "cimd",
     }
 
 
@@ -266,10 +297,10 @@ def _page_context(request, extra=None):
     return ctx
 
 
-def _render(request, ctx, status=200):
+def _render(request, ctx, status=200, template="account/oauth_consent.html"):
     from mojo.apps.account.rest.bouncer.views import _render_with_csp
 
-    response = _render_with_csp(request, "account/oauth_consent.html", ctx)
+    response = _render_with_csp(request, template, ctx)
     response.status_code = status
     # The page names the signed-in person and the app asking for access, and it
     # is one click from a credential. Nothing about it belongs in a shared cache
@@ -282,20 +313,21 @@ def _render(request, ctx, status=200):
     return response
 
 
-def _render_error(request, title, message, status=400):
+def _render_error(request, title, message, status=400,
+                  template="account/oauth_consent.html"):
     return _render(request, _page_context(request, {
         "error": "1",
         "error_title": title,
         "error_message": message,
-    }), status=status)
+    }), status=status, template=template)
 
 
-def _not_available(request):
+def _not_available(request, template="account/oauth_consent.html"):
     return _render_error(
         request,
         "Not available",
         "This installation is not offering remote application access right now.",
-        status=404)
+        status=404, template=template)
 
 
 def handle_authorize(request, origin, registry=None):
@@ -341,22 +373,17 @@ def handle_authorize(request, origin, registry=None):
     except Exception:
         consent_return = f"{resources.SERVER_PATH}/authorize"
 
-    return _render(request, _page_context(request, {
-        "client_name": client.client_name or client.client_id,
-        "client_id": client.client_id,
-        "access_lines": _access_lines(params["granted"]),
-        "requested_resource": params["resource"],
-        # Anti-phishing. A name is whatever the client typed, so show the two
-        # facts it cannot forge — where the credential is being sent, and
-        # whether anything vouched for the name — beside it.
+    ctx = consent_context(client, params["granted"], params["resource"])
+    ctx.update({
+        # Anti-phishing: where the credential is being sent is the other fact
+        # a client name cannot forge.
         "redirect_host": _display_host(redirect_uri),
-        "client_verified_url": client.client_id if client.kind == "cimd" else "",
-        "client_unverified": client.kind != "cimd",
         "deny_url": _with_params(redirect_uri, deny_params),
         "approve_url": f"{resources.SERVER_PATH}/approve",
         "approve_payload": approve_payload,
         "consent_return": consent_return,
-    }))
+    })
+    return _render(request, _page_context(request, ctx))
 
 
 def _session_auth_time(request):
