@@ -4,6 +4,8 @@ This module uses only the challenge-specific downstream client.  It is not a
 DNS provider and intentionally exposes no arbitrary record operations.
 """
 
+from contextlib import contextmanager
+
 from django.db import IntegrityError, transaction
 
 from mojo import errors as me
@@ -83,7 +85,7 @@ def initiate(group, user, domain=None, name=None, *, available=None):
     availability probe (None means ``is_available()``).
     """
     from mojo.apps.account.models import Group
-    from mojo.apps.dnsman.models import AcmeDelegation
+    from mojo.apps.dnsman.models import AcmeDelegation, Domain
 
     if available is None:
         available = is_available()
@@ -98,6 +100,12 @@ def initiate(group, user, domain=None, name=None, *, available=None):
 
     tenant_uuid = group.get_uuid()
     with transaction.atomic():
+        # The FK insert needs a Domain KEY SHARE lock too. Take the same
+        # Domain -> Group order as shared Connect before holding either FK.
+        if domain is not None:
+            domain = Domain.objects.select_for_update().filter(pk=domain.pk).first()
+            if domain is None or domain.group_id != group.pk or domain.name != domain_name:
+                raise me.ValueException("The domain does not belong to this group")
         locked_group = Group.objects.select_for_update().filter(pk=group.pk).first()
         if not _group_active(locked_group) or locked_group.uuid != tenant_uuid:
             raise me.ValueException("An active group is required")
@@ -167,16 +175,42 @@ def _proof_failure(row, code):
     row.last_error_code = code
 
 
+@contextmanager
+def _lifecycle_locks(row):
+    """One order for local lifecycle writers: Domain, Group, Delegation.
+
+    A certificate-only Domain may be created while an unbound caller is
+    waiting for Group. Detect that binding change and retry after releasing
+    every lock, rather than taking a new Domain lock in the inverse order.
+    """
+    from mojo.apps.account.models import Group
+    from mojo.apps.dnsman.models import AcmeDelegation, Domain
+    for unused in range(3):
+        with transaction.atomic():
+            snapshot = AcmeDelegation.objects.values(
+                "domain_id", "domain_name", "group_id").get(pk=row.pk)
+            domains = Domain.objects.select_for_update()
+            domain = domains.filter(pk=snapshot["domain_id"]).first() if snapshot["domain_id"] else domains.filter(name=snapshot["domain_name"]).first()
+            group = Group.objects.select_for_update().filter(pk=snapshot["group_id"]).first()
+            stored = AcmeDelegation.objects.select_for_update().get(pk=row.pk)
+            if stored.domain_id != snapshot["domain_id"]:
+                continue
+            if stored.domain_id is None:
+                current_id = Domain.objects.filter(name=stored.domain_name).values_list("pk", flat=True).first()
+                if current_id != (domain.pk if domain else None):
+                    continue
+            yield stored, group, domain
+            return
+    raise me.ValueException("The ACME connection changed; retry setup", code=409, status=409)
+
+
 def require_current_owner(row, require_domain=True):
     """Lock and re-prove the immutable tenant/domain binding before remote I/O."""
     from mojo.apps.account.models import Group
     from mojo.apps.dnsman.models import AcmeDelegation, Domain
 
     refusal = None
-    with transaction.atomic():
-        stored = AcmeDelegation.objects.select_for_update().get(pk=row.pk)
-        group = Group.objects.select_for_update().filter(pk=stored.group_id).first()
-        domain = Domain.objects.select_for_update().filter(pk=stored.domain_id).first()
+    with _lifecycle_locks(row) as (stored, group, domain):
         if (
             not _group_active(group)
             or group.uuid != stored.tenant_uuid
@@ -190,7 +224,8 @@ def require_current_owner(row, require_domain=True):
             or domain.group_id != group.pk
             or domain.name != stored.domain_name
         ):
-            stored.state = STATE_BROKEN if stored.verified_at is not None else STATE_RETIRED
+            stored.state = (STATE_RETIRED if stored.state == STATE_RETIRED else
+                            STATE_BROKEN if stored.verified_at is not None else STATE_RETIRED)
             stored.retired_at = (
                 stored.retired_at or dates.utcnow()
                 if stored.state == STATE_RETIRED else None)
@@ -235,11 +270,18 @@ def verify(row, resolve_cname=None, shared_checked=False):
     prove_alias(row, resolve_cname=resolve_cname)
 
     refusal = None
-    with transaction.atomic():
-        # Do not select_related nullable relations into this FOR UPDATE query:
-        # PostgreSQL refuses locking the nullable side of an outer join.
-        row = AcmeDelegation.objects.select_for_update().get(pk=row.pk)
-        group = Group.objects.select_for_update().filter(pk=row.group_id).first()
+    with _lifecycle_locks(row) as (row, group, locked_domain):
+        # Proof is network I/O. A restart may have retired this exact ref while
+        # it ran; never revive it or let the partial uniqueness constraint turn
+        # a stale Check into an unhandled IntegrityError.
+        if row.state == STATE_RETIRED:
+            raise me.ValueException("This ACME connection is stale", code=409, status=409)
+        if row.connection_mode == "shared":
+            current_id = AcmeDelegation.objects.filter(
+                tenant_uuid=row.tenant_uuid, domain_name=row.domain_name).exclude(
+                    state=STATE_RETIRED).order_by("-created", "-pk").values_list("pk", flat=True).first()
+            if current_id != row.pk:
+                raise me.ValueException("This ACME connection is stale", code=409, status=409)
         if (
             not _group_active(group)
             or group.uuid != row.tenant_uuid
@@ -251,7 +293,7 @@ def verify(row, resolve_cname=None, shared_checked=False):
                 "state", "retired_at", "last_error_code", "modified"])
             refusal = "The delegation tenant is no longer active"
         else:
-            domain = row.domain
+            domain = locked_domain if row.domain_id else None
             if domain is not None:
                 # The Domain can be deleted or transferred while the tenant is
                 # publishing its CNAME.  Re-check the locked owner now.

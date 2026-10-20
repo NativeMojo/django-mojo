@@ -600,7 +600,9 @@ def check(row, actor=None, client=None, custody=None, probe=None):
         raise _error_with_plan(error, target, actor, client, custody)
     except me.MojoException:
         row.refresh_from_db()
-        code = row.last_error_code if row.last_error_code in ERRORS else "alias_mismatch"
+        current = _current(target)
+        code = "stale_connection" if row.state == "retired" or current is None or current.pk != row.pk else (
+            row.last_error_code if row.last_error_code in ERRORS else "alias_mismatch")
         raise _error_with_plan(SetupError(code), target, actor, client, custody) from None
 
 
@@ -619,23 +621,38 @@ def request(row, actor=None, client=None, custody=None, publish=None):
         if row.cleanup_challenge_ref:
             raise SetupError("cleanup_pending")
         names = [target.name, f"*.{target.name}"]
-        with transaction.atomic():
-            Domain.objects.select_for_update().get(pk=target.domain.pk)
-            rows = list(Certificate.objects.filter(domain=target.domain).exclude(status="revoked"))
-            if any(sorted(cert.sans or [cert.common_name]) != sorted(names) and cert.status in ("pending", "issuing", "active") for cert in rows):
-                raise SetupError("profile_conflict")
-            current = certs.find_covering_certificate(target.domain, names)
-            selected = _selected_certificate(target)
-            material = _certificate_status(selected, custody)
-            if selected and selected.status == "active" and material["material_state"] != "available":
-                outcome = "custody_unavailable"
-            elif current and current.not_after and current.not_after > dates.utcnow():
-                outcome = "already_current"
-            elif any(cert.status in ("pending", "issuing") for cert in rows):
-                outcome = "already_queued"
-            else:
-                certs.request_certificate(target.domain, names=names, publish=publish)
-                outcome = "queued"
+        with ExitStack() as stack:
+            with transaction.atomic():
+                Domain.objects.select_for_update().get(pk=target.domain.pk)
+                target = _refresh(target, actor, write=True)
+                current_route = delegation.routing_for_domain(target.domain)
+                if current_route is None or current_route.pk != row.pk or current_route.state != "verified":
+                    raise SetupError("stale_connection")
+                rows = list(Certificate.objects.filter(domain=target.domain).exclude(status="revoked").order_by("pk"))
+                if any(sorted(cert.sans or [cert.common_name]) != sorted(names) and cert.status in ("pending", "issuing", "active") for cert in rows):
+                    raise SetupError("profile_conflict")
+                # request_certificate takes Certificate row locks. As in
+                # Connect, try every advisory owner first so an issuer paused
+                # before its joined Domain lock cannot create an inverse wait.
+                busy = False
+                for cert in rows:
+                    if not stack.enter_context(certs._issue_lock(cert.pk)):
+                        busy = True
+                        break
+                current = certs.find_covering_certificate(target.domain, names)
+                selected = _selected_certificate(target)
+                material = _certificate_status(selected, custody)
+                if busy:
+                    outcome = "already_queued"
+                elif selected and selected.status == "active" and material["material_state"] != "available":
+                    outcome = "custody_unavailable"
+                elif current and current.not_after and current.not_after > dates.utcnow():
+                    outcome = "already_current"
+                elif any(cert.status in ("pending", "issuing") for cert in rows):
+                    outcome = "already_queued"
+                else:
+                    certs.request_certificate(target.domain, names=names, publish=publish)
+                    outcome = "queued"
         return plan(target, actor=actor, client=client, custody=custody,
                     operation=dict(action="request", outcome=outcome, changed=outcome == "queued"))
     except SetupError as error:

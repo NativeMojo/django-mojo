@@ -550,6 +550,15 @@ row locks. A busy issuer is refused immediately. This avoids the inverse lock
 order of an issuer holding the advisory lock before its joined
 Certificate/Domain row lock. Direct reservations and delegated cleanup are
 settled before the shared guard commits; locks are released before join calls.
+Verify, ownership checks, legacy initiation with an existing
+Domain and shared preparation all lock Domain, Group and Delegation in that
+order. A Check rechecks the locked current generation after DNS proof: a
+restart that completed during proof leaves the old row retired and returns
+`stale_connection`, rather than reviving the old reference. Wildcard Request
+also rechecks its generation under the Domain lock and tries issue advisory
+ownership before the existing certificate request takes Certificate row locks.
+An active issuer returns `already_queued` without a duplicate job.
+
 No worker performs direct-provider reservation cleanup after it has selected
 shared routing. Shared issuance refreshes grant and consumer identity before
 CA account/order creation and again before publish. Withdrawal continues to

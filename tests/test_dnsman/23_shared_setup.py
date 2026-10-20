@@ -371,40 +371,71 @@ def test_request_idempotent_exact_profile(opts):
     caught("profile_conflict", lambda: setup.request(other_row, client=other.hub))
 
 
-@th.django_unit_test("Connect refuses a worker advisory lock before waiting for certificate rows")
+def _backend_pid():
+    from django.db import connection
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_backend_pid()")
+        return cursor.fetchone()[0]
+
+
+def _wait_for_blocker(pid, expected=None):
+    import time
+    from django.db import connection
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_blocking_pids(%s)", [pid])
+            blockers = cursor.fetchone()[0]
+        if blockers and (expected is None or expected in blockers):
+            return blockers
+        time.sleep(0.01)
+    raise AssertionError(f"backend {pid} must become a real PostgreSQL lock waiter")
+
+
+@th.django_unit_test("Connect tries advisory locks before certificate row locks held by a real issuer")
 def test_worker_handover_lock_order(opts):
     from django.db import close_old_connections, connection, transaction
-    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.models import Certificate, Domain
     from mojo.apps.dnsman.services import delegation_setup as setup, certs
     env = fixture()
     cert = cert_for(env)
-    held, release, finished = threading.Event(), threading.Event(), threading.Event()
-    problems = []
+    held, finished = threading.Event(), threading.Event()
+    state, problems = {}, []
 
     def worker():
         close_old_connections()
         try:
+            state["pid"] = _backend_pid()
             with certs._issue_lock(cert.pk) as acquired:
-                assert acquired, "test worker must acquire the advisory issue lock"
-                held.set()
-                assert release.wait(5), "test coordinator must release the paused worker"
+                assert acquired, "test worker must own the advisory issue lock"
                 with transaction.atomic():
-                    Certificate.objects.select_related("domain").select_for_update().get(pk=cert.pk)
+                    # A real issuer may have acquired Certificate before its
+                    # joined Domain lock. It now waits on Connect's Domain.
+                    Certificate.objects.select_for_update().get(pk=cert.pk)
+                    held.set()
+                    Domain.objects.select_for_update().get(pk=env.domain.pk)
         except Exception as error:
             problems.append(str(error))
         finally:
             close_old_connections()
             finished.set()
 
-    thread = threading.Thread(target=worker)
-    thread.start()
-    try:
-        assert held.wait(5), "worker must pause after advisory lock and before joined row lock"
-        caught("certificate_busy", lambda: setup.connect(env.target, env.hub.target, client=env.hub))
-    finally:
-        release.set()
-        thread.join(6)
-    assert finished.is_set() and not problems, f"handover must not deadlock the in-flight issuer: {problems}"
+    with transaction.atomic():
+        Domain.objects.select_for_update().get(pk=env.domain.pk)
+        with connection.cursor() as cursor:
+            cursor.execute("SET LOCAL lock_timeout = '2s'")
+        thread = threading.Thread(target=worker)
+        thread.start()
+        try:
+            assert held.wait(5), "worker must own advisory and Certificate row locks"
+            assert _wait_for_blocker(state["pid"], _backend_pid()), "issuer must really wait on the coordinator's Domain lock"
+            # Reversing _prepare's advisory/Certificate order now blocks on
+            # the worker and fails the test with a PostgreSQL lock timeout.
+            caught("certificate_busy", lambda: setup.connect(env.target, env.hub.target, client=env.hub))
+        finally:
+            pass
+    thread.join(6)
+    assert finished.is_set() and not problems, f"handover must release the real issuer without deadlock: {problems}"
     assert not env.domain.acme_delegations.exists(), "busy refusal must not commit a new route guard"
 
 
@@ -624,3 +655,171 @@ def test_rest_authority_and_legacy_contracts(opts):
         viewer.delete()
         user.delete()
         admin.delete()
+
+
+@th.django_unit_test("Check finishing after restart returns stale without reviving the retired generation")
+def test_check_restart_barrier(opts):
+    from django.db import close_old_connections
+    from mojo.apps.dnsman.models import AcmeDelegation
+    from mojo.apps.dnsman.services import delegation_setup as setup
+    env = fixture()
+    old = verified(env)
+    proof_started, resume = threading.Event(), threading.Event()
+    outcomes = []
+    def probe(*args):
+        proof_started.set()
+        assert resume.wait(5), "coordinator must release the pre-restart alias proof"
+        return objict(ok=True)
+    def checker():
+        close_old_connections()
+        try:
+            setup.check(old.pk, client=env.hub, probe=probe)
+            outcomes.append("unexpected_verification")
+        except setup.SetupError as error:
+            outcomes.append((error.error_code, error.status))
+        except Exception as error:
+            outcomes.append(type(error).__name__)
+        finally:
+            close_old_connections()
+    thread = threading.Thread(target=checker)
+    thread.start()
+    try:
+        assert proof_started.wait(5), "Check must pause after preflight and before persisted proof"
+        env.hub.participants[str(old.client_ref)].trust_state = "revoked"
+        env.hub.participants[str(old.client_ref)].can_publish = False
+        result = setup.connect(env.target, env.hub.target, restart=True, client=env.hub)
+    finally:
+        resume.set()
+        thread.join(6)
+    old.refresh_from_db()
+    successor = AcmeDelegation.objects.get(pk=result["connection"]["id"])
+    assert outcomes == [("stale_connection", 409)], f"stale Check must return a bounded contract error, never a 500: {outcomes}"
+    assert old.state == "retired" and successor.state == "pending" and old.client_ref != successor.client_ref, "old immutable authority must never revive beside its successor"
+
+
+@th.django_unit_test("normal Connect replay and Check complete while contending on real lifecycle locks")
+def test_connect_check_lock_order(opts):
+    from django.db import close_old_connections, connection, transaction
+    from mojo.apps.account.models import Group
+    from mojo.apps.dnsman.services import delegation_setup as setup
+    env = fixture()
+    row = verified(env)
+    states, errors, pids = {}, [], {}
+    started = {key: threading.Event() for key in ("connect", "check")}
+    def runner(kind):
+        close_old_connections()
+        try:
+            pids[kind] = _backend_pid()
+            started[kind].set()
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute("SET LOCAL lock_timeout = '3s'")
+                if kind == "connect":
+                    states[kind] = setup.connect(env.target, env.hub.target, client=env.hub)
+                else:
+                    states[kind] = setup.check(row.pk, client=env.hub, probe=lambda *args: objict(ok=True))
+        except Exception as error:
+            errors.append((kind, type(error).__name__, str(error)))
+        finally:
+            close_old_connections()
+    connect_thread = threading.Thread(target=runner, args=("connect",))
+    check_thread = threading.Thread(target=runner, args=("check",))
+    with transaction.atomic():
+        Group.objects.select_for_update().get(pk=env.group.pk)
+        connect_thread.start()
+        assert started["connect"].wait(5), "Connect backend must start"
+        assert _wait_for_blocker(pids["connect"], _backend_pid()), "Connect must hold Domain while genuinely waiting for Group"
+        check_thread.start()
+        assert started["check"].wait(5), "Check backend must start"
+        assert _wait_for_blocker(pids["check"]), "Check must enter real lifecycle contention before Group release"
+    connect_thread.join(6)
+    check_thread.join(6)
+    row.refresh_from_db()
+    assert not connect_thread.is_alive() and not check_thread.is_alive() and not errors, f"Domain/Group/Delegation ordering must complete both paths without deadlock: {errors}"
+    assert set(states) == {"connect", "check"} and row.state == "verified", "normal replay and Check must retain the same verified generation"
+
+
+@th.django_unit_test("first legacy initiate cannot invert Domain and Group locks against shared Connect")
+def test_legacy_initiate_shared_connect_lock_order(opts):
+    from django.db import close_old_connections, connection, transaction
+    from mojo.apps.dnsman.models import Domain
+    from mojo.apps.dnsman.services import delegation, delegation_setup as setup
+    env = fixture()
+    env.group.get_uuid()
+    states, errors, pids = {}, [], {}
+    started = {key: threading.Event() for key in ("connect", "legacy")}
+    def runner(kind):
+        close_old_connections()
+        try:
+            pids[kind] = _backend_pid()
+            started[kind].set()
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute("SET LOCAL lock_timeout = '3s'")
+                if kind == "connect":
+                    states[kind] = setup.connect(env.target, env.hub.target, client=env.hub)
+                else:
+                    try:
+                        delegation.initiate(env.group, None, domain=env.domain, available=True)
+                    except Exception as error:
+                        if getattr(error, "status", None) == 400 and "shared connection setup" in str(error):
+                            states[kind] = "shared_route_refused"
+                        else:
+                            raise
+        except Exception as error:
+            errors.append((kind, type(error).__name__, str(error)))
+        finally:
+            close_old_connections()
+    connect_thread = threading.Thread(target=runner, args=("connect",))
+    legacy_thread = threading.Thread(target=runner, args=("legacy",))
+    with transaction.atomic():
+        Domain.objects.select_for_update().get(pk=env.domain.pk)
+        connect_thread.start()
+        assert started["connect"].wait(5), "shared Connect backend must start"
+        assert _wait_for_blocker(pids["connect"], _backend_pid()), "Connect must queue first for the held Domain"
+        legacy_thread.start()
+        assert started["legacy"].wait(5), "legacy initiate backend must start"
+        assert _wait_for_blocker(pids["legacy"]), "legacy initiate must contend before the held Domain is released"
+    connect_thread.join(6)
+    legacy_thread.join(6)
+    assert not errors and not connect_thread.is_alive() and not legacy_thread.is_alive(), f"legacy/shared collision must not deadlock or reach provider allocation: {errors}"
+    assert states.get("legacy") == "shared_route_refused" and states["connect"]["connection"]["state"] == "pending", "first prepared shared generation must win and retain its pending deny guard"
+
+
+@th.django_unit_test("wildcard Request does not wait on an active issuer's Certificate row while holding Domain")
+def test_request_worker_lock_order(opts):
+    from django.db import close_old_connections, connection, transaction
+    from mojo.apps.dnsman.models import Certificate, Domain
+    from mojo.apps.dnsman.services import delegation_setup as setup, certs
+    env = fixture()
+    row = verified(env)
+    cert = cert_for(env, due=True)
+    held, state, errors = threading.Event(), {}, []
+    def worker():
+        close_old_connections()
+        try:
+            state["pid"] = _backend_pid()
+            with certs._issue_lock(cert.pk) as acquired:
+                assert acquired, "test issuer must own advisory lock"
+                with transaction.atomic():
+                    Certificate.objects.select_for_update().get(pk=cert.pk)
+                    held.set()
+                    Domain.objects.select_for_update().get(pk=env.domain.pk)
+        except Exception as error:
+            errors.append(str(error))
+        finally:
+            close_old_connections()
+    with transaction.atomic():
+        Domain.objects.select_for_update().get(pk=env.domain.pk)
+        with connection.cursor() as cursor:
+            cursor.execute("SET LOCAL lock_timeout = '2s'")
+        thread = threading.Thread(target=worker)
+        thread.start()
+        assert held.wait(5), "worker must own its Certificate row"
+        assert _wait_for_blocker(state["pid"], _backend_pid()), "worker must genuinely wait on the held Domain"
+        published = []
+        result = setup.request(row, client=env.hub, custody=lambda cert: True,
+                               publish=lambda *args: published.append(args))
+        assert result["operation"]["outcome"] == "already_queued" and not published, "Request must observe active advisory ownership before locking Certificate rows or queuing duplicates"
+    thread.join(6)
+    assert not thread.is_alive() and not errors, f"Request must release the active issuer without deadlock: {errors}"
