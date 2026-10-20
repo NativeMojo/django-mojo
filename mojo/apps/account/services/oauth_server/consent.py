@@ -318,9 +318,12 @@ def handle_authorize(request, origin, registry=None):
             redirect_uri, origin, err.code, err.description,
             _single(data, "state") or "")
 
+    # Everything handle_approve re-validates rides here — the Approve button
+    # POSTs this block unchanged, so a missing key is a refused approval.
     approve_payload = {
         "client_id": client.client_id,
         "redirect_uri": redirect_uri,
+        "response_type": "code",
         "state": params["state"],
         "code_challenge": params["code_challenge"],
         "code_challenge_method": params["code_challenge_method"],
