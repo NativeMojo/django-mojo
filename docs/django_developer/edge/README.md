@@ -421,7 +421,7 @@ installer can be unit-tested but cannot be exercised on a node.
 | `EDGE_HTTP_KEEPALIVE_TIMEOUT` | `65` | http base; clamped 5–300 |
 | `EDGE_HTTP_DEFAULT_SERVER` | `False` | Flag-gates the rendered catch-alls (static; a cutover step, see templates.md) |
 | `EDGE_KEEP_GENERATIONS` | `5` | Retained generations (rollback depth) |
-| `EDGE_KEEP_RELEASES` | `5` | Retained releases per vhost; never prunes the promoted one or one a retained generation links (static — see [webapps.md](webapps.md)) |
+| `EDGE_KEEP_RELEASES` | `5` | Retained releases per vhost; never prunes the promoted one or one a retained generation links, `.prev` fallback links included. Also the fallback depth for open tabs: 0–1 none, 2 one, 3+ two (static — see [webapps.md](webapps.md#settings)) |
 | `EDGE_RELEASE_FETCH_TIMEOUT` | `60` | Per-attempt connect/read timeout for a node's release GET (static) |
 | `EDGE_RELEASE_FETCH_BUDGET` | `300` | Wall-clock ceiling for one release's fetch; the rest resumes next converge (static) |
 | `EDGE_POOLS` | `["default"]` | Pools the convergence sweep covers |

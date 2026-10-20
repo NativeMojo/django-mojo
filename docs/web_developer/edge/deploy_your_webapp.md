@@ -201,6 +201,25 @@ app is live and the three ways to ship a build are waiting. When you were
 explicit **Set up deploys** button and a **Done** button, because that run was
 not about a new app.
 
+## What visitors get after you deploy
+
+- **Pages are always rechecked.** A visitor's browser asks the server for
+  your page on every load, so the next load after a deploy shows the new
+  build. When nothing changed, that check is a tiny "not modified" answer.
+- **Name your build files with a content hash to get long caching.** A file
+  whose name carries a build fingerprint, like `index-0kbck4JK.js`, is cached
+  for a year, because a new build gives it a new name. Vite's default
+  `name-[hash]` naming already does this. Any other file, like `config.js`
+  or `favicon.ico`, is rechecked on every load, so a change to it shows up
+  straight away.
+- **A tab left open keeps working for two deploys.** If someone has your app
+  open from before a deploy, the files their old page asks for are still
+  served from the two earlier builds the server keeps. Nothing is copied.
+  After a third deploy, that tab needs a reload.
+- **Using a CDN in front of your address?** It must follow the cache headers
+  the server sends. A CDN set to cache everything for a minimum time would
+  keep serving an old page.
+
 ## Managing your app afterward
 
 Open any app from **Deployments** and it opens its own page — a link you can
