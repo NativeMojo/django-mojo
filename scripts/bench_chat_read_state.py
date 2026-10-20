@@ -250,7 +250,7 @@ class Fixture:
                             body="Local benchmark fixture", room_seq=i + 1)
                          for i in range(offset, min(history, offset + 2000))]
                 models.QuerySet.bulk_create(ChatMessage.objects.all(), batch, batch_size=2000)
-            ChatRoom.objects.filter(pk=self.room.pk).update(message_seq=history)
+            ChatRoom.objects.filter(pk=self.room.pk).update(message_seq=history, read_state_generation=1)
         self.seed_seconds = time.perf_counter() - start
         self.room.refresh_from_db()
         self.last_seed = ChatMessage.objects.filter(room=self.room, room_seq=history).get()
