@@ -1286,7 +1286,10 @@ def refresh_threat_lists(job):
 
     for ipset in IPSet.ensure_threat_caches():
         if ipset.refresh_from_source():
-            job.add_log(f"Refreshed threat cache {ipset.name} ({ipset.cidr_count} entries)")
+            dropped = getattr(ipset, "refresh_dropped", 0)
+            job.add_log(
+                f"Refreshed threat cache {ipset.name} ({ipset.cidr_count} "
+                f"entries; {dropped} non-IPv4 dropped)")
         else:
             job.add_log(f"Threat cache {ipset.name} refresh failed: {ipset.sync_error}")
 
