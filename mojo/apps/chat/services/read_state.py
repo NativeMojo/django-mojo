@@ -210,18 +210,20 @@ def advance_locked(member, room, target, *, head=None, reason="explicit", handle
         changed = target_seq > member.last_read_seq or bool(removed)
         member.unread_exception_count -= removed
         member.last_read_seq = max(member.last_read_seq, target_seq)
-        # A stale read is valid but cannot replace newer actual acknowledgment facts.
-        if target is not None and (member.last_read_message_id is None
-                                   or target.pk > member.last_read_message_id):
-            member.last_read_message_id = target.pk
-            member.last_read_at = target.created
-            changed = True
-        if changed:
-            ChatMembership.objects.filter(pk=member.pk).update(
-                last_read_seq=member.last_read_seq,
-                last_read_message_id=member.last_read_message_id,
-                last_read_at=member.last_read_at,
-                unread_exception_count=member.unread_exception_count)
+    # A genuine legacy target can establish actual acknowledgment facts while
+    # its null sequence remains read under Option A. It never advances a prefix
+    # or replaces a newer actual acknowledgment with an older message PK.
+    if target is not None and (member.last_read_message_id is None
+                               or target.pk > member.last_read_message_id):
+        member.last_read_message_id = target.pk
+        member.last_read_at = target.created
+        changed = True
+    if changed:
+        ChatMembership.objects.filter(pk=member.pk).update(
+            last_read_seq=member.last_read_seq,
+            last_read_message_id=member.last_read_message_id,
+            last_read_at=member.last_read_at,
+            unread_exception_count=member.unread_exception_count)
     facts = dict(
         ack_target_id=target.pk if target is not None else None,
         ack_target_seq=target.room_seq if target is not None else head,

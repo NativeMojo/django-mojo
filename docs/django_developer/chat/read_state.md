@@ -83,6 +83,33 @@ do not clamp to another row. The target uses `join_bounded_messages`, so an
 otherwise entitled message can still be acknowledged after TTL expiry.
 Channel targets have no join cutoff. See [read bounds](services.md#read-bounds--join_bounded_messages-vs-visible_messages).
 
+A real null-sequence legacy target remains read under initial Option A, but
+may establish genuine actual acknowledgment PK/time without advancing the
+numbered prefix or clearing its exceptions. The same PK-monotonic rule keeps
+an older legacy acknowledgment from replacing newer actual facts. A host may
+then clear an invisible numbered tail with `mark_current_head`, retaining the
+real visible legacy target rather than inventing a message for the head.
+
+### Transaction lock order and stable user keys
+
+`mojo.apps.chat.services.locks.lock_users(user_ids, *, using="default")`
+acquires PostgreSQL `FOR KEY SHARE` locks on existing account User rows in
+ascending PK order and returns their sorted tuple of IDs. It requires an
+active primary `transaction.atomic()`; locks survive until its outermost
+commit. It never applies active-user or membership policy. The returned roster
+lets the host revalidate those policies under its existing business fences.
+
+Cursor message creation fences its author and nonnull `flagged_by` before
+locking the room. Single and bulk membership creation fence their users before
+rooms. A host that already owns the transaction must acquire these fences
+before taking its own business/room locks: existing required pair advisory
+fences, stable User keys, other business fences, sorted rooms, seats, then
+messages. Account closure/key-changing code keeps its strict User
+`FOR UPDATE` before rooms. Key-share fences are compatible with ordinary
+User `FOR NO KEY UPDATE` locks while protecting against deletion/key changes;
+legacy writer behavior is unchanged. Calling this helper after a host already
+holds a room lock cannot repair an inverted order.
+
 `mark_through` locks the current membership, then reloads the room and target
 and rechecks active/muted status and entitlement. Reads advance the sequence
 monotonically within a generation and remove that seat's exception rows

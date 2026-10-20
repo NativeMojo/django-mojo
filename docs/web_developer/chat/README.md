@@ -191,6 +191,10 @@ ID/sequence/time. It preserves later eligible unread arrivals without making
 older private history newly unread. These are the actual operation facts. The standing
 position can already reflect a later read: do not rewind your UI to a stale
 ack target, or treat a newer standing head as part of that old acknowledgment.
+A genuine message from before cursor activation can have a null
+`ack_target_seq` while retaining its real target ID/time. Acknowledging it does
+not advance the numbered prefix; a trusted hidden-tail clear can retain that
+real visible legacy target as the stored actual acknowledgment.
 
 Counts describe arrivals, so flags, expiry and ordinary deletion do not reduce
 them. They can exceed the visible page length or retain an invisible/deleted
