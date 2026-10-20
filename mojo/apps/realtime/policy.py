@@ -17,10 +17,11 @@ never from a database Setting row, so nobody holding `manage_settings` can
 point it at importable code.
 
 It can only narrow: when `default` refuses, the hook is never called, and
-nothing it returns grants access django-mojo refused. Unset, every answer is
-`default`, exactly as before. It fails closed: a load error, a non-callable,
-an exception or any return other than True refuses, for every topic it is
-asked about. Server code -- `send_message(client_authored=False)`, rooms and
+nothing it returns grants access django-mojo refused. Unset (absent or None),
+every answer is `default`, exactly as before. It fails closed: a load error, a
+non-callable (False, 0, "", [] and {} included), an exception or any return
+other than True refuses, for every topic it is asked about. A return of False
+refuses quietly; every other failure is logged at error level. Server code -- `send_message(client_authored=False)`, rooms and
 memberships created through the ORM, the automatic own-topic subscribe and
 topics a server hook subscribes a socket to -- never passes through here.
 
@@ -61,10 +62,16 @@ def _handler(*, handler=_UNSET, path=_UNSET):
             return None
         return handler if callable(handler) else _BROKEN
     configured = path if path is not _UNSET else settings.get_static(HANDLER_KEY, None)
-    if not configured:
+    # Only an absent key or None is unset: False, 0, "", [] and {} are a
+    # broken configuration, never "no hook".
+    if configured is None:
         return None
     if callable(configured):
         return configured
+    if not isinstance(configured, str) or not configured:
+        logger.error(f"realtime: {HANDLER_KEY} is a {type(configured).__name__}, "
+                     "not a callable or a dotted path; refusing")
+        return _BROKEN
     try:
         # Exception, not ImportError: the target module can raise anything
         # at import time.
@@ -83,12 +90,13 @@ def allows(user, topic, default, *, handler=_UNSET, path=_UNSET):
     project's hook, if one is set, agrees.
 
     With no hook, `default` comes back as it was given, so the built-in checks
-    answer exactly as before. A refusing `default` never reaches the hook.
+    answer exactly as before. With one, only a `default` of literal True
+    reaches the hook; anything else refuses.
     """
     func = _handler(handler=handler, path=path)
     if func is None:
         return default
-    if not default:
+    if default is not True:
         return False
     if func is _BROKEN:
         return False
@@ -97,4 +105,11 @@ def allows(user, topic, default, *, handler=_UNSET, path=_UNSET):
     except Exception as e:
         logger.error(f"realtime: {HANDLER_KEY} raised for {topic}, refusing: {e}")
         return False
-    return allowed is True
+    if allowed is True:
+        return True
+    # False is the hook's ordinary "no"; anything else is a hook bug. Log its
+    # type only: the value may carry project data.
+    if allowed is not False:
+        logger.error(f"realtime: {HANDLER_KEY} returned a {type(allowed).__name__} "
+                     f"for {topic}, not True or False; refusing")
+    return False

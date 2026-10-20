@@ -9,6 +9,29 @@ TOPIC = "chat:1"
 POLICY = "mojo.apps.realtime.policy"
 
 
+import logging
+
+
+class _ErrorLog(logging.Handler):
+    """Collects the error records the policy writes to `realtime.log`."""
+
+    def __init__(self):
+        super().__init__(level=logging.ERROR)
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(record)
+
+    def __enter__(self):
+        from mojo.apps.realtime import policy
+        self.stdlib_logger = policy.logger.logger
+        self.stdlib_logger.addHandler(self)
+        return self
+
+    def __exit__(self, *exc):
+        self.stdlib_logger.removeHandler(self)
+
+
 class _Calls:
     def __init__(self, result=True, error=None):
         self.result = result
@@ -51,8 +74,11 @@ def test_only_literal_true_allows(opts):
     hook = _Calls(result=True)
     assert policy.allows("u", TOPIC, True, handler=hook) is True, "a hook returning True must allow"
     assert hook.calls == [("u", TOPIC, True)], f"the hook gets (user, topic, default), got {hook.calls}"
-    hook = _Calls(result=True)
-    assert policy.allows("u", TOPIC, 1, handler=hook) is True, "a truthy built-in reaches the hook"
+    for default in (1, "yes", [True]):
+        hook = _Calls(result=True)
+        got = policy.allows("u", TOPIC, default, handler=hook)
+        assert got is False, f"a non-Boolean built-in {default!r} must refuse with a hook set, got {got!r}"
+        assert hook.calls == [], f"a non-Boolean built-in {default!r} must not reach the hook, got {hook.calls}"
     for result in (False, None, 1, "True", [True], object()):
         got = policy.allows("u", TOPIC, True, handler=_Calls(result=result))
         assert got is False, f"a hook returning {result!r} must refuse, got {got!r}"
@@ -82,3 +108,40 @@ def test_shipped_hooks_behave_as_named(opts):
     assert policy.allows("u", TOPIC, True, path=f"{POLICY}.deny_all") is False, "deny_all must refuse"
     assert policy.allows("u", TOPIC, False, path=f"{POLICY}.allow_all") is False, \
         "allow_all must never widen a refusing built-in verdict"
+
+
+@th.django_unit_test()
+def test_false_like_configured_values_fail_closed(opts):
+    """Only an absent key or None is unset (#8874 R1): every other value that is
+    not a callable or a dotted path refuses through the settings-file branch."""
+    from mojo.apps.realtime import policy
+
+    for configured in (False, 0, "", [], {}):
+        with _ErrorLog() as log:
+            got = policy.allows("u", TOPIC, True, path=configured)
+        assert got is False, f"a configured {configured!r} must refuse, got {got!r}"
+        assert len(log.records) == 1, f"a configured {configured!r} must log one error, got {len(log.records)}"
+        message = log.records[0].getMessage()
+        assert type(configured).__name__ in message, f"the error must name the type, got {message!r}"
+
+
+@th.django_unit_test()
+def test_invalid_hook_returns_are_logged(opts):
+    """A literal False is the hook's ordinary no and is not logged; any other
+    non-True return refuses and logs the topic and its type, never its value
+    (#8874 R3)."""
+    from mojo.apps.realtime import policy
+
+    with _ErrorLog() as log:
+        assert policy.allows("u", TOPIC, True, handler=_Calls(result=False)) is False, "False must refuse"
+    assert log.records == [], f"a hook returning False must not log an error, got {len(log.records)}"
+    for result in (None, 1, "secret-8874", [True]):
+        with _ErrorLog() as log:
+            got = policy.allows("u", TOPIC, True, handler=_Calls(result=result))
+        assert got is False, f"a hook returning {result!r} must refuse, got {got!r}"
+        assert len(log.records) == 1, f"a hook returning {result!r} must log one error, got {len(log.records)}"
+        message = log.records[0].getMessage()
+        assert TOPIC in message, f"the error must name the topic, got {message!r}"
+        assert type(result).__name__ in message, f"the error must name the return's type, got {message!r}"
+        if isinstance(result, str):
+            assert result not in message, f"the error must not carry the returned value, got {message!r}"

@@ -85,11 +85,15 @@ It answers one question: may this user take part in `topic`? The module is
   bans, the group `chat` permission, the confined-credential and protected-group
   checks. The hook is asked only when they allow, and nothing it returns can
   grant access they refused.
-- **Unset changes nothing.** With no setting every answer is exactly as before.
-- **It fails closed.** Only a return of `True` allows. An import error, a
-  non-callable, an exception or any other return (`None`, `1`, `"True"`)
-  refuses, and is logged at error level to `realtime.log`; the client sees only
-  the refusal. A broken hook therefore takes chat down for everyone — the
+- **Unset changes nothing.** With the setting absent or `None` every answer is
+  exactly as before. Any other value that is not a callable or a dotted path —
+  `False`, `0`, `""`, `[]`, `{}` — is a broken setting, not "unset".
+- **It fails closed.** Only a return of `True` allows, and the hook is asked
+  only when django-mojo's own answer is `True`. A return of `False` refuses
+  without logging. An import error, a non-callable, an exception or any other
+  return (`None`, `1`, `"True"`) refuses and is logged at error level to
+  `realtime.log`, naming the topic and the return's type but never its value;
+  the client sees only the refusal. A broken hook therefore takes chat down for everyone — the
   user's own `user:<id>` channel and server writes keep working.
 - **Settings file only.** It is read with `settings.get_static`, never from a
   database Setting row, so nobody holding `manage_settings` can point it at
