@@ -190,9 +190,13 @@ still present in a config file.
 These settings intentionally use `settings.get_static`: no tenant or DB-backed
 setting can redirect an existing or future allocation.
 
-## Version skew
+## Legacy publish-propagation version skew
 
-The fix belongs on the **hub** side, and only there.
+This section describes the historical legacy publish-propagation fix. Shared
+validation v2 separately detects capabilities404 as unsupported and requires the
+[coordinated hub rollout](#coordinated-hub-rollout) below.
+
+The propagation fix belongs on the **hub** side, and only there.
 
 * **Old client → new hub**: works. This is exactly the deployment that is
   broken today, and upgrading the hub alone repairs it — the reply shape is
@@ -211,7 +215,7 @@ A deployment consuming this hub uses
 `mojo.apps.dnsman.services.acme_hub_client`. This is a challenge-specific HTTP
 transport, not a `DnsProvider`: it is never registered with
 `services/dns.get_adapter()`, cannot list records, and cannot write a
-caller-selected name. The only operations are:
+caller-selected name. Its legacy challenge operations are:
 
 ```python
 allocation = acme_hub_client.allocate(domain, client_ref)

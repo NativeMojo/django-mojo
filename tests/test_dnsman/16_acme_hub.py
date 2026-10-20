@@ -4,6 +4,7 @@ TESTIT_TIER = "extended"
 
 import uuid
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest import mock
@@ -796,6 +797,18 @@ def test_shared_fresh_principal(opts):
     _error(lambda: hub.participant_status(_request(replacement), "deleted-binding", dns_probe=dns), 404, "acme_not_authorized")
 
 
+def _wait_for_advisory_waiter(pid):
+    from django.db import connection
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid=%s AND locktype='advisory' AND NOT granted)", [pid])
+            if cursor.fetchone()[0]:
+                return True
+        threading.Event().wait(0.01)
+    return False
+
+
 @th.django_unit_test("Shared ACME concurrent publishers serialize a complete union in both orders")
 def test_shared_concurrent_publications(opts):
     from django.db import close_old_connections, connection
@@ -808,7 +821,7 @@ def test_shared_concurrent_publications(opts):
             hub.grant(owner, _descriptor(allocation, opts.other_group, ref), **seams)
         barrier = threading.Barrier(2)
         provider_entered, release_provider, second_proved = threading.Event(), threading.Event(), threading.Event()
-        writes, db_pids = [], []
+        writes, db_pids = [], {}
 
         class ConcurrentProvider(FakeRoute53):
             def upsert_record(self, zone_id, rtype, name, values, **kwargs):
@@ -835,7 +848,7 @@ def test_shared_concurrent_publications(opts):
             try:
                 with connection.cursor() as cursor:
                     cursor.execute("SELECT pg_backend_pid()")
-                    db_pids.append(cursor.fetchone()[0])
+                    db_pids[ref] = cursor.fetchone()[0]
                 request = _request(opts.other_group)
                 return hub.publish(opts.other_group, ref, "same-ref", [ref], request=request,
                                    dns_probe=ConcurrentProbe(allocation, first), route53_client=r53)
@@ -846,14 +859,16 @@ def test_shared_concurrent_publications(opts):
             second = pool.submit(run, second_ref, False)
             try:
                 assert second_proved.wait(10), "both publishers must overlap on independent connections"
+                assert _wait_for_advisory_waiter(db_pids[second_ref]), "second publisher must actually wait on the PostgreSQL advisory lock held through provider submission"
                 assert not second.done(), "second publish must wait while first holds the provider lock"
                 assert writes == [[first_ref]], f"a provider write escaped the allocation lock: {writes}"
             finally:
                 release_provider.set()
             first.result(timeout=10)
             second.result(timeout=10)
-        assert len(set(db_pids)) == 2, f"concurrency proof must use independent database sessions, got {db_pids}"
+        assert len(set(db_pids.values())) == 2, f"concurrency proof must use independent database sessions, got {db_pids}"
         assert writes == [[first_ref], sorted([first_ref, second_ref])], f"both orderings must preserve full union, got {writes}"
+        assert r53.records[("TXT", allocation.target_name)].record_values == sorted([first_ref, second_ref]), "final provider state must retain both participants, not just capture a correct intermediate call"
 
 
 @th.django_unit_test("Shared ACME revoke wins against a publish already proving DNS on another connection")
@@ -868,7 +883,7 @@ def test_shared_revoke_publish_race(opts):
     proof_entered, proof_resume = threading.Event(), threading.Event()
     provider_entered, provider_resume = threading.Event(), threading.Event()
     rendezvous = threading.Barrier(2)
-    pids = []
+    pids = {}
 
     class SlowProof(AliasProbe):
         def verify_one_hop_cname(self, source, target, **kwargs):
@@ -888,7 +903,7 @@ def test_shared_revoke_publish_race(opts):
         try:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT pg_backend_pid()")
-                pids.append(cursor.fetchone()[0])
+                pids[operation] = cursor.fetchone()[0]
             if operation == "publish":
                 return _error(lambda: hub.publish(opts.other_group, "racing", "losing-publish", ["must-not-publish"],
                     request=_request(opts.other_group), dns_probe=SlowProof(allocation), route53_client=r53), 403, "acme_trust_revoked")
@@ -904,13 +919,14 @@ def test_shared_revoke_publish_race(opts):
         try:
             assert provider_entered.wait(10), "revocation must durably commit before concurrent publish resumes"
             proof_resume.set()
+            assert _wait_for_advisory_waiter(pids["publish"]), "the already-proved publisher must actually wait on revocation's PostgreSQL lock"
             assert not publication.done(), "publish must wait for allocation lock held through cleanup"
         finally:
             proof_resume.set()
             provider_resume.set()
         revocation.result(timeout=10)
         publication.result(timeout=10)
-    assert len(set(pids)) == 2, f"race must use independent connections: {pids}"
+    assert len(set(pids.values())) == 2, f"race must use independent connections: {pids}"
     assert not AcmeHubChallengeLease.objects.filter(allocation=allocation).exists(), "losing publish must persist no intent"
     assert r53.writes == [], "revocation winner must prevent provider publication"
 
