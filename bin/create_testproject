@@ -188,6 +188,100 @@ class TestitSupportConfig(AppConfig):
         system_settings.register_protected_setting("TESTIT_PROTECTED_SENTINEL")
 PYEOF
 
+# A migrations package, so `makemigrations` writes the probes' initial
+# migration with a dependency on account (their Group/User FKs). Unmigrated
+# apps are synced BEFORE migrated ones, when account_group does not exist yet.
+mkdir -p "$TESTPROJECT/config/testit_support/migrations"
+cat > "$TESTPROJECT/config/testit_support/migrations/__init__.py" << 'PYEOF'
+PYEOF
+
+cat > "$TESTPROJECT/config/testit_support/models.py" << 'PYEOF'
+"""Test-only probe models for the list group policy (maestro item #8937).
+
+RestMeta.LIST_REQUIRES_GROUP is a class attribute, and the parallel test ring
+bars flipping a shared model's RestMeta, so these probes declare the flag
+themselves. They exist only in the generated test project: their migration
+is generated there by `makemigrations`, never shipped with the framework.
+"""
+from django.db import models
+from mojo.models import MojoModel
+
+
+class ListGroupProbe(models.Model, MojoModel):
+    """Group-scoped, flag on."""
+    created = models.DateTimeField(auto_now_add=True)
+    name = models.CharField(max_length=64, db_index=True)
+    group = models.ForeignKey(
+        "account.Group", null=True, blank=True, on_delete=models.CASCADE,
+        related_name="+")
+
+    class RestMeta:
+        VIEW_PERMS = ["view_listgroup_probe"]
+        SAVE_PERMS = ["manage_listgroup_probe"]
+        LIST_REQUIRES_GROUP = True
+        GRAPHS = {"default": {"fields": ["id", "name", "group"]}}
+
+
+class ListGroupOwnerProbe(models.Model, MojoModel):
+    """Owner-scoped and group-scoped, flag on."""
+    created = models.DateTimeField(auto_now_add=True)
+    name = models.CharField(max_length=64, db_index=True)
+    user = models.ForeignKey(
+        "account.User", null=True, blank=True, on_delete=models.CASCADE,
+        related_name="+")
+    group = models.ForeignKey(
+        "account.Group", null=True, blank=True, on_delete=models.CASCADE,
+        related_name="+")
+
+    class RestMeta:
+        VIEW_PERMS = ["owner", "view_listgroup_probe"]
+        SAVE_PERMS = ["manage_listgroup_probe"]
+        LIST_REQUIRES_GROUP = True
+        GRAPHS = {"default": {"fields": ["id", "name", "group"]}}
+
+
+class ListGroupProbeOpen(models.Model, MojoModel):
+    """Group-scoped, no flag: the control, and the REST_LIST_REQUIRES_GROUP
+    setting's target."""
+    created = models.DateTimeField(auto_now_add=True)
+    name = models.CharField(max_length=64, db_index=True)
+    group = models.ForeignKey(
+        "account.Group", null=True, blank=True, on_delete=models.CASCADE,
+        related_name="+")
+
+    class RestMeta:
+        VIEW_PERMS = ["view_listgroup_probe"]
+        SAVE_PERMS = ["manage_listgroup_probe"]
+        GRAPHS = {"default": {"fields": ["id", "name", "group"]}}
+PYEOF
+
+cat > "$TESTPROJECT/config/testit_support/rest.py" << 'PYEOF'
+"""REST routes for the #8937 probe models: /api/testit_support/<probe>."""
+import mojo.decorators as md
+from testit_support.models import ListGroupProbe, ListGroupOwnerProbe, ListGroupProbeOpen
+
+
+@md.URL('list_group_probe')
+@md.URL('list_group_probe/<int:pk>')
+@md.uses_model_security(ListGroupProbe)
+def on_list_group_probe(request, pk=None):
+    return ListGroupProbe.on_rest_request(request, pk)
+
+
+@md.URL('list_group_owner_probe')
+@md.URL('list_group_owner_probe/<int:pk>')
+@md.uses_model_security(ListGroupOwnerProbe)
+def on_list_group_owner_probe(request, pk=None):
+    return ListGroupOwnerProbe.on_rest_request(request, pk)
+
+
+@md.URL('list_group_probe_open')
+@md.URL('list_group_probe_open/<int:pk>')
+@md.uses_model_security(ListGroupProbeOpen)
+def on_list_group_probe_open(request, pk=None):
+    return ListGroupProbeOpen.on_rest_request(request, pk)
+PYEOF
+
 cat > "$TESTPROJECT/config/settings/__init__.py" << 'PYEOF'
 from mojo.helpers import paths, modules, settings
 
