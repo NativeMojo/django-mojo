@@ -13,6 +13,7 @@ detect_tor from attempting a live network fetch.
 """
 
 TESTIT_TIER = "extended"
+from pathlib import Path
 from unittest import mock
 
 from testit import helpers as th
@@ -179,6 +180,8 @@ def test_weekly_cron_excludes_threat_caches(opts):
 @th.django_unit_test("threat cache: mixed-family refresh stores only IPv4")
 def test_mixed_family_refresh_drops_ipv6(opts):
     from mojo.apps.incident.models import IPSet
+    from mojo.helpers import logit
+    from mojo.helpers.geoip import threat_intel
 
     IPSet.objects.filter(name="blocklist_de").delete()
     row = IPSet(
@@ -186,6 +189,8 @@ def test_mixed_family_refresh_drops_ipv6(opts):
         data="192.0.2.0/24")
     row._allow_reserved_name = True
     row.save()
+    log_path = Path(logit.LOG_DIR) / "mojo.log"
+    log_start = log_path.stat().st_size if log_path.exists() else 0
 
     with mock.patch.object(
             row, "_fetch_blocklist_de",
@@ -206,6 +211,51 @@ def test_mixed_family_refresh_drops_ipv6(opts):
     assert row.refresh_dropped == 2, \
         f"refresh must expose the two dropped IPv6 entries, got {row.refresh_dropped!r}"
     assert row.is_enabled is False, "cache refresh must not enable the firewall set"
+    if logit._mojo_logger is not None:
+        for handler in logit._mojo_logger.logger.handlers:
+            handler.flush()
+    rendered_log = log_path.read_bytes()[log_start:].decode(
+        "utf-8", errors="replace")
+    assert "IPSet refresh for blocklist_de dropped 2 non-IPv4 entries" \
+        in rendered_log, f"refresh log was not rendered: {rendered_log!r}"
+    with mock.patch(
+            "requests.get",
+            side_effect=AssertionError("warm cache must prevent live fetch")) as request:
+        result = threat_intel.check_blocklist_de("2001:db8::1")
+    assert result == {"source": "blocklist.de", "is_listed": False}, result
+    request.assert_not_called()
+
+
+@th.django_unit_test("threat cache: IPv6-only refresh preserves the IPv4 snapshot")
+def test_ipv6_only_refresh_preserves_snapshot(opts):
+    from mojo.apps.incident.models import IPSet
+    from mojo.helpers.geoip import threat_intel
+
+    IPSet.objects.filter(name="blocklist_de").delete()
+    row = IPSet(
+        name="blocklist_de", kind="abuse", source="blocklist_de",
+        data="192.0.2.0/24")
+    row._allow_reserved_name = True
+    row.save()
+
+    with mock.patch.object(
+            row, "_fetch_blocklist_de", return_value=["2001:db8::1"]):
+        refreshed = row.refresh_from_source()
+
+    row.refresh_from_db()
+    assert refreshed is False, "IPv6-only feed must not replace the IPv4 cache"
+    assert row.cidrs == ["192.0.2.0/24"], \
+        f"IPv6-only feed replaced the previous snapshot: {row.cidrs!r}"
+    assert row.cidr_count == 1, \
+        f"IPv6-only feed changed the previous count: {row.cidr_count!r}"
+    assert row.sync_error == "source_refresh_no_ipv4", row.sync_error
+    assert row.refresh_dropped == 1, row.refresh_dropped
+    with mock.patch(
+            "requests.get",
+            side_effect=AssertionError("preserved cache must prevent live fetch")) as request:
+        result = threat_intel.check_blocklist_de("2001:db8::1")
+    assert result == {"source": "blocklist.de", "is_listed": False}, result
+    request.assert_not_called()
 
 
 @th.django_unit_test("threat cache: malformed mixed-family refresh stays atomic")

@@ -398,10 +398,18 @@ class IPSet(models.Model, MojoModel):
             if data is not None:
                 if self.is_cache_only:
                     data, self.refresh_dropped = _split_cache_families(data)
-                    if self.refresh_dropped:
+                    if self.refresh_dropped and not data:
+                        self.sync_error = "source_refresh_no_ipv4"
+                        self.save(update_fields=["sync_error", "modified"])
+                        logit.warning(
+                            f"IPSet refresh for {self.name} refused a feed "
+                            f"with {self.refresh_dropped} non-IPv4 entries "
+                            "and no IPv4 entries")
+                        return False
+                    elif self.refresh_dropped:
                         logit.info(
-                            "IPSet refresh for %s dropped %d non-IPv4 entries",
-                            self.name, self.refresh_dropped)
+                            f"IPSet refresh for {self.name} dropped "
+                            f"{self.refresh_dropped} non-IPv4 entries")
                 self.set_data(data)
                 self.sync_error = None
                 self.save(update_fields=[
