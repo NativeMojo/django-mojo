@@ -40,7 +40,9 @@ GLOBAL_GADMIN = "fm_gate_global"   # global manage_groups, member of nothing
 LEFT = "fm_gate_left"              # owned a File in A, then left A
 SECURITY = "fm_gate_security"      # global security grant only, member of nothing
 FILES_ADMIN = "fm_gate_files"      # global files grant, member of nothing
-USERS = [MEMBER, OUTSIDER, GADMIN, GLOBAL_GADMIN, LEFT, SECURITY, FILES_ADMIN]
+GLOBAL_MANAGE_GROUP = "fm_gate_mgroup"  # global manage_group only, member of nothing
+USERS = [MEMBER, OUTSIDER, GADMIN, GLOBAL_GADMIN, LEFT, SECURITY, FILES_ADMIN,
+         GLOBAL_MANAGE_GROUP]
 INLINE = "data:text/plain;base64," + base64.b64encode(b"fm gate inline").decode()
 ORIGINAL_BYTES = b"fm gate original"
 
@@ -86,6 +88,8 @@ def setup_create_gate(opts):
     users[SECURITY].save()
     users[FILES_ADMIN].add_permission("files")
     users[FILES_ADMIN].save()
+    users[GLOBAL_MANAGE_GROUP].add_permission("manage_group")
+    users[GLOBAL_MANAGE_GROUP].save()
 
     group_a = Group(name=f"{PREFIX}a")
     group_a.save()
@@ -93,6 +97,9 @@ def setup_create_gate(opts):
     group_b.save()
     group_c = Group(name=f"{PREFIX}c")  # no storage at all: the key inline case
     group_c.save()
+    group_d = Group(name=f"{PREFIX}d")  # no storage at all: a member creates the default
+    group_d.save()
+    group_d.add_member(users[MEMBER])
     group_a.add_member(users[MEMBER])
     gadmin = group_a.add_member(users[GADMIN])
     gadmin.add_permission("manage_group")
@@ -125,7 +132,7 @@ def setup_create_gate(opts):
     left.is_active = False
     left.save()
 
-    opts.group_ids = {"a": group_a.id, "b": group_b.id, "c": group_c.id}
+    opts.group_ids = {"a": group_a.id, "b": group_b.id, "c": group_c.id, "d": group_d.id}
     opts.user_ids = {name: user.id for name, user in users.items()}
     ApiKey.create_for_group(group_b, f"{PREFIX}key_b")
     opts.key_c_id = ApiKey.create_for_group(group_c, f"{PREFIX}key_c")[0].id
@@ -187,6 +194,12 @@ def _reset_b(opts):
     File.objects.filter(group_id=opts.group_ids["b"]).delete()
     FileManager.objects.filter(group_id=opts.group_ids["b"]).delete()
     Group.objects.filter(pk=opts.group_ids["b"]).update(uuid=None)
+
+
+def _uuid(opts, name):
+    from mojo.apps.account.models import Group
+
+    return Group.objects.get(pk=opts.group_ids[name]).uuid
 
 
 def _drop_purpose(opts, group, use):
@@ -280,6 +293,47 @@ def test_get_for_group_refuses_path(opts):
     assert_eq(after, before, "a refused purpose must create no storage")
 
 
+@th.django_unit_test("a purpose with a leading or trailing newline is refused")
+def test_clean_use_refuses_newlines(opts):
+    from mojo import errors as me
+    from mojo.apps.fileman.models import FileManager
+
+    accepted = []
+    for value in ("x\n", "filevault\n", "a" * 64 + "\n", "\nx"):
+        try:
+            FileManager.clean_use(value, from_request=True)
+            accepted.append(value)
+        except me.ValueException:
+            pass
+    assert_eq(accepted, [], "clean_use must refuse every newline purpose with a 400")
+
+
+@th.django_unit_test("a request's reserved purpose with a trailing newline is refused over HTTP")
+def test_use_filevault_newline_refused(opts):
+    from mojo.apps.fileman.models import FileManager
+
+    _login(opts, MEMBER)
+    _drop_purpose(opts, "a", "filevault")
+    with _system_default(opts):
+        before, before_uuid = _managers(opts, "a"), _uuid(opts, "a")
+        response = _initiate(opts, group=opts.group_ids["a"], use="filevault\n")
+        after, after_uuid = _managers(opts, "a"), _uuid(opts, "a")
+    FileManager.objects.filter(group_id=opts.group_ids["a"], use__startswith="filevault").delete()
+    assert_eq(response.status_code, 400, f"a newline purpose must be refused: {response.response}")
+    assert_eq(after, before, "a refused purpose must create no storage")
+    assert_eq(after_uuid, before_uuid, "a refused purpose must not write the group's uuid")
+
+
+@th.django_unit_test("control: a member still uses an ordinary purpose name")
+def test_member_invoices_purpose(opts):
+    _login(opts, MEMBER)
+    _drop_purpose(opts, "a", "invoices")
+    with _system_default(opts):
+        response = _initiate(opts, group=opts.group_ids["a"], use="invoices")
+    _drop_purpose(opts, "a", "invoices")
+    assert_eq(response.status_code, 200, f"use=invoices must still work: {response.response}")
+
+
 @th.django_unit_test("a request cannot select the vault's reserved purpose")
 def test_use_filevault_reserved(opts):
     _login(opts, MEMBER)
@@ -342,6 +396,76 @@ def test_key_without_files_creates_nothing(opts):
         after = _managers(opts, "b")
     assert_true(refused, "a key without files must be refused on the general file endpoint")
     assert_eq(after, 0, "the key's refusal must come before any storage row")
+
+
+@th.django_unit_test("a global manage_group grant alone cannot create another group's storage over HTTP")
+def test_global_manage_group_initiate_refused(opts):
+    _reset_b(opts)
+    _login(opts, GLOBAL_MANAGE_GROUP)
+    with _system_default(opts):
+        response = _initiate(opts, group=opts.group_ids["b"], use="newpurpose")
+        after = _managers(opts, "b")
+    assert_eq(response.status_code, 403, f"global manage_group alone must be refused: {response.response}")
+    assert_eq(after, 0, "no storage may be created in B")
+    assert_true(not _uuid(opts, "b"), "B's uuid must not be written")
+
+
+@th.django_unit_test("a global manage_group grant alone cannot create storage through create_from_file")
+def test_global_manage_group_create_from_file_refused(opts):
+    from mojo import errors as me
+    from mojo.apps.fileman.models import File
+
+    _reset_b(opts)
+    handle = io.BytesIO(b"x")
+    handle.name = "x.txt"
+    handle.size = 1
+    handle.content_type = "text/plain"
+    request = _request(opts, user=_user(opts, GLOBAL_MANAGE_GROUP), group="b")
+    refused = False
+    with _system_default(opts):
+        try:
+            File.create_from_file(handle, "x", request=request)
+        except me.PermissionDeniedException:
+            refused = True
+        managers, files = _managers(opts, "b"), _files(opts, "b")
+    assert_true(refused, "global manage_group alone must be refused")
+    assert_eq(managers, 0, "no storage may be created in B")
+    assert_eq(files, 0, "no File may be written in B")
+    assert_true(not _uuid(opts, "b"), "B's uuid must not be written")
+
+
+@th.django_unit_test("a global manage_group grant alone cannot create storage through an inline write")
+def test_global_manage_group_inline_refused(opts):
+    from mojo import errors as me
+    from mojo.apps.fileman.models import File
+
+    _reset_b(opts)
+    request = _request(opts, user=_user(opts, GLOBAL_MANAGE_GROUP), group="b")
+    refused = False
+    with _system_default(opts):
+        try:
+            File._inline_rest_file(object(), "media", INLINE, request)
+        except me.PermissionDeniedException:
+            refused = True
+        managers, files = _managers(opts, "b"), _files(opts, "b")
+    assert_true(refused, "global manage_group alone must be refused")
+    assert_eq(managers, 0, "no storage may be created in B")
+    assert_eq(files, 0, "no File may be written in B")
+    assert_true(not _uuid(opts, "b"), "B's uuid must not be written")
+
+
+@th.django_unit_test("control: a plain member still creates their group's default storage")
+def test_member_creates_default(opts):
+    from mojo.apps.fileman.models import FileManager
+
+    _login(opts, MEMBER)
+    FileManager.objects.filter(group_id=opts.group_ids["d"]).delete()
+    with _system_default(opts):
+        response = _initiate(opts, group=opts.group_ids["d"])
+        created = FileManager.objects.filter(group_id=opts.group_ids["d"], use="", is_default=True).exists()
+    FileManager.objects.filter(group_id=opts.group_ids["d"]).delete()
+    assert_eq(response.status_code, 200, f"a member must still create the group default: {response.response}")
+    assert_true(created, "the member's group default storage must exist")
 
 
 @th.django_unit_test("control: a plain member still creates a new purpose for their group")
