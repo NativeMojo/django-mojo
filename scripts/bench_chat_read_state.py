@@ -687,9 +687,14 @@ def invariants(fixtures, metrics):
             shape["rows"] == shape["distinct_positions"] == shape["max_seq"] == room.message_seq == expected
             and shape["min_seq"] == 1)
         members = list(ChatMembership.objects.filter(room=room))
-        checks[prefix + ":fresh_cursors_and_exception_cache"] = all(
-            0 <= m.last_read_seq <= room.message_seq and m.last_read_seq >= metrics.expected_read_seq[(room.pk, m.user_id)]
-            and m.unread_exception_count == ChatUnreadException.objects.filter(membership=m).count() for m in members)
+        # Fixtures start at zero. Every successful ack/own-send records its
+        # immutable target under the metrics lock before task_done; after drain
+        # their exact maximum detects both lost reads and over-cleared unread.
+        checks[prefix + ":exact_ack_or_own_send_cursors"] = all(
+            0 <= m.last_read_seq <= room.message_seq
+            and m.last_read_seq == metrics.expected_read_seq[(room.pk, m.user_id)] for m in members)
+        checks[prefix + ":consistent_exception_cache"] = all(
+            m.unread_exception_count == ChatUnreadException.objects.filter(membership=m).count() for m in members)
         receipts = ChatReadReceipt.objects.filter(message__room=room).count()
         checks[prefix + ":no_normal_receipts"] = receipts == 0
         rooms.append(dict(room_id=room.pk, room_head=room.message_seq, expected_messages=expected,
