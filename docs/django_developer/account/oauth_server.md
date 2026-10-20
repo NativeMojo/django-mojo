@@ -335,19 +335,26 @@ a `SCRIPT_NAME`-mounted deployment already carries.
 
 ## Models
 
-Three models, all `models.Model, MojoModel`, all service-managed — there is no
+Four models, all `models.Model, MojoModel`, all service-managed — there is no
 REST CRUD endpoint for any of them. Their `RestMeta` exists for the Admin
 graphs and carries `DENY_AI = True`.
 
 | Model | Holds |
 |---|---|
-| `OAuthClient` | `client_id` (a random hex for DCR, the https document URL for CIMD), `kind`, `client_name`, `redirect_uris`, `metadata`, `is_active`, `last_used`. |
-| `OAuthGrant` | `user`, `client`, `access_jti`, `access_expires`, `refresh_hash`, `prev_refresh_hash`, `refresh_expires`, `last_refreshed`, `last_used`, `scopes`, `resource`, `auth_time`, `is_active`, `revoked_reason`. |
+| `OAuthClient` | `client_id` (a random hex for DCR, the https document URL for CIMD), `kind`, `client_name`, `redirect_uris`, `metadata` (including the declared `grant_types`), `is_active`, `last_used`. |
+| `OAuthGrant` | `user`, `client`, `access_jti`, `access_expires`, `refresh_hash`, `prev_refresh_hash`, `refresh_expires`, `last_refreshed`, `last_used`, `scopes`, `resource`, `auth_time`, `is_active`, `revoked_reason`, `flow`. |
 | `OAuthCode` | `client`, `user`, `code_hash`, `redirect_uri`, `code_challenge`, `scope`, `resource`, `auth_time`, `expires`, `consumed`, `grant`. |
+| `OAuthDeviceCode` | `client`, `user`, `grant`, `device_code_hash`, `user_code_hash`, `scope`, `resource`, `status`, `interval`, `last_polled`, `expires`, `requester_ip`, `requester_ua`, `requester_geo`, `auth_time`, `approved_at`, `grant_ttl_days`. See [Device authorization](#device-authorization-rfc-8628). |
 
-**Only hashes are stored.** The raw authorization code and the raw refresh
-secret exist once, on the wire; the database holds `sha256` hex. Nothing here
-can reproduce a credential.
+`OAuthGrant.flow` records how consent was given: `authorization_code` (the
+default, and what every row from before the device flow reads as) or
+`device_code`. It is shown in the grant's default graph so the Admin can tell a
+browser consent from a headless one.
+
+**Only hashes are stored.** The raw authorization code, the raw refresh secret
+and the raw device code exist once, on the wire; the database holds `sha256` hex
+(the short user code is an HMAC — see below). Nothing here can reproduce a
+credential.
 
 `access_jti` is the `jti` of the **current** access token. That gives two
 properties a grant-constant identifier could not: a refresh retires the previous
@@ -364,12 +371,13 @@ grant matches no live token and no two rows collide.
 
 | Module | Owns |
 |---|---|
-| `resources.py` | `ResourceRegistry`, `register_resource`, `covers`, `offered_scopes`, `public_origin`, the issuer/canonical/PRM URL algebra, `is_ready`, and the four TTL readers. |
+| `resources.py` | `ResourceRegistry`, `register_resource`, `covers`, `offered_scopes`, `public_origin`, the issuer/canonical/PRM URL algebra, `is_ready`, the four TTL readers, `DEVICE_GRANT` and the five device-flow readers. |
 | `discovery.py` | `authorization_server_metadata`, `protected_resource_metadata`, `www_authenticate`. |
 | `clients.py` | `validate_redirect_uri`, `redirect_uri_matches`, `register_client` (RFC 7591), `resolve_client` (DB or CIMD). |
 | `codes.py` | `validate_pkce_challenge`, `verify_pkce`, `mint_code`, `consume_code`. |
-| `tokens.py` | `create_grant`, `mint_access_token`, `issue_tokens`, `refresh_grant`, `revoke_grant`, `revoke_token`, the Admin API, and `validate_access`. |
-| `consent.py` | `handle_authorize`, `handle_approve` — all the page logic, so it is testable in-process without `BASE_URL`. |
+| `tokens.py` | `create_grant` (takes `flow=` and `ttl_days=`), `mint_access_token`, `issue_tokens`, `refresh_grant`, `revoke_grant`, `revoke_token`, the Admin API, and `validate_access`. |
+| `consent.py` | `handle_authorize`, `handle_approve` — all the page logic, so it is testable in-process without `BASE_URL`. Also `validate_scope_resource` and `consent_context`, shared with the device flow. |
+| `device.py` | The RFC 8628 device flow: `start`, `lookup`, `approve`, `deny`, `poll`, `handle_page`. |
 
 Siblings import the package, never its modules:
 
@@ -419,6 +427,21 @@ allows substitution, and SDK defaults routinely ask for `client_secret_post`),
 and `grant_types` / `response_types` are intersected with what the server
 supports. Only a bad `redirect_uris` is fatal — that one is a security boundary,
 not a preference.
+
+**The granted `grant_types` are stored**, in `OAuthClient.metadata["grant_types"]`
+(for a CIMD client, from the fetched document), not just echoed.
+`clients.client_grant_types(client)` reads them back. The device grant is **never
+implied**: a client that names nothing the server supports is given
+`authorization_code` and `refresh_token`, and must list
+`urn:ietf:params:oauth:grant-type:device_code` by name to be served by
+`device_authorization`. A row stored before declarations were kept has no
+`grant_types` and reads as the browser flow, so it can never be treated as having
+asked for the device grant.
+
+**`redirect_uris` is required only by the browser flow.** A client whose granted
+types exclude `authorization_code` (a device-only client) may register none,
+since it is never redirected anywhere. Any it does list are still held to the full
+redirect-URI rules.
 
 `resolve_client(client_id, fetcher=None)` takes the CIMD path when `client_id`
 starts with `https://`. The document is fetched through the shared SSRF-safe
@@ -487,9 +510,11 @@ The cost is deliberate and bounded: a response lost **twice in a row** is not
 recoverable, because the original token is no longer in either column after the
 first grace re-issue. Re-consent is one click; an undetected takeover is not.
 
-The refresh lifetime is **absolute** — 30 days from consent, never slid. A
-credential in a third party's custody gets a hard upper bound with no human in
-the loop; re-consent is one click.
+The refresh lifetime is **absolute** — `OAUTH_REFRESH_TTL_DAYS` (30) from consent,
+never slid; a device grant uses the lifetime its approver chose instead (see
+[Device authorization](#device-authorization-rfc-8628)). A credential in a third
+party's custody gets a hard upper bound with no human in the loop; re-consent is
+one click.
 
 ### Events
 
@@ -499,6 +524,9 @@ the loop; re-consent is one click.
 | `oauth:grant_revoked` | `user.log`, on `revoke_grant`. |
 | `oauth:code_replay` | `report_incident`, level 6. |
 | `oauth:refresh_replay` | `report_incident`, level 6. |
+| `oauth:device_approved` / `oauth:device_denied` | `user.log`, when a person approves or denies a device request. |
+| `oauth:device_code_replay` | `report_incident`, level 6 — a consumed device code was presented again. |
+| `oauth:device_code_bruteforce` | `report_incident`, level 6 — a person or an IP crossed the failed-lookup limit. |
 
 Dynamic client registration writes a `logit.info` line only — there is no user
 yet to attribute it to.
@@ -577,11 +605,160 @@ to overflow `OAuthCode.redirect_uri` past the comparison.
 
 ---
 
+## Device authorization (RFC 8628)
+
+For a client with no browser — a headless agent on a server, a CLI over SSH —
+the installation also speaks the OAuth device authorization grant. It is
+**off by default** (`OAUTH_DEVICE_FLOW_ENABLED`) and, while off, behaves as if it
+did not exist: `device_authorization` and the page 404, the token endpoint answers
+`unsupported_grant_type` for the device grant, and discovery omits both.
+It is also **`mcp`-only** unless `OAUTH_DEVICE_ALLOW_API` is on; asking for `api`
+otherwise answers `invalid_scope`.
+
+`services/oauth_server/device.py` owns the whole flow, in three steps:
+
+1. **`POST {OAUTH_ROOT}/device_authorization`** — `start()`. The client sends
+   `client_id`, `scope` and `resource`; `scope`/`resource` go through the same
+   `consent.validate_scope_resource` the browser flow uses, so both grant exactly
+   what the enabled resources offer. The response is the RFC 8628 §3.2 document
+   (`device_code`, `user_code`, `verification_uri`, `verification_uri_complete`,
+   `expires_in`, `interval`), raw JSON like the other protocol endpoints.
+2. **The verification page** — `GET {OAUTH_ROOT}/device` renders
+   `account/oauth_device.html`. A person signs in, enters (or confirms a
+   pre-filled) user code, reads the facts below, chooses a lifetime, and approves
+   or denies through `POST device/lookup`, `device/approve` and `device/deny`.
+3. **The client polls `{OAUTH_ROOT}/token`** with
+   `grant_type=urn:ietf:params:oauth:grant-type:device_code` — `poll()` — and,
+   once approved, receives an ordinary grant: the same confinement, refresh
+   rotation, replay detection and revocation as a browser consent, with
+   `OAuthGrant.flow = "device_code"`.
+
+The flow's inherent risk is **remote-consent phishing**: someone starts a request
+and sends the link to a victim, and nothing binds the credential to where it is
+delivered. Everything below exists to stand against that.
+
+### Storage and statuses
+
+`OAuthDeviceCode` holds one request. Neither code is stored raw:
+
+- `device_code_hash` is the `sha256` hex of a 256-bit secret.
+- `user_code_hash` is an **HMAC-SHA256 keyed by `SECRET_KEY`**. The user code is
+  eight letters from twenty consonants (`BCDFGHJKLMNPQRSTVWXZ`, shown `XXXX-XXXX`,
+  about 34 bits), so a plain hash would fall to an offline search the moment the
+  table leaked. Case, spaces and dashes are ignored on entry; a character outside
+  the charset is refused rather than mapped to a lookalike.
+
+`status` moves `pending` → `approved` | `denied`, then `approved` → `consumed`.
+**Every move is a conditional `UPDATE ... WHERE status = <expected>`** and the
+rowcount decides the race, so two concurrent approvals — or two concurrent polls
+of an approved code — produce exactly one winner; the loser gets `invalid_grant`
+(or a generic invalid-code error on the page) rather than a second grant.
+
+Expired rows are purged opportunistically on `start()` once they are a day past
+`expires`; there is no job.
+
+**Replay.** Presenting a device code whose row is already `consumed` is treated as
+theft: the grant it produced is revoked (`revoked_reason="device_code_replay"`),
+an `oauth:device_code_replay` incident is reported (level 6), and the caller gets
+`invalid_grant`. Replay is judged **before** the row is matched to the presenting client, so a
+stolen code cannot be laundered through another `client_id`; that match comes
+before the poll bookkeeping, so a stranger cannot slow the real client down.
+
+**Polling.** A poll sooner than the row's `interval` answers `slow_down` and
+permanently raises that row's interval by 5 seconds (capped at 60). Other polls
+answer `authorization_pending`, `access_denied` or `expired_token` per RFC 8628
+§3.5.
+
+### Failed-lookup limits
+
+Every `lookup`, `approve` and `deny` first checks two Redis counters and refuses
+with **429** once either is spent, right code or wrong; every miss increments
+both:
+
+| Counter | Limit | Window |
+|---|---|---|
+| per signed-in person | 5 | 15 minutes |
+| per requesting IP | 20 | 15 minutes |
+
+Crossing either limit reports an `oauth:device_code_bruteforce` incident (level
+6), once. The limits keep a guesser to a vanishing fraction of the 20^8 code
+space. A Redis failure is logged and does not block a legitimate approver.
+
+### What the approving person is shown
+
+`lookup` answers with the consent facts for the pending request. All of them
+describe the **requesting machine** or the request itself, which a phishing link
+cannot choose:
+
+- the client name beside whether anything vouched for it (CIMD URL, or
+  "unverified name" for DCR), the access in plain words, and the exact resource;
+- the requester's **IP, location, user agent and the request's age**. Location is
+  looked up lazily (`GeoLocatedIP`) on the first lookup and cached on the row;
+- a **network-mismatch warning** when the requester's address is not in the same
+  `/24` (IPv4) or `/64` (IPv6) as the approver's current request, or either is
+  unknown;
+- a **missing-permission warning** when the grant includes `mcp` and the approver
+  holds neither `view_admin` nor `assistant`. The tool door requires one of them at
+  request time, so approving a connection that cannot work is the thing being
+  prevented.
+
+A `user_code` in the page URL only pre-fills the box. It is **never approved
+without the person pressing Approve** on a screen that repeats the code. The page
+is a shell; everything about a request arrives from `lookup` after sign-in, so
+nothing on it depends on the code being valid.
+
+The three actions take the consent page's approve guard: `denies_key_backed_session(
+deny_user_api_keys=True)` plus `requires_auth`, so API keys, per-user API keys and
+group tokens are refused, and `_require_session` additionally demands an ordinary
+interactive session (`bearer == "bearer"`, a real `auth_time`). **`approve` also
+carries `requires_fresh_auth(600)`** — a login within the last ten minutes, else
+440 — because the request was started by a machine this person may never have seen.
+`lookup` and `deny` take no freshness window.
+
+### The approver chooses the lifetime
+
+`approve` takes `ttl_days`. The options are **30, 60 and 90 days**, never above
+`OAUTH_DEVICE_MAX_TTL_DAYS`, which is clamped to 1–90. A cap that is not itself
+30, 60 or 90 is offered as the longest option (a cap of 45 offers 30 or 45).
+`lifetime_options(cfg)` computes the list; the first entry is the default, and an
+absent `ttl_days` takes it. Anything outside the list is refused.
+
+The chosen value is stored on the row (`grant_ttl_days`) and passed to
+`create_grant(..., ttl_days=)` at the poll that consumes the code. It is the
+grant's **absolute** lifetime — set once, never slid by a refresh, and capped at
+90 again at issuance. Browser grants are unaffected and keep
+`OAUTH_REFRESH_TTL_DAYS`.
+
+### Registering a device client
+
+A client opts in by listing `urn:ietf:params:oauth:grant-type:device_code` in
+`grant_types` when it registers (DCR) or in its metadata document (CIMD); see
+[Clients](#clients). `device_authorization` answers `unauthorized_client` for one
+that did not. A device-only client may omit `redirect_uris`.
+
+### Discovery
+
+While the flow is on, `authorization_server_metadata` adds
+`device_authorization_endpoint` and appends the device grant to
+`grant_types_supported`. `discovery.authorization_server_metadata(origin,
+device_enabled=...)` is the seam for that switch.
+
+### Test seams
+
+Every function in `device.py` that reads configuration takes `cfg=` (an `objict`
+with `enabled`, `code_ttl`, `interval`, `allow_api`, `max_ttl_days`; `config()`
+builds the live one) and `registry=` (a private `ResourceRegistry`), so tests drive
+the flow in-process without touching the shared settings or resource registry.
+`lookup()` also takes `geo_lookup=` to replace the `GeoLocatedIP` call.
+
+---
+
 ## Settings
 
-All five are read with `get_static` — the **deployment file only**, never the
+All ten are read with `get_static` — the **deployment file only**, never the
 database plane. A `manage_settings` holder must not be able to lengthen a
-credential lifetime through a `Setting` row.
+credential lifetime, switch on the device flow or widen it to `api` through a
+`Setting` row.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -590,14 +767,22 @@ credential lifetime through a `Setting` row.
 | `OAUTH_REFRESH_TTL_DAYS` | `30` | Absolute grant ceiling, measured from consent. |
 | `OAUTH_REFRESH_GRACE_SECONDS` | `30` | Lost-response forgiveness window. |
 | `OAUTH_CODE_TTL` | `300` | Authorization-code lifetime, seconds. |
+| `OAUTH_DEVICE_FLOW_ENABLED` | `False` | Turns the RFC 8628 device flow on. Off, it 404s and is not advertised. |
+| `OAUTH_DEVICE_CODE_TTL` | `600` | How long a device request waits for approval, seconds. Minimum `60`. |
+| `OAUTH_DEVICE_INTERVAL` | `5` | Minimum seconds between a device client's polls. Minimum `1`. |
+| `OAUTH_DEVICE_ALLOW_API` | `False` | Let device sign-ins request the `api` scope. Off, they are `mcp`-only. |
+| `OAUTH_DEVICE_MAX_TTL_DAYS` | `30` | Longest grant the approver may choose, days. Clamped to 1–90. |
 
 `BASE_URL` (System Setup, or the deployment file) and each resource's own enable
 setting complete the configuration.
 
-The three credential-bearing paths are labelled in
+The credential-bearing paths are labelled in
 `mojo.helpers.request.sensitive_body_label` — `token` and `revoke` as
-`oauth_token`, `approve` as `oauth_approve` — so broad request/response logging
-never writes a code verifier, a refresh token or a session bearer in plaintext.
+`oauth_token`, `approve` as `oauth_approve`, and the five device paths
+(`device_authorization`, `device`, `device/lookup`, `device/approve`,
+`device/deny`) as `oauth_device` — so broad request/response logging never writes
+a code verifier, a refresh token, a device or user code or a session bearer in
+plaintext.
 
 ---
 

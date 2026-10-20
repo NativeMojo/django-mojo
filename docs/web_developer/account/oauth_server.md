@@ -339,7 +339,7 @@ behaviour and it means this endpoint is not an oracle.
 | `invalid_request` | 400 | A required parameter is missing. |
 | `invalid_client` | 401 | The `client_id` is unknown, inactive, or its metadata document could not be read. |
 | `invalid_grant` | 400 | The code or refresh token is not usable. Deliberately undifferentiated — unknown, expired, wrong client, wrong redirect, bad verifier, revoked and replayed all look identical. |
-| `unsupported_grant_type` | 400 | Only `authorization_code` and `refresh_token` exist. |
+| `unsupported_grant_type` | 400 | Only `authorization_code` and `refresh_token` exist — plus the device grant when this installation has enabled it (see [Device authorization](#device-authorization-headless-agents)). |
 | `invalid_target` | 400 | The `resource` does not match the one the code was bound to. |
 | `not_found` | 404 | The server is unconfigured or the resource is switched off. |
 
@@ -424,6 +424,182 @@ re-authenticating will not help.
 | An operator revoked the grant | Re-consent. |
 | A code or refresh token was replayed, or a superseded refresh token was presented after the grace window | Re-consent. |
 | The resource was switched off | Nothing to do — wait for the operator. The grant is dormant, not destroyed, and refresh works again once it is back on. |
+
+---
+
+## Device authorization (headless agents)
+
+For a client with no browser to open — an agent on a server, a CLI over SSH — the
+installation can run the OAuth device authorization grant (RFC 8628). The client
+shows a short code; a person approves it on any device they are signed in on; the
+client then collects its tokens by polling.
+
+**This is off unless the deployment enables it.** While off, `device_authorization`
+and the verification page answer `404`, the token endpoint answers
+`unsupported_grant_type` for the device grant, and the discovery document does not
+mention it. When on, discovery adds `device_authorization_endpoint` and lists
+`urn:ietf:params:oauth:grant-type:device_code` in `grant_types_supported`. Read the
+endpoints out of the metadata.
+
+**It is `mcp`-only** unless the deployment also allows `api`. Asking a device flow
+for `api` answers `invalid_scope` by default. The token you receive is otherwise
+the same confined credential described above: same audience, same refresh
+rotation, same revocation.
+
+### 1. Register for the device grant
+
+The device grant is never implied. Your client must **ask for it by name**, or
+`device_authorization` answers `unauthorized_client`:
+
+```http
+POST /api/account/oauth/register
+Content-Type: application/json
+
+{
+  "client_name": "Build agent",
+  "grant_types": ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"]
+}
+```
+
+A client that lists only device grants may omit `redirect_uris` — it is never
+redirected. (A Client ID Metadata Document names `grant_types` the same way.) Read
+the echoed `grant_types` to confirm what you were given.
+
+### 2. Start a request
+
+```http
+POST /api/account/oauth/device_authorization
+Content-Type: application/x-www-form-urlencoded
+
+client_id=<client id>
+&scope=mcp
+&resource=https://example.com/api/assistant/mcp
+```
+
+JSON bodies are accepted too. `scope` and `resource` follow the same rules as the
+authorization endpoint, including that they must agree. `200`, raw RFC JSON with no
+`{status, code, data}` envelope:
+
+```json
+{
+  "device_code": "kD3r…",
+  "user_code": "WDJB-MJHT",
+  "verification_uri": "https://example.com/api/account/oauth/device",
+  "verification_uri_complete": "https://example.com/api/account/oauth/device?user_code=WDJB-MJHT",
+  "expires_in": 600,
+  "interval": 5
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `device_code` | Secret. Keep it; send it only to the token endpoint. |
+| `user_code` | Eight letters, shown as `XXXX-XXXX`. Print it for the person; case, spaces and dashes are ignored when they type it. |
+| `verification_uri` | Where the person goes. Print it too. |
+| `verification_uri_complete` | The same page with the code pre-filled. Fine for a link or QR code. |
+| `expires_in` | Seconds the request waits for approval. After that, start over. |
+| `interval` | Minimum seconds between polls. |
+
+Errors are the usual RFC body, `{"error": …, "error_description": …}`:
+`invalid_client` (`401`), `unauthorized_client` (the client did not register the
+device grant), `invalid_scope`, `invalid_target`, and `404` when the flow is off.
+The endpoint is rate limited per IP.
+
+### 3. Poll the token endpoint
+
+Every `interval` seconds:
+
+```http
+POST /api/account/oauth/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=urn:ietf:params:oauth:grant-type:device_code
+&device_code=<the device code>
+&client_id=<client id>
+```
+
+Once approved, `200` with the ordinary token response (`access_token`,
+`token_type`, `expires_in`, `refresh_token`, `scope`). The device code is
+**single use**: it is spent by that response. Presenting it again is treated as
+theft — the grant it produced is revoked and a security event is recorded — and
+answers `invalid_grant`.
+
+Until then you get one of these (HTTP `400` unless noted):
+
+| `error` | Meaning | What to do |
+|---|---|---|
+| `authorization_pending` | Nobody has approved yet. | Keep polling at `interval`. |
+| `slow_down` | You polled sooner than `interval`. | Add **5 seconds** to your interval, permanently, and keep polling. |
+| `access_denied` | The person denied the request. | Stop. |
+| `expired_token` | `expires_in` has passed. | Stop, and start a new request. |
+| `invalid_grant` | The device code is unknown, already used, for a different client, or the account or resource is no longer usable. Deliberately undifferentiated. | Stop, and start a new request. |
+| `invalid_request` | `device_code` or `client_id` is missing. | Fix the request. |
+| `invalid_client` (`401`) | The `client_id` is unknown or inactive. | Stop. |
+| `unsupported_grant_type` | The installation has not enabled the device flow. | Stop; tell the operator. |
+
+### How long the connection lasts
+
+The person approving **chooses** the lifetime — 30, 60 or 90 days, never more than
+the deployment allows. It is the grant's absolute lifetime, measured from approval
+and never extended by refreshing; after that the person must approve a new request.
+The refresh token rotates exactly as it does for a browser grant (see
+[Refresh](#refresh)).
+
+### The verification page
+
+The person opens `verification_uri` (or the complete link) in any browser:
+
+```
+GET /api/account/oauth/device?user_code=WDJB-MJHT
+```
+
+It is a themed HTML page, never frameable, never cached. It signs the person in
+through the installation's own sign-in pages if needed, then shows who is asking
+and for what, before offering Approve and Deny. **A code in the URL only
+pre-fills the box — nothing is approved until the person presses Approve.** To
+help them spot a request they did not start, the page shows where it came from:
+
+- the requesting machine's **IP address, approximate location and user agent**,
+  and how long ago it asked;
+- a **warning** when that machine is on a different network (a different `/24`
+  for IPv4, `/64` for IPv6) from the one the person is using now;
+- a **warning** when the request includes `mcp` but their account holds neither
+  `view_admin` nor `assistant`, since the Assistant's tools would refuse them.
+
+The page makes three calls. They are listed because a custom front end can make
+them too, but a client application should only ever print the code and send the
+person to the page.
+
+All three need an **interactive sign-in session** (the person's own `Authorization:
+Bearer <session token>`). They refuse an `ApiKey`, a user API key and a
+group-scoped token outright, and an OAuth access token cannot be used to approve
+anything. Responses use the normal `{status, code, data}` envelope.
+
+| Endpoint | Body | Extra requirement |
+|---|---|---|
+| `POST /api/account/oauth/device/lookup` | `user_code` | — |
+| `POST /api/account/oauth/device/approve` | `user_code`, `ttl_days` | A sign-in within the last **600 seconds**, else `440`. |
+| `POST /api/account/oauth/device/deny` | `user_code` | — |
+
+- **`lookup`** returns what the page shows: `client_name`, `client_id`,
+  `access_lines` (one plain-language sentence per scope), `requested_resource`,
+  `client_verified_url` / `client_unverified`, `user_code`, `requester`
+  (`ip`, `location`, `user_agent`, `age_seconds`), `network_mismatch`,
+  `missing_permission`, `lifetime_options` (days), `lifetime_default` and
+  `expires_in`.
+- **`approve`** returns `{"status": "approved", "ttl_days": 30}`. `ttl_days` must be
+  one of the `lifetime_options` from `lookup`; omit it for the default (the first).
+  A value outside the list is `400`.
+- **`deny`** returns `{"status": "denied"}`; the client's next poll gets
+  `access_denied`.
+
+| Status | Cause |
+|---|---|
+| `400` | The code is unknown, expired, already answered, or malformed — one message for all of them. Or `ttl_days` is not an offered option. |
+| `401` / `403` | No session, an API key or group token, or not an ordinary session token. |
+| `404` | The flow is switched off. |
+| `429` | Too many wrong codes. About **5 per person** and **20 per IP** in 15 minutes, after which every call (right code or wrong) is refused until the window passes. |
+| `440` | `approve` only: the sign-in is older than 600 seconds. Sign in again and retry with the same code. |
 
 ---
 
