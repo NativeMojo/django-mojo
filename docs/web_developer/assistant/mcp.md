@@ -205,9 +205,11 @@ approving a card.
   "isError":false}}
 ```
 
-Every result is a JSON object, sent both as text and as `structuredContent` so
-you can skip re-parsing. No `outputSchema` is declared, so nothing about the
-shape is promised.
+Every result is sent as JSON text in `content[0].text`. Object results also
+include `structuredContent`, so you can skip re-parsing those. Array results
+(such as job histories and group member lists) have no `structuredContent`;
+parse the text to read the array. No `outputSchema` is declared; consult the
+individual tool's documented shape.
 
 `isError: true` means the tool refused or failed; the text is a JSON object with
 an `error` key. Unknown tool names, permission refusals and handler errors all
