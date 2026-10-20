@@ -214,6 +214,64 @@ def test_integer_in_malformed(opts):
 
 
 # ---------------------------------------------------------------------------
+# Out-of-range numeric dates (review 131244 R1: OSError escaped as a 500)
+# ---------------------------------------------------------------------------
+
+HUGE_TIMESTAMP = "100000000000000000"
+
+
+@th.django_unit_test("REST: an out-of-range numeric date is a 400 on list and count")
+def test_numeric_date_out_of_range(opts):
+    for key in ("user__last_login__gte", "expires_at__in"):
+        _expect_400(opts, {key: HUGE_TIMESTAMP}, key)
+        _expect_400(opts, {key: HUGE_TIMESTAMP, "_mode": "count"}, key)
+
+
+@th.django_unit_test("REST: _stats nulls an out-of-range numeric date chip and keeps its sibling")
+def test_numeric_date_out_of_range_stats(opts):
+    stats = {
+        "ok": {"is_unread__in": [True, False]},
+        "last_login": {"user__last_login__gte": HUGE_TIMESTAMP},
+        "expires": {"expires_at__in": HUGE_TIMESTAMP},
+    }
+    resp = _get(opts, {"_mode": "count", "_stats": json.dumps(stats), "_no_defaults": "1"})
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.response}")
+    got = resp.response.get("stats") or {}
+    assert_eq(got.get("ok"), 3, f"the valid sibling chip must still count, got {got}")
+    for name in ("last_login", "expires"):
+        assert_true(name in got and got[name] is None,
+                    f"the out-of-range {name} chip must be null, got {got}")
+
+
+# ---------------------------------------------------------------------------
+# Text lookups on integer columns (review 131244 R2: "026" became 26)
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("REST: id__startswith keeps its text pattern on list, count and _stats")
+def test_integer_text_lookup_raw(opts):
+    from mojo.apps.account.models.notification import Notification
+    pk = Notification.objects.get(kind=KIND, title="rfn-a").pk
+    padded = f"0{pk}"
+    params = {"id__startswith": padded, "_no_defaults": "1"}
+    resp = _get(opts, params)
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.response}")
+    assert_eq(_titles(resp), [], f"no id starts with {padded!r}, got {_titles(resp)}")
+    resp = _get(opts, dict(params, _mode="count"))
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.response}")
+    assert_eq(resp.response.get("count"), 0, f"count for {padded!r} must be 0, got {resp.response}")
+    stats = {"padded": {"id__startswith": padded}, "plain": {"id__startswith": str(pk)}}
+    resp = _get(opts, {"_mode": "count", "_stats": json.dumps(stats), "_no_defaults": "1"})
+    got = resp.response.get("stats") or {}
+    assert_eq(got.get("padded"), 0, f"the padded chip must count 0, got {got}")
+    assert_true((got.get("plain") or 0) >= 1, f"the plain prefix must still match rfn-a, got {got}")
+    filters, _ = _parse(opts, {"id__startswith": padded, "id__icontains": "0x"})
+    assert_eq(filters.get("id__startswith"), padded,
+              f"a text lookup must reach the ORM as sent, got {filters}")
+    assert_eq(filters.get("id__icontains"), "0x",
+              f"a text lookup must reach the ORM as sent, got {filters}")
+
+
+# ---------------------------------------------------------------------------
 # Parser matrix (in-process)
 # ---------------------------------------------------------------------------
 
