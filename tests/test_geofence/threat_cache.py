@@ -13,6 +13,8 @@ detect_tor from attempting a live network fetch.
 """
 
 TESTIT_TIER = "extended"
+from unittest import mock
+
 from testit import helpers as th
 
 LISTED_IP = "198.51.100.7"
@@ -172,3 +174,83 @@ def test_weekly_cron_excludes_threat_caches(opts):
         "tor_exits must be excluded from the firewall-sync cron (is_enabled=False)"
     assert "blocklist_de" not in selected, \
         "blocklist_de must be excluded from the firewall-sync cron (is_enabled=False)"
+
+
+@th.django_unit_test("threat cache: mixed-family refresh stores only IPv4")
+def test_mixed_family_refresh_drops_ipv6(opts):
+    from mojo.apps.incident.models import IPSet
+
+    IPSet.objects.filter(name="blocklist_de").delete()
+    row = IPSet(
+        name="blocklist_de", kind="abuse", source="blocklist_de",
+        data="192.0.2.0/24")
+    row._allow_reserved_name = True
+    row.save()
+
+    with mock.patch.object(
+            row, "_fetch_blocklist_de",
+            return_value=[
+                LISTED_IP,
+                "2001:db8::1",
+                "203.0.113.0/24",
+                "2001:db8:1::/48",
+            ]):
+        result = row.refresh_from_source()
+
+    row.refresh_from_db()
+    assert result is True, "mixed-family cache refresh must succeed"
+    assert row.cidrs == ["198.51.100.7/32", "203.0.113.0/24"], \
+        f"cache must store only canonical IPv4 entries, got {row.cidrs!r}"
+    assert row.sync_error is None, \
+        f"successful cache refresh must clear sync_error, got {row.sync_error!r}"
+    assert row.refresh_dropped == 2, \
+        f"refresh must expose the two dropped IPv6 entries, got {row.refresh_dropped!r}"
+    assert row.is_enabled is False, "cache refresh must not enable the firewall set"
+
+
+@th.django_unit_test("threat cache: malformed mixed-family refresh stays atomic")
+def test_malformed_mixed_family_refresh_fails_atomically(opts):
+    from mojo.apps.incident.models import IPSet
+
+    IPSet.objects.filter(name="blocklist_de").delete()
+    row = IPSet(
+        name="blocklist_de", kind="abuse", source="blocklist_de",
+        data="192.0.2.0/24")
+    row._allow_reserved_name = True
+    row.save()
+
+    with mock.patch.object(
+            row, "_fetch_blocklist_de",
+            return_value=["198.51.100.0/24", "not-an-ip", "2001:db8::/32"]):
+        result = row.refresh_from_source()
+
+    row.refresh_from_db()
+    assert result is False, "malformed cache data must fail the refresh"
+    assert row.cidrs == ["192.0.2.0/24"], \
+        f"failed refresh replaced the previous snapshot: {row.cidrs!r}"
+    assert row.sync_error == "source_refresh_failed", \
+        f"malformed refresh must retain the bounded error, got {row.sync_error!r}"
+
+
+@th.django_unit_test("threat cache: refresh job reports dropped IPv6 count")
+def test_refresh_job_reports_dropped_ipv6(opts):
+    from mojo.apps.incident.asyncjobs import refresh_threat_lists
+
+    def response(url, **unused):
+        if "blocklist.de" in url:
+            text = f"{LISTED_IP}\n2001:db8::1\n2001:db8:1::/48\n"
+        else:
+            text = f"ExitAddress {LISTED_IP} 2026-07-08 02:00:00\n"
+        return mock.Mock(text=text)
+
+    with mock.patch("requests.get", side_effect=response):
+        job = mock.Mock()
+        refresh_threat_lists(job)
+
+    messages = [call.args[0] for call in job.add_log.call_args_list]
+    blocklist_messages = [message for message in messages
+                          if "blocklist_de" in message]
+    assert len(blocklist_messages) == 1, \
+        f"refresh must emit one blocklist job log, got {messages!r}"
+    assert "2 non-IPv4 dropped" in blocklist_messages[0], \
+        f"success log must report the dropped IPv6 count, got {blocklist_messages[0]!r}"

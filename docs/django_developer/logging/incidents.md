@@ -698,6 +698,11 @@ action rejects them and `sync()` no-ops for them even if the flag is
 force-set, so the entire Tor exit list / blocklist.de list can never be
 pushed into the fleet-wide firewall.
 
+Cache-only refreshes store the IPv4 subset of a mixed-family feed and report
+the number of well-formed IPv6 entries dropped in the job log. Malformed lines
+still fail the refresh atomically, preserving the prior cache snapshot.
+Kernel-bound IPSets remain strictly IPv4-only and reject IPv6 data.
+
 ### Async Jobs
 
 | Job | Type | Description |
