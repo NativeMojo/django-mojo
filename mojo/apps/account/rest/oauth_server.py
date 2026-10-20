@@ -12,6 +12,8 @@ derives the issuer and the sensitive-body labels:
     /.well-known/oauth-authorization-server/api/account/oauth   (RFC 8414)
     /.well-known/oauth-protected-resource/<resource path>       (RFC 9728)
     /api/account/oauth/authorize | approve | token | revoke | register
+    /api/account/oauth/device_authorization | device                (RFC 8628)
+    /api/account/oauth/device/lookup | device/approve | device/deny
 
 Only the path-suffixed discovery forms are served. The root forms stay free for
 another product's authorization server on the same host, and the protected-
@@ -28,7 +30,7 @@ from django.urls.converters import get_converters
 
 from mojo import decorators as md
 from mojo.apps.account.services.oauth_server import (
-    clients, codes, consent, discovery, resources, tokens,
+    clients, codes, consent, device, discovery, resources, tokens,
 )
 
 _ROOT = resources.SERVER_PATH
@@ -145,6 +147,59 @@ def on_approve(request):
     return consent.handle_approve(request, resources.public_origin())
 
 
+# --- device authorization (RFC 8628) --------------------------------------
+
+@md.POST(f"{_ROOT}/device_authorization")
+@md.public_endpoint("RFC 8628 device authorization request")
+@md.strict_rate_limit("oauth_device_authorization", ip_limit=10, ip_window=300)
+def on_device_authorization(request):
+    try:
+        return _raw(device.start(request, resources.public_origin()))
+    except device.DeviceError as err:
+        if err.status == 404:
+            return _not_found()
+        return _oauth_error(err.code, err.description, err.status)
+
+
+@md.GET(f"{_ROOT}/device")
+@md.public_endpoint("RFC 8628 device verification page")
+# The URL may carry a user code, so the throttle event keeps no request detail.
+@md.strict_rate_limit("oauth_device_page", ip_limit=60,
+                      include_request_in_incident=False)
+def on_device_page(request):
+    return device.handle_page(request, resources.public_origin())
+
+
+# The three actions behind the page take exactly the consent page's approve
+# guard: an interactive session only, never a key of any kind. Approving also
+# demands a login inside the last ten minutes — the request was started by a
+# machine this person may never have seen.
+
+@md.POST(f"{_ROOT}/device/lookup")
+@md.denies_key_backed_session(deny_user_api_keys=True)
+@md.requires_auth()
+@md.strict_rate_limit("oauth_device_lookup", ip_limit=20)
+def on_device_lookup(request):
+    return device.lookup(request, resources.public_origin())
+
+
+@md.POST(f"{_ROOT}/device/approve")
+@md.denies_key_backed_session(deny_user_api_keys=True)
+@md.requires_auth()
+@md.requires_fresh_auth(600)
+@md.strict_rate_limit("oauth_device_approve", ip_limit=20)
+def on_device_approve(request):
+    return device.approve(request, resources.public_origin())
+
+
+@md.POST(f"{_ROOT}/device/deny")
+@md.denies_key_backed_session(deny_user_api_keys=True)
+@md.requires_auth()
+@md.strict_rate_limit("oauth_device_approve", ip_limit=20)
+def on_device_deny(request):
+    return device.deny(request, resources.public_origin())
+
+
 # --- token issuance -------------------------------------------------------
 
 def _exchange_code(request, origin):
@@ -210,8 +265,15 @@ def _refresh(request, origin):
         return _oauth_error(err.code, err.description, 400)
 
 
+def _poll_device(request, origin):
+    try:
+        return _raw(device.poll(request, origin))
+    except device.DeviceError as err:
+        return _oauth_error(err.code, err.description, err.status)
+
+
 @md.POST(f"{_ROOT}/token")
-@md.public_endpoint("OAuth 2.1 token endpoint (authorization_code, refresh_token)")
+@md.public_endpoint("OAuth 2.1 token endpoint (authorization_code, refresh_token, device_code)")
 @md.strict_rate_limit("oauth_token", ip_limit=60)
 def on_token(request):
     origin = resources.public_origin()
@@ -222,6 +284,8 @@ def on_token(request):
         return _exchange_code(request, origin)
     if grant_type == "refresh_token":
         return _refresh(request, origin)
+    if grant_type == resources.DEVICE_GRANT and resources.device_flow_enabled():
+        return _poll_device(request, origin)
     return _oauth_error(
         "unsupported_grant_type", "grant_type must be authorization_code or refresh_token")
 

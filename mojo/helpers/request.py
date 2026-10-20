@@ -204,6 +204,13 @@ def sensitive_body_label(request):
         return "oauth_token"
     if method == "POST" and path == f"{OAUTH_ROOT}/approve":
         return "oauth_approve"
+    # RFC 8628: `device_authorization` answers with the device code, the page's
+    # URL may carry a user code, and the page's three actions carry the user
+    # code plus the session bearer.
+    if path in (f"{OAUTH_ROOT}/device_authorization", f"{OAUTH_ROOT}/device",
+                f"{OAUTH_ROOT}/device/lookup", f"{OAUTH_ROOT}/device/approve",
+                f"{OAUTH_ROOT}/device/deny"):
+        return "oauth_device"
     if path == f"{API_ROOT}/edge/webapp/link_key":
         return "webapp_deployment_key"
     if method == "POST" and path in (

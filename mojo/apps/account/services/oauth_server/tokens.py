@@ -55,11 +55,18 @@ def _sha256_hex(raw):
 
 # --- grants ---------------------------------------------------------------
 
-def create_grant(user, client, scopes, resource, auth_time):
-    """Create the standing authorization behind a credential pair."""
+def create_grant(user, client, scopes, resource, auth_time,
+                 flow="authorization_code", ttl_days=None):
+    """Create the standing authorization behind a credential pair.
+
+    `ttl_days` is the absolute lifetime, set once here and never slid. It is
+    passed only by the device flow, where the approving person chose it within
+    a capped set of options; every other grant gets `OAUTH_REFRESH_TTL_DAYS`.
+    """
     from mojo.apps.account.models.oauth_grant import OAuthGrant
 
     now = dates.utcnow()
+    days = resources.refresh_ttl_days() if ttl_days is None else int(ttl_days)
     grant = OAuthGrant(
         user=user,
         client=client,
@@ -68,10 +75,11 @@ def create_grant(user, client, scopes, resource, auth_time):
         # never resolve a grant that has not issued one yet.
         access_jti=secrets.token_hex(16),
         refresh_hash=secrets.token_hex(32),
-        refresh_expires=now + datetime.timedelta(days=resources.refresh_ttl_days()),
+        refresh_expires=now + datetime.timedelta(days=days),
         scopes=list(scopes or []),
         resource=resource,
         auth_time=int(auth_time or 0),
+        flow=flow,
         is_active=True)
     grant.save()
     try:
