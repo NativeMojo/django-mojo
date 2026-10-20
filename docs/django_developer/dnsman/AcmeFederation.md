@@ -12,7 +12,7 @@ An operator provisions an `ApiKey` on the downstream project's `Group` with
 floor. An ordinary group administrator cannot assign it: the normal member path
 requires the global `sys.dnsman_acme_federation` grant, while the existing
 global `manage_users` / `manage_groups` key-administration override can also
-assign it. The three endpoints reject JWT users, group tokens, anonymous
+assign it. The three legacy allocation/publish/withdraw endpoints reject JWT users, group tokens, anonymous
 callers, keys without the underlying permission, override sessions whose
 underlying key lacks it, and keys whose project or ancestor project is inactive.
 Authorization and ownership always come from `request.api_key.group`; a
@@ -40,7 +40,7 @@ original group attribution, and exact allocation zone name/id never change.
 Changing configuration affects only new allocations and a target is never
 reused, including re-onboarding the same domain with a new reference.
 
-`AcmeHubChallengeLease` durably stores one immutable `challenge_ref`, its exact
+`AcmeHubChallengeLease` durably stores one immutable participant-local `challenge_ref`, its exact
 complete digest set, state, expiry, and reconciliation timestamps. Publish
 commits pending intent before touching Route53. A PostgreSQL advisory lock per
 allocation covers the lease write and the provider write, and Route53 always
@@ -190,9 +190,13 @@ still present in a config file.
 These settings intentionally use `settings.get_static`: no tenant or DB-backed
 setting can redirect an existing or future allocation.
 
-## Version skew
+## Legacy publish-propagation version skew
 
-The fix belongs on the **hub** side, and only there.
+This section describes the historical legacy publish-propagation fix. Shared
+validation v2 separately detects capabilities404 as unsupported and requires the
+[coordinated hub rollout](#coordinated-hub-rollout) below.
+
+The propagation fix belongs on the **hub** side, and only there.
 
 * **Old client → new hub**: works. This is exactly the deployment that is
   broken today, and upgrading the hub alone repairs it — the reply shape is
@@ -211,7 +215,7 @@ A deployment consuming this hub uses
 `mojo.apps.dnsman.services.acme_hub_client`. This is a challenge-specific HTTP
 transport, not a `DnsProvider`: it is never registered with
 `services/dns.get_adapter()`, cannot list records, and cannot write a
-caller-selected name. The only operations are:
+caller-selected name. Its legacy challenge operations are:
 
 ```python
 allocation = acme_hub_client.allocate(domain, client_ref)
@@ -324,3 +328,110 @@ failure is 503. `last_error_code` is a bounded machine diagnostic such as
 `configuration`, `transport`, `response`, `http`, or
 `hub_allocation_mismatch`; UI copy should be driven by the HTTP error and state,
 not by displaying that internal code verbatim.
+
+
+## Shared validation (protocol v2)
+
+An existing allocation controller can authorize explicitly named projects to use
+that allocation's **existing** public target. No new CNAME or target is created.
+This grants certificate issuance authority for the apex **and** wildcard. A
+trusted deployment can obtain a certificate using its own private key; granting
+trust can therefore enable impersonation. No private key, ACME account,
+registrar credential or general DNS capability crosses this protocol.
+
+A controller is the allocation's original project group through a fresh active
+protected federation key, or a genuine interactive platform superuser using the
+shared `services.authorization.is_platform_admin` policy. Acting-superuser
+keys, GroupScopedToken, ordinary DNS/Sites/security managers, key administrators
+and a caller-selected group cannot confer this authority. Every management
+operation repeats the allocation-row check. Protected-key capabilities indicate
+eligibility, never authority over every allocation.
+
+`AcmeHubParticipant` binds a permanent random `participant_ref`, immutable
+consumer project UUID, original group, consumer-local `client_ref`, allocation
+and role (`owner` or `trusted`). `(consumer_project_uuid, client_ref)` is unique
+across both roles. One owner is backfilled for every old allocation, including
+allocations whose group was deleted; historical leases are bound to that owner
+without changing PKs, values, state, expiry, errors or reconciliation timestamps.
+A null original group cannot be inherited by a recreated project.
+
+Grant creates a trusted participant; join only validates that grant and exact
+one-hop alias, and creates nothing. Revocation is a permanent tombstone. Exact
+active grant retries are idempotent; revoked references never reactivate or
+rebind. Regrant needs a fresh persisted consumer-local ref. Owner participants
+cannot be revoked through trust APIs. Legacy allocate creates allocation and
+owner participant atomically and conflicts on an already-trusted local ref,
+rather than minting a competing target.
+
+Every lease has a required participant FK and uniqueness on
+`(participant, challenge_ref)`. All writes, withdrawals, revocations, expiry and
+reconciliation hold the existing allocation advisory lock through provider
+submission. Publication repeats fresh key/group and trust checks **inside** the
+lock after DNS proof. The union excludes elapsed and revoked participants, and
+deduplicates identical values without conflating challenge refs across projects.
+Revocation commits before provider cleanup. Ambiguous provider failures leave
+durable, unconfirmed cleanup for repeated revoke/withdraw or the fair sweep.
+An active rotated protected key in the same original group may withdraw an old
+revoked participant's leases without alias proof; dead credentials and inactive
+projects are never admitted for cleanup.
+
+Cleanup is bounded by the existing lease lifetime
+`DNSMAN_ACME_HUB_LEASE_SECONDS` (default 900, clamped 60–86400 seconds), the
+five-minute sweep cadence and provider availability. Do not promise cleanup
+while the provider is unavailable. Revocation cannot revoke an already-issued
+certificate or undo a CA request accepted before revocation.
+
+### Connection request handshake
+
+Read-only preflight calls `acme_hub_client.capabilities()` and
+`lookup(domain, allocation_ref=None, cursor=None)` before any local row is
+created. A hub returning capabilities404 reports
+`shared_validation_unsupported`; never fall back to a new allocation for an
+already-used CNAME. Existing ordinary DNS and legacy delegation remain usable.
+
+Project setup owns preparing a fresh persisted local ref and exporting:
+
+```json
+{"version":1,"consumer_project_uuid":"0123456789abcdef0123456789abcdef",
+ "client_ref":"persisted-consumer-local-ref","domain":"customer.example",
+ "allocation_ref":"existing-target.acme-hub.example.net"}
+```
+
+The object contains no URL/key/token and has no authority by itself. The
+controller resolves the exact recipient, recognizes its bounded label and the
+apex+wildcard scope, and explicitly grants the descriptor. The consumer rechecks
+and joins with the **same persisted ref**. Public CNAME knowledge cannot join or
+self-grant. A non-controller can export a request and await authorization without
+creating a privileged credential or editing database rows.
+
+The narrow configured client adds `status(client_ref)`,
+`join(domain, client_ref, allocation_ref)`, `list_allocations(domain, cursor=None)`,
+`list_participants(allocation_ref, cursor=None)`,
+`resolve_recipient(allocation_ref, consumer_project_uuid)`, `grant(connection_request)`
+and `revoke(allocation_ref, participant_ref)`. Helpers use fixed paths and strict
+separate v2 DTO validation; no caller URL/key arguments. Existing file-only
+`DNSMAN_ACME_HUB_URL` and `DNSMAN_ACME_HUB_API_KEY` settings retain custody, TLS,
+redirect, retry and timeout safeguards. Shared responses have a bounded 64KiB
+wire budget to accommodate 20 complete DTOs; legacy replies retain 16KiB.
+
+The consumer/controller HTTP contract, exact DTO keys, safe error tokens and
+pagination are documented in the [REST reference](../../web_developer/dnsman/README.md#shared-validation-v2).
+Alias status is an authoritative single-source CNAME observation, **not** TXT
+propagation or certificate convergence. Consumer responses never disclose other
+participants' identities, lease refs or TXT values. Audit entries record action,
+result, actor, participant UUID, consumer UUID, role and counts, never digests,
+zone IDs or secrets.
+
+### Coordinated hub rollout
+
+Drain **all** old hub HTTP writers and sweep workers, migrate/backfill through
+the nonnull participant FK, then resume only new hub binaries before enabling
+shared use. Old hub binaries use allocation/challenge lookups that can touch
+another participant's lease; they cannot coexist safely with this schema.
+Old downstream clients remain wire-compatible with the upgraded hub: the
+allocation data stays exactly four fields and publish/withdraw exactly six,
+echoing each participant's own local ref. Configuration DTOs are unchanged.
+The migration is intentionally irreversible; do not downgrade hub binaries after
+trusted rows exist. Direct-provider Domain rows and certificates stay in place.
+Project setup, portal/Sites adoption, package release and production deployment
+are separate work; this protocol does not lift any production hold.

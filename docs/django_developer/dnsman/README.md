@@ -23,7 +23,7 @@ mojo/helpers/dns/probe.py        Authoritative TXT probe + exact one-hop CNAME p
 
 mojo/apps/dnsman/
   models/        DnsCredential, Domain, DomainPurchase, AcmeAccount, Certificate,
-                 AcmeHubDelegation, AcmeHubChallengeLease, AcmeDelegation
+                 AcmeHubDelegation, AcmeHubParticipant, AcmeHubChallengeLease, AcmeDelegation
   services/
     naming.py    Domain/record normalization — the single source of truth
     dns.py       Provider dispatch (UNGATED mechanism)
@@ -351,3 +351,12 @@ until an explicit authoritative refresh. This mirrors the service reservation
 contract and prevents a frontend retry from overwriting ACME or parallel
 values. Certificate status polling reads metadata endpoints only; the browser
 portal never calls `certificate/material`.
+
+
+Shared ACME validation v2 adds permanent owner/trusted participants to an
+existing allocation. Explicit controller grants confer apex+wildcard issuance
+scope while each deployment retains its certificate private key. See
+[ACME federation](AcmeFederation.md#shared-validation-protocol-v2) for the
+connection-request handshake, locked lease union, irreversible migration and
+coordinated hub rollout. Management endpoints admit original-project keys or a
+true hub superuser; legacy allocation/publish/withdraw remain machine-only.

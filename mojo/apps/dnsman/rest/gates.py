@@ -26,6 +26,7 @@ Two things this does that a bare `request.user.is_superuser` does not:
 
 from mojo import errors as me
 from mojo.helpers.request import is_key_backed_session
+from mojo.apps.dnsman.services.authorization import is_platform_admin
 
 
 def require_platform_admin(request, what):
@@ -44,7 +45,7 @@ def require_platform_admin(request, what):
             f"{what} is restricted to platform administrators "
             f"and cannot be performed with an API key",
             branch="dnsman.platform_admin.api_key")
-    if not getattr(request.user, "is_superuser", False):
+    if not is_platform_admin(request):
         raise me.PermissionDeniedException(
             f"{what} is restricted to platform administrators",
             branch="dnsman.platform_admin.not_superuser")
