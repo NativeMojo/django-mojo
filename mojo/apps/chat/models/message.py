@@ -24,6 +24,7 @@ MODERATION_CHOICES = [
 
 class MessageQuerySet(models.QuerySet):
     def create(self, **kwargs):
+        self._for_write = True
         backend = kwargs.pop("read_backend", None)
         from ..services.read_state import _UNSET
         handler = kwargs.pop("read_handler", _UNSET)

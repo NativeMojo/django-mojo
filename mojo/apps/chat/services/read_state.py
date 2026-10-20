@@ -10,6 +10,7 @@ from django.db.models import Exists, OuterRef, Q
 from mojo.helpers import logit, modules
 from mojo.helpers.settings import settings
 from objict import objict
+from mojo.db import use_primary
 from .backend import read_backend
 
 _UNSET = object()
@@ -38,6 +39,7 @@ def _position(member, room):
     )
 
 
+@use_primary()
 def recipient_positions(room, user_ids=None, message_ids=None, *, backend=None):
     """User-keyed current snapshots, one SQL query (+ one bounded exception query).
 
@@ -68,6 +70,7 @@ def recipient_positions(room, user_ids=None, message_ids=None, *, backend=None):
     return positions
 
 
+@use_primary()
 def unread_counts(user, room_ids=None, *, backend=None):
     if read_backend(backend) != "cursor":
         raise ValueError("unread_counts requires cursor read state")
@@ -101,7 +104,10 @@ def unread_queryset(membership, queryset=None):
     Use visible_messages(room, membership) as the base for user-facing readers.
     """
     from ..models import ChatMessage, ChatUnreadException
-    qs = queryset if queryset is not None else ChatMessage.objects.all()
+    # This queryset is evaluated by its caller, after this function returns.
+    # Bind it explicitly so an outer use_reader scope cannot move eligibility
+    # onto a lagging replica after a freshness-critical read-state operation.
+    qs = (queryset if queryset is not None else ChatMessage.objects.all()).using("default")
     qs = qs.filter(room_id=membership.room_id)
     condition = Q(room_seq__gt=membership.last_read_seq)
     if membership.unread_exception_count:
@@ -112,10 +118,12 @@ def unread_queryset(membership, queryset=None):
     return qs.filter(condition)
 
 
+@use_primary()
 def unread_message_ids(membership, message_ids):
     return set(unread_queryset(membership).filter(pk__in=message_ids).values_list("pk", flat=True))
 
 
+@use_primary()
 def resolve_read_target(room, membership, up_to_message_id, *, backend=None):
     if read_backend(backend) == "legacy":
         return _legacy_resolve_read_target(room, membership, up_to_message_id)

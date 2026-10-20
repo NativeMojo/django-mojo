@@ -111,7 +111,7 @@ def test_live_rest_ws_share_cursor_and_configured_hook(opts):
         counts = opts.client.get("/api/chat/unread")
         assert counts.status_code == 200 and any(p.room_id == room.pk and p.unread_count == 1 for p in counts.json.data), "Real unread endpoint must use durable arrival counts"
         response = opts.client.post("/api/chat/room/read", {"room_id": room.pk, "up_to_message_id": message_id})
-        assert response.status_code == 200 and response.json.position.read_seq == 1, f"REST read must return effective durable cursor: {response.json}"
+        assert response.status_code == 200 and response.json.data.position.read_seq == 1, f"REST read must return effective durable cursor: {response.json}"
         reader_token = opts.client.access_token
         ws = WsClient(WsClient.build_url_from_host(opts.host, path="ws/realtime/"), logger=opts.logger)
         try:
@@ -127,3 +127,27 @@ def test_live_rest_ws_share_cursor_and_configured_hook(opts):
         assert [call["position"]["reason"] for call in calls] == ["own_send", "explicit", "explicit"], "Configured hook must preserve the actual source of each acknowledgment"
         assert not ChatReadReceipt.objects.filter(message__room=room).exists(), "Actual cursor REST/WS traffic must leave the normal receipt table empty"
     _capture.clear(room.pk)
+
+
+@th.django_unit_test()
+def test_reader_scope_uses_primary_for_durable_chat_state(opts):
+    from unittest.mock import patch
+    from django.db import router, connection
+    from django.test.utils import CaptureQueriesContext
+    from mojo.db import use_reader
+    from mojo.db.router import ReaderRouter
+    from mojo.apps.chat.models import ChatMessage, ChatMembership
+    from mojo.apps.chat.services.read_state import recipient_positions, unread_counts, unread_queryset
+    room, users, seats = _fixture("reader-routing")
+    # No replica connection is needed: accidental reader routing raises for an
+    # absent reader alias instead of silently proving freshness on primary.
+    with patch.object(router, "routers", [ReaderRouter()]), use_reader():
+        own = ChatMessage.objects.create(room=room, user=users[0], body="routing",
+            read_backend="cursor", read_handler=None, read_publisher=False)
+        assert own._state.db == "default", "Custom message create must resolve the write alias even inside a reader scope"
+        with use_reader(), CaptureQueriesContext(connection) as captured:
+            positions = recipient_positions(room, backend="cursor")
+            counts = unread_counts(users[1], backend="cursor")
+            ids = list(unread_queryset(seats[1]).values_list("pk", flat=True))
+        assert positions[users[1].pk].unread_count == 1 and counts[room.pk].unread_count == 1, "Fresh durable snapshots must stay on primary inside an explicit reader scope"
+        assert ids == [own.pk] and len(captured) == 3, "Deferred eligibility must also remain primary and bounded when evaluated by its caller"

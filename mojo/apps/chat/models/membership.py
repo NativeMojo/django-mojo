@@ -17,6 +17,7 @@ STATUS_CHOICES = [
 
 class MembershipQuerySet(models.QuerySet):
     def create(self, **kwargs):
+        self._for_write = True
         backend = kwargs.pop("read_backend", None)
         obj = self.model(**kwargs)
         obj.save(force_insert=True, using=self.db, read_backend=backend)

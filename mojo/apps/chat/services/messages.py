@@ -361,10 +361,10 @@ def send_message(room, user, body, kind="text", metadata=None, *,
             def committed_message():
                 # A maintenance operation can invalidate a delayed callback.
                 from ..models import ChatRoom
-                if generation is not None and not ChatRoom.objects.filter(
-                        pk=room.pk, read_state_generation=generation).exists():
-                    return
                 try:
+                    if generation is not None and not ChatRoom.objects.using("default").filter(
+                            pk=room.pk, read_state_generation=generation).exists():
+                        return
                     publish(room.topic, msg_data)
                 except Exception:
                     logger.exception("chat: committed message publication failed")
