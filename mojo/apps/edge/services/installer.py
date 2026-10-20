@@ -465,11 +465,17 @@ def _previous_web_root(previous, vhost_id):
     under the vhost's `releases/` tree is re-checked here — this value becomes
     a symlink target in the next generation.
     """
+    return _previous_link(previous, vhost_id, "")
+
+
+def _previous_link(previous, vhost_id, suffix):
+    """The release directory the live generation's `www/<id><suffix>` link
+    names, or None — contained under the vhost's own `releases/` tree."""
     from mojo.apps.edge import validators
 
     if not previous:
         return None
-    link = os.path.join(previous, "www", str(int(vhost_id)))
+    link = os.path.join(previous, "www", f"{int(vhost_id)}{suffix}")
     if not os.path.islink(link):
         return None
     try:
@@ -648,7 +654,8 @@ def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
                                     carry_upgrade_map=carry_upgrade_map),
         gen_is_live)
 
-    stage_web_roots(generation, installable, webapps or [], fallbacks)
+    stage_web_roots(generation, installable, webapps or [], fallbacks,
+                    previous=previous)
     return objict(excluded=excluded, cert_excluded=cert_excluded)
 
 
@@ -704,7 +711,48 @@ p {{ margin: 0.5rem 0; color: #52606d; line-height: 1.5; }}
 """
 
 
-def stage_web_roots(generation, vhosts, webapps, fallbacks=None):
+def default_fallback_depth():
+    """How many earlier releases stay servable: bounded by what is retained.
+
+    `EDGE_KEEP_RELEASES` 0 or 1 gives none, 2 gives one, 3 or more gives two.
+    """
+    return min(len(render.FALLBACK_SLOTS),
+               max(www_sync.keep_releases() - 1, 0))
+
+
+def _fallback_candidates(previous, vhost_id):
+    """Releases the live generation served or kept servable, newest first.
+
+    Read BEFORE any link of this vhost is swapped: a heal retry re-stages the
+    live generation in place, so `previous` can be the directory being
+    written, and reading it after the swap would lose the release an open tab
+    is on.
+    """
+    found = [_previous_link(previous, vhost_id, "")]
+    found += [_previous_link(previous, vhost_id, f".prev{n}")
+              for n in render.FALLBACK_SLOTS]
+    return [path for path in found if path]
+
+
+def _stage_fallback_links(generation, vhost_id, current, candidates, depth):
+    """Point `www/<id>.prevN` at the releases before `current`; unlink the
+    slots that have none (an in-place re-stage may hold a stale one)."""
+    current = os.path.realpath(current) if current else None
+    chosen = []
+    for path in candidates:
+        if path != current and path not in chosen and os.path.isdir(path):
+            chosen.append(path)
+    chosen = chosen[:depth]
+    for n in render.FALLBACK_SLOTS:
+        link = render.www_fallback_dir(generation, vhost_id, n)
+        if n <= len(chosen):
+            _symlink_swap(link, chosen[n - 1])
+        elif os.path.islink(link):
+            os.unlink(link)
+
+
+def stage_web_roots(generation, vhosts, webapps, fallbacks=None, *,
+                    previous=None, fallback_depth=None):
     """Point every file-serving vhost's web root at its installed release.
 
     **The pointer lives INSIDE the generation.** An earlier design put a
@@ -717,21 +765,32 @@ def stage_web_roots(generation, vhosts, webapps, fallbacks=None):
     `fallbacks` names the vhosts whose desired release could not be fetched
     but which were already serving something — they get their PREVIOUS release
     directory, not the desired one.
+
+    Each release vhost also gets `www/<id>.prev1` / `.prev2`: the releases it
+    served before, in serving order, so a tab opened before this generation
+    can still load the chunks its page names. `previous` is the live
+    generation directory; `fallback_depth` defaults to
+    `default_fallback_depth()`.
     """
     by_vhost = {row["vhost"]: row for row in webapps}
     fallbacks = fallbacks or {}
+    if fallback_depth is None:
+        fallback_depth = default_fallback_depth()
 
     for vhost in vhosts:
         if vhost.kind not in ("site", "site_api"):
             continue
 
         link = render.www_dir(generation, vhost.pk)
+        candidates = _fallback_candidates(previous, vhost.pk)
         fallback = fallbacks.get(vhost.pk)
         if fallback:
             # Deliberately NOT the desired release: those bytes are not on
             # disk, and this vhost keeps serving exactly what it served before
             # the promote until a later converge fetches them.
             _symlink_swap(link, fallback)
+            _stage_fallback_links(generation, vhost.pk, fallback, candidates,
+                                  fallback_depth)
             continue
 
         row = by_vhost.get(vhost.pk)
@@ -745,6 +804,7 @@ def stage_web_roots(generation, vhosts, webapps, fallbacks=None):
             with open(os.path.join(link, "index.html"), "w") as handle:
                 handle.write(_placeholder_page(
                     getattr(vhost, "server_name", "")))
+            _stage_fallback_links(generation, vhost.pk, None, [], 0)
             continue
 
         target = release_dir(vhost.pk, row["release"]["version"])
@@ -759,6 +819,8 @@ def stage_web_roots(generation, vhosts, webapps, fallbacks=None):
                 f"release {row['release']['version']} for vhost {vhost.pk} "
                 f"is not on disk at {target}")
         _symlink_swap(link, target)
+        _stage_fallback_links(generation, vhost.pk, target, candidates,
+                              fallback_depth)
 
 
 def prune_generations(keep=None):
