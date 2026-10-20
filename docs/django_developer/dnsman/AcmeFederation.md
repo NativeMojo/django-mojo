@@ -285,7 +285,8 @@ reserve a globally unique `Domain`; authoritative exact one-hop proof creates
 never registered with general DNS CRUD.
 
 The public lifecycle is `pending → verified ↔ broken`; `retired` tombstones are
-internal. Pending is inert. Once verified, routing is sticky: a changed,
+internal. Legacy `allocated` pending rows are inert; prepared `shared` rows are
+route guards immediately. Once verified, routing is sticky: a changed,
 missing, chained or conflicting alias marks the delegation broken and issuance
 fails closed without falling back to the Domain's old Route53/GoDaddy adapter.
 Verification locks and rechecks the original tenant identity and its effective
@@ -433,5 +434,155 @@ allocation data stays exactly four fields and publish/withdraw exactly six,
 echoing each participant's own local ref. Configuration DTOs are unchanged.
 The migration is intentionally irreversible; do not downgrade hub binaries after
 trusted rows exist. Direct-provider Domain rows and certificates stay in place.
-Project setup, portal/Sites adoption, package release and production deployment
-are separate work; this protocol does not lift any production hold.
+Portal/Sites adoption, package release and production deployment remain
+separate work; this protocol and its project setup flow do not lift any
+production hold.
+
+## Supported project setup
+
+`services/delegation_setup.py` is the local contract for an authorized project
+operator or agent to reuse an existing allocation. REST, `aws-check` and the
+[DNS assistant tools](../assistant/dns_tools.md) return the same versioned
+[Readiness v1](../../web_developer/dnsman/README.md#readiness-v1) object.
+Inspection, durable preparation, joining, persisted proof and certificate
+request are separate actions. None of them grants hub trust.
+
+The target is either an existing local `Domain` id, or an active local group
+plus a normalized apex name. An existing same-name Domain must belong to that
+exact group. Setup never adopts a house zone, moves a Domain, creates a group,
+changes its provider/credential/hosted-zone configuration, or replaces its
+certificate or vhost references. A groupless house Domain is read-only and
+ineligible: mutation capabilities are false, no descriptor is exported, and
+`next_action` is `unsupported_domain_scope` for the deployment operator.
+Shared setup currently requires a group-managed domain; existing direct-provider
+operation remains available.
+
+The local tenant UUID and hub consumer project UUID are different identities.
+The consumer UUID comes only from capabilities authenticated by the configured
+hub key's original group. It must never be inferred from `Domain.group`, an
+interactive controller session, DNS, or user input.
+
+### Prepare, authorize, connect, check, request
+
+The examples use fake public names and references. Authentication is omitted.
+A project administrator performs these local calls with the appropriate DNS
+permission; only the allocation controller performs the intervening grant.
+
+1. Inspect without creating rows, refs, accounts or jobs:
+   `GET /api/dnsman/delegation/plan?domain=12&allocation_ref=existing-target.acme-hub.example.net`.
+   Failed DNS observations do not demote a verified connection on this read.
+2. Prepare with `POST /api/dnsman/delegation/connect` and
+   `{"domain":12,"allocation_ref":"existing-target.acme-hub.example.net"}`.
+   Local authorization and read-only hub capabilities/own-participant lookup
+   precede preparation. Unconfigured, unsupported or unauthorized preflight
+   leaves direct routing unchanged. Successful preparation commits a fresh
+   immutable ref, shared mode, allocation and consumer identity before an
+   ambiguous status/join call. Missing trust yields `grant_trust` and a public
+   request of exactly this shape:
+
+   ```json
+   {
+     "version": 1,
+     "consumer_project_uuid": "0123456789abcdef0123456789abcdef",
+     "client_ref": "11111111-2222-4333-8444-555555555555",
+     "domain": "customer.example",
+     "allocation_ref": "existing-target.acme-hub.example.net"
+   }
+   ```
+
+   Export the object as returned. It contains no secret and has no authority
+   by itself. Display the scope separately as
+   `["customer.example","*.customer.example"]`.
+3. The controller imports that object into
+   `POST /api/dnsman/acme/trust/grant` as `{"connection_request": ...}` after
+   recognizing the exact recipient and the issuance authority being granted.
+   Ordinary local `manage_dns` cannot perform this grant or mint the protected
+   key. The existing public CNAME and allocation remain unchanged.
+4. Replay the same local Connect input after grant. It reuses the stored ref,
+   rechecks the configured consumer identity and pins the exact participant,
+   source and target. A lost response is retried with that same ref. Changing
+   the configured key to a different project reports `identity_changed` and
+   cannot repin the connection.
+5. Run `POST /api/dnsman/delegation/check` with `{"delegation":9}`. This is
+   the explicit state-changing proof step: it rechecks local ownership, active
+   grant, fixed scope and exact one-hop CNAME, then reuses `delegation.verify`.
+   An existing direct-provider Domain is bound without rewriting it. A new
+   external name becomes the existing certificate-only `provider="mojo"`
+   Domain only after proof succeeds.
+6. Run `POST /api/dnsman/delegation/request` with `{"delegation":9}`.
+   The exact apex-plus-wildcard request is queued through the existing
+   certificate service. An exact valid certificate outside its renewal
+   window returns `already_current`; pending/issuing returns `already_queued`;
+   a due active certificate renews its existing id. Conflicting SAN profiles
+   are refused rather than converted. Poll Plan for status.
+
+### Immutable generations and routing
+
+`AcmeDelegation.connection_mode` defaults old rows to `allocated`; `shared`
+rows pin `hub_allocation_ref`, `hub_consumer_project_uuid` and, once known,
+`hub_participant_ref`. These are server-owned immutable bindings. Generic
+creation/update/deletion remain disabled and `DENY_AI` blocks model-tool
+bypass. Client refs stay unique and the active tenant/name constraint remains.
+The target is no longer globally unique across local historical generations:
+a successor must be able to reuse the existing public target.
+
+Connect with `restart:true` is an explicit recovery action only for a revoked
+binding or an unjoined pending request. It retires the old generation and
+commits a fresh ref for the same allocation; the old ref is never edited,
+revived or given the new grant. Outstanding cleanup must be settled first.
+Export the new descriptor and ask the controller for a new grant. Repeating
+ordinary Connect keeps the existing ref. Neither path resets valid certificate
+material, `renew_after`, certificate ids or vhost references.
+
+`delegation.routing_for_domain(domain)` is the canonical route selector;
+`for_domain` is its compatibility wrapper. It chooses the newest live shared
+request, including pending, or an ever-verified tombstone, including retired.
+`routing_for_domains(domain_ids)` returns a domain-id-to-row map in one query;
+`routed_domain_ids()` returns a composable one-column queryset with the same
+selector. Consumers must use these helpers instead of reproducing the rule or
+checking only `Domain.provider`. A returned row is a route/deny guard, not proof
+that a usable wildcard private key exists. Sites must separately establish
+active, readable, exact-profile DNSMan material before selecting it.
+
+Preparation locks Domain first, collects certificate ids in stable order, and
+tries each existing certificate issue advisory lock before taking Certificate
+row locks. A busy issuer is refused immediately. This avoids the inverse lock
+order of an issuer holding the advisory lock before its joined
+Certificate/Domain row lock. Direct reservations and delegated cleanup are
+settled before the shared guard commits; locks are released before join calls.
+No worker performs direct-provider reservation cleanup after it has selected
+shared routing. Shared issuance refreshes grant and consumer identity before
+CA account/order creation and again before publish. Withdrawal continues to
+use the original local ref/challenge ref after revocation; it does not require
+active publish trust. Inactive keys/groups remain refused and hub expiry/sweep
+owns eventual cleanup when credentials are unavailable.
+
+### Deploying and recovering the downstream
+
+Deliver `DNSMAN_ACME_HUB_URL` and `DNSMAN_ACME_HUB_API_KEY` through the
+installation's existing static Django settings delivery. They are read with
+`settings.get_static`; the normal server loader reads `VAR_ROOT/django.conf`
+once per process. Restart API processes and all issuance workers after
+configuration or binary updates. No database setting, browser credential
+field, CLI key option, remote-agent key input or credential readback is added.
+The configured normalized origin and fixed paths remain the only destinations.
+
+Upgrade the hub first using its drain/migrate sequence above. Apply the next
+DNSMan migration, which defaults legacy rows to allocated mode, adds nullable
+shared bindings and relaxes historical target uniqueness. It does not rewrite
+Domain or Certificate rows. Drain every old downstream issuance worker and
+restart API/worker processes with the new routing/grant checks before accepting
+shared Connect. Old workers ignore pending shared guards and cannot safely
+handle these rows. Prove scheduled renewal with stubbed hub/DNS/CA and the
+existing KMS/edge handoff before any separately authorized production adoption.
+`renewal.worker_version` remains unknown without established worker telemetry;
+the API version cannot prove a long-lived worker restarted.
+
+Before any shared connection, application code can be rolled back with the
+additive schema retained. Once shared rows exist, keep the new guards: do not
+downgrade binaries, delete rows, or retire a connection merely to regain direct
+renewal. Retain still-valid serving material, revoke trust through the core if
+needed, repair static configuration/alias/grant, and use explicit fresh-ref
+restart where allowed. Returning a formerly shared name to direct DNS requires
+a separately authorized DNS handover. The software change authorizes no live
+DNS, credential, certificate, vhost or production-adoption change.

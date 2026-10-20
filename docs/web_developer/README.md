@@ -52,6 +52,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | [assistant/mcp](assistant/mcp.md) | Connecting an AI client over MCP — the endpoint, the sign-in hand-off, the wire shapes, the approval hand-off and the error table |
 | [assistant/cloud_tools](assistant/cloud_tools.md) | Cloud/fleet assistant tools — result shapes, which block renders each, and what to poll after an approval |
 | [assistant/webapp_tools](assistant/webapp_tools.md) | The assistant's `webapp` domain from a client's side — result shapes, what each approval card binds, the fresh-auth split, and the handoffs |
+| [assistant/dns_tools](assistant/dns_tools.md) | Shared wildcard-validation setup through assistant/MCP, public request handoff, approval cards and readiness states |
 | [github/](github/README.md) | GitHub App installations — list, create, update, delete |
 | [docit/](docit/README.md) | Documentation system |
 

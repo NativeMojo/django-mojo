@@ -273,7 +273,9 @@ class AWSCheckRunner:
                  dns_domain=None, dns_group=None, provider=None, *,
                  settings_get=None, session_factory=None, release_buckets=None,
                  certs_service=None, delegation_service=None,
-                 cron_heartbeats=None, redis_connection=None):
+                 cron_heartbeats=None, redis_connection=None,
+                 dns_action=None, dns_allocation=None, dns_restart=False,
+                 setup_service=None):
         # Injection seams (tests): every one of these defaults to None, which
         # preserves the production collaborators exactly. `settings_get` takes
         # the module `_setting` signature; `release_buckets` is a literal list
@@ -289,6 +291,7 @@ class AWSCheckRunner:
         self.release_buckets = release_buckets
         self.certs_service = certs_service
         self.delegation_service = delegation_service
+        self.setup_service = setup_service
         self.region = region or self._setting("AWS_REGION", "us-east-1")
         self.profile = profile
         self.timeout = max(1, min(int(timeout or 3), 30))
@@ -309,6 +312,9 @@ class AWSCheckRunner:
         self.delivery_seen = False
         self.dns_domain = dns_domain
         self.dns_group = dns_group
+        self.dns_action = dns_action
+        self.dns_allocation = dns_allocation
+        self.dns_restart = bool(dns_restart)
         self.provider = provider or ProviderCaller(logger)
         # DNSMAN_ACME_HUB_API_KEY belongs here too: the dns section surfaces hub
         # client errors through _add(), and #1423 requires that key never be
@@ -418,7 +424,9 @@ class AWSCheckRunner:
         )
 
     def run(self, sections=None):
-        selected = list(sections or SECTIONS)
+        selected = list(sections or (["dns"] if self.dns_action else SECTIONS))
+        if self.dns_action and set(selected) != {"dns"}:
+            raise ValueError("A shared DNS action can only select the dns section")
         unknown = sorted(set(selected) - set(ALL_SECTIONS))
         if unknown:
             raise ValueError(f"unknown section(s): {', '.join(unknown)}")
@@ -1565,6 +1573,9 @@ class AWSCheckRunner:
             self._add("dns", "skip", "dnsman.not_installed",
                       "dnsman is not installed, so there is no DNS or ACME state to audit")
             return
+        if self.dns_action:
+            self._shared_dns_action()
+            return
         self._check_dns_acme_account()
         self._check_dns_delegations()
         self._check_dns_certificates()
@@ -1574,6 +1585,76 @@ class AWSCheckRunner:
             self._add("dns", "warn", "dns.no_bootstrap_requested",
                       "No domain was named, so nothing was bootstrapped",
                       remediation="Rerun with --apply --dns-domain example.com --dns-group <id-or-name>.")
+
+    def _shared_dns_action(self):
+        """One explicit shared setup action, with no AWS or chained issuance."""
+        from mojo.apps.dnsman.services import delegation_setup
+
+        service = self.setup_service or delegation_setup
+        action = self.dns_action
+        if action not in ("plan", "connect", "check", "request"):
+            self._add("dns", "fail", "dns.shared_setup.invalid_action",
+                      "Choose plan, connect, check or request.")
+            return
+        if (action != "plan" and not self.apply) or (action == "plan" and self.apply):
+            self._add("dns", "fail", "dns.shared_setup.apply_required",
+                      "Shared DNS changes require explicit apply; plan is read-only.")
+            return
+        if self.dns_restart and action != "connect":
+            self._add("dns", "fail", "dns.shared_setup.invalid_restart",
+                      "A fresh reference can only be requested with connect.")
+            return
+        group = self._resolve_dns_group()
+        if group is None or not group.is_effectively_active():
+            self._add("dns", "fail", "dns.shared_setup.group_required",
+                      "A single active group must be named to own the connection.")
+            return
+        try:
+            target = service.resolve_target(
+                group=group, name=self.dns_domain, actor=None,
+                write=action != "plan")
+            if action != "plan" and not self._approve(
+                    f"Perform shared DNS {action} for {target.name} under {group.name}? "
+                    "This action uses the configured hub and keeps certificate keys local."):
+                self._add("dns", "warn", "dns.shared_setup.not_approved",
+                          "The shared DNS action was not approved.")
+                return
+            if action == "plan":
+                dto = service.plan(target, allocation_ref=self.dns_allocation, actor=None)
+            elif action == "connect":
+                if not self.dns_allocation:
+                    self._add("dns", "fail", "dns.shared_setup.allocation_required",
+                              "Connect requires an existing allocation target.")
+                    return
+                dto = service.connect(target, self.dns_allocation, actor=None,
+                                      restart=self.dns_restart)
+            else:
+                current = service.plan(target, actor=None)
+                connection_id = (current.get("connection") or {}).get("id")
+                if connection_id is None:
+                    self._add("dns", "fail", "dns.shared_setup.connection_required",
+                              "Prepare a shared connection before checking or requesting.",
+                              {"shared_setup": current})
+                    return
+                row = service.resolve_connection(connection_id, actor=None, write=True)
+                dto = getattr(service, action)(row, actor=None)
+            operation = dto.get("operation") or {}
+            next_action = dto.get("next_action") or {}
+            self._add("dns", "pass" if next_action.get("code") == "none" else "pending",
+                      "dns.shared_setup", "Shared DNS validation readiness",
+                      {"shared_setup": dto}, changed=operation.get("changed", False))
+        except Exception as exc:
+            # Only the service's bounded error token/DTO is public. Provider
+            # and transport exception text must never reach CLI output.
+            if isinstance(exc, delegation_setup.SetupError):
+                self._add("dns", "fail", "dns.shared_setup",
+                          "The shared DNS action needs attention.",
+                          {"error_code": exc.error_code,
+                           "shared_setup": exc.data} if exc.data is not None else
+                          {"error_code": exc.error_code})
+            else:
+                self._add("dns", "fail", "dns.shared_setup",
+                          "The shared DNS action could not complete safely.")
 
     def _check_dns_acme_account(self):
         from mojo.apps.dnsman.models import AcmeAccount

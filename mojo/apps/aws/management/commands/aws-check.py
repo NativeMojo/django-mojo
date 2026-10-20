@@ -14,6 +14,7 @@ class Command(BaseCommand):
         parser.add_argument("--apply", action="store_true", help="Allow confirmation-gated create-missing actions")
         parser.add_argument("--yes", action="store_true", help="Approve create-missing actions (requires --apply)")
         parser.add_argument("--json", action="store_true", help="Emit versioned JSON; implies --check")
+        parser.add_argument("--output-json", action="store_true", help="Emit versioned JSON, including explicitly approved DNS actions")
         parser.add_argument("--section", action="append", choices=ALL_SECTIONS, help="Audit only this section; repeatable")
         parser.add_argument("--timeout", type=int, default=3, help="AWS connect/read timeout in seconds (1-30)")
         parser.add_argument("--region", help="AWS region override")
@@ -24,6 +25,9 @@ class Command(BaseCommand):
         parser.add_argument("--adopt-bucket", action="store_true", help="Explicitly adopt an exact owned bucket after interrupted tagging")
         parser.add_argument("--dns-domain", help="Domain to bootstrap ACME delegation for (requires --dns-group)")
         parser.add_argument("--dns-group", help="Group id or exact name that will own the delegation")
+        parser.add_argument("--dns-action", choices=("plan", "connect", "check", "request"), help="Perform one shared DNS validation setup action; plan is read-only")
+        parser.add_argument("--dns-allocation", help="Existing immutable hub allocation target FQDN")
+        parser.add_argument("--dns-restart", action="store_true", help="Explicitly prepare a fresh connection reference (connect only)")
 
     def _confirm(self, message):
         self.stdout.write(f"\n{message}")
@@ -36,20 +40,37 @@ class Command(BaseCommand):
             raise CommandError("--yes requires --apply", returncode=2)
         if options["json"] and (options["apply"] or options["yes"] or options["probe_s3"]):
             raise CommandError("--json is read-only and cannot be combined with apply/probe flags", returncode=2)
+        action = options["dns_action"]
+        if action and (not options["dns_domain"] or not options["dns_group"]):
+            raise CommandError("--dns-action requires --dns-domain and --dns-group", returncode=2)
+        if action and options["section"] and set(options["section"]) != {"dns"}:
+            raise CommandError("--dns-action can only select --section dns", returncode=2)
+        if action and action != "plan" and not options["apply"]:
+            raise CommandError("Mutating --dns-action requires explicit --apply", returncode=2)
+        if action == "plan" and options["apply"]:
+            raise CommandError("--dns-action plan is read-only", returncode=2)
+        if options["dns_restart"] and action != "connect":
+            raise CommandError("--dns-restart requires --dns-action connect", returncode=2)
+        if options["dns_allocation"] and action not in ("plan", "connect"):
+            raise CommandError("--dns-allocation requires --dns-action plan or connect", returncode=2)
+        if action == "connect" and not options["dns_allocation"]:
+            raise CommandError("--dns-action connect requires --dns-allocation", returncode=2)
         if not 1 <= options["timeout"] <= 30:
             raise CommandError("--timeout must be between 1 and 30 seconds", returncode=2)
 
         interactive = bool(getattr(sys.stdin, "isatty", lambda: False)())
-        apply = options["apply"] or (interactive and not options["check"] and not options["json"])
+        apply = options["apply"] or (not action and interactive and not options["check"] and not options["json"] and not options["output_json"])
         runner = AWSCheckRunner(
             region=options["region"], profile=options["aws_profile"], timeout=options["timeout"],
             apply=apply, yes=options["yes"], probe_s3=options["probe_s3"],
             bucket_name=options["bucket_name"], mailbox_email=options["mailbox_email"],
             adopt_bucket=options["adopt_bucket"], confirm=self._confirm if interactive else None,
             dns_domain=options["dns_domain"], dns_group=options["dns_group"],
+            dns_action=action, dns_allocation=options["dns_allocation"],
+            dns_restart=options["dns_restart"],
         )
         report = runner.run(options["section"])
-        if options["json"]:
+        if options["json"] or options["output_json"]:
             self.stdout.write(json.dumps(report, sort_keys=True))
         else:
             current = None

@@ -112,6 +112,7 @@ All other tools (security, jobs, users, groups, metrics, docit, full discovery) 
 | `docit` | Search the documentation knowledge base (docit books and pages) |
 | `discovery` | Full tool listing (`list_tools`) |
 | `cloud` | Cloud and fleet operations: platform/dashboard health, capacity, managed-engine upgrades, framework version, recorded drift, CloudWatch metrics, System Setup readiness (read-only), and the Admin's deploy/framework/upgrade/capacity controls behind an approval |
+| `dns` | Shared wildcard-validation setup: authorized groups, read-only readiness, prepare/join, check and idempotent request behind PendingAction — see [dns_tools.md](dns_tools.md) |
 
 ### `load_tools` — the primary gateway
 

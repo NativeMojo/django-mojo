@@ -328,7 +328,8 @@ def has_still_valid_material(certificate, now=None):
         and certificate.cert_pem
         and certificate.mojo_secrets)
 
-def issue(certificate, *, acme=None, sync=None, wait_for_txt=None):
+def issue(certificate, *, acme=None, sync=None, wait_for_txt=None,
+          hub_client=None, store_key=None, resolve_cname=None):
     """
     Run the full DNS-01 issuance for a Certificate row.
 
@@ -349,10 +350,12 @@ def issue(certificate, *, acme=None, sync=None, wait_for_txt=None):
             current = Certificate.objects.get(pk=certificate.pk)
             return objict(ok=True, certificate=current, skipped=True)
         return _issue_locked(certificate, acme=acme, sync=sync,
-                             wait_for_txt=wait_for_txt)
+                             wait_for_txt=wait_for_txt, hub_client=hub_client,
+                             store_key=store_key, resolve_cname=resolve_cname)
 
 
-def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
+def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None,
+                  hub_client=None, store_key=None, resolve_cname=None):
     """Issue while the caller holds the certificate advisory lock."""
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.models.certificate import (
@@ -388,12 +391,13 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
 
     certificate = claimed
     domain = certificate.domain
-    try:
-        record_reservations.cleanup_for_certificate(certificate)
-    except Exception as err:
-        return _record_issue_failure(certificate, err, renewing)
     names = list(certificate.sans or [certificate.common_name])
-    delegated = delegation.for_domain(domain)
+    delegated = delegation.routing_for_domain(domain)
+    if delegated is None or delegated.connection_mode != "shared":
+        try:
+            record_reservations.cleanup_for_certificate(certificate)
+        except Exception as err:
+            return _record_issue_failure(certificate, err, renewing)
     if delegated is None and domain.provider == "mojo":
         return _record_issue_failure(
             certificate, me.ValueException("This delegated ACME domain is not verified"),
@@ -407,9 +411,10 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
         try:
             delegated = delegation.require_current_owner(delegated)
             _require_delegated_profile(domain, names)
+            delegation.require_shared_authority(delegated, client=hub_client)
             # Proof and any prior ambiguous cleanup happen before the CA order.
-            delegation.prove_alias(delegated)
-            _withdraw_pending_delegated_cleanup(delegated)
+            delegation.prove_alias(delegated, resolve_cname=resolve_cname)
+            _withdraw_pending_delegated_cleanup(delegated, client=hub_client)
         except Exception as err:
             return _record_issue_failure(certificate, err, renewing)
 
@@ -425,6 +430,7 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
         account, client = acme() if acme is not None else _get_account()
         if delegated is not None:
             delegated = delegation.require_current_owner(delegated)
+            delegation.require_shared_authority(delegated, client=hub_client)
         order = client.new_order(names)
         certificate.acme_order_url = order.get("url")
         certificate.save()
@@ -437,7 +443,7 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
         # exactly one of the two authorizations would fail.
         if delegated is not None:
             delegated_challenge_ref = _publish_delegated_challenges(
-                delegated, challenges, wait_for_txt=wait_for_txt)
+                delegated, challenges, wait_for_txt=wait_for_txt, client=hub_client)
         else:
             for record_name, digests in challenges.items():
                 reservation = record_reservations.reserve(
@@ -492,7 +498,7 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
 
         certificate.cert_pem = cert_pem
         certificate.chain_pem = chain_pem
-        certificate.set_private_key_pem(acme_helpers.dump_key(key))
+        (store_key or type(certificate).set_private_key_pem)(certificate, acme_helpers.dump_key(key))
         certificate.issuer = (details.issuer or "")[:255] or None
         certificate.serial = details.serial
         certificate.not_before = details.not_before
@@ -513,7 +519,7 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
                 delegated_challenge_ref
                 or delegated.cleanup_challenge_ref)
             if cleanup_ref:
-                _withdraw_delegated_cleanup(delegated, cleanup_ref)
+                _withdraw_delegated_cleanup(delegated, cleanup_ref, client=hub_client)
         else:
             cleanup_challenges(domain, planted)
 
@@ -650,7 +656,7 @@ def _delegated_quorum_query(target_name, digests, dns_probe=None):
     return query, state
 
 
-def _publish_delegated_challenges(row, challenges, wait_for_txt=None):
+def _publish_delegated_challenges(row, challenges, wait_for_txt=None, client=None):
     from mojo.apps.dnsman.models import AcmeDelegation
     from mojo.apps.dnsman.services import acme_hub_client, delegation
     from mojo.helpers.dns import probe
@@ -664,6 +670,7 @@ def _publish_delegated_challenges(row, challenges, wait_for_txt=None):
     digests = list(challenges[row.source_name])
     challenge_ref = uuid.uuid4().hex
     delegation.require_current_owner(row)
+    delegation.require_shared_authority(row, client=client)
 
     # Commit cleanup intent before the ambiguous remote publish call.
     AcmeDelegation.objects.filter(pk=row.pk).update(
@@ -673,7 +680,7 @@ def _publish_delegated_challenges(row, challenges, wait_for_txt=None):
     row.cleanup_challenge_ref = challenge_ref
     row.cleanup_requested_at = dates.utcnow()
 
-    result = acme_hub_client.publish(
+    result = (client or acme_hub_client).publish(
         str(row.client_ref), challenge_ref, digests)
     delegation.compare_challenge_result(row, result, challenge_ref)
     query, quorum = _delegated_quorum_query(row.target_name, digests)
@@ -687,18 +694,18 @@ def _publish_delegated_challenges(row, challenges, wait_for_txt=None):
     return challenge_ref
 
 
-def _withdraw_pending_delegated_cleanup(row):
+def _withdraw_pending_delegated_cleanup(row, client=None):
     if row.cleanup_challenge_ref:
-        _withdraw_delegated_cleanup(row, row.cleanup_challenge_ref, raise_errors=True)
+        _withdraw_delegated_cleanup(row, row.cleanup_challenge_ref, raise_errors=True, client=client)
 
 
-def _withdraw_delegated_cleanup(row, challenge_ref, raise_errors=False):
+def _withdraw_delegated_cleanup(row, challenge_ref, raise_errors=False, client=None):
     from mojo.apps.dnsman.models import AcmeDelegation
     from mojo.apps.dnsman.services import acme_hub_client, delegation
 
     try:
         row = delegation.require_current_owner(row)
-        result = acme_hub_client.withdraw(str(row.client_ref), challenge_ref)
+        result = (client or acme_hub_client).withdraw(str(row.client_ref), challenge_ref)
         delegation.compare_challenge_result(row, result, challenge_ref)
         AcmeDelegation.objects.filter(
             pk=row.pk, cleanup_challenge_ref=challenge_ref).update(

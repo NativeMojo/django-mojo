@@ -124,6 +124,8 @@ def initiate(group, user, domain=None, name=None, *, available=None):
 
     # The row (and therefore client_ref) is committed before the first remote
     # allocation.  A retry replays the same immutable reference.
+    if row.connection_mode == "shared":
+        raise me.ValueException("Use shared connection setup for this domain")
     try:
         row = require_current_owner(row, require_domain=row.domain_id is not None)
         allocation = acme_hub_client.allocate(domain_name, str(row.client_ref))
@@ -156,7 +158,8 @@ def _proof_failure(row, code):
     # row so stale objects can never demote verified -> pending.
     with transaction.atomic():
         stored = AcmeDelegation.objects.select_for_update().get(pk=row.pk)
-        state = STATE_BROKEN if stored.verified_at is not None else STATE_PENDING
+        state = (STATE_RETIRED if stored.state == STATE_RETIRED else
+                 STATE_BROKEN if stored.verified_at is not None else STATE_PENDING)
         stored.state = state
         stored.last_error_code = code
         stored.save(update_fields=["state", "last_error_code", "modified"])
@@ -205,12 +208,12 @@ def require_current_owner(row, require_domain=True):
     return stored
 
 
-def prove_alias(row):
+def prove_alias(row, resolve_cname=None):
     """Authoritatively prove the exact stored, one-hop CNAME allocation."""
     if not row.source_name or not row.target_name:
         _proof_failure(row, ERROR_HUB_MISMATCH)
         raise me.ValueException("The delegated ACME allocation is incomplete")
-    proof = probe.verify_one_hop_cname(row.source_name, row.target_name)
+    proof = (resolve_cname or probe.verify_one_hop_cname)(row.source_name, row.target_name)
     if not proof.ok:
         code = ERROR_ALIAS_LOOKUP if "lookup" in (proof.error or "") else ERROR_ALIAS_MISMATCH
         _proof_failure(row, code)
@@ -219,7 +222,7 @@ def prove_alias(row):
     return True
 
 
-def verify(row):
+def verify(row, resolve_cname=None, shared_checked=False):
     """Verify the alias and atomically bind/create the certificate Domain."""
     from mojo.apps.account.models import Group
     from mojo.apps.dnsman.models import AcmeDelegation, Domain
@@ -227,7 +230,9 @@ def verify(row):
 
     if row.state == STATE_RETIRED:
         raise me.ValueException("This ACME delegation is retired")
-    prove_alias(row)
+    if row.connection_mode == "shared" and not shared_checked:
+        raise me.ValueException("Use shared connection Check for this domain")
+    prove_alias(row, resolve_cname=resolve_cname)
 
     refusal = None
     with transaction.atomic():
@@ -297,13 +302,49 @@ def verify(row):
     return row
 
 
-def for_domain(domain):
-    """Return sticky delegation routing for a Domain, or None for direct DNS."""
+def _routing_rows():
+    """Shared pending intent and every once-verified tombstone are deny guards.
+
+    Newest live shared intent wins over history. Legacy pending allocations
+    remain inert. All consumers use this selector and ordering.
+    """
+    from django.db.models import Case, IntegerField, Q, Value, When
     from mojo.apps.dnsman.models import AcmeDelegation
 
-    row = AcmeDelegation.objects.filter(
-        domain=domain, state__in=(STATE_VERIFIED, STATE_BROKEN)
-    ).order_by("-verified_at").first()
+    live_shared = Q(connection_mode="shared") & ~Q(state=STATE_RETIRED)
+    return AcmeDelegation.objects.filter(
+        live_shared | Q(verified_at__isnull=False)
+    ).annotate(_route_priority=Case(
+        When(live_shared, then=Value(0)), default=Value(1),
+        output_field=IntegerField())).order_by("domain_id", "_route_priority", "-created", "-pk")
+
+
+def routing_for_domain(domain):
+    return _routing_rows().filter(domain_id=domain.pk).first()
+
+
+def routing_for_domains(domain_ids):
+    rows = {}
+    for row in _routing_rows().filter(domain_id__in=domain_ids):
+        rows.setdefault(row.domain_id, row)
+    return rows
+
+
+def routed_domain_ids():
+    return _routing_rows().filter(domain_id__isnull=False).order_by().values_list("domain_id", flat=True)
+
+
+def for_domain(domain):
+    """Compatibility wrapper: a route is not proof of readiness."""
+    return routing_for_domain(domain)
+
+
+def require_shared_authority(row, client=None):
+    """Refresh the authenticated consumer and exact participant before CA I/O."""
+    if row.connection_mode != "shared":
+        return row
+    from mojo.apps.dnsman.services import delegation_setup
+    delegation_setup.validate_shared(row, client=client)
     return row
 
 

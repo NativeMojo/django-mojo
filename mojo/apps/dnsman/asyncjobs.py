@@ -27,7 +27,7 @@ def _certificate(job):
     return Certificate.objects.filter(pk=pk).select_related("domain").last()
 
 
-def _run(job, what):
+def _run(job, what, issuer=None):
     from mojo.apps.dnsman.services import certs
 
     pk = (job.payload or {}).get("certificate")
@@ -38,7 +38,7 @@ def _run(job, what):
         logit.info(f"dnsman: {what} — certificate {pk} no longer exists, skipping")
         return f"completed:missing={pk}"
 
-    result = certs.issue(cert)
+    result = (issuer or certs.issue)(cert)
     if not result.ok:
         raise me.ValueException(
             f"dnsman: {what} failed for certificate {cert.pk} "
@@ -51,14 +51,14 @@ def issue_certificate(job):
     return _run(job, "issue_certificate")
 
 
-def renew_certificate(job):
+def renew_certificate(job, issuer=None):
     """
     Reissue the certificate named in the payload.
 
     Renewal is issuance: ACME has no separate renew operation, and reusing the
     same code path means a renewal cannot drift from a first issuance.
     """
-    return _run(job, "renew_certificate")
+    return _run(job, "renew_certificate", issuer=issuer)
 
 
 def poll_domain_operations(job):
@@ -189,7 +189,7 @@ def publish_certificate_expiry_metric(job, put_metric=None):
     return f"completed:days={days}"
 
 
-def certificate_updated(job):
+def certificate_updated(job, publish=None):
     """
     Broadcast handler for the certificate sync channel.
 
@@ -216,7 +216,7 @@ def certificate_updated(job):
         from mojo.apps.edge.cronjobs import (
             CONVERGE_JOB, EDGE_CHANNEL, converge_pools)
 
-        jobs.publish(
+        (publish or jobs.publish)(
             func=CONVERGE_JOB,
             payload={"pools": converge_pools()},
             channel=EDGE_CHANNEL,

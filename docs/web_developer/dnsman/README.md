@@ -202,6 +202,10 @@ apex-plus-wildcard profile. These endpoints use normal `view_dns`/`manage_dns`
 tenant isolation and never return the hub ApiKey, client reference, cleanup
 reference, TXT digest, PEM, or private key.
 
+The supported flow for an existing shared target is documented in
+[project shared-validation setup](#project-shared-validation-setup). Use that
+flow instead of legacy initiate when another project already owns the target.
+
 ## Domains
 
 ### `GET /api/dnsman/domain` · `GET /api/dnsman/domain/<pk>`
@@ -901,3 +905,226 @@ Upgrade the hub after draining **all old HTTP writers and sweep workers**, then
 migrate/backfill before resuming new writers. Old downstream clients work with
 the upgraded hub; mixed old/new hub binaries do not. Do not downgrade after
 trusted rows exist. See the [framework rollout guide](../../django_developer/dnsman/AcmeFederation.md#coordinated-hub-rollout).
+
+## Project shared-validation setup
+
+These **local project** endpoints connect to an existing allocation through the
+installation's configured hub. The [hub v2 API](#shared-validation-v2) remains
+the separate controller/consumer protocol. Setup does not create a target,
+replace the public CNAME, change provider credentials, grant trust or mint a
+protected federation key. Each project issues and renews its own certificate
+and keeps its own private key.
+
+A target is exactly `{domain:12}` or `{group:7,name:"customer.example"}`. The
+group must already exist and be effectively active. An existing same-name
+Domain must belong to that exact group; no house adoption or transfer is
+implicit. Resolve local object authority before any hub read. Read requires
+`view_dns`, `manage_dns` or `security` for the target; mutations require
+`manage_dns` or `security`. Key-backed override sessions remain confined to the
+underlying key's group and authority. A groupless house Domain is readable only
+within its existing authority and ineligible for shared mutations: no request
+is exported, mutation capabilities are false, and `next_action` is
+`{code:"unsupported_domain_scope",actor:"deployment_operator"}`. Shared setup
+currently requires a group-managed domain; existing direct-provider operation
+remains available.
+
+| Local route | Exact input | Effect |
+|---|---|---|
+| `GET delegation/plan` | Target, optional `allocation_ref` | Read-only Readiness v1, also used for polling status. No row/ref/account/job creation or stored demotion on a failed observation. |
+| `POST delegation/connect` | Target, `allocation_ref`, optional `restart:false` | Preflight, prepare/export a durable request, or replay join after controller grant. |
+| `POST delegation/check` | `{delegation:9}` | Persist verified/broken result and bind the local Domain after current grant/one-hop proof. |
+| `POST delegation/request` | `{delegation:9}` | Idempotent request for the fixed exact apex-plus-wildcard profile. No names, force or key input. |
+| `GET delegation/group-choice` | `id` OR `search/start/size` | Minimal authorized active local group choices, default25/max50. Recheck the exact action after selection. |
+
+All routes are under `/api/dnsman`. Group choices derive from setup authority,
+including inherited active memberships; they are not the global-only
+`credential/group-choice` assignment surface. Group selection cannot confer
+hub consumer or controller authority. Inputs contain no hub URL, token, key or
+caller-supplied consumer UUID.
+
+### Prepare, export, grant, replay
+
+Examples omit authentication and use fake public refs.
+
+```http
+GET /api/dnsman/delegation/plan?domain=12&allocation_ref=existing-target.acme-hub.example.net
+```
+
+A first Plan has no connection/client ref and cannot export a stable request.
+It performs read-only capabilities and own-participant discovery. Old-hub
+capabilities404 means unsupported; show `upgrade_hub`. It never allocates a
+replacement or changes local routing after an unsuccessful preflight.
+
+```http
+POST /api/dnsman/delegation/connect
+Content-Type: application/json
+
+{"domain":12,"allocation_ref":"existing-target.acme-hub.example.net"}
+```
+
+Successful preparation pins the server-authenticated consumer identity and
+fresh immutable client ref before any ambiguous join call. Missing trust
+returns `grant_trust` and this **exact five-field public request** in
+`connection_request`:
+
+```json
+{
+  "version": 1,
+  "consumer_project_uuid": "0123456789abcdef0123456789abcdef",
+  "client_ref": "11111111-2222-4333-8444-555555555555",
+  "domain": "customer.example",
+  "allocation_ref": "existing-target.acme-hub.example.net"
+}
+```
+
+Present scope separately as `["customer.example","*.customer.example"]`.
+The hub consumer UUID is the configured protected key's original project,
+independent of the local Domain tenant. The descriptor has no authority by
+itself and is safe to hand to the controller. Do not add credentials to it.
+
+The controller recognizes the recipient and explicitly grants apex **and**
+wildcard issuance authority through the hub:
+
+```http
+POST /api/dnsman/acme/trust/grant
+Content-Type: application/json
+
+{"connection_request":{"version":1,"consumer_project_uuid":"0123456789abcdef0123456789abcdef","client_ref":"11111111-2222-4333-8444-555555555555","domain":"customer.example","allocation_ref":"existing-target.acme-hub.example.net"}}
+```
+
+That is a controller action under the hub's stronger authority; ordinary local
+`manage_dns` cannot grant it. Then replay the original **local** Connect request.
+It joins using the same stored ref, consumer, allocation, domain and scope.
+A lost response is retried without generating another ref. A changed key project
+reports `identity_changed` and cannot silently repin the connection.
+
+```http
+POST /api/dnsman/delegation/check
+Content-Type: application/json
+
+{"delegation":9}
+```
+
+Check revalidates local ownership, active grant and exact one-hop alias before
+persisting proof. Existing Domain provider, tenant, credential, hosted-zone and
+certificate/vhost references stay intact. A new external name becomes a
+certificate-only `mojo` Domain only after proof succeeds.
+
+```http
+POST /api/dnsman/delegation/request
+Content-Type: application/json
+
+{"delegation":9}
+```
+
+An exact valid not-due certificate returns `already_current`; pending/issuing
+returns `already_queued`; due active material renews the same certificate id.
+A conflicting SAN profile is refused rather than changed or downgraded to an
+exact-host certificate. Poll Plan for status; the request does not claim that
+an edge host already installed the new material.
+
+For a revoked binding or an unjoined pending request, explicit recovery uses
+Connect with the same target/allocation and `"restart":true`. The old generation
+is retired and its cleanup must be settled; a fresh immutable ref is exported
+and requires a fresh controller grant. Restart cannot swap an active grant,
+revive a revoked ref or repoint the allocation. Valid certificate material,
+renewal dates and vhost references survive setup and unsuccessful renewal.
+
+### Readiness v1
+
+Each setup action returns the same data object in the normal response envelope.
+All top-level fields are present:
+
+```text
+version: 1
+checked_at: ISO timestamp
+domain: {id, name, provider, group: {id, name}|null}
+profile: {name: "apex_wildcard", names: [apex, "*."+apex]}
+hub: {state, protocol_version, consumer_project_uuid}
+connection: {id, mode, state, client_ref, allocation_ref, participant_ref, verified_at}|null
+trust: {state, can_publish, can_withdraw}
+alias: {state, source, target, observed_target, one_hop, checked_at}
+certificate: {id, state, names, not_after, renew_after, serving_valid, material_state}|null
+renewal: {state, next_attempt_at, attempts, error_code, cleanup_pending,
+          job: {id, state}|null, worker_version}
+capabilities: {group_choices, can_connect, can_restart, can_check, can_request}
+next_action: {code, actor}
+connection_request: {version, consumer_project_uuid, client_ref, domain, allocation_ref}|null
+operation: {action, outcome, changed}
+```
+
+An external name can have `domain.id:null` before proof. Connection mode is
+`allocated|shared`; persisted states remain `pending|verified|broken|retired`.
+View-only callers receive no descriptor and false mutation capabilities.
+`operation` describes the chosen action, not an automatically chained workflow.
+
+| Field | States / interpretation |
+|---|---|
+| `hub.state` | `unconfigured`, `misconfigured`, `unavailable`, `unauthorized`, `unsupported`, `ready` |
+| `trust.state` | `unknown`, `not_requested`, `missing`, `active`, `revoked`, `identity_changed` |
+| `alias.state` | `unknown`, `match`, `mismatch`, `lookup_failed`; a chained alias has `one_hop:false` |
+| `certificate.material_state` | `available`, `missing`, `unavailable`; `serving_valid` is nullable when custody cannot be established |
+| `renewal.state` | `not_requested`, `scheduled`, `queued`, `issuing`, `retrying`, `blocked`, `failed`, `expired`, `unknown` |
+
+Serving validity and renewal readiness are separate. A retrying/blocked renewal
+may retain a still-valid certificate. The material check establishes API-node
+custody for only the selected row, returns no PEM/key, and proves no edge-host
+installation. Renewal exposes only that certificate's summarized job id/state,
+attempts, next attempt, allowlisted error and cleanup flag; never raw job or
+remote error payloads. `worker_version` remains unknown without established
+worker telemetry. An API version cannot prove an old long-lived worker restarted.
+
+`next_action` is the first unmet prerequisite, with one of these fixed codes:
+`configure_hub`, `upgrade_hub`, `repair_hub_access`, `retry_hub`,
+`choose_allocation`, `prepare_connection`, `grant_trust`, `restart_connection`,
+`connect`, `repair_alias`, `check`, `request`, `wait_for_job`, `repair_worker`,
+`restore_custody`, `inspect_failure`, `unsupported_domain_scope`, `none`.
+Actor is `deployment_operator`, `allocation_controller`, `domain_owner`,
+`project_operator` or `none`. Render product copy for the code and actor;
+never execute a command supplied by a remote response.
+
+### Errors and client recovery
+
+GET Plan reports readiness/prerequisite failures as data with HTTP200. Mutation
+prerequisite failures return the normal false envelope with HTTP409, an
+allowlisted `error_code` and Readiness v1 in `data`:
+
+`trust_missing`, `trust_revoked`, `hub_identity_changed`, `allocation_conflict`,
+`alias_mismatch`, `alias_lookup_failed`, `connection_not_verified`,
+`certificate_busy`, `cleanup_pending`, `profile_conflict`, `stale_connection`,
+`unsupported_domain_scope`.
+
+Invalid shape is400, target permission is403, inaccessible ids are404,
+configuration/unsupported/unavailable is503, and rate limit is429. Keep the
+readiness object available on an action error so the UI can show the next
+repair. Display fixed copy instead of arbitrary hub exception text. A busy
+certificate means an existing worker owns its issue lock: retry later without
+preparing a different request. A failed plan observation does not persist a
+verified-to-broken demotion; explicit Check and runtime issuance validation may.
+
+Shared pending/broken/revoked/identity-changed connections block certificate
+issuance before CA/provider writes. Formerly verified retired tombstones retain
+the guard until a successor verifies. Legacy allocated pending rows remain
+inert. No shared failure silently writes TXT through Route53/GoDaddy beside the
+CNAME or downgrades the requested profile. Trust revocation stops future
+validation and does not revoke an already-issued certificate.
+
+### Deployment and rollback
+
+Hub URL/key remain server-only static deployment settings, delivered through
+the existing deployment configuration and never accepted/read back through
+these endpoints, CLI output or remote-agent input. Restart API and worker
+processes after their configuration/binary upgrade. Upgrade the hub first,
+apply the additive downstream schema, then drain/restart **all** old issuance
+workers before enabling Connect; old workers do not understand shared pending
+guards. Keep legacy rows in allocated mode. Existing direct Domain/provider and
+certificate rows are preserved in place. Verify a stubbed scheduled renewal
+through the existing job, KMS and edge handoff before separately authorized
+production adoption.
+
+Before any shared connection, application rollback can retain the additive
+schema. After shared rows exist, retain the new binaries/guards and valid
+material; repair configuration, alias and trust or explicitly restart an
+eligible connection. Do not delete/retire a row to regain direct renewal or
+downgrade workers. A return to direct DNS is a separately authorized handover.
+This feature does not authorize live production changes or lift a hold.

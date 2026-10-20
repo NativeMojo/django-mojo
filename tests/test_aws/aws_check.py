@@ -1,6 +1,8 @@
 
 TESTIT_TIER = "edge"
 import io
+import json
+import uuid
 from types import SimpleNamespace
 from unittest import mock
 
@@ -1810,3 +1812,169 @@ def test_bootstrap_refuses_a_domain_owned_by_another_group(opts):
     codes = [item["code"] for item in runner.results]
     assert "dns.domain_not_owned" in codes, \
         f"a domain owned by another group must fail closed before any write, got {codes}"
+
+
+class _SharedDNSSetup:
+    """A call-local shared service fake: no settings, provider or queue."""
+    def __init__(self):
+        self.calls = []
+        self.error = None
+        self.dto = {
+            "version": 1, "checked_at": "2026-10-20T21:00:00Z",
+            "domain": {"id": 123, "name": "shared.example", "provider": "godaddy",
+                       "group": {"id": 7, "name": "tenant"}},
+            "profile": {"name": "apex_wildcard", "names": ["shared.example", "*.shared.example"]},
+            "hub": {"state": "ready", "protocol_version": 2,
+                    "consumer_project_uuid": "fake-public-project-uuid"},
+            "connection": {"id": 9, "mode": "shared", "state": "pending",
+                           "client_ref": "fake-public-client-ref",
+                           "allocation_ref": "fixed.hub.example", "participant_ref": None,
+                           "verified_at": None},
+            "trust": {"state": "missing", "can_publish": False, "can_withdraw": False},
+            "alias": {"state": "unknown", "source": "_acme-challenge.shared.example",
+                      "target": "fixed.hub.example", "observed_target": None,
+                      "one_hop": None, "checked_at": None},
+            "certificate": None,
+            "renewal": {"state": "not_requested", "next_attempt_at": None,
+                        "attempts": 0, "error_code": None, "cleanup_pending": False,
+                        "job": {"id": None, "state": None}, "worker_version": None},
+            "capabilities": {"group_choices": True, "can_connect": True,
+                             "can_restart": False, "can_check": False, "can_request": False},
+            "next_action": {"code": "grant_trust", "actor": "allocation_controller"},
+            "connection_request": {"version": 1, "consumer_project_uuid": "fake-public-project-uuid",
+                                   "client_ref": "fake-public-client-ref", "domain": "shared.example",
+                                   "allocation_ref": "fixed.hub.example"},
+            "operation": {"action": "plan", "outcome": "ready", "changed": False},
+        }
+
+    def resolve_target(self, group=None, name=None, actor=None, write=False):
+        self.calls.append(("target", name, write, actor))
+        return SimpleNamespace(group=group, name=name)
+
+    def plan(self, target, allocation_ref=None, actor=None):
+        self.calls.append(("plan", allocation_ref, actor))
+        return json.loads(json.dumps(self.dto))
+
+    def resolve_connection(self, value, actor=None, write=False):
+        self.calls.append(("connection", value, write, actor))
+        return SimpleNamespace(pk=value)
+
+    def _write(self, action):
+        self.calls.append((action,))
+        if self.error is not None:
+            raise self.error
+        dto = json.loads(json.dumps(self.dto))
+        dto["operation"] = {"action": action, "outcome": "awaiting_trust", "changed": True}
+        return dto
+
+    def connect(self, target, allocation_ref, actor=None, restart=False):
+        self.calls.append(("connect_args", allocation_ref, restart, actor))
+        return self._write("connect")
+
+    def check(self, row, actor=None):
+        return self._write("check")
+
+    def request(self, row, actor=None):
+        return self._write("request")
+
+
+def _shared_runner(setup, action, **kwargs):
+    from mojo.apps.account.models import Group
+    from mojo.apps.aws.services.aws_check import AWSCheckRunner
+
+    group = Group.objects.create(name="testit-aws-shared-" + uuid.uuid4().hex[:12])
+    return AWSCheckRunner(
+        dns_action=action, dns_domain="shared.example", dns_group=str(group.pk),
+        setup_service=setup, settings_get=_setting_values(), **kwargs), group
+
+
+@th.django_unit_test("shared DNS plan is read-only, requires no AWS and returns the exact shared DTO")
+def test_shared_dns_plan_is_independent_of_aws(opts):
+    setup = _SharedDNSSetup()
+    runner, group = _shared_runner(setup, "plan", dns_allocation="fixed.hub.example")
+    try:
+        report = runner.run()
+    finally:
+        group.delete()
+    assert len(report["items"]) == 1 and report["items"][0]["code"] == "dns.shared_setup", \
+        f"An explicit shared action must run only DNS setup, got {report}"
+    assert report["items"][0]["details"]["shared_setup"] == setup.dto, \
+        "CLI must nest the same complete Readiness v1 DTO without reconstructing it"
+    assert [call[0] for call in setup.calls] == ["target", "plan"], \
+        f"Plan must neither prepare, check, request, allocate nor touch AWS, got {setup.calls}"
+    assert not runner.primary_identity, "Shared DNS setup must not demand or establish AWS identity"
+
+
+@th.django_unit_test("shared DNS mutations require apply and confirmation, and execute one action only")
+def test_shared_dns_actions_are_explicit(opts):
+    for action in ("connect", "check", "request"):
+        for apply, yes, expected in ((False, False, False), (True, False, False), (True, True, True)):
+            setup = _SharedDNSSetup()
+            runner, group = _shared_runner(
+                setup, action, apply=apply, yes=yes, dns_allocation="fixed.hub.example")
+            try:
+                report = runner.run()
+            finally:
+                group.delete()
+            writes = [call[0] for call in setup.calls if call[0] in ("connect", "check", "request")]
+            assert writes == ([action] if expected else []), \
+                f"{action} apply={apply} yes={yes} must execute only its explicitly approved action, got {writes}"
+            if expected:
+                dto = report["items"][0]["details"]["shared_setup"]
+                assert dto["operation"]["action"] == action and report["items"][0]["changed"], \
+                    f"The report must retain the chosen {action} operation and changed marker"
+
+
+@th.django_unit_test("shared DNS command flags retain legacy readonly JSON and allow explicit apply output JSON")
+def test_shared_dns_cli_flag_contract(opts):
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+
+    invalid = [
+        ["--dns-action", "connect", "--dns-domain", "shared.example", "--dns-group", "missing"],
+        ["--dns-action", "plan", "--dns-domain", "shared.example", "--dns-group", "missing", "--apply"],
+        ["--dns-action", "request", "--dns-domain", "shared.example", "--dns-group", "missing", "--apply", "--json"],
+        ["--dns-action", "plan", "--dns-domain", "shared.example", "--dns-group", "missing", "--dns-restart"],
+        ["--dns-action", "plan", "--dns-domain", "shared.example", "--dns-group", "missing", "--section", "identity"],
+    ]
+    for args in invalid:
+        try:
+            call_command("aws-check", *args, stdout=io.StringIO())
+        except CommandError as exc:
+            assert exc.returncode == 2, f"Invalid shared DNS flags must fail before execution: {args}"
+        else:
+            assert False, f"Unsafe shared DNS flags must be rejected: {args}"
+    for action_args in (["--dns-action", "plan"],
+                        ["--dns-action", "connect", "--dns-allocation", "fixed.hub.example", "--apply", "--yes"]):
+        output = io.StringIO()
+        try:
+            call_command("aws-check", *action_args, "--dns-domain", "shared.example",
+                         "--dns-group", "testit-absent-" + uuid.uuid4().hex,
+                         "--output-json", stdout=output)
+        except CommandError as exc:
+            assert exc.returncode == 1, "An unavailable group is a readiness failure, not an invalid output-json/apply combination"
+        report = json.loads(output.getvalue())
+        assert report["schema_version"] == 1 and report["items"][0]["section"] == "dns", \
+            "Both plan and explicitly applied output-json must retain the versioned CLI envelope"
+
+
+@th.django_unit_test("shared DNS expected errors carry safe readiness and arbitrary provider text is hidden")
+def test_shared_dns_error_redaction(opts):
+    from mojo.apps.dnsman.services.delegation_setup import SetupError
+
+    secret = "FAKE-HUB-SECRET-MUST-NOT-APPEAR"
+    for safe in (False, True):
+        setup = _SharedDNSSetup()
+        setup.error = SetupError("trust_missing", data=setup.dto) if safe else RuntimeError(secret)
+        runner, group = _shared_runner(setup, "connect", apply=True, yes=True,
+                                       dns_allocation="fixed.hub.example")
+        try:
+            report = runner.run()
+        finally:
+            group.delete()
+        assert report["overall"] == "fail", "A failed shared operation must keep the command failure exit contract"
+        assert secret not in json.dumps(report), "Raw hub/provider exceptions must never leak through CLI reports"
+        if safe:
+            details = report["items"][0]["details"]
+            assert details["error_code"] == "trust_missing" and details["shared_setup"] == setup.dto, \
+                "Expected setup prerequisites must retain the allowlisted error and exact readiness DTO"
