@@ -11,8 +11,8 @@ from testit.helpers import assert_eq, assert_true
 
 TEST_EMAIL_ADMIN = "asst-firewall-tools-admin@example.com"
 TEST_PASSWORD = "TestPass1!"
-TEST_IP = "198.51.100.42"
-TEST_IP_2 = "198.51.100.43"
+TEST_IP = "203.0.118.42"
+TEST_IP_2 = "203.0.118.43"
 
 
 @th.django_unit_setup()

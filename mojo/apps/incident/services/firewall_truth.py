@@ -235,9 +235,42 @@ def _iso(value):
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
-def permanent_snapshot():
-    """Canonical aggregate truth; quarantine bad legacy rows independently."""
+def _flag_unsafe(pairs):
+    """Mark blocked rows whose target is unsafe, once per code (#8885).
+
+    The row keeps `is_blocked` so the operator sees it and can unblock it;
+    the builders have already planned it absent.
+    """
     from mojo.apps.account.models import GeoLocatedIP
+    for pk, code in pairs:
+        message = f"unsafe_target: {code}"[:MAX_FIREWALL_ERROR]
+        GeoLocatedIP.objects.filter(pk=pk).exclude(
+            firewall_sync_error=message).update(firewall_sync_error=message)
+
+
+def _unsafe_code(canonical, protected):
+    """The block-safety refusal for a stored row, or "".
+
+    Whitelist state is the builder's own; malformed protection config only
+    narrows to the pinned non-global table here, and the dispatch boundary
+    refuses every present request until it is fixed, so existing kernel
+    state is left alone rather than torn down.
+    """
+    from mojo.apps.incident.services import block_safety
+    if protected is None:
+        return "non_global_address" if block_safety.is_non_global(canonical) else ""
+    return block_safety.check_block_target(
+        canonical, protected=protected, whitelist=False)[1]
+
+
+def permanent_snapshot():
+    """Canonical aggregate truth; quarantine bad legacy rows independently.
+
+    Rows whose target is unsafe (#8885) are left out and flagged
+    `unsafe_target: <code>`.
+    """
+    from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident.services import block_safety
     from django.db.models import Q
     from mojo.helpers import dates
 
@@ -251,25 +284,34 @@ def permanent_snapshot():
         raise FirewallTruthError("network_limit", "too many permanent firewall rows")
     members = []
     invalid = []
+    unsafe = []
     generations = []
+    protected = block_safety.protected_networks()
     for row in rows:
         try:
             canonical = canonical_ipv4_address(row.ip_address)
         except FirewallTruthError as err:
             invalid.append((row.pk, err.code))
             continue
+        code = _unsafe_code(canonical, protected)
+        if code:
+            unsafe.append((row.pk, code))
+            continue
         members.append(canonical)
         generations.append((row.pk, row.firewall_generation, canonical))
     cidrs = canonical_ipv4_networks(members)
+    _flag_unsafe(unsafe)
     value = {
         "name": permanent_set_name(), "cidrs": cidrs,
         "generations": generations, "quarantined": invalid,
+        "unsafe": unsafe,
     }
     value["fingerprint"] = state_fingerprint(value)
     return value
 
 
 def geolocated_snapshot_from_row(row, permanent=None):
+    from mojo.apps.incident.services import block_safety
     from mojo.helpers import dates
 
     canonical = canonical_ipv4_address(row.ip_address)
@@ -282,6 +324,12 @@ def geolocated_snapshot_from_row(row, permanent=None):
         (row.blocked_until is None or row.blocked_until > now) and
         not whitelisted)
     temporary = bool(active and row.blocked_until is not None)
+    if temporary:
+        # An unsafe temporary block is planned absent and flagged (#8885).
+        code = _unsafe_code(canonical, block_safety.protected_networks())
+        if code:
+            temporary = False
+            _flag_unsafe([(row.pk, code)])
     permanent = permanent or permanent_snapshot()
     desired = {
         "ip": {"ip": canonical, "present": temporary},
@@ -321,6 +369,18 @@ def ipset_snapshot_from_row(row):
             "reserved_set_name", "configured permanent set name is reserved")
     present = bool(row.is_enabled and not row.is_cache_only)
     name, cidrs = canonical_operator_ipset(name, row.cidrs, present)
+    if present:
+        # The kernel set gets only safe networks (#8885); the stored data
+        # keeps the operator's intent, and the digest describes what is kept.
+        from mojo.apps import metrics
+        from mojo.apps.incident.services import block_safety
+        from mojo.helpers import logit
+        cidrs, carved = block_safety.safe_block_networks(cidrs)
+        if carved:
+            logit.info(
+                f"firewall: IPSet {name} carves {len(carved)} unsafe network(s) "
+                "out of the kernel set")
+            metrics.record("firewall:ipset_carved", category="firewall")
     desired = {
         "name": name, "present": present,
         "count": len(cidrs) if present else 0,

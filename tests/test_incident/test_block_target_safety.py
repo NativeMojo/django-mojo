@@ -58,6 +58,12 @@ def _fresh(ip, **fields):
     return GeoLocatedIP.objects.create(ip_address=ip, provider="test", **fields)
 
 
+def _cleanup(*ips):
+    """Drop rows a test whitelisted, so no other test's set is carved."""
+    from mojo.apps.account.models import GeoLocatedIP
+    GeoLocatedIP.objects.filter(ip_address__in=ips).delete()
+
+
 def _state(geo):
     geo.refresh_from_db()
     return (geo.is_blocked, geo.blocked_until, geo.firewall_generation,
@@ -106,6 +112,7 @@ def test_predicate_table(opts):
            whitelisted_until=dates.utcnow() - timedelta(hours=1))
     th.assert_eq(block_safety.check_block_target("203.0.114.78")[1], "",
                  "an expired whitelist does not protect")
+    _cleanup("203.0.114.77", "203.0.114.78")
 
 
 @th.django_unit_test()
@@ -346,6 +353,7 @@ def test_operator_set_carve_out(opts):
                  "the digest describes the kept networks")
     th.assert_eq(plan["desired"]["count"], len(cidrs), "the count describes the kept networks")
     th.assert_eq(row.data, data, "the operator's stored data is unchanged")
+    _cleanup("203.0.114.7")
 
     with mock.patch.object(block_safety, "MAX_FIREWALL_NETWORKS", 20):
         try:
