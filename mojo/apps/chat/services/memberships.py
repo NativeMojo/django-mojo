@@ -19,6 +19,8 @@ def save_membership(member, args, kwargs, *, backend=None):
         if member.pk is not None:
             raise ValueError("New cursor memberships require a database-assigned primary key")
         with transaction.atomic(using=kwargs.get("using")):
+            from .locks import lock_users
+            lock_users([member.user_id], using=kwargs.get("using") or "default")
             room = ChatRoom.objects.select_for_update().get(pk=member.room_id)
             _initialize(member, room.message_seq)
             return models.Model.save(member, *args, **kwargs)
@@ -45,6 +47,8 @@ def create_memberships(queryset, members, kwargs, *, backend=None):
     if kwargs.get("update_conflicts"):
         raise ValueError("Cursor membership bulk upsert is unsupported")
     with transaction.atomic(using=alias):
+        from .locks import lock_users
+        lock_users([member.user_id for member in members], using=alias)
         rooms = {r.pk: r for r in ChatRoom.objects.using(alias).select_for_update().filter(
             pk__in={m.room_id for m in members}).order_by("pk")}
         for member in members:

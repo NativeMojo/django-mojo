@@ -25,6 +25,8 @@ def save_message(message, args, kwargs):
     if message.room_seq is not None:
         raise ValueError("New message room_seq is assigned by the chat service")
     with transaction.atomic(using=kwargs.get("using")):
+        from .locks import lock_users
+        lock_users([message.user_id, message.flagged_by_id], using=kwargs.get("using") or "default")
         room = ChatRoom.objects.select_for_update().get(pk=message.room_id)
         if room.read_state_generation == 0:
             room.read_state_generation = 1

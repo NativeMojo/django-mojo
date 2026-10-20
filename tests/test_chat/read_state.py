@@ -246,3 +246,24 @@ def test_join_boundary_legacy_and_banned_seats(opts):
     assert set_join_boundary([member.pk], legacy_boundary, backend="legacy") == 1, "Legacy backend must retain the joined-at-only setter contract"
     member.refresh_from_db()
     assert member.joined_at == legacy_boundary and (member.last_read_seq, member.unread_exception_count) == previous, "Legacy boundary updates must leave cursor fields untouched"
+
+
+@th.django_unit_test()
+def test_legacy_actual_target_survives_hidden_tail_head_clear(opts):
+    from mojo.apps.chat.models import ChatMessage
+    from mojo.apps.chat.services.read_state import mark_current_head
+    room, user, member = _fixture("legacy-actual-target")
+    legacy = ChatMessage.objects.create(room=room, body="visible before cursor activation")
+    tail = _create(room)
+    tail.delete()
+    result = _read(room, user, member, legacy)
+    member.refresh_from_db()
+    assert result.changed and result.position.ack_target_id == legacy.pk and result.position.ack_target_seq is None, "A real null-sequence legacy target must establish exact acknowledgment facts without inventing a sequence"
+    assert member.last_read_seq == 0 and member.last_read_message_id == legacy.pk and member.last_read_at == legacy.created, "Legacy acknowledgment must preserve the genuine target PK/time while leaving numbered unread positions untouched"
+    cleared = mark_current_head(room, user, member, backend="cursor", handler=None, publisher=False)
+    assert cleared.position.unread_count == 0 and cleared.position.last_read_message_id == legacy.pk, "Trusted hidden-tail clear must retain the real visible legacy target instead of fabricating a head message"
+    newer = _create(room)
+    _read(room, user, member, newer)
+    stale = _read(room, user, member, legacy)
+    member.refresh_from_db()
+    assert not stale.changed and member.last_read_seq == newer.room_seq and member.last_read_message_id == newer.pk and member.last_read_at == newer.created, "An old legacy acknowledgment must never rewind newer numbered actual facts or cursor state"
