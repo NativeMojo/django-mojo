@@ -160,3 +160,62 @@ def test_reader_scope_uses_primary_for_durable_chat_state(opts):
             ids = list(unread_queryset(seats[1]).values_list("pk", flat=True))
         assert positions[users[1].pk].unread_count == 1 and counts[room.pk].unread_count == 1, "Fresh durable snapshots must stay on primary inside an explicit reader scope"
         assert ids == [own.pk] and len(captured) == 3, "Deferred eligibility must also remain primary and bounded when evaluated by its caller"
+
+
+@th.django_unit_test()
+def test_stale_full_saves_preserve_service_state_and_identity(opts):
+    from datetime import timedelta
+    from unittest.mock import patch
+    from django.conf import settings as django_settings
+    from django.db import models
+    from mojo.apps.chat.models import ChatRoom, ChatMembership, ChatMessage
+    from mojo.apps.chat.services.maintenance import relocate_messages
+    room, users, seats = _fixture("stale-saves")
+    stale_room = ChatRoom.objects.get(pk=room.pk)
+    stale_member = ChatMembership.objects.get(pk=seats[0].pk)
+    with patch.object(django_settings, "CHAT_READ_STATE_BACKEND", "cursor", create=True):
+        destination = ChatRoom.objects.create(name="cursor-serial-stale-saves-dest")
+        ChatMembership.objects.bulk_create([ChatMembership(room=destination, user=u) for u in users])
+        msg = ChatMessage.objects.create(room=room, user=users[0], body="original",
+                                         read_handler=None, read_publisher=False)
+        stale_room.name = "cursor-serial-stale-saves-renamed"
+        stale_room.save()
+        room.refresh_from_db()
+        assert room.message_seq == 1 and room.read_state_generation == 1, "Stale room rename must not overwrite a committed send's head or generation"
+        assert room.modified > stale_room.created, "Ordinary full saves must preserve auto_now modified behavior"
+        stale_member.status = "muted"
+        stale_member.role = "admin"
+        new_join = stale_member.joined_at - timedelta(seconds=1)
+        stale_member.joined_at = new_join
+        stale_member.save()
+        current = ChatMembership.objects.get(pk=stale_member.pk)
+        assert current.last_read_seq == 1 and current.last_read_message_id == msg.pk and current.last_read_at == msg.created, "Stale membership full save must preserve committed sender read facts"
+        assert current.status == "muted" and current.role == "admin" and current.joined_at == new_join, "Ordinary role/status and trusted explicit join changes must continue to save"
+        # Force maintenance into the exact gap between identity validation and
+        # the base UPDATE, proving the SQL itself excludes protected identity.
+        original_save = models.Model.save
+        moved = []
+        def move_then_save(instance, *args, **kwargs):
+            if instance is msg and not moved:
+                moved.append(True)
+                relocate_messages([room.pk, destination.pk], {msg.pk: destination.pk}, publisher=False)
+            return original_save(instance, *args, **kwargs)
+        msg.body = "edited"
+        with patch.object(models.Model, "save", move_then_save):
+            msg.save()
+        msg.refresh_from_db()
+        assert msg.room_id == destination.pk and msg.room_seq == 1 and msg.body == "edited", "An edit racing maintenance must save content without moving/resequencing the message back"
+        rejected = [
+            lambda: room.save(update_fields=["message_seq"]),
+            lambda: current.save(update_fields=["last_read_seq"]),
+            lambda: msg.save(update_fields=["room_seq"]),
+            lambda: ChatMessage(pk=msg.pk, room=room, body="replace").save(),
+            lambda: ChatMembership(pk=current.pk, room=room, user=users[0]).save(),
+            lambda: ChatRoom(pk=room.pk, name="replace").save(),
+        ]
+        for write in rejected:
+            try:
+                write()
+                assert False, "Explicit service-field updates and preassigned-PK replacement saves must be rejected"
+            except ValueError:
+                pass

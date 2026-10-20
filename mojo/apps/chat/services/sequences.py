@@ -9,12 +9,19 @@ def save_message(message, args, kwargs):
     handler = kwargs.pop("read_handler", _UNSET)
     publisher = kwargs.pop("read_publisher", None)
     if not message._state.adding:
+        from .backend import ordinary_save_fields
         fields = kwargs.get("update_fields")
+        protected = {"room", "room_id", "room_seq"}
+        if fields is not None and protected.intersection(fields):
+            raise ValueError("Message identity changes require chat maintenance")
         if fields is None or {"room", "room_id", "room_seq"}.intersection(fields):
             old = ChatMessage.objects.filter(pk=message.pk).values("room_id", "room_seq").get()
             if old["room_id"] != message.room_id or old["room_seq"] != message.room_seq:
                 raise ValueError("Message identity changes require chat maintenance")
+        ordinary_save_fields(message, kwargs, protected)
         return models.Model.save(message, *args, **kwargs)
+    if message.pk is not None:
+        raise ValueError("New cursor messages require a database-assigned primary key")
     if message.room_seq is not None:
         raise ValueError("New message room_seq is assigned by the chat service")
     with transaction.atomic(using=kwargs.get("using")):

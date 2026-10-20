@@ -297,6 +297,8 @@ def perform(kind, fixture, index=0, target=None, key=None):
             target.pk, backend="cursor", handler=None, publisher=False)
         if result.target is None:
             raise RuntimeError("Public read service rejected an entitled fixture target")
+        if result.target.pk != target.pk or result.target.room_seq != target.room_seq:
+            raise RuntimeError("Public read service acknowledged a different fixture target")
         return result
     if kind == "count":
         return read_state.unread_counts(user, room_ids=fixture.count_room_ids, backend="cursor")
@@ -516,7 +518,10 @@ class Load:
                             self.offer("read", fixture, 1, fixture.last_seed, delivered_at)
                             self.offer("snapshot", fixture, offered_at=delivered_at)
                     elif kind == "read":
-                        self.metrics.acknowledge(fixture, fixture.users[index].pk, result.position.read_seq)
+                        # The oracle comes from the offered immutable message,
+                        # never the implementation's returned cursor. Otherwise
+                        # a lost advancement returning its old prefix passes.
+                        self.metrics.acknowledge(fixture, fixture.users[index].pk, target.room_seq)
                 except Exception as exc:
                     error = exc
                 finally:

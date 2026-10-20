@@ -76,9 +76,13 @@ class ChatRoom(models.Model, MojoModel):
         return self.name or f"ChatRoom {self.pk}"
 
     def save(self, *args, **kwargs):
-        from ..services.backend import read_backend
+        from ..services.backend import read_backend, ordinary_save_fields
         if self._state.adding and read_backend() == "cursor":
+            if self.pk is not None:
+                raise ValueError("New cursor rooms require a database-assigned primary key")
             self.read_state_generation = 1
+        if not self._state.adding:
+            ordinary_save_fields(self, kwargs, {"message_seq", "read_state_generation"})
         return super().save(*args, **kwargs)
 
     @property

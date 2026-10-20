@@ -1,6 +1,6 @@
 """Initialize every supported membership creation door at a locked head."""
 from django.db import models, transaction
-from .backend import read_backend
+from .backend import read_backend, ordinary_save_fields
 
 
 def _initialize(member, head):
@@ -15,15 +15,22 @@ def save_membership(member, args, kwargs, *, backend=None):
         return models.Model.save(member, *args, **kwargs)
     from ..models import ChatRoom, ChatMembership
     if member._state.adding:
+        if member.pk is not None:
+            raise ValueError("New cursor memberships require a database-assigned primary key")
         with transaction.atomic(using=kwargs.get("using")):
             room = ChatRoom.objects.select_for_update().get(pk=member.room_id)
             _initialize(member, room.message_seq)
             return models.Model.save(member, *args, **kwargs)
     fields = kwargs.get("update_fields")
+    protected = {"room", "room_id", "user", "user_id", "last_read_seq",
+                 "last_read_message_id", "last_read_at", "unread_exception_count"}
+    if fields is not None and protected.intersection(fields):
+        raise ValueError("Service-owned chat fields require chat services")
     if fields is None or {"room", "room_id", "user", "user_id"}.intersection(fields):
         old = ChatMembership.objects.filter(pk=member.pk).values("room_id", "user_id").get()
         if old["room_id"] != member.room_id or old["user_id"] != member.user_id:
             raise ValueError("Membership identity changes require chat maintenance")
+    ordinary_save_fields(member, kwargs, protected)
     return models.Model.save(member, *args, **kwargs)
 
 
