@@ -603,6 +603,8 @@ One row per serving vhost: the app's primary, plus one per
 ```
 /opt/www/<vhost-id>/releases/<version>/           retained across generations
 EDGE_ROOT/generations/<gen>/www/<vhost-id> ->     the pointer, INSIDE the generation
+EDGE_ROOT/generations/<gen>/www/<vhost-id>.prev1 -> the release served before it
+EDGE_ROOT/generations/<gen>/www/<vhost-id>.prev2 -> the one before that
 ```
 
 The pointer living inside the generation is what makes the pair coherent: one
@@ -611,6 +613,33 @@ rollback reverts both. An earlier design put a `current` symlink next to the
 release, outside the atomic swap — so a failed `nginx -t` abandoned the config
 change but left the content already moved, and the node served a new bundle
 under old config.
+
+**The `.prev1` / `.prev2` links keep an open tab working across a deploy**
+(maestro #8669/#8670). A tab opened before a deploy still holds the old
+`index.html`, which names the old build's lazy chunks; those names are not in
+the new release. The rendered vhost answers a static file missing from the
+current release from `.prev1`, then `.prev2`, then 404 — never a page
+([templates.md](templates.md), "three cache postures").
+`installer.stage_web_roots` stages them per release vhost:
+
+- **They follow serving history, not mtime.** The candidates are what the live
+  generation's `www/<id>`, `.prev1` and `.prev2` named, newest first. The
+  release being staged is dropped, so is a duplicate, a directory already
+  gone, and a target outside `/opt/www/<id>/releases/`. A rollback from v3 to
+  v1 therefore keeps v3 as `.prev1` and v2 as `.prev2`.
+- **Every candidate is read before any link of the vhost is swapped.** A heal
+  retry re-stages the live generation in place, so the live generation can be
+  the directory being written; reading after the swap would lose the release
+  an open tab is on.
+- **Depth comes from `EDGE_KEEP_RELEASES`** (see [Settings](#settings)): no
+  hidden extra retention. A first install has no links; a placeholder vhost
+  gets none and loses any stale ones; a degraded vhost keeps serving its
+  previous release and links the ones before that. A slot with nothing to
+  name is unlinked.
+- **Pruning sees them.** `www_sync._referenced_releases` counts the `.prevN`
+  links of every retained generation, so a release one names is exempt. The
+  links are staged before `nginx -t` and the swap; pruning runs after the
+  reload.
 
 ### The release-less placeholder page
 
@@ -963,6 +992,17 @@ symlinks — so setting it to `1` (or `0`) cannot delete what is being served.
 Pair it with `EDGE_KEEP_GENERATIONS`: a generation retained for rollback is
 useless if the release it points at was pruned, so keeping N generations means
 wanting at least N releases.
+
+`EDGE_KEEP_RELEASES` also sets how many earlier releases an open tab can still
+load chunks from (the `.prev` links, [Node-side](#node-side)): `0` or `1` gives
+none, so tabs break on deploy as they did before #8669; `2` gives one; `3` or
+more (the default `5`) gives two, so a tab survives up to two deploys. A
+release a retained generation's `.prev` link names is exempt from pruning,
+like one its `www/<id>` names.
+
+A CDN in front of a vhost must honour the origin `Cache-Control`; one that
+forces a minimum TTL defeats the pages' `no-cache`. Not verified for any
+provider.
 
 ## Day-2 management
 

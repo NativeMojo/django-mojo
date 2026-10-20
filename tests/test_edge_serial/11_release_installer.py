@@ -21,6 +21,7 @@ from tests.test_edge._helpers import (
     RELEASE_BUCKET, declare_pools,
     cleanup, declare_release_buckets, make_certificate,
     make_domain, make_group, make_release, make_vhost, make_webapp, raises,
+    with_setting,
 )
 
 
@@ -535,5 +536,172 @@ def test_stage_web_roots_placeholder(opts):
         with open(os.path.join(released, "index.html")) as handle:
             assert handle.read() == "ph1:index.html", \
                 "the release's own index.html was overwritten by a placeholder"
+    finally:
+        _exit(patches, root, www)
+
+
+# ----------------------------------------------------------------------
+# fallback links for already-open tabs (#8670)
+# ----------------------------------------------------------------------
+
+def _fallback_stage(opts, generation, version, previous, depth=2,
+                    fallbacks=None, webapps=None):
+    """Stage one generation's web roots by hand; returns its directory."""
+    from mojo.apps.edge.services import installer, render
+
+    gen_dir = render.generation_dir(generation)
+    os.makedirs(os.path.join(gen_dir, "www"), exist_ok=True)
+    if webapps is None:
+        webapps = [{"vhost": opts.vhost.pk, "release": {"version": version}}]
+    installer.stage_web_roots(
+        generation, [opts.vhost], webapps, fallbacks,
+        previous=previous, fallback_depth=depth)
+    return gen_dir
+
+
+def _links(opts, generation):
+    """{slot: release version or None} for www/<id>, .prev1 and .prev2."""
+    from mojo.apps.edge.services import render
+
+    out = {}
+    paths = {"www": render.www_dir(generation, opts.vhost.pk)}
+    paths.update({f"prev{n}": render.www_fallback_dir(generation, opts.vhost.pk, n)
+                  for n in (1, 2)})
+    for slot, path in paths.items():
+        out[slot] = (os.path.basename(os.path.realpath(path))
+                     if os.path.islink(path) else None)
+    return out
+
+
+def _fallback_env(opts, versions):
+    root = tempfile.mkdtemp(prefix="edge-fb-")
+    www = tempfile.mkdtemp(prefix="edge-www-")
+    patches = _patches(root, www)
+    _enter(patches)
+    dirs = {v: _stage_release_on_disk(www, opts.vhost.pk, v) for v in versions}
+    return root, www, patches, dirs
+
+
+@th.django_unit_test("deploys link the releases served before, newest first, two deep")
+def test_fallback_links_follow_deploys(opts):
+    root, www, patches, _dirs = _fallback_env(opts, ["v1", "v2", "v3", "v4"])
+    try:
+        g1 = _fallback_stage(opts, "g1", "v1", None)
+        assert _links(opts, "g1") == {"www": "v1", "prev1": None, "prev2": None}, \
+            "a first install has nothing to fall back to"
+        g2 = _fallback_stage(opts, "g2", "v2", g1)
+        assert _links(opts, "g2") == {"www": "v2", "prev1": "v1", "prev2": None}, \
+            f"v1 -> v2 must leave prev1 on v1: {_links(opts, 'g2')}"
+        g3 = _fallback_stage(opts, "g3", "v3", g2)
+        assert _links(opts, "g3") == {"www": "v3", "prev1": "v2", "prev2": "v1"}
+        _fallback_stage(opts, "g4", "v4", g3)
+        assert _links(opts, "g4") == {"www": "v4", "prev1": "v3", "prev2": "v2"}, \
+            "the third release back must drop out"
+    finally:
+        _exit(patches, root, www)
+
+
+@th.django_unit_test("a rollback keeps the release it rolled back from")
+def test_fallback_links_on_rollback(opts):
+    root, www, patches, _dirs = _fallback_env(opts, ["v1", "v2", "v3"])
+    try:
+        g1 = _fallback_stage(opts, "g1", "v1", None)
+        g2 = _fallback_stage(opts, "g2", "v2", g1)
+        g3 = _fallback_stage(opts, "g3", "v3", g2)
+        _fallback_stage(opts, "g5", "v1", g3)
+        assert _links(opts, "g5") == {"www": "v1", "prev1": "v3", "prev2": "v2"}, \
+            f"tabs on v3 must survive the rollback: {_links(opts, 'g5')}"
+    finally:
+        _exit(patches, root, www)
+
+
+@th.django_unit_test("re-staging a generation in place leaves its links as they were")
+def test_fallback_links_restage_in_place(opts):
+    root, www, patches, _dirs = _fallback_env(opts, ["v1", "v2", "v3"])
+    try:
+        g1 = _fallback_stage(opts, "g1", "v1", None)
+        g2 = _fallback_stage(opts, "g2", "v2", g1)
+        g3 = _fallback_stage(opts, "g3", "v3", g2)
+        _fallback_stage(opts, "g3", "v3", g3)
+        assert _links(opts, "g3") == {"www": "v3", "prev1": "v2", "prev2": "v1"}
+    finally:
+        _exit(patches, root, www)
+
+
+@th.django_unit_test("heal in place: the degraded release becomes prev1, read before the swap")
+def test_fallback_links_heal_in_place(opts):
+    root, www, patches, dirs = _fallback_env(opts, ["v1", "v2"])
+    try:
+        # Degraded: desired v2 had no bytes, so gH serves v1 through the
+        # fallback path. The heal retry re-stages the SAME generation id.
+        gh = _fallback_stage(opts, "gh", "v2", None,
+                             fallbacks={opts.vhost.pk: dirs["v1"]})
+        assert _links(opts, "gh")["www"] == "v1"
+        _fallback_stage(opts, "gh", "v2", gh)
+        assert _links(opts, "gh") == {"www": "v2", "prev1": "v1", "prev2": None}, (
+            "the heal lost the release open tabs are on — candidates must be "
+            f"read before the swap: {_links(opts, 'gh')}")
+    finally:
+        _exit(patches, root, www)
+
+
+@th.django_unit_test("fallback depth follows EDGE_KEEP_RELEASES: 0 none, 1 one")
+def test_fallback_depth(opts):
+    from mojo.apps.edge.services import installer
+
+    root, www, patches, _dirs = _fallback_env(opts, ["v1", "v2", "v3"])
+    try:
+        g1 = _fallback_stage(opts, "g1", "v1", None)
+        g2 = _fallback_stage(opts, "g2", "v2", g1)
+        _fallback_stage(opts, "g3", "v3", g2, depth=0)
+        assert _links(opts, "g3") == {"www": "v3", "prev1": None, "prev2": None}
+        _fallback_stage(opts, "g3b", "v3", g2, depth=1)
+        assert _links(opts, "g3b") == {"www": "v3", "prev1": "v2", "prev2": None}
+        for keep, depth in ((0, 0), (1, 0), (2, 1), (3, 2), (5, 2)):
+            got = with_setting("EDGE_KEEP_RELEASES", keep,
+                               installer.default_fallback_depth)
+            assert got == depth, f"EDGE_KEEP_RELEASES={keep} gave depth {got}"
+    finally:
+        _exit(patches, root, www)
+
+
+@th.django_unit_test("a deleted or escaping earlier release is never linked")
+def test_fallback_links_refuse_missing_and_escaping(opts):
+    root, www, patches, dirs = _fallback_env(opts, ["v1", "v2", "v3"])
+    outside = tempfile.mkdtemp(prefix="edge-outside-")
+    try:
+        g1 = _fallback_stage(opts, "g1", "v1", None)
+        g2 = _fallback_stage(opts, "g2", "v2", g1)
+        shutil.rmtree(dirs["v1"])
+        _fallback_stage(opts, "g3", "v3", g2)
+        assert _links(opts, "g3") == {"www": "v3", "prev1": "v2", "prev2": None}, \
+            "a deleted release was linked"
+        from mojo.apps.edge.services import render
+        os.unlink(render.www_fallback_dir("g3", opts.vhost.pk, 1))
+        os.symlink(outside, render.www_fallback_dir("g3", opts.vhost.pk, 1))
+        g3 = render.generation_dir("g3")
+        _fallback_stage(opts, "g4", "v2", g3)
+        links = _links(opts, "g4")
+        assert links["prev1"] == "v3" and links["prev2"] is None, (
+            f"a .prev link outside releases/ was carried forward: {links}")
+    finally:
+        shutil.rmtree(outside, ignore_errors=True)
+        _exit(patches, root, www)
+
+
+@th.django_unit_test("a placeholder vhost gets no fallback links, and stale ones go")
+def test_fallback_links_placeholder(opts):
+    from mojo.apps.edge.services import render
+
+    root, www, patches, dirs = _fallback_env(opts, ["v1"])
+    try:
+        gen_www = os.path.join(render.generation_dir("gp"), "www")
+        os.makedirs(gen_www, exist_ok=True)
+        os.symlink(dirs["v1"], render.www_fallback_dir("gp", opts.vhost.pk, 1))
+        _fallback_stage(opts, "gp", None, None, webapps=[])
+        assert _links(opts, "gp") == {"www": None, "prev1": None, "prev2": None}, \
+            f"placeholder kept a fallback link: {_links(opts, 'gp')}"
+        assert os.path.isfile(os.path.join(
+            render.www_dir("gp", opts.vhost.pk), "index.html"))
     finally:
         _exit(patches, root, www)

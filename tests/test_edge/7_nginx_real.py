@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import urllib.error
 import urllib.request
 from unittest import mock
 
@@ -482,4 +483,131 @@ def test_production_temp_contract_spills_request_body(opts):
         upstream.shutdown()
         upstream.server_close()
         thread.join(timeout=5)
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _get(port, path):
+    """(status, headers, body) — a 404 is an answer here, not an error."""
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}{path}", timeout=10) as response:
+            return response.status, response.headers, response.read().decode()
+    except urllib.error.HTTPError as err:
+        return err.code, err.headers, ""
+
+
+@th.requires_extra("extended")
+@th.django_unit_test("a real nginx serves old chunks from .prev2 and never an old page")
+def test_real_nginx_serves_fallback_chain(opts):
+    """#8669/#8670 Challenge 1: `try_files` inside a named location chaining
+    to another named location is not spelled out in nginx's docs. This proves
+    it: a chunk that exists only two releases back is served, pages are
+    always rechecked, and a page is never answered from an older release."""
+    import socket
+    import time
+    import types
+
+    from mojo.apps.edge.services import render
+    from mojo.deploy import nginx_runtime
+
+    binary = _nginx_binary()
+    if not binary:
+        raise TestitSkip("nginx is not installed — skipping the serving check")
+
+    root = tempfile.mkdtemp(prefix="edge-fallback-")
+    process = None
+    try:
+        www = os.path.join(root, "www", "4242")
+        files = {
+            www: {"index.html": "current-page"},
+            f"{www}.prev1": {"old.html": "old-page", "index.html": "prev1-page"},
+            f"{www}.prev2": {"a-Ab12cd34.js": "chunk-from-prev2",
+                             "legacy.js": "unhashed-from-prev2"},
+        }
+        for directory, contents in files.items():
+            os.makedirs(directory)
+            for name, body in contents.items():
+                with open(os.path.join(directory, name), "w") as handle:
+                    handle.write(body)
+
+        vhost = types.SimpleNamespace(pk=4242, spa=True)
+        body = "\n".join(render._site_body(vhost, GENERATION)).replace(
+            render.www_dir(GENERATION, 4242), www)
+        runtime_root = os.path.join(root, "runtime")
+        for _directive, leaf in nginx_runtime.TEMP_PATHS:
+            os.makedirs(os.path.join(runtime_root, leaf), mode=0o700,
+                        exist_ok=True)
+        log_dir = os.path.join(root, "log")
+        os.makedirs(log_dir)
+        mime_path = os.path.join(root, "mime.types")
+        with open(mime_path, "w") as handle:
+            handle.write(STOCK_MIME_TYPES)
+        knobs = dict(render.http_knobs(), mime_types=mime_path,
+                     log_dir=log_dir, default_server=False,
+                     mojosec_mode="off")
+        port = _free_port()
+        config = os.path.join(root, "nginx.conf")
+        with open(config, "w") as handle:
+            handle.write("\n".join([
+                f"pid {root}/nginx.pid;",
+                f"error_log {root}/error.log notice;",
+                "events { worker_connections 32; }",
+                "http {",
+                "    default_type application/octet-stream;",
+                nginx_runtime.render_http_fragment(
+                    runtime_root, indent="    ").rstrip(),
+                render.render_http_base(knobs, security=[]),
+                "server {",
+                f"    listen 127.0.0.1:{port};",
+                render._header_block(),
+                body,
+                "}",
+                "}",
+                "",
+            ]))
+        checked = subprocess.run(
+            [binary, "-e", "stderr", "-t", "-c", config, "-p", root],
+            capture_output=True, text=True, timeout=60)
+        assert checked.returncode == 0, (
+            f"nginx refused the fallback locations:\n{checked.stderr}")
+        process = subprocess.Popen(
+            [binary, "-c", config, "-p", root, "-g", "daemon off;"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _attempt in range(100):
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                    break
+            except OSError:
+                time.sleep(0.05)
+
+        status, headers, text = _get(port, "/a-Ab12cd34.js")
+        assert (status, text) == (200, "chunk-from-prev2"), (
+            f"a chunk only .prev2 holds was not served: {status} {text!r}")
+        assert "immutable" in headers.get("Cache-Control", "")
+        assert headers.get("X-Frame-Options") == "DENY", \
+            "the fallback location dropped the security headers"
+
+        status, headers, text = _get(port, "/legacy.js")
+        assert (status, text) == (200, "unhashed-from-prev2")
+        assert headers.get("Cache-Control") == "no-cache"
+
+        status, headers, text = _get(port, "/old.html")
+        assert (status, text) == (200, "current-page"), (
+            f"a page was answered from an older release: {text!r}")
+        assert headers.get("Cache-Control") == "no-cache"
+
+        status, headers, text = _get(port, "/index.html")
+        assert (status, text) == (200, "current-page")
+        assert headers.get("Cache-Control") == "no-cache"
+
+        status, _headers, _text = _get(port, "/missing-Zz99yy88.js")
+        assert status == 404, f"a chunk no release holds answered {status}"
+    finally:
+        if process is not None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
         shutil.rmtree(root, ignore_errors=True)

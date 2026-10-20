@@ -33,12 +33,43 @@ Structural on **every** kind — rendered always, optional never:
   Referrer-Policy), re-emitted inside any location that
   declares its own `add_header` — nginx header inheritance is
   replace-not-merge, so the no-cache posture on proxied locations and the
-  immutable caching on assets would otherwise silently drop them. There is
+  cache headers on pages and static files would otherwise silently drop them. There is
   deliberately **no `Permissions-Policy`**: which browser features a site and
   the things it embeds may use (camera, microphone, geolocation, media) is
   the website's decision, not the platform's. A site that wants to restrict
   them sends that header itself; the edge never restricts on its behalf
   (maestro #8225, 2026-10-14).
+- On `site` / `site_api`, **three cache postures for files** (maestro
+  #8669/#8670). Every one of these locations re-emits the security headers.
+  - **Hashed build files** — `location ~ "<HASHED_ASSET_RE>"`, rendered
+    first because nginx takes the first matching regex location:
+    `Cache-Control: public, max-age=31536000, immutable`. The pattern is
+    `render.HASHED_ASSET_RE`:
+    `^/.+[.-](?=[A-Za-z0-9_-]*[0-9A-Z])[A-Za-z0-9_-]{8,}\.(<asset ext>)$` —
+    a `-` or `.` then 8+ URL-safe base64 characters (Rollup/Vite's hash
+    alphabet) holding at least one digit or upper-case letter, so
+    `vendor-libraries.js` is not read as a hash. It is matched with `~`,
+    **case-sensitive on purpose**: under `~*` the `[0-9A-Z]` lookahead
+    would accept lower case too and every long lower-case name would be
+    cached for a year. A real hash that happens to have no digit or capital
+    is misread as unhashed; that fails safe (`no-cache`).
+  - **Other static files** — `location ~* \.(<asset ext>)$` (`config.js`,
+    `env.js`, `favicon.ico`, `sw.js`, …): `Cache-Control: no-cache`. The
+    browser rechecks every load; the ETag keeps that to a 304.
+  - **Pages** — `location /` (`index.html`, the SPA fallback, any `.html`):
+    `Cache-Control: no-cache`, so a deploy is picked up on the next load.
+  - **Fallback chain.** A static file missing from the current release is
+    answered from the releases this node served before:
+    `try_files $uri @edge_hashed_prev1` → `@edge_hashed_prev2` → `=404`
+    (and `@edge_static_prev1/2` for other static files). Each named location
+    sets `root` to `www/<id>.prev1` / `.prev2` inside the generation and
+    keeps its location's cache header. **Pages never fall back**: `/old.html`
+    on an SPA gets the current `index.html`, on a plain site the current
+    `404.html`. The links are fixed suffixes, so the text stays a pure
+    function of the generation's inputs; which releases they name is the
+    installer's job ([webapps.md](webapps.md#node-side)). A vhost with no
+    `.prev` links (placeholder, first install, `EDGE_KEEP_RELEASES` ≤ 1)
+    misses through the chain to the same 404 as before.
 - `client_max_body_size` rendered from `body_size_mb` (default 50, range
   1–4096) — nginx's 1m default is never silently in play.
 - The **blocklist guards** (`if ($edge_block_ip)` / `if ($edge_block_ua)` →
@@ -81,7 +112,8 @@ DNS-01-only mode and two when public HTTP is enabled, asserted in
   alias uses nginx's `^~` prefix modifier so the site's asset-suffix regex
   cannot capture a Django static request and look for it in the release root.
 - **`spa`** (`site`, `site_api`) — `try_files ... /index.html` history
-  fallback instead of `=404` + `error_page`.
+  fallback instead of `=404` + `error_page`. The fallback page is served
+  from `location /`, so it is `no-cache` like every page.
 - **Routes** (`site_api`) — one `location ^~ <prefix>` per `VhostRoute`, so
   longest-prefix wins while the site's asset-suffix regex cannot capture an
   asset-shaped request below a declared API prefix. Every proxied location

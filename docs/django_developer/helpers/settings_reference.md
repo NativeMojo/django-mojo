@@ -658,8 +658,10 @@ reasoning: [edge README](../edge/README.md#settings),
   live `current` generation is never pruned.
 - `EDGE_KEEP_RELEASES` — **file-only** (`settings.get_static`), int, default
   `5`. Release directories retained per vhost, i.e. the web-app rollback depth;
-  the promoted release and anything a retained generation still symlinks are
-  exempt, so even `0` cannot delete what is being served.
+  the promoted release and anything a retained generation still symlinks
+  (its `.prev` fallback links included) are exempt, so even `0` cannot delete
+  what is being served. It also bounds how many earlier releases an open tab
+  can load chunks from: `0`–`1` none, `2` one, `3`+ two.
 - `EDGE_RELEASE_BUCKETS` — **DB-backed** (`settings.get`, `kind="list"`),
   default `[]`. The S3 buckets a web app may use; **fails closed** — with none
   declared no web app can be registered, no upload URL signed, and no node

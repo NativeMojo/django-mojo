@@ -597,3 +597,44 @@ def test_fetch_refuses_an_escaping_version(opts):
             "fetch_webapps let an escaping row raise instead of degrading it"
     finally:
         _exit(patches, root, www)
+
+
+@th.django_unit_test("prune keeps a release named only by a .prev fallback link")
+def test_prune_keeps_fallback_link_releases(opts):
+    """An open tab from two deploys ago still loads chunks through
+    `www/<id>.prev2`; pruning must not delete the release it names (#8670)."""
+    from mojo.apps.edge.services import installer, render, www_sync
+
+    root = tempfile.mkdtemp(prefix="edge-sync-")
+    www = tempfile.mkdtemp(prefix="edge-www-")
+    patches = _patches(root, www)
+    _enter(patches)
+    try:
+        versions = ["fb1", "fb2", "fb3", "fb4", "fb5"]
+        dirs = {}
+        for index, version in enumerate(versions):
+            path = installer.release_dir(opts.vhost.pk, version)
+            os.makedirs(path, exist_ok=True)
+            stamp = time.time() - (len(versions) - index) * 1000
+            os.utime(path, (stamp, stamp))
+            dirs[version] = path
+
+        gen = "genfallback"
+        os.makedirs(os.path.dirname(render.www_dir(gen, opts.vhost.pk)),
+                    exist_ok=True)
+        os.symlink(dirs["fb5"], render.www_dir(gen, opts.vhost.pk))
+        os.symlink(dirs["fb1"], render.www_fallback_dir(gen, opts.vhost.pk, 2))
+
+        removed = www_sync.prune_releases(
+            [_row(opts.vhost.pk, "fb5", FILES_V1)], keep=2)
+
+        assert os.path.isdir(dirs["fb1"]), (
+            "prune deleted the release a .prev2 fallback link names — an "
+            "open tab's lazy chunks now 404")
+        assert dirs["fb1"] not in removed
+        assert os.path.isdir(dirs["fb4"]), "newest unreferenced release dropped"
+        for version in ("fb2", "fb3"):
+            assert not os.path.exists(dirs[version]), \
+                f"{version} is unreferenced and past keep, but was retained"
+    finally:
+        _exit(patches, root, www)
