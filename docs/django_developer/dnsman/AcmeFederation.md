@@ -512,8 +512,10 @@ permission; only the allocation controller performs the intervening grant.
 6. Run `POST /api/dnsman/delegation/request` with `{"delegation":9}`.
    The exact apex-plus-wildcard request is queued through the existing
    certificate service. An exact valid certificate outside its renewal
-   window returns `already_current`; pending/issuing returns `already_queued`;
-   a due active certificate renews its existing id. Conflicting SAN profiles
+   window returns `already_current`; a real pending/running job or active
+   issuer returns `already_queued`; a due active certificate renews its existing
+   id. Pending/issuing rows with terminal or missing jobs return `job_held`
+   unchanged and direct inspection. Conflicting SAN profiles
    are refused rather than converted. Poll Plan for status.
 
 ### Immutable generations and routing
@@ -615,5 +617,7 @@ follows the actual replacement leaf and stops for cancellation, completion or a
 different failure. It does not revive an operator-canceled job. Readiness keeps
 serving validity separate, reports an exhausted busy worker as failed and points
 to `repair_worker`. Request returns `job_held` without changing a preserved
-canceled, expired non-busy or differently failed job. No extra scheduler or
-installer is introduced.
+terminal job (including completion), or a pending/issuing row without a Job.
+Only a real queued/running job or observed active issuer justifies
+`already_queued`; held work directs inspection. No extra scheduler or installer
+is introduced.

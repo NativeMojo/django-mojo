@@ -293,19 +293,27 @@ def _certificate_status(cert, custody=None):
                 serving_valid=serving, material_state=material)
 
 
-def _renewal(cert, row, certificate, blocked):
+def _certificate_job(cert):
     from mojo.apps.jobs.models import Job
+    from mojo.apps.dnsman.services import certs
+    return Job.objects.filter(func__in=(certs.ISSUE_JOB, certs.RENEW_JOB),
+        payload={"certificate": cert.pk}, broadcast=False).order_by("-created", "-pk").first()
+
+
+def _renewal(cert, row, certificate, blocked, issuer_active=False):
     if cert is None:
         return dict(state="not_requested", next_attempt_at=None, attempts=0, error_code=None,
                     cleanup_pending=bool(row and row.cleanup_challenge_ref), job=None, worker_version=None)
     from mojo.apps.dnsman.services import certs
-    job = Job.objects.filter(func__in=(certs.ISSUE_JOB, certs.RENEW_JOB), payload__certificate=cert.pk).order_by("-created").first()
+    job = _certificate_job(cert)
     if blocked:
         state = "blocked"
-    elif cert.status == "issuing":
+    elif issuer_active:
         state = "issuing"
     elif job and job.status in ("pending", "running"):
         state = "queued" if job.status == "pending" else "issuing"
+    elif cert.status in ("pending", "issuing"):
+        state = "failed" if job and job.status == "failed" else "blocked"
     elif job and job.status == "failed" and job.last_error == certs.ISSUE_BUSY_ERROR:
         state = "failed"
     elif job and job.status in ("canceled", "expired") and cert.renew_after and cert.renew_after <= dates.utcnow():
@@ -332,7 +340,7 @@ def _descriptor(row):
                 client_ref=str(row.client_ref), domain=row.domain_name, allocation_ref=row.hub_allocation_ref)
 
 
-def plan(target, allocation_ref=None, actor=None, client=None, custody=None, operation=None):
+def plan(target, allocation_ref=None, actor=None, client=None, custody=None, operation=None, _issuer_active=False):
     target = _refresh(target, actor)
     client = client or acme_hub_client
     if allocation_ref is not None:
@@ -374,7 +382,8 @@ def plan(target, allocation_ref=None, actor=None, client=None, custody=None, ope
     certificate = _certificate_status(cert, custody)
     write = target.group is not None and can_access(actor, target.group, True)
     verified = bool(row and row.state == "verified" and trust["state"] == "active" and alias["state"] == "match" and alias["one_hop"] is True)
-    renewal = _renewal(cert, row, certificate, bool(row and row.connection_mode == "shared" and not verified))
+    renewal = _renewal(cert, row, certificate, bool(row and row.connection_mode == "shared" and not verified),
+                       issuer_active=_issuer_active)
     next_code, next_actor = "none", "none"
     if target.group is None:
         next_code, next_actor = "unsupported_domain_scope", "deployment_operator"
@@ -425,6 +434,7 @@ def plan(target, allocation_ref=None, actor=None, client=None, custody=None, ope
                                   can_check=bool(write and row and row.hub_participant_ref and row.connection_mode == "shared" and trust["state"] == "active"),
                                   can_request=bool(write and verified and not row.cleanup_challenge_ref and not (
                                       certificate and cert.status == "active" and certificate["material_state"] != "available")
+                                      and not (cert and cert.status in ("pending", "issuing") and renewal["state"] in ("blocked", "failed"))
                                       and not (renewal["job"] and renewal["job"]["state"] == "canceled"))),
                 next_action=dict(code=next_code, actor=next_actor),
                 connection_request=_descriptor(row) if write and row and row.connection_mode == "shared" else None,
@@ -664,7 +674,8 @@ def request(row, actor=None, client=None, custody=None, publish=None):
                 elif current and current.not_after and current.not_after > dates.utcnow():
                     outcome = "already_current"
                 elif any(cert.status in ("pending", "issuing") for cert in rows):
-                    outcome = "already_queued"
+                    job = _certificate_job(selected) if selected else None
+                    outcome = "already_queued" if job and job.status in ("pending", "running") else "job_held"
                 else:
                     publication = {}
                     def publish_requested(func, certificate):
@@ -673,12 +684,13 @@ def request(row, actor=None, client=None, custody=None, publish=None):
                         # work. A preserved terminal id did not enqueue work;
                         # a new job may legitimately finish during on_commit.
                         publication["held"] = isinstance(job_id, str) and Job.objects.filter(
-                            pk=job_id, status__in=("canceled", "expired", "failed")).exists()
+                            pk=job_id, status__in=("canceled", "expired", "failed", "completed")).exists()
                         return job_id
                     certs.request_certificate(target.domain, names=names, publish=publish_requested)
                     outcome = "job_held" if publication.get("held") else "queued"
         result = plan(target, actor=actor, client=client, custody=custody,
-                      operation=dict(action="request", outcome=outcome, changed=outcome == "queued"))
+                      operation=dict(action="request", outcome=outcome, changed=outcome == "queued"),
+                      _issuer_active=busy)
         return result
     except SetupError as error:
         raise _error_with_plan(error, target, actor, client, custody)

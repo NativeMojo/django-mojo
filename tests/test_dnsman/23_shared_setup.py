@@ -363,8 +363,6 @@ def test_request_idempotent_exact_profile(opts):
     Certificate.objects.filter(pk=cert.pk).update(renew_after=dates.utcnow() - timedelta(days=1))
     due = setup.request(row, client=env.hub, custody=lambda cert: True, publish=publish)
     assert due["certificate"]["id"] == cert.pk and published[-1][1] == cert.pk and "renew_certificate" in published[-1][0], "due certificate must renew the same id"
-    Certificate.objects.filter(pk=cert.pk).update(status="issuing")
-    assert setup.request(row, client=env.hub, custody=lambda cert: True)["operation"]["outcome"] == "already_queued", "issuing lineage must not queue a duplicate"
     other = fixture()
     other_row = verified(other)
     cert_for(other, names=[other.target.name])
@@ -831,6 +829,67 @@ def test_request_worker_lock_order(opts):
 BUSY_CHANNEL = "testit_dnsman_cert_jobs"
 
 
+@th.django_unit_test("pending and issuing Request outcomes follow runnable jobs or an observed issue owner")
+def test_request_pending_job_matrix(opts):
+    from django.db import close_old_connections
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.dnsman.services import certs, delegation_setup as setup
+    from mojo.helpers import dates
+    env = fixture()
+    row = verified(env)
+    cert = cert_for(env, due=True)
+    job_id = certs.publish_job(certs.ISSUE_JOB, cert, channel=BUSY_CHANNEL)
+    held, release = threading.Event(), threading.Event()
+    errors = []
+    def owner():
+        close_old_connections()
+        try:
+            with certs._issue_lock(cert.pk) as acquired:
+                assert acquired, "test issuer must actually acquire its advisory guard"
+                held.set()
+                assert release.wait(8), "Request must finish before the actual owner is released"
+        except Exception as error:
+            errors.append(str(error))
+        finally:
+            close_old_connections()
+    thread = None
+    try:
+        for certificate_state in ("pending", "issuing"):
+            type(cert).objects.filter(pk=cert.pk).update(status=certificate_state)
+            for state in ("pending", "running", "canceled", "expired", "failed", "completed"):
+                Job.objects.filter(pk=job_id).update(status=state, last_error="ordinary_ca_failure" if state == "failed" else "",
+                    expires_at=dates.utcnow() + timedelta(days=-1 if state == "expired" else 1))
+                result = setup.request(row, client=env.hub, custody=lambda certificate: True)
+                runnable = state in ("pending", "running")
+                expected = "already_queued" if runnable else "job_held"
+                assert result["operation"] == dict(action="request", outcome=expected, changed=False), f"{certificate_state} certificate with {state} job must report only runnable work as queued"
+                renewal_state = {"pending": "queued", "running": "issuing", "failed": "failed"}.get(state, "blocked")
+                assert result["renewal"]["state"] == renewal_state and result["renewal"]["job"] == dict(id=job_id, state=state), "Request operation and readiness must describe the same real job"
+                assert result["next_action"]["code"] == ("wait_for_job" if runnable else "inspect_failure"), "held terminal work needs inspection rather than waiting on a job that cannot run"
+                assert result["capabilities"]["can_request"] is runnable, "Readiness must disable a pending/issuing Request that cannot dispatch work"
+                assert Job.objects.filter(payload__certificate=cert.pk).count() == 1 and Job.objects.get(pk=job_id).status == state, "Request must not publish replacements or revive terminal work in this matrix"
+        Job.objects.filter(pk=job_id).delete()
+        for certificate_state in ("pending", "issuing"):
+            type(cert).objects.filter(pk=cert.pk).update(status=certificate_state)
+            result = setup.request(row, client=env.hub, custody=lambda certificate: True)
+            assert result["operation"] == dict(action="request", outcome="job_held", changed=False) and result["renewal"]["job"] is None, "a pending/issuing row without any Job must not claim queued work"
+            assert result["renewal"]["state"] == "blocked" and result["next_action"]["code"] == "inspect_failure", "a missing worker handoff must be visible as a blocker"
+        thread = threading.Thread(target=owner)
+        thread.start()
+        assert held.wait(5), "independent issuer must hold the real advisory guard"
+        result = setup.request(row, client=env.hub, custody=lambda certificate: True)
+        assert result["operation"] == dict(action="request", outcome="already_queued", changed=False), "observed active issue ownership takes precedence over a missing Job"
+        assert result["renewal"]["state"] == "issuing" and result["next_action"]["code"] == "wait_for_job", "Request must retain its actual live-owner observation in readiness"
+        cert.refresh_from_db()
+        assert cert.cert_pem == "preserved-public-material" and cert.mojo_secrets == "preserved-encrypted-key" and cert.attempts == 0, "the full matrix must preserve serving material and CA backoff"
+    finally:
+        release.set()
+        if thread:
+            thread.join(6)
+        Job.objects.filter(pk=job_id).delete()
+    assert not errors and not thread.is_alive(), f"actual issue owner must release cleanly: {errors}"
+
+
 @th.django_unit_test("Request reports preserved terminal jobs without claiming queued work")
 def test_request_preserved_terminal_job_outcomes(opts):
     from mojo.apps.jobs.models import Job
@@ -843,7 +902,7 @@ def test_request_preserved_terminal_job_outcomes(opts):
     job_id = certs.publish_job(certs.RENEW_JOB, cert, channel=BUSY_CHANNEL)
     try:
         for state, error in (("expired", ""), ("failed", "ordinary_ca_failure"),
-                             ("canceled", certs.ISSUE_BUSY_ERROR)):
+                             ("canceled", certs.ISSUE_BUSY_ERROR), ("completed", "")):
             Job.objects.filter(pk=job_id).update(status=state, last_error=error,
                                                 expires_at=dates.utcnow() - timedelta(seconds=1))
             count = Job.objects.filter(payload__certificate=cert.pk).count()
