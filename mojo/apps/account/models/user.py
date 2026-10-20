@@ -1967,6 +1967,12 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         return {"response": {"type": "ack"}}
 
     def on_realtime_can_subscribe(self, topic):
+        # The project's REALTIME_SUBSCRIBE_HANDLER may narrow the built-in
+        # verdict, never widen it (maestro #8874).
+        from mojo.apps.realtime import policy
+        return policy.allows(self, topic, self._builtin_can_subscribe(topic))
+
+    def _builtin_can_subscribe(self, topic):
         if topic.startswith("chat:"):
             from mojo.apps.chat.models import ChatRoom, ChatMembership
             try:

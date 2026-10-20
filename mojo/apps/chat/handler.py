@@ -131,6 +131,14 @@ def _get_membership(user, room_id):
     return membership, room, None
 
 
+def _policy_allows(user, room):
+    """The project's REALTIME_SUBSCRIBE_HANDLER for the room's topic, asked
+    after django-mojo's own checks have passed (maestro #8874). It can only
+    refuse; with no hook it allows."""
+    from mojo.apps.realtime import policy
+    return policy.allows(user, room.topic, True)
+
+
 def _handle_send(user, data, *, publisher=None):
     """Handle sending a new chat message.
 
@@ -179,6 +187,10 @@ def _handle_send(user, data, *, publisher=None):
     if not membership.can_send:
         return _send_error(
             client_key, f"Cannot send messages (status: {membership.status})")
+
+    # After the dedupe, so a retry of a stored message still gets its ack.
+    if not _policy_allows(user, room):
+        return _send_error(client_key, "Not allowed in this room")
 
     # Validation, room policy, persistence and the broadcast all live in the
     # send service. `client_authored=True` is what keeps a WebSocket client off
@@ -244,6 +256,8 @@ def _handle_edit(user, data, *, publisher=None):
     if not membership or not membership.can_send:
         return {"type": "error", "error": "Cannot edit this message"}
     if msg.user_id != user.pk and not membership.is_admin:
+        return {"type": "error", "error": "Cannot edit this message"}
+    if not _policy_allows(user, msg.room):
         return {"type": "error", "error": "Cannot edit this message"}
 
     # Room rules
@@ -312,7 +326,7 @@ def _handle_flag(user, data):
     if user.has_permission("manage_chat"):
         has_perm = True
 
-    if not has_perm:
+    if not has_perm or not _policy_allows(user, msg.room):
         return {"type": "error", "error": "Permission denied"}
 
     msg.is_flagged = True
@@ -384,6 +398,8 @@ def _handle_react(user, data, *, publisher=None):
     # may react to anything they were entitled to see.
     if not join_bounded_messages(msg.room, membership).filter(pk=msg.pk).exists():
         return not_found
+    if not _policy_allows(user, msg.room):
+        return not_found
 
     if action == "add":
         # unique_together on (message, user, emoji) backs this: a concurrent
@@ -452,7 +468,7 @@ def _handle_typing(user, data):
 
     from .models import ChatRoom
     room = ChatRoom.objects.filter(pk=room_id).first()
-    if not room:
+    if not room or not _policy_allows(user, room):
         return None
 
     publish_topic(room.topic, {
@@ -497,6 +513,8 @@ def _handle_read(user, data, *, publisher=None):
     ).first()
     if not membership:
         return {"type": "error", "error": "Not a member of this room"}
+    if not _policy_allows(user, room):
+        return {"type": "error", "error": "Not allowed in this room"}
 
     target = mark_read(room, user, membership, up_to_message_id)
 
