@@ -1,5 +1,9 @@
 # Chat Models
 
+Read state defaults to legacy receipts. The optional
+[cursor backend](read_state.md) uses additive fields and sparse exceptions;
+these server-owned fields cannot be set through REST.
+
 ## ChatRoom
 
 Represents a chat room. Three kinds:
@@ -18,6 +22,10 @@ Represents a chat room. Three kinds:
 - `user` — FK to owner (User)
 - `group` — FK to Group (optional). Links room to the permission system.
 - `rules` — JSONField with per-room content policies
+- `message_seq` — cursor arrival head, positive bigint with Python/DB default 0
+- `read_state_generation` — positive bigint with Python/DB default 0;
+  initial activation/new cursor rooms use 1, and maintenance resequencing
+  increments it to invalidate old positions
 - `created`, `modified` — timestamps
 
 **Properties:**
@@ -62,7 +70,9 @@ A single message in a room.
   The choices tuple is descriptive, not restrictive — nothing in this codebase
   runs `full_clean` on the save path, so `ChatMessage.objects.create` accepts
   any string. Enforcement lives in
-  [`send_message`](services.md#kind-whitelist), which is the one creation path.
+  [`send_message`](services.md#kind-whitelist), which is the validated creation
+  path. Trusted direct ORM creation still uses the cursor numbering bridge
+  when enabled, but does not run the send service's content policy.
 - `moderation_decision` — `"allow"`, `"warn"`, `"masked"`, or legacy `"block"`.
   `masked` is the advisory chat mapping of classifier `block`.
 - `moderation_score` — nullable positive small integer, classifier score 0–100.
@@ -98,7 +108,15 @@ at every severity; consumer display/notification policy belongs to
 - `client_key` — optional client-supplied idempotency key for the send
   (`CharField(max_length=64, null=True, blank=True)`). Set by the WebSocket
   `chat_message` handler; never writable over REST (listed in `NO_SAVE_FIELDS`).
+- `room_seq` — nullable positive bigint with Python/DB default `None`.
+  Cursor inserts receive an atomic room-local sequence; old/legacy rows stay
+  null and initially count as read. Returned in both REST graphs, history,
+  send acknowledgments and new-message events. Clients cannot set it or move
+  a message's room through REST; cursor ORM identity changes require maintenance.
 - `created` — timestamp
+
+**Cursor constraint:** partial unique `(room, room_seq)` where `room_seq IS NOT
+NULL` (`chat_message_room_seq_uniq`). Ordinary deletion does not reuse a number.
 
 **Unique constraint:** `chat_message_client_key_uniq` — a *partial* unique constraint
 on `(room, user, client_key)` with condition `client_key IS NOT NULL`. Messages
@@ -117,14 +135,25 @@ Links a user to a room with role and status.
 - `user` — FK to User
 - `role` — `"member"`, `"admin"`, or `"owner"`
 - `status` — `"active"`, `"muted"`, or `"banned"`
-- `last_read_at` — advanced by `services.read_state.mark_read` on **every** room
-  kind, to the resolved target's `created` and **only forward**. Only the
-  `channel` branch of `GET /api/chat/unread` reads it; the write is
-  unconditional.
+- `last_read_at` — actual acknowledged target's creation time. In legacy mode
+  it advances only forward and drives channel counts. In cursor mode it is
+  paired with `last_read_message_id`; counts use sequences rather than dates.
+- `last_read_seq` — cursor prefix, positive bigint with Python/DB default 0
+- `last_read_message_id` — nullable scalar bigint with Python/DB default
+  `None`, retaining a real acknowledged message identity through ordinary
+  deletion; it is deliberately not a message FK
+- `unread_exception_count` — cached sparse unread count, positive integer
+  with Python/DB default 0; maintained atomically with the exception rows
 - `joined_at` — timestamp, `auto_now_add`. **This is the read bound for every
-  non-`channel` room kind**: message history and unread counts return only
+  non-`channel` room kind**: history and read targets are entitled only to
   messages created at or after it (see
   [`GET /api/chat/room/messages`](rest.md#messages)).
+
+All four read fields are `NO_SAVE_FIELDS`. Cursor membership creation,
+including supported bulk creation, starts at the locked current room head
+with no exceptions. Ban/unban preserves state; removal/rejoin creates a new
+head baseline. Cursor counts describe arrivals independently of display
+visibility; see [arrival rules](read_state.md#arrival-and-membership-rules).
 
 > **Deleting and recreating a membership resets `joined_at`.** That is the
 > intended behaviour for a remove/re-add — the re-added member cannot read what
@@ -158,7 +187,7 @@ Emoji reaction on a message. Toggle-based (add/remove).
 
 ## ChatReadReceipt
 
-Per-message read receipt, written for every room kind **except `channel`**.
+Legacy per-message read receipt, written for every room kind **except `channel`**.
 Created on first read, never updated. The `channel` exclusion is the same
 fail-closed shape as the history bound — an unrecognised `kind` gets receipts,
 it is not silently treated as channel-like.
@@ -172,3 +201,20 @@ it is not silently treated as channel-like.
 
 For **channels**, no per-message receipts are written; `GET /api/chat/unread`
 counts against `last_read_at` on ChatMembership instead.
+
+Cursor mode does not write receipts, for any room kind.
+
+## ChatUnreadException
+
+Sparse maintenance-only unread identity below/at a membership's cursor prefix.
+Ordinary sends and reads create no exception rows; acknowledgments remove them.
+
+- `membership` — FK to ChatMembership, cascades when that seat is deleted
+- `room_seq` — positive bigint, unique with `membership`
+- `message_id` — scalar positive bigint, indexed with `membership`; ordinary
+  message deletion retains the exception/count slot
+- `created`, `modified` — timestamps
+
+No public write endpoint exists. Its restrictive RestMeta exposes only `id`
+and pins every state field. Use [maintenance](read_state.md#maintenance-and-reversible-relocation)
+to relocate/resequence history and preserve current unread identities.

@@ -2,11 +2,13 @@
 
 Domain logic for the chat app lives in `mojo/apps/chat/services/`.
 
-- `services/messages.py` — `send_message`, the one creation path for a chat
+- `services/messages.py` — `send_message`, the validated creation path for a chat
   message, plus the two read bounds `join_bounded_messages` and
   `visible_messages`
-- `services/read_state.py` — `resolve_read_target` and `mark_read`, the one
-  read-acknowledgement path
+- `services/read_state.py` — shared read acknowledgments, batched cursor
+  positions/counts and exception-aware eligibility
+- `services/sequences.py`, `memberships.py` — thin atomic ORM creation bridges
+- `services/maintenance.py` — initial activation and rare reversible relocation
 - `services/deletion.py` — the deletion notification hook
 
 ## `send_message`
@@ -18,7 +20,9 @@ msg, error = send_message(room, user, body, kind="text", metadata=None, *,
                           client_authored=True, enforce_room_policy=True,
                           broadcast=True, broadcast_extra=None,
                           client_key=None, publisher=None,
-                          validators=_UNSET, max_bytes=_UNSET)
+                          validators=_UNSET, max_bytes=_UNSET,
+                          read_backend=None, read_handler=_UNSET,
+                          read_publisher=None)
 ```
 
 Returns `(message, None)` on success and `(None, error_dict)` on refusal. The
@@ -78,8 +82,14 @@ author one. `system` likewise.
 7. Moderation — `check_moderation_scored(body, group=room.group)` (`enforce_room_policy`),
    so the room group's hide level and allowed domains apply
 8. Persist body, decision, reasons and score together
-9. Publish the `chat_message` frame when `broadcast`
-10. `room.save(update_fields=["modified"])`
+9. `room.save(update_fields=["modified"])` in the persistence transaction
+10. Publish the `chat_message` frame when `broadcast`, after the outermost commit
+
+An outer rollback emits no message frame. Cursor inserts also atomically
+allocate `room_seq` and acknowledge the author's older arrivals; see
+[Cursor Read State](read_state.md). History, send acks and new-message frames
+carry the authoritative `room_seq` (null for old/legacy rows). Deferred cursor
+callbacks are discarded if maintenance changes the numbering generation.
 
 Step 6 runs only for client-authored sends: its purpose is stopping a *client*
 smuggling a link past a room owner who set `allow_urls=false`. A server-derived
@@ -183,6 +193,9 @@ because `tests/test_chat` is scanned strict by `testit/isolation.py` — the
 package declares `default_core` with no cold budget and carries `@th.tier("core")`
 tests, so `th.server_settings()` and `mock.patch` both fail the whole package.
 The seams are the only legal way to exercise the settings-driven behavior.
+`read_backend=`, `read_handler=` and `read_publisher=` similarly allow isolated
+cursor tests; production deployments select one consistent backend in the
+settings file rather than mixing modes per send.
 
 ## Read bounds — `join_bounded_messages` vs `visible_messages`
 
@@ -198,9 +211,12 @@ easiest mistake in this app, so they are named for what they answer:
 | `join_bounded_messages(room, membership)` | unflagged + `created >= joined_at` (every kind except `channel`) | *Which message id may this caller name?* — **entitlement** |
 | `visible_messages(room, membership)` | the above **plus** the room's `disappearing_ttl` | *What does this caller see right now?* — **display** |
 
-`visible_messages` is the display bound: `GET /api/chat/room/messages` and
-`GET /api/chat/unread` both narrow through it, so a badge can never count a
-message opening the room will not show.
+`visible_messages` is the display bound for `GET /api/chat/room/messages`.
+Legacy `GET /api/chat/unread` also narrows through it, so its badge cannot
+count a message opening the room will not show. Cursor counts instead track
+arrival positions, including invisible/deleted slots; use
+`unread_queryset(membership, visible_messages(room, membership))` for a
+displayable unread message list.
 
 `join_bounded_messages` is the entitlement bound, and it is what
 `services/read_state.py` resolves read and react targets against. Entitlement
@@ -213,6 +229,11 @@ The join cutoff is *excluded for `channel`* rather than allowlisted for
 allowlist would fail **open** on any kind nobody reasoned about.
 
 ## `read_state` — resolving a read acknowledgement
+
+The following clamp/receipt behavior is the default **legacy backend**. With
+`CHAT_READ_STATE_BACKEND = "cursor"`, targets must match an exact entitled
+message PK, no receipts are written, and `mark_through` returns effective
+durable state. See the [cursor API and hook contract](read_state.md#public-python-api).
 
 ```python
 from mojo.apps.chat.services.read_state import resolve_read_target, mark_read
@@ -239,8 +260,8 @@ backward.
 > race the clamp exists to survive. `cleanup.run_cleanup` is wired to nothing
 > in this repo, so expired rows persist indefinitely and nothing self-heals.
 
-Both `chat_read` and `POST /api/chat/room/read` go through `mark_read`; they
-previously carried duplicate copies of the receipt block and could drift.
+Both `chat_read` and `POST /api/chat/room/read` go through `mark_through`, whose
+legacy branch delegates to the same receipt logic as `mark_read`.
 `chat_react` resolves its target through `join_bounded_messages` directly.
 
 ## Deletion hook
@@ -373,14 +394,14 @@ def room_authority(user, room, action, context):
 
 ## Settings
 
-All optional. Every one but `CHAT_REACHABILITY_HANDLER` and
-`CHAT_ROOM_AUTHORITY_HANDLER` (whose unset defaults are new rules) defaults to
-the previous behavior.
+All optional. Read-state deployment controls and hooks are file-only.
 
 | Setting | Default | Purpose |
 |---|---|---|
 | `CHAT_KIND_VALIDATORS` | `{}` | Per-kind payload validators, `{kind: "dotted.path"}` |
 | `CHAT_METADATA_MAX_BYTES` | `4096` | Byte cap on the compact JSON encoding of `metadata` |
 | `CHAT_MESSAGE_DELETED_HANDLER` | `None` | Dotted path to `handler(room_id, message_ids)` |
+| `CHAT_READ_STATE_BACKEND` | `"legacy"` | Settings file only: `legacy` receipts/channel timestamps or opt-in DB-only `cursor`; unknown values fail configuration |
+| `CHAT_READ_HANDLER` | `None` | Settings file only: post-commit `handler(room_id, user_id, position, changed)` for cursor acknowledgments and own sends |
 | `CHAT_REACHABILITY_HANDLER` | `None` (any active user) | Settings file only. Dotted path to `handler(user, target, room) -> bool` for `dm` and `room/member/add` |
 | `CHAT_ROOM_AUTHORITY_HANDLER` | `None` (built-in rule) | Settings file only. Dotted path to `handler(user, room, action, context) -> bool` for the room-admin REST operations |

@@ -145,7 +145,7 @@ fixed here, not in `ChatMessage.RestMeta.GRAPHS`:
     "status": true,
     "data": [
         {
-            "id": 482, "user_id": 7, "body": "hello", "kind": "text",
+            "id": 482, "room_seq": 100, "user_id": 7, "body": "hello", "kind": "text",
             "edited_at": null, "moderation_decision": "allow",
             "moderation_reasons": [], "moderation_score": 0,
             "created": "2026-08-30T12:00:00+00:00",
@@ -163,6 +163,9 @@ fixed here, not in `ChatMessage.RestMeta.GRAPHS`:
 `GRAPHS["default"]` includes it, so `/api/chat/room/flagged?graph=default` returns it on
 every flagged row. Treat `client_key` as room-visible. `metadata` is always an object
 (`{}` when empty).
+
+`room_seq` is the cursor arrival sequence, or null for old/legacy rows. It is
+server-owned; clients continue to use message IDs for pagination and reads.
 
 All rows carry persisted `moderation_decision`, `moderation_reasons` and
 `moderation_score`. Numeric 0 is clean; null means legacy/unscored. Existing
@@ -193,10 +196,10 @@ signed-in user can join a channel with no `group` (`POST room/join`) and then
 read its whole history. Put anything not meant for every account in a group
 room, a group-linked channel, or a direct room.
 
-The same three bounds — unflagged, join cutoff, disappearing-message TTL — live
-in `mojo.apps.chat.services.messages.visible_messages(room, membership)`. Every
-reader narrows through it, `GET /api/chat/unread` included, so a badge can never
-count a message this endpoint will not return.
+The same three display bounds — unflagged, join cutoff, disappearing-message
+TTL — live in `visible_messages(room, membership)`. Legacy unread counts use
+them too. Cursor unread counts instead track arrival positions and may include
+hidden/deleted slots; see [Unread counts](#get-apichatunread--unread-counts).
 
 ### `GET /api/chat/room/flagged?room_id=5` — Flagged messages
 
@@ -250,16 +253,16 @@ Requires a membership with `status in ("active", "muted")` — the same predicat
 history and `/unread` use. A **banned** member gets 404 `"Not a member"` and
 writes nothing; a **muted** member still marks read.
 
-`up_to_message_id` is resolved through `services.read_state.mark_read`, shared
-with the `chat_read` WebSocket handler — see
-[Target resolution and last_read_at](handler.md#target-resolution-and-last_read_at)
-for the clamp, the monotonic `last_read_at`, and why the disappearing-message
-TTL is deliberately excluded from resolution.
+`up_to_message_id` is resolved through `services.read_state.mark_through`,
+shared with the `chat_read` WebSocket handler. Both backends apply join
+entitlement and exclude flagged targets, but deliberately do not apply TTL.
+An entitled message can still be acknowledged after it expires from display.
 
 The response carries the resolved id **additively**:
 
 ```json
-{"status": true, "code": 200, "data": {"status": true, "up_to_message_id": 480}}
+{"status": true, "code": 200,
+ "data": {"status": true, "up_to_message_id": 480, "position": null, "changed": true}}
 ```
 
 The endpoint returns a plain dict with no `data` key, so the response decorator
@@ -270,13 +273,28 @@ A **non-numeric** `up_to_message_id` now resolves to `null` and returns 200.
 It previously ran a bare `int()` and raised `ValueError` out of the view as a
 500.
 
+**Default legacy backend.** The target clamps downward to the newest entitled
+message at or below the supplied ID. The service writes non-channel receipts
+and advances `last_read_at` only forward. `position` is null;
+`changed` means a target resolved.
+
+**Opt-in cursor backend.** The exact entitled in-room PK must exist; foreign,
+missing, flagged and pre-join IDs do not clamp. `position` is the effective
+durable [position plus actual acknowledgment facts](read_state.md#position-shape).
+`changed` reports a state change; a valid duplicate can be false. An invalid
+target returns null target, current position and false without a frame/hook.
+Reads advance monotonically within a generation and clear sparse exceptions
+through the target, including below the encoded prefix. No receipts are
+written. The framework publishes the committed cursor read frame and calls
+`CHAT_READ_HANDLER`; adapters must not publish a duplicate frame.
+
 ### `GET /api/chat/unread` — Unread counts
 
 Returns unread message counts per room for the authenticated user, over
 memberships with `status in ("active", "muted")`. Rooms with a zero count are
 omitted.
 
-**Same bound as history.** Each room's count narrows through
+**Default legacy backend — same bound as history.** Each room's count narrows through
 `visible_messages(room, membership)` — unflagged, the join-time cutoff for every
 non-`channel` kind, and the disappearing-message TTL — then excludes the
 caller's own messages. A badge can therefore never exceed what
@@ -292,3 +310,19 @@ every other kind counts messages carrying no `ChatReadReceipt` for the caller.
     ]
 }
 ```
+
+**Cursor backend — arrival counts.** Each row is a current
+[position](read_state.md#position-shape), including the same room labels plus
+`user_id`, `generation`, `head_seq`, `read_seq`, `last_read_message_id`,
+`read_at`, `unread_exception_count`, `read_frontier_message_id` and
+`unread_count = head_seq - read_seq + unread_exception_count`. Tenant policy
+still filters rooms before snapshots are returned. The count query joins
+memberships to rooms; it does not scan message history or read receipts.
+
+Flagging, TTL expiry and ordinary deletion do not reduce cursor arrival
+counts. Sending advances the author's own seat through that send, and new
+seats start at the current head. Counts can include an invisible/deleted tail;
+trusted server `mark_current_head` can clear it. Clients cannot supply a raw
+sequence or set the model read fields. For displayable unread candidates,
+hosts use exception-aware `unread_queryset` before content limits rather than
+assuming a count equals the visible page length.
