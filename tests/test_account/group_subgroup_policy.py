@@ -84,7 +84,8 @@ def _restore(opts):
         Group.objects.filter(name__startswith=f"{PREFIX}new_", groups__isnull=True).delete()
     for name, pk in opts.ids.items():
         Group.objects.filter(pk=pk).update(
-            parent_id=opts.shape[pk], is_active=True, metadata=_metadata_for(POLICY[name]))
+            name=f"{PREFIX}{name}", parent_id=opts.shape[pk], is_active=True,
+            metadata=_metadata_for(POLICY[name]))
     ApiKey.objects.filter(name__startswith=PREFIX).delete()
     UserAPIKey.objects.filter(user__email__startswith=PREFIX).delete()
 
@@ -214,6 +215,7 @@ def setup_group_subgroup_policy(opts):
 
     _mk_user("row_mgr").add_permission("manage_group")
     _mk_user("global_mg").add_permission("manage_groups")
+    _mk_user("global_groups").add_permission("groups")
     _mk_user("super", is_superuser=True)
 
 
@@ -588,4 +590,167 @@ def test_compatibility(opts):
             f"{opts.client.last_response.body}"
     finally:
         opts.client.logout()
+        _restore(opts)
+
+
+# ---------------------------------------------------------------------------
+# The system admin's switch (#9126)
+# ---------------------------------------------------------------------------
+
+SWITCH = "allow_member_subgroups"
+
+
+def _switch_logs(pk):
+    from mojo.apps.logit.models import Log
+    return Log.objects.filter(
+        kind="group:subgroup_policy_changed", model_name="account.Group", model_id=pk).count()
+
+
+def _switch(opts, pk, value, headers=None):
+    if headers:
+        return opts.client.post(f"/api/group/{pk}", {SWITCH: value}, headers=headers)
+    return opts.client.post(f"/api/group/{pk}", {SWITCH: value})
+
+
+@th.django_unit_test("#9126: a system admin switches a group's sub-group policy on and off")
+def test_admins_switch_the_policy(opts):
+    _restore(opts)
+    p, q = opts.ids["p"], opts.ids["q"]
+    try:
+        for actor in ("global_mg", "global_groups", "super"):
+            _login(opts, actor)
+            logs = _switch_logs(q)
+            resp = _switch(opts, q, True)
+            assert resp.status_code == 200 and resp.json.get(SWITCH) is True and _policy(q) is True, \
+                f"{actor} must be able to switch the policy on, got {resp.status_code}: " \
+                f"{opts.client.last_response.body}, stored {_policy(q)!r}"
+            assert _switch_logs(q) == logs + 1, f"switching the policy on as {actor} must be logged"
+            resp = _switch(opts, q, False)
+            assert resp.status_code == 200 and resp.json.get(SWITCH) is False and _policy(q) is _ABSENT, \
+                f"{actor} must be able to switch the policy off (the key removed), got {resp.status_code}: " \
+                f"{opts.client.last_response.body}, stored {_policy(q)!r}"
+            assert _switch_logs(q) == logs + 2, f"switching the policy off as {actor} must be logged"
+
+        _login(opts, "global_mg")
+        _switch(opts, q, True)
+        logs = _switch_logs(q)
+        resp = _switch(opts, q, True)
+        assert resp.status_code == 200 and _switch_logs(q) == logs, \
+            f"switching on a group that is already on must answer 200 and log nothing, " \
+            f"got {resp.status_code} and {_switch_logs(q) - logs} new log row(s)"
+        resp = _switch(opts, p, False)
+        assert resp.status_code == 200 and _policy(p) is _ABSENT, \
+            f"a system admin must be able to switch an opted-in parent off, got {resp.status_code}"
+
+        _login(opts, "q_mgr")
+        _created(opts, "after_switch_on", q, "a manager of a parent switched on by the action", parent=q)
+        _login(opts, "p_mgr")
+        _refused(opts, "after_switch_off", "a manager of a parent switched off by the action", parent=p)
+    finally:
+        opts.client.logout()
+        _restore(opts)
+
+
+@th.django_unit_test("#9126: nobody but a system admin can switch the policy")
+def test_only_admins_can_switch(opts):
+    from mojo.apps.account.models import ApiKey, Group, User
+    from mojo.apps.account.services import group_token
+    _restore(opts)
+    t, p, q = opts.ids["t"], opts.ids["p"], opts.ids["q"]
+
+    def refused(pk, value, what, status=403, headers=None):
+        before = _policy(pk)
+        resp = _switch(opts, pk, value, headers=headers)
+        assert resp.status_code == status, \
+            f"{what} must be refused with {status}, got {resp.status_code}: {opts.client.last_response.body}"
+        assert _policy(pk) == before, \
+            f"SECURITY: {what} changed the stored policy from {before!r} to {_policy(pk)!r}"
+
+    try:
+        _login(opts, "p_mgr")
+        refused(p, False, "a manager of an opted-in parent switching it off")
+        refused(q, True, "a manager of one parent switching on another")
+        _login(opts, "q_mgr")
+        refused(q, True, "a manager of a parent switching it on")
+        _login(opts, "row_mgr")
+        refused(q, True, "a user-row manage_group holder (it passes the save gate on every group)")
+        opts.client.logout()
+
+        _, token = ApiKey.create_for_group(
+            group=Group.objects.get(pk=t), name=f"{PREFIX}key_{_uuid.uuid4().hex[:6]}",
+            permissions={"manage_groups": True, "groups": True, "manage_group": True})
+        refused(q, True, "a group API key carrying manage_groups", headers={"Authorization": f"apikey {token}"})
+
+        gtok = group_token.mint(User.objects.get(email=_email("t_mgr")), Group.objects.get(pk=t))
+        refused(t, True, "a group token", headers={"Authorization": f"grouptoken {gtok}"})
+
+        refused(q, True, "a signed-out caller", status=401)
+    finally:
+        opts.client.logout()
+        _restore(opts)
+
+
+@th.django_unit_test("#9126: the switch takes a boolean only")
+def test_switch_takes_a_boolean(opts):
+    _restore(opts)
+    q = opts.ids["q"]
+    try:
+        _login(opts, "global_mg")
+        for value in ("true", 1, None):
+            resp = _switch(opts, q, value)
+            assert resp.status_code == 400 and _policy(q) is _ABSENT, \
+                f"the switch posted as {value!r} must be refused with 400 and change nothing, " \
+                f"got {resp.status_code}, stored {_policy(q)!r}"
+    finally:
+        opts.client.logout()
+        _restore(opts)
+
+
+@th.django_unit_test("#9126: a refused switch writes nothing else in the same request")
+def test_refused_switch_writes_nothing(opts):
+    from mojo.apps.account.models import Group
+    _restore(opts)
+    p, q = opts.ids["p"], opts.ids["q"]
+    try:
+        _login(opts, "p_mgr")
+        resp = opts.client.post(f"/api/group/{p}", {"name": f"{PREFIX}renamed", SWITCH: False})
+        assert resp.status_code == 403, \
+            f"a tenant admin's save carrying the switch must be refused, got {resp.status_code}"
+        assert Group.objects.get(pk=p).name == f"{PREFIX}p" and _policy(p) is True, \
+            "SECURITY: a refused switch still wrote the other fields of its request"
+        _refused(opts, "with_switch", "a policy create carrying the switch", parent=p, **{SWITCH: True})
+
+        _login(opts, "global_mg")
+        resp = opts.client.post(f"/api/group/{q}", {"name": f"{PREFIX}q_admin", SWITCH: True})
+        assert resp.status_code == 200 and _policy(q) is True \
+            and Group.objects.get(pk=q).name == f"{PREFIX}q_admin", \
+            f"a system admin's save carrying the switch must apply both, got {resp.status_code}: " \
+            f"{opts.client.last_response.body}"
+    finally:
+        opts.client.logout()
+        _restore(opts)
+
+
+@th.django_unit_test("#9126: the switch does not put back protected metadata it loaded earlier")
+def test_switch_keeps_concurrent_protected_changes(opts):
+    from objict import objict
+    from mojo.apps.account.models import Group
+    from mojo.models import rest as mojo_rest
+    _restore(opts)
+    q = opts.ids["q"]
+    try:
+        loaded = Group.objects.get(pk=q)
+        Group.objects.get(pk=q).set_protected_metadata("group_token_epoch", 7)
+        request = _rest_request("global_mg", objict({SWITCH: True}))
+        token = mojo_rest.ACTIVE_REQUEST.set(request)
+        try:
+            loaded.on_action_allow_member_subgroups(True)
+        finally:
+            mojo_rest.ACTIVE_REQUEST.reset(token)
+        stored = Group.objects.get(pk=q)
+        assert stored.allows_member_subgroups(), "the switch itself must land"
+        assert stored.get_protected_metadata("group_token_epoch") == 7, \
+            f"SECURITY: the switch wrote back protected metadata loaded before a newer change " \
+            f"(group_token_epoch is {stored.get_protected_metadata('group_token_epoch')!r}, expected 7)"
+    finally:
         _restore(opts)

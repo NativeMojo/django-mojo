@@ -73,7 +73,7 @@ class Group(MojoSecrets, MojoModel):
         # for group"), so it is handed back here.
         ALLOW_SAVE_FIELDS = ["uuid"]
         POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate',
-                             'revoke_group_tokens']
+                             'revoke_group_tokens', 'allow_member_subgroups']
         GRAPHS = {
             "simple": {
                 "extra": ["timezone", "short_name", "thumbnail"],
@@ -875,6 +875,41 @@ class Group(MojoSecrets, MojoModel):
             request=self.active_request,
         )
 
+    def on_action_allow_member_subgroups(self, value):
+        """Switch the sub-group policy (SUBGROUP_POLICY_KEY, #9107) on or off.
+
+        A system admin's switch (#9126): the person's own global
+        manage_groups or groups, as for disable/reactivate. Off removes the
+        key. The row is read again under its lock first, so the write does
+        not put back protected metadata loaded before someone else's change.
+        """
+        if not self._has_global_permission(WEBAPP_URL_PERMS):
+            raise merrors.PermissionDeniedException(
+                "admin tier (groups / manage_groups) required to change sub-group creation")
+        if not isinstance(value, bool):
+            raise merrors.ValueException("allow_member_subgroups must be true or false")
+        with transaction.atomic():
+            type(self).objects.select_for_update().filter(pk=self.pk).first()
+            self.refresh_from_db()
+            changed = self.allows_member_subgroups() != value
+            if changed:
+                metadata = self.metadata if isinstance(self.metadata, dict) else {}
+                protected = metadata.get("protected")
+                if not isinstance(protected, dict):
+                    protected = {}
+                if value:
+                    protected[SUBGROUP_POLICY_KEY] = True
+                else:
+                    protected.pop(SUBGROUP_POLICY_KEY, None)
+                metadata["protected"] = protected
+                self.metadata = metadata
+                self.save(update_fields=["metadata", "modified"])
+        if changed:
+            username = getattr(self.active_user, "username", "unknown")
+            self.log(f"{username} turned member sub-group creation {'on' if value else 'off'}",
+                     kind="group:subgroup_policy_changed")
+        return {"status": True, "allow_member_subgroups": value}
+
     def _has_global_permission(self, perms):
         """True only for a signed-in person whose OWN global permissions hold
         one of `perms`, or a superuser.
@@ -1043,6 +1078,16 @@ class Group(MojoSecrets, MojoModel):
             "involved, or the global manage_groups (or groups) permission")
 
     def on_rest_pre_save(self, changed_fields, created):
+        # (imported here too: the branches below import it locally, which
+        # makes the name local to the whole method)
+        from mojo import errors as merrors
+        # The sub-group switch runs after the save, so a body that also
+        # carries fields, or a create, is refused here, before any write.
+        request = self.active_request
+        if request is not None and "allow_member_subgroups" in (getattr(request, "DATA", None) or {}) \
+                and not self._has_global_permission(WEBAPP_URL_PERMS):
+            raise merrors.PermissionDeniedException(
+                "admin tier (groups / manage_groups) required to change sub-group creation")
         self._guard_webapp_url_and_tree(created)
         if created or "parent" in changed_fields or "parent_id" in changed_fields:
             from mojo.apps.account.services import group_hierarchy
