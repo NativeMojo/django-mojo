@@ -89,7 +89,7 @@ def setup_cloud_registry(opts):
 # Registration shape
 # ---------------------------------------------------------------------------
 
-@th.django_unit_test("the cloud domain registers exactly its twenty-two tools, none core")
+@th.django_unit_test("the cloud domain registers exactly its twenty-four tools, none core")
 def test_cloud_domain_roster(opts):
     from mojo.apps.assistant import DOMAIN_DESCRIPTIONS
 
@@ -212,9 +212,12 @@ def test_domain_listing(opts):
     domains = get_available_domains(opts.root)
     assert_true("cloud" in domains,
                 f"a superuser's domain listing has no cloud entry: {sorted(domains)}")
-    assert_eq(domains["cloud"]["count"], 22,
+    assert_eq(domains["cloud"]["count"], 24,
               f"the cloud domain lists {domains['cloud']['count']} tools for a "
-              f"superuser, expected 22")
+              f"superuser, expected 24")
+    cloud = {t["name"] for t in get_domain_tools_for_user(opts.root, ["cloud"])}
+    assert_eq(cloud, set(READ_TOOLS) | set(MUTATING_TOOLS),
+              "superuser cloud listing did not expose the explicit read/mutation inventory, including snapshot and coverage")
     security = {t["name"] for t in get_domain_tools_for_user(opts.root, ["security"])}
     assert_true("block_ip" in security and "query_incidents" in security,
                 f"an existing domain's tools moved: {sorted(security)[:8]}")
