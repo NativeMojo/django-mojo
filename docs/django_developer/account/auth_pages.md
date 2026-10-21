@@ -184,7 +184,7 @@ placing a file with the same path in your project's `TEMPLATES` directories.
 | `register.html` | Registration page — extends base; redirects to `/passkey` when `passkey_prompt != off` |
 | `passkey_enroll.html` | Standalone passkey enrollment page |
 | `oauth_consent.html` | OAuth 2.1 consent screen — extends base; see [oauth_server.md](oauth_server.md) |
-| `bouncer_challenge.html` | Hosted Continue/recovery shell (default branded, opt-in override per group) |
+| `bouncer_challenge.html` | Hosted Continue/recovery page ("One quick check"), themed by the hosted sign-in theme and the tenant's branding and custom CSS |
 | `bouncer_decoy.html` | Explicit scanner honeypot |
 | `bouncer_review_result.html` | No-JavaScript review receipt/error page |
 
@@ -265,7 +265,9 @@ Two things not to do:
 
 This rule is codebase-wide, not a property of one file. Every shipped template
 that interpolates a value into a `<script>` string literal carries `|escapejs`
-(`auth_base.html`, `bouncer_challenge.html`, `contact.html`, `login.html`);
+(`auth_base.html`, `contact.html`, `login.html`); `bouncer_challenge.html`
+interpolates nothing into a script — its config travels in a `json_script`
+data block;
 `auth_base.html` also keeps the same note as a `{% comment %}` beside its block.
 
 A `<style>` block is raw-text too — and there is no `escapecss` filter. So a
@@ -273,8 +275,11 @@ A `<style>` block is raw-text too — and there is no `escapecss` filter. So a
 it must instead be a value that is provably **not attacker-influenced** (admin-set
 config, a per-render hex nonce, a conf-file-only setting). The three that ship
 this way — `auth_base.html`'s `custom_css|safe`, `bouncer_challenge.html`'s
-`accent_color`, and `bouncer_decoy.html`'s `accent_color` — are enumerated in
-a reviewed allowlist; adding another is a security decision, not a formatting one.
+`custom_css|safe` (the same tenant stylesheet, loaded the same way), and
+`bouncer_decoy.html`'s `accent_color` — are enumerated in a reviewed allowlist;
+adding another is a security decision, not a formatting one. The challenge's
+own page `<style>` interpolates nothing: the tenant accent is an autoescaped
+`style` attribute on `<body>`.
 
 Both rules are enforced by a standing audit:
 `test_shipped_templates_raw_text_interpolations_are_safe`
@@ -334,6 +339,9 @@ same semantic form markup:
     --mat-danger-text: #c62828;    /* dark: #ef9a9a */
     --mat-success-strong: #2e7d32;
     --mat-pending-shadow: …;       /* disc shadow, per appearance */
+    /* bouncer challenge failure ring */
+    --mat-warn: #d9952b;           /* dark: #e0a43a */
+    --mat-warn-text: #8a5a12;      /* dark: #f0c27a */
 }
 ```
 
@@ -342,13 +350,18 @@ The tenant accent (`theme.accent_color`) is set inline on `<body>`
 on `body` or a descendant, never on `:root` — a `:root` `color-mix()` resolves
 against the default accent and ignores the tenant's. `--mat-accent-hover` lives
 on `body` for that reason; the pending view's darker accent shade
-(`--mat-pending-strong`) lives on `.mat-pending`. Because `body` declares its
+(`--mat-pending-strong`) lives on `.mat-pending`, and the bouncer challenge's
+(`--mbg-strong`) on `.mbg`. Browsers without `color-mix()` (Safari/WebView before
+16.2) fall back to the plain accent for both through an
+`@supports not (color: color-mix(…))` block, so the primary button never turns
+transparent behind its white text. Because `body` declares its
 own `--mat-accent-hover`, custom CSS that overrides it must target `body` too —
 a `:root { --mat-accent-hover: … }` value is shadowed by the `body` rule.
 
-The stylesheet is served with a day-long public cache, so `auth_base.html`
-loads it as `mojo-auth-theme.css?v=<first 10 hex of its SHA-256>`, the same
-rule as `mojo-auth.js`. Change the CSS and the version together —
+The stylesheet is served with a day-long public cache, so `auth_base.html` and
+`bouncer_challenge.html` load it as `mojo-auth-theme.css?v=<first 10 hex of its
+SHA-256>`, the same rule as `mojo-auth.js` and `mojo-hosted-bouncer.js`. A `?v=`
+that does not match the served file is answered `no-store`. Change the CSS and the version together —
 `tests/test_auth/hosted_script_version.py` fails with the value to set.
 
 ### Custom CSS — runtime overrides
@@ -388,10 +401,14 @@ For QA and previews, `?auth_theme=<preset>&auth_appearance=<mode>` may override
 those two enum values for the current auth journey. Unknown values fall back to
 configuration, and the override is propagated across hosted auth pages.
 
-The bouncer challenge resolves the same group theme. It uses `app_title` and
-`logo_url` for the destination identity, `accent_color` for its progress and
-challenge controls, and `auth_provider_name` in the "Secure sign-in via …"
-explanation.
+The bouncer challenge resolves the same group theme and loads the same
+stylesheet. It uses `app_title` and `logo_url` for the destination identity
+(falling back to an explicitly set `BOUNCER_CHALLENGE_BRAND` /
+`BOUNCER_CHALLENGE_LOGO_URL`, then to the sign-in page's own defaults),
+`accent_color` for its ring and buttons, `appearance` (and the
+`?auth_appearance=` override) for light/dark/system, the tenant's
+`custom_css_url` / `custom_css`, and `auth_provider_name` in the "Secure
+sign-in via …" footer.
 
 ---
 
@@ -952,8 +969,12 @@ bot evidence, active signatures, historical `blocked` devices, and streaming
 freezes show honest recovery with a review form; a check never clears those
 restrictions. Scanner decoys remain confined to their explicit routes.
 
-Retry is manual and hidden after three errors; 429 shows a bounded wait before
-retrying. Restart reloads for a new descriptor. Review requires a signed,
+Try again is manual and hidden after three errors; 429 counts down a bounded
+wait on the disabled button. Restart reloads for a new descriptor and stays
+reachable in every failed state — a quiet "Start over", or the primary "Try
+again" when Try again is hidden. The reference shows once with a copy button.
+Review is a separate step that never starts open; a sent request shows the
+server's receipt and reference. Review requires a signed,
 host-bound 30-minute ticket, a valid email, and an optional note of at most 500
 characters. Its independent limit is 30 requests per IP per 300 seconds. The
 form works without cookies or JavaScript and returns an HTML receipt in that
@@ -969,9 +990,12 @@ external support for storage outages; gated `/contact` is not a fallback.
 
 Hosted v2 `mbp` and HttpOnly session cookie `mbs` share cookie scope and survive
 IP changes within one browser session. Legacy passes retain IP-prefix binding.
-Deploy Python workers, templates, and `mobile-1` scripts as a coherent pool:
-old workers cannot validate v2 passes. No migrations are required. Keep version
-queries in static-cache keys and honor `no-store` on descriptor-bearing HTML.
+Deploy Python workers, templates, and content-hashed scripts as a coherent
+pool: old workers cannot validate v2 passes. No migrations are required. Keep
+version queries in static-cache keys and honor `no-store` on descriptor-bearing
+HTML and on static files whose `?v=` does not match their content.
+(`mobile-1` remains the diagnostic `hosted_gate.version` label; it is no longer
+a script cache key.)
 
 Before production, validate physical iPhone Safari, physical Android Chrome,
 and the actual Maestro app WebView, including stationary taps, network changes,

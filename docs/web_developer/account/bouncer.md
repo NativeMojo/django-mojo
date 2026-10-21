@@ -41,22 +41,42 @@ Registration and contact use the same gate:
 
 ### Retry and recovery
 
+The challenge ("One quick check") is an open page in the hosted sign-in theme:
+the tenant's accent, logo, brand name and provider name, the same light/dark/system
+appearance as the sign-in page (including the `?auth_appearance=` override), and
+the tenant's custom CSS. Its brand sits at the top, a shield in a ring in the
+centre, the heading and one status line under it, **Continue** as the main
+button with a quiet "Having trouble? Get help" link, and "Secure sign-in via
+<provider>" at the bottom.
+
 Continue accepts touch, mouse, and keyboard activation, with visible focus and
-live status. A stationary touch-down and button activation count as interaction;
+a live status region. A stationary touch-down and button activation count as interaction;
 mouse movement is not required. Missing measurements are treated as unknown,
 not measured zero. The hosted slider and its three-miss cooldown are removed;
 in-flight slider state and cached misses do not prevent Continue after current
-policy checks. An expired check asks for a reload. Connection failures, non-JSON or
-invalid responses, and the 8-second request timeout show an error and manual
-Retry. After three errors, use Restart or help. A 429 disables assessment Retry
-until `Retry-After` (default 60 seconds, bounded to 1–3600 seconds).
-None claims success or automatically navigates.
+policy checks. While checking, the ring spins and the button shows a spinner; a
+pass closes the ring, draws a check and says "Continuing to sign in…" before
+the redirect. Continue is a check, not a claim that the visitor is human.
+
+A failure turns the ring amber and shows a heading and one plain sentence for
+the reason (cookie refused, too many tries, expired, changed, briefly
+unavailable, operator, unreadable response, interrupted connection, or three
+failures). Connection failures, non-JSON or invalid responses, and the 8-second
+request timeout offer a manual **Try again**; after three errors it is hidden.
+**Start over** (a reload) is always there: a quiet link next to Try again, or
+the main "Try again" button when Try again is hidden. A 429 counts down on the
+disabled button ("Try again in 0:42") until `Retry-After` (default 60 seconds,
+bounded to 1–3600 seconds). None claims success or automatically navigates.
+The reference shows once, small, with a copy button.
 
 Site cookies must work. Missing cookies show cookie guidance; an embedded
 contact page can offer opening the same page in a top-level tab. Unavailable
 verification and existing device blocks/frozen sessions retain their restriction
-and show recovery guidance. The current shell offers a review form requiring
-only an email and optional note, without a pass, cookies, or JavaScript. An
+and show recovery guidance. **Ask for a review** opens a separate review step
+(it never starts open) requiring only an email and optional note, without a
+pass, cookies, or JavaScript; Back returns to the check. A sent request shows
+"Request sent" with the server's message and the review reference — it does not
+grant access. Without JavaScript the review form shows under the check. An
 operator-configured external support link provides a fallback during outages.
 Old blocked records require operator review, even if their original verdict was
 a false positive. Successful checks do not clear reputation or enforcement state.
@@ -199,10 +219,12 @@ session; current restrictions still apply. `mbp` defaults to 24 hours, while
 `mbs` is a browser-session cookie. Legacy passes keep their original IP-prefix
 binding; form tokens still bind to the exact request IP.
 
-Deploy the Python workers, templates, and `mobile-1` scripts to a coherent pool:
-old workers cannot validate v2 passes. Preserve the scripts' version query
-strings in cache keys and do not cache descriptor-bearing HTML (`no-store`,
-`no-referrer`). No migration is needed; descriptor protocol version 1 and
+Deploy the Python workers, templates, and content-hashed scripts to a coherent
+pool: old workers cannot validate v2 passes. The hosted pages load
+`mojo-hosted-bouncer.js` and `mojo-auth-theme.css` with `?v=<content hash>`;
+`/api/account/static/` answers a `?v=` that does not match the file with
+`Cache-Control: no-store`. Preserve the scripts' version query strings in cache
+keys and do not cache descriptor-bearing HTML (`no-store`, `no-referrer`). No migration is needed; descriptor protocol version 1 and
 third-party legacy SDK calls remain supported.
 
 ---
@@ -631,7 +653,7 @@ original request are forwarded to the post-challenge login redirect:
 | `group_uuid` | Group UUID for per-group branding |
 | `force_reauth` | Force the credential form instead of accepting an existing session |
 | `auth_theme` | Valid hosted-auth layout override |
-| `auth_appearance` | Valid hosted-auth appearance override |
+| `auth_appearance` | Valid hosted-auth appearance override (also themes the challenge itself) |
 | `kind` | Valid contact/support kind on `/contact` only |
 | Declared `registration.extra_fields` name | Registration attribution on `/auth` and `/register` only |
 

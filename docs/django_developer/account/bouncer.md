@@ -177,24 +177,59 @@ to cellular transitions; current restrictions are still evaluated. Legacy
 `mbp` cookies remain accepted with their original IP-prefix binding, and legacy
 SDK issuance is unchanged. Form tokens still bind to the exact request IP.
 
-Deploy templates, versioned `mobile-1` scripts, and Python workers as a coherent
+Deploy templates, content-hashed scripts, and Python workers as a coherent
 pool: old workers cannot validate v2 passes. The descriptor protocol is still
-version 1. This change requires no migrations. Preserve script query strings
-in static-cache keys and honor `Cache-Control: no-store` on descriptor-bearing
-HTML; those responses also set `Referrer-Policy: no-referrer`.
+version 1. This change requires no migrations. The hosted pages load
+`mojo-hosted-bouncer.js` and `mojo-auth-theme.css` as `?v=<first 10 hex of the
+file's SHA-256>`, so new challenge markup never meets a cached old script.
+`/api/account/static/<file>` answers a `?v=` that is not the served file's
+content hash with `Cache-Control: no-store` instead of the day-long public
+cache, so a mixed deploy cannot pin an old file under a new key. Preserve script
+query strings in static-cache keys and honor `Cache-Control: no-store` on
+descriptor-bearing HTML; those responses also set `Referrer-Policy: no-referrer`.
 
 ### Recovery and review intake
 
-Continue supports touch, mouse, and keyboard activation, with visible focus and
-live status. Requests have an
-8-second client timeout. Network/JSON errors offer manual Retry, hidden after
-three failures, then Restart or help. Assessment 429 responses show a wait and
-disable Retry until `Retry-After` (default 60 seconds, bounded to 1–3600 seconds).
-Cookie, expired-check, and operator restrictions explain the next step without
-claiming verification. Embedded contact cookie failures can open the same page
-in a top-level tab. Hosted high-risk/signature denials use this honest shell;
-only explicit `/login`, `/signin`, and `/signup` scanner honeypots retain decoy
-credential forms and their existing POST/logging behavior.
+The challenge ("One quick check", `account/bouncer_challenge.html`) is an open
+page themed by the hosted sign-in theme: the tenant accent, logo, brand name,
+`auth_provider_name`, the light/dark/system appearance the sign-in page would
+use (`auth_appearance` resolved exactly as `_auth_context` does), and the
+tenant's `custom_css_url` / `custom_css`. One `data-state` on `#mbg-root`
+(`ready`, `checking`, `verified`, `failed`, `review`, `sent`) drives every
+visual; `mojo-hosted-bouncer.js` sets it and owns the texts and the
+`hidden`/`disabled` flags.
+
+Continue supports touch, mouse, and keyboard activation, with visible focus.
+The heading and one status sentence sit in one polite live region. Requests have
+an 8-second client timeout. A pass shows a check and "Continuing to sign in…"
+(`/register`: "…to create your account…", `/contact`: "Continuing…") before the
+redirect. Every failure shows an amber ring, a heading and one plain sentence per
+reason (cookies, limited, expired, restart, unavailable, operator, invalid, an
+interrupted connection, and three failures). Continue becomes **Try again**,
+hidden for `recovery`/`decoy` outcomes and after three failures, exactly as
+before. **Restart** (a reload) is reachable in every failed state: a quiet
+"Start over" next to Try again, or the primary "Try again" when Try again is
+hidden. Assessment 429 responses count down on the disabled button ("Try again
+in 0:42") until `Retry-After` (default 60 seconds, bounded to 1–3600 seconds);
+only the button label ticks, not the live region. When an outcome hides or
+disables the focused control, focus moves to the heading. Nothing on the page
+describes Continue as proof of being human. Embedded contact cookie failures
+can open the same page in a top-level tab. Hosted high-risk/signature denials
+use this honest shell; only explicit `/login`, `/signin`, and `/signup` scanner
+honeypots retain decoy credential forms and their existing POST/logging
+behavior.
+
+The diagnostic **reference** appears once, small, with a copy button (the
+Clipboard API, or a text selection plus a hint when the clipboard is refused);
+the status sentence never repeats it. **Review is its own step** and never
+starts open: "Having trouble? Get help" (ready) or "Ask for a review" (failed)
+opens it, Back returns to where the visitor was. It holds the email, the
+optional note, the no-passwords hint and **Send request**. A successful request
+switches to "Request sent" showing the server's own message (recorded for
+review; it does not grant access) and the review reference, with "Back to
+start" (a reload). A review never clears a restriction. Without JavaScript the
+review form shows under the check and posts for the HTML receipt; if the script
+fails to load, Get help still reveals the form (CSS `:target`).
 
 `services/bouncer/hosted_recovery.py` stores diagnostics in existing
 `BouncerSignal.server_signals.hosted_gate` (`version='mobile-1'`), with
@@ -705,16 +740,18 @@ table in [Auth Config](auth_config.md).
 
 ### Challenge page branding
 
-The bouncer challenge page uses the configured default branding. To override it
-for a specific group (opt-in only):
+The bouncer challenge page follows the hosted sign-in theme: the group's
+`theme.logo_url` and `theme.app_title` head the page. Where the theme sets
+neither, an explicitly set challenge setting fills the gap (deployment-wide or
+per group):
 
 ```python
 settings.set('BOUNCER_CHALLENGE_LOGO_URL', 'https://cdn.client.com/logo.svg', group=group)
 settings.set('BOUNCER_CHALLENGE_BRAND', 'CLIENT BRAND', group=group)
 ```
 
-`BOUNCER_CHALLENGE_LOGO_URL` and `BOUNCER_CHALLENGE_BRAND` only take effect
-when a group is resolved. Requests with no group always use the default branding.
+With neither set, the challenge uses the sign-in page's own fallbacks: no logo,
+and the name "DJANGO MOJO". There is no built-in third-party branding.
 
 ### OAuth round-trip
 
@@ -757,7 +794,7 @@ See [group.md](group.md) for the full `auth_domain` field and `resolve_by_auth_d
 ## Templates
 
 - `account/login.html` — full mojo-auth webapp. Override in your project's templates dir.
-- `account/bouncer_challenge.html` — hosted Continue/recovery shell; override logo/brand via `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` per group.
+- `account/bouncer_challenge.html` — hosted Continue/recovery page ("One quick check"); themed by the hosted sign-in theme (`mojo-auth-theme.css` tokens, tenant accent/logo/brand/appearance/custom CSS); `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` fill in only when explicitly set and the theme has none.
 - `account/bouncer_decoy.html` — explicit scanner honeypot.
 - `account/bouncer_review_result.html` — no-JavaScript review receipt/error page.
 

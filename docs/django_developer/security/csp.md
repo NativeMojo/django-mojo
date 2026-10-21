@@ -59,7 +59,8 @@ changes until you set `AUTH_CSP_ENABLED = True`.
 | `GET /register` | yes, `frame-ancestors 'none'` | same |
 | `GET /passkey` | yes, `frame-ancestors 'none'` | same |
 | `GET /contact` | yes, **no `frame-ancestors`** | documented as iframe-embeddable |
-| `bouncer_challenge.html` / `bouncer_decoy.html` | **no** | un-nonce'd inline content by design |
+| `bouncer_challenge.html` | yes, `frame-ancestors 'none'` (dropped on the `/contact` challenge) | rendered through `_render_with_csp`; every script nonce'd, config in a JSON data block |
+| `bouncer_decoy.html` | yes, `frame-ancestors 'none'` | rendered through `_render_with_csp`; scripts nonce'd |
 | `token_landing_base.html` and the three landings it feeds (`email_verify_landing.html`, `email_change_landing.html`, `account_deactivate_landing.html`) | **no** | same — standalone pages, un-nonce'd inline `<style>`/`<script>` by design |
 | every JSON API response | **no** | not a document |
 
@@ -67,10 +68,12 @@ The paths above are the defaults; they follow `BOUNCER_LOGIN_PATH`,
 `BOUNCER_REGISTER_PATH`, `BOUNCER_PASSKEY_PATH` and `BOUNCER_CONTACT_PATH`.
 
 `/auth`, `/register` and `/contact` are bouncer-gated: a cold client is served
-the challenge page first, and **the challenge page carries no CSP**. The header
-appears on the real page — after the challenge, or immediately when the client
-presents a valid `mbp` pass cookie. `/passkey` is not gated, so its first
-response already carries the header.
+the challenge page first. **The challenge page carries its own CSP** from the
+same `_render_with_csp` — a fresh nonce on every script, and `frame-ancestors
+'none'` except on the `/contact` challenge, which stays embeddable like
+`/contact` itself. The real page's header follows after the challenge, or
+immediately when the client presents a valid `mbp` pass cookie. `/passkey` is
+not gated, so its first response already carries the header.
 
 **Non-goal.** This is not a framework-wide CSP and must not become one. A nonce
 is only valid for a response whose markup was stamped with the same value, so

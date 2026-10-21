@@ -361,8 +361,12 @@ Fetch `GET /api/auth/config?group_uuid=<uuid>` to get the resolved config for
 a group — useful for custom front-ends. See [Auth Config](auth_config.md).
 
 The bouncer challenge uses the resolved group's `theme.app_title`, `logo_url`,
-and `accent_color`, then names `theme.auth_provider_name` in its "Secure
-sign-in via …" explanation. This tells visitors both which destination they
+`accent_color`, `appearance` (light/dark/system, and the `?auth_appearance=`
+override) and custom CSS — it loads the same theme stylesheet as the sign-in
+page — then names `theme.auth_provider_name` in its "Secure sign-in via …"
+footer. With no tenant logo or title it falls back as the sign-in page does
+(no logo, "DJANGO MOJO") unless `BOUNCER_CHALLENGE_LOGO_URL` /
+`BOUNCER_CHALLENGE_BRAND` are explicitly set. This tells visitors both which destination they
 are entering and whose account credentials they should use before the login
 form appears.
 
@@ -568,17 +572,22 @@ verify the exact HttpOnly `mbp` pass, its `mbs` session cookie, and current rest
 success displays Verified and navigates once. The pass TTL remains 24 hours by
 default; later valid passes still cannot bypass new restrictions.
 
-Failed requests time out after 8 seconds and offer manual Retry. After three
-errors, use Restart or help; a 429 disables assessment Retry until the displayed
-wait expires. Cookie failure offers restart/help; an embedded contact page can
-offer a top-level tab. Expired checks require restarting for a new descriptor.
+Failed requests time out after 8 seconds and offer a manual Try again. After
+three errors it is hidden and Start over (a reload) becomes the main button;
+Start over is reachable in every failed state. A 429 counts down on the
+disabled Try again until the wait expires. Cookie failure offers Start over and
+a review; an embedded contact page can offer a top-level tab. Expired checks
+require restarting for a new descriptor. The reference shows once, with a copy
+button.
 Existing blocked/frozen records are never automatically cleared.
 
-The shell's review form POSTs `/api/auth/bouncer/recovery` with its signed
+The review step (opened by "Get help" or "Ask for a review"; never open on
+arrival) POSTs `/api/auth/bouncer/recovery` with its signed
 30-minute host-bound ticket, a required email, and an optional note (max 500
 characters). It works without JavaScript or cookies and needs no password/pass.
 Its independent limit is 30 requests per IP per 300 seconds. Success records a
-pending review and returns a reference; it does not grant access. Queue reads
+pending review and returns a reference; the page shows "Request sent" with the
+server's message and that reference. It does not grant access. Queue reads
 and resolution require global security permissions. See the
 [Recovery Review API](bouncer.md#recovery-review-api) for payloads, errors, and
 the operator remediation procedure. An assigned operator must inspect the
@@ -594,7 +603,7 @@ through gated `/contact`.
 Hosted v2 passes survive IP changes within a browser session using the `mbp` +
 `mbs` pair. `mbp` defaults to 24 hours; `mbs` is a session cookie. Legacy passes
 retain their IP-prefix binding and protected form tokens still bind to the
-exact request IP. Roll out workers, templates, and versioned `mobile-1` scripts
+exact request IP. Roll out workers, templates, and content-hashed scripts
 together: old workers cannot validate v2 passes. No migration is required.
 
 Physical iPhone Safari, physical Android Chrome, and the actual Maestro app

@@ -87,8 +87,9 @@ time.
 
 ### Challenge page branding (opt-in)
 
-By default, the bouncer challenge page always uses the default branding. To
-override it for a specific group:
+The bouncer challenge page follows the group's hosted sign-in theme
+(`theme.logo_url`, `theme.app_title`, accent, appearance and custom CSS). Where
+the theme sets no logo or title, explicitly set challenge settings fill the gap:
 
 ```python
 from mojo.helpers import settings
@@ -97,8 +98,8 @@ settings.set('BOUNCER_CHALLENGE_LOGO_URL', 'https://cdn.client.com/logo.svg', gr
 settings.set('BOUNCER_CHALLENGE_BRAND', 'CLIENT BRAND', group=group)
 ```
 
-These settings are intentionally not global — they only take effect when a
-group is detected. This preserves the default branding for the default flow.
+With neither the theme nor these settings, the challenge falls back exactly as
+the sign-in page does: no logo, and the name "DJANGO MOJO".
 
 ## RestMeta
 
