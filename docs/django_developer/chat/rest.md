@@ -2,6 +2,13 @@
 
 All endpoints are under `/api/chat/`. Authentication is required on all endpoints.
 
+When a project sets `REALTIME_SUBSCRIBE_HANDLER`, `GET room/messages`,
+`GET room/online`, `GET room/members` and `POST room/read` also ask it after
+their own checks pass and answer 403 when it refuses, and `POST dm` asks it
+before handing back an existing DM. `POST room`, `room/leave`, `GET rooms` and
+`GET unread` do not ask it. See
+[Chat permissions](permissions.md#a-projects-own-rule-for-who-takes-part-realtime_subscribe_handler).
+
 ## Room Management
 
 ### `GET /api/chat/rooms` — List user's rooms
@@ -224,7 +231,9 @@ Every refusal about the target — no `user_id`, a bad one, your own, a missing,
 inactive or refused user, a hook error — is the same 404
 `{"error": "User not found"}`, with no room written. (A DM to yourself used to
 be 400 `"Cannot DM yourself"`.) The existing-room lookups run before the rule,
-so a pair already sharing a direct room always gets it back.
+so a pair already sharing a direct room gets it back — unless the project's
+`REALTIME_SUBSCRIBE_HANDLER` refuses the caller that room, which answers the
+same 404 and creates nothing.
 
 **Reuse is groupless-first.** A personal DM is groupless by construction — the
 create path here has always built one that way, and `_deny_cross_tenant_room(request, None)`

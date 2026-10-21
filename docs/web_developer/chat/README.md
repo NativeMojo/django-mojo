@@ -120,7 +120,8 @@ what to do about a non-null `group` in your UI; there is no flag to force a
 new personal room.
 
 **You can start a DM with any active account**, unless the app's server
-limits it. A DM you already have always comes back. Every
+limits it. A DM you already have comes back, unless the app's server has
+limited your account's chat (see below). Every
 refusal — no `user_id`, a bad one, yourself, an account that does not exist,
 is inactive or that you cannot reach — is the same 404
 `{"error": "User not found"}`. A DM to yourself used to be 400.
@@ -226,9 +227,30 @@ revert. Old-generation delayed callbacks are discarded.
 Backend integration, supported writers and drained activation/rollback are
 documented in [Cursor Read State](../../django_developer/chat/read_state.md).
 
+**When the app limits an account's chat.** An app's server may restrict which
+rooms an account takes part in (for example, support rooms only). In a room it
+refuses:
+
+- `GET room/messages`, `GET room/online`, `GET room/members` and
+  `POST room/read` answer 403.
+- `POST dm` answers the usual 404 `"User not found"` for a DM you already
+  have, and creates nothing.
+- Subscribing to `chat:{room_id}` is refused, and sends, edits, reactions,
+  read marks and typing are refused (see the WebSocket section).
+
+You can still create a room, leave a room, and list `GET rooms` and
+`GET unread`. Show these refusals as "not available", not as an error to retry.
+
 ## WebSocket Messages
 
 Send via the existing realtime WebSocket connection. All require authentication.
+
+In a room the app's server refuses your account (see above), `chat_message`
+and `chat_read` answer `{"type": "error", "error": "Not allowed in this room"}`,
+`chat_edit` answers `Cannot edit this message`, `chat_react` answers
+`Message not found`, `chat_flag` answers `Permission denied`, and
+`chat_typing` is silently dropped. A `chat_message` retry with a `client_key`
+the server already stored still gets its original ack.
 
 ### Send message
 ```json

@@ -1,7 +1,8 @@
 from mojo import decorators as md
 from mojo import errors as merrors
+from mojo.apps.realtime import policy
 from mojo.helpers.request import is_override_user_session
-from .rooms import _deny_cross_tenant_room
+from .rooms import _deny_cross_tenant_room, _refuse_by_policy
 from ..models import ChatRoom, ChatMessage, ChatMembership
 from ..services import reachability
 from ..services.messages import visible_messages
@@ -32,6 +33,7 @@ def on_chat_room_messages(request):
                 request.user, ["chat", "manage_chat"],
                 not is_override_user_session(request))):
             raise merrors.PermissionDeniedException()
+    _refuse_by_policy(request, room)
 
     # Unflagged, the join-time cutoff for every non-channel kind, and the
     # disappearing-message TTL. One shared bound so history and the unread
@@ -150,7 +152,7 @@ def on_chat_dm(request):
     ).select_related("room").first()
 
     if existing_room:
-        return existing_room.room.on_rest_get(request)
+        return _reuse_dm(request, existing_room.room)
 
     # 2. No personal DM, but the pair may already share a tenant-managed one.
     # Return it rather than forking the conversation into a second room; the
@@ -163,7 +165,7 @@ def on_chat_dm(request):
     ).select_related("room").first()
 
     if scoped_room:
-        return scoped_room.room.on_rest_get(request)
+        return _reuse_dm(request, scoped_room.room)
 
     target_user = reachability.reachable_user(request, target_id)
     if target_user is None:
@@ -177,6 +179,16 @@ def on_chat_dm(request):
     ChatMembership.objects.create(room=room, user=request.user, role="owner")
     ChatMembership.objects.create(room=room, user=target_user, role="member")
 
+    return room.on_rest_get(request)
+
+
+def _reuse_dm(request, room):
+    """Hand back a DM the pair already shares, unless the project's
+    REALTIME_SUBSCRIBE_HANDLER refuses the caller that room (maestro #8874).
+    The refusal is the uniform "User not found" and creates nothing; with no
+    hook the room comes back as before (#8345)."""
+    if not policy.allows(request.user, room.topic, True):
+        return reachability.refuse(request)
     return room.on_rest_get(request)
 
 
@@ -205,6 +217,7 @@ def on_chat_room_read(request):
     ).first()
     if not membership:
         return ChatRoom.rest_error_response(request, 404, error="Not a member")
+    _refuse_by_policy(request, room)
 
     result = mark_through(
         room, request.user, membership, request.DATA.up_to_message_id)

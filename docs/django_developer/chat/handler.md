@@ -2,6 +2,15 @@
 
 Chat messages are sent and received over the existing realtime WebSocket connection (`ws/realtime/`). The User model's `on_realtime_message` hook routes `chat_*` message types to the chat handler.
 
+Every client frame below also asks the project's `REALTIME_SUBSCRIBE_HANDLER`,
+when one is set, for the room's topic after its own checks pass. A refusal is
+`Not allowed in this room` for `chat_message` (after the `client_key` dedupe,
+so a retry of a stored message still gets its ack) and `chat_read`,
+`Cannot edit this message` for `chat_edit`, `Message not found` for
+`chat_react`, `Permission denied` for `chat_flag`, and silence for
+`chat_typing`. Nothing is written or broadcast. See
+[Chat permissions](permissions.md#a-projects-own-rule-for-who-takes-part-realtime_subscribe_handler).
+
 ## Message Types
 
 ### chat_message — Send a message

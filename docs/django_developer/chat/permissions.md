@@ -58,7 +58,84 @@ through the ORM is never checked.
   the consumer's to keep even.
 
 A pair that already shares a direct room gets it back from `dm` without the
-rule: both are members already.
+rule: both are members already. A project's `REALTIME_SUBSCRIBE_HANDLER`
+(below) can still refuse that room back to the caller.
+
+## A project's own rule for who takes part (`REALTIME_SUBSCRIBE_HANDLER`)
+
+A project that restricts some of its own users — a player limited to support
+chat, say — names one function in its Django settings file:
+
+```python
+REALTIME_SUBSCRIBE_HANDLER = "myapp.realtime.can_subscribe"
+
+def can_subscribe(user, topic, default):
+    # default is django-mojo's own verdict, and is always truthy here.
+    if not topic.startswith("chat:"):
+        return True
+    if not is_restricted(user.pk):          # read fresh from the database
+        return True
+    return is_support_room(int(topic.split(":", 1)[1]))
+```
+
+It answers one question: may this user take part in `topic`? The module is
+`mojo/apps/realtime/policy.py`.
+
+- **It can only narrow.** django-mojo's own checks run first — membership,
+  bans, the group `chat` permission, the confined-credential and protected-group
+  checks. The hook is asked only when they allow, and nothing it returns can
+  grant access they refused.
+- **Unset changes nothing.** With the setting absent or `None` every answer is
+  exactly as before. Any other value that is not a callable or a dotted path —
+  `False`, `0`, `""`, `[]`, `{}` — is a broken setting, not "unset".
+- **It fails closed.** Only a return of `True` allows, and the hook is asked
+  only when django-mojo's own answer is `True`. A return of `False` refuses
+  without logging. An import error, a non-callable, an exception or any other
+  return (`None`, `1`, `"True"`) refuses and is logged at error level to
+  `realtime.log`, naming the topic and the return's type but never its value;
+  the client sees only the refusal. A broken hook therefore takes chat down for everyone — the
+  user's own `user:<id>` channel and server writes keep working.
+- **Settings file only.** It is read with `settings.get_static`, never from a
+  database Setting row, so nobody holding `manage_settings` can point it at
+  importable code.
+- **Shipped:** `mojo.apps.realtime.policy.allow_all` (the same as unset) and
+  `.deny_all` (refuse every topic it is asked about).
+
+Where it is asked, for the room's `chat:<id>` topic:
+
+| Door | Refusal |
+|---|---|
+| Client `subscribe` (any topic) and the chat re-check on an open socket | `Access denied to topic: ...`; the open socket is unsubscribed |
+| `chat_message` (send), after the `client_key` dedupe | `Not allowed in this room` |
+| `chat_edit` | `Cannot edit this message` |
+| `chat_react` | `Message not found`, the same answer as every other refusal |
+| `chat_typing` | Nothing is broadcast |
+| `chat_read` | `Not allowed in this room` |
+| `chat_flag` | `Permission denied` |
+| `GET room/messages`, `GET room/online`, `GET room/members`, `POST room/read` | 403 |
+| `POST dm` returning a DM the pair already shares | The uniform 404 `"User not found"`; nothing is created |
+
+Left open, and why:
+
+- `POST room` (create) stays open. A refused user's own room is no use to them:
+  they cannot subscribe to it, send into it or read it, and others reach it
+  only through `room/join` or `room/member/add`, which have their own rules.
+- `room/leave` always works.
+- `GET rooms` and `GET unread` list room names and counts, not content.
+- The own-topic subscribe a socket makes at connect, and topics a server hook
+  subscribes a socket to, are server-chosen and never ask the hook.
+- Server writes are never gated: `send_message(client_authored=False)` and
+  rooms or memberships created through the ORM. Server-created support rooms
+  keep working, as long as the hook allows their topics.
+
+The `user` argument is the caller as django-mojo knows it: on a socket the
+`User` loaded at connect (a fresh row on the chat re-check), on REST
+`request.user`, which for an API key that is not linked to a user is the key
+itself. Read restriction state from the database or your own store, never from
+the passed object's attributes, and return `True` for callers your rule does
+not cover.
+
+For open sockets, see [Open sockets](#open-sockets).
 
 ## Who may run a room-admin operation (room authority)
 
@@ -167,6 +244,13 @@ reaches an open socket:
 
 Code that removes access some other way and needs it to take effect at once
 should call `publish_access_change` (see [Services](services.md#access-change-frames)).
+
+A project's `REALTIME_SUBSCRIBE_HANDLER` reaches open sockets the same way: at
+the next re-check, or at once when the project calls
+`realtime.disconnect_user` after the restriction commits, since every later
+subscribe asks the hook again. The disconnect is best effort. Topics other than
+chat are checked only at subscribe, so they last until the socket drops.
+Rotating the account's `auth_key` does not close open sockets.
 See [realtime architecture](../realtime/architecture.md#chat-topic-delivery-chatroom_id)
 for the mechanism.
 

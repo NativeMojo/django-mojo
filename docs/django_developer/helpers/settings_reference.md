@@ -1170,6 +1170,17 @@ registered resource is enabled; until then every endpoint answers 404.
 
 ### REALTIME
 
+- `REALTIME_SUBSCRIBE_HANDLER` — dotted path to
+  `handler(user, topic, default) -> bool`, read from the Django settings file
+  only (`settings.get_static`; a database Setting row is ignored), default
+  unset. A project's own rule for who may take part in a topic. It can only
+  narrow django-mojo's own verdict, and is asked only when that verdict allows:
+  every client subscribe, the chat re-check on an open socket, the client chat
+  frames, the REST room reads and existing-DM reuse. Unset changes nothing.
+  Only `True` allows; an unloadable path, a non-callable, an exception or any
+  other return refuses. `mojo.apps.realtime.policy.allow_all` is the same as
+  unset; `.deny_all` refuses every topic it is asked about. See
+  [Chat permissions](../chat/permissions.md#a-projects-own-rule-for-who-takes-part-realtime_subscribe_handler).
 - `REALTIME_GROUP_TOPIC_PERMISSIONS` — **file-only** (`settings.get_static`), default `None` (disabled; existing behavior preserved). A nonempty list/tuple grants access to canonical `group:<positive id>` topics when an active User has any listed permission on an active group. Empty/malformed configuration denies group topics. Every protected delivery rechecks current access and drops/unsubscribes on denial. Configure only in deployments opting in. See [Group-topic permissions](../realtime/architecture.md#group-topic-permissions-opt-in).
 
 ### REDIS
