@@ -1,15 +1,25 @@
 # Packaged Admin Security client
 
 The packaged Portal is **portal-mojo 0.2.18**, source revision
-`9aee005308d3b6f220dfa78493f1df4ae4b30fd8`, a clean canonical build verified
-against Portal CI run 39336711554. It includes changes after the `v0.2.18` tag;
+`ea414d196f1e727be310681a9d36c97513784908`, the clean canonical artifact
+from Portal CI run 39516512697. It includes changes after the `v0.2.18` tag;
 the source revision and manifest digest identify this exact bundle.
 
-- Manifest SHA-256: `ee17a868e91f6ff4b885ee36cafd78d62d6d717a5667149a8344e9704acf0895`
+- Manifest SHA-256: `03f4d7cb0d0ba718531c7254e928970affd736c052b1a783683325648da6cd6a`
 - Lockfile SHA-256: `291fc4f7bd7f55a38e264847650d38c08cb229b18e685e792c606b1c4118351a`
 - Inventory: 128 files
 
 New in this build:
+
+- **Passkeys** (user detail and My account) no longer crashes for users who
+  hold a passkey. `transports` on `/api/account/passkeys` rows is a JSON list
+  of strings (`[]` when none).
+- **Set temporary password** is back in the user header menu and Security
+  section (`sys.users` or `sys.manage_users`). It confirms first, calls
+  `POST /api/account/admin/user/password/temporary` with fresh auth, and shows
+  the generated password once in a copyable dialog.
+
+Included from the earlier Assistant Setup build:
 
 - **Assistant → Setup** is an owner-only page for the encrypted, write-only API
   key, enablement, automatic latest compatible Sonnet selection and manual model

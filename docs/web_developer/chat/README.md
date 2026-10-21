@@ -81,13 +81,18 @@ checks and the banned-caller refusal.
 
 Pagination: pass `limit` (max 200) and `before` (message ID cursor).
 
-Each history row is `{id, user_id, body, kind, edited_at, moderation_decision,
+Each history row is `{id, room_seq, generation, user_id, body, kind, edited_at, moderation_decision,
 moderation_reasons, moderation_score, created, metadata, client_key}`. `client_key` carries the key on your own messages and is `null`
 on everyone else's — but **do not treat that as privacy**: your key is broadcast to every
 room subscriber on the live `chat_message` frame by design. A `client_key` must be an
 opaque per-send identifier (a fresh UUID or ULID) and must never encode anything you would
 not show the room. `metadata` is an object (`{}` when empty) — see
 [Message metadata](#message-metadata).
+
+`room_seq` is a server-assigned room-local arrival sequence in cursor mode,
+or null on old/legacy messages. `generation` binds it to the room's numbering
+version; compare sequences only within one generation. Continue using message
+IDs for pagination and read requests; never submit your own sequence.
 
 `/api/chat/room/flagged` now includes `metadata` on each row too, so a moderator
 sees the payload a card or file message carried.
@@ -127,43 +132,99 @@ is inactive or that you cannot reach — is the same 404
 | POST | `/api/chat/room/read` | Mark read `{room_id, up_to_message_id}` |
 | GET | `/api/chat/unread` | Unread counts per room |
 
-`/api/chat/unread` counts exactly the messages `/api/chat/room/messages` would
-return for you — the same join-date bound, and the same disappearing-message
-expiry. A badge therefore never exceeds what opening the room shows.
+The host chooses the read-state backend. The default is legacy receipts;
+deployments may opt in to DB-only cursor state. Both retain this request shape
+and require an active or muted membership. Banned members cannot mark read.
 
-**The server resolves `up_to_message_id`; trust the id it echoes, not the one
-you sent.** It is clamped to the newest message at or below your value that you
-are allowed to have seen — an id from another room, one from before you joined,
-a flagged one, or a number that does not exist yet all clamp downward rather
-than being taken at face value.
-
-**Read it from `data.up_to_message_id`, not the top level.** The resolved id is
-nested one deep — this response is wrapped, so there is a `status` at both
-levels:
+**Read the result from `data`, not the top level.** The REST response is
+wrapped with `status` at both levels. It now includes `position` and `changed`:
 
 ```json
 {
   "status": true,
   "code": 200,
-  "data": {"status": true, "up_to_message_id": 480}
+  "data": {"status": true, "up_to_message_id": 480,
+           "position": null, "changed": true}
 }
 ```
 
-`data.up_to_message_id` is a new field; `data.status` is unchanged. It is
-`null` when nothing resolved — including for a non-numeric value, which now
-answers 200 cleanly instead of erroring:
+`up_to_message_id` is the server-resolved actual target. Malformed values
+return 200 with a null target and no mutation. A message that has expired from
+display can still be acknowledged when you were entitled to it: TTL does not
+invalidate the read target. `position` is null in legacy mode and an object in
+cursor mode.
 
-```json
-{"status": true, "code": 200, "data": {"status": true, "up_to_message_id": null}}
-```
+#### Legacy backend (default)
 
-Update your local read marker from that value, not from the id you sent.
+The supplied ID clamps downward to the newest entitled message at or below
+it. A foreign, pre-join, flagged or not-yet-existing ID may therefore resolve
+to a different row. Trust the echoed ID. `changed` means a target resolved.
+`/api/chat/unread` counts visible unread messages using the same join-date,
+flag and disappearing-message bounds as history, excluding your own sends.
 
-A message that has since aged out of a disappearing-message room still counts:
-the read happened, so receipts and the `chat_read` event still go out.
+#### Cursor backend
 
-**Banned members cannot mark read.** Muted members can — mute stops sending,
-not reading.
+Reads require the exact entitled in-room message ID. A foreign, missing,
+flagged or pre-join ID returns a null target, the current position and
+`changed: false`; it does not clamp or emit a read event. A valid duplicate
+can also have `changed: false`, but may still emit the committed read event.
+Reads move forward within the current generation and clear sparse exceptions
+through the actual target. No per-message receipt rows are written.
+
+Positions in read acknowledgments and `/api/chat/unread` rows contain:
+
+| Field | Meaning |
+|---|---|
+| `room_id`, `user_id`, `room_name`, `room_kind` | Identity and room labels |
+| `generation` | Version of this room's sequence numbering |
+| `head_seq`, `read_seq` | Current arrival head and encoded member read prefix |
+| `last_read_message_id`, `read_at` | Stored actual acknowledged message ID/time, nullable |
+| `unread_exception_count` | Sparse unread slots below/at the encoded prefix |
+| `unread_count` | `head_seq - read_seq + unread_exception_count` |
+| `read_frontier_message_id` | Stored actual read ID when exceptions are zero, otherwise null |
+
+Successful read results also carry `ack_target_id`, `ack_target_seq`,
+`ack_target_created`, `ack_generation` and `reason` (`explicit`, `own_send`,
+`current_head` or `join_boundary`). A server ownership/privacy boundary change
+can reconcile unread state with `reason: "join_boundary"` and null target
+ID/sequence/time. It preserves later eligible unread arrivals without making
+older private history newly unread. These are the actual operation facts. The standing
+position can already reflect a later read: do not rewind your UI to a stale
+ack target, or treat a newer standing head as part of that old acknowledgment.
+A genuine message from before cursor activation can have a null
+`ack_target_seq` while retaining its real target ID/time. Acknowledging it does
+not advance the numbered prefix; a trusted hidden-tail clear can retain that
+real visible legacy target as the stored actual acknowledgment.
+
+Counts describe arrivals, so flags, expiry and ordinary deletion do not reduce
+them. They can exceed the visible page length or retain an invisible/deleted
+tail. The host can explicitly clear the current head on the server; clients
+cannot submit a raw sequence. Sending a message acknowledges all older
+arrivals through your own send. New memberships start with zero unread at the
+current head, including channels with visible older history. Ban/unban retains
+the seat's state; removal/rejoin starts a new baseline.
+
+Merge/revert maintenance can encode the prefix at the head while retaining
+earlier unread messages as sparse exceptions. When exceptions are nonzero,
+do not mark every message below `read_seq` or `last_read_message_id` as read.
+The host must use exception-aware message eligibility; count snapshots alone
+do not list which messages are exceptions. Only compare sequence values in
+the same generation.
+
+The framework publishes committed `chat_read` events for explicit reads,
+own sends and trusted head clears, for all room kinds. Its event
+`up_to_message_id` is the current `read_frontier_message_id`, so it can be
+null while exceptions remain. The event includes fresh standing state plus
+the actual `ack_*` facts; it can be newer than the direct ack. Callback errors
+do not undo a durable read. Reconcile after reconnect using server state.
+
+On `chat_read_state_invalidated {room_id, generation}`, discard cached
+positions and refresh: maintenance has resequenced the room. It preserves
+current unread message identities, including reads made between merge and
+revert. Old-generation delayed callbacks are discarded.
+
+Backend integration, supported writers and drained activation/rollback are
+documented in [Cursor Read State](../../django_developer/chat/read_state.md).
 
 ## WebSocket Messages
 
@@ -177,6 +238,7 @@ Send via the existing realtime WebSocket connection. All require authentication.
 Response:
 ```json
 {"type": "chat_message_ack", "message_id": 123, "room_id": 5,
+ "room_seq": 100, "generation": 1,
  "kind": "text", "metadata": {}, "created": "...", "client_key": "01J8Z0K3Q0X",
  "moderation_decision": "allow", "moderation_reasons": [], "moderation_score": 0}
 ```
@@ -248,9 +310,11 @@ not tell you which. Muted members can still react; only banned members cannot.
 {"type": "chat_read", "room_id": 5, "up_to_message_id": 482}
 ```
 
-Acks `{"type": "chat_read_ack", "room_id": 5, "up_to_message_id": 480}` with
-the **server-resolved** id (see [Read State](#read-state)) — `null` if nothing
-resolved, in which case nothing was written and no `chat_read` event went out.
+Acks `{"type": "chat_read_ack", "room_id": 5, "up_to_message_id": 480,
+"position": null, "changed": true}`. The target is server-resolved; `position`
+is null in legacy mode and a cursor position in cursor mode (see
+[Read State](#read-state)). An invalid target echoes null, writes nothing and
+emits no read event.
 
 ### Flag message (moderator)
 ```json
@@ -354,12 +418,13 @@ the send frame.
 
 | Event type | Description |
 |-----------|-------------|
-| `chat_message` | New message `{message_id, room_id, user_id, body, kind, metadata, created, client_key?, moderation_decision, moderation_reasons, moderation_score}` — `client_key` is present only when the sender supplied one |
+| `chat_message` | New message `{message_id, room_id, room_seq, generation, user_id, body, kind, metadata, created, client_key?, moderation_decision, moderation_reasons, moderation_score}` — `client_key` is present only when the sender supplied one |
 | `chat_message_edited` | Message edited `{message_id, room_id, user_id, body, edited_at, moderation_decision, moderation_reasons, moderation_score}` |
 | `chat_message_flagged` | Message flagged (hide it) `{message_id}` |
 | `chat_reaction` | Reaction changed `{message_id, user_id, emoji, action}` — `action` is `added`/`removed`; not sent for a no-op |
 | `chat_typing` | User is typing `{room_id, user_id}` |
-| `chat_read` | Messages read `{room_id, user_id, up_to_message_id}` — the id is server-resolved, not the sender's raw value, and the event only fires when one resolved |
+| `chat_read` | Legacy: resolved `{room_id, user_id, up_to_message_id}` for direct/group rooms. Cursor: committed position plus actual `ack_*` facts for all room kinds; `up_to_message_id` is a nullable effective frontier; see [Read State](#read-state) |
+| `chat_read_state_invalidated` | Cursor maintenance resequenced the room `{room_id, generation}` — discard old positions and refresh |
 | `chat_member_joined` | Member joined `{room_id, user_id}` |
 | `chat_member_left` | Member left `{room_id, user_id}` |
 | `chat_member_removed` | An admin removed a member `{room_id, user_id}` |
