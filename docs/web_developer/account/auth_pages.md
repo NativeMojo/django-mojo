@@ -47,8 +47,8 @@ Default set: `password`, `sms`, `passkey`, `magic`, `google`, `apple`, `github`.
 When `password` is not among `login.methods` but `sms` is (a passwordless
 config), the page opens directly on the SMS phone-entry form rather than a
 sign-in form — so SMS sign-in is the first thing the user sees. With
-`password` present, the sign-in form leads and "Sign in with a code" is a
-button alongside passkey/Google/Apple/GitHub.
+`password` present, the sign-in form leads and "SMS code" is a button
+alongside passkey/Google/Apple/GitHub; it opens the "Sign in with a code" view.
 
 **Anti-enumeration UX.** SMS sign-in never reveals whether a phone number has an
 account — `POST /api/auth/sms/login` returns the same generic success for known
