@@ -4,13 +4,14 @@ Push notifications use Firebase Cloud Messaging (FCM) v1 for all platforms — i
 
 > **First time?** See [push_setup.md](push_setup.md) for Firebase project creation, service account setup, and client SDK configuration.
 
-
 ## Registration ownership
 
 One registration per token: the newest authenticated registration wins and
 replaces the previous holder, including a changed device ID or platform string.
 Both `POST /api/account/devices/push/register` and the legacy
-`POST /api/account/member/device/register` use this rule. Other phones are unchanged.
+`POST /api/account/member/device/register` use this rule. Both require authentication
+and register for the current user; no device-management permission is required.
+Other phones are unchanged.
 The caller's existing `(user, device_id)` row retains its ID and is reactivated.
 Old holder rows and their delivery history are deleted; cross-account moves
 record a `push:token_reassigned` audit event with the previous holder and removed
@@ -18,7 +19,9 @@ delivery count, without the token. A send already in progress can still finish.
 
 Tokens must be non-empty strings of at most 4096 characters; device IDs must be
 non-empty strings of at most 255 characters. Invalid input returns **400**.
-The legacy token field is `cmf_token` (or `cm_token`). A concurrent conflict is
+The legacy token field is `cmf_token` (or `cm_token`); its successful response is
+`{"status": true}`. Its platform comes from the request user agent, and `device_id`
+falls back to the request device identity when omitted. A concurrent conflict is
 retried once on the server; **409** means the client should retry registration.
 The registration token is never returned by any device REST graph, including `full`.
 
@@ -200,6 +203,12 @@ Older records without explicit evidence fall back to their stored `status`. A si
 
 ## Service Layer
 
+`register_push_device(user, *, device_id, device_token, platform, fields, request=None)`
+returns `(device, created)` and applies the ownership transaction described above.
+Callers must authorize the user and validate the input first. `fields` accepts
+`device_name`, `app_version`, `os_version`, and `push_preferences`. An exhausted
+collision raises `PushRegistrationConflict`; REST callers map it to HTTP 409.
+
 `mojo/apps/account/services/push.py` provides convenience wrappers for the three most common patterns:
 
 ```python
@@ -268,6 +277,7 @@ result = test_registered_device(device, "Push Test", "Please confirm receipt")
 | Method | URL | Auth | Notes |
 |---|---|---|---|
 | `POST` | `/api/account/devices/push/register` | required | Register device |
+| `POST` | `/api/account/member/device/register` | required | Legacy device registration |
 | `POST` | `/api/account/devices/push/unregister` | required | Deactivate device |
 | `GET/POST/PATCH/DELETE` | `/api/account/devices/push[/<pk>]` | required | CRUD for devices |
 | `GET/POST/PATCH/DELETE` | `/api/account/devices/push/templates[/<pk>]` | required | CRUD for templates |

@@ -16,6 +16,7 @@ def register_push_device(user, *, device_id, device_token, platform, fields,
                          request=None, _before_write=None):
     """Atomically replace stale token holders with the current app registration."""
     from django.db import IntegrityError, transaction
+    from django.db.models import Q
 
     defaults = {key: fields[key] for key in (
         'device_name', 'app_version', 'os_version', 'push_preferences') if key in fields}
@@ -24,9 +25,14 @@ def register_push_device(user, *, device_id, device_token, platform, fields,
     for attempt in (1, 2):
         try:
             with transaction.atomic():
-                stale = list(RegisteredDevice.objects.select_for_update()
-                    .filter(device_token=device_token)
-                    .exclude(user=user, device_id=device_id).order_by('pk'))
+                # Lock the caller row together with token holders in a single
+                # order: opposite token swaps otherwise lock each other's row.
+                locked = list(RegisteredDevice.objects.select_for_update().filter(
+                    Q(device_token=device_token) | Q(user=user, device_id=device_id)
+                ).order_by('pk'))
+                stale = [previous for previous in locked
+                         if previous.device_token == device_token
+                         and not (previous.user_id == user.pk and previous.device_id == device_id)]
                 moves = []
                 same_user = False
                 for previous in stale:

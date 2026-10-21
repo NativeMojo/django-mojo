@@ -187,3 +187,48 @@ def test_full_graph_hides_token(opts):
     assert result.response.data, 'Fixture devices must be returned'
     assert all('device_token' not in d for d in result.response.data), 'No full graph may disclose token'
     assert 'device_token' not in device.to_dict('full'), 'Owner graph must also omit token'
+
+
+@th.django_unit_test()
+def test_simultaneous_token_swap(opts):
+    from threading import Event
+    from django.db import connections
+    from mojo.apps.account.services.push import register_push_device
+    a, b, *_ = opts.pto_users
+    left, right = row(a), row(b)
+    reached_write = Event()
+    futures = []
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        def second():
+            try:
+                return register_push_device(b, device_id=right.device_id,
+                    device_token=left.device_token, platform='ios', fields={},
+                    _before_write=reached_write.set)
+            finally:
+                connections.close_all()
+        def first_hook():
+            if not futures:
+                futures.append(pool.submit(second))
+                # On old code both transactions delete the other's caller row.
+                # Correct lock ordering blocks the second before this hook.
+                reached_write.wait(timeout=0.25)
+        current, _ = register_push_device(a, device_id=left.device_id,
+            device_token=right.device_token, platform='ios', fields={}, _before_write=first_hook)
+        other, _ = futures[0].result(timeout=10)
+    current.refresh_from_db()
+    other.refresh_from_db()
+    assert current.device_token == right.device_token, 'First caller must retain its requested token'
+    assert other.device_token == left.device_token, 'Second caller must complete without a deadlock'
+
+
+@th.django_unit_test()
+def test_validation_and_idempotent_reactivation(opts):
+    a = opts.pto_users[0]
+    device = row(a, is_active=False, push_enabled=False)
+    current = register(opts, a, device.device_token, device.device_id)
+    assert current.pk == device.pk, 'Repeated same-token registration must preserve row ID'
+    for token, device_id in [('', 'valid'), ('t', ''), ('t' * 4097, 'valid'),
+                             ('t', 'd' * 256), (42, 'valid'), ('t', True)]:
+        result = opts.client.post('/api/account/devices/push/register', json={
+            'device_token': token, 'device_id': device_id, 'platform': 'ios'})
+        assert result.status_code == 400, 'Invalid token or identifier must return 400'
