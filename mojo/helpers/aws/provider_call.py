@@ -212,3 +212,76 @@ class ProviderClient:
 
 
 provider_caller = ProviderCaller()
+
+
+class DeadlineProviderClient:
+    """Read collector client: one attempt, remaining connect/read budget.
+
+    A fresh bounded boto client per operation avoids changing a shared client.
+    The same absolute monotonic deadline is used across all collector sources.
+    """
+
+    def __init__(self, service, deadline, region=None, session=None,
+                 client=None, client_factory=None, clock=None):
+        import time
+        self.service = service
+        self.deadline = deadline
+        self.region = region
+        self.session = session
+        self.client = client
+        self.client_factory = client_factory
+        self.clock = clock or time.monotonic
+
+    def __getattr__(self, operation):
+        def call(**kwargs):
+            remaining = self.deadline - self.clock()
+            if remaining <= 0:
+                raise ProviderCallError(self.service + "." + operation, "deadline_exceeded")
+            if self.client is not None:
+                target = self.client
+            else:
+                from botocore.config import Config
+                from .client import get_client, get_session
+                from mojo.helpers.settings import settings
+                factory = self.client_factory or get_client
+                if self.session is None:
+                    self.session = get_session(settings.get_static("AWS_KEY", None),
+                                               settings.get_static("AWS_SECRET", None), self.region)
+                botocore_session = getattr(self.session, "_session", None)
+                if botocore_session is not None:
+                    # Credential discovery is part of this private call budget.
+                    # IMDS uses these per-session settings; interactive SSO,
+                    # credential_process and container/STS refresh chains have
+                    # independent transports and cannot provide this contract.
+                    botocore_session.set_config_variable("metadata_service_timeout", min(0.25, remaining / 8))
+                    botocore_session.set_config_variable("metadata_service_num_attempts", 1)
+                    import os
+                    profile = botocore_session.get_scoped_config()
+                    cached = getattr(botocore_session, "_credentials", None)
+                    unsupported_profile = any(profile.get(key) for key in (
+                        "credential_process", "role_arn", "web_identity_token_file",
+                        "sso_session", "sso_start_url"))
+                    unsupported_environment = any(os.environ.get(key) for key in (
+                        "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+                        "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN"))
+                    if cached is None and (unsupported_profile or unsupported_environment):
+                        # Never remove a selected provider and silently use a
+                        # different account's fallback credentials instead.
+                        raise ProviderCallError(self.service + "." + operation,
+                                                "credential_transport_unsupported")
+                target = factory(self.service, region=self.region, session=self.session,
+                                 timeout=min(1.0, remaining / 4), max_attempts=0,
+                                 config=Config(connect_timeout=min(1.0, remaining / 4),
+                                               read_timeout=min(1.0, remaining / 4),
+                                               retries={"total_max_attempts": 1, "mode": "standard"}))
+            try:
+                if self.clock() >= self.deadline:
+                    raise ProviderCallError(self.service + "." + operation, "deadline_exceeded")
+                result = getattr(target, operation)(**kwargs)
+                if self.clock() >= self.deadline:
+                    raise ProviderCallError(self.service + "." + operation, "deadline_exceeded")
+                return result
+            finally:
+                if self.client is None:
+                    target.close()
+        return call

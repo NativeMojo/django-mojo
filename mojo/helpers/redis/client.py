@@ -35,6 +35,7 @@ Notes:
 from urllib.parse import quote, unquote, urlparse
 import asyncio
 import weakref
+import time
 
 import redis
 import redis.asyncio
@@ -215,7 +216,7 @@ def get_connection(reader=False):
 
 
 def get_bounded_connection(timeout=1.0, max_connections=8,
-                           read_from_replicas=None):
+                           read_from_replicas=None, deadline=None):
     """Return a short-lived Redis client with a hard per-command budget.
 
     Admin evidence collectors must not inherit the process-wide 60-second
@@ -226,6 +227,14 @@ def get_bounded_connection(timeout=1.0, max_connections=8,
     """
     url = _build_url()
     timeout = max(0.05, float(timeout))
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("redis_deadline_exceeded")
+        timeout = min(timeout, remaining / 4)
+    from redis.retry import Retry
+    from redis.backoff import NoBackoff
+    no_retry = Retry(NoBackoff(), 0)
     max_connections = max(1, min(int(max_connections), 32))
     is_cluster = str(settings.get_static("REDIS_CLUSTER", False)).lower() in (
         "1", "true")
@@ -233,17 +242,94 @@ def get_bounded_connection(timeout=1.0, max_connections=8,
         if read_from_replicas is None:
             read_from_replicas = str(settings.get_static(
                 "REDIS_READ_FROM_REPLICAS", "1")) in ("1", "true", "True")
-        return RedisCluster.from_url(
+        client = RedisCluster.from_url(
             url, decode_responses=True,
             socket_connect_timeout=timeout, socket_timeout=timeout,
             max_connections=max_connections,
             read_from_replicas=bool(read_from_replicas),
-            reinitialize_steps=5)
+            reinitialize_steps=1, cluster_error_retry_attempts=0,
+            retry=no_retry, retry_on_timeout=False)
+        return _DeadlineClient(client, deadline) if deadline is not None else client
     pool = redis.ConnectionPool.from_url(
         url, decode_responses=True,
         socket_connect_timeout=timeout, socket_timeout=timeout,
-        max_connections=max_connections)
-    return redis.Redis(connection_pool=pool)
+        max_connections=max_connections, retry=no_retry, retry_on_timeout=False)
+    client = redis.Redis(connection_pool=pool)
+    return _DeadlineClient(client, deadline) if deadline is not None else client
+
+
+class _DeadlineClient:
+    """Per-call primary client, pipeline and pubsub sharing one deadline.
+
+    Only wraps the private pool created above. Never wrap a process singleton.
+    Close/reset disconnect locally (redis-py does not send UNSUBSCRIBE there),
+    so exhaustion never starts another network cleanup operation.
+    """
+
+    def __init__(self, target, deadline, root=None):
+        self.target = target
+        self.deadline = deadline
+        self.root = root or target
+
+    def __enter__(self):
+        self.remaining()
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def remaining(self):
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("redis_deadline_exceeded")
+        pools = []
+        pool = getattr(self.root, "connection_pool", None)
+        if pool is not None:
+            pools.append(pool)
+        nodes = getattr(getattr(self.root, "nodes_manager", None), "nodes_cache", {})
+        for node in nodes.values():
+            pool = getattr(getattr(node, "redis_connection", None), "connection_pool", None)
+            if pool is not None:
+                pools.append(pool)
+        # Reserve budget for connect, write and response in the same operation.
+        timeout = remaining / 4
+        for pool in pools:
+            pool.connection_kwargs.update(socket_timeout=timeout, socket_connect_timeout=timeout)
+            connections = list(getattr(pool, "_available_connections", []))
+            connections += list(getattr(pool, "_in_use_connections", []))
+            for connection in connections:
+                connection.socket_timeout = timeout
+                connection.socket_connect_timeout = timeout
+                sock = getattr(connection, "_sock", None)
+                if sock is not None:
+                    sock.settimeout(timeout)
+        return remaining
+
+    def close(self):
+        # PubSub.reset and unWATCHed Pipeline.reset are local disconnect/release.
+        self.target.close()
+        if self.target is self.root:
+            pool = getattr(self.root, "connection_pool", None)
+            if pool is not None:
+                pool.disconnect()
+
+    def __getattr__(self, name):
+        value = getattr(self.target, name)
+        if not callable(value):
+            return value
+        if name == "reset":
+            return value
+
+        def call(*args, **kwargs):
+            remaining = self.remaining()
+            if name == "get_message":
+                kwargs["timeout"] = min(kwargs.get("timeout", 0), remaining / 4)
+            result = value(*args, **kwargs)
+            self.remaining()
+            if name in ("pubsub", "pipeline"):
+                return _DeadlineClient(result, self.deadline, self.root)
+            return self if result is self.target else result
+        return call
 
 
 def _create_async_client(url, max_conn, connect_timeout, socket_timeout):

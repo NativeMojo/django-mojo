@@ -165,6 +165,8 @@ class JobManager:
             self.keys.runner_registry(channel),
             now - heartbeat_ttl, now + heartbeat_ttl,
             start=0, num=limit + 1)
+        if time.monotonic() >= deadline:
+            raise RuntimeError("runner_roster_timeout")
         future_count = client.zcount(
             self.keys.runner_registry(channel),
             f"({now + heartbeat_ttl}", "+inf")
@@ -185,10 +187,14 @@ class JobManager:
                 raise RuntimeError("runner_roster_invalid")
             runner_ids.append(runner_id)
         runner_ids.sort()
+        if time.monotonic() >= deadline:
+            raise RuntimeError("runner_roster_timeout")
         pipe = client.pipeline(transaction=False)
         try:
             for runner_id in runner_ids:
                 pipe.get(self.keys.runner_hb(runner_id))
+            if time.monotonic() >= deadline:
+                raise RuntimeError("runner_roster_timeout")
             raw_rows = pipe.execute()
         finally:
             pipe.reset()
@@ -675,7 +681,7 @@ class JobManager:
 
     def broadcast_execute_checked(self, func_path, data=None, timeout=5.0,
                                   channel=None, roster=None,
-                                  correlation_id=None):
+                                  correlation_id=None, client=None, deadline=None):
         """Execute once per compatible host and prove the exact replies.
 
         This is deliberately a different wire command from legacy ``execute``.
@@ -690,6 +696,27 @@ class JobManager:
         one valid success receipt arrived from every expected host.
         """
         started = time.monotonic()
+        if deadline is not None and client is None:
+            from mojo.helpers.redis import get_bounded_connection
+            try:
+                with get_bounded_connection(
+                        timeout=min(float(timeout), max(0.001, deadline - started)),
+                        max_connections=2, read_from_replicas=False,
+                        deadline=deadline) as bounded_client:
+                    return self.broadcast_execute_checked(
+                        func_path, data, timeout, channel, roster, correlation_id,
+                        client=bounded_client, deadline=deadline)
+            except Exception:
+                return self._checked_result(
+                    "unknown", correlation_id, channel, [], [], [], [], [],
+                    ["checked_transport_unavailable"], [], started)
+        transport = client if client is not None else self.redis
+
+        def budget():
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("checked_deadline_exceeded")
+            return max(0.001, deadline - time.monotonic()) if deadline is not None else timeout
+
         try:
             timeout = float(timeout)
         except (TypeError, ValueError):
@@ -725,8 +752,10 @@ class JobManager:
                 ["payload_overflow"], [], started)
 
         try:
+            budget()
             rows = (self.get_runners_bounded(
-                channel, limit=CHECKED_EXECUTE_MAX_HOSTS, timeout=min(timeout, 2.0))
+                channel, limit=CHECKED_EXECUTE_MAX_HOSTS, timeout=min(timeout, 2.0, budget()),
+                client=client)
                     if roster is None else list(roster))
             selected, expected, incompatibilities = self._checked_host_roster(
                 rows, channel)
@@ -745,7 +774,8 @@ class JobManager:
 
         reply_channel = self.keys.reply_channel(correlation_id)
         try:
-            pubsub = self.redis.pubsub()
+            budget()
+            pubsub = transport.pubsub()
         except Exception:
             return self._checked_result(
                 "unknown", correlation_id, channel, expected, [], [], [],
@@ -754,7 +784,9 @@ class JobManager:
         replies = {}
         dispatched = 0
         try:
+            budget()
             pubsub.subscribe(reply_channel)
+            budget()
             message = {
                 "command": "execute_checked",
                 "protocol": CHECKED_EXECUTE_PROTOCOL,
@@ -775,13 +807,16 @@ class JobManager:
                 encoded = json.dumps(
                     targeted, sort_keys=True, separators=(",", ":"),
                     allow_nan=False)
-                self.redis.publish(
+                budget()
+                transport.publish(
                     self.keys.runner_ctl(runner["runner_id"]), encoded)
                 dispatched += 1
+                budget()
 
-            deadline = started + timeout
-            while time.monotonic() < deadline and len(replies) < len(expected):
-                remaining = deadline - time.monotonic()
+            poll_deadline = min(deadline, started + timeout) if deadline is not None else started + timeout
+            while time.monotonic() < poll_deadline and len(replies) < len(expected):
+                budget()
+                remaining = poll_deadline - time.monotonic()
                 msg = pubsub.get_message(timeout=min(0.1, max(0.0, remaining)))
                 if not msg or msg.get("type") != "message":
                     continue
@@ -802,6 +837,9 @@ class JobManager:
                 anomalies.append("dispatch_or_reply_unavailable")
         finally:
             try:
+                if deadline is not None and time.monotonic() >= deadline:
+                    anomalies.append("checked_deadline_exceeded")
+                # close disconnects locally; never issue unsubscribe after expiry.
                 pubsub.close()
             except Exception:
                 if len(anomalies) < CHECKED_EXECUTE_MAX_ANOMALIES:
