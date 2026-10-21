@@ -11,6 +11,11 @@ on top. What lives here is the part every product would otherwise rebuild.
 
 REST reference for API consumers: [web_developer/dnsman](../../web_developer/dnsman/README.md).
 
+Shared validation ships disabled until its separately authorized
+[hub upgrade and recovery cutover](HubUpgrade.md). The dedicated seeded
+installation state, actual release qualification and retained root floor are
+part of that operator contract; a missing state never enables compatibility.
+
 ## Layout
 
 ```

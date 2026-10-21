@@ -15,6 +15,7 @@ thing that heals it.
 """
 
 from mojo.helpers import logit
+from mojo.apps.edge.services import acme_hub_deploy
 
 
 def install_generation(job):
@@ -145,12 +146,16 @@ def webapp_onboarding_advance(job):
 DEPLOY_POLL_INTERVAL = 3.0
 
 
+@acme_hub_deploy.guarded
 def _publish_deploy_node(runner_id, sha, framework, migrate, deployment_id,
-                         api_cohort=True):
+                         api_cohort=True, capacity_operation=None):
     from mojo.apps import jobs
     from mojo.apps.edge.services import deploy
     from mojo.apps.edge.services import platform_deploy
 
+    acme_hub_deploy.check_dispatch(
+        deployment_id, sha, framework, runner_id, migrate, api_cohort,
+        capacity_operation=capacity_operation)
     try:
         job_id = jobs.publish(
             func=deploy.DEPLOY_NODE_JOB,
@@ -164,7 +169,7 @@ def _publish_deploy_node(runner_id, sha, framework, migrate, deployment_id,
             payload=dict(
                 sha=sha, framework=framework, migrate=bool(migrate),
                 deployment=str(deployment_id), runner=str(runner_id),
-                api_cohort=bool(api_cohort)),
+                api_cohort=bool(api_cohort), capacity_operation=capacity_operation),
             channel=runner_id,
             max_retries=0,
             expires_in=deploy.canary_timeout())
@@ -179,6 +184,7 @@ def _publish_deploy_node(runner_id, sha, framework, migrate, deployment_id,
     return job_id
 
 
+@acme_hub_deploy.guarded
 def deploy_orchestrate(job):
     """Drive one fleet deploy: canary first, fleet on proof, self last (D4).
 
@@ -374,6 +380,11 @@ def deploy_orchestrate(job):
     reason = "canary_not_proven"
     diagnosis = None
     if released:
+        successor = deploy.get_target() or {}
+        if successor and successor.get("deployment") != deployment_id:
+            return _deploy_terminal(sha, me, framework, released=False,
+                                    deployment_id=deployment_id,
+                                    reason="target_moved_mid_canary")
         platform_deploy.transition(
             deployment_id, "fleet", {"canary": canary, "proven": True})
         # The release is proven. Tell the START-of-deploy snapshot, minus the
@@ -626,6 +637,7 @@ def _recycle_engine_after_return():
         env=os.environ.copy())
 
 
+@acme_hub_deploy.guarded
 def deploy_node(job):
     """Run the update script on THIS node (D4).
 
@@ -712,6 +724,13 @@ def deploy_node(job):
         f"edge deploy {deployment_id} ({sha}): running update script "
         f"(migrate={migrate}, node_type={node_type})")
     try:
+        try:
+            acme_hub_deploy.before_spawn(job)
+        except Exception:
+            _node_deploy_failed(
+                deployment_id, sha, job, migrate, phase="preflight_failed",
+                message=f"deploy {deployment_id} ({sha}): shared ACME deployment admission refused")
+            raise RuntimeError("deployment_admission_refused") from None
         result = deploy._run(argv)
     except OSError as err:
         # The script never started: wrong mode, wrong interpreter, gone

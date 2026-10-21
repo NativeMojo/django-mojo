@@ -128,10 +128,11 @@ def _node_payload(opts, sha, migrate):
     from mojo.apps.edge.models import PlatformDeployment
     row = PlatformDeployment.objects.create(
         sha=sha, actor="test", source="test", request_key=str(uuid.uuid4()),
-        frozen_roster=[opts.me], transitions=[])
+        framework_version=FRAMEWORK, status="canary" if migrate else "fleet",
+        frozen_roster=[opts.me], detail={"api_roster": [opts.me]}, transitions=[])
     return dict(
         sha=sha, framework=FRAMEWORK, migrate=bool(migrate),
-        deployment=str(row.pk), api_cohort=True), row
+        deployment=str(row.pk), runner=opts.me, api_cohort=True), row
 
 
 @th.django_unit_test("deploy_node: constant argv, validated inputs, success completes")

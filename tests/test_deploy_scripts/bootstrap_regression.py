@@ -6,14 +6,152 @@ then deliberately locates the post-deploy body from that candidate version.
 """
 
 import os
+import json
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
+import hashlib
 
 from testit import helpers as th
+
+
+@th.django_unit_test()
+def test_shared_acme_floor_fences_late_root_launch_and_interrupted_recovery(opts):
+    """Run the real packaged shell; every path/OS command is test-owned."""
+    from pathlib import Path
+    from mojo.deploy import acme_hub_floor as floor_module
+
+    repo = Path(__file__).resolve().parents[2]
+    source = (repo / "mojo/deploy/project_scripts/update.sh").read_text()
+    floor = dict(schema=1, installation_uuid=str(uuid.uuid4()), activation_uuid=str(uuid.uuid4()),
+                 generation=1, roster_digest="a" * 64,
+                 artifact=dict(epoch=1, source_sha="b" * 40, manifest_sha256="c" * 64,
+                               release="1.38.0", wheel_sha256="d" * 64))
+    identity = {key: value for key, value in floor["artifact"].items() if key != "wheel_sha256"}
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        state, project, stubs = root / "state", root / "project", root / "bin"
+        for path in (state, project, stubs):
+            path.mkdir(mode=0o700)
+        (state / "update.lock").touch(mode=0o600)
+        helper = root / "fixed-helper"
+        runner = root / "check.py"
+        identity_file = root / "installed-identity.json"
+        identity_file.write_text(json.dumps(identity))
+        runner.write_text(
+            "import json,os,sys\nfrom mojo.deploy import acme_hub_floor as m\n"
+            f"m.check_update(json.loads(sys.stdin.buffer.readline()),{str(state)!r},uid=os.getuid(),"
+            f"loader=lambda:json.load(open({str(identity_file)!r})))\n")
+        _write_executable(str(helper), f'exec "{sys.executable}" "{runner}"\n')
+        enrollment = root / "enrollment.json"
+        enrollment.write_text(json.dumps(dict(helper_sha256=hashlib.sha256(helper.read_bytes()).hexdigest())))
+        enrollment.chmod(0o644)
+        update = root / "update.sh"
+        # Fixture replaces fixed production paths in a PRIVATE COPY; no env or
+        # CLI override is added to the privileged production helper.
+        source = source.replace('info.st_uid!=0', 'info.st_uid!=' + str(os.getuid()))
+        source = source.replace('("/usr", "/usr/local", "/usr/local/libexec")', '(' + json.dumps(str(root)) + ',)')
+        source = source.replace('/usr/local/libexec/mojo-acme-hub-enrollment.json', str(enrollment))
+        update.write_text(source.replace('TRANSACTION_ROOT="/var/lib/django-mojo-deploy"',
+                                         f'TRANSACTION_ROOT="{state}"').replace(
+                                             "/usr/local/libexec/mojo-acme-hub-upgrade", str(helper)))
+        marker, resume, commands = root / "paused", root / "resume", root / "commands"
+        _write_executable(str(stubs / "python3"),
+            'if [ "${1:-}" = -m ] && [ "${2:-}" = mojo.deploy ]; then\n'
+            '  if [ "${PAUSE_ADMISSION:-}" = 1 ]; then\n'
+            f'    touch "{marker}"\n'
+            f'    while [ ! -f "{resume}" ]; do sleep 0.01; done\n'
+            '  fi\n'
+            '  printf "testoperator\\n"; exit 0\n'
+            'fi\n'
+            f'exec "{sys.executable}" "$@"\n')
+        _write_executable(str(stubs / "sudo"),
+            'while [ "${1:-}" != -- ]; do shift; done\nshift\nexec "$@"\n')
+        _write_executable(str(stubs / "git"), f'echo mutation >> "{commands}"\nexit 90\n')
+        _write_executable(str(stubs / "flock"),
+            f'exec "{sys.executable}" -c "import fcntl; fcntl.flock(9,fcntl.LOCK_EX)"\n')
+        environment = dict(os.environ, PATH=str(stubs) + ":" + os.environ.get("PATH", ""),
+                           PROJ_PATH=str(project), MOJO_DEPLOY_NO_SYSTEMD="1", PAUSE_ADMISSION="1")
+        argv = ["bash", str(update), "--sha", "e" * 40, "--framework", "1.37.3",
+                "--deployment", str(uuid.uuid4())]
+        child = subprocess.Popen(argv, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            deadline = time.monotonic() + 5
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert marker.exists(), "real updater must pause before root transaction lock/launch"
+            # Simulate its lost DB admission: activation can stamp while this
+            # pre-admitted parent survives. The root gate must still refuse it.
+            session = floor_module.Session(state, uid=os.getuid(), loader=lambda: identity)
+            session.handle(dict(operation="prepare_hold", floor=floor, nonce="1" * 32))
+            session.close()
+            (state / "preparing.must-survive").mkdir(mode=0o700)
+            resume.touch()
+            stdout, stderr = child.communicate(timeout=10)
+            assert child.returncode != 0, f"late incompatible updater must refuse: {stdout!r} {stderr!r}"
+            assert not commands.exists(), "late target refusal must precede any git/package mutation"
+            assert (state / "preparing.must-survive").is_dir(), "floor admission must precede preparing cleanup"
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.communicate()
+        active = state / "active"
+        active.mkdir(mode=0o700)
+        (active / "previous_framework").write_text("1.37.3")
+        (active / "previous_post.sh").write_text("must never execute")
+        before = sorted(path.name for path in active.iterdir())
+        environment["PAUSE_ADMISSION"] = "0"
+        argv[argv.index("1.37.3")] = "1.38.0"
+        done = subprocess.run(argv, env=environment, capture_output=True, timeout=10)
+        assert done.returncode != 0, "interrupted unqualified recovery must refuse"
+        assert active.is_dir() and sorted(path.name for path in active.iterdir()) == before, "unsafe ACTIVE must remain untouched"
+        assert (state / "preparing.must-survive").is_dir(), "unsafe recovery must refuse before any cleanup"
+        assert not commands.exists(), "unsafe recovery must not restore checkout/requirements/framework"
+
+        # Exercise the actual packaged rollback body with a qualifying saved
+        # baseline. Every checkout/pip/lifecycle action is a local stub.
+        (active / "previous_framework").write_text("1.38.0")
+        (active / "previous_sha").write_text("f" * 40)
+        (active / "previous_node_type").write_text("api")
+        (active / "candidate_node_type").write_text("api")
+        (active / "candidate_sha").write_text("e" * 40)
+        (active / "deployment").write_text(str(uuid.uuid4()))
+        (active / "previous_requirements.txt").write_text("reviewed==1.0\n")
+        _write_executable(str(active / "previous_post.sh"), f'echo previous-activate >> "{commands}"\n')
+        _write_executable(str(active / "candidate_post.sh"), f'echo candidate-rollback >> "{commands}"\n')
+        (active / "mutation_started").touch()
+        floor_module.check_update(dict(phase="snapshot", framework="1.38.0"), state,
+                                  uid=os.getuid(), loader=lambda: identity)
+        guard = source[source.index("acme_helper_exec() {"):source.index("\nlog() {")]
+        guard = guard.replace("/usr/local/libexec/mojo-acme-hub-upgrade", str(helper))
+        body = source[source.index("rollback_transaction() {"):source.index("\nrollback_and_exit() {")]
+        isolated = (
+            f'TRANSACTION_ROOT="{state}"; ACTIVE="{active}"; PROJ_PATH="{project}"\n'
+            f'FRAMEWORK=1.38.0; RUN_UID={os.getuid()}\n'
+            + guard + "\n"
+            + f'git_project() {{ echo "git $*" >> "{commands}"; }}\n'
+            + f'python3() {{ echo "pip $*" >> "{commands}"; }}\n'
+            + 'valid_sha() { return 0; }; valid_version() { return 0; }; valid_node_type() { return 0; }\n'
+            + 'log() { :; }; refresh_mojosec() { :; }; write_outcome() { :; }\n'
+            + body + "\nrollback_transaction\n")
+        identity_file.write_text(json.dumps(dict(identity, source_sha="a" * 40)))
+        refused = subprocess.run(["bash", "-c", isolated], env=environment, capture_output=True, timeout=10)
+        assert refused.returncode != 0 and active.is_dir(), "same-version substituted restore must retain ACTIVE"
+        assert commands.exists(), f"restore fixture must reach pip before actual-byte refusal: {refused.stderr!r}"
+        assert "previous-activate" not in commands.read_text(), "unqualified reinstalled bytes must refuse before previous lifecycle"
+        commands.unlink()
+        identity_file.write_text(json.dumps(identity))
+        restored = subprocess.run(["bash", "-c", isolated], env=environment, capture_output=True, timeout=10)
+        assert restored.returncode == 0, f"qualified real rollback must remain supported: {restored.stderr!r}"
+        assert not active.exists(), "qualified rollback must complete and remove its own ACTIVE transaction"
+        lines = commands.read_text().splitlines()
+        assert lines[0] == "candidate-rollback" and lines[-1] == "previous-activate", "qualified lifecycle order must be preserved"
+        assert any("--constraint" in line and "previous_requirements.txt" in line for line in lines), "saved requirements must retain exact compatible framework constraint"
+        assert floor_module.read_floor(state, uid=os.getuid()) == floor, "ordinary successful rollback never erases activation floor"
 
 
 def _write_executable(path, body):
