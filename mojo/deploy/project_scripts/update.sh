@@ -88,51 +88,6 @@ OUTCOME_ROOT="$TRANSACTION_ROOT/public"
 LOCK_FILE="$TRANSACTION_ROOT/update.lock"
 ROLLING_BACK=0
 
-# Root enrollment is separate from package installation. Never execute code
-# from a candidate package to decide whether saved recovery is compatible.
-acme_helper_exec() {
-    case "${1:-}" in --entry-context|--updater-check|--lock-check) ;; *) return 1 ;; esac
-    /usr/bin/python3 -I -S -c '
-import hashlib,json,os,stat,sys
-def read(path,mode,maximum):
-    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
-    try:
-        info=os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_nlink!=1 or stat.S_IMODE(info.st_mode)!=mode or info.st_size>maximum:
-            raise ValueError()
-        raw=os.read(fd,maximum+1)
-        after=os.fstat(fd)
-        if len(raw)!=info.st_size or (info.st_mtime_ns,info.st_ctime_ns)!=(after.st_mtime_ns,after.st_ctime_ns):
-            raise ValueError()
-        return raw
-    finally:
-        os.close(fd)
-try:
-    for parent in ("/usr", "/usr/local", "/usr/local/libexec"):
-        info=os.lstat(parent)
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid!=0 or info.st_mode & 0o022:
-            raise ValueError()
-    manifest=json.loads(read("/usr/local/libexec/mojo-acme-hub-enrollment.json",0o644,65536))
-    body=read("/usr/local/libexec/mojo-acme-hub-upgrade",0o755,1048576)
-    if hashlib.sha256(body).hexdigest()!=manifest.get("helper_sha256"):
-        raise ValueError()
-    os.execv("/usr/local/libexec/mojo-acme-hub-upgrade",["mojo-acme-hub-upgrade",sys.argv[1]])
-except (OSError,ValueError,TypeError,AttributeError):
-    sys.exit(1)
-' "$1"
-}
-
-acme_floor_guard() {
-    local phase="$1"
-    if [ "${MOJO_ACME_ROOT_ENTRY:-0}" != "1" ] && \
-            [ ! -e "$TRANSACTION_ROOT/acme-hub-floor.json" ] && \
-            [ ! -L "$TRANSACTION_ROOT/acme-hub-floor.json" ]; then
-        return 0
-    fi
-    printf '{"phase":"%s","framework":"%s"}\n' "$phase" "${FRAMEWORK:-}" | \
-        acme_helper_exec --updater-check >/dev/null
-}
-
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() {
     echo "[$(date '+%H:%M:%S')] FATAL: $*" >&2
@@ -352,7 +307,6 @@ rollback_transaction() {
     # publishing its app-readable result, finish that atomic publication;
     # rolling back a healthy candidate here would make identity and code lie.
     if [ -f "$ACTIVE/activation_succeeded" ]; then
-        acme_floor_guard publication || return 1
         log "Finishing successful deployment publication"
         refresh_mojosec candidate || :
         publish_success || return 1
@@ -367,9 +321,7 @@ rollback_transaction() {
         return 0
     fi
 
-    # Validate every saved baseline byte before candidate rollback hooks or
-    # reinstalling requirements/framework/lifecycle. On refusal retain ACTIVE.
-    acme_floor_guard rollback || return 1
+    # Restore the baseline captured by the ordinary deployment transaction.
     log "Rolling back candidate lifecycle"
     if [ -x "$ACTIVE/candidate_post.sh" ]; then
         MOJO_DEPLOY_ROLLBACK=1 bash "$ACTIVE/candidate_post.sh" \
@@ -380,18 +332,9 @@ rollback_transaction() {
     cd "$PROJ_PATH"
     git_project checkout --force "$previous_sha" || return 1
     if [ -f "$ACTIVE/previous_requirements.txt" ]; then
-        if [ -f "$ACTIVE/acme_previous_framework_constraint.txt" ]; then
-            python3 -m pip install --constraint "$ACTIVE/acme_previous_framework_constraint.txt" \
-                -r "$ACTIVE/previous_requirements.txt" || return 1
-        else
-            python3 -m pip install -r "$ACTIVE/previous_requirements.txt" || return 1
-        fi
+        python3 -m pip install -r "$ACTIVE/previous_requirements.txt" || return 1
     fi
     python3 -m pip install "django-mojo==$previous_framework" || return 1
-
-    # pip's exact version may be satisfied by different same-release bytes.
-    # Prove restored critical code before any retained activation executes.
-    acme_floor_guard restored || return 1
 
     refresh_mojosec rollback || :
 
@@ -471,32 +414,6 @@ else
     valid_deployment "$DEPLOYMENT" || die "invalid deployment UUID"
 fi
 
-# On enrolled hosts only the retained, reviewed copy may enter the root
-# transaction. This data-only probe cannot load .pth or candidate Mojo.
-if [ "$RUN_UID" = "0" ]; then
-    MOJO_ACME_ROOT_ENTRY="$(/usr/bin/python3 -I -S - "$0" <<'PY'
-import os, stat, sys
-try:
-    def exists(path):
-        try: info = os.lstat(path)
-        except FileNotFoundError: return False
-        if info.st_uid != 0 or info.st_mode & 0o022 or stat.S_ISLNK(info.st_mode):
-            raise ValueError()
-        return True
-    marker = exists("/usr/local/libexec/mojo-acme-hub-enrollment.json")
-    state = exists("/var/lib/django-mojo-deploy")
-    floor = state and exists("/var/lib/django-mojo-deploy/acme-hub-floor.json")
-    enrolled = marker or floor
-    if enrolled and os.path.abspath(sys.argv[1]) != "/usr/local/libexec/mojo-acme-hub-update.sh":
-        raise ValueError()
-    print("1" if enrolled else "0")
-except (OSError, ValueError):
-    sys.exit(1)
-PY
-)" || { echo 'FATAL: shared ACME fixed entry unavailable' >&2; exit 1; }
-    export MOJO_ACME_ROOT_ENTRY
-fi
-
 # A custom profile may restart the engine service that launched this command.
 # Re-enter the complete transaction in its own bounded systemd cgroup first;
 # no checkout or package mutation happens before this boundary.
@@ -511,7 +428,6 @@ if [ "$TRANSACTION" = "0" ] && [ "${MOJO_DEPLOY_NO_SYSTEMD:-0}" != "1" ]; then
             --property "TimeoutStopSec=$ROLLBACK_SECONDS" \
             --setenv="MOJO_DEPLOY_IN_TRANSIENT_UNIT=1" \
             --setenv="MOJO_DEPLOY_PARENT_STATUS=${MOJO_DEPLOY_PARENT_STATUS:-}" \
-            --setenv="MOJO_ACME_ROOT_ENTRY=${MOJO_ACME_ROOT_ENTRY:-0}" \
             --setenv="PROJ_PATH=$PROJ_PATH" \
             --setenv="APP_USER=$APP_USER_CANDIDATE" \
             --setenv="PROBE_URL=${PROBE_URL:-https://127.0.0.1/api/version}" \
@@ -533,47 +449,21 @@ fi
 # systemd-run above), so the transient-unit boundary stays untouched. An
 # unresolvable account is a refusal, not a guess — a wrong owner bricks the
 # node's engine and log ownership permanently.
-if [ "${MOJO_ACME_ROOT_ENTRY:-0}" != "1" ]; then
-    APP_USER="$(python3 -m mojo.deploy app-user --root "$PROJ_PATH" \
-        --candidate "$APP_USER_CANDIDATE")" ||
-        die "cannot resolve a non-root application account"
-    export APP_USER
-fi
+APP_USER="$(python3 -m mojo.deploy app-user --root "$PROJ_PATH" \
+    --candidate "$APP_USER_CANDIDATE")" ||
+    die "cannot resolve a non-root application account"
+export APP_USER
 
 ensure_state_root
 previous_umask="$(umask)"
 umask 077
-if [ "${MOJO_ACME_ROOT_ENTRY:-0}" = "1" ]; then
-    acme_helper_exec --lock-check || { echo 'FATAL: shared ACME existing lock unavailable' >&2; exit 1; }
-    # Local Linux flock supports an exclusive lock on a read-only descriptor.
-    # Unlike <>, < cannot create a missing inode or truncate existing state.
-    exec 9<"$LOCK_FILE"
-else
-    exec 9>"$LOCK_FILE"
-    chmod 0600 "$LOCK_FILE"
-fi
+exec 9>"$LOCK_FILE"
+chmod 0600 "$LOCK_FILE"
 umask "$previous_umask"
 if [ "$MANUAL" = "1" ]; then
     flock -n 9 || die "another update is running"
 else
     flock 9
-fi
-
-if [ "${MOJO_ACME_ROOT_ENTRY:-0}" = "1" ]; then
-    entry_context="$(acme_helper_exec --entry-context)" || {
-        echo 'FATAL: shared ACME fixed account unavailable' >&2; exit 1;
-    }
-    APP_USER="${entry_context%%$'\n'*}"
-    PROJ_PATH="${entry_context#*$'\n'}"
-    PATH="/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin"
-    export APP_USER PROJ_PATH PATH
-fi
-
-# A stale admitted parent may launch after losing its DB session. The durable
-# floor is checked under the actual root lock, before cleanup or recovery.
-if ! acme_floor_guard admit; then
-    echo "FATAL: shared ACME floor refused deployment; transaction retained" >&2
-    exit 1
 fi
 
 cd "$PROJ_PATH"
@@ -626,11 +516,6 @@ if [ "$PREVIOUS_NODE_TYPE" != "api" ] && [ "$PREVIOUS_NODE_TYPE" != "code" ]; th
     chmod 0700 "$PREPARING/previous_profile.sh"
 fi
 mv -- "$PREPARING" "$ACTIVE"
-if ! acme_floor_guard snapshot; then
-    echo "FATAL: shared ACME rollback baseline unavailable; transaction retained" >&2
-    exit 1
-fi
-
 trap 'rollback_and_exit $?' ERR
 trap 'rollback_and_exit 143' TERM HUP
 trap 'rollback_and_exit 130' INT
@@ -662,7 +547,6 @@ fi
 installed_candidate_framework="$(installed_framework)"
 valid_version "$installed_candidate_framework" || die "cannot read candidate django-mojo version"
 printf '%s\n' "$installed_candidate_framework" > "$ACTIVE/candidate_framework"
-acme_floor_guard candidate || die "shared ACME candidate identity unavailable"
 
 # Resolve only after installing the requested framework. A release replacing
 # broken deployment code executes its own post-deploy body, not N-1's.

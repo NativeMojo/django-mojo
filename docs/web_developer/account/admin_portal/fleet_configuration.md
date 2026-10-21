@@ -228,3 +228,40 @@ published target. Every managed node must match both fields. Unmanaged,
 undelegated and explicitly disabled topics preserve legacy Fleet/GeoIP health
 without contacting a legacy static hub; their topic-specific readiness remains a
 separate status.
+
+
+## Enable hub sharing
+
+The existing authenticated Admin family provides one small hub enable surface:
+
+| Method/path | Exact input | Result |
+|---|---|---|
+| `GET /api/account/admin/fleet/shared-validation/hub` | None | Read-only status |
+| `POST /api/account/admin/fleet/shared-validation/hub` | `{"deployment_uuid":"<canonical hyphenated UUID>"}` | Deliberate enablement, then fresh status |
+
+Both routes reuse the existing literal-superuser actor and exclude every
+key-backed session. POST also uses the existing same-origin and fresh-auth
+checks. Responses use the existing private no-store envelope. Never replay
+POST automatically after fresh authentication; refresh and let the human act.
+
+Status has exactly:
+
+```json
+{"version":1,"enabled":false,"configured":true,"deployment_uuid":"11111111-1111-4111-8111-111111111111","can_enable":true,"reason":null}
+```
+
+The candidate UUID is null when no deployment exists. `enabled:true` has
+`can_enable:false,reason:null`. Otherwise `can_enable` is true only when
+`reason` is null. Safe refusal reasons are `hub_unconfigured`, `hub_unavailable`,
+`deployment_required`, `deployment_in_progress`, `deployment_not_converged`,
+`deployment_proof_unavailable`, and `framework_upgrade_required`. A changed
+selected UUID returns409 `deployment_changed`; malformed input returns400.
+Use existing deployment/configuration links and Refresh for these conditions.
+
+A qualifying release must be newer than1.39.0 and equal to the serving process
+framework. Every frozen-roster node needs fresh ordinary proof of that exact
+UUID, SHA and framework. An active, stale, incomplete or mismatched deployment
+cannot enable sharing. The enable transaction binds original owners and
+retains installation identity; status reads never activate it. Consumers still
+require their separate explicit trust grants. See the
+[normal rollout guide](../../../django_developer/dnsman/HubUpgrade.md).

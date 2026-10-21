@@ -23,25 +23,10 @@ def check_framework(version):
         return version
     from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
     if upgrade.enabled():
-        from mojo.apps.dnsman import acme_hub_feature as feature
         state = upgrade.read_state()
-        try:
-            if feature.release(version) < feature.release(state.minimum_release):
-                raise ValueError()
-        except ValueError:
+        if upgrade._release(version) < upgrade._release(state.minimum_release):
             upgrade.refuse("framework_below_acme_floor")
     return version
-
-
-def capacity_allowed():
-    # External AMI/bootstrap admission is deliberately not inferred from a
-    # successful deploy. The operator must keep these launch paths excluded.
-    if not _installed():
-        return
-    from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
-    with upgrade.admission() as state:
-        if state.mode == "enabled":
-            upgrade.refuse("launch_coverage_unavailable")
 
 
 def check_dispatch(deployment_id, sha, framework, runner, migrate, api_cohort,
@@ -63,7 +48,6 @@ def check_dispatch(deployment_id, sha, framework, runner, migrate, api_cohort,
                 or operation.get("phase") != "converging"
                 or detail.get("runner_id") != runner or not detail.get("instance_id")):
             upgrade.refuse("capacity_admission_unavailable")
-        capacity_allowed()
         return row
     roster = set(row.frozen_roster or [])
     raw_api = (row.detail or {}).get("api_roster")

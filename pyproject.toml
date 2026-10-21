@@ -77,9 +77,6 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["mojo", "testit"]
 
-[tool.hatch.build.hooks.custom]
-path = "hatch_build.py"
-
 # A release never builds or uploads a source archive (maestro #6348). This
 # keeps one built by hand clean anyway: without it, hatchling packs every file
 # `.gitignore` does not name, including each agent worktree.
@@ -87,5 +84,5 @@ path = "hatch_build.py"
 only-include = ["mojo", "testit"]
 
 [build-system]
-requires = ["hatchling", "packaging>=24.2"]
+requires = ["hatchling"]
 build-backend = "hatchling.build"

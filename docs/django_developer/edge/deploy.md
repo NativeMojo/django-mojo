@@ -219,20 +219,15 @@ action once the cause is cleared.
 
 ## Shared ACME hub upgrade boundary
 
-Hub installation state is separate from generic Settings. While enabled, each
-request/resume, orchestration publication, node delivery and final spawn checks
-the exact durable deployment UUID, app SHA, resolved framework, frozen roster,
-cohort and intended runner under shared admission. A superseded canary cannot
-continue stale fleet fan-out. Resolution rejects versions below the activation
-floor before dispatch; a retained root gate checks again under update.lock,
-including partial stamps and interrupted recovery. This does not make a queued
-old binary honor new code: the operator must quiesce pre-admitted deployers and
-root launchers through exclusive activation.
+Hub installation state stays separate from generic Settings. An interactive
+superuser enables sharing in the existing Portal after the ordinary deployment
+is converged. The action checks the deployment UUID, app SHA, framework and
+complete fresh frozen-roster proofs under exclusive PostgreSQL admission.
 
-The fixed enrolled entry replaces the default current-package locator before
-any root candidate import; its app account and retained bytes are root-bound
-enrollment data, not a caller command or environment. An enabled hub currently
-refuses new capacity (`launch_coverage_unavailable`) because future AMI/ASG/
-bootstrap floor coverage has no qualified automatic lane. See
-[the operator contract](../dnsman/HubUpgrade.md); no host enrollment, maintenance
-window, package publication or live authority follows from these source guards.
+Deployment publication, node delivery and final spawn retain their ordinary
+stale-deployment, runner and cohort checks. Framework resolution refuses versions
+below the one recorded at sharing enablement. The normal packaged updater,
+rollback and capacity controls remain in use; no retained root entry, process
+attestation or separate operator service is required. Manual package downgrade
+or an unmanaged older writer bypasses the normal policy and is unsupported.
+See [the rollout guide](../dnsman/HubUpgrade.md).

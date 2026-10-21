@@ -252,14 +252,6 @@ def local_node_proof(data=None):
     }
 
 
-def _acme_hub_loaded_identity():
-    # Private local metadata only. A first import into an old process cannot
-    # prove its other modules or workers restarted; operator PID/quiescence
-    # observations remain mandatory. Keep the public node-proof DTO stable.
-    from mojo.apps.dnsman.acme_hub_feature import loaded_identity
-    return loaded_identity()
-
-
 def _desired_generations(pools):
     from mojo.apps.edge.services import convergence
     return {pool: convergence.desired_generation(pool) for pool in pools}

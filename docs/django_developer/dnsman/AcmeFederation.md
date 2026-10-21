@@ -425,26 +425,23 @@ zone IDs or secrets.
 
 ### Coordinated hub rollout
 
-The additive participant schema starts owner-only with sharing disabled. It
-keeps legacy ORM lease inserts nullable, creates no participants and performs
-no lazy binding; existing old/new owner writers may overlap in this phase.
-Capabilities keeps its existing shape with `shared_validation:false`; project
-setup returns the existing `configure_hub` action for the deployment operator.
-A missing dedicated installation singleton is unavailable, never compatibility.
+Deploy a normal release newer than1.39.0 to every expected node through the
+existing deployment controls. Shared capabilities remain off until a genuine
+interactive superuser enables them in the existing Portal. The action checks
+the selected latest converged deployment, exact UUID/SHA/framework and complete
+fresh frozen-roster proofs, then atomically binds owners under the existing
+PostgreSQL admission lock. Existing published1.38 owners and already-pinned trusted participants continue
+normal issuance before enablement; no new trust is inferred. Missing installation state fails closed.
 
-A separately authorized one-time effective-root operator cutover must establish
-actual release/loaded-process convergence, persistent writer/restart/launch
-quiescence, fixed retained root entry and per-node monotonic recovery floors.
-Only then does the exclusive activation transaction bind owners and enable
-sharing. No old writer may resume afterwards. See the complete
-[hub upgrade and recovery contract](HubUpgrade.md), including partial-stamp
-retry, actual artifact binding, interrupted recovery and unavailable future
-launch coverage. Source shipment alone grants no root access or live authority.
+See [the small rollout and rollback boundary](HubUpgrade.md). No separate
+operator login, root service, enrollment, process attestation or recovery floor
+is required. Normal deployment policy rejects framework versions below the
+recorded enablement version. Unmanaged older writers and manual package
+rollback across the sharing boundary are unsupported.
 
-Legacy allocation data stays four fields and publish/withdraw six. Public
-configuration DTOs are unchanged. Domain/provider/certificate/vhost references
-and valid material stay in place. Package publication and production adoption
-remain separately authorized and subject to existing holds.
+Legacy allocation data stays four fields and publish/withdraw six. Domain,
+provider, certificate and vhost references stay in place. Source shipment does
+not publish a package, deploy production or activate a live installation.
 
 ## Supported project setup
 

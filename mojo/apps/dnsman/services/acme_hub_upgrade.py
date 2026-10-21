@@ -1,8 +1,4 @@
-"""One-way shared-validation admission and trusted local operator cutover."""
-import hashlib
-import json
-import os
-import time
+"""Shared-validation admission and enablement on the existing deployment plane."""
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -10,80 +6,56 @@ from functools import wraps
 
 from django.db import connections, transaction
 from objict import objict
+from packaging.version import Version, InvalidVersion
 
 from mojo import errors as me
 from mojo.helpers import dates
-from mojo.apps.dnsman import acme_hub_feature as feature
 
 _NAMESPACE = 1423
 _SESSION = ContextVar("acme_hub_admission", default=None)
-_TOP = {"installation_uuid", "activation_uuid", "nonce", "deployment_uuid", "app_sha",
-        "artifact", "roster_digest", "collector_identity", "classification", "observed_at",
-        "expires_at", "nodes", "unmanaged_writer_statement", "launch_exclusion_statement",
-        "provider_outcome_statement"}
-_NODE = {"node_id", "instance_id", "boot_id", "helper_pid", "helper_start", "helper_session",
-         "nonce", "activation_uuid", "floor_generation", "artifact", "old_processes_absent",
-         "request_held", "engine_held", "scheduler_held", "cron_held", "supervisor_held",
-         "launch_held", "no_root_launchers", "transaction_idle", "helper_confirmed_at",
-         "installed_identity", "updater_identity", "lifecycle_identity", "processes"}
-_HOLDS = {"old_processes_absent", "request_held", "engine_held", "scheduler_held", "cron_held",
-          "supervisor_held", "launch_held", "no_root_launchers", "transaction_idle"}
+# Published releases through 1.39.0 used the previous activation contract.
+LEGACY_RELEASE_CEILING = Version("1.39.0")
 
 
-def refuse(reason="state_unavailable"):
-    raise me.ValueException(reason, code=503, status=503)
-
-
-def canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
-
-
-def digest(value):
-    return hashlib.sha256(canonical(value)).hexdigest()
+def refuse(reason="state_unavailable", status=503):
+    raise me.ValueException(reason, code=status, status=status)
 
 
 def _uuid(value):
     try:
-        result = str(uuid.UUID(str(value)))
-        if result != value:
+        if not isinstance(value, str) or str(uuid.UUID(value)) != value:
             raise ValueError()
-        return result
+        return value
     except (ValueError, TypeError, AttributeError):
-        refuse("evidence_unavailable")
+        refuse("invalid_request", 400)
+
+
+def _release(value):
+    try:
+        parsed = Version(value)
+        if parsed.is_prerelease or parsed.is_devrelease or parsed.local is not None:
+            raise ValueError()
+        return parsed
+    except (InvalidVersion, TypeError, ValueError):
+        refuse("framework_upgrade_required")
 
 
 def read_state():
     from mojo.apps.dnsman.models import AcmeHubInstallation
     try:
         rows = list(AcmeHubInstallation.objects.using("default").all()[:2])
-        if len(rows) != 1 or rows[0].pk != 1 or rows[0].feature_epoch != feature.EPOCH:
+        if len(rows) != 1 or rows[0].pk != 1 or rows[0].mode not in ("compatibility", "enabled"):
             refuse()
         row = rows[0]
-        if row.mode not in ("compatibility", "enabled"):
-            refuse()
-        if row.mode == "enabled":
-            _uuid(str(row.activation_uuid))
-            _uuid(str(row.deployment_uuid))
-            feature.validate_artifact(artifact_for(row))
-            if (not feature.HEX40.fullmatch(row.app_sha) or row.activated_at is None
-                    or not feature.HEX64.fullmatch(row.roster_sha256)
-                    or not feature.HEX64.fullmatch(row.attestation_sha256)):
-                refuse()
-        elif any((row.activation_uuid, row.deployment_uuid, row.activated_at, row.app_sha,
-                  row.source_sha, row.minimum_release, row.wheel_sha256, row.manifest_sha256,
-                  row.roster_sha256, row.attestation_sha256)):
+        if row.mode == "enabled" and (not row.activation_uuid or not row.deployment_uuid
+                or not row.activated_at or len(row.app_sha) != 40
+                or not row.minimum_release):
             refuse()
         return row
     except me.MojoException:
         raise
     except Exception:
         refuse()
-
-
-def artifact_for(row):
-    return dict(epoch=row.feature_epoch, source_sha=row.source_sha,
-                manifest_sha256=row.manifest_sha256, release=row.minimum_release,
-                wheel_sha256=row.wheel_sha256)
 
 
 @contextmanager
@@ -138,10 +110,6 @@ def admitted(function=None, *, shared=False):
             with admission(state_reader=reader) as state:
                 if shared and state.mode != "enabled":
                     refuse("acme_hub_unavailable")
-                if not shared and state.mode == "compatibility":
-                    from mojo.apps.dnsman.models import AcmeHubParticipant
-                    if AcmeHubParticipant.objects.using("default").exists():
-                        refuse("legacy_state_requires_qualification")
                 return fn(*args, **kwargs)
         return wrapped
     return decorate(function) if function is not None else decorate
@@ -150,99 +118,6 @@ def admitted(function=None, *, shared=False):
 def enabled():
     session = _SESSION.get()
     return (session.state if session else read_state()).mode == "enabled"
-
-
-def status():
-    row = read_state()
-    return dict(installation_uuid=str(row.installation_uuid), mode=row.mode,
-                feature_epoch=row.feature_epoch,
-                activation_uuid=str(row.activation_uuid) if row.activation_uuid else None,
-                evidence="operator_attested" if row.mode == "enabled" else "evidence_unavailable")
-
-
-def plan(artifact, roster, deployment_uuid, app_sha, *, activation_uuid=None, previous_floor=None):
-    row = read_state()
-    feature.validate_artifact(artifact)
-    if (not isinstance(roster, list) or not 1 <= len(roster) <= 32
-            or roster != sorted(set(roster)) or any(not isinstance(n, str) or not 1 <= len(n) <= 128 for n in roster)
-            or not isinstance(app_sha, str) or not feature.HEX40.fullmatch(app_sha)):
-        refuse("evidence_unavailable")
-    if previous_floor is not None:
-        expected = (str(row.installation_uuid), artifact, digest(roster))
-        actual = (previous_floor.get("installation_uuid"), previous_floor.get("artifact"), previous_floor.get("roster_digest"))
-        if actual != expected or (activation_uuid and activation_uuid != previous_floor.get("activation_uuid")):
-            refuse("activation_conflict")
-        activation_uuid = previous_floor["activation_uuid"]
-    if row.mode == "enabled":
-        activation_uuid = str(row.activation_uuid)
-    return dict(installation_uuid=str(row.installation_uuid), activation_uuid=_uuid(activation_uuid) if activation_uuid else str(uuid.uuid4()),
-                nonce=uuid.uuid4().hex, deployment_uuid=_uuid(deployment_uuid), app_sha=app_sha,
-                artifact=dict(artifact), roster_digest=digest(roster), roster=list(roster),
-                started_at=time.time())
-
-
-def validate_attestation(value, operation, *, now=None):
-    now = time.time() if now is None else now
-    try:
-        if (not isinstance(value, dict) or set(value) != _TOP or len(canonical(value)) > 65536
-                or value["classification"] != "operator_attested"
-                or not isinstance(value["collector_identity"], str)
-                or not 1 <= len(value["collector_identity"]) <= 128):
-            refuse("evidence_unavailable")
-        for key in ("installation_uuid", "activation_uuid", "nonce", "deployment_uuid", "app_sha", "artifact", "roster_digest"):
-            if value[key] != operation[key]:
-                refuse("activation_conflict")
-        feature.validate_artifact(value["artifact"])
-        if (type(value["observed_at"]) not in (int, float) or type(value["expires_at"]) not in (int, float)
-                or not operation["started_at"] <= value["observed_at"] <= now
-                or not now < value["expires_at"] <= value["observed_at"] + 300):
-            refuse("evidence_unavailable")
-        if any(value[key] is not True for key in ("unmanaged_writer_statement", "launch_exclusion_statement", "provider_outcome_statement")):
-            refuse("evidence_unavailable")
-        nodes = value["nodes"]
-        if not isinstance(nodes, list) or not 1 <= len(nodes) <= 32:
-            refuse("evidence_unavailable")
-        if [n.get("node_id") for n in nodes] != operation["roster"]:
-            refuse("evidence_unavailable")
-        for node in nodes:
-            if (set(node) != _NODE or any(node[k] is not True for k in _HOLDS)
-                    or node["artifact"] != operation["artifact"]
-                    or node["nonce"] != operation["nonce"]
-                    or node["activation_uuid"] != operation["activation_uuid"]
-                    or type(node["floor_generation"]) is not int or node["floor_generation"] != 1
-                    or type(node["helper_pid"]) is not int or node["helper_pid"] <= 1
-                    or type(node["helper_start"]) is not int or node["helper_start"] <= 0
-                    or not operation["started_at"] <= node["helper_confirmed_at"] <= now
-                    or now - node["helper_confirmed_at"] > 30):
-                refuse("evidence_unavailable")
-            if (node["installed_identity"] != operation["artifact"]
-                    or any(not isinstance(node[k], str) or not feature.HEX64.fullmatch(node[k])
-                           for k in ("updater_identity", "lifecycle_identity"))
-                    or not isinstance(node["processes"], list) or len(node["processes"]) > 64):
-                refuse("evidence_unavailable")
-            seen = set()
-            for process in node["processes"]:
-                if (not isinstance(process, dict) or set(process) != {
-                        "role", "pid", "start_ticks", "loaded_epoch", "loaded_source_sha", "loaded_manifest_sha256", "stopped"}
-                        or process["role"] not in ("http", "worker", "scheduler", "cron", "deployer")
-                        or type(process["pid"]) is not int or process["pid"] <= 1
-                        or type(process["start_ticks"]) is not int or process["start_ticks"] <= 0
-                        or process["stopped"] is not True
-                        or type(process["loaded_epoch"]) is not int or process["loaded_epoch"] != feature.EPOCH
-                        or process["loaded_source_sha"] != operation["artifact"]["source_sha"]
-                        or process["loaded_manifest_sha256"] != operation["artifact"]["manifest_sha256"]
-                        or (process["pid"], process["start_ticks"]) in seen):
-                    refuse("evidence_unavailable")
-                seen.add((process["pid"], process["start_ticks"]))
-            for key in ("instance_id", "boot_id", "helper_session"):
-                if not isinstance(node[key], str) or not 1 <= len(node[key]) <= 128:
-                    refuse("evidence_unavailable")
-            _uuid(node["boot_id"])
-            if len(node["helper_session"]) != 32 or uuid.UUID(node["helper_session"]).hex != node["helper_session"]:
-                refuse("evidence_unavailable")
-        return digest(value)
-    except (KeyError, TypeError, ValueError, OverflowError):
-        refuse("evidence_unavailable")
 
 
 def _bind_owners():
@@ -272,53 +147,104 @@ def _bind_owners():
         refuse("owner_conflict")
 
 
-def activate(operation, attestation=None, confirmation=None, *, identity_reader=None, operator_uid=None):
-    # Only the actual root operator is the production assertion authority.
-    # Internal uid/identity seams are for local tests, never CLI options.
-    if (os.geteuid() if operator_uid is None else operator_uid) != 0:
-        refuse("evidence_unavailable")
-    if attestation is None:
-        refuse("evidence_unavailable")
+def _configured():
+    from mojo.helpers.settings import settings
+    from mojo.apps.dnsman.services import acme_hub
+    if not settings.get_static("DNSMAN_ACME_HUB_ZONE", None):
+        return False, "hub_unconfigured"
+    try:
+        acme_hub._new_zone()
+    except Exception:
+        return False, "hub_unavailable"
+    return True, None
+
+
+def _candidate(*, lock=False):
+    import mojo
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import platform_deploy, deploy
+
+    rows = PlatformDeployment.objects.order_by("-created", "-pk")
+    row = (rows.select_for_update() if lock else rows).first()
+    if PlatformDeployment.objects.filter(status__in=PlatformDeployment.ACTIVE_STATUSES).exists():
+        return row, "deployment_in_progress"
+    if row is None:
+        return None, "deployment_required"
+    if row.status != PlatformDeployment.STATUS_CONVERGED:
+        return row, "deployment_not_converged"
+    try:
+        current = _release(mojo.__version__)
+        if current <= LEGACY_RELEASE_CEILING or _release(row.framework_version) != current:
+            return row, "framework_upgrade_required"
+    except me.MojoException:
+        return row, "framework_upgrade_required"
+    target = deploy.get_target() or {}
+    if target and (target.get("deployment") != str(row.pk) or target.get("sha") != row.sha):
+        return row, "deployment_not_converged"
+    roster = row.frozen_roster
+    evidence = row.node_evidence
+    if (not isinstance(roster, list) or not roster or len(roster) > platform_deploy.MAX_ROSTER
+            or any(not isinstance(node, str) or not node for node in roster)
+            or len(set(roster)) != len(roster) or not isinstance(evidence, list)
+            or len(evidence) != len(roster)):
+        return row, "deployment_proof_unavailable"
+    seen = set()
+    for entry in evidence:
+        if not isinstance(entry, dict):
+            return row, "deployment_proof_unavailable"
+        runner, proof = entry.get("runner"), entry.get("proof")
+        try:
+            fresh = dates.parse_datetime(entry["stale_after"]) > dates.utcnow()
+        except (KeyError, TypeError, ValueError, AttributeError):
+            fresh = False
+        if (not fresh or runner not in roster or runner in seen or entry.get("state") != "proven"
+                or not platform_deploy.proof_matches(row, proof)
+                or proof.get("platform_sha") != row.sha
+                or proof.get("django_mojo_version") != row.framework_version):
+            return row, "deployment_proof_unavailable"
+        seen.add(runner)
+    return row, None
+
+
+def status(actor):
+    from mojo.apps.account.services import provider_setup
+    provider_setup._superuser(actor)
+    state = read_state()
+    configured, reason = _configured()
+    candidate, deployment_reason = _candidate()
+    enabled = state.mode == "enabled"
+    reason = None if enabled else reason or deployment_reason
+    return dict(version=1, enabled=enabled, configured=configured,
+                deployment_uuid=str(candidate.pk) if candidate else None,
+                can_enable=not enabled and reason is None, reason=reason)
+
+
+def enable(actor, deployment_uuid):
+    from mojo.apps.account.services import provider_setup
+    from mojo.apps.dnsman.models import AcmeHubInstallation
+    deployment_uuid = _uuid(deployment_uuid)
+    provider_setup._superuser(actor)
     with admission(exclusive=True) as state:
-        if operation.get("installation_uuid") != str(state.installation_uuid):
-            refuse("activation_conflict")
-        if state.mode == "enabled":
-            if (str(state.activation_uuid) != operation["activation_uuid"] or artifact_for(state) != operation["artifact"]
-                    or state.roster_sha256 != operation["roster_digest"]
-                    or str(state.deployment_uuid) != operation["deployment_uuid"] or state.app_sha != operation["app_sha"]):
-                refuse("activation_conflict")
-            return status()
-        # The attestation must be observed under THIS exclusive session.
-        operation = dict(operation, started_at=time.time())
-        value = attestation(operation) if callable(attestation) else attestation
-        receipt = validate_attestation(value, operation)
-        if receipt != confirmation and not callable(confirmation):
-            refuse("evidence_unavailable")
-        if callable(confirmation) and confirmation(receipt) != receipt:
-            refuse("evidence_unavailable")
-        loaded = (identity_reader or feature.loaded_identity)()
-        expected = {k: v for k, v in operation["artifact"].items() if k != "wheel_sha256"}
-        if loaded != expected:
-            refuse("artifact_unavailable")
-        from mojo.apps.edge.models import PlatformDeployment
-        from mojo.apps.dnsman.models import AcmeHubInstallation
-        record = PlatformDeployment.objects.using("default").filter(pk=operation["deployment_uuid"]).first()
-        if (record is None or record.status != "converged" or record.sha != operation["app_sha"]
-                or record.framework_version != operation["artifact"]["release"]
-                or sorted(set(record.frozen_roster or [])) != operation["roster"]
-                or PlatformDeployment.objects.using("default").filter(status__in=PlatformDeployment.ACTIVE_STATUSES).exists()):
-            refuse("evidence_unavailable")
-        check_session()
-        validate_attestation(value, operation)
         with transaction.atomic(using="default"):
+            actor = provider_setup._superuser(actor, lock=True)
             AcmeHubInstallation.objects.using("default").select_for_update().get(pk=1)
+            # Ordinary proof refreshes also lock this deployment row. Read and
+            # validate only after obtaining that same lock, through enablement.
+            candidate, reason = _candidate(lock=True)
+            if candidate is None or str(candidate.pk) != deployment_uuid:
+                refuse("deployment_changed", 409)
+            if state.mode == "enabled":
+                return status(actor)
+            if reason:
+                refuse(reason)
+            configured, reason = _configured()
+            if not configured:
+                refuse(reason)
             _bind_owners()
-            artifact = operation["artifact"]
-            changed = AcmeHubInstallation.objects.using("default").filter(pk=1, mode="compatibility").update(
-                mode="enabled", activation_uuid=operation["activation_uuid"], deployment_uuid=record.pk,
-                app_sha=record.sha, minimum_release=artifact["release"], source_sha=artifact["source_sha"],
-                wheel_sha256=artifact["wheel_sha256"], manifest_sha256=artifact["manifest_sha256"],
-                roster_sha256=operation["roster_digest"], attestation_sha256=receipt, activated_at=dates.utcnow())
-            if changed != 1:
-                refuse("activation_conflict")
-        return status()
+            check_session()
+            AcmeHubInstallation.objects.using("default").filter(pk=1, mode="compatibility").update(
+                mode="enabled", activation_uuid=uuid.uuid4(), deployment_uuid=candidate.pk,
+                app_sha=candidate.sha, minimum_release=candidate.framework_version,
+                activated_at=dates.utcnow())
+        actor.log(f"Shared DNS validation enabled for deployment {candidate.pk}", "dnsman_acme:enabled")
+    return status(actor)

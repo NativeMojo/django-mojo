@@ -3540,8 +3540,6 @@ def _sleep(seconds=POLL_INTERVAL):
 def _run_add_node(record):
     from mojo.apps.edge.services import deploy, platform_deploy
 
-    from mojo.apps.edge.services.acme_hub_deploy import capacity_allowed
-    capacity_allowed()
     detail = record["detail"]
     source_id = detail["source_instance"]
     source = ec2_helper.instance_facts(source_id)

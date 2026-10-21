@@ -13,7 +13,6 @@
     "test_edge_extended_serial.26_deploy_contract",
     "test_edge_extended_serial.29_capacity_converge",
     "test_aws.capacity",
-    "test_deploy.acme_hub_floor",
     "test_deploy_scripts.node_scripts",
     "test_deploy_scripts.bootstrap_regression",
     "test_account_fleet_extended_serial.publisher",

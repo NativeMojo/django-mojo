@@ -11,10 +11,10 @@ on top. What lives here is the part every product would otherwise rebuild.
 
 REST reference for API consumers: [web_developer/dnsman](../../web_developer/dnsman/README.md).
 
-Shared validation ships disabled until its separately authorized
-[hub upgrade and recovery cutover](HubUpgrade.md). The dedicated seeded
-installation state, actual release qualification and retained root floor are
-part of that operator contract; a missing state never enables compatibility.
+Shared validation starts disabled. Enable it through the existing Portal login
+and deployment controls after an ordinary converged rollout; see
+[shared-validation rollout](HubUpgrade.md). Missing installation state remains
+unavailable and is never recreated by a read.
 
 ## Layout
 

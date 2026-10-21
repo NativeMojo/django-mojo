@@ -271,10 +271,9 @@ def deploy_script_argv():
     tiny stable endpoint and automatically execute the script from the
     framework version being installed; they do not vendor framework shell.
     """
-    from mojo.deploy.acme_hub_entry import default_argv, required
-    default = default_argv()
-    if required():
-        return default
+    default = ["sudo", "-n", "bash", "-c",
+               'exec bash "$(python3 -m mojo.deploy locate update.sh)" --parent-status "$@"',
+               "django-mojo-update"]
     argv = settings.get_static("EDGE_DEPLOY_SCRIPT", default, kind="list")
     if not argv:
         return None

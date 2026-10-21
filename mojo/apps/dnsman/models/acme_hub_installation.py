@@ -19,6 +19,7 @@ class AcmeHubInstallation(models.Model, MojoModel):
     deployment_uuid = models.UUIDField(null=True, default=None, editable=False)
     app_sha = models.CharField(max_length=40, default="", editable=False)
     minimum_release = models.CharField(max_length=64, default="", editable=False)
+    # Retained for rolling compatibility with older ORM readers; no runtime authority.
     source_sha = models.CharField(max_length=40, default="", editable=False)
     wheel_sha256 = models.CharField(max_length=64, default="", editable=False)
     manifest_sha256 = models.CharField(max_length=64, default="", editable=False)
@@ -33,13 +34,10 @@ class AcmeHubInstallation(models.Model, MojoModel):
             models.CheckConstraint(
                 condition=(Q(mode="compatibility", activation_uuid__isnull=True,
                              deployment_uuid__isnull=True, activated_at__isnull=True,
-                             app_sha="", minimum_release="", source_sha="", wheel_sha256="",
-                             manifest_sha256="", roster_sha256="", attestation_sha256="") |
+                             app_sha="", minimum_release="") |
                            (Q(mode="enabled", activation_uuid__isnull=False,
                               deployment_uuid__isnull=False, activated_at__isnull=False) &
-                            ~Q(app_sha="") & ~Q(minimum_release="") & ~Q(source_sha="") &
-                            ~Q(wheel_sha256="") & ~Q(manifest_sha256="") &
-                            ~Q(roster_sha256="") & ~Q(attestation_sha256=""))),
+                            ~Q(app_sha="") & ~Q(minimum_release=""))),
                 name="dnsman_hub_installation_state"),
         ]
 
@@ -53,7 +51,7 @@ class AcmeHubInstallation(models.Model, MojoModel):
         GRAPHS = {}
 
     def save(self, *args, **kwargs):
-        raise me.PermissionDeniedException("ACME installation state has a dedicated operator writer")
+        raise me.PermissionDeniedException("ACME installation state has a dedicated Admin writer")
 
     def delete(self, *args, **kwargs):
         raise me.PermissionDeniedException("ACME installation state cannot be deleted")

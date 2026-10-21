@@ -319,7 +319,7 @@ def _desired_snapshot(allocation):
     for lease in leases:
         if shared and (lease.participant_id is None or lease.participant.allocation_id != allocation.pk):
             upgrade.refuse("participant_state_unavailable")
-        live = not shared or lease.participant.revoked_at is None
+        live = lease.participant_id is None or lease.participant.revoked_at is None
         snapshot_ids.append(lease.pk)
         if lease.state in (STATE_PENDING, STATE_ACTIVE) and live:
             desired.update(lease.record_values or [])
@@ -758,7 +758,7 @@ def _alias(allocation, *, dns_probe=None):
         return failed
 
 
-@upgrade.admitted(shared=True)
+@upgrade.admitted
 def participant_status(request, client_ref, *, dns_probe=None):
     key = authorize(request, consumer=True)
     participant = _participant_for(key.group, _input_ref(client_ref), request, new=True)
@@ -912,25 +912,39 @@ def revoke(request, allocation_ref, participant_ref, *, route53_client=None, dns
         return participant_payload(row, request, controller=True)
 
 
+def _existing_participant(group, client_ref, request):
+    client_ref = _reference(client_ref, "client_ref")
+    group = _operation_group(group, request)
+    return AcmeHubParticipant.objects.filter(
+        consumer_project_uuid=group.get_uuid(), group=group,
+        client_ref=client_ref).exists()
+
+
 @upgrade.admitted
-def allocate(*args, **kwargs):
-    if upgrade.enabled():
+def allocate(group, client_ref, domain, request=None, **kwargs):
+    args = (group, client_ref, domain)
+    kwargs["request"] = request
+    if upgrade.enabled() or _existing_participant(group, client_ref, request):
         return _shared_allocate(*args, **kwargs)
     from . import acme_hub_legacy
     return acme_hub_legacy.allocate(*args, **kwargs)
 
 
 @upgrade.admitted
-def publish(*args, **kwargs):
-    if upgrade.enabled():
+def publish(group, client_ref, challenge_ref, values, request=None, **kwargs):
+    args = (group, client_ref, challenge_ref, values)
+    kwargs["request"] = request
+    if upgrade.enabled() or _existing_participant(group, client_ref, request):
         return _shared_publish(*args, **kwargs)
     from . import acme_hub_legacy
     return acme_hub_legacy.publish(*args, **kwargs)
 
 
 @upgrade.admitted
-def withdraw(*args, **kwargs):
-    if upgrade.enabled():
+def withdraw(group, client_ref, challenge_ref, request=None, **kwargs):
+    args = (group, client_ref, challenge_ref)
+    kwargs["request"] = request
+    if upgrade.enabled() or _existing_participant(group, client_ref, request):
         return _shared_withdraw(*args, **kwargs)
     from . import acme_hub_legacy
     return acme_hub_legacy.withdraw(*args, **kwargs)

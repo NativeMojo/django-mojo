@@ -729,7 +729,7 @@ def deploy_node(job):
         except Exception:
             _node_deploy_failed(
                 deployment_id, sha, job, migrate, phase="preflight_failed",
-                message=f"deploy {deployment_id} ({sha}): shared ACME deployment admission refused")
+                message=f"deploy {deployment_id} ({sha}): deployment admission refused")
             raise RuntimeError("deployment_admission_refused") from None
         result = deploy._run(argv)
     except OSError as err:

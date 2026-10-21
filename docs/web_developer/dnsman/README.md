@@ -901,14 +901,18 @@ for display and never persist arbitrary remote error prose:
 Legacy owner request/response keys, statuses and error behavior remain
 compatible. A trusted revoked publish can return `acme_trust_revoked`.
 Do not add participant metadata to legacy four/six-field replies or `/dnsman/config`.
-A newly upgraded hub remains owner-only until its dedicated local operator
-cutover. Capabilities returns the same v2 shape with `shared_validation:false`
-and both capability booleans false; setup uses the existing `configure_hub`
-action for the deployment operator. Shared operations return503. Missing
-installation state never falls back to owner-only. Mixed old/new owner writers
-may overlap only in this disabled compatibility phase. After activation,
-retained recovery floors and restarted qualified binaries are required. See
-[the framework rollout guide](../../django_developer/dnsman/HubUpgrade.md).
+A newly upgraded hub keeps sharing disabled until its one-time enable action in
+the existing Portal. Capabilities returns the same v2 shape with
+`shared_validation:false` and both capability booleans false. New setup, grant
+and join operations return503; exact existing participant status and its own
+publish/withdraw remain available. Owner issuance and already-pinned published1.38 trusted connections continue
+normal renewal under their existing trust and revocation checks. New setup,
+grants and joins stay unavailable until enabled. Missing installation state fails closed.
+
+Deploy every expected node through the existing controls, then enable using the
+[authenticated Admin hub endpoint](../account/admin_portal/fleet_configuration.md#enable-hub-sharing).
+No separate operator login, root enrollment or attestation ceremony is required.
+See [the rollout and rollback boundary](../../django_developer/dnsman/HubUpgrade.md).
 
 ## Project shared-validation setup
 

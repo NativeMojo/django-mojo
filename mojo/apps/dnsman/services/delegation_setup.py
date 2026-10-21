@@ -232,7 +232,11 @@ def _shared_status(row, client, caps=None, require_active=True):
             raise SetupError(_hub_error(error, capabilities=True), status=503) from None
     if caps.get("consumer_project_uuid") != row.hub_consumer_project_uuid:
         raise SetupError("hub_identity_changed")
-    if caps.get("version") != 2 or not caps.get("can_consume"):
+    # A published connection can renew during the compatible rollout before
+    # new setup/grants are enabled. Its exact pinned participant must still
+    # authenticate and pass all identity, scope and active-trust checks below.
+    existing = bool(row.hub_participant_ref) and caps.get("shared_validation") is False
+    if caps.get("version") != 2 or not caps.get("can_consume") and not existing:
         raise SetupError("hub_unsupported", status=503)
     try:
         participant = client.status(str(row.client_ref))

@@ -34,3 +34,5 @@ from .admin_fleet import *
 
 from .admin_shared_validation import *
 from .admin_shared_validation_recipient import *
+
+from .admin_shared_validation_hub import *

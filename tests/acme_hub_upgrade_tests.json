@@ -13,8 +13,17 @@
     "test_edge_extended_serial.26_deploy_contract",
     "test_edge_extended_serial.29_capacity_converge",
     "test_aws.capacity",
-    "test_deploy.acme_hub_floor",
     "test_deploy_scripts.node_scripts",
-    "test_deploy_scripts.bootstrap_regression"
+    "test_deploy_scripts.bootstrap_regression",
+    "test_account_fleet_extended_serial.publisher",
+    "test_account_fleet_extended_serial.rest",
+    "test_account_fleet_extended_serial.apply",
+    "test_deploy_extended_serial.fleet_registry",
+    "test_deploy_extended_serial.fleet_role",
+    "test_deploy_extended_serial.fleet_config_node",
+    "test_deploy_extended_serial.config_sync",
+    "test_dnsman_extended_serial.19_connection_config",
+    "test_dnsman_extended_serial.20_recipient_keys",
+    "test_user_mgmt.api_key_delegation"
   ]
 }
