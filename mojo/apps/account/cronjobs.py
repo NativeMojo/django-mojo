@@ -4,8 +4,13 @@ from mojo.apps import jobs
 
 @schedule(minutes="*/5")
 def health_snapshot():
-    from mojo.apps.account.services.health_snapshot import enqueue_snapshot
-    return enqueue_snapshot()
+    from mojo.apps.account.services.health_snapshot import SnapshotError, enqueue_snapshot
+    try:
+        return enqueue_snapshot()
+    except SnapshotError as exc:
+        if exc.error_code != "source_identity_unresolved":
+            raise
+        return {"status": "unknown", "reason": exc.error_code}
 
 
 @schedule(minutes="0", hours="*")

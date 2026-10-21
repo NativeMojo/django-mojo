@@ -1,9 +1,12 @@
 """Producer scheduling, bounded assembly and independent-source failures."""
 import json
+import subprocess
+import sys
 import time
 import uuid
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from testit import helpers as th
 
@@ -15,6 +18,86 @@ def _configuration():
     return {**identity, "config_revision": "b"*64, "services": [{"resource_id": "primary", "service_id": "primary", "origin": "https://example.com", "path": "/api/version"}],
         "services_complete": True, "services_omitted": 0, "channels": ["testit_health"], "channels_complete": True,
         "expected": {"configured": True, "complete": True, "spec": None, "sources": {}, "declarations": []}}
+
+
+def _run_isolated_cron_contract(script, message):
+    # Scheduler/provider substitutions belong to a private Django process, not
+    # the default runner's parallel workers or process-shared schedule registry.
+    prelude = '''
+from unittest.mock import MagicMock, patch
+from mojo.apps.account import cronjobs
+from mojo.apps.account.services import health_snapshot as hs, health_evidence as he
+from mojo.helpers import cron
+'''
+    manage = Path(__file__).resolve().parents[2] / "testproject/manage.py"
+    result = subprocess.run([sys.executable, str(manage), "shell", "-c", prelude + script],
+                            capture_output=True, text=True, timeout=30)
+    th.assert_eq(result.returncode, 0, message + ": " + result.stderr[-3000:])
+
+
+@th.django_unit_test()
+def test_unenrolled_health_cron_continues_later_scheduled_maintenance(opts):
+    _run_isolated_cron_contract('''
+import json
+from contextlib import nullcontext
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from mojo.apps.account.services import system_settings
+
+calls, results = [], []
+def forbid_write(*args, **kwargs):
+    raise AssertionError("unenrolled health cron attempted identity, producer or queue writes")
+def configuration(deadline):
+    cursor = SimpleNamespace(execute=lambda *args: None, fetchone=lambda: ({}, []))
+    return he.source_configuration(deadline, cursor_context=lambda end: nullcontext(cursor),
+                                   get_static=lambda key, default=None: default)
+enqueue = hs.enqueue_snapshot
+def dispatch():
+    return enqueue(configuration_reader=configuration, publisher=forbid_write, mirror=forbid_write)
+def health():
+    calls.append("health")
+    results.append(cronjobs.health_snapshot())
+def later_maintenance():
+    calls.append("later")
+redis = MagicMock()
+redis.set.return_value = True
+specs = [{"func": health}, {"func": later_maintenance}]
+with patch.object(hs, "enqueue_snapshot", side_effect=dispatch), \\
+     patch.object(system_settings, "_initialize_identity", side_effect=forbid_write), \\
+     patch.object(cron, "find_scheduled_specs", return_value=specs):
+    cron.run_now(now=datetime(2026, 10, 21, 10, 0, tzinfo=timezone.utc),
+                 redis_client=redis, node_id="testit-unenrolled")
+assert results == [{"status": "unknown", "reason": "source_identity_unresolved"}], "unenrolled cron must return only bounded unknown identity state"
+assert calls == ["health", "later"], "unenrolled health collection aborted later scheduled maintenance"
+heartbeat = json.loads(redis.pipeline.return_value.set.call_args.args[1])
+assert heartbeat["state"] == "completed" and heartbeat["completed_count"] == 2, "real cron runner did not complete both scheduled functions"
+''',
+        "unenrolled health cron must let the real scheduler finish later maintenance")
+
+
+@th.django_unit_test()
+def test_configured_health_cron_preserves_dispatch_result(opts):
+    _run_isolated_cron_contract('''
+result = {"status": "enqueued", "job_id": "testit-existing-producer"}
+with patch.object(hs, "enqueue_snapshot", return_value=result) as enqueue:
+    actual = cronjobs.health_snapshot()
+assert actual is result, "configured health cron changed the producer dispatch result"
+enqueue.assert_called_once_with()
+''', "configured health cron must preserve the existing producer result")
+
+
+@th.django_unit_test()
+def test_health_cron_propagates_unrelated_snapshot_errors(opts):
+    _run_isolated_cron_contract('''
+failure = hs.SnapshotError("publication_state_unavailable")
+with patch.object(hs, "enqueue_snapshot", side_effect=failure):
+    try:
+        cronjobs.health_snapshot()
+    except hs.SnapshotError as error:
+        assert error is failure, "health cron replaced an unrelated snapshot failure"
+    else:
+        raise AssertionError("health cron hid an unrelated snapshot failure")
+''', "health cron must propagate unrelated snapshot errors unchanged")
 
 
 @th.django_unit_test()

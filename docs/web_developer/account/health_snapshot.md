@@ -22,7 +22,9 @@ The contract is `django-mojo.health_snapshot`, `schema_version:2`,
 `profile_version:2`. Source identity is `{installation_id,environment_id}` using
 the frozen installation UUID and explicit configured environment. `source_id`
 is its stable hash. A release, URL or host name is not source identity.
-Missing/conflicting identity yields unknown; no read initializes it.
+Missing/conflicting identity yields unknown; no read initializes it. The scheduled
+cron hook skips collection for unresolved identity without dispatching a producer,
+allowing later scheduled maintenance to continue.
 
 The envelope carries:
 
