@@ -201,7 +201,7 @@ def artifact():
 @th.django_unit_test()
 def test_actual_legacy_release_cannot_be_an_activation_floor(opts):
     from mojo.apps.dnsman import acme_hub_feature as feature
-    for version in ("1.37.3", "1.37.2", "1.38.0.dev1", "1.38.0rc1", "1.38.0+local", "unknown"):
+    for version in ("1.37.4", "1.37.3", "1.37.2", "1.38.0.dev1", "1.38.0rc1", "1.38.0+local", "unknown"):
         try:
             feature.validate_artifact(dict(artifact(), release=version))
         except ValueError:
@@ -291,6 +291,49 @@ def test_default_operator_and_unknown_evidence_refuse(opts):
         refuses(lambda: upgrade.activate(operation, operator_uid=1000), "evidence_unavailable")
         refuses(lambda: upgrade.activate(operation, operator_uid=0), "evidence_unavailable")
         assert upgrade.read_state().mode == "compatibility", "unavailable evidence must not activate or bind"
+
+
+@th.django_unit_test()
+def test_enabled_dispatch_rechecks_exact_live_journal_and_runner(opts):
+    from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
+    from mojo.apps.edge.services import acme_hub_deploy as guard, deploy, platform_deploy
+    from mojo.apps.edge.models import PlatformDeployment
+    redis = deploy.get_client()
+    previous, ttl = redis.get(deploy.TARGET_KEY), redis.pttl(deploy.TARGET_KEY)
+    try:
+        with upgrade_schema(), installation("enabled"), upgrade.admission():
+            row = PlatformDeployment.objects.create(sha="d" * 40, framework_version="1.38.0", status="canary",
+                request_key=uuid.uuid4().hex, frozen_roster=["testit-upgrade-api"], detail={"api_roster": ["testit-upgrade-api"]})
+            redis.set(deploy.TARGET_KEY, json.dumps(dict(deployment=str(row.pk))))
+            payload = dict(deployment=str(row.pk), sha=row.sha, framework=row.framework_version,
+                           runner="testit-upgrade-api", migrate=True, api_cohort=True)
+            job = SimpleNamespace(runner_id="testit-upgrade-api", payload=payload)
+            guard.before_spawn(job)
+            for key, bad in (("deployment", str(uuid.uuid4())), ("sha", "e" * 40), ("framework", "1.37.4")):
+                bad_job = SimpleNamespace(runner_id=job.runner_id, payload=dict(payload, **{key: bad}))
+                refuses(lambda: guard.before_spawn(bad_job), "deployment_identity_mismatch")
+            refuses(lambda: guard.before_spawn(SimpleNamespace(runner_id=job.runner_id,
+                payload=dict(payload, runner="other"))), "deployment_runner_mismatch")
+            refuses(lambda: guard.check_dispatch(str(row.pk), row.sha, row.framework_version,
+                "other", False, True), "stale_deployment_dispatch")
+            refuses(lambda: guard.check_dispatch(str(row.pk), row.sha, row.framework_version,
+                job.runner_id, False, False), "stale_deployment_dispatch")
+            redis.set(deploy.TARGET_KEY, json.dumps(dict(deployment=str(uuid.uuid4()))))
+            refuses(lambda: guard.before_spawn(job), "stale_deployment_dispatch")
+            redis.set(deploy.TARGET_KEY, json.dumps(dict(deployment=str(row.pk))))
+            PlatformDeployment.objects.filter(pk=row.pk).update(status="superseded")
+            refuses(lambda: guard.before_spawn(job), "stale_deployment_dispatch")
+            refuses(lambda: guard.check_framework("1.37.4"), "framework_below_acme_floor")
+            refuses(guard.capacity_allowed, "launch_coverage_unavailable")
+            refuses(lambda: platform_deploy.set_framework(str(row.pk), "1.39.0"), "framework")
+            row.refresh_from_db()
+            assert row.framework_version == "1.38.0", "stale dispatch cannot rewrite frozen framework identity"
+    finally:
+        redis.delete(deploy.TARGET_KEY)
+        if previous is not None:
+            redis.set(deploy.TARGET_KEY, previous)
+            if ttl > 0:
+                redis.pexpire(deploy.TARGET_KEY, ttl)
 
 
 @th.django_unit_test()

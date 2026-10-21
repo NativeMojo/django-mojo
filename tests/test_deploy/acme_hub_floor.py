@@ -196,7 +196,7 @@ def test_floor_strict_frames_and_conservative_release_policy(opts):
         _error(lambda: module.decode(raw))
     for value in ("1.38.0.dev1", "1.38.0rc1", "1.38.0+local", "1.38.0.post1", "1!1.38.0", "v1.38.0", "garbage"):
         _error(lambda: module.release(value), "artifact_unavailable")
-    for value in ("1.37.3", "1.37.2", "1.0"):
+    for value in ("1.37.4", "1.37.3", "1.37.2", "1.0"):
         _error(lambda: module.artifact(dict(_floor()["artifact"], release=value)), "artifact_unavailable")
 
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from packaging.version import Version, InvalidVersion
 
 EPOCH = 1
-LEGACY_RELEASE_CEILING = "1.37.3"
+LEGACY_RELEASE_CEILING = "1.37.4"
 ROOT = Path(__file__).resolve().parents[2]
 BUILD_FILE = ROOT / "apps/dnsman/_acme_hub_build.json"
 CRITICAL_FILES = (

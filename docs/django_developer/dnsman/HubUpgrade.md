@@ -33,8 +33,11 @@ per process; inspecting newer files cannot prove an old worker reloaded them.
 
 The release policy accepts only canonical dotted numeric final releases with
 two through four components. Epoch, pre/dev/local/post releases, unknown
-identities, and every release at or below **1.37.3** refuse. New local bytes
-still called1.37.3 cannot become the first floor. This work chooses no next
+identities, and every release at or below **1.37.4** refuse. New local bytes
+still called1.37.3 or1.37.4 cannot become the first floor. The merged
+pre-feature release source already reports1.37.4: qualification requires both
+a numeric release above that known legacy ceiling and the actual published
+feature epoch/source/manifest/wheel identity. This work chooses no next
 release number and does not bump or publish one. The runtime uses
 `packaging.Version`; the retained verifier uses the same smaller policy with
 stdlib parsing, independent of the pip environment being recovered.
