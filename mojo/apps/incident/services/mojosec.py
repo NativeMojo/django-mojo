@@ -12,7 +12,6 @@ from django.db.models import F, Q
 from mojo.helpers import dates, logit
 from mojo.helpers.settings import settings
 from mojo.mojosec import protocol
-from mojo.mojosec.disposition import is_local_only
 from . import mojosec_evidence
 from . import mojosec_correlation
 from . import mojosec_volume
@@ -744,6 +743,7 @@ def dispatch_mojosec_receipt(job):
 
 def ingest_batch(api_key, batch, *, volume_observer=None):
     from .mojosec_defaults import ensure_defaults
+    from .mojosec_rule_facts import routine_local_event
 
     ensure_defaults()
     if protocol.has_unstorable_text(batch["policy_revision"]):
@@ -777,7 +777,7 @@ def ingest_batch(api_key, batch, *, volume_observer=None):
                 })
                 continue
             digest = _payload_digest(sensor_event)
-            if is_local_only(sensor_event, wire=True):
+            if routine_local_event(sensor_event):
                 receipt, accepted = _accept_local_only(
                     api_key, batch, sensor_event, digest)
                 if receipt.payload_digest != digest:

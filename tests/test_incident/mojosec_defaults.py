@@ -225,3 +225,98 @@ def test_concurrent_setup_does_not_duplicate_rulesets(opts):
             "Concurrent setup must create exactly one copy of every named default"
     finally:
         _clear()
+
+
+@th.django_unit_test()
+def test_partial_migration_does_not_seed_against_a_newer_model_schema(opts):
+    from django.db import connection
+    from django.db.migrations.executor import MigrationExecutor
+    from mojo.apps.incident.models import RuleSet
+    from mojo.apps.incident.services import mojosec_defaults
+
+    _clear()
+    try:
+        historical = MigrationExecutor(connection).loader.project_state([
+            ("incident", "0001_initial")]).apps
+        mojosec_defaults.after_migrate(sender=None, apps=historical)
+        assert not RuleSet.objects.filter(category__startswith="mojosec.").exists(), \
+            "A partial incident migration must not seed policies using the current schema"
+        mojosec_defaults.after_migrate(sender=None, using="replica")
+        assert not RuleSet.objects.filter(category__startswith="mojosec.").exists(), \
+            "A non-default database migration must not seed the default database"
+        mojosec_defaults.after_migrate(sender=None)
+        assert RuleSet.objects.filter(category="mojosec.web.probe").exists(), \
+            "Normal complete migrations must still seed MojoSec defaults"
+    finally:
+        _clear()
+
+
+@th.django_unit_test()
+def test_default_scanner_rechecks_freshness_and_requires_verified_fleet_enforcement(opts):
+    from types import SimpleNamespace
+    from unittest import mock
+    from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident.models import Incident, MojoSecReceipt
+    from mojo.apps.incident.services import mojosec_defaults
+    from mojo.apps.incident.handlers.event_handlers import execute_handler
+    from mojo.helpers import dates
+    from .mojosec_rule_facts import _fixture, _receipt
+
+    _clear()
+    source_ip = "203.0.115.187"
+    GeoLocatedIP.objects.filter(ip_address=source_ip).delete()
+    try:
+        mojosec_defaults.ensure_defaults()
+        geo = GeoLocatedIP.objects.create(ip_address=source_ip)
+        with _fixture("defaults-block") as (key, sensor):
+            for path in ("/.env", "/.git/config", "/.git/HEAD",
+                         "/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php"):
+                receipt, event = _receipt(key, sensor, "web.probe", {
+                    "source_ip": source_ip, "path": path, "status": 404})
+            with mock.patch.object(GeoLocatedIP, "geolocate", return_value=geo):
+                publication = event.publish(exact_category=True, use_catchall=False,
+                    dispatch_handlers=False, allow_default_llm=False)
+            policy = publication["rule_set"]
+            incident = publication["incident"]
+            assert policy.name == "MojoSec - Repeated sensitive-path scanner", \
+                "Repeated confirmed scanning must select the bounded fleet block policy"
+            queued = []
+
+            def capture(function, payload, **kwargs):
+                queued.append(payload)
+                return "test-default-scanner-job"
+
+            assert policy.run_handler(event, incident, publisher=capture), \
+                "The default scanner action must be durably dispatchable"
+            assert queued[0].get("require_fresh_mojosec_scanner") is True, \
+                "The queued default action must carry an enforcement-time freshness requirement"
+            job = SimpleNamespace(payload=queued[0])
+            MojoSecReceipt.objects.filter(pk=receipt.pk).update(
+                created=dates.utcnow() - dates.timedelta(minutes=11))
+            with mock.patch.object(GeoLocatedIP, "block_checked") as block:
+                assert execute_handler(job) is False, \
+                    "A delayed default job must not block using stale scanner evidence"
+                assert not block.called, "Stale evidence must be refused before firewall writes"
+            incident.refresh_from_db()
+            assert incident.status not in ("resolved", "ignored"), \
+                "Skipping a stale action must leave its incident visible"
+            MojoSecReceipt.objects.filter(pk=receipt.pk).update(created=dates.utcnow())
+            with mock.patch.object(GeoLocatedIP, "block_checked", return_value={
+                    "status": "partial", "ok": False, "error": {"code": "missing_host"}}):
+                assert execute_handler(job) is False, \
+                    "Partial fleet proof must not count as a successful default block"
+            incident.refresh_from_db()
+            assert incident.status not in ("resolved", "ignored"), \
+                "An unverified default block must keep the incident open"
+            with mock.patch.object(GeoLocatedIP, "block_checked", return_value={
+                    "status": "verified", "ok": True}):
+                assert execute_handler(job) is True, \
+                    "A fresh scanner action with checked fleet proof should succeed"
+            incident.refresh_from_db()
+            assert incident.status == "resolved", \
+                "Only verified fleet enforcement may resolve the default scanner incident"
+            assert incident.events.exists(), "Successful enforcement must preserve Event audit"
+            Incident.objects.filter(pk=incident.pk).delete()
+    finally:
+        GeoLocatedIP.objects.filter(ip_address=source_ip).delete()
+        _clear()

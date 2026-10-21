@@ -15,11 +15,12 @@ PREFIX = "mojosec-rule-facts-test-"
 @contextlib.contextmanager
 def _fixture(label):
     from mojo.apps.account.models import ApiKey, Group
-    from mojo.apps.incident.models import Event, MojoSecDeployment, MojoSecReceipt, RuleSet
+    from mojo.apps.incident.models import Event, Incident, MojoSecDeployment, MojoSecReceipt, RuleSet
 
     sensor_id = PREFIX + label
 
     def clean():
+        Incident.objects.filter(events__metadata__mojosec__sensor_id=sensor_id).delete()
         MojoSecReceipt.objects.filter(sensor_id=sensor_id).delete()
         Event.objects.filter(metadata__mojosec__sensor_id=sensor_id).delete()
         Event.objects.filter(title=sensor_id).delete()
@@ -311,8 +312,11 @@ def test_scanner_window_uses_server_receipts_and_rejects_corrupted_candidates(op
                      "expired, corrupt, or different-source receipts must not complete a scanner threshold")
         _receipt(key, sensor, "web.probe", _web("/.env"), observed="2000-01-01T00:00:00Z")
         unused_receipt, event = _receipt(key, sensor, "web.probe", _web("/.git/config"))
+        th.assert_eq(facts.field_value(event, "mojosec_scanner_confirmed"), False,
+                     "a newly received stale spool event must not complete an automatic-block threshold")
+        unused_receipt, event = _receipt(key, sensor, "web.probe", _web("/.env"))
         th.assert_eq(facts.field_value(event, "mojosec_scanner_confirmed"), True,
-                     "recent server receipts must use server time rather than attacker-controlled wire time")
+                     "three current valid observations and server receipts should still prove scanning")
 
 
 @th.django_unit_test()
@@ -336,26 +340,33 @@ def test_real_failures_never_become_routine_from_host_claims(opts):
 @th.django_unit_test()
 def test_facts_cache_and_context_queries_are_bounded(opts):
     from django.db import connection
-    from django.test.utils import CaptureQueriesContext
     from mojo.apps.incident.services import mojosec_rule_facts as facts
+
+    queries = []
+
+    def count_query(execute, sql, params, many, context):
+        queries.append(sql)
+        return execute(sql, params, many, context)
 
     with _fixture("cache") as (key, sensor):
         unused_receipt, event = _receipt(key, sensor, "web.probe", _web("/.env"))
-        with CaptureQueriesContext(connection) as initial:
+        with connection.execute_wrapper(count_query):
             for name in ("mojosec_kind", "mojosec_path", "mojosec_status", "mojosec_response_class"):
                 facts.field_value(event, name)
-        th.assert_eq(len(initial), 1,
+        th.assert_eq(len(queries), 1,
                      "all descriptive fields for one Event must share one receipt lookup")
-        with CaptureQueriesContext(connection) as context:
+        queries.clear()
+        with connection.execute_wrapper(count_query):
             facts.field_value(event, "mojosec_scanner_confirmed")
-        th.assert_eq(len(context), 1,
+        th.assert_eq(len(queries), 1,
                      "scanner context must use one bounded query rather than one query per candidate")
-        th.assert_true("LIMIT 256" in context[0]["sql"].upper(),
+        th.assert_true("LIMIT 256" in queries[0].upper(),
                        "scanner context must never scan unbounded historical receipts")
-        with CaptureQueriesContext(connection) as repeated:
+        queries.clear()
+        with connection.execute_wrapper(count_query):
             facts.field_value(event, "mojosec_kind")
             facts.field_value(event, "mojosec_scanner_confirmed")
-        th.assert_eq(len(repeated), 0,
+        th.assert_eq(len(queries), 0,
                      "repeated rule evaluation must reuse the Event's validated receipt and scanner cache")
 
 
@@ -422,3 +433,93 @@ def test_failed_receipt_lookup_is_cached_for_the_event(opts):
                          f"unavailable durable evidence must fail closed for {name}")
         th.assert_eq(lookup.call_count, 1,
                      "one unavailable receipt lookup must not be retried for every condition on the Event")
+
+
+@th.django_unit_test()
+def test_ingestion_uses_the_same_strict_local_command_proof_as_policy(opts):
+    from mojo.apps.incident.models import Incident, MojoSecReceipt
+    from mojo.apps.incident.services import mojosec, mojosec_rule_facts as facts
+    from mojo.mojosec import protocol
+    from mojo.mojosec.disposition import JOBMAN_FIREWALL_CLASSIFIER
+
+    with _fixture("ingest-local") as (key, sensor):
+        attributes = {
+            "actor": "www", "target_user": "root",
+            "command": "/usr/local/sbin/mojo-firewall-broker",
+            "command_path": "/usr/local/sbin/mojo-firewall-broker",
+            "attribution_provenance": "none",
+            "local_disposition": JOBMAN_FIREWALL_CLASSIFIER,
+            "operation_id": "a" * 32, "origin_kind": "cron_jobman",
+            "proof_status": "proven", "lineage_sha256": "b" * 64,
+        }
+        observed = protocol.utc_now()
+        template = {
+            "kind": "auth.sudo_command", "observed_at": observed,
+            "first_seen": observed, "last_seen": observed,
+            "severity": "high", "summary": "Privileged sudo command executed",
+            "count": 1, "recommendation": "review",
+        }
+        events = []
+        for proof in ("proven", "conflict", None):
+            wire = dict(template, id=uuid.uuid4().hex + uuid.uuid4().hex,
+                        attributes=dict(attributes))
+            if proof is None:
+                wire["attributes"].pop("proof_status")
+            else:
+                wire["attributes"]["proof_status"] = proof
+            events.append(wire)
+        result = mojosec.ingest_batch(
+            key, protocol.make_batch(sensor, events, policy_revision="facts-test"),
+            volume_observer=lambda *unused_args: None)
+        th.assert_eq([row["status"] for row in result["results"]], ["accepted"] * 3,
+                     "both exact routine proof and visible near matches must be durably accepted")
+        for index, wire in enumerate(events):
+            receipt = MojoSecReceipt.objects.get(api_key=key, wire_event_id=wire["id"])
+            if index == 0:
+                th.assert_true(receipt.event_id is None and receipt.incident_id is None,
+                               "an exact proven local broker operation may remain an eventless receipt")
+                th.assert_eq(receipt.replay_features["feature_schema"], "local_only_receipt_v1",
+                             "only exact proven routine commands may use the local-only replay schema")
+            else:
+                th.assert_true(receipt.event_id is not None,
+                               "conflicting or missing broker proof must retain the central Event")
+                th.assert_true(receipt.incident_id is not None and Incident.objects.filter(
+                    pk=receipt.incident_id).exists(),
+                    "conflicting or missing broker proof must remain visible as a review Incident")
+                th.assert_eq(facts.field_value(receipt.event, "mojosec_routine"), False,
+                             "ingestion and policy must agree that broker near matches are not routine")
+
+
+@th.django_unit_test()
+def test_scanner_requires_fresh_wire_and_triggering_receipt(opts):
+    from mojo.apps.incident.models import MojoSecReceipt
+    from mojo.apps.incident.services import mojosec_rule_facts as facts
+    from mojo.helpers import dates
+
+    with _fixture("scanner-freshness") as (key, sensor):
+        source_ip = "192.0.2.196"
+        _receipt(key, sensor, "web.probe", _web("/.env", source_ip=source_ip))
+        _receipt(key, sensor, "web.probe", _web("/.git/config", source_ip=source_ip))
+        now = dates.utcnow()
+        for path, observed in (
+                ("/.git/HEAD", now + datetime.timedelta(seconds=600)),
+                ("/.git/index", now - datetime.timedelta(seconds=660))):
+            unused_receipt, event = _receipt(
+                key, sensor, "web.probe", _web(path, source_ip=source_ip),
+                observed=observed.isoformat())
+            th.assert_eq(facts.field_value(event, "mojosec_scanner_confirmed"), False,
+                         "stale or out-of-bounds future wire time must not trigger automatic blocking")
+            unused_receipt, repeat = _receipt(
+                key, sensor, "web.probe", _web("/.env", source_ip=source_ip))
+            th.assert_eq(facts.field_value(repeat, "mojosec_scanner_confirmed"), False,
+                         "stale or future counter candidates must not complete a fresh event's threshold")
+        unused_receipt, current = _receipt(key, sensor, "web.probe", _web(
+            "/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php", source_ip=source_ip))
+        th.assert_eq(facts.field_value(current, "mojosec_scanner_confirmed"), True,
+                     "fresh timestamps must permit the positive scanner threshold")
+        old, old_event = _receipt(
+            key, sensor, "web.probe", _web("/.git/HEAD", source_ip=source_ip))
+        MojoSecReceipt.objects.filter(pk=old.pk).update(
+            created=dates.utcnow() - datetime.timedelta(seconds=660))
+        th.assert_eq(facts.field_value(old_event, "mojosec_scanner_confirmed"), False,
+                     "an aged triggering receipt must not borrow a current source's valid scanner context")

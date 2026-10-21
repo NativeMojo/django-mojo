@@ -24,6 +24,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | [security/](security/README.md) | Security system — incidents, events, rules, handlers, LLM agent, firewall, bouncer integration, health monitoring |
 | [security/llm_safety.md](security/llm_safety.md) | Mandatory provider-neutral policy, budgets, ledger, breaker, emergency stop, and duplicate-safe incident LLM dispatch |
 | [security/mojosec_sensor.md](security/mojosec_sensor.md) | Settings-free EC2 host sensor — targeted journal/nginx/FIM signals, durable aggregation, and batched incident delivery |
+| [security/mojosec_defaults.md](security/mojosec_defaults.md) | Receipt-backed MojoSec policy defaults, reserved rule fields, create-only setup, and revision-bound legacy visibility repair |
 | [logging/](logging/README.md) | Database logging (logit app), security incidents, fleet-wide IP blocking |
 | [fileman/](fileman/README.md) | File upload, storage backends, renditions |
 | [email/](email/README.md) | AWS SES email, templates, mailboxes, inbound handling |

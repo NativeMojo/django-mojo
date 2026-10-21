@@ -162,6 +162,29 @@ def ensure_defaults():
     return setup_defaults(apply=True)
 
 
-def after_migrate(sender, using="default", **kwargs):
-    if using == "default":
-        ensure_defaults()
+def after_migrate(sender, using="default", apps=None, **kwargs):
+    from django.db import router
+    from mojo.apps.incident.models import Rule, RuleSet
+
+    if using != "default":
+        return
+    for model in (RuleSet, Rule):
+        if not router.allow_migrate_model(using, model):
+            return
+        expected = {field.column for field in model._meta.local_concrete_fields}
+        if apps is not None:
+            try:
+                migrated = apps.get_model("incident", model.__name__)
+            except LookupError:
+                return
+            if not expected.issubset({
+                    field.column for field in migrated._meta.local_concrete_fields}):
+                return
+        if model._meta.db_table not in connection.introspection.table_names():
+            return
+        with connection.cursor() as cursor:
+            columns = {column.name for column in connection.introspection.get_table_description(
+                cursor, model._meta.db_table)}
+        if not expected.issubset(columns):
+            return
+    ensure_defaults()

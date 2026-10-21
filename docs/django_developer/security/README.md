@@ -1298,6 +1298,15 @@ the exact runtime-only compatibility exception described above. A governed
 replacement must express equivalent intent using the atomic safe subset; the
 exception cannot be inherited by reusing a RuleSet name or metadata flag.
 
+### MojoSec Rules
+
+The [MojoSec defaults guide](mojosec_defaults.md) covers its separate,
+create-only governed policies: receipt-proven routine activity and refused
+probes avoid incident noise, repeated sensitive-path scanners can request a
+bounded checked fleet block, and failures remain visible. It also documents
+the reserved `mojosec_*` operands and the preview-first `mojosec_rules` command
+for exact legacy WMWX visibility repair.
+
 ### OSSEC Rules
 
 | Rule | Category | Matches | Handler | Bundle |

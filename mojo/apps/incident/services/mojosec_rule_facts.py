@@ -24,6 +24,7 @@ FIELD_SCHEMAS = {
 }
 
 WINDOW_SECONDS = 600
+MAX_FUTURE_SECONDS = 300
 MAX_RECENT_RECEIPTS = 256
 _CACHE_ATTRIBUTE = "_mojosec_rule_facts_cache"
 _DIGEST = re.compile(r"^[a-f0-9]{64}$")
@@ -137,23 +138,16 @@ def _expected_change(context):
         context["receipt"].api_key_id, annotation["deployment_id"], context["now"])
 
 
-def _routine(context):
+def routine_local_event(wire):
+    """One exact local-only proof shared by ingestion and policy evaluation."""
     from mojo.mojosec.disposition import classify_local_only, JOBMAN_FIREWALL_CLASSIFIER
+    from mojo.mojosec import protocol
 
-    wire = context["wire"]
-    kind = wire["kind"]
+    try:
+        protocol.validate_event(wire)
+    except (TypeError, ValueError, OverflowError):
+        return False
     attributes = wire["attributes"]
-    evidence = context["projection"]["evidence"]
-    if kind == "auth.ssh_login":
-        if (not context["projection"]["source_ip"] or
-                not isinstance(attributes.get("user"), str) or
-                not evidence.get("user") or evidence.get("auth_method") != "PUBLICKEY"):
-            return False
-        # A valid credential immediately following failures is precisely the
-        # success that must remain visible, including a different target user.
-        return not _recent(context, ("mojosec.auth.ssh_failure",))
-    if kind == "fim.change":
-        return _value(context, "mojosec_expected_change")
     classifier = classify_local_only(wire, wire=True)
     if classifier == JOBMAN_FIREWALL_CLASSIFIER:
         # This classifier's envelope is shared with the sensor. The explicit
@@ -170,6 +164,24 @@ def _routine(context):
     return bool(classifier)
 
 
+def _routine(context):
+    wire = context["wire"]
+    kind = wire["kind"]
+    attributes = wire["attributes"]
+    evidence = context["projection"]["evidence"]
+    if kind == "auth.ssh_login":
+        if (not context["projection"]["source_ip"] or
+                not isinstance(attributes.get("user"), str) or
+                not evidence.get("user") or evidence.get("auth_method") != "PUBLICKEY"):
+            return False
+        # A valid credential immediately following failures is precisely the
+        # success that must remain visible, including a different target user.
+        return not _recent(context, ("mojosec.auth.ssh_failure",))
+    if kind == "fim.change":
+        return _value(context, "mojosec_expected_change")
+    return routine_local_event(wire)
+
+
 def _sensitive_path(path):
     if not isinstance(path, str) or not path.startswith("/"):
         return False
@@ -184,22 +196,41 @@ def _sensitive_path(path):
                 pieces[-1] == "eval-stdin.php")
 
 
-def _scanner_candidate(context):
+def _scanner_fresh(context, now):
+    from mojo.apps.incident.services import mojosec_correlation
+
+    observed = mojosec_correlation._observed(context["wire"]["observed_at"])
+    created = context["receipt"].created
+    if observed is None or not isinstance(created, datetime.datetime):
+        return False
+    # dates.utcnow() and Django timestamps can be naive under USE_TZ=False;
+    # both still represent UTC, while sensor timestamps always name a zone.
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=datetime.timezone.utc)
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(seconds=WINDOW_SECONDS)
+    return bool(cutoff <= created <= now and
+                cutoff <= observed <= now + datetime.timedelta(seconds=MAX_FUTURE_SECONDS))
+
+
+def _scanner_candidate(context, now):
     evidence = context["projection"]["evidence"]
     status = evidence.get("status")
     return bool(
         context["wire"]["kind"] == "web.probe" and
         type(status) is int and 300 <= status < 500 and
-        context["projection"]["source_ip"] and _sensitive_path(evidence.get("path")))
+        context["projection"]["source_ip"] and _sensitive_path(evidence.get("path")) and
+        _scanner_fresh(context, now))
 
 
 def _scanner_confirmed(context):
-    if not _scanner_candidate(context):
+    if not _scanner_candidate(context, context["now"]):
         return False
     paths = set()
     receipts = set()
     for candidate in _recent(context, ("mojosec.web.probe",)):
-        if _scanner_candidate(candidate):
+        if _scanner_candidate(candidate, context["now"]):
             paths.add(candidate["projection"]["evidence"]["path"].lower())
             receipts.add(candidate["receipt"].pk)
             if len(paths) >= 3 and len(receipts) >= 3:
