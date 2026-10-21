@@ -746,6 +746,17 @@ def execute_handler(job):
         handler_type = handler_url.scheme
         params = {k: v[0] for k, v in parse_qs(handler_url.query).items()}
 
+        freshness = payload.get("require_fresh_mojosec_scanner")
+        if freshness is not None:
+            if freshness is not True or handler_type != "block" or mode != "governed":
+                return False
+            from mojo.apps.incident.services.mojosec_rule_facts import field_value
+            if field_value(event, "mojosec_scanner_confirmed") is not True:
+                if incident:
+                    incident.add_history("handler:block", note=(
+                        "MojoSec default block skipped: scanner evidence is no longer fresh or valid"))
+                return False
+
         handler_cls = HANDLER_MAP.get(handler_type)
         if not handler_cls:
             logger.warning("execute_handler: unknown handler type %s", handler_type)

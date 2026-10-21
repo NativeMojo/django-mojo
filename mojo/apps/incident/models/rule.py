@@ -306,6 +306,10 @@ class RuleSet(models.Model, MojoModel):
                         handler_schema=rule_validation.HANDLER_JOB_SCHEMA,
                         handler_schema_version=(
                             rule_validation.HANDLER_JOB_SCHEMA_VERSION))
+                    if (self.category == "mojosec.web.probe" and
+                            self.metadata.get("mojosec_default_version") == 1 and
+                            handler_url.scheme == "block"):
+                        payload["require_fresh_mojosec_scanner"] = True
                 try:
                     publisher(
                         "mojo.apps.incident.handlers.event_handlers.execute_handler",
@@ -410,6 +414,8 @@ class RuleSet(models.Model, MojoModel):
         cls.ensure_health_rules()
         cls.ensure_traffic_rules()
         cls.ensure_catchall_rules()
+        from mojo.apps.incident.services.mojosec_defaults import ensure_defaults
+        ensure_defaults()
 
     @classmethod
     def ensure_cloudwatch_rules(cls):

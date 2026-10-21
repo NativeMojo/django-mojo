@@ -791,7 +791,7 @@ def test_mojosec_middleware_never_parses_or_logs_sensitive_body(opts):
 def test_mojosec_exact_policy_ignores_broad_scope_and_default_llm(opts):
     from mojo.apps.account.models import ApiKey
     from mojo.apps.incident.models import Incident, RuleSet
-    from mojo.apps.incident.services import mojosec
+    from mojo.apps.incident.services import mojosec, mojosec_defaults
 
     key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
     batch = _golden_batch()
@@ -799,31 +799,43 @@ def test_mojosec_exact_policy_ignores_broad_scope_and_default_llm(opts):
     batch["events"][0]["id"] = "f" * 64
     RuleSet.objects.create(
         category="mojosec", name="Receiver test broad scope", handler=None, priority=1)
-    ack = mojosec.ingest_batch(key, batch)
-    th.assert_eq(ack["results"][0]["status"], "accepted",
-                 "a valid event should be stored even without an exact action policy")
-    th.assert_true(
-        not Incident.objects.filter(events__metadata__mojosec__sensor_id=SENSOR_ID).exists(),
-        "a broad scope rule and the level fallback must not action MojoSec evidence")
+    mojosec_defaults.ensure_defaults()
+    defaults = list(RuleSet.objects.filter(
+        category="mojosec.auth.ssh_login",
+        metadata__mojosec_default_version=mojosec_defaults.VERSION,
+    ).values_list("pk", "is_active"))
+    RuleSet.objects.filter(pk__in=[pk for pk, unused_active in defaults]).update(is_active=False)
+    try:
+        ack = mojosec.ingest_batch(key, batch)
+        th.assert_eq(ack["results"][0]["status"], "accepted",
+                     "a valid event should be stored even without an exact action policy")
+        th.assert_true(
+            not Incident.objects.filter(
+                events__metadata__mojosec__sensor_id=SENSOR_ID,
+                events__metadata__mojosec__event_id="f" * 64).exists(),
+            "a broad scope rule and the level fallback must not action MojoSec evidence")
 
-    exact = copy.deepcopy(batch)
-    exact["events"][0]["id"] = "g" * 64
-    RuleSet.objects.create(
-        category="mojosec.auth.ssh_login", name="Receiver test exact category",
-        handler=None, priority=1)
-    ack = mojosec.ingest_batch(key, exact)
-    th.assert_eq(ack["results"][0]["status"], "accepted",
-                 "an exact server-owned category rule should publish successfully")
-    th.assert_true(
-        Incident.objects.filter(events__metadata__mojosec__event_id="g" * 64).exists(),
-        "only the exact central category policy should promote evidence to an incident")
+        exact = copy.deepcopy(batch)
+        exact["events"][0]["id"] = "g" * 64
+        RuleSet.objects.create(
+            category="mojosec.auth.ssh_login", name="Receiver test exact category",
+            handler=None, priority=1)
+        ack = mojosec.ingest_batch(key, exact)
+        th.assert_eq(ack["results"][0]["status"], "accepted",
+                     "an exact server-owned category rule should publish successfully")
+        th.assert_true(
+            Incident.objects.filter(events__metadata__mojosec__event_id="g" * 64).exists(),
+            "only the exact central category policy should promote evidence to an incident")
+    finally:
+        for pk, is_active in defaults:
+            RuleSet.objects.filter(pk=pk).update(is_active=is_active)
 
 
 @th.django_unit_test()
 def test_mojosec_server_registry_ignores_host_escalation_and_victim_ip(opts):
     from mojo.apps.account.models import ApiKey
-    from mojo.apps.incident.models import Event
-    from mojo.apps.incident.services import mojosec
+    from mojo.apps.incident.models import Event, RuleSet
+    from mojo.apps.incident.services import mojosec, mojosec_defaults
 
     key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
     batch = _golden_batch()
@@ -834,26 +846,36 @@ def test_mojosec_server_registry_ignores_host_escalation_and_victim_ip(opts):
     })
     claimed["attributes"]["source_ip"] = "192.0.2.55"
     batch["events"] = [claimed]
-    ack = mojosec.ingest_batch(key, batch)
-    th.assert_eq(ack["results"][0]["status"], "accepted",
-                 "valid evidence remains reportable despite untrusted recommendations")
-    event = Event.objects.get(metadata__mojosec__event_id="1" * 64)
-    th.assert_eq(event.level, 5,
-                 "host critical severity cannot exceed the server-owned kind policy")
-    th.assert_eq(event.source_ip, "192.0.2.55",
-                 "known source-bearing web kinds should promote canonical IP evidence")
-    th.assert_true(event.incident_id is None,
-                   "an advisory block claim cannot action outside the exact central registry")
-    th.assert_eq(event.metadata["mojosec"]["sensor_severity"], "critical",
-                 "the raw severity claim remains advisory evidence")
+    mojosec_defaults.ensure_defaults()
+    defaults = list(RuleSet.objects.filter(
+        category="mojosec.web.error",
+        metadata__mojosec_default_version=mojosec_defaults.VERSION,
+    ).values_list("pk", "is_active"))
+    RuleSet.objects.filter(pk__in=[pk for pk, unused_active in defaults]).update(is_active=False)
+    try:
+        ack = mojosec.ingest_batch(key, batch)
+        th.assert_eq(ack["results"][0]["status"], "accepted",
+                     "valid evidence remains reportable despite untrusted recommendations")
+        event = Event.objects.get(metadata__mojosec__event_id="1" * 64)
+        th.assert_eq(event.level, 5,
+                     "host critical severity cannot exceed the server-owned kind policy")
+        th.assert_eq(event.source_ip, "192.0.2.55",
+                     "known source-bearing web kinds should promote canonical IP evidence")
+        th.assert_true(event.incident_id is None,
+                       "an advisory block claim cannot action outside the exact central registry")
+        th.assert_eq(event.metadata["mojosec"]["sensor_severity"], "critical",
+                     "the raw severity claim remains advisory evidence")
 
-    probe = copy.deepcopy(claimed)
-    probe.update({"id": "2" * 64, "kind": "web.probe", "count": 1})
-    batch["events"] = [probe]
-    mojosec.ingest_batch(key, batch)
-    event = Event.objects.get(metadata__mojosec__event_id="2" * 64)
-    th.assert_eq(event.source_ip, "192.0.2.55",
-                 "truthful fingerprinting permits even one canonical probe source")
+        probe = copy.deepcopy(claimed)
+        probe.update({"id": "2" * 64, "kind": "web.probe", "count": 1})
+        batch["events"] = [probe]
+        mojosec.ingest_batch(key, batch)
+        event = Event.objects.get(metadata__mojosec__event_id="2" * 64)
+        th.assert_eq(event.source_ip, "192.0.2.55",
+                     "truthful fingerprinting permits even one canonical probe source")
+    finally:
+        for pk, is_active in defaults:
+            RuleSet.objects.filter(pk=pk).update(is_active=is_active)
 
 
 @th.django_unit_test()

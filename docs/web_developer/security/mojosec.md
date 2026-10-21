@@ -165,6 +165,58 @@ require the current `modified` revision plus typed confirmation, and never
 replay after a 409 or ambiguous 401. Admin v1 retains its existing routes and
 Activity content.
 
+### Default policy and operator state
+
+On deployments running the MojoSec defaults implementation, missing governed
+RuleSets are seeded after migration and ensured during sensor ingestion.
+Setup preserves existing operator categories and edited or disabled defaults.
+Disable a default through the Admin Security action authority to retain an
+override; deleting it can cause automatic setup to recreate it. These are
+fleet-wide database policies, not per-sensor settings.
+
+The default ignores receipt-proven routine public-key SSH without a recent
+trusted source failure, exact local-operation proof, centrally registered
+expected FIM changes, and 300–499 `web.probe` responses. Ignored policy Events
+and receipts remain available while no Incident is created; the existing
+exact local-only compatibility path remains eventless. Unproven operations,
+real failures, and 2xx/5xx probes remain visible through review RuleSets.
+Default ignore/block conditions require Event level at most 8.
+
+Before ignoring a probe, a higher-priority scanner rule checks for at least
+three trusted receipts from one source on three distinct sensitive paths in
+ten minutes. Receipt creation and sensor observation must both be fresh;
+the default's queued block job rechecks the evidence when it executes. A
+failed recheck skips the block and leaves the existing incident visible.
+Its handler requests a one-hour fleet-wide checked block. A
+sensor's aggregate count, a replayed ID, a user agent, or one path is
+insufficient. Action requests do not themselves establish verified fleet
+enforcement; the block handler resolves the incident only after a verified,
+`ok=true` checked result.
+
+The governed action schema's rule-field roster adds these reserved operands:
+
+| Fields | Type | Meaning |
+|---|---|---|
+| `mojosec_kind`, `mojosec_user`, `mojosec_auth_method` | `str` | Validated event kind, literal identity, and authentication method |
+| `mojosec_path`, `mojosec_response_class`, `mojosec_command_path`, `mojosec_proof_status` | `str` | Safe projected evidence; a class/path/label alone is not routine proof |
+| `mojosec_status` | `int` | Validated HTTP status |
+| `mojosec_expected_change`, `mojosec_routine`, `mojosec_scanner_confirmed` | `bool` | Server-computed proof predicates |
+
+These are receipt-backed rule operands, not fields clients may supply to gain
+an exemption. Missing, corrupted, or ambiguous proof yields no value; Event
+metadata cannot override them. No new batch/ack version or REST route is
+introduced. Newly projected sensor Events use `model_name="mojosec_sensor"`
+and installation API key primary key as `model_id` for separate host bundles;
+`hostname` is unchanged, and historical rows are not rewritten.
+
+Operators can preview missing defaults or the exact legacy WMWX visibility
+repair with `python manage.py mojosec_rules [--repair-visibility]`. Applying
+requires `--apply --expected-revision <revision>` with the same preview flags;
+changed policy invalidates the token. Repair disables only matching
+legacy rows and never deletes historical evidence. See the
+[backend policy guide](../../django_developer/security/mojosec_defaults.md)
+for the full matching and repair contract.
+
 Recommendation approve/reject/cancel/reverse operations use the same action
 writer and bind to the recommendation's `modified` value and exact proposal
 scope. `cancel` is an audited transition to the existing `rejected` state.
