@@ -15,7 +15,7 @@ from django.db import connection, transaction, IntegrityError
 from objict import objict
 
 from mojo import errors as me
-from mojo.helpers import dates, logit
+from mojo.helpers import advisory_locks, dates, logit
 from mojo.helpers.aws import route53
 from mojo.helpers.dns import probe
 from mojo.helpers.settings import settings
@@ -32,7 +32,7 @@ logger = logit.get_logger("dnsman.acme_hub", "dnsman.log")
 _REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _MAX_VALUES = 20
 _MAX_VALUE_LENGTH = 1024
-_LOCK_NAMESPACE = 1422
+_LOCK_NAMESPACE = advisory_locks.ACME_HUB_ALLOCATION
 
 
 def _bounded_static(name, default, minimum, maximum):

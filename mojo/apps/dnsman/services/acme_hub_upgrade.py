@@ -12,10 +12,10 @@ from django.db import connections, transaction
 from objict import objict
 
 from mojo import errors as me
-from mojo.helpers import dates
+from mojo.helpers import advisory_locks, dates
 from mojo.apps.dnsman import acme_hub_feature as feature
 
-_NAMESPACE = 1423
+_NAMESPACE = advisory_locks.ACME_HUB_ADMISSION
 _SESSION = ContextVar("acme_hub_admission", default=None)
 _TOP = {"installation_uuid", "activation_uuid", "nonce", "deployment_uuid", "app_sha",
         "artifact", "roster_digest", "collector_identity", "classification", "observed_at",

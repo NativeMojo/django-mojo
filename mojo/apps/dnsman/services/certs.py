@@ -37,7 +37,7 @@ from django.db import connection, transaction
 from objict import objict
 
 from mojo import errors as me
-from mojo.helpers import dates, logit
+from mojo.helpers import advisory_locks, dates, logit
 from mojo.helpers.settings import settings
 
 
@@ -53,7 +53,7 @@ DEFAULT_SYNC_CHANNEL = "certs"
 DEFAULT_RETRY_BASE_SECONDS = 3600
 MAX_RETRY_SECONDS = 86400
 DEFAULT_ISSUING_STALE_SECONDS = 1800
-_ISSUE_LOCK_NAMESPACE = 1421
+_ISSUE_LOCK_NAMESPACE = advisory_locks.CERT_ISSUE
 
 ISSUE_JOB = "mojo.apps.dnsman.asyncjobs.issue_certificate"
 RENEW_JOB = "mojo.apps.dnsman.asyncjobs.renew_certificate"

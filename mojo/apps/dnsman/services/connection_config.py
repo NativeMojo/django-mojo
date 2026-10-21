@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from mojo import errors as me
 from mojo.deploy import config_override
+from mojo.helpers import advisory_locks
 from mojo.helpers.settings import settings
 from mojo.apps.dnsman import fleet_settings as schema
 from mojo.apps.dnsman.services import acme_hub_client
@@ -36,7 +37,7 @@ def _admit_identity():
     # identity owner that can itself be waiting on those fences. PostgreSQL
     # retains successful admission through the outer transaction, reentrantly.
     with connection.cursor() as cursor:
-        cursor.execute("SELECT pg_try_advisory_xact_lock(%s, %s)", [0x444e534d, 8986])
+        cursor.execute("SELECT pg_try_advisory_xact_lock(%s, %s)", [advisory_locks.DNSMAN_CONNECTION_CONFIG, 8986])
         if not cursor.fetchone()[0]:
             raise ConfigurationError("configuration_busy")
 
