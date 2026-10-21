@@ -205,6 +205,124 @@ def is_sensitive_filter_path(model, key):
     return False
 
 
+_BOOL_TRUE_TOKENS = frozenset(("true", "1", "t", "y", "yes", "on"))
+_BOOL_FALSE_TOKENS = frozenset(("false", "0", "f", "n", "no", "off"))
+
+# Lookups whose value Django compares as the field's own type. A relation-path
+# value is normalized only under these; text lookups (startswith, icontains,
+# regex, range, ...) reach the ORM exactly as sent.
+_TYPED_LOOKUPS = frozenset(("exact", "in", "gt", "gte", "lt", "lte")) | _DATE_COMPONENT_LOOKUPS
+
+
+def _parse_rest_bool(value, label):
+    """One strict boolean parser for every filter surface (#8556).
+
+    Accepts a real bool, int 0/1 and the usual tokens in any case. Anything
+    else is a 400 naming the key: silently reading a typo as False answered a
+    different question than the caller asked.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in _BOOL_TRUE_TOKENS:
+            return True
+        if token in _BOOL_FALSE_TOKENS:
+            return False
+    raise me.ValueException(
+        f"Invalid boolean for {label}: {value!r}", code=400, status=400)
+
+
+def _normalize_scalar(field, value, label, typed=True):
+    """Coerce ONE filter value to `field`'s Python type.
+
+    `typed` is False under a text lookup (startswith, icontains, ...): an
+    integer column then keeps the caller's text, so `?id__startswith=026`
+    still means the pattern "026", not 26.
+    """
+    internal = field.get_internal_type()
+    if internal == "BooleanField":
+        # ?flag=null has always meant False on a top-level Boolean; kept.
+        if value is None:
+            return False
+        return _parse_rest_bool(value, label)
+    if value is None or isinstance(value, bool):
+        return value
+    if internal in _DATE_FIELD_TYPES:
+        if isinstance(value, (datetime.datetime, datetime.date)):
+            return value
+        try:
+            return dates.parse_datetime(value)
+        except (TypeError, ValueError, OverflowError, OSError):
+            # OSError: an out-of-range epoch number (fromtimestamp, EOVERFLOW).
+            raise me.ValueException(
+                f"Invalid date for {label}: {value!r}", code=400, status=400)
+    # Integer columns under a typed lookup: a numeric string becomes an int;
+    # anything else goes to the ORM unchanged, which answers 400. Text lookups
+    # keep the string as sent.
+    if typed and (internal.endswith("IntegerField") or internal.endswith("AutoField")):
+        if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+            return int(value)
+    return value
+
+
+def _normalize_field_value(field, value, label, lookup=None):
+    """Normalize a filter value for `field`, per element for a list.
+
+    `lookup` is a date-component lookup token (month, year, ...), a text
+    lookup token (startswith, icontains, ...) or None. A list stays a list:
+    turning `?flag__in=true,false` into one bool was the 500 behind #8556.
+    """
+    if lookup in _DATE_COMPONENT_LOOKUPS:
+        try:
+            if isinstance(value, list):
+                return [int(v) for v in value]
+            return int(value)
+        except (TypeError, ValueError):
+            raise me.ValueException(
+                f"Invalid value for {label}: {value!r}", code=400, status=400)
+    typed = lookup is None or lookup in _TYPED_LOOKUPS
+    if isinstance(value, list):
+        return [_normalize_scalar(field, v, label, typed) for v in value]
+    return _normalize_scalar(field, value, label, typed)
+
+
+def _split_in_value(value):
+    """An __in value as a list: split a query string on commas, wrap a JSON
+    scalar from a `_stats` bundle, keep a list as it is."""
+    if isinstance(value, str):
+        return value.split(",")
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
+def _resolve_filter_field(model, key):
+    """Walk an ORM lookup path; return (field, lookups) or (None, None).
+
+    The same `_meta` walk as is_sensitive_filter_path. `lookups` is what
+    follows the last field (["in"], ["month", "in"], [] for exact). Only ever
+    called AFTER the sensitive and viewer-restricted guards have passed the
+    key, and it reads nothing but `_meta`.
+    """
+    current, field = model, None
+    parts = key.split("__")
+    for index, part in enumerate(parts):
+        if current is None:
+            return field, parts[index:]
+        try:
+            found = current._meta.get_field(part)
+        except Exception:
+            if field is None:
+                return None, None
+            return field, parts[index:]
+        field = found
+        current = getattr(found, "related_model", None) if found.is_relation else None
+    return field, []
+
+
 def is_viewer_restricted_path(model, key, request):
     """True when an ORM lookup path crosses a relation into a model that
     declares NESTED_PRIVATE_LOOKUPS, names one of them, and the viewer lacks
@@ -1440,44 +1558,23 @@ class MojoModel:
         """Coerce a raw query-param value to the right Python type for filter().
 
         ``lookup`` is the trailing ``__<suffix>`` token from the filter key.
+        Under a text lookup (``startswith``, ``icontains``, ...) an integer
+        column keeps the value as sent.
         When it names a date-component lookup (``year``, ``month``, ``day``,
         ``quarter``, …), the value is coerced to int (or list-of-int for
         ``__in``) instead of being parsed as a datetime — this lets
         ``?created__month=4`` work on a ``DateTimeField`` without the value
         being mangled by ``dates.parse_datetime``.
+
+        A list (``__in`` / ``__not_in``) is normalized per element and stays a
+        list. Booleans go through the one strict parser: an unrecognized value
+        is a 400, never a silent False (#8556).
         """
         if lookup in _DATE_COMPONENT_LOOKUPS:
-            try:
-                if isinstance(value, list):
-                    return [int(v) for v in value]
-                return int(value)
-            except (TypeError, ValueError):
-                raise me.ValueException(
-                    f"Invalid value for {field_name}__{lookup}: {value!r}",
-                    code=400, status=400,
-                )
-
+            return _normalize_field_value(
+                None, value, f"{field_name}__{lookup}", lookup=lookup)
         field = cls.get_model_field(field_name)
-        # Preserve boolean values (e.g., __isnull filters) and do not coerce them to dates
-        if isinstance(value, bool):
-            return value
-        if field.get_internal_type() == "BooleanField":
-            if isinstance(value, str):
-                value = value.lower() in ("true", "1")
-            elif isinstance(value, int):
-                value = bool(value)
-            else:
-                value = bool(value)
-        elif value is not None:
-            if field.get_internal_type() in ["DateTimeField", "DateField"]:
-                if not isinstance(value, (datetime.datetime, datetime.date)):
-                    value = dates.parse_datetime(value)
-        elif field.get_internal_type() in ["IntegerField", "BigIntegerField"]:
-            if isinstance(value, (str, bool)):
-                value = int(value)
-            elif isinstance(value, bool):
-                value = int(value)
-        return value
+        return _normalize_field_value(field, value, field_name, lookup=lookup)
 
     @classmethod
     def _report_sensitive_probe(cls, request, key):
@@ -1579,20 +1676,31 @@ class MojoModel:
             trailing_lookup = key_parts[-1] if len(key_parts) > 1 else None
 
             if field_name in cls.__rest_field_names__ and cls._meta.get_field(field_name).is_relation:
-                # TODO Normalize relation field values
                 if key.endswith("__in"):
-                    value = value.split(",") if isinstance(value, str) else value
+                    value = _split_in_value(value)
                 elif key.endswith("__not_in"):
                     # Convert __not_in to __in for exclude()
                     key = key.replace("__not_in", "__in")
-                    value = value.split(",") if isinstance(value, str) else value
+                    value = _split_in_value(value)
                 elif key.endswith("__not"):
                     # Remove __not suffix for exclude()
                     key = key.replace("__not", "")
                 elif key.endswith("__isnull"):
-                    value = str(value).strip().lower() in ("true", "1", "yes", "y", "t")
+                    value = _parse_rest_bool(value, key)
                 elif value == "null":
                     value = None
+                # The value is normalized through the field the path ends on,
+                # exactly as a top-level filter is (#8556). This runs only
+                # after both guards above passed the key, and changes the
+                # value's type only, never the key or the queryset. A path
+                # ending on a relation compares pks and is left alone, as are
+                # text lookups and an explicit null.
+                field, lookups = _resolve_filter_field(cls, key)
+                if (field is not None and not field.is_relation and value is not None
+                        and all(part in _TYPED_LOOKUPS for part in lookups)):
+                    component = next(
+                        (part for part in lookups if part in _DATE_COMPONENT_LOOKUPS), None)
+                    value = _normalize_field_value(field, value, key, lookup=component)
                 target_dict[key] = value
             elif hasattr(cls, field_name):
                 # Partial-date field shorthand: ?created=2026-04 expands to a
@@ -1616,16 +1724,16 @@ class MojoModel:
                             continue
 
                 if key.endswith("__in"):
-                    value = value.split(",") if isinstance(value, str) else value
+                    value = _split_in_value(value)
                 elif key.endswith("__not_in"):
                     # Convert __not_in to __in for exclude()
                     key = key.replace("__not_in", "__in")
-                    value = value.split(",") if isinstance(value, str) else value
+                    value = _split_in_value(value)
                 elif key.endswith("__not"):
                     # Remove __not suffix for exclude()
                     key = key.replace("__not", "")
                 elif key.endswith("__isnull"):
-                    value = str(value).strip().lower() in ("true", "1", "yes", "y", "t")
+                    value = _parse_rest_bool(value, key)
                 elif value == "null":
                     value = None
 
@@ -1639,6 +1747,12 @@ class MojoModel:
                     if part in _DATE_COMPONENT_LOOKUPS:
                         normalized_lookup = part
                         break
+                if normalized_lookup is None:
+                    # A text lookup (startswith, icontains, ...) is passed on
+                    # so an integer column keeps the caller's pattern.
+                    normalized_lookup = next(
+                        (part for part in key.split("__")[1:]
+                         if part not in _TYPED_LOOKUPS), None)
                 target_dict[key] = cls.normalize_rest_value(
                     request, field_name, value, lookup=normalized_lookup,
                 )
