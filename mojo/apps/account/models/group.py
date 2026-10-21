@@ -26,8 +26,9 @@ _ABSENT = object()
 
 # A parent that carries this key, set to true, under metadata["protected"] lets
 # a person who manages it as a member create groups directly under it, with no
-# global permission (#9107). Only the protected-metadata gate, or server code
-# through set_protected_metadata, can set it; it does not pass to descendants.
+# global permission (#9107). Only a system admin's allow_member_subgroups
+# action (#9126), the protected-metadata gate, or server code through
+# set_protected_metadata can set it; it does not pass to descendants.
 SUBGROUP_POLICY_KEY = "allow_member_subgroups"
 
 GROUP_LAST_ACTIVITY_FREQ = settings.get_static("GROUP_LAST_ACTIVITY_FREQ", 300)
@@ -1077,17 +1078,19 @@ class Group(MojoSecrets, MojoModel):
             f"{what} requires manage_group as a member of every parent "
             "involved, or the global manage_groups (or groups) permission")
 
+    def on_rest_save(self, request, data_dict):
+        # The sub-group switch is an action and runs after the fields are
+        # saved, so a body that also carries fields, a create, or a nested
+        # save of this group is judged here, before anything is written.
+        if isinstance(data_dict, dict) and "allow_member_subgroups" in data_dict:
+            if not self._has_global_permission(WEBAPP_URL_PERMS):
+                raise merrors.PermissionDeniedException(
+                    "admin tier (groups / manage_groups) required to change sub-group creation")
+            if not isinstance(data_dict["allow_member_subgroups"], bool):
+                raise merrors.ValueException("allow_member_subgroups must be true or false")
+        return super().on_rest_save(request, data_dict)
+
     def on_rest_pre_save(self, changed_fields, created):
-        # (imported here too: the branches below import it locally, which
-        # makes the name local to the whole method)
-        from mojo import errors as merrors
-        # The sub-group switch runs after the save, so a body that also
-        # carries fields, or a create, is refused here, before any write.
-        request = self.active_request
-        if request is not None and "allow_member_subgroups" in (getattr(request, "DATA", None) or {}) \
-                and not self._has_global_permission(WEBAPP_URL_PERMS):
-            raise merrors.PermissionDeniedException(
-                "admin tier (groups / manage_groups) required to change sub-group creation")
         self._guard_webapp_url_and_tree(created)
         if created or "parent" in changed_fields or "parent_id" in changed_fields:
             from mojo.apps.account.services import group_hierarchy

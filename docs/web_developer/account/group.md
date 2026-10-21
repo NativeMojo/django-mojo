@@ -330,8 +330,9 @@ in the group's `default` graph: `true` means on, anything else means off.
   `400`.
 - Sending the current value changes nothing. Turning it off does not touch
   groups that were already created under it.
-- If someone not allowed to switch sends it together with other changes in
-  the same request, the whole request is refused and nothing is saved.
+- If it is sent together with other changes in the same request, and the
+  caller may not switch or the value is not a boolean, the whole request is
+  refused and nothing is saved.
 
 ---
 

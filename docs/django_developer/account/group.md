@@ -222,7 +222,7 @@ group.metadata = {
 }
 ```
 
-**Audit trail:** Every successful write to `metadata["protected"]` is unconditionally logged with `kind="meta:protected_changed"`, recording the username, changed keys, and instance pk — regardless of the `LOG_CHANGES` or `LOG_META_CHANGES` settings.
+**Audit trail:** Every successful REST field write to `metadata["protected"]` is unconditionally logged with `kind="meta:protected_changed"`, recording the username, changed keys, and instance pk — regardless of the `LOG_CHANGES` or `LOG_META_CHANGES` settings. Actions that write a protected key log their own kind instead (`disable`/`reactivate` through the disable service, `revoke_group_tokens` as `group:tokens_revoked`, `allow_member_subgroups` as `group:subgroup_policy_changed`).
 
 When `LOG_META_CHANGES = True`, all root-level key changes across the entire `metadata` field are also logged with `kind="meta:changed"`.
 
@@ -572,10 +572,12 @@ The action takes a signed-in person whose **own** global permissions hold
 refused, and so is a value that is not a boolean (400). Off removes the key.
 The action re-reads the row under its lock before it writes, so it never puts
 back protected metadata that was loaded earlier in the request. A no-op writes
-nothing, and every change is logged as `group:subgroup_policy_changed`. A
-body that carries the action alongside field edits, or a create, is refused
-in `on_rest_pre_save` before anything is written when the caller may not
-switch.
+nothing, and every change is logged as `group:subgroup_policy_changed`.
+Because an action runs after the fields are saved, `Group.on_rest_save`
+judges the switch first: a body that carries it alongside field edits, a
+create, or a nested save of the group (`{"parent": {...}}`) is refused before
+anything is written when the caller may not switch or the value is not a
+boolean.
 
 It is also an ordinary protected key, so a superuser or a holder of
 `admin_compliance` / `admin_verify` can still write it through

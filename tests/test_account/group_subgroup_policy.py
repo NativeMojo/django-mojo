@@ -754,3 +754,29 @@ def test_switch_keeps_concurrent_protected_changes(opts):
             f"(group_token_epoch is {stored.get_protected_metadata('group_token_epoch')!r}, expected 7)"
     finally:
         _restore(opts)
+
+
+@th.django_unit_test("#9126: the switch is judged before a nested save or a field write")
+def test_switch_is_judged_before_any_write(opts):
+    from mojo.apps.account.models import Group
+    _restore(opts)
+    p, q = opts.ids["p"], opts.ids["q"]
+    try:
+        child = Group.objects.create(name=f"{PREFIX}new_nested", kind="organization", parent_id=p)
+        _login(opts, "p_mgr")
+        resp = opts.client.post(f"/api/group/{child.pk}",
+                                {"parent": {"name": f"{PREFIX}renamed", SWITCH: False}})
+        assert resp.status_code == 403, \
+            f"a nested save of the parent carrying the switch must be refused, got {resp.status_code}: " \
+            f"{opts.client.last_response.body}"
+        assert Group.objects.get(pk=p).name == f"{PREFIX}p" and _policy(p) is True, \
+            "SECURITY: a nested save carrying a refused switch still wrote the parent"
+
+        _login(opts, "global_mg")
+        resp = opts.client.post(f"/api/group/{q}", {"name": f"{PREFIX}q_bad", SWITCH: "true"})
+        assert resp.status_code == 400 and Group.objects.get(pk=q).name == f"{PREFIX}q", \
+            f"a save carrying a switch that is not a boolean must be refused before it writes, " \
+            f"got {resp.status_code}, name {Group.objects.get(pk=q).name!r}"
+    finally:
+        opts.client.logout()
+        _restore(opts)
