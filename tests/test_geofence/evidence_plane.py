@@ -293,9 +293,9 @@ def test_expired_whitelist_block_regression(opts):
     from datetime import timedelta
     from mojo.helpers import dates
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
-    ip = f"203.0.113.{(int(_uuid.uuid4().hex[:4], 16) % 40) + 210}"
+    ip = f"203.0.119.{(int(_uuid.uuid4().hex[:4], 16) % 40) + 210}"
     GeoLocatedIP.objects.filter(ip_address=ip).delete()
-    row = GeoLocatedIP.objects.create(ip_address=ip, subnet="203.0.113")
+    row = GeoLocatedIP.objects.create(ip_address=ip, subnet="203.0.119")
     try:
         # permanent whitelist still suppresses blocking (unchanged behavior)
         row.whitelist(reason="perm dev box")
