@@ -584,11 +584,17 @@ class GeoLocatedIP(models.Model, MojoModel):
         return firewall_truth.canonical_ipv4_networks(list(values))
 
     def _finish_firewall_reconcile(self, generation, result):
-        from mojo.apps.incident.services.firewall_truth import bounded_error
+        from mojo.apps.incident.services.firewall_truth import (
+            bounded_error, unsafe_target_marker)
         verified = result.get("status") == "verified" and result.get("ok") is True
         values = {}
         if verified:
-            values.update(firewall_pending=False, firewall_sync_error="",
+            # An unsafe blocked row keeps `unsafe_target: <code>` (#8885);
+            # read at this generation so the marker matches the stored block.
+            row = GeoLocatedIP.objects.filter(
+                pk=self.pk, firewall_generation=generation).first()
+            values.update(firewall_pending=False,
+                          firewall_sync_error=unsafe_target_marker(row) if row else "",
                           firewall_observed_at=dates.utcnow())
         else:
             code, message = bounded_error(result)
@@ -624,12 +630,18 @@ class GeoLocatedIP(models.Model, MojoModel):
     def _block_checked_locked(self, reason, ttl, broadcast, from_sync,
                               sync_config, lease):
         """Persist desired state, wait outside the transaction, then CAS truth."""
-        from mojo.apps.incident.services import firewall_truth
+        from mojo.apps.incident.services import block_safety, firewall_truth
         try:
             canonical = firewall_truth.canonical_ipv4_address(self.ip_address)
         except firewall_truth.FirewallTruthError as err:
             return {"status": "unknown", "ok": False, "outcome": "refused",
                     "error": {"code": err.code, "message": str(err)}}
+        # Non-global, protected, trusted-proxy and whitelisted targets are
+        # refused before anything is written or dispatched (#8885).
+        _canonical, unsafe = block_safety.check_block_target(canonical)
+        if unsafe:
+            return {"status": "unknown", "ok": False, "outcome": "refused",
+                    "error": {"code": unsafe}}
         prev_snapshot = self._abuse_snapshot()
         now = dates.utcnow()
         try:
@@ -981,6 +993,14 @@ class GeoLocatedIP(models.Model, MojoModel):
             )
         except Exception:
             logit.exception("geofence whitelist hook failed for %s", self.ip_address)
+        try:
+            # Operator, country and feed sets carve out actively whitelisted
+            # addresses (#8885): re-plan them now, not at the hourly sync.
+            from mojo.apps.incident import cronjobs
+            cronjobs.sync_firewall(force=True)
+        except Exception:
+            logit.exception("firewall sync after whitelist change failed for %s",
+                            self.ip_address)
 
     def on_action_block(self, value):
         if not isinstance(value, dict):

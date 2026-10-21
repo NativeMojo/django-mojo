@@ -139,6 +139,23 @@ without complete fleet proof; it does not prove that a broker mutation ran.
 is proof that no host changed after a transport failure. Both leave durable
 pending state for repair and must remain failure/pending in the UI.
 
+Some addresses are never blocked. The response is then
+`{"status": "unknown", "ok": false, "outcome": "refused", "error": {"code": ...}}`
+and nothing changes:
+
+| Code | Meaning |
+|---|---|
+| `non_global_address` | A private, internal, multicast or documentation address |
+| `mojosec_protected_cidrs` | Inside the server's protected networks |
+| `mojosec_trusted_proxy_cidrs` | Inside the server's trusted proxies |
+| `whitelisted` | The address is whitelisted |
+| `protected_config_invalid` | The server's protection settings are malformed; no new block is accepted until they are fixed |
+
+A row blocked before this rule existed for such an address stops being
+enforced and shows `firewall_sync_error` starting `unsafe_target:`. Unblock it
+to clear it. Bulk IPSets keep their stored list, but the firewall leaves out
+these ranges and every whitelisted address.
+
 ### Unblock an IP
 
 ```

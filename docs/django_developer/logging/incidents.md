@@ -307,8 +307,11 @@ never receipt metadata strings, samples, notes, or an LLM — and each is
 validated fail-closed: canonicalized, refused when non-global
 (private/loopback/link-local/multicast/reserved), whitelisted, or inside
 `MOJOSEC_PROTECTED_CIDRS` / `MOJOSEC_TRUSTED_PROXY_CIDRS` (a malformed CIDR
-list refuses **every** target — uncertainty stops enforcement). Protected
-targets are recorded as skipped rows, never silently dropped.
+list refuses **every** target — uncertainty stops enforcement). Both settings
+take a list or a comma-separated string of IPv4 CIDRs. Protected
+targets are recorded as skipped rows, never silently dropped. The same check
+guards every other block path and is re-run at execution; see
+[Target safety](../deploy/firewall.md#target-safety).
 
 The lifecycle is `proposed → approved|auto_approved → executing →
 executed|failed → expired|reversed` (+ `rejected`), with one open
