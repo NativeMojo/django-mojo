@@ -298,6 +298,8 @@ def _access_kind(scopes):
     scopes = scopes if isinstance(scopes, list) else []
     tools = "mcp" in scopes
     full = "api" in scopes
+    if tools and "mcp:execute" in scopes and not full:
+        return "execute"
     if tools and full:
         return "both"
     if full:

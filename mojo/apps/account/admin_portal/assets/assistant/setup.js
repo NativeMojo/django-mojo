@@ -70,10 +70,11 @@ function discoveryLine(discovery) {
 }
 
 // What a connection can actually reach. `tools` is the Assistant's tool door,
-// where every change still needs an approval; `api` is full REST reach as that
-// person, where the approval step does not apply.
+// `execute` adds explicit ordinary-tool delegation; protected tools still need
+// their own confirmation. `api` is full REST reach as that person.
 const ACCESS_LABELS = {
   tools: 'Tools',
+  execute: 'Delegated tools',
   api: 'Full API',
   both: 'Tools + full API',
 };
@@ -406,7 +407,9 @@ export function mountSetup({ctx, panel, onBack}) {
                 h('thead', {}, h('tr', {}, ...['Client', 'Signed in as', 'Access',
                   'Connected', 'Last used', 'Expires', ''].map((label) => h('th', {scope: 'col', text: label})))),
                 h('tbody', {}, ...state.mcp.grants.map((grant) => grantRow(grant, disconnect))))),
-            h('p', {class: 'assistant-note', text: 'Full API rows can call every '
+            h('p', {class: 'assistant-note', text: 'Delegated tools run ordinary '
+              + 'changes with the signed-in person’s permissions; protected tools '
+              + 'keep their confirmation checks. Full API rows can call every '
               + 'API as that person; the approval step does not apply to those calls.'}))
         : h('p', {class: 'assistant-note', text: 'No agent is connected.'}),
 

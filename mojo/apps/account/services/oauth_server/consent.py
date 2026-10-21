@@ -32,6 +32,11 @@ MAX_STATE_LENGTH = 512
 TOOLS_COPY = (
     "Use the Assistant's tools as {email} — the same permissions as your "
     "account; changes still need your approval in the Admin")
+EXECUTE_COPY = (
+    "Let this connected agent execute ordinary Assistant tools as {email}, "
+    "within your account permissions, without approving each change in Admin. "
+    "Tools with additional operator-confirmation or fresh-sign-in requirements "
+    "still require those checks. You can revoke this connection at any time.")
 API_COPY = (
     "Full API access as {email} — everything your account can do through the "
     "API, and nothing more, including approving the Assistant's own pending "
@@ -148,7 +153,9 @@ def _access_lines(granted):
     built-in sign-in makes on its own.
     """
     lines = []
-    if DEFAULT_SCOPE in granted:
+    if resources.MCP_EXECUTE_SCOPE in granted:
+        lines.append(EXECUTE_COPY)
+    elif DEFAULT_SCOPE in granted:
         lines.append(TOOLS_COPY)
     if API_SCOPE in granted:
         lines.append(API_COPY)
@@ -251,6 +258,9 @@ def validate_scope_resource(data, origin, registry=None):
                 "invalid_scope", f"scope {token} is not offered")
         if token not in granted:
             granted.append(token)
+    if resources.MCP_EXECUTE_SCOPE in granted and DEFAULT_SCOPE not in granted:
+        raise RedirectableError(
+            "invalid_scope", "mcp:execute requires the mcp scope")
     # De-duplicated: "mcp mcp mcp…" is the same grant as "mcp", and the joined
     # string is stored on the code and the grant and rides in every token. The
     # REQUEST's order is preserved, because the refresh endpoint compares the

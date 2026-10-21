@@ -932,7 +932,7 @@ def _owner_state_decision(tool_entry, tool_input, user):
 
 def _execute_tool(
         block, registry, user, conversation, tools, on_event, tool_calls_made,
-        request_meta=None, _reporter=None, pending_actions=None):
+        request_meta=None, _reporter=None, pending_actions=None, execution_grant=None):
     """
     Execute a single tool call with permission gate, approval gate, meta-tool
     handling, and event reporting.
@@ -940,8 +940,9 @@ def _execute_tool(
     This is the ONLY place a tool handler is dispatched from an agent turn, and
     both ``run_assistant`` and ``run_assistant_ws`` funnel through it — which is
     why the approval gate lives here and nowhere else. A ``mutates=True`` tool
-    never reaches ``_call_handler`` from here unless its ``owner_state``
-    predicate returns exactly True for this call; otherwise it produces a
+    reaches ``_call_handler`` directly only when its ``owner_state`` predicate
+    returns exactly True or a separately consented MCP execution grant passes
+    the live delegation checks for an ordinary tool. Otherwise it produces a
     ``PendingAction`` the operator must resolve (see ``services/approvals.py``).
     No prompt wording can route around this. An owner-state call is dispatched on
     ``normalize_args``-validated arguments, so skipping the card never means
@@ -963,6 +964,15 @@ def _execute_tool(
     owner = (_owner_state_decision(tool_entry, tool_input, user) if allowed
              else objict.objict(exempt=False, args=tool_input, error=None))
     call_args = owner.args
+    delegated = objict.objict(exempt=False, error=None, audit="")
+    if (allowed and tool_entry.get("mutates") and not owner.exempt
+            and execution_grant is not None):
+        from mojo.apps.assistant.services import mcp_execution
+        delegated = mcp_execution.decision(
+            tool_entry, tool_input, user, execution_grant, conversation, request_meta)
+        if delegated.exempt:
+            call_args = delegated.args
+            user = delegated.user
 
     if not tool_entry:
         tool_result = {"error": f"Unknown tool: {tool_name}"}
@@ -998,9 +1008,11 @@ def _execute_tool(
         tool_result = owner.error
         logger.info("Refused arguments for owner-state tool %s: %s",
                     tool_name, tool_result["error"])
-    elif tool_entry.get("mutates") and not owner.exempt:
-        # THE GATE. A mutating tool call is a PROPOSAL, never an execution
-        # (owner-state calls branch to the direct path below).
+    elif delegated.error is not None:
+        tool_result = delegated.error
+    elif tool_entry.get("mutates") and not (owner.exempt or delegated.exempt):
+        # Built-in Assistant, old grants and protected tools remain proposals.
+        # Only validated owner-state/delegated calls reach the direct path.
         try:
             tool_result, approval_block = approvals.propose(
                 user, conversation, tool_name, tool_entry, tool_input,
@@ -1056,13 +1068,14 @@ def _execute_tool(
             )
             if tool_entry.get("mutates") and not (
                     isinstance(tool_result, dict) and "error" in tool_result):
-                # Owner-state direct execution. Same category, level and shape
+                # Owner-state or delegated execution. Same category and level
                 # as the event approvals.resolve() files for an approved
                 # execution, so RuleSets keyed on it keep firing. Every other
                 # mutating tool still reports from approvals.resolve().
                 _report_event(
                     f"assistant:tool:{tool_name}", 5, f"Assistant tool: {tool_name}",
-                    f"User {user.email} (id={user.pk}) executed owner-state mutating "
+                    f"User {user.email} (id={user.pk}) executed "
+                    f"{delegated.audit or 'owner-state'} mutating "
                     f"tool '{tool_name}' directly. conv={conversation.pk}",
                     user=user, model_name="account.User", model_id=user.pk,
                     _reporter=_reporter)

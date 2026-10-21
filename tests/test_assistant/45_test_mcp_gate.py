@@ -338,8 +338,8 @@ def test_descriptors_protection_and_registration(opts):
     entry = oauth_server.resolve(MCP_PATH)
     assert_true(entry is not None,
                 "the MCP path must be registered as an OAuth resource")
-    assert_eq(list(entry.scopes), ["mcp"],
-              f"the resource must require the mcp scope, got {entry.scopes}")
+    assert_eq(list(entry.scopes), ["mcp", "mcp:execute"],
+              f"the exact resource must offer tools and explicit execution, got {entry.scopes}")
     assert_true(entry.prefix is False,
                 "the MCP door is ONE endpoint — registering it as a prefix "
                 "would hand every tool-door token the whole API")
@@ -481,7 +481,7 @@ def test_root_prefix_registration_is_refused(opts):
     assert_eq(registry.paths(), [MCP_PATH],
               f"the MCP door must still register when the root is refused — "
               f"the tool door is unaffected, got {registry.paths()}")
-    assert_eq(resources.offered_scopes(registry), ["mcp"],
+    assert_eq(resources.offered_scopes(registry), ["mcp", "mcp:execute"],
               "an installation with no usable API root must not advertise the "
               "api scope at all")
 

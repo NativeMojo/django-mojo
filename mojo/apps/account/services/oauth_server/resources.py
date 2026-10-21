@@ -43,6 +43,7 @@ SERVER_PATH = "/" + settings.get_static(
 # prefix resource — see `register` for the invariant that ties them together.
 DEFAULT_SCOPE = "mcp"
 API_SCOPE = "api"
+MCP_EXECUTE_SCOPE = "mcp:execute"
 
 
 class ResourceRegistry:

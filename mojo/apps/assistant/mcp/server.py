@@ -37,7 +37,7 @@ from objict import objict
 import mojo
 from mojo.helpers import infrastructure, logit
 from mojo.helpers.settings import settings
-from mojo.apps.assistant.services import agent, approvals
+from mojo.apps.assistant.services import agent, approvals, mcp_execution
 
 from . import protocol
 
@@ -106,6 +106,16 @@ INSTRUCTIONS = (
 )
 
 READ_ONLY_ANNOTATIONS = {"readOnlyHint": True, "destructiveHint": False}
+EXECUTION_INSTRUCTIONS = (
+    "This connection has explicit delegated MCP execution consent. Ordinary "
+    "mutating tools execute as the connected operator, within their live "
+    "permissions, and return their actual result. Tools with fresh-sign-in, "
+    "revision/preview, approval-bound handlers or explicit operator-confirmation "
+    "requirements still propose an approval. An approval_required response means "
+    "NOT EXECUTED: explain its installation and approval_url, then stop. "
+    "Do not blindly retry an uncertain mutation; direct calls have normal API "
+    "retry semantics, not a per-approval single-use guarantee."
+)
 
 # The two tools that exist only on this transport. Both are reads, both are
 # scoped to the calling grant's own conversation.
@@ -181,7 +191,7 @@ def projected_registry(hide_infrastructure=None):
     return projected
 
 
-def _mcp_tool(entry):
+def _mcp_tool(entry, execution=False):
     """One registry entry in MCP `Tool` shape.
 
     ``annotations`` are hints, not a security boundary — the boundary is the
@@ -190,9 +200,16 @@ def _mcp_tool(entry):
     """
     definition = entry["definition"]
     mutates = bool(entry.get("mutates"))
+    description = definition.get("description", "")
+    if execution and mutates and not mcp_execution.requires_approval(entry):
+        description = re.sub(
+            r"Requires operator approval: calling this tool creates an approval "
+            r"card and does not execute\.", "", description).strip()
+        description = ("Executes immediately under this connection's delegated "
+                       "operator authority; no separate approval request. " + description)
     return {
         "name": definition["name"],
-        "description": definition.get("description", ""),
+        "description": description,
         "inputSchema": definition.get("input_schema"),
         "annotations": {
             "readOnlyHint": not mutates,
@@ -201,14 +218,14 @@ def _mcp_tool(entry):
     }
 
 
-def list_tools(user, hide_infrastructure=None):
+def list_tools(user, hide_infrastructure=None, grant=None):
     """Everything this user may call over MCP, in registry order."""
     from mojo.apps.assistant import user_can_use_tool
 
     tools = []
     for entry in projected_registry(hide_infrastructure).values():
         if user_can_use_tool(user, entry):
-            tools.append(_mcp_tool(entry))
+            tools.append(_mcp_tool(entry, execution=mcp_execution.has_execution_scope(grant)))
     tools.extend(dict(tool) for tool in MCP_ONLY_TOOLS)
     return tools
 
@@ -268,6 +285,22 @@ def _call_result(text):
         parsed = ujson.loads(text)
     except Exception:
         parsed = None
+    if isinstance(parsed, dict) and parsed.get("status") == "approval_required":
+        from mojo.apps.account.services.oauth_server.resources import public_origin
+        from mojo.apps.account.services.admin_portal import ADMIN_PATH
+
+        origin = public_origin()
+        if origin:
+            parsed["installation"] = origin
+            parsed["approval_url"] = f"{origin}/{ADMIN_PATH}/"
+        parsed["approval_location"] = (
+            "This installation's built-in Admin: open Assistant, then its "
+            "conversation history and the MCP connection's conversation.")
+        parsed["message"] = (
+            "NOT EXECUTED. This tool requires a separate operator confirmation. "
+            "Explain the installation, approval_url and approval_location to "
+            "the operator, then stop. Do not retry this request or claim it ran.")
+        text = ujson.dumps(parsed)
     result = {
         "content": [{"type": "text", "text": text}],
         "isError": isinstance(parsed, dict) and "error" in parsed,
@@ -388,7 +421,8 @@ def call_tool(name, arguments, user, grant, request_meta,
     outcome = agent._execute_tool(
         block, projected_registry(hide_infrastructure), user,
         conversation_for_grant(user, grant), [], None, [],
-        request_meta=request_meta, _reporter=reporter, pending_actions=[])
+        request_meta=request_meta, _reporter=reporter, pending_actions=[],
+        execution_grant=grant if mcp_execution.has_execution_scope(grant) else None)
     return _call_result(outcome["content"])
 
 
@@ -405,12 +439,14 @@ def _dispatch(msg, ctx):
             "protocolVersion": version,
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": ctx.server_name, "version": mojo.__version__},
-            "instructions": INSTRUCTIONS,
+            "instructions": (EXECUTION_INSTRUCTIONS
+                             if mcp_execution.has_execution_scope(ctx.grant)
+                             else INSTRUCTIONS),
         }
     if method == "ping":
         return {}
     if method == "tools/list":
-        return {"tools": list_tools(ctx.user, ctx.hide_infrastructure)}
+        return {"tools": list_tools(ctx.user, ctx.hide_infrastructure, grant=ctx.grant)}
     if method == "tools/call":
         name = params.get("name")
         # Refused BEFORE dispatch, so an unbounded or newline-bearing name never
