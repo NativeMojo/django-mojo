@@ -365,8 +365,9 @@ The bouncer challenge uses the resolved group's `theme.app_title`, `logo_url`,
 override) and custom CSS — it loads the same theme stylesheet as the sign-in
 page — then names `theme.auth_provider_name` in its "Secure sign-in via …"
 footer. With no tenant logo or title it falls back as the sign-in page does
-(no logo, "DJANGO MOJO") unless `BOUNCER_CHALLENGE_LOGO_URL` /
-`BOUNCER_CHALLENGE_BRAND` are explicitly set. This tells visitors both which destination they
+(no logo, "DJANGO MOJO") unless the operator has explicitly set
+`BOUNCER_CHALLENGE_LOGO_URL` (fills an empty logo) or `BOUNCER_CHALLENGE_BRAND`
+(fills a blank title). This tells visitors both which destination they
 are entering and whose account credentials they should use before the login
 form appears.
 
@@ -573,9 +574,10 @@ success displays Verified and navigates once. The pass TTL remains 24 hours by
 default; later valid passes still cannot bypass new restrictions.
 
 Failed requests time out after 8 seconds and offer a manual Try again. After
-three errors it is hidden and Start over (a reload) becomes the main button;
-Start over is reachable in every failed state. A 429 counts down on the
-disabled Try again until the wait expires. Cookie failure offers Start over and
+three errors it is hidden and the reload control takes its place as the main
+"Try again" button; otherwise a quiet "Start over" (also a reload) sits under
+"Ask for a review". One of the two is reachable in every failed state. A 429 counts down on the
+disabled Try again until the wait expires. Cookie failure offers a restart and
 a review; an embedded contact page can offer a top-level tab. Expired checks
 require restarting for a new descriptor. The reference shows once, with a copy
 button.

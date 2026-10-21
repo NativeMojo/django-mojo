@@ -182,9 +182,12 @@ pool: old workers cannot validate v2 passes. The descriptor protocol is still
 version 1. This change requires no migrations. The hosted pages load
 `mojo-hosted-bouncer.js` and `mojo-auth-theme.css` as `?v=<first 10 hex of the
 file's SHA-256>`, so new challenge markup never meets a cached old script.
+Change either file and every template reference together;
+`tests/test_auth/hosted_script_version.py` fails with the value to set.
 `/api/account/static/<file>` answers a `?v=` that is not the served file's
 content hash with `Cache-Control: no-store` instead of the day-long public
-cache, so a mixed deploy cannot pin an old file under a new key. Preserve script
+cache, so a mixed deploy cannot pin an old file under a new key (an unversioned
+request keeps the day cache; `DEBUG` is always `no-store`). Preserve script
 query strings in static-cache keys and honor `Cache-Control: no-store` on
 descriptor-bearing HTML; those responses also set `Referrer-Policy: no-referrer`.
 
@@ -208,8 +211,8 @@ reason (cookies, limited, expired, restart, unavailable, operator, invalid, an
 interrupted connection, and three failures). Continue becomes **Try again**,
 hidden for `recovery`/`decoy` outcomes and after three failures, exactly as
 before. **Restart** (a reload) is reachable in every failed state: a quiet
-"Start over" next to Try again, or the primary "Try again" when Try again is
-hidden. Assessment 429 responses count down on the disabled button ("Try again
+"Start over" under "Ask for a review", or relabeled and promoted to the primary
+"Try again" in Try again's slot when Try again is hidden. Assessment 429 responses count down on the disabled button ("Try again
 in 0:42") until `Retry-After` (default 60 seconds, bounded to 1–3600 seconds);
 only the button label ticks, not the live region. When an outcome hides or
 disables the focused control, focus moves to the heading. Nothing on the page
@@ -741,9 +744,12 @@ table in [Auth Config](auth_config.md).
 ### Challenge page branding
 
 The bouncer challenge page follows the hosted sign-in theme: the group's
-`theme.logo_url` and `theme.app_title` head the page. Where the theme sets
-neither, an explicitly set challenge setting fills the gap (deployment-wide or
-per group):
+`theme.logo_url` and `theme.app_title` head the page. An explicitly set
+challenge setting (deployment-wide or per group) fills a gap the theme leaves:
+`BOUNCER_CHALLENGE_LOGO_URL` whenever `theme.logo_url` is empty (its default),
+`BOUNCER_CHALLENGE_BRAND` only when `theme.app_title` is explicitly blank —
+`app_title` defaults to "DJANGO MOJO", so an unset theme title already wins.
+Both settings default to empty:
 
 ```python
 settings.set('BOUNCER_CHALLENGE_LOGO_URL', 'https://cdn.client.com/logo.svg', group=group)
@@ -794,7 +800,7 @@ See [group.md](group.md) for the full `auth_domain` field and `resolve_by_auth_d
 ## Templates
 
 - `account/login.html` — full mojo-auth webapp. Override in your project's templates dir.
-- `account/bouncer_challenge.html` — hosted Continue/recovery page ("One quick check"); themed by the hosted sign-in theme (`mojo-auth-theme.css` tokens, tenant accent/logo/brand/appearance/custom CSS); `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` fill in only when explicitly set and the theme has none.
+- `account/bouncer_challenge.html` — hosted Continue/recovery page ("One quick check"); themed by the hosted sign-in theme (`mojo-auth-theme.css` tokens, tenant accent/logo/brand/appearance/custom CSS); `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` (both default empty) fill in only when explicitly set and the theme's logo is empty / title is blank.
 - `account/bouncer_decoy.html` — explicit scanner honeypot.
 - `account/bouncer_review_result.html` — no-JavaScript review receipt/error page.
 

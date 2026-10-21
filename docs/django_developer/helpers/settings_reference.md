@@ -426,8 +426,8 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   [account/bouncer.md](../account/bouncer.md#cross-origin-embedding).
   Deliberately not readable from the DB/Redis settings plane, so a `Setting` row
   cannot change the origin policy at runtime.
-- `BOUNCER_CHALLENGE_BRAND`
-- `BOUNCER_CHALLENGE_LOGO_URL`
+- `BOUNCER_CHALLENGE_BRAND` — default empty (unset); per-group readable. Brand name for the hosted bot check, used only when the group's `theme.app_title` is explicitly blank (the theme's own default is `"DJANGO MOJO"`, which wins otherwise). See [account/bouncer.md](../account/bouncer.md#challenge-page-branding).
+- `BOUNCER_CHALLENGE_LOGO_URL` — default empty (no logo); per-group readable. Logo for the hosted bot check, used whenever `theme.logo_url` is empty. See [account/bouncer.md](../account/bouncer.md#challenge-page-branding).
 - `BOUNCER_CONTACT_PATH`
 - `BOUNCER_LEARN_CAMPAIGN_THRESHOLD`
 - `BOUNCER_LEARN_ENABLED`

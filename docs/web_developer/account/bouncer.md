@@ -47,7 +47,7 @@ appearance as the sign-in page (including the `?auth_appearance=` override), and
 the tenant's custom CSS. Its brand sits at the top, a shield in a ring in the
 centre, the heading and one status line under it, **Continue** as the main
 button with a quiet "Having trouble? Get help" link, and "Secure sign-in via
-<provider>" at the bottom.
+…" naming the tenant's auth provider at the bottom.
 
 Continue accepts touch, mouse, and keyboard activation, with visible focus and
 a live status region. A stationary touch-down and button activation count as interaction;
@@ -63,8 +63,8 @@ the reason (cookie refused, too many tries, expired, changed, briefly
 unavailable, operator, unreadable response, interrupted connection, or three
 failures). Connection failures, non-JSON or invalid responses, and the 8-second
 request timeout offer a manual **Try again**; after three errors it is hidden.
-**Start over** (a reload) is always there: a quiet link next to Try again, or
-the main "Try again" button when Try again is hidden. A 429 counts down on the
+A reload control is always there: a quiet "Start over" under "Ask for a review",
+or the main "Try again" button when Try again is hidden. A 429 counts down on the
 disabled button ("Try again in 0:42") until `Retry-After` (default 60 seconds,
 bounded to 1–3600 seconds). None claims success or automatically navigates.
 The reference shows once, small, with a copy button.
@@ -72,7 +72,8 @@ The reference shows once, small, with a copy button.
 Site cookies must work. Missing cookies show cookie guidance; an embedded
 contact page can offer opening the same page in a top-level tab. Unavailable
 verification and existing device blocks/frozen sessions retain their restriction
-and show recovery guidance. **Ask for a review** opens a separate review step
+and show recovery guidance. **Ask for a review** (or "Get help" before a failure)
+opens a separate review step
 (it never starts open) requiring only an email and optional note, without a
 pass, cookies, or JavaScript; Back returns to the check. A sent request shows
 "Request sent" with the server's message and the review reference — it does not

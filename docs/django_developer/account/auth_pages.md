@@ -403,8 +403,9 @@ configuration, and the override is propagated across hosted auth pages.
 
 The bouncer challenge resolves the same group theme and loads the same
 stylesheet. It uses `app_title` and `logo_url` for the destination identity
-(falling back to an explicitly set `BOUNCER_CHALLENGE_BRAND` /
-`BOUNCER_CHALLENGE_LOGO_URL`, then to the sign-in page's own defaults),
+(an explicitly set `BOUNCER_CHALLENGE_LOGO_URL` fills in an empty `logo_url`, and
+`BOUNCER_CHALLENGE_BRAND` a blank `app_title`; otherwise the sign-in page's own
+defaults: no logo, "DJANGO MOJO"),
 `accent_color` for its ring and buttons, `appearance` (and the
 `?auth_appearance=` override) for light/dark/system, the tenant's
 `custom_css_url` / `custom_css`, and `auth_provider_name` in the "Secure

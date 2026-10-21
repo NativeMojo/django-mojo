@@ -165,6 +165,10 @@ The security value of this policy is concentrated in `script-src`,
 ctx['csp_nonce'] = secrets.token_hex(16)
 ```
 
+`_serve_challenge` does not use `_auth_context()`: it mints its own nonce
+(`secrets.token_urlsafe(24)`) and `_render_with_csp()` stamps that value, so the
+challenge's header and scripts agree too.
+
 `_render_with_csp()` renders the template and stamps the **same** value into the
 header, so markup and policy can never disagree. Every inline `<script>` in
 `auth_base.html` and its children carries it:
@@ -191,8 +195,10 @@ The external `<script src="{{ api_base }}/api/account/static/mojo-auth.js">` tag
 origin, which is why a cross-origin `api_base` needs no host source in
 `script-src`.
 
-> Unrelated name collision: `render_ctx.css_nonce` on the bouncer challenge page
-> is an anti-automation class-name randomizer, not a CSP nonce.
+> Unrelated name collision: `render_ctx.css_nonce` in the bouncer challenge's
+> context is an anti-automation class-name randomizer (the shipped
+> `bouncer_challenge.html` does not read `render_ctx`; an override may), not a
+> CSP nonce.
 
 ---
 
