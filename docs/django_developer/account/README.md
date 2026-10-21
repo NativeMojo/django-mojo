@@ -34,3 +34,5 @@
 - [Disable Lifecycle](disable_lifecycle.md) — Unified disable/reactivate state for User and Group: `metadata.protected.disable.*` schema, REST POST_SAVE_ACTIONS, throttle-read endpoint, service API, permanent-closure delegation via `ACCOUNT_CLOSURE_HANDLER`
 - [Bouncer](bouncer.md) — Bot detection gate for login, registration, and public message pages; adaptive learning, device reputation, signature management; continuous in-session detection (stream scorer, stream analyzers, gradient enforcement), static-page gating via `verify_pass` + nginx `auth_request`, cross-origin embedding, Bouncer-as-a-Service
 - [Public Messages](bouncer.md#public-messages-contact--support) — Bouncer-gated contact/support intake; `PublicMessage` model, `KIND_SCHEMAS`, notify_admins, admin RestMeta
+
+- [Protected health snapshots](health_snapshot.md) — Five-minute schema2 cache, source freshness, permissions, failure cursors and monitoring coverage

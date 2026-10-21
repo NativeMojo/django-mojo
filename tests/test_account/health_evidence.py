@@ -250,3 +250,29 @@ def test_cluster_binding_uses_current_writer_after_failover(opts):
         budget=he.CycleBudget(deadline), provider_factory=lambda service: RDS() if service == "rds" else Cache())
     assert result["database"]["resource"] == "new-writer" and calls == [resolved["db_writer"], "new-writer"], "stable cluster endpoint attributed failover pressure to the old configured writer"
     assert all(row["resource"] == "new-writer" for row in result["series"]), "old instance dimensions survived current writer resolution"
+
+
+@th.django_unit_test()
+def test_private_checked_redis_factory_clamps_actual_requested_command_timeout(opts):
+    import time
+    from mojo.apps.account.services import health_evidence as he
+    requested = []
+    def connect(**kwargs):
+        requested.append(kwargs)
+        return object()
+    deadline = time.monotonic()+5
+    he.bounded_redis_connection(budget=he.CycleBudget(deadline), connect=connect, timeout=5,
+        max_connections=2, read_from_replicas=True, deadline=deadline)
+    assert requested[0]["timeout"] == 0.5 and requested[0]["read_from_replicas"] is False and requested[0]["deadline"] == deadline, "checked wait budget reached the Redis pool as a longer per-command timeout or replica read"
+
+
+@th.django_unit_test()
+def test_scheduler_lock_presence_remains_noncausal_installation_metadata(opts):
+    from mojo.apps.account.services import health_evidence as he
+    fleet = _assembly_fleet()
+    fleet["sources"] = {"scheduler": {"status": "ok", "scope": "installation", "scheduler_active": True}}
+    result = he.build_components(_assembly_configuration(), {}, {}, fleet, {}, now=NOW)
+    jobman = next(row for row in result if row["kind"] == "jobman")
+    lock = next(row for row in jobman["evidence"] if row["slot_id"] == "scheduler_lock")
+    assert lock["provenance"]["installation_lock_present"] is True and lock["provenance"]["scope"] == "installation", "snapshot lost the actually read installation scheduler-lock presence"
+    assert lock["observed_at"] is None and lock["fresh_until"] is None and not jobman["coverage"]["complete"], "lock presence fabricated independent scheduler heartbeat freshness"

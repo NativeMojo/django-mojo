@@ -1,6 +1,6 @@
 # Cloud Domain Tools — Result Shapes
 
-What the `cloud` domain's twenty-two tools return, which block renders each, and
+What the `cloud` domain's twenty-four tools return, which block renders each, and
 what a client does after a mutating one is approved.
 
 The domain is **on demand**: the model loads it with
@@ -275,3 +275,25 @@ clients must not turn such omissions into healthy service status.
 identity aliases. An environment or expectation change invalidates old aliases.
 Fresh competing host claims remain `identity_ambiguous` even after one host
 replies again; clients must refresh rather than guess a logical alias.
+
+## Cached health and monitoring coverage
+
+`get_health_snapshot(evidence_cursor=None)` is read-only and cache-only, with
+current global platform entry permission, independent AWS/jobs projection and a
+24KiB MCP ceiling. It returns `django-mojo.health_snapshot` schema2, collected
+every300 seconds for60-second external polling. Its immutable publication digest
+and configuration hash survive permission projections. Each causal slot retains
+actual sample time and expiry; repeated reads do not renew health. MCP omissions
+return the frozen checkpoint before unread failure evidence and a REST reference.
+
+`get_monitoring_coverage(node_id=None,cursor=None)` is a read-only schema1
+on-demand drilldown over the shared bounded readers. It accepts an expected
+node or signed cursor, one node per page. Global roster counts stay separate
+from local measurement coverage, and every multi-node page stays incomplete.
+Runtime, continuous streams, recipe declaration and installation proof remain
+independent; partial/capped/missing/denied requirements stay visible.
+
+See [the health snapshot contract](../account/health_snapshot.md) for both tools,
+source permissions, three-second reads, durable failure cursors, fixed deadlines
+and the public-data boundary. Existing fleet/node and platform tools keep their
+existing public signatures and source permissions.

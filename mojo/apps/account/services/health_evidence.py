@@ -128,6 +128,7 @@ def slot_is_fresh(value, now):
     return bool(value.get("status") == "ok" and not value.get("truncated")
                 and observed is not None and until is not None and until > now
                 and maximum is not None and until <= maximum
+                and until <= now + timedelta(seconds=min(MAX_AGE_SECONDS, 3*value["period_seconds"]) if value.get("period_seconds") is not None else MAX_AGE_SECONDS)
                 and valid_time(value.get("collected_at"), now) is not None
                 and valid_time(value.get("last_success_at"), now) is not None
                 and isinstance(value.get("sample_id"), str))
@@ -435,15 +436,20 @@ class CycleBudget:
     LIMITS = {"provider_operations": 32, "inventory_pages": 4, "metric_discovery_pages": 4,
               "cloudwatch_series": 256, "checked_broadcasts": 4, "checked_targets": 128,
               "redis_commands": 256, "db_queries": 16, "api_services": 24, "channels": 32}
-    def __init__(self, deadline, *, limits=None, clock=None):
+    def __init__(self, deadline, *, limits=None, clock=None, reserved=None):
+        self.reserved, self.finalizing = dict(reserved or {}), False
         self.clock, self.deadline = clock or time.monotonic, deadline
         self.limits = {**self.LIMITS, **(limits or {})}
         self.counts, self.lock = {}, threading.Lock()
     def take(self, name, count=1):
         with self.lock:
-            if self.clock() >= self.deadline or self.counts.get(name, 0) + count > self.limits[name]:
+            ceiling = self.limits[name] - (0 if self.finalizing else self.reserved.get(name, 0))
+            if self.clock() >= self.deadline or self.counts.get(name, 0) + count > ceiling:
                 raise TimeoutError("not_collected_budget")
             self.counts[name] = self.counts.get(name, 0) + count
+    def begin_finalization(self):
+        with self.lock:
+            self.finalizing = True
 
 
 class BudgetRedis:
@@ -464,6 +470,14 @@ class BudgetRedis:
             result = target(*args, **kwargs)
             return BudgetRedis(result, self.budget) if name in ("pipeline", "pubsub") else result
         return call
+
+
+def bounded_redis_connection(*, budget, connect=None, **kwargs):
+    """Private primary command cap also applies to checked transport callers."""
+    from mojo.helpers.redis import get_bounded_connection
+    kwargs["timeout"] = min(0.5, float(kwargs.get("timeout", 0.5)))
+    kwargs["read_from_replicas"] = False
+    return BudgetRedis((connect or get_bounded_connection)(**kwargs), budget)
 
 
 def source_configuration(deadline, *, get_static=None, cursor_context=None, budget=None):
@@ -676,10 +690,16 @@ def managed_series(configuration, deadline, *, budget, provider_factory=None):
         bound = str(configuration["bindings"].get("redis_host") or "").rstrip(".").lower()
         if endpoint and bound == endpoint:
             result["redis"] = {"status": "ok", "resource": resolved["cache_group"], "binding": "validated_endpoint"}
-            for member in (row.get("MemberClusters") or [])[:4]:
+            members = row.get("MemberClusters") or []
+            if len(members) > 4:
+                result["redis"].update(status="unknown", reason="not_collected_budget", omitted_count=len(members)-4)
+            for member in members[:4]:
                 clusters = call("elasticache", "describe_cache_clusters", CacheClusterId=member, ShowCacheNodeInfo=True).get("CacheClusters") or []
                 cluster = clusters[0] if len(clusters) == 1 and clusters[0].get("CacheClusterId") == member else {}
-                for node in (cluster.get("CacheNodes") or [])[:4]:
+                cache_nodes = cluster.get("CacheNodes") or []
+                if len(cache_nodes) > 4:
+                    result["redis"].update(status="unknown", reason="not_collected_budget", omitted_count=result["redis"].get("omitted_count", 0)+len(cache_nodes)-4)
+                for node in cache_nodes[:4]:
                     node_id = node.get("CacheNodeId")
                     if not node_id:
                         continue
@@ -701,11 +721,18 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
     def make(kind, resource, slot_id, raw, *, grant="platform", source=None, value=None, identity=None):
         previous_slot = next((row for row in old.get(kind + ":" + resource, {}).get("evidence", []) if row["slot_id"] == slot_id), None)
         raw = raw or {}
+        provenance = {key: raw[key] for key in ("namespace", "metric", "dimensions", "start", "end", "aggregation") if key in raw}
+        if any(key in raw for key in ("total", "maxmemory")):
+            provenance["capacity_denominator"] = {key: raw[key] for key in ("total", "maxmemory") if key in raw}
+        provenance["pressure_profile_version"] = PROFILE_VERSION
+        if source == "scheduler_lock" and type(raw.get("scheduler_active")) is bool:
+            provenance["installation_lock_present"] = raw["scheduler_active"]
+            provenance["scope"] = "installation"
         return slot(source_id, kind + ":" + resource, slot_id, source=source or grant, required_grant=grant,
             source_identity=identity or {}, observed_at=raw.get("observed_at"), collected_at=raw.get("collected_at") or timestamp(now),
             status=raw.get("status", "ok" if raw.get("observed_at") else "unknown"), reason=raw.get("reason"),
             value=raw if value is None else value, unit=raw.get("unit"), period_seconds=raw.get("period_seconds"),
-            truncated=raw.get("truncated", False), provenance={key: raw[key] for key in ("namespace", "metric", "dimensions", "start", "end", "aggregation") if key in raw},
+            truncated=raw.get("truncated", False), provenance=provenance,
             previous=previous_slot, now=now)
     def predicate(kind, resource, rule, value, predicate_value, *, impact="operational", resource_key=None):
         outcome = "unknown" if predicate_value is None else "fail" if predicate_value else "pass"
@@ -756,8 +783,8 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
                 checks.append(predicate(kind, "default", request["metric"] + "_ge_90_percent", metric_slot, pressured(metric.get("value")), resource_key=request["resource"]))
             elif request["unit"] == "Seconds" and request["metric"] in ("ReadLatency", "WriteLatency"):
                 checks.append(predicate(kind, "default", request["metric"] + "_ge_1_second", metric_slot, pressured(metric.get("value"), 1), resource_key=request["resource"]))
-        if not requests:
-            slots.append(make(kind, "default", "managed_pressure", {"status": "unknown", "reason": "managed_resource_unresolved"}, grant="aws", source="cloudwatch"))
+        if not requests or (managed or {}).get(kind, {}).get("status") != "ok":
+            slots.append(make(kind, "default", "managed_pressure", {"status": "unknown", "reason": (managed or {}).get(kind, {}).get("reason", "managed_resource_unresolved"), "omitted_count": (managed or {}).get(kind, {}).get("omitted_count", 0)}, grant="aws", source="cloudwatch"))
         components.append(component(source_id, kind, "default", slots, checks, now=now, identity_grant="platform"))
     slots, checks = [], []
     for row in fleet.get("rows", []):
@@ -779,9 +806,13 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
             sample = make("fleet", "installation", "runtime:" + digest([node_id, key])[:32], raw, grant="jobs", source="runtime", identity={"node_id": node_id, "measurement": key})
             slots.append(sample)
             percent = raw.get("percent")
+            if key == "memory" or key.startswith("filesystem:"):
+                total = raw.get("total")
+                if type(total) not in (int, float) or total <= 0:
+                    percent = None
             if key.startswith("inodes"):
                 total, free = raw.get("total"), raw.get("free")
-                percent = (total - free) * 100 / total if total and type(free) in (int, float) else None
+                percent = (total - free) * 100 / total if type(total) in (int, float) and total > 0 and type(free) in (int, float) and 0 <= free <= total else None
             if key != "filesystem_inventory":
                 checks.append(predicate("fleet", "installation", key.split(":")[0] + "_ge_90_percent", sample, pressured(percent), resource_key=digest([node_id, key])))
         trends = detail.get("trends") or {}
@@ -803,6 +834,7 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
     for channel in configuration["channels"]:
         raw = by_channel.get(channel) or {"channel": channel, "due_pending": 0, "running": 0, "overruns": 0}
         raw = {**raw, "observed_at": native.get("observed_at"), "status": "ok" if native.get("observed_at") else "unknown"}
+        raw["events_last_300_seconds"] = {row["event"]: row["count"] for row in native.get("events", []) if row["channel"] == channel}
         queue = make("jobman", "installation", "queue:" + digest(channel)[:32], raw, grant="jobs", source="job_queue", identity={"channel": channel})
         job_slots.append(queue)
         job_checks.append(predicate("jobman", "installation", "runtime_overrun", queue, raw.get("overruns", 0) > 0 if raw.get("observed_at") else None, resource_key=channel))
@@ -812,7 +844,14 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
             duration = (parse_time(raw["observed_at"]) - parse_time(prior["observed_at"])).total_seconds()
             if duration >= 300:
                 current_completed, previous_completed = parse_time(raw.get("latest_completed")), parse_time((prior.get("value") or {}).get("latest_completed"))
-                progress = not current_completed or (previous_completed is not None and current_completed <= previous_completed)
+                raw["progress_window_seconds"] = duration
+                if current_completed is None and previous_completed is not None or current_completed and previous_completed and current_completed < previous_completed:
+                    raw["progress_comparison"] = "reset_unknown"
+                    progress = None
+                else:
+                    progress = not raw["events_last_300_seconds"].get("completed", 0) and (current_completed is None or previous_completed is not None and current_completed == previous_completed)
+                    raw["progress_comparison"] = "same_channel_window"
+                queue["value"] = dict(raw)
         job_checks.append(predicate("jobman", "installation", "due_backlog_no_progress_300_seconds", queue, progress, resource_key=channel))
     from mojo.helpers.settings import settings
     interval = max(1, int(settings.get_static("JOBS_RUNNER_HEARTBEAT_SEC", 5)))

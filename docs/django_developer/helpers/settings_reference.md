@@ -1415,3 +1415,13 @@ registered resource is enabled; until then every endpoint answers 404.
 
 - Source: static scan of `settings.get(...)`, `getattr(settings, ...)`, and `settings.KEY` across `mojo/` (excluding migrations).
 - Keys here are framework-known knobs only; project-specific settings may exist in your Django project and are not listed unless referenced by framework code.
+
+## Health Snapshot Identity and Internal State
+
+- `MOJO_ENVIRONMENT` — file-only explicit source environment identity.
+- `HEALTH_SNAPSHOT_ENVIRONMENT_ID` — file-only explicit fallback for installations without `MOJO_ENVIRONMENT`; conflicting values refuse identity.
+- `MOJO_HEALTH_PUBLICATION_STATE` — protected internal global Setting; bounded durable source generation/configuration heads, never health history. Generic Settings/Setup writers cannot change it.
+
+Collection reuses the frozen installation UUID/slug and existing fleet, jobs
+channel, Redis and primary database declarations. No new agent/collector
+configuration or public raw endpoint is created. See [health snapshots](../account/health_snapshot.md).

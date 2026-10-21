@@ -128,6 +128,10 @@ def test_checked_custom_alias_and_competing_proofs_are_reconciled_before_binding
     assert row["identity_status"] == "ambiguous" and not acquired["roster_complete"], "competing checked aliases established a resolved complete roster"
     assert acquired["evidence"]["logical"]["current"]["reason"] == "identity_ambiguous", "ambiguous logical identity accepted one claimant's runtime facts"
     assert acquired["evidence"]["logical"]["trends"]["reason"] == "identity_ambiguous", "ambiguous identity accepted instance-specific provider facts"
+    from mojo.apps.account.services import health_evidence as he
+    components = he.build_components({"source_id": "a"*64, "services": [], "channels": [], "channels_complete": False}, {}, {}, acquired, {})
+    fleet = next(row for row in components if row["kind"] == "fleet")
+    assert not fleet["coverage"]["complete"] and all(slot["observed_at"] is None for slot in fleet["evidence"]), "snapshot assembly trusted samples bound to an ambiguous roster identity"
 
 
 @th.django_unit_test()
@@ -139,7 +143,7 @@ def test_recent_series_partial_and_mount_caps_remain_required_coverage_gaps(opts
         def list_metrics(self, **params):
             return {"Metrics": [{"Namespace": params["Namespace"], "MetricName": params["MetricName"], "Dimensions": [{"Name": "InstanceId", "Value": "i-one"}]}]}
         def get_metric_data(self, **params):
-            return {"MetricDataResults": [{"Id": query["Id"], "StatusCode": "PartialData", "Timestamps": [now], "Values": [0]} for query in params["MetricDataQueries"]]}
+            return {"MetricDataResults": [{"Id": query["Id"], "StatusCode": "PartialData", "Timestamps": [now-timedelta(seconds=1)], "Values": [0]} for query in params["MetricDataQueries"]]}
     cloud = CloudWatchHelper(access_key="fake", secret_key="fake").get_recent_evidence(
         [{"node_id": "one", "instance_id": "i-one"}], "CWAgent", {"one": ["/data%d" % index for index in range(10)]}, deadline=time.monotonic()+5, client=Provider(), now=now)
     filesystems = cloud["nodes"]["one"]["filesystems"]
@@ -147,3 +151,88 @@ def test_recent_series_partial_and_mount_caps_remain_required_coverage_gaps(opts
     assert sum(row.get("reason") == "not_collected_budget" for row in filesystems) == 3, "capped named mounts were mislabeled as absent provider series"
     slot = fh._coverage_slot(cloud["nodes"]["one"]["cpu"], source="cloudwatch", now=now, freshness=900)
     assert slot["truncated"] and slot["coverage_status"] == "incomplete" and slot["value"] == 0, "retained PartialData sample established complete series coverage"
+
+
+@th.django_unit_test()
+def test_default_snapshot_readers_charge_inventory_and_redis_to_shared_caps(opts):
+    from mojo.apps.aws.services import fleet_health as fh
+    from mojo.apps.account.services.health_evidence import CycleBudget
+    from mojo.deploy.provision.spec import Spec
+    deadline, calls = time.monotonic()+5, []
+    budget = CycleBudget(deadline, limits={"provider_operations": 1, "inventory_pages": 1, "redis_commands": 2})
+    class Provider:
+        def describe_instances(self, **params):
+            calls.append("inventory")
+            return {"Reservations": [], "NextToken": "second-page"}
+    class Redis:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def get(self, key):
+            calls.append("redis")
+            return None
+    readers = fh._snapshot_readers(deadline, budget, {}, connect_factory=lambda **kwargs: Redis(), provider_factory=lambda *args: Provider())
+    result = readers["inventory"](Spec("testit-budget", "production", "us-east-1", balancer=False), deadline)
+    assert calls.count("inventory") == 1 and not result["complete"], "default inventory bypassed the whole-cycle provider/page cap"
+    readers["identity_cache"].read({"platform": True, "aws": True, "jobs": True}, deadline)
+    readers["scheduler"](deadline)
+    with th.assert_raises(TimeoutError):
+        readers["scheduler"](deadline)
+    assert budget.counts["redis_commands"] == 2 and calls.count("redis") == 2, "default cache/scheduler reads bypassed cumulative Redis accounting"
+    with th.assert_raises(TimeoutError):
+        budget.take("provider_operations")
+    assert budget.counts["provider_operations"] == 1, "a later metric/managed binding operation received a reset provider allowance"
+
+
+@th.django_unit_test()
+def test_proved_single_node_coverage_targets_only_its_runtime_host(opts):
+    from mojo.apps.aws.services import fleet_health as fh
+    readers, calls = _readers()
+    original = readers["diagnostics_batch"]
+    targeted = []
+    def diagnostics(roster, end):
+        targeted.extend(row["hostname"] for row in roster)
+        return original(roster, end)
+    readers["diagnostics_batch"] = diagnostics
+    acquired = fh.acquire_snapshot(Actor("view_platform", "manage_aws", "view_jobs"), deadline=time.monotonic()+5,
+        readers=readers, node_ids=["a"])
+    assert targeted == ["a"] and set(acquired["evidence"]) == {"a"}, "a proved one-node request broadcast checked collection to unrelated fleet runners"
+
+
+@th.django_unit_test()
+def test_default_bounded_topology_reader_decodes_owned_text_setting(opts):
+    from mojo.apps.aws.services import fleet_health as fh
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.services.health_evidence import CycleBudget
+    import json
+    key = "TESTIT_HEALTH_TOPOLOGY_JSON"
+    Setting.objects.filter(key=key).delete()
+    try:
+        Setting.objects.create(key=key, value=json.dumps({"nodes": ["testit-offline"], "pools": ["web"]}))
+        deadline = time.monotonic()+3
+        readers = fh._snapshot_readers(deadline, CycleBudget(deadline), {}, topology_key=key)
+        expected = readers["expected"]({"platform": True, "aws": False, "jobs": False}, deadline)
+        assert expected["sources"]["edge_topology"]["status"] == "ok" and any(row["node_id"] == "testit-offline" for row in expected["declarations"]), "bounded TextField topology read dropped declared offline obligations instead of JSON-decoding them"
+    finally:
+        Setting.objects.filter(key=key).delete()
+
+
+@th.django_unit_test()
+def test_late_valid_checked_proof_uses_phase_time_instead_of_producer_start(opts):
+    from mojo.apps.aws.services import fleet_health as fh
+    readers, calls = _readers()
+    started = datetime.now(timezone.utc)
+    phase = [started]
+    observed = (started+timedelta(seconds=40)).isoformat()
+    readers["expected"] = lambda *args: {"configured": True, "complete": True, "spec": None, "sources": {}, "declarations": [{"node_id": "logical", "source": "edge_topology"}]}
+    readers["heartbeats"] = lambda end: [{"hostname": "host-late", "runner_id": "runner-late", "started": observed, "last_heartbeat": observed, "alive": True}]
+    def checked(roster, end):
+        phase[0] = started+timedelta(seconds=40)
+        return {"status": "verified", "results": [{"host": "host-late", "started": observed, "status": "success", "result": {
+            "hostname": "host-late", "proof": {"node_id": "logical", "observed_at": observed},
+            "current": {"cpu": {"status": "ok", "observed_at": observed, "percent": 1}}}}]}
+    readers["diagnostics_batch"] = checked
+    acquired = fh.acquire_snapshot(Actor("view_platform", "manage_aws", "view_jobs"), deadline=time.monotonic()+5,
+        readers=readers, wall_clock=lambda: phase[0])
+    assert acquired["rows"][0]["hostname"] == "host-late" and acquired["evidence"]["logical"]["current"]["cpu"]["percent"] == 1, "valid later phase proof was rejected as future relative to collector start"

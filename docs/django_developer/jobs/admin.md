@@ -363,3 +363,21 @@ TLS handshake setup refreshes its remaining budget after TCP and local certifica
 configuration, then uses a single native handshake timeout. Existing TLS
 certificate/hostname requirements remain enforced. The private transport does not
 change the installation's global Redis/TLS connection classes.
+
+## Health snapshot queue and failure facts
+
+The account five-minute producer coalesces one source/slot into one running job
+plus the latest pending attempt, with zero retries and no catch-up replay.
+Snapshots batch declared channels: queue/processing/scheduled counts and earliest
+visibility score are separate from grouped primary due/running/completed facts.
+Future schedules are not overdue; processing scores are not exact runtime.
+Actual `max_exec_seconds` and `started_at` prove overruns. Idle/drained queues
+pass the stall predicate; same-scope independent progress samples and counter
+reset handling are required for pressure. Scheduler lock presence remains
+installation-only and never fabricates detector heartbeat evidence.
+
+Failed/expired JobEvents and current terminal Job fallback use signed frozen
+24-hour keyset windows,200 rows/page,600-second overlap and fixed expiry. Reads
+never acknowledge/delete source rows. Manual retry creates a replacement while
+preserving original terminal fields. Event writes and retention remain best
+effort; standing limitations differ from observed gaps. See the [full contract](../account/health_snapshot.md).

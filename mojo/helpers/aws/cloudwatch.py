@@ -475,7 +475,7 @@ class CloudWatchHelper:
         return output
 
     def get_recent_evidence(self, nodes, namespace="CWAgent", mounts=None, *, deadline,
-                            client=None, now=None, budget=None, maximum_series=256, extra_series=None):
+                            client=None, now=None, budget=None, maximum_series=256, extra_series=None, maximum_operations=32):
         """One recent acquisition, exact discovered dimensions and batched data.
 
         Input identities are resolved expected rows, never request parameters.
@@ -493,7 +493,7 @@ class CloudWatchHelper:
         accounting = {"provider_operations": 0, "metric_discovery_pages": 0, "series": 0}
         def call(operation, **params):
             nonlocal calls
-            if calls >= 32 or time.monotonic() >= deadline:
+            if calls >= maximum_operations or time.monotonic() >= deadline:
                 raise TimeoutError("metric_budget_exceeded")
             if budget is not None:
                 budget.take("provider_operations")

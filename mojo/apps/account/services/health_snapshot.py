@@ -201,8 +201,8 @@ def validate_publication(value, identity):
                     and value["fresh_total"] == value["returned_total"] == value["expected_total"]
                     and value["unknown_total"] == 0, "coverage_omission_inconsistent")
     require(isinstance(value, dict))
-    if "publication_digest" in value:
-        require(value["publication_digest"] == evidence.digest({key: item for key, item in value.items() if key != "publication_digest"}), "publication_digest_mismatch")
+    require(isinstance(value.get("publication_digest"), str) and HEX.fullmatch(value["publication_digest"]))
+    require(value["publication_digest"] == evidence.digest({key: item for key, item in value.items() if key != "publication_digest"}), "publication_digest_mismatch")
     try:
         require(len(evidence.canonical(value).encode()) <= MAX_BYTES, "snapshot_oversize")
     except (TypeError, ValueError, RecursionError):
@@ -591,7 +591,7 @@ def mcp_projection(value, evidence_cursor=None):
 PRODUCER_FUNC = "mojo.apps.account.asyncjobs.produce_health_snapshot"
 
 
-def enqueue_snapshot(*, now=None, configuration_reader=None, publisher=None):
+def enqueue_snapshot(*, now=None, configuration_reader=None, publisher=None, mirror=None):
     """One running producer plus one latest pending slot, no catch-up replay."""
     from django.db import connections, transaction
     from mojo.apps import jobs
@@ -624,6 +624,11 @@ def enqueue_snapshot(*, now=None, configuration_reader=None, publisher=None):
             for obsolete in pending:
                 if obsolete.pk != chosen.pk:
                     Job.objects.using("default").filter(pk=obsolete.pk, status="pending").update(status="canceled", finished_at=now, modified=now)
+            # Reconcile the exact durable row even when a previous on-commit
+            # mirror was lost or delivered without acknowledgement. The engine
+            # claims a pending row once; duplicate queue IDs are harmless.
+            Job.objects.using("default").filter(pk=chosen.pk, status="pending").update(last_error=jobs.UNCONFIRMED_PUBLISH_ERROR)
+            transaction.on_commit(lambda: (mirror or jobs._publish_after_commit)(chosen.pk, chosen.channel, chosen.run_at, chosen.broadcast, "default"), using="default")
             return {"status": "coalesced", "job_id": str(chosen.pk), "slot": slot}
         job_id = (publisher or jobs.publish)(PRODUCER_FUNC, payload=payload, channel=channel,
             idempotency_key=idempotency, max_retries=0, expires_at=expires, max_exec_seconds=60)
@@ -693,14 +698,15 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
     payload = job.payload or {}
     if type(payload.get("slot")) is not int or payload["slot"] != int(now.timestamp()) // 300:
         return {"status": "expired", "reason": "superseded_slot"}
-    budget = evidence.CycleBudget(deadline, clock=monotonic)
+    collection_deadline = deadline - 10
+    budget = evidence.CycleBudget(deadline, clock=monotonic, reserved={"redis_commands": 4, "db_queries": 5})
     config_reader = configuration_reader or partial(evidence.source_configuration, budget=budget)
-    configuration = config_reader(deadline)
+    configuration = config_reader(collection_deadline)
     identity = {key: configuration[key] for key in ("source_id", "source_identity")}
     if payload.get("source_id") != identity["source_id"]:
         raise SnapshotError("source_identity_mismatch")
     def counted_connect(**kwargs):
-        return evidence.BudgetRedis((connect or get_bounded_connection)(**kwargs), budget)
+        return evidence.bounded_redis_connection(connect=connect or get_bounded_connection, budget=budget, **kwargs)
     cursor_context = lambda end: evidence.primary_cursor(end, budget=budget)
     def check_configuration(cursor):
         if configuration_reader is None:
@@ -737,7 +743,7 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
                     budget.take("provider_operations")
                     if operation == "describe_instances":
                         budget.take("inventory_pages")
-                    return getattr(DeadlineProviderClient(self.service, deadline, region=configuration["expected"].get("spec").region), operation)(**params)
+                    return getattr(DeadlineProviderClient(self.service, collection_deadline, region=configuration["expected"].get("spec").region), operation)(**params)
                 return call
         def inventory(spec, end):
             if spec is None:
@@ -753,21 +759,21 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
                 active = bool(client.get(JobKeys().scheduler_lock()))
             return {"status": "ok", "scope": "installation", "scheduler_active": active, "observed_at": None}
         def fleet_source():
-            managed = readers.get("managed", lambda: evidence.managed_series(configuration, deadline, budget=budget))()
+            managed = readers.get("managed", lambda: evidence.managed_series(configuration, collection_deadline, budget=budget))()
             raw_readers = {"expected": lambda grants, end: configuration["expected"], "inventory": inventory,
                 "heartbeats": heartbeats, "scheduler": scheduler, "identity_cache": fleet_health.IdentityRoster(connect=counted_connect),
                 "diagnostics_batch": lambda roster, end: jobs.get_sysinfo(diagnostic=True, roster=roster, deadline=end,
                     connect=counted_connect, revision=settings.get_static("MOJO_FLEET_CONFIG_REVISION", None)), **readers.get("fleet", {})}
-            acquired = fleet_health.acquire_snapshot(InternalActor(), deadline=deadline, readers=raw_readers, budget=budget, now=now, extra_series=managed["series"])
+            acquired = fleet_health.acquire_snapshot(InternalActor(), deadline=collection_deadline, readers=raw_readers, budget=budget, extra_series=managed["series"])
             return acquired, managed
         values, probes = {}, {}
         with ThreadPoolExecutor(max_workers=4) as pool:
-            futures = {pool.submit(readers.get("native", lambda: evidence.database_and_job_facts(configuration["channels"], deadline, budget=budget))): "native",
-                       pool.submit(readers.get("redis", lambda: {"native": evidence.redis_facts(deadline, connect=counted_connect), "queues": evidence.queue_facts(configuration["channels"], deadline, connect=counted_connect, budget=budget)})): "redis",
+            futures = {pool.submit(readers.get("native", lambda: evidence.database_and_job_facts(configuration["channels"], collection_deadline, budget=budget))): "native",
+                       pool.submit(readers.get("redis", lambda: {"native": evidence.redis_facts(collection_deadline, connect=counted_connect), "queues": evidence.queue_facts(configuration["channels"], collection_deadline, connect=counted_connect, budget=budget)})): "redis",
                        pool.submit(fleet_source): "fleet"}
             for service in configuration["services"]:
                 budget.take("api_services")
-                futures[pool.submit(readers.get("probe", evidence.probe_service), service, deadline)] = service["resource_id"]
+                futures[pool.submit(readers.get("probe", evidence.probe_service), service, collection_deadline)] = service["resource_id"]
             for future in as_completed(futures):
                 key = futures[future]
                 try:
@@ -778,6 +784,7 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
                     values[key] = value
                 else:
                     probes[key] = value
+        budget.begin_finalization()
         fleet_value = values.get("fleet")
         if not isinstance(fleet_value, tuple):
             acquired = {"expected": configuration["expected"], "rows": fleet_health.reconcile(configuration["expected"]["declarations"]), "evidence": {}, "roster_revision": None}

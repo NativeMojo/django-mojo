@@ -159,3 +159,11 @@ Use a global `view_admin` + `view_security` operator without
 complete evidence with secret-only scrubbing, legacy links, and session recovery only. Do not submit RuleSet,
 recommendation, or IPSet confirmations; live-preview API calls reach the real
 installation.
+
+## Protected health snapshot read
+
+`GET /api/account/admin/health/snapshot` reads the five-minute schema2 publication
+without collecting. Optional `evidence_cursor` traverses bounded durable failed/
+expired job evidence. Entry requires current global platform permission; AWS and
+jobs facts use independent source grants. See [the full health snapshot contract](health_snapshot.md)
+for immutable identity/generation/digest, per-slot expiry, limits and denial behavior.

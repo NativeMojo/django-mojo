@@ -1,6 +1,6 @@
 # Cloud Domain Tools
 
-Twenty-two on-demand tools (`domain="cloud"`, none core) that let an operator ask
+Twenty-four on-demand tools (`domain="cloud"`, none core) that let an operator ask
 the Assistant what is healthy, what needs attention, and — after an explicit
 approval — perform the same bounded cloud and fleet tasks the built-in Admin
 already offers.
@@ -28,6 +28,8 @@ projection (see [Bounding and redaction](#bounding-and-redaction)).
 | `get_framework_status` | `GET /api/account/admin/platform/framework` | `admin_platform.framework_overview` | `view_platform`, `manage_platform`, `admin` |
 | `get_fleet_health` | Reconciled fleet read | `fleet_health.report` | Per-source platform/AWS/jobs grants; see below |
 | `get_node_health` | Selected node diagnostics | `fleet_health.node` | Per-source platform/AWS/jobs grants; see below |
+| `get_monitoring_coverage` | One expected-node coverage page | `fleet_health.coverage` | Per-source platform/AWS/jobs grants |
+| `get_health_snapshot` | `GET /api/account/admin/health/snapshot` | `health_snapshot.read_snapshot` | Global platform entry; independent AWS/jobs facts |
 | `get_fleet_capacity` | `GET /api/aws/capacity` | `capacity.report` | `manage_aws` |
 | `get_capacity_operation_status` | `GET /api/aws/capacity/status` | `capacity.operation_status` / `capacity.batch_status` | `manage_aws` |
 | `get_managed_upgrades` | `GET /api/aws/maintenance/versions` | `maintenance.report` | `manage_aws` |
@@ -421,3 +423,25 @@ retains an unknown row but loses callable instance/hostname aliases. This raw
 reader fence is separate from snapshot producer component ownership identity.
 Fresh competing checked claims remain ambiguous even if one claimant replies
 again; one fresh reply cannot erase a still-fresh conflicting identity proof.
+
+## Cached health and monitoring coverage
+
+`get_health_snapshot(evidence_cursor=None)` is read-only and cache-only, with
+current global platform entry permission, independent AWS/jobs projection and a
+24KiB MCP ceiling. It returns `django-mojo.health_snapshot` schema2, collected
+every300 seconds for60-second external polling. Its immutable publication digest
+and configuration hash survive permission projections. Each causal slot retains
+actual sample time and expiry; repeated reads do not renew health. MCP omissions
+return the frozen checkpoint before unread failure evidence and a REST reference.
+
+`get_monitoring_coverage(node_id=None,cursor=None)` is a read-only schema1
+on-demand drilldown over the shared bounded readers. It accepts an expected
+node or signed cursor, one node per page. Global roster counts stay separate
+from local measurement coverage, and every multi-node page stays incomplete.
+Runtime, continuous streams, recipe declaration and installation proof remain
+independent; partial/capped/missing/denied requirements stay visible.
+
+See [the health snapshot contract](../account/health_snapshot.md) for both tools,
+source permissions, three-second reads, durable failure cursors, fixed deadlines
+and the public-data boundary. Existing fleet/node and platform tools keep their
+existing public signatures and source permissions.

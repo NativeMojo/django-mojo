@@ -939,7 +939,7 @@ def node(actor, node_id, hours=24, *, readers=None, deadline=None):
     return output
 
 
-def _snapshot_readers(deadline, budget, readers):
+def _snapshot_readers(deadline, budget, readers, *, connect_factory=None, provider_factory=None, topology_key=None):
     """Private default readers all charge the same source-operation budget."""
     from mojo.apps.account.services import health_evidence as he
     from mojo.helpers.redis import get_bounded_connection
@@ -950,7 +950,7 @@ def _snapshot_readers(deadline, budget, readers):
     from mojo.apps import jobs
     readers = dict(readers)
     def connect(**kwargs):
-        return he.BudgetRedis(get_bounded_connection(**kwargs), budget)
+        return he.bounded_redis_connection(connect=connect_factory or get_bounded_connection, budget=budget, **kwargs)
     def inventory(spec, end):
         if spec is None:
             return {"instances": {}, "complete": False, "reasons": ["identity_unavailable"]}
@@ -962,7 +962,8 @@ def _snapshot_readers(deadline, budget, readers):
                     budget.take("provider_operations")
                     if operation == "describe_instances":
                         budget.take("inventory_pages")
-                    return getattr(DeadlineProviderClient(self.service, end, region=spec.region), operation)(**params)
+                    client = provider_factory(self.service, end, spec.region) if provider_factory else DeadlineProviderClient(self.service, end, region=spec.region)
+                    return getattr(client, operation)(**params)
                 return call
         value = capacity.health_inventory(spec, end, ec2_client=Provider("ec2"), elbv2_client=Provider("elbv2"))
         value["observed_at"] = _now()
@@ -978,9 +979,10 @@ def _snapshot_readers(deadline, budget, readers):
         from mojo.apps.account.models import Setting
         def topology(key):
             with he.primary_cursor(end, budget=budget) as cursor:
-                cursor.execute('SELECT value FROM "%s" WHERE group_id IS NULL AND key=%%s' % Setting._meta.db_table, [key])
+                cursor.execute('SELECT value FROM "%s" WHERE group_id IS NULL AND key=%%s' % Setting._meta.db_table, [topology_key or key])
                 row = cursor.fetchone()
-            return row[0] if row else None
+            raw = row[0] if row else None
+            return json.loads(raw) if isinstance(raw, str) else raw
         return _read_expected(grants, end, topology_reader=topology)
     readers.setdefault("expected", expected)
     readers.setdefault("inventory", inventory)
@@ -993,12 +995,12 @@ def _snapshot_readers(deadline, budget, readers):
     return readers
 
 
-def acquire_snapshot(actor, *, deadline, readers=None, budget=None, now=None, node_ids=None, extra_series=None):
+def acquire_snapshot(actor, *, deadline, readers=None, budget=None, now=None, node_ids=None, extra_series=None, wall_clock=None):
     """Shared raw acquisition for snapshots/coverage, never a public-tool loop."""
     from mojo.apps.account.services.health_evidence import CycleBudget
     from mojo.helpers.aws.cloudwatch import CloudWatchHelper
     from mojo.deploy.provision.spec import names
-    now = now or datetime.now(timezone.utc)
+    phase_now = lambda: now if now is not None else (wall_clock or (lambda: datetime.now(timezone.utc)))()
     budget = budget or CycleBudget(deadline)
     readers = _snapshot_readers(deadline, budget, readers or {})
     grants, expected, rows, sources, runners, overflow, inventory = readers.get("collected") or _collect(actor, deadline, readers)
@@ -1010,7 +1012,10 @@ def acquire_snapshot(actor, *, deadline, readers=None, budget=None, now=None, no
             # The already bounded channel registry is the transport authority.
             # All checked proofs must be reconciled together, including hosts
             # whose custom logical node id has no hostname alias yet.
-            roster = runners[:128]
+            chosen = [row for row in rows if row["expected"] and (node_ids is None or row["node_id"] in node_ids)]
+            proved_target = node_ids is not None and chosen and all(row.get("hostname") and row.get("identity_status") == "resolved" for row in chosen)
+            hosts = {row.get("hostname") for row in chosen}
+            roster = [runner for runner in runners if not proved_target or runner.get("hostname", "").lower() in hosts][:128]
             if roster:
                 budget.take("checked_broadcasts")
                 budget.take("checked_targets", len(roster))
@@ -1024,9 +1029,9 @@ def acquire_snapshot(actor, *, deadline, readers=None, budget=None, now=None, no
                 for row in rows if row.get("proof_started") and row.get("proof_observed_at")]
             resolved = reconcile(expected["declarations"], inventory, runners, prior + [{
                 "host": receipt["host"], "started": receipt.get("started"), "proof": (receipt.get("result") or {}).get("proof") or {}}
-                for receipt in receipts], now=now, heartbeat_ttl=readers.get("heartbeat_ttl", max(1, int(settings.get_static("JOBS_RUNNER_HEARTBEAT_SEC", 5)))*3))
+                for receipt in receipts], now=phase_now(), heartbeat_ttl=readers.get("heartbeat_ttl", max(1, int(settings.get_static("JOBS_RUNNER_HEARTBEAT_SEC", 5)))*3))
             for previous in rows:
-                if previous.get("identity_status") == "ambiguous" and _fresh(previous.get("proof_observed_at"), now):
+                if previous.get("identity_status") == "ambiguous" and _fresh(previous.get("proof_observed_at"), phase_now()):
                     for row in resolved:
                         if row["node_id"] == previous["node_id"]:
                             row.update(identity_status="ambiguous", health="unknown", aliases=previous.get("aliases", []), proof_observed_at=previous["proof_observed_at"])
@@ -1063,7 +1068,7 @@ def acquire_snapshot(actor, *, deadline, readers=None, budget=None, now=None, no
             cloud_rows = [row for row in selected if row["identity_status"] != "ambiguous"]
             cloud = readers.get("recent", lambda rows, namespace, mounts, deadline: CloudWatchHelper(
                 region=spec.region if spec else None, static_configuration=True).get_recent_evidence(rows, namespace, mounts,
-                    deadline=deadline, budget=budget, now=now, extra_series=extra_series))(cloud_rows, namespace, mounts, deadline)
+                    deadline=deadline, budget=budget, now=phase_now(), extra_series=extra_series, maximum_operations=readers.get("metric_operations", 32)))(cloud_rows, namespace, mounts, deadline)
             for row in selected:
                 evidence[row["node_id"]]["trends"] = (_state("unknown", "identity_ambiguous") if row["identity_status"] == "ambiguous" else
                     (cloud.get("nodes") or {}).get(row["node_id"]) or _state("unavailable", "not_collected_budget"))
@@ -1182,7 +1187,7 @@ def coverage(actor, node_id=None, cursor=None, *, readers=None, deadline=None, n
     deadline = min(deadline or time.monotonic() + 20, time.monotonic() + 20)
     from mojo.apps.account.services.health_evidence import CycleBudget
     budget = CycleBudget(deadline, limits={"provider_operations": 32, "cloudwatch_series": 10})
-    readers = _snapshot_readers(deadline, budget, readers or {})
+    readers = _snapshot_readers(deadline, budget, {**(readers or {}), "metric_operations": 12})
     # Resolve the roster once, then pass this exact acquisition into the raw
     # detail phase. No public node/report call and no second inventory sweep.
     collected = _collect(actor, deadline, readers)

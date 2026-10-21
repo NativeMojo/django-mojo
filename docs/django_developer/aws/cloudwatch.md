@@ -588,3 +588,20 @@ handshake, after DNS/TCP and local certificate-context setup. HTTP body makefile
 retain their socket reference after `Connection: close` releases its owner, then
 close the underlying transport on the final file release. This preserves ordinary
 response-body semantics while keeping every read under the original deadline.
+
+## Recent snapshot and coverage evidence
+
+The additive `get_recent_evidence` batch uses a fixed previous30-minute window
+with CPU300/memory60/disk300-second periods and real sample timestamps. It shares
+exact full-dimension discovery, preserves nulls/zeros and marks PartialData or
+non-exhausted results incomplete. Only eight mount series are collected; known
+capped paths remain named `not_collected_budget` obligations. Coverage allows
+twelve CloudWatch operations; the scheduled producer shares32 total provider
+operations and256 metric series with inventory and managed-resource binding.
+
+Managed RDS/cache dimensions require selected declarations and exact actual
+connection endpoint binding. A stable Aurora endpoint additionally resolves the
+current `IsClusterWriter` member. No API-host sample substitutes for managed
+pressure. A recipe proves declaration, never agent installation. Fresh runtime
+evidence cannot fill a missing continuous slot. See [health snapshots](../account/health_snapshot.md)
+for source grants, three-period/420-second expiry, causal proof and caps.
