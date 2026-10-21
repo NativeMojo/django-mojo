@@ -3,7 +3,9 @@ from mojo.apps.account.models import (
     RegisteredDevice, NotificationTemplate, PushConfig,
     NotificationDelivery, User
 )
-from mojo.apps.account.services.push import send_to_user, send_to_users
+from mojo.apps.account.services.push import (
+    send_to_user, send_to_users, register_push_device, PushRegistrationConflict
+)
 from mojo.helpers import response
 from mojo.helpers import request as rhelper
 
@@ -25,26 +27,18 @@ def register_device(request):
         "push_preferences": {"orders": true, "marketing": false}
     }
     """
-    device, created = RegisteredDevice.objects.update_or_create(
-        user=request.user,
-        device_id=request.DATA.get('device_id'),
-        defaults={
-            'device_token': request.DATA.get('device_token'),
-            'platform': request.DATA.get('platform'),
-            'device_name': request.DATA.get('device_name', ''),
-            'app_version': request.DATA.get('app_version', ''),
-            'os_version': request.DATA.get('os_version', ''),
-            'push_preferences': request.DATA.get('push_preferences', {}),
-            'is_active': True,
-            'push_enabled': True
-        }
-    )
-
-    if not created:
-        if not device.push_enabled:
-            device.is_active = True
-            device.push_enabled = True
-            device.save()
+    device_token = request.DATA.get('device_token')
+    device_id = request.DATA.get('device_id')
+    if not _valid_registration(device_token, device_id):
+        return response.error('device_token and device_id must be non-empty strings (maximum 4096 and 255 characters)')
+    try:
+        device, created = register_push_device(
+            request.user, device_id=device_id, device_token=device_token,
+            platform=request.DATA.get('platform'), request=request,
+            fields={key: request.DATA.get(key, default) for key, default in (
+                ('device_name', ''), ('app_version', ''), ('os_version', ''), ('push_preferences', {}))})
+    except PushRegistrationConflict:
+        return response.error('Push registration changed concurrently; retry.', status=409)
 
     return device.on_rest_get(request, 'default')
 
@@ -54,32 +48,30 @@ def register_device(request):
 def register_legacy_device(request):
     device_id = request.DATA.get("device_id", request.duid)
     if not device_id:
-        device_id = request.device.id
+        device_id = getattr(getattr(request, 'device', None), 'id', None)
+        if device_id is not None:
+            device_id = str(device_id)
     cmf_token = request.DATA.get(["cmf_token", "cm_token"])
+    if not _valid_registration(cmf_token, device_id):
+        return response.error('cmf_token and device_id must be non-empty strings (maximum 4096 and 255 characters)')
     meta = request.DATA.get("device_metadata", {})
     ua_info = rhelper.parse_user_agent(request.user_agent)
     platform = ua_info.os.family
-    device, created = RegisteredDevice.objects.update_or_create(
-        user=request.user,
-        device_id=device_id,
-        defaults={
-            'device_token': cmf_token,
-            'platform': platform.lower(),
-            'device_name': f"{request.user.display_name} {{platform}}",
-            'app_version': meta.get('app_version', ''),
-            'os_version': meta.get('os_version', ''),
-            'push_preferences': request.DATA.get('push_preferences', {}),
-            'is_active': True,
-            'push_enabled': True
-        }
-    )
-
-    if not created:
-        if not device.push_enabled:
-            device.is_active = True
-            device.push_enabled = True
-            device.save()
+    try:
+        register_push_device(request.user, device_id=device_id, device_token=cmf_token,
+            platform=platform.lower(), request=request, fields={
+                'device_name': f"{request.user.display_name} {platform}"[:100],
+                'app_version': meta.get('app_version', ''),
+                'os_version': meta.get('os_version', ''),
+                'push_preferences': request.DATA.get('push_preferences', {})})
+    except PushRegistrationConflict:
+        return response.error('Push registration changed concurrently; retry.', status=409)
     return {"status": True}
+
+
+def _valid_registration(token, device_id):
+    return (isinstance(token, str) and bool(token.strip()) and len(token) <= 4096
+            and isinstance(device_id, str) and bool(device_id.strip()) and len(device_id) <= 255)
 
 
 @md.POST('account/devices/push/unregister')
