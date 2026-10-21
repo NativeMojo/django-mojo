@@ -1,0 +1,429 @@
+"""Version 2 protected health publication and cached-read contract.
+
+Redis is publication storage, never the durable generation authority. Reads
+cannot trigger collection and never fall back to a process-local green value.
+"""
+import copy
+import json
+import re
+import secrets
+import time
+import uuid
+from datetime import timedelta
+
+from mojo.apps.account.services import health_evidence as evidence
+from mojo.helpers.settings import settings
+
+CONTRACT = "django-mojo.health_snapshot"
+SCHEMA_VERSION = 2
+PROFILE_VERSION = 2
+STATE_KEY = "MOJO_HEALTH_PUBLICATION_STATE"
+MAX_BYTES = 512 * 1024
+MAX_COMPONENTS = 29
+MAX_SLOTS = 2048
+MAX_GENERATION = 2 ** 53 - 1
+CACHE_TTL = 48 * 3600
+LEASE_SECONDS = 75
+READ_SECONDS = 3
+KINDS = ("api", "database", "redis", "jobman", "fleet", "monitoring")
+HEX = re.compile(r"^[a-f0-9]{64}$")
+ENVIRONMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+class SnapshotError(Exception):
+    def __init__(self, code):
+        self.error_code = code
+        super().__init__(code)
+
+
+def _read_installation_identity(deadline):
+    """Read the frozen pair through a bounded primary transaction, never create."""
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.services import system_settings
+    with evidence.primary_cursor(deadline, max_queries=4) as cursor:
+        cursor.execute('SELECT key, value FROM "%s" WHERE group_id IS NULL AND key IN (%%s, %%s)' % Setting._meta.db_table,
+                       [system_settings.INSTALLATION_UUID, system_settings.INSTALLATION_SLUG])
+        rows = dict(cursor.fetchall())
+    return system_settings._validate_identity_pair(
+        rows.get(system_settings.INSTALLATION_UUID), rows.get(system_settings.INSTALLATION_SLUG))
+
+
+def resolve_identity(*, identity_reader=None, get_static=None, deadline=None):
+    """Stable installation/environment identity; missing/conflicting input fails."""
+    get_static = get_static or settings.get_static
+    try:
+        stored = (identity_reader() if identity_reader else
+                  _read_installation_identity(deadline or time.monotonic() + 1))
+        installation = str(uuid.UUID(stored["uuid"]))
+        selected = get_static("MOJO_ENVIRONMENT", None)
+        explicit = get_static("HEALTH_SNAPSHOT_ENVIRONMENT_ID", None)
+        if selected and explicit and selected != explicit:
+            raise ValueError()
+        environment = selected or explicit
+        if not isinstance(environment, str) or not ENVIRONMENT.fullmatch(environment):
+            raise ValueError()
+        identity = {"installation_id": installation, "environment_id": environment}
+        return {"source_identity": identity, "source_id": evidence.digest([installation, environment])}
+    except Exception:
+        raise SnapshotError("source_identity_unresolved") from None
+
+
+def configuration_revision(identity, configuration):
+    return evidence.digest([identity["source_id"], PROFILE_VERSION, configuration])
+
+
+def _validate_state(key, value):
+    if not isinstance(value, dict) or len(value) > 64:
+        raise ValueError("publication state must contain at most 64 sources")
+    for source_id, row in value.items():
+        if (not isinstance(source_id, str) or not HEX.fullmatch(source_id)
+                or not isinstance(row, dict) or set(row) != {"generation", "config_revision"}
+                or type(row["generation"]) is not int or not 0 < row["generation"] <= MAX_GENERATION
+                or not isinstance(row["config_revision"], str) or not HEX.fullmatch(row["config_revision"])):
+            raise ValueError("publication state is invalid")
+    return value
+
+
+def reserve_generation(source_id, config_revision, deadline, *, key=STATE_KEY, cursor_context=None):
+    """Advance the one protected Setting under its primary row lock.
+
+    INSERT ON CONFLICT uses the existing global unique constraint to make the
+    initial row race safe. The internal bypass writes only a counter/config
+    map, never snapshot history or a Setting cache.
+    """
+    from mojo.apps.account.models import Setting
+    if (not isinstance(source_id, str) or not HEX.fullmatch(source_id)
+            or not isinstance(config_revision, str) or not HEX.fullmatch(config_revision)):
+        raise SnapshotError("invalid_publication_identity")
+    if key != STATE_KEY and not key.startswith("TESTIT_"):
+        raise SnapshotError("invalid_internal_state_key")
+    table = '"%s"' % Setting._meta.db_table
+    context = cursor_context or evidence.primary_cursor
+    with context(deadline) as cursor:
+        cursor.execute("INSERT INTO %s (key, value, is_secret, group_id, created, modified) "
+                       "VALUES (%%s, '{}', false, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
+                       "ON CONFLICT (key) WHERE group_id IS NULL DO NOTHING" % table, [key])
+        cursor.execute("SELECT id, value, is_secret FROM %s WHERE key=%%s AND group_id IS NULL FOR UPDATE" % table, [key])
+        row = cursor.fetchone()
+        if not row or row[2]:
+            raise SnapshotError("publication_state_invalid")
+        try:
+            state = json.loads(row[1])
+            _validate_state(key, state)
+        except (ValueError, TypeError):
+            raise SnapshotError("publication_state_invalid") from None
+        current = state.get(source_id, {}).get("generation", 0)
+        if current >= MAX_GENERATION or (source_id not in state and len(state) >= 64):
+            raise SnapshotError("publication_state_limit")
+        generation = current + 1
+        state[source_id] = {"generation": generation, "config_revision": config_revision}
+        cursor.execute("UPDATE %s SET value=%%s, modified=CURRENT_TIMESTAMP WHERE id=%%s" % table,
+                       [evidence.canonical(state), row[0]])
+    return generation
+
+
+# Kept here until the snapshot entry point is wired; registration is repeated
+# in system_settings' eager defaults by the integration unit, before any read.
+from mojo.apps.account.services import system_settings
+system_settings.register_protected_setting(STATE_KEY, _validate_state)
+
+
+def coverage(components, *, reasons=None, omitted=0, denominator_known=True):
+    required = [row for row in components if row.get("required")]
+    known = denominator_known and not omitted
+    return {"expected_total": len(required) + omitted if denominator_known else None,
+            "returned_total": len(required),
+            "observed_total": sum(row.get("observed_at") is not None for row in required),
+            "fresh_total": sum(row.get("coverage", {}).get("complete") is True for row in required),
+            "unknown_total": sum(not row.get("coverage", {}).get("complete") for row in required),
+            "omitted_total": omitted, "complete": bool(required and known and all(row.get("coverage", {}).get("complete") for row in required)),
+            "truncated": bool(omitted), "reasons": list(reasons or [])}
+
+
+def publication(identity, generation, config_revision, components, *, generated_at,
+                published_at, roster_revision, reasons=None):
+    value = {"contract": CONTRACT, "schema_version": 2, **copy.deepcopy(identity),
+             "publication_generation": generation, "config_revision": config_revision,
+             "generated_at": generated_at, "published_at": published_at,
+             "roster_revision": roster_revision, "profile_version": PROFILE_VERSION,
+             "components": copy.deepcopy(components), "coverage": coverage(components, reasons=reasons),
+             "failure_evidence": {"capture_status": "best_effort", "summary_only": True}}
+    value["collection_status"] = "complete" if value["coverage"]["complete"] else "partial" if components else "unknown"
+    validate_publication(value, identity)
+    return value
+
+
+def validate_publication(value, identity):
+    """Validate the bounded immutable wire object before trusting cached facts."""
+    def require(valid, code="snapshot_malformed"):
+        if not valid:
+            raise SnapshotError(code)
+    def check_coverage(value):
+        require(isinstance(value, dict))
+        for name in ("expected_total", "returned_total", "observed_total", "fresh_total", "unknown_total", "omitted_total"):
+            number = value.get(name)
+            require((name == "expected_total" and number is None)
+                    or type(number) is int and 0 <= number <= 100000)
+        require(type(value.get("complete")) is bool and type(value.get("truncated")) is bool
+                and isinstance(value.get("reasons"), list))
+    require(isinstance(value, dict))
+    try:
+        require(len(evidence.canonical(value).encode()) <= MAX_BYTES, "snapshot_oversize")
+    except (TypeError, ValueError, RecursionError):
+        raise SnapshotError("snapshot_malformed") from None
+    require(value.get("contract") == CONTRACT and value.get("schema_version") == 2
+            and value.get("profile_version") == PROFILE_VERSION, "snapshot_unsupported")
+    require(value.get("source_identity") == identity.get("source_identity")
+            and value.get("source_id") == identity.get("source_id"), "source_identity_mismatch")
+    require(type(value.get("publication_generation")) is int and 0 < value["publication_generation"] <= MAX_GENERATION)
+    require(isinstance(value.get("config_revision"), str) and HEX.fullmatch(value["config_revision"]))
+    require(evidence.parse_time(value.get("generated_at")) is not None and evidence.parse_time(value.get("published_at")) is not None)
+    require(value.get("collection_status") in ("complete", "partial", "unknown"))
+    require(isinstance(value.get("roster_revision"), (str, type(None))))
+    check_coverage(value.get("coverage"))
+    require(isinstance(value.get("failure_evidence"), dict))
+    components = value.get("components")
+    require(isinstance(components, list) and len(components) <= MAX_COMPONENTS)
+    seen, total_slots, total_conditions = set(), 0, 0
+    for component in components:
+        require(isinstance(component, dict))
+        component_id = component.get("component_id")
+        require(component.get("kind") in KINDS and isinstance(component.get("resource_id"), str)
+                and 0 < len(component["resource_id"]) <= 256)
+        require(component_id == component["kind"] + ":" + component["resource_id"] and component_id not in seen)
+        seen.add(component_id)
+        require(component.get("status") in ("healthy", "degraded", "unhealthy", "unknown", "stale", "not_applicable")
+                and component.get("availability") in ("up", "down", "unknown", "not_applicable")
+                and type(component.get("required")) is bool)
+        require(isinstance(component.get("resource_scope"), str) and isinstance(component.get("resource_owner_source_id"), str)
+                and isinstance(component.get("service_id"), (str, type(None))))
+        check_coverage(component.get("coverage"))
+        require(isinstance(component.get("reasons"), list))
+        for name in ("observed_at", "last_success_at", "fresh_until", "sample_id"):
+            require(name in component)
+            require(component[name] is None or (isinstance(component[name], str) and
+                    (HEX.fullmatch(component[name]) if name == "sample_id" else evidence.parse_time(component[name]) is not None)))
+        slots, conditions = component.get("evidence"), component.get("conditions")
+        require(isinstance(slots, list) and isinstance(conditions, list))
+        total_slots += len(slots)
+        total_conditions += len(conditions)
+        require(total_slots <= MAX_SLOTS and total_conditions <= evidence.MAX_CONDITIONS)
+        by_id = {}
+        for slot in slots:
+            require(isinstance(slot, dict) and isinstance(slot.get("slot_id"), str)
+                    and 0 < len(slot["slot_id"]) <= 256 and slot["slot_id"] not in by_id)
+            by_id[slot["slot_id"]] = slot
+            require(slot.get("required_grant") in evidence.GRANTS and type(slot.get("required")) is bool)
+            require(all(key in slot for key in ("source", "source_identity", "status", "reason", "observed_at",
+                        "collected_at", "last_success_at", "fresh_until", "sample_id", "value", "unit", "provenance", "limits", "truncated")))
+            for name in ("observed_at", "collected_at", "last_success_at", "fresh_until"):
+                require(slot[name] is None or evidence.parse_time(slot[name]) is not None)
+            require(slot["sample_id"] is None or isinstance(slot["sample_id"], str) and HEX.fullmatch(slot["sample_id"]))
+            require(type(slot["truncated"]) is bool and isinstance(slot["provenance"], dict)
+                    and isinstance(slot["limits"], dict) and isinstance(slot["source_identity"], dict))
+        condition_keys = set()
+        for condition in conditions:
+            require(isinstance(condition, dict) and isinstance(condition.get("condition_key"), str)
+                    and HEX.fullmatch(condition["condition_key"]) and condition["condition_key"] not in condition_keys)
+            condition_keys.add(condition["condition_key"])
+            require(condition.get("outcome") in ("pass", "fail", "unknown", "not_applicable")
+                    and condition.get("impact") in ("availability", "operational"))
+            basis = condition.get("basis")
+            require(isinstance(basis, list) and len(basis) <= evidence.MAX_BASIS)
+            require(condition["outcome"] not in ("pass", "fail") or bool(basis))
+            basis_ids = set()
+            for fact in basis:
+                require(isinstance(fact, dict) and fact.get("slot_id") in by_id
+                        and fact["slot_id"] not in basis_ids and isinstance(fact.get("resource_key"), str))
+                basis_ids.add(fact["slot_id"])
+                authoritative = by_id[fact["slot_id"]]
+                require(all(fact.get(key) == authoritative.get(key) for key in ("sample_id", "observed_at", "fresh_until")), "causal_basis_mismatch")
+    return value
+
+
+_RESERVE_LUA = """-- health_snapshot.reserve.v2
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+return 1
+"""
+_RELEASE_LUA = """-- health_snapshot.release.v2
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+redis.call('DEL', KEYS[1], KEYS[2])
+return 1
+"""
+_PUBLISH_LUA = """-- health_snapshot.publish.v2
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+if redis.call('GET', KEYS[2]) ~= ARGV[2] then return 0 end
+local reservation = cjson.decode(ARGV[2])
+local publication = cjson.decode(ARGV[3])
+local lease = cjson.decode(ARGV[1])
+if reservation.lease ~= ARGV[1] or lease.source_id ~= reservation.source_id or lease.config_revision ~= reservation.config_revision then return 0 end
+if publication.source_id ~= reservation.source_id or publication.config_revision ~= reservation.config_revision then return 0 end
+if publication.publication_generation ~= reservation.generation then return 0 end
+local generation = tonumber(redis.call('GET', KEYS[5]) or '0')
+if generation >= reservation.generation then return 0 end
+local current = nil
+if redis.call('STRLEN', KEYS[3]) <= tonumber(ARGV[6]) then current = redis.call('GET', KEYS[3]) end
+if current then redis.call('SET', KEYS[4], current, 'EX', ARGV[4]) end
+redis.call('SET', KEYS[3], ARGV[3], 'EX', ARGV[4])
+redis.call('SET', KEYS[5], ARGV[5], 'EX', ARGV[4])
+redis.call('DEL', KEYS[1], KEYS[2])
+return 1
+"""
+_READ_LUA = """-- health_snapshot.read.v2
+local size = redis.call('STRLEN', KEYS[1])
+if size == 0 then return {'', 'missing', ''} end
+if size > tonumber(ARGV[1]) then return {'', 'oversize', ''} end
+if redis.call('STRLEN', KEYS[2]) > 32 then return {'', 'malformed', ''} end
+return {redis.call('GET', KEYS[1]), 'ok', redis.call('GET', KEYS[2]) or ''}
+"""
+
+
+class PublicationCache:
+    def __init__(self, source_id, *, connect=None, prefix="mojo:health", clock=None):
+        if not isinstance(source_id, str) or not HEX.fullmatch(source_id):
+            raise SnapshotError("source_identity_unresolved")
+        self.source_id, self.connect = source_id, connect
+        self.prefix, self.clock = prefix, clock or time.monotonic
+
+    def keys(self):
+        base = self.prefix + ":{" + self.source_id + "}:"
+        return {name: base + name for name in ("lease", "reservation", "current", "previous", "published")}
+
+    def connection(self, deadline):
+        from mojo.helpers.redis import get_bounded_connection
+        if deadline <= self.clock():
+            raise SnapshotError("snapshot_deadline_exceeded")
+        return (self.connect or get_bounded_connection)(timeout=0.5, max_connections=1,
+                                                       read_from_replicas=False, deadline=deadline)
+
+    def acquire(self, config_revision, deadline):
+        if not isinstance(config_revision, str) or not HEX.fullmatch(config_revision):
+            raise SnapshotError("invalid_publication_identity")
+        lease = evidence.canonical({"token": secrets.token_hex(24), "source_id": self.source_id,
+                                    "config_revision": config_revision})
+        with self.connection(deadline) as client:
+            return lease if client.set(self.keys()["lease"], lease, nx=True, ex=LEASE_SECONDS) else None
+
+    def reserve(self, lease, config_revision, deadline, *, reserve=None):
+        try:
+            bound = json.loads(lease)
+            if bound["source_id"] != self.source_id or bound["config_revision"] != config_revision:
+                raise SnapshotError("publication_configuration_changed")
+        except (ValueError, TypeError, KeyError):
+            raise SnapshotError("publication_lease_lost") from None
+        keys = self.keys()
+        with self.connection(deadline) as client:
+            if not lease or client.get(keys["lease"]) != lease:
+                raise SnapshotError("publication_lease_lost")
+        generation = (reserve or reserve_generation)(self.source_id, config_revision, deadline)
+        reservation = evidence.canonical({"source_id": self.source_id, "config_revision": config_revision,
+                                          "generation": generation, "lease": lease})
+        with self.connection(deadline) as client:
+            if client.eval(_RESERVE_LUA, 2, keys["lease"], keys["reservation"], lease, reservation, LEASE_SECONDS) != 1:
+                raise SnapshotError("publication_lease_lost")
+        return generation, reservation
+
+    def publish(self, value, lease, reservation, deadline, *, current_identity, current_config_revision):
+        validate_publication(value, current_identity)
+        if value["source_id"] != self.source_id or value["config_revision"] != current_config_revision:
+            raise SnapshotError("publication_configuration_changed")
+        keys = self.keys()
+        with self.connection(deadline) as client:
+            accepted = client.eval(_PUBLISH_LUA, 5, *(keys[name] for name in ("lease", "reservation", "current", "previous", "published")),
+                                   lease, reservation, evidence.canonical(value), CACHE_TTL,
+                                   str(value["publication_generation"]), MAX_BYTES)
+        if accepted != 1:
+            raise SnapshotError("publication_fence_refused")
+        return True
+
+    def release(self, lease, deadline):
+        keys = self.keys()
+        with self.connection(deadline) as client:
+            return client.eval(_RELEASE_LUA, 2, keys["lease"], keys["reservation"], lease) == 1
+
+    def read(self, identity, deadline):
+        keys = self.keys()
+        with self.connection(deadline) as client:
+            raw, state, published = client.eval(_READ_LUA, 2, keys["current"], keys["published"], MAX_BYTES)
+        if state != "ok":
+            raise SnapshotError("snapshot_" + state)
+        try:
+            value = json.loads(raw)
+            validate_publication(value, identity)
+            if str(value["publication_generation"]) != str(published):
+                raise SnapshotError("publication_generation_mismatch")
+            return value
+        except (ValueError, TypeError, RecursionError):
+            raise SnapshotError("snapshot_malformed") from None
+
+
+def unknown(identity, reason, now=None):
+    return {"contract": CONTRACT, "schema_version": 2,
+            "source_id": (identity or {}).get("source_id"),
+            "source_identity": (identity or {}).get("source_identity"),
+            "publication_generation": None, "generated_at": None, "published_at": None,
+            "served_at": evidence.timestamp(now or evidence.utcnow()), "roster_revision": None,
+            "profile_version": PROFILE_VERSION, "collection_status": "unknown", "components": [],
+            "coverage": coverage([], reasons=[reason], denominator_known=False),
+            "failure_evidence": {"capture_status": "best_effort", "gaps": ["not_read"]}}
+
+
+def project_publication(value, grants, *, now=None):
+    """Re-evaluate expiry and source grants without modifying immutable bytes."""
+    now = now or evidence.utcnow()
+    result = copy.deepcopy(value)
+    components, denied = [], False
+    for item in result["components"]:
+        slots, denied_ids, denied_grants = [], set(), {}
+        for slot in item["evidence"]:
+            if not grants.get(slot["required_grant"]):
+                denied = True
+                denied_ids.add(slot["slot_id"])
+                grant = slot["required_grant"]
+                denied_grants[grant] = denied_grants.get(grant, False) or slot["required"]
+            else:
+                if slot.get("status") == "ok" and not evidence.slot_is_fresh(slot, now):
+                    if any(evidence.valid_time(slot.get(key), now) is None for key in ("observed_at", "collected_at", "last_success_at")):
+                        slot.update(status="unknown", reason="source_time_invalid", fresh_until=None)
+                    else:
+                        slot.update(status="stale", reason="sample_expired")
+                slots.append(slot)
+        # One denial per grant, independent of how many protected resources or
+        # measurements it concealed. Denied counts are not an identity oracle.
+        for grant, required in sorted(denied_grants.items()):
+            slots.append(evidence.slot(value["source_id"], item["component_id"], "permission_denied:" + grant,
+                                      source="restricted", required_grant=grant,
+                                      status="permission_denied", reason="permission_required", required=required, now=now))
+        conditions = []
+        for condition in item["conditions"]:
+            if any(fact["slot_id"] in denied_ids for fact in condition["basis"]):
+                continue
+            if condition["outcome"] in ("pass", "fail") and any(
+                    not evidence.slot_is_fresh(next(slot for slot in slots if slot["slot_id"] == fact["slot_id"]), now)
+                    for fact in condition["basis"]):
+                condition.update(outcome="unknown", reason="causal_basis_unavailable")
+            conditions.append(condition)
+        projected = evidence.component(value["source_id"], item["kind"], item["resource_id"], slots, conditions,
+                                       service_id=item["service_id"], resource_scope=item["resource_scope"],
+                                       resource_owner_source_id=item["resource_owner_source_id"], required=item["required"],
+                                       coverage_complete=item["coverage"]["complete"] and not denied_ids,
+                                       reasons=["permission_required"] if denied_ids else item["reasons"], now=now)
+        for key in ("omitted_total", "truncated"):
+            projected["coverage"][key] = item["coverage"].get(key, 0 if key == "omitted_total" else False)
+        if denied_ids:
+            # Composite identity can encode restricted observations and is not
+            # confirmation proof; never expose the privileged cached hash.
+            projected["sample_id"] = None
+            projected["coverage"]["expected_total"] = None
+        components.append(projected)
+    result["components"] = components
+    result["coverage"] = coverage(components, reasons=["permission_required"] if denied else value["coverage"].get("reasons"),
+                                  omitted=value["coverage"].get("omitted_total", 0), denominator_known=not denied and value["coverage"].get("expected_total") is not None)
+    result["collection_status"] = "complete" if result["coverage"]["complete"] else "partial" if components else "unknown"
+    if denied:
+        result["roster_revision"] = None
+        result["config_revision"] = None
+    result["failure_evidence"] = {"capture_status": "best_effort", "summary_only": True}
+    result["served_at"] = evidence.timestamp(now)
+    return result
