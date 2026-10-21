@@ -8,6 +8,54 @@ These are just convenience functions for common use cases.
 from mojo.apps.account.models import User, RegisteredDevice, PushConfig
 
 
+class PushRegistrationConflict(Exception):
+    """A concurrent registration prevented reconciliation; the caller can retry."""
+
+
+def register_push_device(user, *, device_id, device_token, platform, fields,
+                         request=None, _before_write=None):
+    """Atomically replace stale token holders with the current app registration."""
+    from django.db import IntegrityError, transaction
+
+    defaults = {key: fields[key] for key in (
+        'device_name', 'app_version', 'os_version', 'push_preferences') if key in fields}
+    defaults.update(device_token=device_token, platform=platform,
+                    is_active=True, push_enabled=True)
+    for attempt in (1, 2):
+        try:
+            with transaction.atomic():
+                stale = list(RegisteredDevice.objects.select_for_update()
+                    .filter(device_token=device_token)
+                    .exclude(user=user, device_id=device_id).order_by('pk'))
+                moves = []
+                same_user = False
+                for previous in stale:
+                    facts = dict(previous_user_id=previous.user_id,
+                                 previous_device_pk=previous.pk,
+                                 previous_device_id=previous.device_id,
+                                 platform=previous.platform,
+                                 deliveries_removed=previous.notification_deliveries.count())
+                    if previous.user_id != user.pk:
+                        moves.append(facts)
+                    else:
+                        same_user = True
+                    previous.delete()
+                if _before_write is not None:
+                    _before_write()
+                device, created = RegisteredDevice.objects.update_or_create(
+                    user=user, device_id=device_id, defaults=defaults)
+                for facts in moves:
+                    transaction.on_commit(lambda facts=facts: user.report_incident(
+                        'Push token moved from another account', 'push:token_reassigned',
+                        request=request, **facts))
+                if same_user:
+                    transaction.on_commit(lambda: device.log('Push registration moved to current device ID'))
+            return device, created
+        except IntegrityError:
+            if attempt == 2:
+                raise PushRegistrationConflict('Push registration changed concurrently; retry.') from None
+
+
 TEST_ERRORS = {
     'missing_credentials': 'No usable FCM service account is stored.',
     'invalid_credentials': 'The stored FCM service account is invalid.',
