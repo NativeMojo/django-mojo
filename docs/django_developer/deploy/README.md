@@ -94,7 +94,11 @@ The built-in `api` path:
 
 1. runs `manage.py check` before changing host configuration;
 2. runs `migrate_locked --noinput` only on the API canary when `--migrate` is
-   present, then runs `collectstatic`;
+   present, then runs `collectstatic`. `migrate_locked` takes Postgres advisory
+   lock `(1424, 1)` without waiting and refuses, naming the holding session's
+   pid, mode and application, when another session has it. Every fixed
+   advisory-lock namespace lives in `mojo/helpers/advisory_locks.py`; a new
+   lock takes a new number there;
 3. renders and installs the project's nginx, cron, and systemd files;
 4. applies explicit removals from `aws/node_retired.conf`;
 5. runs the real `nginx -t`;

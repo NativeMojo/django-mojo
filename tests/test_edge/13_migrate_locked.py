@@ -65,23 +65,36 @@ def test_lock_mutual_exclusion(opts):
         raw.close()
 
 
-@th.django_unit_test("migrate_locked succeeds and releases the lock afterwards")
+@th.django_unit_test("migrate_locked succeeds inside a deploy's admission and releases the lock")
 def test_lock_released_after_success(opts):
     if not opts.pg:
         return
     from django.core.management import call_command
+    from mojo.apps.dnsman.services import acme_hub_upgrade
     from mojo.apps.edge.management.commands import migrate_locked as cmd_module
     from mojo.apps.edge.management.commands.migrate_locked import LOCK_ID, LOCK_NAMESPACE
+
+    # #9048: a guarded deploy job holds shared-ACME admission for its whole
+    # run, and update.sh runs migrate_locked in a second session. When both
+    # used (1423, 1) the exclusive try-lock was refused and every deploy
+    # rolled back, so the run below happens under that same shared hold.
+    admission = _raw_connection()
+    held = admission.cursor()
+    held.execute("SELECT pg_advisory_lock_shared(%s, 1)", (acme_hub_upgrade._NAMESPACE,))
+    held.close()
 
     # The inner migrate is stubbed: the test project builds its schema with
     # `migrate --run-syncdb` and records nothing in django_migrations, so a
     # REAL migrate here would replay 0001 into existing tables. The property
     # under test is the lock lifecycle, not Django's migrate.
     calls = []
-    with mock.patch.object(
-            cmd_module, "call_command",
-            side_effect=lambda *a, **kw: calls.append((a, kw))):
-        call_command("migrate_locked", noinput=True)
+    try:
+        with mock.patch.object(
+                cmd_module, "call_command",
+                side_effect=lambda *a, **kw: calls.append((a, kw))):
+            call_command("migrate_locked", noinput=True)
+    finally:
+        admission.close()
 
     th.assert_eq(calls, [(("migrate",), {"interactive": False})],
                  f"--noinput must pass through to migrate, got {calls!r}")
@@ -93,6 +106,35 @@ def test_lock_released_after_success(opts):
             acquired,
             "the lock must be free after a successful migrate_locked run")
         _unlock(raw, LOCK_NAMESPACE, LOCK_ID)
+    finally:
+        raw.close()
+
+
+@th.django_unit_test("the refusal names the session holding the migration lock")
+def test_refusal_names_holder(opts):
+    if not opts.pg:
+        return
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+    from mojo.apps.edge.management.commands.migrate_locked import LOCK_ID, LOCK_NAMESPACE
+
+    raw = _raw_connection()
+    try:
+        th.assert_true(_try_lock(raw, LOCK_NAMESPACE, LOCK_ID),
+                       "test setup: the second session could not take the lock")
+        cursor = raw.cursor()
+        cursor.execute("SELECT pg_backend_pid()")
+        holder_pid = cursor.fetchone()[0]
+        cursor.close()
+        try:
+            call_command("migrate_locked", noinput=True)
+            raise AssertionError("migrate_locked must refuse while the lock is held")
+        except CommandError as err:
+            message = str(err)
+        th.assert_in(f"pid {holder_pid} ExclusiveLock", message,
+                     f"the refusal must name the holder, got: {message}")
+        th.assert_in(f"({LOCK_NAMESPACE}, {LOCK_ID})", message,
+                     f"the refusal must name the key, got: {message}")
     finally:
         raw.close()
 

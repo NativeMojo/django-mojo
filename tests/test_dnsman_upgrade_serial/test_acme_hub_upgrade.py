@@ -381,8 +381,9 @@ def test_admin_enable_refuses_active_old_version_and_missing_hub(opts):
         with mock.patch.object(upgrade,"_configured",return_value=(False,"hub_unconfigured")):
             assert upgrade.status(actor)["can_enable"] is False, "unconfigured hub must not enable"
             refuses(lambda:upgrade.enable(actor,str(row.pk)),"hub_unconfigured")
-    with upgrade_schema(), installation(), admin_candidate(version="1.39.0") as (actor,row):
-        assert upgrade.status(actor)["reason"] == "framework_upgrade_required", "published pre-cleanup version cannot qualify same-number new bytes"
+    for legacy in ("1.39.0", "1.39.1"):
+        with upgrade_schema(), installation(), admin_candidate(version=legacy) as (actor,row):
+            assert upgrade.status(actor)["reason"] == "framework_upgrade_required", f"published pre-cleanup {legacy} cannot qualify same-number new bytes"
 
 
 @th.django_unit_test()

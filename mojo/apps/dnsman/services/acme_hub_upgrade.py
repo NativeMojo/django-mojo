@@ -9,12 +9,13 @@ from objict import objict
 from packaging.version import Version, InvalidVersion
 
 from mojo import errors as me
-from mojo.helpers import dates
+from mojo.helpers import advisory_locks, dates
 
-_NAMESPACE = 1423
+_NAMESPACE = advisory_locks.ACME_HUB_ADMISSION
 _SESSION = ContextVar("acme_hub_admission", default=None)
-# Published releases through 1.39.0 used the previous activation contract.
-LEGACY_RELEASE_CEILING = Version("1.39.0")
+# Published releases through 1.39.1 used the previous activation contract
+# (1.39.1 is the 1.39.0 migration-lock hotfix, cut from the 1.39.0 tag).
+LEGACY_RELEASE_CEILING = Version("1.39.1")
 
 
 def refuse(reason="state_unavailable", status=503):
