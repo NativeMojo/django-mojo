@@ -280,6 +280,8 @@ def activate(operation, attestation=None, confirmation=None, *, identity_reader=
     if attestation is None:
         refuse("evidence_unavailable")
     with admission(exclusive=True) as state:
+        if operation.get("installation_uuid") != str(state.installation_uuid):
+            refuse("activation_conflict")
         if state.mode == "enabled":
             if (str(state.activation_uuid) != operation["activation_uuid"] or artifact_for(state) != operation["artifact"]
                     or state.roster_sha256 != operation["roster_digest"]

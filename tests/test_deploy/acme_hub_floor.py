@@ -11,6 +11,7 @@ import uuid
 import threading
 import hashlib
 import pwd
+import shlex
 
 from testit import helpers as th
 
@@ -229,6 +230,50 @@ def test_floor_enrollment_pins_retained_bytes_and_prefloor_policy(opts):
 
 
 @th.django_unit_test()
+def test_floor_retained_lock_open_is_read_only_and_never_creates_or_truncates(opts):
+    from mojo.deploy import acme_hub_floor as module
+    source = (Path(module.__file__).parent / "project_scripts/update.sh").read_text()
+    start = source.index('previous_umask="$(umask)"')
+    body = source[start:source.index('if [ "$MANUAL" = "1" ]; then', start)]
+    with tempfile.TemporaryDirectory() as directory:
+        root = _root(directory)
+        lock = root / "update.lock"
+        lock.write_bytes(b"existing lock inode")
+        check = root / "check.py"
+        check.write_text("import os\nfrom mojo.deploy import acme_hub_floor as m\n"
+                         f"os.close(m._lock_descriptor({str(root)!r},os.getuid()))\n")
+        proof = root / "proof.py"
+        proof.write_text("import os,fcntl\n"
+                         "assert fcntl.fcntl(9,fcntl.F_GETFL)&os.O_ACCMODE==os.O_RDONLY, 'retained fd must be read-only'\n"
+                         "fcntl.flock(9,fcntl.LOCK_EX|fcntl.LOCK_NB)\n"
+                         f"other=os.open({str(lock)!r},os.O_RDWR)\n"
+                         "try:\n fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)\n"
+                         "except BlockingIOError:\n pass\n"
+                         "else:\n raise AssertionError('real exclusive flock must remain held')\n")
+        script = ('set -e\nMOJO_ACME_ROOT_ENTRY=1\nLOCK_FILE=' + shlex.quote(str(lock)) + '\n'
+                  + 'acme_helper_exec() { ' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(check)) + '; }\n'
+                  + body + '\n' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(proof)))
+        good = subprocess.run(["bash", "-c", script], capture_output=True, timeout=5)
+        assert good.returncode == 0 and lock.read_bytes() == b"existing lock inode", f"qualified retained read-only fd must hold local exclusive flock without truncation: {good.stderr!r}"
+        for kind in ("mode", "symlink", "missing"):
+            if kind == "mode":
+                lock.chmod(0o644)
+            elif kind == "symlink":
+                lock.unlink()
+                lock.symlink_to(root / "missing-target")
+            else:
+                lock.unlink()
+            refused = subprocess.run(["bash", "-c", script], capture_output=True, timeout=5)
+            assert refused.returncode != 0 and not (root / "missing-target").exists(), f"unsafe {kind} existing lock must refuse before opening/creation"
+            if lock.is_symlink() or lock.exists():
+                lock.unlink()
+            if kind != "missing":
+                lock.write_bytes(b"existing lock inode")
+                lock.chmod(0o600)
+        assert not lock.exists(), "enrolled missing lock must remain missing after refusal"
+
+
+@th.django_unit_test()
 def test_floor_root_selector_partial_stamp_and_poisoned_candidate(opts):
     from mojo.deploy.acme_hub_entry import ROOT_GATE
     with tempfile.TemporaryDirectory() as directory:
@@ -240,6 +285,10 @@ def test_floor_root_selector_partial_stamp_and_poisoned_candidate(opts):
         helper = libexec / "mojo-acme-hub-upgrade"
         helper.write_text("#!/bin/bash\nprintf '%s\\n' \"$@\" > " + str(selected) + "\n")
         helper.chmod(0o755)
+        body = helper.read_bytes()
+        marker = libexec / "mojo-acme-hub-enrollment.json"
+        marker.write_text(json.dumps(dict(helper_sha256=hashlib.sha256(body).hexdigest())))
+        marker.chmod(0o644)
         (poison / "sitecustomize.py").write_text("open(" + repr(str(executed)) + ", 'w').write('site')")
         (poison / "mojo.py").write_text("open(" + repr(str(executed)) + ", 'w').write('mojo')")
         # Only private fixture copies replace fixed paths/uid. Production has
@@ -256,6 +305,30 @@ def test_floor_root_selector_partial_stamp_and_poisoned_candidate(opts):
         assert done.returncode == 0 and selected.read_text().splitlines()[0] == "--launch", "partial floor without DB enable must select fixed entry"
         assert not executed.exists(), "root selection must never import candidate Mojo or startup poison"
         selected.unlink()
+        for kind in ("writable", "symlink", "hardlink", "digest"):
+            if kind == "writable":
+                helper.chmod(0o777)
+            elif kind == "symlink":
+                helper.unlink()
+                helper.symlink_to(root / "unreviewed-helper")
+                (root / "unreviewed-helper").write_bytes(body)
+                (root / "unreviewed-helper").chmod(0o755)
+            elif kind == "hardlink":
+                os.link(helper, root / "other-link")
+            else:
+                helper.write_bytes(body + b"# unreviewed replacement\n")
+            refused = subprocess.run(["/usr/bin/python3", "-I", "-S", "-c", source], capture_output=True, timeout=5)
+            assert refused.returncode != 0 and not selected.exists(), f"{kind} helper must refuse BEFORE executing root canary"
+            helper.unlink()
+            if (root / "other-link").exists():
+                (root / "other-link").unlink()
+            helper.write_bytes(body)
+            helper.chmod(0o755)
+        marker.unlink()
+        refused = subprocess.run(["/usr/bin/python3", "-I", "-S", "-c", source], capture_output=True, timeout=5)
+        assert refused.returncode != 0 and not selected.exists(), "partial floor without enrollment binding cannot execute or fall back"
+        marker.write_text(json.dumps(dict(helper_sha256=hashlib.sha256(body).hexdigest())))
+        marker.chmod(0o644)
         helper.unlink()
         refused = subprocess.run(["/usr/bin/python3", "-I", "-S", "-c", source], capture_output=True, timeout=5)
         assert refused.returncode != 0 and not selected.exists(), "missing enrolled entry cannot fall back to current package locator"

@@ -87,6 +87,11 @@ manual/latest-version route, arbitrary command, path or environment override.
 The retained shell enters its existing bounded transient unit, acquires the
 fixed update.lock and checks sealed data-only admission/recovery before any
 current-package root import. The app account comes from enrollment as data.
+The enrolled lane requires a local Linux filesystem with exclusive `flock`
+supported on a read-only fd. It validates the existing root0600 single-link
+regular lock before a no-create/no-truncate open, then verifies the actual
+descriptor/inode and held lock. Missing/unsafe/unsupported lock state refuses;
+enrollment must not replace the inode while held.
 Unsafe ACTIVE recovery remains untouched. Saved metadata is checked before
 restore, and actual installed bytes are checked again before retained
 lifecycle. A qualifying ordinary rollback remains supported. Never edit an

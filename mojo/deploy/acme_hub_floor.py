@@ -318,6 +318,20 @@ def _transaction(root, uid):
         os.close(parent)
 
 
+def _lock_descriptor(root, uid):
+    parent = _parent(root, uid)
+    try:
+        fd = os.open("update.lock", os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != uid
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+            os.close(fd)
+            _fail()
+        return fd
+    finally:
+        os.close(parent)
+
+
 class Session:
     """One local lock-owning session. root/uid/clock/loader are library seams."""
     def __init__(self, root=STATE_ROOT, *, uid=0, clock=time.monotonic, loader=None):
@@ -332,23 +346,13 @@ class Session:
         self.heartbeat = self.started + HEARTBEAT_SECONDS
 
     def _lock(self):
-        parent = _parent(self.root, self.uid)
+        fd = _lock_descriptor(self.root, self.uid)
         try:
-            # Enrollment/updater creates this lock. Status never creates it.
-            fd = os.open("update.lock", os.O_RDWR | os.O_NOFOLLOW, dir_fd=parent)
-            info = os.fstat(fd)
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != self.uid
-                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
-                os.close(fd)
-                _fail()
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                os.close(fd)
-                _fail("update_busy")
-            self.lock_fd = fd
-        finally:
-            os.close(parent)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            _fail("update_busy")
+        self.lock_fd = fd
 
     def close(self):
         if self.lock_fd is not None:
@@ -568,28 +572,30 @@ def main(argv=None):
         if argv and argv[0] == "--launch":
             launch(argv[1:])
             return 1
+        if argv == ["--lock-check"]:
+            enrollment()
+            os.close(_lock_descriptor(STATE_ROOT, 0))
+            return 0
         if argv == ["--entry-context"]:
             value = enrollment()
             # The retained script calls this only after acquiring fd9. Check
             # the actual lock inode and a competing description, as data.
-            parent = _parent(STATE_ROOT, 0)
+            other = _lock_descriptor(STATE_ROOT, 0)
             try:
                 held = os.fstat(9)
-                expected = os.stat("update.lock", dir_fd=parent, follow_symlinks=False)
-                if (held.st_dev, held.st_ino) != (expected.st_dev, expected.st_ino):
+                expected = os.fstat(other)
+                if ((held.st_dev, held.st_ino) != (expected.st_dev, expected.st_ino)
+                        or not stat.S_ISREG(held.st_mode) or held.st_uid != 0
+                        or stat.S_IMODE(held.st_mode) != 0o600 or held.st_nlink != 1):
                     _fail("entry_unavailable")
-                other = os.open("update.lock", os.O_RDWR | os.O_NOFOLLOW, dir_fd=parent)
                 try:
-                    try:
-                        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    except BlockingIOError:
-                        pass
-                    else:
-                        _fail("entry_unavailable")
-                finally:
-                    os.close(other)
+                    fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass
+                else:
+                    _fail("entry_unavailable")
             finally:
-                os.close(parent)
+                os.close(other)
             sys.stdout.write(value["app_user"] + "\n" + value["project_root"] + "\n")
             return 0
         if argv == ["--updater-check"]:

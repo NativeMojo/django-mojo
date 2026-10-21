@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import uuid
+import hashlib
 
 from testit import helpers as th
 
@@ -46,9 +47,15 @@ def test_shared_acme_floor_fences_late_root_launch_and_interrupted_recovery(opts
             f"m.check_update(json.loads(sys.stdin.buffer.readline()),{str(state)!r},uid=os.getuid(),"
             f"loader=lambda:json.load(open({str(identity_file)!r})))\n")
         _write_executable(str(helper), f'exec "{sys.executable}" "{runner}"\n')
+        enrollment = root / "enrollment.json"
+        enrollment.write_text(json.dumps(dict(helper_sha256=hashlib.sha256(helper.read_bytes()).hexdigest())))
+        enrollment.chmod(0o644)
         update = root / "update.sh"
         # Fixture replaces fixed production paths in a PRIVATE COPY; no env or
         # CLI override is added to the privileged production helper.
+        source = source.replace('info.st_uid!=0', 'info.st_uid!=' + str(os.getuid()))
+        source = source.replace('("/usr", "/usr/local", "/usr/local/libexec")', '(' + json.dumps(str(root)) + ',)')
+        source = source.replace('/usr/local/libexec/mojo-acme-hub-enrollment.json', str(enrollment))
         update.write_text(source.replace('TRANSACTION_ROOT="/var/lib/django-mojo-deploy"',
                                          f'TRANSACTION_ROOT="{state}"').replace(
                                              "/usr/local/libexec/mojo-acme-hub-upgrade", str(helper)))
@@ -119,7 +126,7 @@ def test_shared_acme_floor_fences_late_root_launch_and_interrupted_recovery(opts
         (active / "mutation_started").touch()
         floor_module.check_update(dict(phase="snapshot", framework="1.38.0"), state,
                                   uid=os.getuid(), loader=lambda: identity)
-        guard = source[source.index("acme_floor_guard() {"):source.index("\nlog() {")]
+        guard = source[source.index("acme_helper_exec() {"):source.index("\nlog() {")]
         guard = guard.replace("/usr/local/libexec/mojo-acme-hub-upgrade", str(helper))
         body = source[source.index("rollback_transaction() {"):source.index("\nrollback_and_exit() {")]
         isolated = (
@@ -134,6 +141,7 @@ def test_shared_acme_floor_fences_late_root_launch_and_interrupted_recovery(opts
         identity_file.write_text(json.dumps(dict(identity, source_sha="a" * 40)))
         refused = subprocess.run(["bash", "-c", isolated], env=environment, capture_output=True, timeout=10)
         assert refused.returncode != 0 and active.is_dir(), "same-version substituted restore must retain ACTIVE"
+        assert commands.exists(), f"restore fixture must reach pip before actual-byte refusal: {refused.stderr!r}"
         assert "previous-activate" not in commands.read_text(), "unqualified reinstalled bytes must refuse before previous lifecycle"
         commands.unlink()
         identity_file.write_text(json.dumps(identity))

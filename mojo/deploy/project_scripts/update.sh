@@ -90,6 +90,38 @@ ROLLING_BACK=0
 
 # Root enrollment is separate from package installation. Never execute code
 # from a candidate package to decide whether saved recovery is compatible.
+acme_helper_exec() {
+    case "${1:-}" in --entry-context|--updater-check|--lock-check) ;; *) return 1 ;; esac
+    /usr/bin/python3 -I -S -c '
+import hashlib,json,os,stat,sys
+def read(path,mode,maximum):
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        info=os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_nlink!=1 or stat.S_IMODE(info.st_mode)!=mode or info.st_size>maximum:
+            raise ValueError()
+        raw=os.read(fd,maximum+1)
+        after=os.fstat(fd)
+        if len(raw)!=info.st_size or (info.st_mtime_ns,info.st_ctime_ns)!=(after.st_mtime_ns,after.st_ctime_ns):
+            raise ValueError()
+        return raw
+    finally:
+        os.close(fd)
+try:
+    for parent in ("/usr", "/usr/local", "/usr/local/libexec"):
+        info=os.lstat(parent)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid!=0 or info.st_mode & 0o022:
+            raise ValueError()
+    manifest=json.loads(read("/usr/local/libexec/mojo-acme-hub-enrollment.json",0o644,65536))
+    body=read("/usr/local/libexec/mojo-acme-hub-upgrade",0o755,1048576)
+    if hashlib.sha256(body).hexdigest()!=manifest.get("helper_sha256"):
+        raise ValueError()
+    os.execv("/usr/local/libexec/mojo-acme-hub-upgrade",["mojo-acme-hub-upgrade",sys.argv[1]])
+except (OSError,ValueError,TypeError,AttributeError):
+    sys.exit(1)
+' "$1"
+}
+
 acme_floor_guard() {
     local phase="$1"
     if [ "${MOJO_ACME_ROOT_ENTRY:-0}" != "1" ] && \
@@ -97,13 +129,8 @@ acme_floor_guard() {
             [ ! -L "$TRANSACTION_ROOT/acme-hub-floor.json" ]; then
         return 0
     fi
-    local helper="/usr/local/libexec/mojo-acme-hub-upgrade" helper_owner helper_mode
-    [ ! -L "$helper" ] && [ -f "$helper" ] && [ -x "$helper" ] || return 1
-    helper_owner="$(stat -c '%u' "$helper" 2>/dev/null || stat -f '%u' "$helper")"
-    helper_mode="$(stat -c '%a' "$helper" 2>/dev/null || stat -f '%Lp' "$helper")"
-    [ "$helper_owner" = "$RUN_UID" ] && (( (8#$helper_mode & 022) == 0 )) || return 1
     printf '{"phase":"%s","framework":"%s"}\n' "$phase" "${FRAMEWORK:-}" | \
-        "$helper" --updater-check >/dev/null
+        acme_helper_exec --updater-check >/dev/null
 }
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
@@ -516,9 +543,16 @@ fi
 ensure_state_root
 previous_umask="$(umask)"
 umask 077
-exec 9>"$LOCK_FILE"
+if [ "${MOJO_ACME_ROOT_ENTRY:-0}" = "1" ]; then
+    acme_helper_exec --lock-check || { echo 'FATAL: shared ACME existing lock unavailable' >&2; exit 1; }
+    # Local Linux flock supports an exclusive lock on a read-only descriptor.
+    # Unlike <>, < cannot create a missing inode or truncate existing state.
+    exec 9<"$LOCK_FILE"
+else
+    exec 9>"$LOCK_FILE"
+    chmod 0600 "$LOCK_FILE"
+fi
 umask "$previous_umask"
-chmod 0600 "$LOCK_FILE"
 if [ "$MANUAL" = "1" ]; then
     flock -n 9 || die "another update is running"
 else
@@ -526,7 +560,7 @@ else
 fi
 
 if [ "${MOJO_ACME_ROOT_ENTRY:-0}" = "1" ]; then
-    entry_context="$(/usr/local/libexec/mojo-acme-hub-upgrade --entry-context)" || {
+    entry_context="$(acme_helper_exec --entry-context)" || {
         echo 'FATAL: shared ACME fixed account unavailable' >&2; exit 1;
     }
     APP_USER="${entry_context%%$'\n'*}"

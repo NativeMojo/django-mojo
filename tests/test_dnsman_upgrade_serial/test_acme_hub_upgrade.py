@@ -6,6 +6,8 @@ import threading
 import tempfile
 import json
 from pathlib import Path
+import inspect
+from unittest import mock
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -173,6 +175,58 @@ def test_legacy_orm_and_compatibility_writer_share_allocation_lock(opts):
         AcmeHubDelegation.objects.filter(pk=allocation.pk).delete()
 
 
+@th.django_unit_test()
+def test_default_compatibility_complete_legacy_flow_has_exact_wire_and_no_participants(opts):
+    from mojo.apps.account.models import Group, ApiKey
+    from mojo.apps.dnsman.models import AcmeHubDelegation, AcmeHubChallengeLease, AcmeHubParticipant
+    from mojo.apps.dnsman.services import acme_hub as hub
+    rest = importlib.import_module("mojo.apps.dnsman.rest.acme_hub")
+    from mojo.helpers import dates
+    fixtures = importlib.import_module("tests.test_dnsman.16_acme_hub")
+    provider, probe = fixtures.FakeRoute53(), fixtures.FakeProbe()
+    group = Group.objects.create(name="acme_hub_test_compat_" + uuid.uuid4().hex)
+    key, unused_token = ApiKey.create_for_group(group, "acme_hub_test_compat", permissions={"dnsman_acme_federation": True})
+    request = SimpleNamespace(api_key=key, user=None, group=group, DATA={})
+    four = {"client_ref", "domain", "source", "target"}
+    six = four | {"challenge_ref", "active_value_count"}
+    try:
+        # Only the external provider/probe and read-only zone boundary are
+        # faked. The actual singleton reader, admission, mode dispatch, legacy
+        # services and REST serializers run with NO state_reader override.
+        with upgrade_schema(), installation(), mock.patch.object(hub, "route53", provider), mock.patch.object(hub, "probe", probe), mock.patch.object(hub, "_new_zone", lambda **kwargs: SimpleNamespace(name="hub.example.net", id="ZONE-HUB")):
+            request.DATA = dict(client_ref="compat-owner", domain="compat.example")
+            allocated = inspect.unwrap(rest.on_acme_delegation)(request)
+            replay = inspect.unwrap(rest.on_acme_delegation)(request)
+            assert set(allocated) == four and replay == allocated, "default owner allocation must retain exact four-field idempotent wire shape"
+            allocation = AcmeHubDelegation.objects.get(client_ref="compat-owner")
+            request.DATA = dict(client_ref="compat-owner", challenge_ref="compat-first", values=["compat-value"])
+            published = inspect.unwrap(rest.on_acme_publish)(request)
+            again = inspect.unwrap(rest.on_acme_publish)(request)
+            assert set(published) == six and again == published and published["active_value_count"] == 1, "default publish/replay must retain exact six fields and additive idempotence"
+            lease = AcmeHubChallengeLease.objects.get(allocation=allocation, challenge_ref="compat-first")
+            assert lease.participant_id is None and lease.record_values == ["compat-value"], "default publication must persist legacy unbound intent"
+            request.DATA = dict(client_ref="compat-owner", challenge_ref="compat-first")
+            withdrawn = inspect.unwrap(rest.on_acme_withdraw)(request)
+            repeated = inspect.unwrap(rest.on_acme_withdraw)(request)
+            assert set(withdrawn) == six and repeated == withdrawn and withdrawn["active_value_count"] == 0, "default withdrawal must retain exact six-field idempotence"
+            assert hub.reconcile(allocation) == [], "normal compatibility reconcile must retain empty desired union after withdraw"
+            request.DATA = dict(client_ref="compat-owner", challenge_ref="compat-expire", values=["elapsed-value"])
+            inspect.unwrap(rest.on_acme_publish)(request)
+            AcmeHubChallengeLease.objects.filter(allocation=allocation, challenge_ref="compat-expire").update(expires_at=dates.add(seconds=-1))
+            swept = hub.sweep()
+            assert swept.expired == 1 and swept.errors == 0, "normal compatibility sweep must expire and reconcile elapsed old-shape intent"
+            assert not AcmeHubParticipant.objects.exists(), "complete default legacy flow must create ZERO owner/trust participants"
+            request.DATA = {}
+            capabilities = inspect.unwrap(rest.on_acme_capabilities)(request)
+            assert set(capabilities) == {"version", "shared_validation", "consumer_project_uuid", "can_consume", "can_manage_trust", "trust_scope"}, "disabled capability wire must retain its exact six-key shape"
+            assert capabilities["shared_validation"] is False and capabilities["can_consume"] is False and capabilities["can_manage_trust"] is False, "default mode must leave every shared mutation capability off"
+            refuses(lambda: hub.lookup_participants(request, "compat.example"), "acme_hub_unavailable")
+            assert not AcmeHubParticipant.objects.exists(), "disabled shared read cannot lazily bind an owner"
+    finally:
+        ApiKey.objects.filter(pk=key.pk).delete()
+        Group.objects.filter(pk=group.pk).delete()
+
+
 @contextmanager
 def upgrade_schema():
     from django.db import connection
@@ -294,6 +348,23 @@ def test_default_operator_and_unknown_evidence_refuse(opts):
 
 
 @th.django_unit_test()
+def test_wrong_installation_plan_refuses_before_observation_and_idempotence(opts):
+    from mojo.apps.dnsman.models import AcmeHubInstallation, AcmeHubParticipant
+    from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
+    for mode in ("compatibility", "enabled"):
+        with installation(mode):
+            operation = upgrade.plan(artifact(), ["node-engine"], str(uuid.uuid4()), "d" * 40)
+            operation["installation_uuid"] = str(uuid.uuid4())
+            before = list(AcmeHubInstallation.objects.values())
+            owners = AcmeHubParticipant.objects.count()
+            def forbidden(current):
+                assert False, "wrong installation must refuse before operator/root-floor observation"
+            refuses(lambda: upgrade.activate(operation, forbidden, lambda value: value, operator_uid=0), "activation_conflict")
+            assert list(AcmeHubInstallation.objects.values()) == before, f"wrong {mode} installation cannot mutate authority or claim idempotence"
+            assert AcmeHubParticipant.objects.count() == owners, "wrong installation must not bind owners"
+
+
+@th.django_unit_test()
 def test_enabled_dispatch_rechecks_exact_live_journal_and_runner(opts):
     from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
     from mojo.apps.edge.services import acme_hub_deploy as guard, deploy, platform_deploy
@@ -385,6 +456,45 @@ def test_atomic_activation_and_immutable_readback(opts):
             AcmeHubParticipant.objects.filter(allocation=allocation).delete()
             AcmeHubDelegation.objects.filter(pk=allocation.pk).delete()
             record.delete()
+
+
+@th.django_unit_test()
+def test_original_participants_refuse_compatibility_and_failed_binding_rolls_back(opts):
+    from mojo.apps.account.models import Group
+    from mojo.apps.dnsman.models import AcmeHubDelegation, AcmeHubChallengeLease, AcmeHubParticipant, AcmeHubInstallation
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade, acme_hub as hub
+    from mojo.helpers import dates
+    group = Group.objects.create(name="acme_hub_test_conflict_" + uuid.uuid4().hex)
+    group.get_uuid()
+    try:
+        with upgrade_schema(), installation():
+            allocations = []
+            for index in range(3):
+                ref = uuid.uuid4().hex
+                allocations.append(AcmeHubDelegation.objects.create(owner_project_uuid=ref, client_ref=ref,
+                    domain_name=f"atomic{index}.example", source_name=f"_acme-challenge.atomic{index}.example",
+                    target_name=ref + ".hub.example", allocation_zone_name="hub.example", allocation_zone_id="TESTIT",
+                    group=group if index == 2 else None))
+            lease = AcmeHubChallengeLease.objects.create(allocation=allocations[0], challenge_ref="atomic-existing",
+                record_values=["untouched"], state="expired", expires_at=dates.add(seconds=-100))
+            AcmeHubParticipant.objects.create(allocation=allocations[1], consumer_project_uuid=uuid.uuid4().hex,
+                client_ref="original-trusted", role="trusted", revoked_at=dates.utcnow())
+            before_state = list(AcmeHubInstallation.objects.values())
+            before_participants = list(AcmeHubParticipant.objects.values())
+            before_leases = list(AcmeHubChallengeLease.objects.values())
+            refuses(lambda: hub.allocate(None, "ignored", "atomic.example"), "legacy_state_requires_qualification")
+            assert list(AcmeHubParticipant.objects.values()) == before_participants, "exceptional original005 participants/revocation must survive refused compatibility"
+            record = PlatformDeployment.objects.create(sha="d" * 40, framework_version="1.38.0", status="converged",
+                request_key=uuid.uuid4().hex, frozen_roster=["node-engine"])
+            operation = upgrade.plan(artifact(), ["node-engine"], str(record.pk), record.sha)
+            refuses(lambda: upgrade.activate(operation, attestation, lambda value: value, operator_uid=0,
+                identity_reader=lambda: {k:v for k,v in artifact().items() if k != "wheel_sha256"}), "owner_conflict")
+            assert list(AcmeHubInstallation.objects.values()) == before_state, "late owner conflict must not enable installation"
+            assert list(AcmeHubParticipant.objects.values()) == before_participants, "late binding failure must roll back earlier owners and preserve original revoked trust"
+            assert list(AcmeHubChallengeLease.objects.values()) == before_leases, "late failure must roll back already-bound null leases without changing history"
+    finally:
+        Group.objects.filter(pk=group.pk).delete()
 
 
 @th.django_unit_test()
