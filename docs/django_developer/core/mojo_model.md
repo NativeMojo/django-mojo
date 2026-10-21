@@ -829,6 +829,7 @@ class RestMeta:
 
 - Any save attempt that includes `"protected"` in a JSONField value will raise a `403 PermissionDeniedException` if the user lacks the required permission.
 - The guard covers **every** write path: merges (the default), full replaces (`"__replace": true` or `JSON_REPLACE_FIELDS`), and non-dict overwrites (e.g. posting a list or string over a dict). A replace or overwrite that would **clobber an existing** `"protected"` subtree is denied the same as one that writes it — even if the incoming value doesn't contain a `"protected"` key.
+- A top-level key spelled as a path into it, `"protected.<key>"`, counts as writing `"protected"` too. When the stored value is an `objict`, item assignment follows the dots, so a merge would otherwise reach the subtree past the guard.
 - Changes to the `"protected"` key are **always** written to the audit log (`kind="meta:protected_changed"`) regardless of `LOG_CHANGES` or `LOG_META_CHANGES` — it is an unconditional security audit trail. On a replace, the logged changed-keys include keys that were removed.
 - When `LOG_META_CHANGES = True`, all root-level key changes to any JSONField are logged (`kind="meta:changed"`).
 

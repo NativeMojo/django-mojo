@@ -199,7 +199,9 @@ call `refresh_from_db()` and assign again. A write that skips `save()`
 
 ### Protected Metadata
 
-The reserved root key `"protected"` in `metadata` is write-protected at the framework level. Only a superuser or a user with a permission listed in `PROTECTED_JSON_PERMS` (for Group: `"admin_compliance"` or `"admin_verify"`) can set or update it via the REST API. A key or group token that acts as a member is always refused, even when that member is a superuser or holds the permission. A group API key in reference mode passes when its own list carries one of them; both are on the API-key protection floor, so only staff can put them on a key (see [API keys](api_keys.md)). Any attempt by an unprivileged user raises a `403 PermissionDeniedException`. The gate cannot be bypassed with `"__replace": true` or a non-dict overwrite — a wholesale replace that would rewrite **or drop** the existing `protected` subtree is denied the same as a merge that touches it.
+The reserved root key `"protected"` in `metadata` is write-protected at the framework level. Only a superuser or a user with a permission listed in `PROTECTED_JSON_PERMS` (for Group: `"admin_compliance"` or `"admin_verify"`) can set or update it via the REST API. A key or group token that acts as a member is always refused, even when that member is a superuser or holds the permission. A group API key in reference mode passes when its own list carries one of them; both are on the API-key protection floor, so only staff can put them on a key (see [API keys](api_keys.md)). Any attempt by an unprivileged user raises a `403 PermissionDeniedException`. The gate cannot be bypassed with `"__replace": true` or a non-dict overwrite — a wholesale replace that would rewrite **or drop** the existing `protected` subtree is denied the same as a merge that touches it — or with a dotted `"protected.<key>"` key inside the metadata.
+
+`metadata.protected.allow_member_subgroups` opts a parent into sub-groups created by its own administrators; see [Letting a parent's administrators create sub-groups](#letting-a-parents-administrators-create-sub-groups).
 
 Use it to store config that group editors should be able to read but never overwrite:
 
@@ -535,6 +537,64 @@ Django admin set a parent with no permission question, here and for a move
 between trees. `update_from_dict` runs the REST hooks, so outside a request it
 is refused like any caller with no rights. Code that moves groups on a user's
 behalf must check that user itself.
+
+## Letting a parent's administrators create sub-groups
+
+`Group` has no tenant field, so `POST /api/group` normally needs a **global**
+group permission (`manage_groups`, `manage_group` or `groups` on the user
+row). A tenant administrator who manages their organization only as a member
+cannot create groups under it.
+
+A parent can be opted in so that they can. Set the protected key
+`allow_member_subgroups` to `true` on that parent:
+
+```python
+from mojo.apps.account.models.group import SUBGROUP_POLICY_KEY  # "allow_member_subgroups"
+
+org.set_protected_metadata(SUBGROUP_POLICY_KEY, True)   # server code
+org.allows_member_subgroups()                           # True only for exactly True
+```
+
+Over REST it is written like any protected key, so only a superuser or a
+holder of `admin_compliance` / `admin_verify` can set or clear it (see
+[Protected Metadata](#protected-metadata)). A tenant's own administrators
+cannot turn it on or off, by any spelling of the write.
+
+Once it is set, `Group.on_rest_handle_create` admits a create whose `parent`
+(or `parent_id`) is that group when the caller:
+
+- **is a person.** A signed-in user, including their own per-user API key and
+  OAuth session, as for every other member-grant check. A group API key or
+  group token never takes this path, whatever it holds.
+- **manages the parent as a member.** A member row on the parent or one of its
+  ancestors that holds a `SAVE_PERMS` grant (`Group._may_manage_tree_position`
+  rules: the nearest row decides, and a `manage_group` on the user row does
+  not count).
+- **names one parent.** `parent` and `parent_id` must agree and convert to an
+  id the way the save converts them. `request.group` (`?group=`) is never
+  read.
+
+The parent must also be effectively active (it and every ancestor). The policy
+is read from the parent's **own** row only. It does not pass to descendants, so
+the administrators of a child created this way cannot create under that child
+unless the platform opts the child in too. A new child cannot carry the policy
+itself: its `metadata.protected` write is refused like any other.
+
+A caller who is not admitted gets the base create's 403, unchanged. Global
+holders take the base path exactly as before, so nothing changes for them.
+
+`save()` judges an admitted create again, inside its transaction, after it has
+locked the parent and every ancestor (`Group._guard_policy_create`). It re-reads
+the parent and requires that it is still the admitted one, still carries the
+policy, is still effectively active, and is still managed by the caller. A
+policy switched off, a deactivation or a move that landed first refuses the
+create. One that comes later waits for this write. Member rows are not
+locked: a grant removed while the create is in flight may still carry it, as
+for any move or create under a parent.
+
+Every admitted create logs `model:created` and a `group:subgroup_created`
+entry naming the parent. The assistant's create-record tool gates on the
+caller's global permission directly and does not apply this policy.
 
 ## Hierarchy integrity
 

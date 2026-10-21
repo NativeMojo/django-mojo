@@ -277,6 +277,40 @@ needs the same grant on that parent. Three details:
 Posting the `parent` a group already has is not a move and is never refused,
 so a form that sends every field on save keeps working.
 
+### Creating sub-groups as an organization's administrator
+
+Creating a group (`POST /api/group`) normally needs a global group permission.
+If the platform has opted an organization in, its own administrators can
+create groups directly under it without one:
+
+```
+POST /api/group
+{"name": "North Region", "kind": "region", "parent": 42}
+```
+
+This works when all of these hold:
+
+- Group `42` carries `metadata.protected.allow_member_subgroups: true`. Only the
+  platform sets this: a superuser or a holder of `admin_compliance` /
+  `admin_verify`. The organization's own administrators cannot change it.
+- The caller is signed in as a person (a session, or their own per-user API
+  key) and holds `manage_group` (or `manage_groups`/`groups`) **as a member** of
+  group `42` or of a group above it.
+- Group `42` and every group above it are active.
+
+Otherwise the create returns `403` and nothing is created, as before. Some
+details:
+
+- The new group goes **directly** under the opted-in parent. The setting does
+  not pass down, so creating under the new group needs the platform to opt it
+  in too, and the new group cannot be created with the setting already on.
+- Send the parent once, as `parent` or `parent_id`. Two values that disagree,
+  or a parent that is not an id, are refused. A `?group=` parameter does not
+  stand in for the parent.
+- A group API key or group token cannot create groups this way.
+- The Assistant's generic model-create tool does not use this setting; use the
+  Group API.
+
 ---
 
 ## Disable Lifecycle
