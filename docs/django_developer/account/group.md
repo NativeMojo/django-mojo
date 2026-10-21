@@ -580,8 +580,10 @@ the administrators of a child created this way cannot create under that child
 unless the platform opts the child in too. A new child cannot carry the policy
 itself: its `metadata.protected` write is refused like any other.
 
-A caller who is not admitted gets the base create's 403, unchanged. Global
-holders take the base path exactly as before, so nothing changes for them.
+A caller who is not admitted gets the base create's refusal, unchanged: 401
+when signed out (whatever the parent, so the answer does not reveal which
+groups are opted in), 403 otherwise. Global holders take the base path exactly
+as before, so nothing changes for them.
 
 `save()` judges an admitted create again, inside its transaction, after it has
 locked the parent and every ancestor (`Group._guard_policy_create`). It re-reads

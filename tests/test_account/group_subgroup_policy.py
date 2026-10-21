@@ -299,6 +299,24 @@ def test_others_are_refused(opts):
         _restore(opts)
 
 
+@th.django_unit_test("#9107: a signed-out caller gets the base 401, whatever the parent")
+def test_signed_out_caller(opts):
+    _restore(opts)
+    p, q = opts.ids["p"], opts.ids["q"]
+    try:
+        opts.client.logout()
+        # Both answers must be the same 401: a different answer for an
+        # opted-in parent would tell a stranger which groups are opted in.
+        for name, parent, what in (("anon_p", p, "an opted-in parent"), ("anon_q", q, "a parent with no policy")):
+            resp, made = _create(opts, name, parent=parent)
+            assert resp.status_code == 401, \
+                f"a signed-out create under {what} must get 401, got {resp.status_code}: " \
+                f"{opts.client.last_response.body}"
+            assert made is None, f"SECURITY: a signed-out caller created group {made.pk} under {what}"
+    finally:
+        _restore(opts)
+
+
 @th.django_unit_test("#9107: a deactivated parent or tenant admits nothing")
 def test_deactivated_parent_or_tenant(opts):
     from mojo.apps.account.models import Group

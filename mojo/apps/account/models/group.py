@@ -1253,7 +1253,10 @@ class Group(MojoSecrets, MojoModel):
         nothing. request.group is never read, so a `group=` naming an opted-in
         parent cannot lend it to another one.
         """
-        if is_key_backed_session(request) or not is_request_user(request):
+        # is_authenticated first: the signed-out user is an objict, which
+        # answers every attribute, is_request_user's marker included.
+        if not getattr(request.user, "is_authenticated", False) \
+                or is_key_backed_session(request) or not is_request_user(request):
             return None
         data = request.DATA
         parent_id = None
