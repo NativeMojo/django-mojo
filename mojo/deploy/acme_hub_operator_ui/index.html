@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Guarded ACME upgrade · Native</title>
+  <meta name="description" content="Review and operate the retained Native ACME upgrade service with current guardian evidence, fresh authentication, and explicit recovery.">
+  <meta property="og:title" content="Guarded ACME upgrade · Native">
+  <meta property="og:description" content="The retained operator workspace for ACME upgrade review and recovery.">
+  <meta property="og:type" content="website">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="wizard.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">Skip to current task</a>
+  <header class="app-header">
+    <a class="brand" href="./" aria-label="Native guarded upgrade home"><span class="brand-mark" aria-hidden="true">N</span><span>Native <span class="brand-section">Operations</span></span></a>
+    <div class="header-tools"><span class="retained-label">Retained service</span><button id="theme" class="icon-button" type="button" aria-label="Use dark theme">◐</button></div>
+  </header>
+  <div class="authority-bar"><span class="authority-dot" aria-hidden="true"></span><span>Guardian origin</span><strong id="guardian-origin">Checking origin…</strong><span class="authority-note">Independent operator session</span></div>
+  <main id="workspace" class="workspace" tabindex="-1">
+    <div class="page-heading"><div><p class="eyebrow">ACME configuration</p><h1>Guarded upgrade</h1><p class="page-description">One-time setup and exceptional recovery. Healthy certificate renewals remain automatic.</p><p class="key-ownership">Each project keeps its own certificate and private key.</p></div><button id="refresh" class="button secondary" type="button">Refresh status</button></div>
+    <div id="notice" class="notice" role="alert" hidden></div>
+    <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+    <section class="session-strip" aria-label="Operator session"><div><span id="session-dot" class="status-dot"></span><strong id="session-label">Checking session</strong><span id="actor" class="muted"></span></div><button id="sign-in" class="text-button" type="button" disabled>Sign in with an existing passkey</button><button id="sign-out" class="text-button" type="button" hidden>Sign out</button></section>
+    <div class="workspace-grid">
+      <nav class="phase-rail" aria-label="Upgrade stages"><details id="phase-disclosure" open><summary><span id="phase-current">Awaiting guardian state</span><span id="phase-count" class="muted"></span></summary><ol id="phases"></ol></details><div class="rail-note"><span class="small-label">Root authority</span><p>Actions follow the guardian’s current state and evidence.</p></div></nav>
+      <div class="task-column">
+        <section class="panel current-task" aria-labelledby="task-title"><div class="panel-heading"><span class="eyebrow">Current task</span><span id="state" class="badge">Connecting</span></div><h2 id="task-title">Read the retained service</h2><p id="task-description" class="task-description">Waiting for the guardian’s current status.</p><dl class="operation-details"><div><dt>Operation</dt><dd id="operation-id">Not observed</dd></div><div><dt>Root revision</dt><dd id="revision">Not observed</dd></div><div><dt>Outcome</dt><dd id="outcome">Not observed</dd></div></dl><div id="deadline" class="deadline" hidden><span class="small-label">Guardian completion window</span><strong id="countdown"></strong><span id="deadline-time" class="muted"></span></div><div id="next-action" class="next-action"></div><p id="observation" class="observation">Source: retained guardian · Awaiting readback</p></section>
+        <section id="bootstrap-panel" class="panel" aria-labelledby="bootstrap-title" hidden><div class="section-heading"><span class="step-label">Trust setup</span><h2 id="bootstrap-title">Enroll an existing credential</h2></div><p id="bootstrap-description"></p><p class="supporting">Choose an existing compatible passkey when the guardian offers approved account, credential, and profile choices. Possession and independent approval are separate checks.</p><div id="bootstrap-link"></div></section>
+        <section class="panel" aria-labelledby="facts-title"><div class="section-heading"><div><span class="step-label">Source observations</span><h2 id="facts-title">Evidence ledger</h2></div></div><div id="facts"><p class="empty-state">No evidence has been read.</p></div></section>
+        <section class="panel actions-panel" aria-labelledby="actions-title"><div class="section-heading"><div><span class="step-label">Supported controls</span><h2 id="actions-title">Upgrade and recovery</h2></div><span id="action-count" class="muted">Awaiting status</span></div><details id="controls-disclosure"><summary id="controls-summary">View current controls</summary><div id="actions" class="action-list"></div></details></section>
+      </div>
+      <aside class="evidence-column" aria-label="Qualification and installation evidence"><section class="panel"><span class="step-label">Installation</span><h2>Retained authority</h2><dl class="side-details"><div><dt>Installation</dt><dd id="installation-id">Not observed</dd></div><div><dt>Enrollment</dt><dd id="enrollment">Not observed</dd></div></dl><p class="supporting">An installed profile is an expectation until actual root readback confirms enrollment.</p></section><section class="panel"><span class="step-label">Qualification</span><h2>Required proof</h2><div id="qualification"><p class="empty-state">Waiting for source observations.</p></div></section><section class="panel"><div class="section-heading"><div><span class="step-label">Frozen roster</span><h2>Nodes</h2></div><span id="node-count" class="count">—</span></div><div id="nodes"><p class="empty-state">No node observations.</p></div></section><section class="panel"><span class="step-label">Independent destinations</span><h2>Approval and history</h2><div id="destinations"><p class="empty-state">No registered destinations.</p></div><p class="supporting">External destinations open in a separate tab.</p></section></aside>
+    </div>
+    <footer class="workspace-footer"><span>Native · Guarded operator service</span><span>Closing this page does not remove holds or cancel a pending operation.</span></footer>
+  </main>
+  <dialog id="review-dialog" aria-labelledby="review-title" aria-describedby="review-description"><div class="dialog-heading"><span class="eyebrow">Exact action review</span><button id="close-review" class="icon-button" aria-label="Close action review" type="button">×</button></div><h2 id="review-title"></h2><p id="review-description"></p><dl id="review-facts" class="review-facts"></dl><div id="review-warning" class="notice warning"></div><p id="review-auth" class="supporting"></p><div class="dialog-actions"><button id="cancel-review" class="button secondary" type="button">Go back</button><button id="confirm-review" class="button primary" type="button">Continue</button></div></dialog>
+  <noscript><p class="notice">JavaScript is required for the retained operator service. No action has been requested.</p></noscript>
+</body>
+</html>
