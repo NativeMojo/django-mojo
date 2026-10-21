@@ -114,6 +114,10 @@ class DnsProvider:
     # that answers False must override `clear_record`.
     can_delete_last_record = True
 
+    # Optional ACME-only seam. Conditional recovery is opt-in and unsupported
+    # providers retain ordinary issuance without acquiring a false guarantee.
+    supports_owned_challenge_cleanup = False
+
     def __init__(self, domain):
         self.domain = domain
         self.zone_name = domain.name

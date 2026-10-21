@@ -36,19 +36,26 @@ def reserve(certificate, record_name, record_values):
                 if current.certificate_id != certificate.pk:
                     raise me.ValueException(
                         f"{record_name} TXT is reserved by another certificate operation")
+                from mojo.apps.dnsman.services import challenge_dns
+                settled = challenge_dns.require_reusable(current, desired)
+                challenge_dns.record_origin(current)
                 current.record_values = desired
                 current.state = STATE_RESERVED
-                current.mutation_attempted = False
-                current.mutation_proven = False
+                if settled:
+                    current.mutation_attempted = False
+                    current.mutation_proven = False
                 current.last_error = None
                 current.save(update_fields=[
                     "record_values", "state", "mutation_attempted",
                     "mutation_proven", "last_error", "modified"])
                 return current
-            return DnsRecordReservation.objects.create(
+            current = DnsRecordReservation.objects.create(
                 domain=domain, certificate=certificate,
                 record_type="TXT", record_name=record_name,
                 record_values=desired)
+            from mojo.apps.dnsman.services import challenge_dns
+            challenge_dns.record_origin(current, fresh=True)
+            return current
     except IntegrityError:
         raise me.ValueException(
             f"{record_name} TXT is reserved by another certificate operation")

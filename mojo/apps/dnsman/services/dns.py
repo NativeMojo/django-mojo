@@ -178,8 +178,16 @@ def upsert_record(domain, rtype, name, record_values, ttl=300, reservation=None)
     with record_reservations.mutation_guard(
             domain, rtype, fqdn, reservation=reservation):
         try:
-            change_id = adapter.upsert_record(rtype, fqdn, values, ttl=ttl)
+            if reservation is not None or rtype == "TXT" and fqdn.startswith("_acme-challenge."):
+                from mojo.apps.dnsman.services import challenge_dns
+                change_id = (challenge_dns.reservation_mutation(reservation, adapter, "publish", values, ttl)
+                    if reservation is not None else challenge_dns.compatibility_mutation(domain, adapter, "publish", fqdn, values, ttl))
+            else:
+                change_id = adapter.upsert_record(rtype, fqdn, values, ttl=ttl)
         except Exception as provider_error:
+            from mojo.apps.dnsman.services.challenge_attempts import JournalError
+            if isinstance(provider_error, JournalError):
+                raise
             # Provider timeouts are ambiguous. Inventory is authoritative: if
             # it now equals the intended complete set, the retry converged and
             # must not write a second time.
@@ -210,7 +218,12 @@ def delete_record(domain, rtype, name, record_values=None, reservation=None):
     from mojo.apps.dnsman.services import record_reservations
     with record_reservations.mutation_guard(
             domain, rtype, fqdn, reservation=reservation):
-        change_id = adapter.delete_record(rtype, fqdn, record_values=values)
+        if reservation is not None or rtype == "TXT" and fqdn.startswith("_acme-challenge."):
+            from mojo.apps.dnsman.services import challenge_dns
+            change_id = (challenge_dns.reservation_mutation(reservation, adapter, "delete", values)
+                if reservation is not None else challenge_dns.compatibility_mutation(domain, adapter, "delete", fqdn, values))
+        else:
+            change_id = adapter.delete_record(rtype, fqdn, record_values=values)
     return objict(change_id=change_id, provider=adapter.name, type=rtype, name=fqdn)
 
 
@@ -231,7 +244,12 @@ def clear_record(domain, rtype, name, record_values=None, reservation=None):
     from mojo.apps.dnsman.services import record_reservations
     with record_reservations.mutation_guard(
             domain, rtype, fqdn, reservation=reservation):
-        change_id = adapter.clear_record(rtype, fqdn, record_values=values)
+        if reservation is not None or rtype == "TXT" and fqdn.startswith("_acme-challenge."):
+            from mojo.apps.dnsman.services import challenge_dns
+            change_id = (challenge_dns.reservation_mutation(reservation, adapter, "clear", values)
+                if reservation is not None else challenge_dns.compatibility_mutation(domain, adapter, "clear", fqdn, values))
+        else:
+            change_id = adapter.clear_record(rtype, fqdn, record_values=values)
     return objict(change_id=change_id, provider=adapter.name, type=rtype, name=fqdn)
 
 

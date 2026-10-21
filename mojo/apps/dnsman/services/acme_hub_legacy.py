@@ -92,7 +92,11 @@ def publish(group, client_ref, challenge_ref, values, request=None, *, route53_c
         raise me.ValueException(proof.error or "CNAME delegation proof failed")
     with hub._allocation_lock(row.pk):
         allocation_for(group, client_ref, request)
+        from . import challenge_dns
+        challenge_dns.require_hub_publish(row, None, challenge_ref)
+        previous = AcmeHubChallengeLease.objects.filter(allocation=row, challenge_ref=challenge_ref).exists()
         lease = persist(row, challenge_ref, values)
+        challenge_dns.hub_origin(row, None, challenge_ref, values, fresh=not previous)
         desired = hub._reconcile_locked(row, request=request, audit_kind="published",
                                        route53_client=route53_client, dns_probe=dns_probe)
     lease.refresh_from_db()

@@ -13,6 +13,7 @@ from .acme_hub_installation import AcmeHubInstallation
 from .acme_hub_challenge_lease import AcmeHubChallengeLease
 from .acme_delegation import AcmeDelegation
 from .dns_record_reservation import DnsRecordReservation
+from .dns_challenge_attempt import DnsChallengeAttempt
 
 __all__ = [
     "DnsCredential",
@@ -26,4 +27,5 @@ __all__ = [
     "AcmeHubChallengeLease",
     "AcmeDelegation",
     "DnsRecordReservation",
+    "DnsChallengeAttempt",
 ]

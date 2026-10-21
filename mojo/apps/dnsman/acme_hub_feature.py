@@ -39,6 +39,23 @@ CRITICAL_FILES = (
     'deploy/config_sync.py',
     'deploy/fleet_config_node.py',
     'deploy/fleet_config_role.py',
+    'apps/dnsman/models/dns_challenge_attempt.py',
+    'apps/dnsman/models/__init__.py',
+    'apps/dnsman/migrations/0008_dnschallengeattempt.py',
+    'apps/dnsman/services/challenge_attempts.py',
+    'apps/dnsman/services/challenge_dns.py',
+    'apps/dnsman/services/challenge_finality.py',
+    'apps/dnsman/services/dns.py',
+    'apps/dnsman/services/record_reservations.py',
+    'apps/dnsman/services/certs.py',
+    'apps/dnsman/services/providers/base.py',
+    'apps/dnsman/services/providers/route53_provider.py',
+    'apps/dnsman/services/providers/godaddy_provider.py',
+    'helpers/aws/route53_challenge.py',
+    'deploy/acme_dns_coverage.py',
+    'helpers/aws/provider_call.py',
+    'helpers/aws/route53.py',
+    'helpers/dns/probe.py',
 )
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")

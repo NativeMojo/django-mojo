@@ -300,7 +300,11 @@ def _response_data(response, max_bytes=MAX_RESPONSE_BYTES):
 
 
 def _post(operation, payload):
-    return _wire(operation, payload, _config(), requests.post)
+    config = _config()
+    if operation in {"publish", "withdraw", "cleanup"}:
+        from mojo.apps.dnsman.services.challenge_dns import outgoing_hub
+        return outgoing_hub(operation, payload, config, lambda: _wire(operation, payload, config, requests.post))
+    return _wire(operation, payload, config, requests.post)
 
 
 def _wire(operation, payload, config, post):
@@ -310,7 +314,7 @@ def _wire(operation, payload, config, post):
         "Accept": "application/json",
     }
     timeout = (config.connect_timeout, config.read_timeout)
-    attempts = config.retries + 1
+    attempts = 1 if operation in {"publish", "withdraw", "cleanup"} else config.retries + 1
     for attempt in range(attempts):
         try:
             response = post(

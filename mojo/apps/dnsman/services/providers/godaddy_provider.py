@@ -96,6 +96,28 @@ class GoDaddyProvider(DnsProvider):
 
     name = "godaddy"
 
+    def prepare_challenge_mutation(self, action, name, record_values, ttl=60):
+        # Instrument the exact one existing compatibility PUT. GoDaddy gains
+        # no conditional/finality claim and qualified cleanup never calls it.
+        rtype, values = self._prepare("TXT", record_values)
+        relative = to_relative(name, self.zone_name)
+        if action == "publish":
+            payload = [{"data": value, "ttl": max(int(ttl or 0), MIN_TTL)} for value in values]
+        else:
+            entries = self._entries(rtype, relative)
+            if not entries and action == "clear":
+                return None, None
+            remaining = self._surviving(rtype, entries, values)
+            if not remaining and action == "delete":
+                raise me.ValueException("GoDaddy cannot delete the last record of this type")
+            payload = self._payload(remaining) if remaining else [{"data": RETIRED_VALUE, "ttl": MIN_TTL}]
+        request = {"method": "PUT", "url": godaddy.build_url("domains", self.zone_name, "records", rtype, relative),
+                   "body": payload}
+        def send():
+            self.manager.put_records(self.zone_name, rtype, relative, payload)
+            return None
+        return request, send
+
     # GoDaddy rejects an empty record-set replacement, so the LAST value of a
     # (type, name) set can never be removed. `clear_record` below is what a
     # caller uses when the data must stop resolving regardless.

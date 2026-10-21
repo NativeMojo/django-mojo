@@ -25,6 +25,7 @@ from mojo.apps.dnsman.models.acme_hub_challenge_lease import (
 from mojo.apps.dnsman.services.naming import normalize_domain
 from mojo.apps.dnsman.services.authorization import is_platform_admin
 from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
+from mojo.apps.dnsman.services import challenge_dns, challenge_attempts
 
 
 logger = logit.get_logger("dnsman.acme_hub", "dnsman.log")
@@ -314,12 +315,15 @@ def _desired_snapshot(allocation):
     snapshot_ids = []
     pending_ids = []
     leases = list(AcmeHubChallengeLease.objects.filter(allocation=allocation)
-        .select_related("participant").only("pk", "state", "record_values", "participant__revoked_at", "participant__allocation_id"))
+        .select_related("participant").only("pk", "state", "record_values", "participant__revoked_at", "participant__allocation_id", "participant__participant_ref",
+            "participant__consumer_project_uuid", "participant__client_ref", "participant__role", "challenge_ref"))
     shared = upgrade.enabled()
+    retired = challenge_dns.hub_retired(allocation)
     for lease in leases:
         if shared and (lease.participant_id is None or lease.participant.allocation_id != allocation.pk):
             upgrade.refuse("participant_state_unavailable")
-        live = not shared or lease.participant.revoked_at is None
+        live = ((not shared or lease.participant.revoked_at is None)
+                and not challenge_dns.hub_lease_retired(allocation, lease, retired))
         snapshot_ids.append(lease.pk)
         if lease.state in (STATE_PENDING, STATE_ACTIVE) and live:
             desired.update(lease.record_values or [])
@@ -365,23 +369,26 @@ def _write_exact(allocation, values, *, route53_client=None, dns_probe=None):
     upgrade.check_session()
     client = route53_client or route53
     _stored_zone(allocation, route53_client=route53_client, dns_probe=dns_probe)
-    if values:
-        client.upsert_record(
-            allocation.allocation_zone_id, "TXT", allocation.target_name,
-            values, ttl=ttl(), zone_name=allocation.allocation_zone_name,
-            comment="django-mojo ACME delegation hub reconciliation")
-        return
-    current = None
-    for record in client.list_records(allocation.allocation_zone_id):
-        if record.type == "TXT" and record.name == allocation.target_name:
-            current = record
-            break
-    if current is not None:
-        client.delete_record(
-            allocation.allocation_zone_id, "TXT", allocation.target_name,
-            values=current.record_values, ttl=current.ttl,
-            zone_name=allocation.allocation_zone_name,
-            comment="django-mojo ACME delegation hub reconciliation")
+    if route53_client is None:
+        return challenge_dns.hub_write(allocation, values, ttl=ttl())
+    # Test/older mechanism injection retains compatibility without being a
+    # qualified raw Route53 transport. It still journals exactly one entry.
+    def compatibility():
+        request = {"zone": allocation.allocation_zone_id, "name": allocation.target_name,
+                   "type": "TXT", "values": list(values), "ttl": ttl(), "compatibility": True}
+        def send():
+            if values:
+                return client.upsert_record(allocation.allocation_zone_id, "TXT", allocation.target_name,
+                    values, ttl=ttl(), zone_name=allocation.allocation_zone_name,
+                    comment="django-mojo ACME delegation hub reconciliation")
+            current = next((record for record in client.list_records(allocation.allocation_zone_id)
+                if record.type == "TXT" and record.name == allocation.target_name), None)
+            if current is not None:
+                return client.delete_record(allocation.allocation_zone_id, "TXT", allocation.target_name,
+                    values=current.record_values, ttl=current.ttl, zone_name=allocation.allocation_zone_name,
+                    comment="django-mojo ACME delegation hub reconciliation")
+        return request, send
+    return challenge_dns.hub_write(allocation, values, compatibility=compatibility, ttl=ttl())
 
 
 def _reconcile_locked(allocation, request=None, audit_kind="reconciled",
@@ -499,8 +506,11 @@ def _shared_publish(group, client_ref, challenge_ref, values, request=None,
         if participant.revoked_at is not None:
             _audit(allocation, request, "publish_refused", participant=participant, result="revoked")
             _fail("acme_trust_revoked", 403)
+        challenge_dns.require_hub_publish(allocation, participant, challenge_ref)
+        previous = AcmeHubChallengeLease.objects.filter(participant=participant, challenge_ref=challenge_ref).exists()
         _retire_elapsed(allocation)
         lease = _persist_publish_lease(participant, challenge_ref, values)
+        challenge_dns.hub_origin(allocation, participant, challenge_ref, values, fresh=not previous)
         desired = _reconcile_locked(
             allocation, request=request, audit_kind="published", confirm=False, participant=participant,
             route53_client=route53_client, dns_probe=dns_probe)

@@ -32,6 +32,43 @@ CHANGE_POLL_INTERVAL = 5
 class Route53Provider(DnsProvider):
 
     name = "route53"
+    supports_owned_challenge_cleanup = True
+
+    def prepare_challenge_mutation(self, action, name, record_values, ttl=60):
+        from mojo.helpers.aws import route53_challenge
+        import uuid
+        # Older injected provider APIs remain an explicitly unqualified
+        # compatibility seam; production always uses the dedicated SDK client.
+        if self.route53_api is not route53:
+            request = {"action": action, "zone": self.zone_id, "name": name,
+                       "record_values": list(record_values or []), "ttl": ttl}
+            if action == "publish":
+                return request, lambda: self.upsert_record("TXT", name, record_values, ttl=ttl)
+            method = self.clear_record if action == "clear" else self.delete_record
+            return request, lambda: method("TXT", name, record_values=record_values)
+        client = route53_challenge.mutation_client()
+        try:
+            raw = route53_challenge.snapshot(client, self.zone_id, name)
+            request = route53_challenge.batch(self.zone_id, name, raw,
+                record_values or [], record_values if action == "publish" else [], ttl=ttl,
+                comment="mojo-acme:" + uuid.uuid4().hex)
+        except Exception:
+            client.close()
+            raise
+        if request is None:
+            client.close()
+            return None, None
+        def send():
+            try:
+                # The dedicated seam already emits bounded errors and must
+                # retain its exact conclusive-no-change classification.
+                result = route53_challenge.submit(client, request)
+                self._change_ids[("TXT", name)] = result["change_id"]
+                return result
+            finally:
+                client.close()
+        send.close = client.close
+        return request, send
 
     def __init__(self, domain, provider=None, route53_api=None):
         super().__init__(domain)
