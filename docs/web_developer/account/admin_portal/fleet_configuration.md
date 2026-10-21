@@ -258,7 +258,7 @@ The candidate UUID is null when no deployment exists. `enabled:true` has
 selected UUID returns 409 `deployment_changed`; malformed input returns 400.
 Use existing deployment/configuration links and Refresh for these conditions.
 
-A qualifying release must be newer than 1.39.0 and equal to the serving process
+A qualifying release must be newer than 1.39.1 and equal to the serving process
 framework. Every frozen-roster node needs fresh ordinary proof of that exact
 UUID, SHA and framework. An active, stale, incomplete or mismatched deployment
 cannot enable sharing. The enable transaction binds original owners and
