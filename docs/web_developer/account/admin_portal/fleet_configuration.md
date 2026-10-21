@@ -255,10 +255,10 @@ The candidate UUID is null when no deployment exists. `enabled:true` has
 `reason` is null. Safe refusal reasons are `hub_unconfigured`, `hub_unavailable`,
 `deployment_required`, `deployment_in_progress`, `deployment_not_converged`,
 `deployment_proof_unavailable`, and `framework_upgrade_required`. A changed
-selected UUID returns409 `deployment_changed`; malformed input returns400.
+selected UUID returns 409 `deployment_changed`; malformed input returns 400.
 Use existing deployment/configuration links and Refresh for these conditions.
 
-A qualifying release must be newer than1.39.0 and equal to the serving process
+A qualifying release must be newer than 1.39.0 and equal to the serving process
 framework. Every frozen-roster node needs fresh ordinary proof of that exact
 UUID, SHA and framework. An active, stale, incomplete or mismatched deployment
 cannot enable sharing. The enable transaction binds original owners and

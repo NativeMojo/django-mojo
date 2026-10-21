@@ -814,7 +814,7 @@ allocate another target or modify the public CNAME.
 | `trust/list` | `{allocation_ref,cursor?}` | `ControllerParticipantDTO` page including owner/revoked rows. Exact allocation controller only. |
 | `trust/recipient` | `{allocation_ref,consumer_project_uuid}` | `{consumer_project_uuid,label,active:true}` for one effectively active group, after controller check. Label max200; no group directory or key-existence oracle. |
 | `trust/grant` | `{connection_request}` | `ControllerParticipantDTO`. Controller, matching domain/target, exact one-hop alias and active recipient required. Exact active retry returns the same row. |
-| `trust/revoke` | `{allocation_ref,participant_ref}` | Revoked `ControllerParticipantDTO` after durable revocation and union cleanup. Owner revocation is refused. No alias proof; provider failures return503 while revocation persists. Retry/sweep repairs cleanup. |
+| `trust/revoke` | `{allocation_ref,participant_ref}` | Revoked `ControllerParticipantDTO` after durable revocation and union cleanup. Owner revocation is refused. No alias proof; provider failures return 503 while revocation persists. Retry/sweep repairs cleanup. |
 
 `ParticipantDTO` has **exactly**:
 
@@ -904,8 +904,8 @@ Do not add participant metadata to legacy four/six-field replies or `/dnsman/con
 A newly upgraded hub keeps sharing disabled until its one-time enable action in
 the existing Portal. Capabilities returns the same v2 shape with
 `shared_validation:false` and both capability booleans false. New setup, grant
-and join operations return503; exact existing participant status and its own
-publish/withdraw remain available. Owner issuance and already-pinned published1.38 trusted connections continue
+and join operations return 503; exact existing participant status and its own
+publish/withdraw remain available. Owner issuance and already-pinned published 1.38 trusted connections continue
 normal renewal under their existing trust and revocation checks. New setup,
 grants and joins stay unavailable until enabled. Missing installation state fails closed.
 

@@ -425,12 +425,12 @@ zone IDs or secrets.
 
 ### Coordinated hub rollout
 
-Deploy a normal release newer than1.39.0 to every expected node through the
+Deploy a normal release newer than 1.39.0 to every expected node through the
 existing deployment controls. Shared capabilities remain off until a genuine
 interactive superuser enables them in the existing Portal. The action checks
 the selected latest converged deployment, exact UUID/SHA/framework and complete
 fresh frozen-roster proofs, then atomically binds owners under the existing
-PostgreSQL admission lock. Existing published1.38 owners and already-pinned trusted participants continue
+PostgreSQL admission lock. Existing published 1.38 owners and already-pinned trusted participants continue
 normal issuance before enablement; no new trust is inferred. Missing installation state fails closed.
 
 See [the small rollout and rollback boundary](HubUpgrade.md). No separate

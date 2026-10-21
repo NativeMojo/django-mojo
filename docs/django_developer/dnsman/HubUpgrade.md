@@ -8,7 +8,7 @@ each issuer keeps its own ACME account, certificates and private keys.
 
 1. Publish and deploy a normal framework release carrying this backend and the
    matching Portal UI. It must be newer than **1.39.0**, which used the previous
-   activation contract. Local source still numbered1.39.0 is not a qualifying
+   activation contract. Local source still numbered 1.39.0 is not a qualifying
    production release. This feature does not choose or publish the next version.
 2. Use the existing deployment page to deploy every expected node and verify
    the deployment. The latest attempt must be converged, with no deployment
@@ -39,12 +39,14 @@ Existing allocation names, lease values/timestamps, certificate material and
 private keys remain in place. Missing installation state fails closed; reads do
 not recreate it.
 
-Published1.38 owner and already-trusted participants continue normal issuance while sharing is
-still disabled. Legacy owner-only allocations remain compatible until enablement;
-new shared setup, grants and consumer joins stay unavailable until enabled. Pinned
-existing connections still check their authenticated consumer identity, exact
-participant, issuance scope and current revocation state before renewing. Unused historical metadata columns remain for old ORM readers during the normal
-rolling deployment. Schema changes use forward migrations; migration0005 is not rewritten by this cleanup.
+Published 1.38 owners and existing trusted connections keep renewing while
+sharing is disabled. New setup, joins, grants and trust list/revoke maintenance
+wait until Enable; existing key deactivation remains the emergency control.
+Pinned connections still check their authenticated consumer identity, exact
+participant, issuance scope and current revocation state before renewing.
+Unused historical metadata columns remain for old ORM readers during the normal
+rolling deployment. Schema changes use forward migrations; migration 0005 is
+not rewritten by this cleanup.
 
 The dedicated root service, enrollment, retained updater, process attestation,
 private operator login and special capacity prohibition are removed. Deployment
