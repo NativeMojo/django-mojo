@@ -299,7 +299,7 @@ def test_validate_extra_fields_config(opts):
     bad_cases = [
         ("not a list", "must be a list"),
         ([{"label": "x"}], "name"),                         # missing name
-        ([{"name": "email"}], "collides"),                  # canonical collision
+        ([{"name": "email"}], "reserved"),                  # canonical collision
         ([{"name": "pro mo"}], "identifier"),               # non-identifier chars
         ([{"name": "promo", "label": 5}], "label"),         # non-string label
         ([{"name": "promo", "required": "yes"}], "required"),  # non-bool required
