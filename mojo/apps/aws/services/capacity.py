@@ -4313,14 +4313,15 @@ def _run_resize_database(record):
                  f"console.")
 
 
-def health_inventory(fleet_spec, deadline, ec2_client=None, elbv2_client=None):
+def health_inventory(fleet_spec, deadline, ec2_client=None, elbv2_client=None, *, inventory_reader=None):
     """Narrow response-only EC2/ELB read, independent of capacity mutations/data tiers."""
     from mojo.helpers.aws.provider_call import DeadlineProviderClient
     from mojo.deploy.provision.spec import names
     if fleet_spec is None:
         return {"instances": {}, "complete": False, "reasons": ["identity_unavailable"],
                 "serving": {"groups": [], "complete": False, "reasons": ["identity_unavailable"]}}
-    inventory = ec2_helper.fleet_inventory_bounded(
+    reader = inventory_reader or ec2_helper.fleet_inventory_bounded
+    inventory = reader(
         fleet_spec.project, fleet_spec.env, fleet=fleet_spec.fleet,
         client=ec2_client, region=fleet_spec.region, deadline=deadline)
     serving = {"groups": [], "complete": False, "reasons": []}
@@ -4340,10 +4341,12 @@ def health_inventory(fleet_spec, deadline, ec2_client=None, elbv2_client=None):
     try:
         if time.monotonic() >= deadline:
             serving["reasons"].append("deadline_exceeded")
+            inventory["complete"] = False
             return inventory
         balancers = call("describe_load_balancers", Names=[resolved["balancer"]]).get("LoadBalancers") or []
         if len(balancers) != 1:
             serving["reasons"].append("balancer_missing_or_ambiguous")
+            inventory["complete"] = False
             return inventory
         page = call("describe_target_groups", LoadBalancerArn=balancers[0]["LoadBalancerArn"], PageSize=20)
         groups = page.get("TargetGroups") or []

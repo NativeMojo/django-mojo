@@ -270,3 +270,8 @@ Collection deadlines cover bounded DNS, numeric connection establishment and
 complete socket transfers. Slow replies cannot renew a collection deadline.
 Unsupported proxy/OCSP/resolver transports remain unknown/unavailable evidence;
 clients must not turn such omissions into healthy service status.
+
+`roster_scope` is the selected environment/declaration fence used for short-lived
+identity aliases. An environment or expectation change invalidates old aliases.
+Fresh competing host claims remain `identity_ambiguous` even after one host
+replies again; clients must refresh rather than guess a logical alias.

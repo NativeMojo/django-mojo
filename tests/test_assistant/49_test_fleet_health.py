@@ -64,7 +64,7 @@ def test_final_continuation_remains_incomplete_through_mcp_dispatch(opts):
         "heartbeats": lambda deadline: [{"hostname": name, "runner_id": name, "last_heartbeat": now, "alive": True}
                                         for name in ("a", "b")],
         "scheduler": lambda deadline: {"status": "ok", "scope": "installation"},
-        "identity_cache": SimpleNamespace(read=lambda *args: None, write=lambda *args: True),
+        "identity_cache": SimpleNamespace(read=lambda *args, **kwargs: None, write=lambda *args, **kwargs: True),
     }
     entry = dict(get_registry()["get_fleet_health"])
     entry["handler"] = lambda params, user: report(user, readers=readers, **params)
