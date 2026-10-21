@@ -320,3 +320,64 @@ on the channel, not only the ones you just reset. It is also bounded: a call
 with no `limit` is capped at `JOBS_REQUEUE_MAX` (default 5000), and a truncated
 sweep returns `'truncated': True` plus a `'remaining'` count — run it again
 until nothing remains.
+
+## Checked host diagnostics (Python service)
+
+Legacy `jobs.get_sysinfo(runner_id=None, timeout=5.0)` retains its list result and
+legacy targeted/broadcast dispatch. The opt-in mode is
+`jobs.get_sysinfo(diagnostic=True, roster=<bounded selected-node roster>,
+channel=None, deadline=None, revision=None, timeout=5.0)`. It returns the checked
+execution envelope and uses only the fixed
+`mojo.apps.jobs.services.sysinfo_task.collect_diagnostics` collector. The channel
+is local `ADMIN_FLEET_CONFIG_CHANNEL` (default `edge`); absent membership or older
+checked protocol never falls back to unchecked healthy proof. A node on custom
+worker channels needs the existing common diagnostics channel or remains
+unavailable; this read changes no production channels.
+
+`JobManager.broadcast_execute_checked(..., client=None, deadline=None)` is
+backward compatible for existing callers. Diagnostics pass a private primary
+`get_bounded_connection(..., deadline=...)`; roster discovery, subscription,
+publication, polling and local disconnect cleanup share a five-second deadline.
+No singleton/pool is modified and no retry fan-out occurs. A possibly delivered
+publish remains a partial/uncertain outcome even if its acknowledgement expires.
+Deadline-bound RedisCluster startup is unsupported and refuses before network
+discovery; non-deadline behavior is unchanged.
+
+The diagnostic collector returns stable local identity/type and independent
+CPU/load, memory/swap, per-mount bytes/free/capacity/inodes and cumulative network
+families. It includes no users, TCP endpoint lists, environment/config values or
+process output. Each family isolates errors. CPU declares its 0.1-second sample
+interval. The optional local revision binds root-controlled role/activation
+receipt evidence (including request-service profile); an activation receipt does
+not establish current service liveness. Installation scheduler summaries remain
+installation-scoped. Existing liveness detection/alert ownership is unchanged.
+
+The private diagnostic Redis pool uses bounded DNS, numeric TCP dialing and an
+absolute-deadline socket over plain/TLS connections. The original hostname is
+retained for TLS certificate verification/SNI; no global resolver or pool is
+patched. Buffered/pipelined/slow-drip replies share the same deadline as roster,
+publication and polling. Extra OCSP network validation and cluster topology
+startup remain unsupported for this bounded diagnostic path.
+
+TLS handshake setup refreshes its remaining budget after TCP and local certificate
+configuration, then uses a single native handshake timeout. Existing TLS
+certificate/hostname requirements remain enforced. The private transport does not
+change the installation's global Redis/TLS connection classes.
+
+## Health snapshot queue and failure facts
+
+The account five-minute producer coalesces one source/slot into one running job
+plus the latest pending attempt, with zero retries and no catch-up replay.
+Snapshots batch declared channels: queue/processing/scheduled counts and earliest
+visibility score are separate from grouped primary due/running/completed facts.
+Future schedules are not overdue; processing scores are not exact runtime.
+Actual `max_exec_seconds` and `started_at` prove overruns. Idle/drained queues
+pass the stall predicate; same-scope independent progress samples and counter
+reset handling are required for pressure. Scheduler lock presence remains
+installation-only and never fabricates detector heartbeat evidence.
+
+Failed/expired JobEvents and current terminal Job fallback use signed frozen
+24-hour keyset windows,200 rows/page,600-second overlap and fixed expiry. Reads
+never acknowledge/delete source rows. Manual retry creates a replacement while
+preserving original terminal fields. Event writes and retention remain best
+effort; standing limitations differ from observed gaps. See the [full contract](../account/health_snapshot.md).

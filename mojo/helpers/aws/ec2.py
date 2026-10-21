@@ -24,7 +24,7 @@ import botocore
 from typing import Dict, List, Optional, Union, Any, Tuple
 
 from .client import get_client, get_session
-from .provider_call import ProviderCaller
+from .provider_call import ProviderCaller, ProviderCallError
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
 
@@ -1227,3 +1227,69 @@ def tag_resources(resource_ids, tags, client=None, region=None):
         lambda: ec2.create_tags(Resources=ids, Tags=_tag_list(tags)),
         iam_action="ec2:CreateTags", mutation=True)
     return True
+
+
+def fleet_inventory_bounded(project, environment, fleet=None, client=None,
+                            region=None, deadline=None, max_pages=4, limit=128):
+    """Completeness-reporting companion to fleet_instance_map; no account fallback."""
+    import time
+    from .provider_call import DeadlineProviderClient
+    deadline = deadline if deadline is not None else time.monotonic() + 8
+    output = {"instances": {}, "complete": False, "pages": 0, "row_count": 0,
+              "has_more": False, "reasons": []}
+    if not project or not environment:
+        output["reasons"].append("identity_unavailable")
+        return output
+    filters = [{"Name": "tag:mojo:project", "Values": [str(project)]},
+               {"Name": "tag:mojo:env", "Values": [str(environment)]},
+               {"Name": "tag:mojo:role", "Values": ["node"]}]
+    if fleet:
+        filters.append({"Name": "tag:mojo:fleet", "Values": [str(fleet)]})
+    ec2 = DeadlineProviderClient("ec2", deadline, region=region, client=client)
+    token = None
+    seen = set()
+    for _ in range(min(4, max(1, max_pages))):
+        if time.monotonic() >= deadline:
+            output["reasons"].append("deadline_exceeded")
+            break
+        params = {"Filters": filters, "MaxResults": 128}
+        if token:
+            params["NextToken"] = token
+        try:
+            page = _caller.call("ec2.describe_instances", lambda: ec2.describe_instances(**params),
+                                iam_action="ec2:DescribeInstances", mutation=False)
+        except ProviderCallError as exc:
+            output["failure"] = exc.detail()
+            output["reasons"].append("provider_denied" if exc.denied else exc.provider_code)
+            break
+        output["pages"] += 1
+        rows = [row for reservation in page.get("Reservations") or []
+                for row in reservation.get("Instances") or []]
+        output["row_count"] += len(rows)
+        for row in rows:
+            facts = _facts(row)
+            tags = facts.get("tags") or {}
+            if (tags.get("mojo:project") != project or tags.get("mojo:env") != environment
+                    or tags.get("mojo:role") != "node"
+                    or (fleet and tags.get("mojo:fleet") != fleet)):
+                output["reasons"].append("ownership_mismatch")
+                continue
+            identifier = facts.get("instance_id")
+            if identifier and identifier not in output["instances"]:
+                if len(output["instances"]) >= min(128, max(1, limit)):
+                    output["reasons"].append("inventory_overflow")
+                    output["has_more"] = True
+                    return output
+                output["instances"][identifier] = facts
+        token = page.get("NextToken")
+        output["has_more"] = bool(token)
+        if not token:
+            output["complete"] = not output["reasons"]
+            return output
+        if token in seen:
+            output["reasons"].append("inventory_token_repeated")
+            return output
+        seen.add(token)
+    if output["has_more"]:
+        output["reasons"].append("inventory_page_limit")
+    return output

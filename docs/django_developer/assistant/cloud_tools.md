@@ -1,6 +1,6 @@
 # Cloud Domain Tools
 
-Twenty on-demand tools (`domain="cloud"`, none core) that let an operator ask
+Twenty-four on-demand tools (`domain="cloud"`, none core) that let an operator ask
 the Assistant what is healthy, what needs attention, and — after an explicit
 approval — perform the same bounded cloud and fleet tasks the built-in Admin
 already offers.
@@ -26,6 +26,10 @@ projection (see [Bounding and redaction](#bounding-and-redaction)).
 | `get_platform_overview` | `GET /api/account/admin/platform?sections=…` | `admin_platform.platform_overview` | `view_platform`, `view_platform_security`, `manage_platform`, `admin` |
 | `get_advanced_inventory` | `GET /api/account/admin/advanced` | `admin_platform.advanced_overview` | `view_advanced`, `view_advanced_inventory`, `view_advanced_security`, `manage_advanced`, `admin` |
 | `get_framework_status` | `GET /api/account/admin/platform/framework` | `admin_platform.framework_overview` | `view_platform`, `manage_platform`, `admin` |
+| `get_fleet_health` | Reconciled fleet read | `fleet_health.report` | Per-source platform/AWS/jobs grants; see below |
+| `get_node_health` | Selected node diagnostics | `fleet_health.node` | Per-source platform/AWS/jobs grants; see below |
+| `get_monitoring_coverage` | One expected-node coverage page | `fleet_health.coverage` | Per-source platform/AWS/jobs grants |
+| `get_health_snapshot` | `GET /api/account/admin/health/snapshot` | `health_snapshot.read_snapshot` | Global platform entry; independent AWS/jobs facts |
 | `get_fleet_capacity` | `GET /api/aws/capacity` | `capacity.report` | `manage_aws` |
 | `get_capacity_operation_status` | `GET /api/aws/capacity/status` | `capacity.operation_status` / `capacity.batch_status` | `manage_aws` |
 | `get_managed_upgrades` | `GET /api/aws/maintenance/versions` | `maintenance.report` | `manage_aws` |
@@ -324,3 +328,120 @@ deployment control plane; this domain does not introduce a second release path.
 - `tests/test_assistant/40_test_cloud_tools_registry.py`, `41_test_cloud_projections.py`, `42_test_cloud_read_tools.py`, `43_test_cloud_mutations.py`
 - `tests/test_assistant_extended_serial/40_test_cloud_infrastructure.py`
 - [Approvals](approvals.md) · [aws/capacity.md](../aws/capacity.md) · [aws/maintenance.md](../aws/maintenance.md) · [aws/infrastructure_mode.md](../aws/infrastructure_mode.md)
+
+## Fleet and node diagnostic reads
+
+`get_fleet_health(limit=20, cursor=None)` and
+`get_node_health(node_id, hours=24)` call
+`mojo.apps.aws.services.fleet_health.report(actor, ...)` and `.node(actor, ...)`.
+They are on-demand `cloud` reads, with MCP `readOnlyHint: true`. Existing
+transport enablement, token/session policy and capacity mutation gates apply.
+
+The registry accepts the union of platform, AWS and jobs readers. The service
+rechecks an active global User and authorizes each source independently:
+
+| Source | Global grants (OR) |
+|---|---|
+| Configuration/edge expectation, heartbeats, installation scheduler | `view_platform`, `manage_platform`, `admin` |
+| Provision declarations | Platform grants above or `manage_aws` |
+| Scoped EC2/ELB and CloudWatch | `manage_aws` |
+| Checked full host diagnostics | `manage_jobs`, `view_jobs`, `jobs` |
+
+Denied sources return `permission_denied` without collection or identity
+publication. Group membership and Assistant access alone grant no source.
+An AWS-only reader can see provision declarations but cannot establish the
+whole expected denominator when configuration/edge sources are denied.
+
+The fleet denominator is the union of valid independent configuration-consuming
+hostnames, protected edge topology and the selected valid provision environment.
+Invalid declarations remain unknown; observed instances/runners never replace
+expectations. Every response carries schema version 1, UTC `generated_at`,
+`roster_revision`, `collection_status`, `health`, `health_scope`, `coverage`,
+`sources`, `truncated` and `nodes` or `node`. `coverage.expected_total` is null
+when the whole denominator is unknown. Expected missing and terminal-conflict
+rows remain visible. A fresh runner heartbeat proves presence, with the existing
+configured heartbeat cadence; it does not prove application health.
+
+Limits are 128 roster identities, 20 returned rows, four EC2 pages/128 instances,
+the existing four-group ELB limit, eight seconds per fleet collection and twenty
+seconds per selected-node collection. Only the node read issues checked control
+and metric reads. Checked dispatch has a five-second shared deadline over roster,
+subscribe, publish, poll and local cleanup, uses a private primary Redis client
+and never falls back to unchecked execution. Bounded RedisCluster diagnostics
+return explicit unsupported/unavailable evidence before cluster topology startup;
+legacy non-deadline clients retain their behavior. Deadline-bound AWS reads use
+one attempt and remaining connect/read limits. Configured external process,
+SSO/STS/container credential transports and caller-supplied refreshable sessions
+cannot promise that budget and return `credential_transport_unsupported`; the
+private bounded IMDS/static credential paths remain available.
+
+Fleet cursors are signed revision/last-id continuations. A changed normalized
+membership or alias mapping returns `roster_changed`; a final continuation page
+still describes partial fleet coverage. Unknown or ambiguous selected IDs refuse
+before diagnostic/provider-metric dispatch. A checked custom `EDGE_NODE_ID` can
+resolve a configured hostname alias; refresh the fleet after `roster_changed`.
+That proof binds the exact host/incarnation and expires without extending its
+proof timestamp. Duplicate identities remain ambiguous.
+
+A shared primary Redis entry keeps **identity aliases only**, partitioned by
+current source grants and the configured jobs namespace, for 120 seconds
+(maximum 128 rows/96 KiB). It lets another worker resolve observed-only IDs;
+expired/malformed identity evidence requires a fresh fleet read. This is separate
+from diagnostics: host readings, metric results, service proofs and healthy
+logs are never cached here. Five-minute snapshots belong to the separate
+snapshot producer; consumers poll those snapshots rather than fan out these
+on-demand readers every minute.
+
+Node `current` contains allowlisted CPU/load, memory/swap, relevant filesystems
+and since-boot network counters. `services` keeps request-role applicability,
+checked runner and revision-bound configuration activation evidence separate.
+Only a proved `request_service_required:false` excludes API service checks;
+opaque role names do not. The scheduler lock has installation scope and leaves
+per-node scheduler health unknown. Activation receipts are not current service
+liveness. No pressure thresholds or second liveness detector are introduced.
+
+`trends` contains separate CPU, memory and at most eight mount series, with exact
+namespace/dimensions, UTC window, units, aggregation, actual sample timestamps,
+null gaps and real-sample summaries. Averages are historical and never populate
+current readings. Missing/stale/unsupported/denied/failed families remain
+explicit. Output fits 24 KiB: bucket omissions are counted; an oversized full
+dimension set is omitted as a whole series with `dimensions_omitted:true` and
+`omitted_series_count`, never clipped into another CloudWatch identity. Any
+omission or family failure prevents complete coverage.
+
+DNS and complete transfers are included in these deadlines: private provider
+and Redis adapters consume the shared bounded DNS resolver, dial numeric
+addresses, preserve TLS SNI/Host, and guard each socket send/read (including
+buffered HTTP reads). A slow-drip reply cannot renew the deadline. Proxy/extra
+OCSP side channels and unsupported resolver transports return explicit failures.
+
+`roster_scope` is a stable SHA-256 fence of the selected project/environment/fleet
+and normalized expected declarations. Identity cache keys include this fence as
+well as current source grants; changing environments or declarations invalidates
+old aliases before provider/runtime diagnostics. A no-longer-observed cached ID
+retains an unknown row but loses callable instance/hostname aliases. This raw
+reader fence is separate from snapshot producer component ownership identity.
+Fresh competing checked claims remain ambiguous even if one claimant replies
+again; one fresh reply cannot erase a still-fresh conflicting identity proof.
+
+## Cached health and monitoring coverage
+
+`get_health_snapshot(evidence_cursor=None)` is read-only and cache-only, with
+current global platform entry permission, independent AWS/jobs projection and a
+24KiB MCP ceiling. It returns `django-mojo.health_snapshot` schema2, collected
+every300 seconds for60-second external polling. Its immutable publication digest
+and configuration hash survive permission projections. Each causal slot retains
+actual sample time and expiry; repeated reads do not renew health. MCP omissions
+return the frozen checkpoint before unread failure evidence and a REST reference.
+
+`get_monitoring_coverage(node_id=None,cursor=None)` is a read-only schema1
+on-demand drilldown over the shared bounded readers. It accepts an expected
+node or signed cursor, one node per page. Global roster counts stay separate
+from local measurement coverage, and every multi-node page stays incomplete.
+Runtime, continuous streams, recipe declaration and installation proof remain
+independent; partial/capped/missing/denied requirements stay visible.
+
+See [the health snapshot contract](../account/health_snapshot.md) for both tools,
+source permissions, three-second reads, durable failure cursors, fixed deadlines
+and the public-data boundary. Existing fleet/node and platform tools keep their
+existing public signatures and source permissions.

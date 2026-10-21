@@ -246,3 +246,11 @@ environment and performs a dependency-free installed-asset smoke check.
 a private temporary folder, and requires archive/build-smoke proof before any
 push. Its dry-run builds and checks for real, in the same way, and stops before
 the push, the upload and the tag.
+
+## Protected health snapshot read
+
+`GET /api/account/admin/health/snapshot` reads the five-minute schema2 publication
+without collecting. Optional `evidence_cursor` traverses bounded durable failed/
+expired job evidence. Entry requires current global platform permission; AWS and
+jobs facts use independent source grants. See [the full health snapshot contract](health_snapshot.md)
+for immutable identity/generation/digest, per-slot expiry, limits and denial behavior.

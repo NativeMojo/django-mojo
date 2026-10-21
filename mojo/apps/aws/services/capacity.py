@@ -4311,3 +4311,60 @@ def _run_resize_database(record):
     return _fail(record, "resize_timeout",
                  f"{resource} did not settle on {to_class}. Check the RDS "
                  f"console.")
+
+
+def health_inventory(fleet_spec, deadline, ec2_client=None, elbv2_client=None, *, inventory_reader=None):
+    """Narrow response-only EC2/ELB read, independent of capacity mutations/data tiers."""
+    from mojo.helpers.aws.provider_call import DeadlineProviderClient
+    from mojo.deploy.provision.spec import names
+    if fleet_spec is None:
+        return {"instances": {}, "complete": False, "reasons": ["identity_unavailable"],
+                "serving": {"groups": [], "complete": False, "reasons": ["identity_unavailable"]}}
+    reader = inventory_reader or ec2_helper.fleet_inventory_bounded
+    inventory = reader(
+        fleet_spec.project, fleet_spec.env, fleet=fleet_spec.fleet,
+        client=ec2_client, region=fleet_spec.region, deadline=deadline)
+    serving = {"groups": [], "complete": False, "reasons": []}
+    inventory["serving"] = serving
+    if not provision_spec.wants_balancer(fleet_spec):
+        serving.update(complete=True, status="not_applicable")
+        return inventory
+    resolved = names(fleet_spec)
+    # Only this selected environment's named balancer; never whole-account ELB.
+    client = DeadlineProviderClient("elbv2", deadline, region=fleet_spec.region,
+                                    client=elbv2_client)
+    from mojo.helpers.aws.provider_call import provider_caller
+    def call(operation, **kwargs):
+        return provider_caller.call(
+            "elbv2." + operation, lambda: getattr(client, operation)(**kwargs),
+            iam_action="elasticloadbalancing:" + "".join(part.title() for part in operation.split("_")))
+    try:
+        if time.monotonic() >= deadline:
+            serving["reasons"].append("deadline_exceeded")
+            inventory["complete"] = False
+            return inventory
+        balancers = call("describe_load_balancers", Names=[resolved["balancer"]]).get("LoadBalancers") or []
+        if len(balancers) != 1:
+            serving["reasons"].append("balancer_missing_or_ambiguous")
+            inventory["complete"] = False
+            return inventory
+        page = call("describe_target_groups", LoadBalancerArn=balancers[0]["LoadBalancerArn"], PageSize=20)
+        groups = page.get("TargetGroups") or []
+        if page.get("NextMarker") or len(groups) > elbv2_helper.DEFAULT_MAX_GROUPS:
+            serving["reasons"].append("serving_group_limit")
+        for group in groups[:elbv2_helper.DEFAULT_MAX_GROUPS]:
+            result = call("describe_target_health", TargetGroupArn=group["TargetGroupArn"])
+            targets = result.get("TargetHealthDescriptions") or []
+            if len(targets) > elbv2_helper.MAX_TARGETS:
+                serving["reasons"].append("serving_target_limit")
+            serving["groups"].append({"name": group.get("TargetGroupName"), "targets": [
+                {"id": (row.get("Target") or {}).get("Id"),
+                 "state": (row.get("TargetHealth") or {}).get("State")}
+                for row in targets[:elbv2_helper.MAX_TARGETS]
+                if (row.get("Target") or {}).get("Id") in inventory["instances"]]})
+        serving["complete"] = not serving["reasons"]
+    except ProviderCallError as exc:
+        serving["reasons"].append("provider_denied" if exc.denied else exc.provider_code)
+        serving["failure"] = exc.detail()
+    inventory["complete"] = inventory["complete"] and serving["complete"]
+    return inventory
