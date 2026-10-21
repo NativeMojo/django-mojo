@@ -1122,3 +1122,46 @@ def test_busy_budget_preserves_ca_backoff(opts):
     finally:
         _RENEW.pop(cert.pk, None)
         Job.objects.filter(pk=root_id).delete()
+
+
+@th.django_unit_test("profile publication serializes preparation and refuses authenticated stale identity")
+def test_profile_publication_preparation_race(opts):
+    from django.db import close_old_connections
+    from mojo.apps.dnsman.models import AcmeDelegation
+    from mojo.apps.dnsman.services import connection_config, delegation_setup as setup
+    env = fixture()
+    publishing, attempted, finished = threading.Event(), threading.Event(), threading.Event()
+    current = {"consumer": env.hub.consumer}
+    outcomes = []
+
+    def current_identity(consumer):
+        if consumer != current["consumer"]:
+            raise connection_config.ConfigurationError("hub_identity_migration_required")
+
+    def prepare_paused():
+        close_old_connections()
+        attempted.set()
+        try:
+            setup._prepare(env.target, env.hub.target, env.hub.consumer, None, False, identity_check=current_identity)
+            outcomes.append("created")
+        except setup.SetupError as error:
+            outcomes.append(error.error_code)
+        finally:
+            close_old_connections()
+            finished.set()
+    try:
+        with connection_config.identity_lock():
+            publishing.set()
+            thread = threading.Thread(target=prepare_paused)
+            thread.start()
+            assert attempted.wait(3), "Connection preparation must reach the held publication lock"
+            assert not finished.wait(0.15), "Preparation must not persist old-identity intent while publication holds the app identity lock"
+            current["consumer"] = uuid.uuid4().hex
+        assert finished.wait(5), "Paused preparation must resume after profile publication commits"
+        thread.join(5)
+        assert outcomes == ["hub_identity_changed"], "Resumed preparation must refuse its authenticated predecessor identity"
+        assert not AcmeDelegation.objects.filter(group=env.group).exists(), "The profile transition race must leave no stale shared connection row"
+    finally:
+        if env.domain:
+            env.domain.delete()
+        env.group.delete()

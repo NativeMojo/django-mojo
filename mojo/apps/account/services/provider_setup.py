@@ -132,7 +132,10 @@ def _write_document(s3, bucket, key, kms_key, allowed, current, values, revision
         arguments["IfMatch"] = current["etag"]
     else:
         arguments["IfNoneMatch"] = "*"
-    return s3.put_object(**arguments)
+    with transaction.atomic():
+        config_override.validate_publication(
+            current["document"]["settings"] if current else {}, values)
+        return s3.put_object(**arguments)
 
 
 def key_hint(value):

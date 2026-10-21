@@ -48,6 +48,22 @@ CRITICAL_FILES = (
     "apps/aws/services/capacity.py",
     "apps/dnsman/services/acme_hub_client.py",
     "apps/dnsman/services/delegation_setup.py",
+    'apps/dnsman/fleet_settings.py',
+    'apps/dnsman/apps.py',
+    'apps/dnsman/services/connection_config.py',
+    'apps/dnsman/services/recipient_keys.py',
+    'apps/account/rest/__init__.py',
+    'apps/account/rest/admin_shared_validation.py',
+    'apps/account/rest/admin_shared_validation_recipient.py',
+    'apps/account/rest/admin_fleet.py',
+    'apps/account/services/provider_setup.py',
+    'apps/account/services/fleet_config.py',
+    'apps/account/services/fleet_apply.py',
+    'apps/account/models/api_key.py',
+    'deploy/config_override.py',
+    'deploy/config_sync.py',
+    'deploy/fleet_config_node.py',
+    'deploy/fleet_config_role.py',
 )
 FLOOR_FIELDS = {"schema", "installation_uuid", "activation_uuid", "generation", "artifact", "roster_digest"}
 ARTIFACT_FIELDS = {"epoch", "source_sha", "manifest_sha256", "release", "wheel_sha256"}

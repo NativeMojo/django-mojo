@@ -1163,3 +1163,43 @@ terminal job (including completion), or a pending/issuing row without a Job.
 Only a real queued/running job or observed active issuer justifies
 `already_queued`; held work directs inspection. No extra scheduler or installer
 is introduced.
+
+## Protected recipient setup and rotation
+
+The deployment operator uses the [private shared-validation Fleet topic](../account/admin_portal/fleet_configuration.md#shared-validation-topic)
+to select an installed approved hub, preview a write-only key, publish it, Apply,
+and observe all expected nodes. Tenant connection status must use its safe
+readiness/repair codes and operator handoff; never embed this private profile
+catalog or credential input in a tenant flow. Configuration health and actual
+shared-validation activation are separate. No operation here grants controller
+allocation trust.
+
+On the hub, `GET /api/account/admin/fleet/shared-validation/recipient` accepts only
+`consumer_project_uuid=<exact original hub Group UUID>`. Its response is
+`{purpose:"acme_validation_consumer",consumer_project_uuid,consumer_label,
+permission:"dnsman_acme_federation",can_issue,grant_explanation}`. Show the real
+recipient label and exact UUID for confirmation. The route does not enumerate
+projects or infer the hub UUID from a downstream tenant.
+
+Issue with exactly `{consumer_project_uuid,expected_consumer_label,label,
+purpose:"acme_validation_consumer"}` by POST to the same route. Writes require
+an interactive active literal superuser, same origin and fresh auth. The backend
+re-resolves the original effectively active Group and checks protected grants
+under lock. A changed label returns 409 and requires reload. Unknown/inactive
+recipients return the same bounded unavailable response. Success returns
+`{purpose,consumer_project_uuid,consumer_label,api_key:{id,name,is_active,permission},token}`
+through the existing non-cacheable secret-response pattern. No arbitrary
+permissions, linked user, override mode or raw key-create payload is accepted.
+Keep tokens transient in UI state; configuration reads, previews, histories and
+receipts never return them. Existing explicit audited reveal remains supported;
+do not promise a one-time unrecoverable token.
+
+Recommend staged rotation: issue replacement → preview/publish → Apply → verify
+every expected node → explicitly deactivate the old hub key using
+`/api/account/admin/apikey/action`. Existing in-place rotate invalidates its prior
+token immediately; disclose that before invoking it. Revoke/deactivate/reveal
+remain existing explicit key operations. After uncertain issuance or publication,
+refetch authoritative key inventory/configuration before retrying. Missing catalog,
+delegation, publisher or node enrollment must show the supported Setup/AWS/Capacity
+operator destination and application-adoption responsibility, without asking the
+operator to edit local files or rerun initial bootstrap.
