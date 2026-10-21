@@ -99,6 +99,22 @@ def test_repeated_cached_read_expires_and_revoked_source_is_removed(opts):
 
 
 @th.django_unit_test()
+def test_denied_component_identity_does_not_survive_projection(opts):
+    from mojo.apps.account.services import health_evidence as he, health_snapshot as hs
+    identity = _identity()
+    private = he.slot(identity["source_id"], "database:secret-rds", "private-slot", source="cloudwatch", required_grant="aws",
+                      observed_at=NOW, collected_at=NOW, source_identity={"resource": "secret-rds"}, value=3, now=NOW)
+    component = he.component(identity["source_id"], "database", "secret-rds", [private], [],
+                             service_id="secret-service", resource_scope="secret-scope", resource_owner_source_id="secret-owner", now=NOW)
+    value = hs.publication(identity, 1, CONFIG, [component], generated_at=he.timestamp(NOW), published_at=he.timestamp(NOW), roster_revision="c" * 64)
+    result = hs.project_publication(value, {"platform": True, "aws": False, "jobs": False}, now=NOW)
+    text = json.dumps(result)
+    for secret in ("secret-rds", "secret-service", "secret-scope", "secret-owner", "private-slot"):
+        assert secret not in text, f"denied owning grant leaked component identity {secret}"
+    assert result["coverage"]["expected_total"] is None, "denied component count leaked through the denominator"
+
+
+@th.django_unit_test()
 def test_durable_generation_uses_one_test_owned_primary_row(opts):
     from mojo import errors as me
     from mojo.apps.account.models import Setting
@@ -120,9 +136,10 @@ def test_durable_generation_uses_one_test_owned_primary_row(opts):
 
 @th.django_unit_test()
 def test_atomic_publication_fences_late_token_and_survives_cache_key_loss(opts):
+    from contextlib import nullcontext
     from mojo.apps.account.services import health_snapshot as hs
     identity = _identity()
-    cache = hs.PublicationCache(identity["source_id"], prefix="TESTIT_HEALTH_" + uuid.uuid4().hex)
+    cache = hs.PublicationCache(identity["source_id"], prefix="TESTIT_HEALTH_" + uuid.uuid4().hex, guard=lambda *args: nullcontext())
     keys, deadline = cache.keys(), time.monotonic() + 10
     generation = iter((1, 2, 3))
     reserve = lambda source, revision, end: next(generation)
@@ -170,3 +187,109 @@ def test_cache_missing_malformed_oversize_and_forged_marker_fail_closed(opts):
     finally:
         with cache.connection(time.monotonic() + 2) as client:
             client.delete(*keys.values())
+
+
+@th.django_unit_test()
+def test_cached_service_has_no_collection_fallback_and_checks_entry_grant(opts):
+    from mojo.apps.account.services import health_snapshot as hs
+    class Actor:
+        is_active = True
+        is_request_user = True
+        def __init__(self, *perms):
+            self.perms = set(perms)
+        def has_permission(self, perms):
+            return bool(self.perms.intersection(perms))
+    calls = []
+    class Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def eval(self, *args):
+            calls.append("cache")
+            return [json.dumps(_publication()), "ok", "1"]
+    def connect(**kwargs):
+        assert kwargs["timeout"] == 0.5 and kwargs["read_from_replicas"] is False, "fast cache read inherited an unbounded/replica client"
+        return Client()
+    report = hs.read_snapshot(Actor("view_platform"), connect=connect, identity_reader=_identity,
+                              actor_loader=lambda actor, deadline: actor, now=NOW)
+    assert report["components"][0]["status"] == "healthy" and calls == ["cache"], "cached read performed more than its one bounded cache acquisition"
+    with th.assert_raises(hs.SnapshotError):
+        hs.read_snapshot(Actor("manage_aws"), connect=connect, identity_reader=_identity,
+                         actor_loader=lambda actor, deadline: actor, now=NOW)
+    assert calls == ["cache"], "entry denial touched cached protected source data"
+    def unavailable(**kwargs):
+        raise RuntimeError("bounded_cluster_startup_unsupported")
+    failed = hs.read_snapshot(Actor("view_platform"), connect=unavailable, identity_reader=_identity,
+                              actor_loader=lambda actor, deadline: actor, now=NOW)
+    assert failed["collection_status"] == "unknown" and not failed["components"], "Redis failure reused an in-process green snapshot"
+    assert failed["source_id"] == _identity()["source_id"], "cache failure discarded independently validated configured identity"
+
+
+@th.django_unit_test()
+def test_mcp_compaction_preserves_unread_failure_cursor(opts):
+    from mojo.apps.account.services import health_snapshot as hs
+    value = _publication()
+    value["failure_evidence"] = {"events": [{"channel": "x" * 250, "id": number} for number in range(200)],
+                                 "terminal_fallback": [], "next_cursor": "advanced", "gaps": []}
+    result = hs.mcp_projection(value, "original")
+    assert len(json.dumps(result).encode()) < 24 * 1024, "MCP compaction exceeded its projection byte boundary"
+    assert result["failure_evidence"]["next_cursor"] == "original", "MCP dropped failure rows but advanced beyond unread evidence"
+    assert not result["coverage"]["complete"] and result["rest_reference"], "MCP omission was reported as a complete report"
+
+
+@th.django_unit_test()
+def test_well_shaped_cache_cannot_extend_old_source_deadline(opts):
+    from mojo.apps.account.services import health_snapshot as hs
+    value = _publication()
+    slot = value["components"][0]["evidence"][0]
+    slot["fresh_until"] = (NOW + timedelta(days=1)).isoformat()
+    value["components"][0]["conditions"][0]["basis"][0]["fresh_until"] = slot["fresh_until"]
+    with th.assert_raises(hs.SnapshotError):
+        hs.validate_publication(value, _identity())
+    forged_sample = _publication()
+    forged_sample["components"][0]["evidence"][0]["sample_id"] = "e" * 64
+    with th.assert_raises(hs.SnapshotError):
+        hs.validate_publication(forged_sample, _identity())
+    for field in ("omitted_total", "truncated", "omitted_conditions"):
+        omitted = _publication()
+        omitted["components"][0]["coverage"][field] = True if field == "truncated" else 1
+        with th.assert_raises(hs.SnapshotError):
+            hs.validate_publication(omitted, _identity())
+        projected = hs.project_publication(omitted, {"platform": True}, now=NOW)
+        assert not projected["coverage"]["complete"], f"required {field} omission survived as complete coverage"
+
+
+@th.django_unit_test()
+def test_restored_old_redis_token_cannot_cross_durable_generation_head(opts):
+    from functools import partial
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.services import health_snapshot as hs
+    Setting.objects.filter(key="TESTIT_HEALTH_RESTORE_STATE").delete()
+    identity, deadline = _identity(), time.monotonic() + 12
+    cache = hs.PublicationCache(identity["source_id"], prefix="TESTIT_HEALTH_" + uuid.uuid4().hex,
+                                guard=partial(hs.publication_guard, key="TESTIT_HEALTH_RESTORE_STATE"))
+    keys = cache.keys()
+    reserve = partial(hs.reserve_generation, key="TESTIT_HEALTH_RESTORE_STATE")
+    try:
+        old = cache.acquire(CONFIG, deadline)
+        one, old_reservation = cache.reserve(old, CONFIG, deadline, reserve=reserve)
+        with cache.connection(deadline) as client:
+            backup = {name: client.get(key) for name, key in keys.items()}
+            client.delete(*keys.values())
+        new = cache.acquire(CONFIG, deadline)
+        two, reservation = cache.reserve(new, CONFIG, deadline, reserve=reserve)
+        cache.publish(_publication(two), new, reservation, deadline, current_identity=identity, current_config_revision=CONFIG)
+        with cache.connection(deadline) as client:
+            client.delete(*keys.values())
+            for name, raw in backup.items():
+                if raw is not None:
+                    client.set(keys[name], raw, ex=75)
+        with th.assert_raises(hs.SnapshotError):
+            cache.publish(_publication(one), old, old_reservation, deadline, current_identity=identity, current_config_revision=CONFIG)
+        with cache.connection(deadline) as client:
+            assert client.get(keys["current"]) is None, "restored old token published an old generation over durable newer state"
+    finally:
+        with cache.connection(time.monotonic() + 2) as client:
+            client.delete(*keys.values())
+        Setting.objects.filter(key="TESTIT_HEALTH_RESTORE_STATE").delete()

@@ -118,11 +118,25 @@ def slot(source_id, component_id, slot_id, *, source, required_grant,
 def slot_is_fresh(value, now):
     until = parse_time(value.get("fresh_until"))
     observed = valid_time(value.get("observed_at"), now)
+    maximum = slot_deadline(value)
     return bool(value.get("status") == "ok" and not value.get("truncated")
                 and observed is not None and until is not None and until > now
+                and maximum is not None and until <= maximum
                 and valid_time(value.get("collected_at"), now) is not None
                 and valid_time(value.get("last_success_at"), now) is not None
                 and isinstance(value.get("sample_id"), str))
+
+
+def slot_deadline(value):
+    sample, collected = parse_time(value.get("observed_at")), parse_time(value.get("collected_at"))
+    if sample is None or collected is None:
+        return None
+    period = value.get("period_seconds")
+    if period is None:
+        return sample + timedelta(seconds=MAX_AGE_SECONDS)
+    if type(period) not in (int, float) or not math.isfinite(period) or period <= 0:
+        return None
+    return min(sample + timedelta(seconds=3 * period), collected + timedelta(seconds=MAX_AGE_SECONDS))
 
 
 def condition(component_id, rule, resource_key, outcome, basis, *, impact="operational", reason=None, now=None):
@@ -143,9 +157,13 @@ def condition(component_id, rule, resource_key, outcome, basis, *, impact="opera
 
 def component(source_id, kind, resource_id, evidence, conditions, *, service_id=None,
               resource_scope="installation", resource_owner_source_id=None,
-              required=True, coverage_complete=True, reasons=None, now=None):
+              required=True, coverage_complete=True, reasons=None, now=None, identity_grant=None):
     """Conservative component rollup; a proved outage survives independent gaps."""
     now = now or utcnow()
+    owning_grants = {row["required_grant"] for row in evidence}
+    identity_grant = identity_grant or (next(iter(owning_grants)) if len(owning_grants) == 1 else "platform")
+    if identity_grant not in GRANTS:
+        raise EvidenceError("invalid_identity_grant")
     component_id = kind + ":" + resource_id
     required_slots = [row for row in evidence if row.get("required", True)
                       and row.get("status") != "not_applicable"]
@@ -163,6 +181,7 @@ def component(source_id, kind, resource_id, evidence, conditions, *, service_id=
     all_known = lambda values: bool(values) and all(value is not None for value in values)
     return {"component_id": component_id, "kind": kind, "resource_scope": resource_scope,
             "resource_id": resource_id, "resource_owner_source_id": resource_owner_source_id or source_id,
+            "identity_grant": identity_grant,
             "service_id": service_id, "required": required, "status": status, "availability": availability,
             "observed_at": timestamp(min(observations)) if all_known(observations) else None,
             "last_success_at": timestamp(min(successes)) if all_known(successes) else None,
@@ -282,3 +301,109 @@ def primary_cursor(deadline, *, connect=None, clock=None, max_queries=16):
         # rollback network operation may outlive the claimed deadline.
         raw.close()
         connection.close()
+
+
+FAILURE_CURSOR_SALT = "mojo.health.failures.v2"
+FAILURE_LIMITATIONS = ["best_effort_event_capture", "retention_unproven",
+                      "old_job_prune_cascades_recent_events", "manual_purge_possible",
+                      "commit_delay_beyond_600_seconds"]
+
+
+def _failure_rows(phase, start, end, after, limit, deadline):
+    from mojo.apps.jobs.models import Job, JobEvent
+    if phase == "events":
+        table, at = JobEvent._meta.db_table, "at"
+        fields = "id, job_id, channel, event, at, attempt"
+        columns = ("id", "job_id", "channel", "event", "at", "attempt")
+        clause = "event IN ('failed', 'expired')"
+    else:
+        table, at = Job._meta.db_table, "finished_at"
+        fields = "id, channel, status, attempt, finished_at"
+        columns = ("id", "channel", "status", "attempt", "finished_at")
+        clause = "status IN ('failed', 'expired')"
+    params = [start, end]
+    if after:
+        clause += ' AND ("%s", id) > (%%s, %%s)' % at
+        params += [parse_time(after[0]), after[1]]
+    sql = 'SELECT %s FROM "%s" WHERE "%s">=%%s AND "%s"<=%%s AND %s ORDER BY "%s", id LIMIT %%s' % (fields, table, at, at, clause, at)
+    with primary_cursor(deadline, max_queries=4) as cursor:
+        cursor.execute(sql, params + [limit + 1])
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def failure_page(source_id, cursor=None, *, deadline, now=None, reader=None):
+    """Frozen failure-only keyset windows; a completed cursor opens overlap."""
+    from django.core import signing
+    now, reader = now or utcnow(), reader or _failure_rows
+    start, end, phase, position, gaps = now - timedelta(hours=24), now, "events", None, []
+    if cursor is not None:
+        if not isinstance(cursor, str) or not 0 < len(cursor) <= 4096:
+            raise EvidenceError("invalid_evidence_cursor")
+        try:
+            saved = signing.loads(cursor, salt=FAILURE_CURSOR_SALT)
+            if (not isinstance(saved, dict) or saved.get("source") != source_id
+                    or saved.get("profile") != PROFILE_VERSION or saved.get("query") != "failed_expired_v2"
+                    or saved.get("phase") not in ("events", "fallback", "complete")):
+                raise ValueError()
+            start, end = parse_time(saved.get("start")), parse_time(saved.get("end"))
+            expires = parse_time(saved.get("expires"))
+            if (start is None or end is None or expires is None or start > end
+                    or end > now + timedelta(seconds=30) or end - start > timedelta(hours=24)):
+                raise ValueError()
+            phase, position = saved["phase"], saved.get("position")
+            if position is not None and (not isinstance(position, list) or len(position) != 2
+                    or parse_time(position[0]) is None or not start <= parse_time(position[0]) <= end
+                    or (phase == "events" and (type(position[1]) is not int or position[1] < 1))
+                    or (phase == "fallback" and (not isinstance(position[1], str) or len(position[1]) > 32))):
+                raise ValueError()
+            if expires <= now:
+                gaps.append("cursor_expired")
+                start, end, phase, position = now - timedelta(hours=24), now, "events", None
+            elif phase == "complete":
+                start, end, phase, position = end - timedelta(seconds=600), now, "events", None
+                if now - start > timedelta(hours=24):
+                    start = now - timedelta(hours=24)
+                    gaps.append("consumer_interval_beyond_24_hours")
+        except (ValueError, TypeError, signing.BadSignature):
+            raise EvidenceError("invalid_evidence_cursor") from None
+    result = {"window_start": timestamp(start), "window_end": timestamp(end),
+              "capture_status": "best_effort", "limitations": list(FAILURE_LIMITATIONS),
+              "retention_basis": "jobs_created_before_7_days_may_be_pruned_with_events",
+              "events": [], "terminal_fallback": [], "has_more": False,
+              "next_cursor": None, "gaps": gaps, "counts_scope": "returned_page",
+              "total": None}
+    remaining = 200
+    try:
+        while phase != "complete" and remaining:
+            rows = reader(phase, start, end, position, remaining, deadline)
+            more = len(rows) > remaining
+            selected = rows[:remaining]
+            destination = result["events" if phase == "events" else "terminal_fallback"]
+            for row in selected:
+                at_key = "at" if phase == "events" else "finished_at"
+                at = parse_time(row.get(at_key))
+                if at is None or not start <= at <= end:
+                    raise EvidenceError("invalid_durable_evidence")
+                destination.append({**row, at_key: timestamp(at)})
+            remaining -= len(selected)
+            if more:
+                last = selected[-1]
+                position = [timestamp(parse_time(last["at" if phase == "events" else "finished_at"])), last["id"]]
+                result["has_more"] = True
+                result["gaps"].append("page_backlog")
+                break
+            phase, position = ("fallback" if phase == "events" else "complete"), None
+        if not remaining and phase != "complete":
+            result["has_more"] = True
+            result["gaps"].append("page_backlog")
+        result["next_cursor"] = signing.dumps({"source": source_id, "profile": PROFILE_VERSION,
+            "query": "failed_expired_v2", "start": timestamp(start), "end": timestamp(end),
+            "phase": phase, "position": position, "expires": timestamp(now + timedelta(hours=1))},
+            salt=FAILURE_CURSOR_SALT, compress=True)
+    except Exception:
+        result["gaps"].append("durable_read_unavailable")
+        # No cursor advances past unread rows after a failed database read.
+        result["next_cursor"] = cursor
+        result["has_more"] = True
+    result["gaps"] = sorted(set(result["gaps"]))
+    return result

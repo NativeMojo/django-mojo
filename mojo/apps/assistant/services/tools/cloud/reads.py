@@ -903,3 +903,23 @@ def _tool_get_node_health(params, user):
     except fleet_health.FleetHealthError as error:
         return refuse(error.message, error.error_code)
     return bounded(result, depth=14, max_items=128, max_nodes=18000, max_string=1024)
+
+
+@tool(
+    name="get_health_snapshot", domain="cloud",
+    permission=["view_platform", "manage_platform", "admin"],
+    description=("Read the protected cached schema2 five-minute health snapshot and one failure-only evidence page. "
+                 "No refresh or collection. Source times/deadlines, gaps and permissions are independent. "
+                 "Use REST drilldown if this24KiB projection is incomplete. Read-only."),
+    input_schema={"type": "object", "properties": {"evidence_cursor": {"type": "string"}},
+                  "additionalProperties": False},
+)
+def _tool_get_health_snapshot(params, user):
+    from mojo.apps.account.services import health_snapshot
+    if set(params) - {"evidence_cursor"}:
+        return refuse("Only evidence_cursor is accepted.", "invalid_request")
+    try:
+        result = health_snapshot.read_snapshot(user, params.get("evidence_cursor"))
+    except health_snapshot.SnapshotError as error:
+        return refuse(error.error_code, error.error_code)
+    return health_snapshot.mcp_projection(result, params.get("evidence_cursor"))

@@ -20,7 +20,7 @@ TEST_PASSWORD = "TestPass1!"
 
 READ_TOOLS = (
     "get_platform_health", "get_platform_overview", "get_advanced_inventory",
-    "get_framework_status", "get_fleet_capacity", "get_fleet_health", "get_node_health",
+    "get_framework_status", "get_fleet_capacity", "get_fleet_health", "get_node_health", "get_health_snapshot",
     "get_capacity_operation_status", "get_managed_upgrades",
     "get_upgrade_status", "get_setup_readiness", "get_setup_operation",
     "get_version_drift", "list_cloud_resources", "fetch_cloud_metrics",

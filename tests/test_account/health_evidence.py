@@ -104,3 +104,38 @@ def test_sql_deadline_and_cleanup_are_per_operation(opts):
         with he.primary_cursor(10, connect=lambda deadline: limited, clock=lambda: 5, max_queries=2) as cursor:
             cursor.execute("SELECT 1")
     assert limited.closed, "query-budget refusal leaked its private connection"
+
+
+@th.django_unit_test()
+def test_failure_windows_keep_unread_rows_and_requery_overlap(opts):
+    from mojo.apps.account.services import health_evidence as he
+    calls = []
+    def rows(phase, start, end, after, limit, deadline):
+        calls.append((phase, start, end, after))
+        if phase == "fallback":
+            return []
+        minimum = after[1] if after else 0
+        return [{"id": number, "job_id": "job", "channel": "testit_health", "event": "failed", "at": NOW, "attempt": 1}
+                for number in range(minimum + 1, 251)][:limit + 1]
+    first = he.failure_page(SOURCE, deadline=10, now=NOW, reader=rows)
+    assert len(first["events"]) == 200 and first["has_more"], "first failure page did not retain its unread event continuation"
+    second = he.failure_page(SOURCE, first["next_cursor"], deadline=10, now=NOW, reader=rows)
+    assert len(second["events"]) == 50 and not second["has_more"], "failure keyset cursor skipped or duplicated same-time event IDs"
+    assert second["events"][0]["id"] == 201, "failure cursor used job UUID or max-ID watermark rather than frozen(at,id) position"
+    later = NOW + timedelta(seconds=300)
+    he.failure_page(SOURCE, second["next_cursor"], deadline=10, now=later, reader=rows)
+    assert calls[-2][1] == NOW - timedelta(seconds=600), "completed window did not reread600seconds of overlap"
+    assert first["capture_status"] == "best_effort" and "retention_unproven" in first["limitations"], "available failure rows overstated capture or retention completeness"
+    assert not second["gaps"], "standing best-effort limitations became permanent observed gaps"
+    with th.assert_raises(he.EvidenceError):
+        he.failure_page("b" * 64, first["next_cursor"], deadline=10, now=NOW, reader=rows)
+
+
+@th.django_unit_test()
+def test_failure_database_error_never_advances_cursor_or_claims_zero(opts):
+    from mojo.apps.account.services import health_evidence as he
+    def broken(*args):
+        raise RuntimeError("database unavailable")
+    result = he.failure_page(SOURCE, deadline=10, now=NOW, reader=broken)
+    assert result["has_more"] and result["next_cursor"] is None, "failed database page advanced its window"
+    assert "durable_read_unavailable" in result["gaps"] and result["total"] is None, "failed read reported reassuring zero actual failures"
