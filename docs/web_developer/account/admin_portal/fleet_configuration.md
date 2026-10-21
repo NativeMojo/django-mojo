@@ -200,9 +200,17 @@ authority is 403; unavailable dependencies are 503. Stable codes include
 `hub_identity_mismatch`, `hub_identity_migration_required`,
 `connection_disable_ineligible`, `fleet_schema_unavailable`,
 `fleet_delegation_unavailable`, `publisher_unavailable`,
-`node_enrollment_unavailable`, `fleet_revision_changed`, `publication_uncertain`
+`node_enrollment_unavailable`, `fleet_revision_changed`, `configuration_busy`, `publication_uncertain`
 and bounded `hub_*` codes. A failed or uncertain publish requires authoritative
 state reload before another preview. Never blindly replay a secret-bearing write.
+
+`configuration_busy` is HTTP 409 for a competing setup/configuration identity
+owner, including preview, publish and historical restore. It refuses before a
+conditional S3 write and does not mean the key or identity changed. Show the busy
+state, Refresh authoritative configuration, preview again, and let the operator
+deliberately retry. Never automatically replay the mutation. An unchanged complete
+managed tuple still permits unrelated Fleet/GeoIP publication without identity
+admission or a hub probe while that other owner is active.
 
 Each expected node retains safe `shared_validation` evidence: `state`, `profile_id`,
 `observed_project_uuid`, `checked_at`, `error_code`, and `sharing_ready`. Offline

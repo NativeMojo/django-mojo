@@ -28,6 +28,7 @@ ERRORS = {
     "alias_lookup_failed": "The validation CNAME could not be checked.",
     "connection_not_verified": "Check this connection before requesting a certificate.",
     "certificate_busy": "A certificate worker is using this domain; retry after it finishes.",
+    "configuration_busy": "Shared-validation configuration is busy; refresh before retrying.",
     "cleanup_pending": "An earlier challenge still needs isolated cleanup.",
     "profile_conflict": "An existing certificate has a different name profile.",
     "stale_connection": "This connection is no longer the current request.",
@@ -487,11 +488,12 @@ def _prepare(target, allocation_ref, consumer, actor, restart, cleanup=None, ide
     with transaction.atomic():
         with ExitStack() as stack:
             from mojo.apps.dnsman.services import connection_config
-            stack.enter_context(connection_config.identity_lock())
             try:
+                stack.enter_context(connection_config.identity_lock())
                 (identity_check or connection_config.require_current_identity)(consumer)
-            except connection_config.ConfigurationError:
-                raise SetupError("hub_identity_changed") from None
+            except connection_config.ConfigurationError as error:
+                raise SetupError("configuration_busy" if error.error_code == "configuration_busy"
+                                 else "hub_identity_changed") from None
             # Domain first, NO Certificate row locks before trying all advisory
             # locks. An issuer owns its advisory lock before joined row locks.
             domain = Domain.objects.select_for_update().filter(name=target.name).first()

@@ -1174,6 +1174,15 @@ catalog or credential input in a tenant flow. Configuration health and actual
 shared-validation activation are separate. No operation here grants controller
 allocation trust.
 
+Connect/restart can return `configuration_busy` with HTTP 409 when another setup
+or configuration operation owns identity admission. No connection reference is
+created, retired or rotated, and no hub mutation is attempted by that refusal.
+Show a busy message, Refresh the current plan, and require a deliberate retry;
+do not automatically replay Connect/restart. Refreshed identity changes can still
+require the existing `hub_identity_changed` repair. Protected preview, publish and
+historical restore use the same bounded busy response; the private operator flow
+must Refresh configuration and preview again before an explicit publication.
+
 On the hub, `GET /api/account/admin/fleet/shared-validation/recipient` accepts only
 `consumer_project_uuid=<exact original hub Group UUID>`. Its response is
 `{purpose:"acme_validation_consumer",consumer_project_uuid,consumer_label,

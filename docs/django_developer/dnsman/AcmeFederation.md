@@ -639,6 +639,17 @@ profile catalog, both schema/delegation planes and fixed node-proof enrollment.
 Configuration can be verified against authenticated protocol v2 while sharing is
 inactive; sharing operations remain unavailable until actual hub activation.
 
+Shared Connect/restart and protected configuration changes use nonblocking
+transaction-scoped identity admission. A competing owner returns
+`configuration_busy` (HTTP 409) before local intent is inserted/retired or a hub
+mutation is attempted. This also applies when an application already holds its
+Domain/issuer fences: let the failed operation unwind those fences, Refresh the
+current plan/configuration, and explicitly retry. Never automatically replay the
+mutation. A retry rechecks the complete published and authenticated loaded tuple;
+a changed identity is still refused as `hub_identity_changed`. Applications do not
+need a private framework lock context. Unchanged managed tuples continue to bypass
+identity admission and hub probes for unrelated Fleet/GeoIP publication.
+
 On the hub, `GET /api/account/admin/fleet/shared-validation/recipient` accepts only
 `consumer_project_uuid`, the exact original Group UUID. It returns the actual
 `consumer_project_uuid`, `consumer_label`, purpose `acme_validation_consumer`,

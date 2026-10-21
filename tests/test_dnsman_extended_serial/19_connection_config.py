@@ -1,9 +1,12 @@
 """Protected topic policies, redaction and explicit candidate authentication."""
 import io
+import importlib
 import json
 import os
 import subprocess
 import sys
+import threading
+import time
 from contextlib import contextmanager, ExitStack
 from types import SimpleNamespace
 from unittest import mock
@@ -69,6 +72,209 @@ def refused(code, call):
         assert SECRET not in str(error), "Safe failures must never contain the submitted credential"
         return error
     raise AssertionError("The invalid shared-validation operation was accepted")
+
+
+@contextmanager
+def competing_identity_owner():
+    from django.db import connections
+    from mojo.apps.dnsman.services import connection_config
+    admitted, release, finished = threading.Event(), threading.Event(), threading.Event()
+    outcome = []
+
+    def own_identity():
+        connections.close_all()
+        try:
+            with connection_config.identity_lock():
+                admitted.set()
+                if not release.wait(10):
+                    raise AssertionError("Test must release its competing identity owner")
+            outcome.append("released")
+        except Exception as error:
+            outcome.append(type(error).__name__)
+        finally:
+            connections.close_all()
+            finished.set()
+
+    thread = threading.Thread(target=own_identity)
+    thread.start()
+    try:
+        assert admitted.wait(3), "A separate PostgreSQL connection must actually own identity admission"
+        yield
+    finally:
+        release.set()
+        assert finished.wait(5), "The competing identity owner must finish before fixture cleanup"
+        thread.join(1)
+        assert outcome == ["released"], f"The test-owned PostgreSQL transaction must release normally: {outcome}"
+
+
+@th.django_unit_test("opposing Domain and identity owners refuse setup without a lock cycle")
+def test_opposing_domain_identity_owners_refuse_without_mutation(opts):
+    from django.db import connection, connections, transaction
+    from mojo.apps.account.models import Group
+    from mojo.apps.dnsman.models import AcmeDelegation, Domain
+    from mojo.apps.dnsman.services import connection_config, delegation_setup as setup
+    shared = importlib.import_module("test_dnsman.23_shared_setup")
+    env = shared.fixture()
+    old = setup._prepare(env.target, env.hub.target, env.hub.consumer, None, False,
+                         identity_check=lambda consumer: None)
+    ready, finished = threading.Event(), threading.Event()
+    owner = {}
+    observed = {}
+
+    def opposing_owner():
+        connections.close_all()
+        try:
+            with connection_config.identity_lock():
+                with connection.cursor() as cursor:
+                    cursor.execute("SET LOCAL lock_timeout = '4s'")
+                    cursor.execute("SELECT pg_backend_pid()")
+                    owner["pid"] = cursor.fetchone()[0]
+                ready.set()
+                row = setup._prepare(env.target, env.hub.target, env.hub.consumer, None, False,
+                                     identity_check=lambda consumer: None)
+                owner["completed"] = row.pk
+        except Exception as error:
+            owner["error"] = type(error).__name__
+        finally:
+            connections.close_all()
+            finished.set()
+
+    thread = threading.Thread(target=opposing_owner)
+    try:
+        with transaction.atomic():
+            Domain.objects.select_for_update().get(pk=env.domain.pk)
+            Group.objects.select_for_update().get(pk=env.group.pk)
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL lock_timeout = '500ms'")
+                cursor.execute("SELECT pg_backend_pid()")
+                caller_pid = cursor.fetchone()[0]
+            before = list(AcmeDelegation.objects.filter(group=env.group).values_list(
+                "pk", "client_ref", "state", "retired_at", "hub_participant_ref"))
+            thread.start()
+            assert ready.wait(3), "The opposing connection must own the actual identity advisory lock"
+            deadline = time.monotonic() + 2
+            blocked = False
+            while time.monotonic() < deadline:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT %s = ANY(pg_blocking_pids(%s))", [caller_pid, owner["pid"]])
+                    blocked = cursor.fetchone()[0]
+                if blocked:
+                    break
+            assert blocked, "PostgreSQL must confirm the identity owner is blocked by this caller's Domain fence"
+            started = time.monotonic()
+            try:
+                setup.connect(env.target, env.hub.target, restart=True, client=env.hub,
+                              custody=lambda cert: True, identity_check=lambda consumer: None)
+                observed["outcome"] = "accepted"
+            except setup.SetupError as error:
+                observed.update(outcome=error.error_code, status=error.status)
+            except Exception as error:
+                observed["outcome"] = type(error).__name__
+            observed["duration"] = time.monotonic() - started
+            after = list(AcmeDelegation.objects.filter(group=env.group).values_list(
+                "pk", "client_ref", "state", "retired_at", "hub_participant_ref"))
+            assert after == before, "Busy restart must not insert, rotate, retire or rebind immutable connection intent"
+            assert not any(call[0] in ("join", "publish", "withdraw") for call in env.hub.calls), "Busy setup must not mutate the injected remote hub"
+        assert finished.wait(5), "Releasing the Domain/tenant fences must let the opposing preparation complete"
+        thread.join(1)
+        assert observed.get("outcome") == "configuration_busy" and observed.get("status") == 409, f"Competing setup must return configuration_busy 409 instead of waiting or changing identity: {observed}"
+        assert owner.get("completed") == old.pk and "error" not in owner, f"The identity owner must complete actual preparation after the other caller releases its fences: {owner}"
+        assert observed["duration"] < 0.4, "Identity admission must refuse before the test-owned half-second PostgreSQL lock timeout"
+    finally:
+        if thread.ident is not None:
+            thread.join(6)
+        assert not thread.is_alive(), "The opposing PostgreSQL owner must release its connection before fixture cleanup"
+        env.domain.delete()
+        env.group.delete()
+
+
+@th.django_unit_test("busy publication is bounded across topic, common writer and restore")
+def test_busy_publication_boundaries_and_unchanged_tuple_bypass(opts):
+    from mojo import errors as me
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import provider_setup
+    from mojo.deploy import config_override as codec
+    real_superuser = provider_setup._superuser
+    with fixture() as (topic, schema, provider, fleet, s3, actor, values, static, payload, probe):
+        original = s3.get_object.side_effect
+        historical_values = dict(values, **{schema.KEYS[2]: "test-owned-historical-key"})
+        historical = codec.encode_document(historical_values, "b" * 32, "then", static["ADMIN_FLEET_CONFIG_ALLOWED_KEYS"])
+        s3.get_object.side_effect = lambda **kw: ({"Body": io.BytesIO(historical), "ContentLength": len(historical),
+                                                "ETag": '"history"', "Metadata": {"sha256": codec.sha256(historical)}}
+                                                if "VersionId" in kw else original(**kw))
+        with competing_identity_owner():
+            for operation in (
+                lambda: topic.mutate(actor, payload),
+                lambda: topic.mutate(actor, dict(payload, action="publish", key_action="replace", replacement_key=SECRET)),
+                lambda: fleet.publish(actor, {"expected_revision": "a" * 32, "changes": {schema.KEYS[2]: {"action": "set", "value": "test-owned-new-key"}}}),
+                lambda: fleet.restore(actor, {"expected_revision": "a" * 32, "version_id": "historical"}),
+            ):
+                error = refused("configuration_busy", operation)
+                assert error.status == 409 and str(error) == "configuration_busy", "Every publisher must preserve the bounded busy 409 rather than uncertain-write or identity errors"
+            assert not s3.put_object.called and not probe.called, "Busy publication must neither probe credentials nor attempt a conditional S3 PUT"
+            stale = User.objects.create(username="testit-busy-stale-actor", is_active=True, is_superuser=True)
+            try:
+                User.objects.filter(pk=stale.pk).update(is_superuser=False, permissions={"admin": True})
+                with mock.patch.object(provider, "_superuser", side_effect=real_superuser):
+                    for operation in (lambda: topic.mutate(stale, payload),
+                                      lambda: fleet.publish(stale, {"expected_revision": "a" * 32, "changes": {"GEOIP_PRIMARY_PROVIDER": {"action": "set", "value": "mojo"}}})):
+                        with th.assert_raises(me.PermissionDeniedException):
+                            operation()
+                assert not s3.put_object.called, "A stale actor must be denied before identity contention can mask lost authority"
+            finally:
+                stale.delete()
+            probe.side_effect = RuntimeError(SECRET)
+            result = fleet.publish(actor, {"expected_revision": "a" * 32, "changes": {"GEOIP_PRIMARY_PROVIDER": {"action": "set", "value": "mojo"}}})
+            assert result["published"] and s3.put_object.call_count == 1, "An unchanged full managed tuple must allow unrelated publication even while identity admission is owned elsewhere"
+            assert not probe.called, "Unchanged owned values must bypass identity admission and the unavailable hub"
+            sent = s3.put_object.call_args.kwargs
+            assert sent["IfMatch"] == '"current"', "Unrelated publication must retain the common conditional-writer fence"
+            assert {key: json.loads(sent["Body"])["settings"][key] for key in schema.KEYS} == values, "Unrelated publication must preserve the complete protected tuple"
+            s3.put_object.reset_mock()
+            with ExitStack() as stack:
+                for name in ("_write_configuration_revision", "_write_verify_state", "_save_geoip_secret", "_audit"):
+                    stack.enter_context(mock.patch.object(provider, name))
+                stack.enter_context(mock.patch.object(provider, "_configuration_revision", return_value=None))
+                stack.enter_context(mock.patch.object(provider, "_test_provider_credentials", return_value=({"geoip": {"success": True}}, False)))
+                legacy = provider.apply(actor, "geoip", {"expected_revision": "a" * 32, "geoip": {
+                    **codec.DEFAULTS, "GEOIP_MOJO_SYNC_ENABLED": True}})
+            assert legacy["published"] and s3.put_object.call_count == 1, "The legacy GeoIP publisher must also remain usable while another identity owner holds admission"
+            sent = s3.put_object.call_args.kwargs
+            assert sent["IfMatch"] == '"current"' and not probe.called, "Legacy GeoIP must preserve conditional publication without contacting the hub"
+            assert {key: json.loads(sent["Body"])["settings"][key] for key in schema.KEYS} == values, "Legacy GeoIP publication must retain every protected DNS value"
+
+
+@th.django_unit_test("identity admission is reentrant and survives inner savepoint exit")
+def test_identity_admission_lasts_through_outer_publication_transaction(opts):
+    from django.db import connections, transaction
+    from mojo.apps.dnsman.services import connection_config
+    outcomes = []
+
+    def try_competitor():
+        connections.close_all()
+        try:
+            with connection_config.identity_lock():
+                outcomes.append("admitted")
+        except connection_config.ConfigurationError as error:
+            outcomes.append(error.error_code)
+        finally:
+            connections.close_all()
+
+    def compete():
+        thread = threading.Thread(target=try_competitor)
+        thread.start()
+        thread.join(3)
+        assert not thread.is_alive(), "A competing identity attempt must return without waiting for this transaction"
+
+    with fixture() as (topic, schema, provider, fleet, s3, actor, values, static, payload, probe):
+        with transaction.atomic():
+            with connection_config.identity_lock():
+                with connection_config.identity_lock():
+                    topic.publication_policy(values, dict(values, **{schema.KEYS[2]: "test-owned-reentrant-key"}))
+            compete()
+            assert outcomes == ["configuration_busy"], "Inner/savepoint exit must retain identity ownership until the surrounding publication commits"
+        compete()
+        assert outcomes == ["configuration_busy", "admitted"], "The outer transaction commit must release identity admission for a deliberate later attempt"
 
 
 @th.django_unit_test()
