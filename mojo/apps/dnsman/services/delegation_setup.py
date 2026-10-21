@@ -480,12 +480,18 @@ def _settle_cleanup(domain, certificates, old, cleanup=None):
             raise SetupError("cleanup_pending") from None
 
 
-def _prepare(target, allocation_ref, consumer, actor, restart, cleanup=None):
+def _prepare(target, allocation_ref, consumer, actor, restart, cleanup=None, identity_check=None):
     from mojo.apps.account.models import Group
     from mojo.apps.dnsman.models import AcmeDelegation, Certificate, Domain
     from mojo.apps.dnsman.services import certs
     with transaction.atomic():
         with ExitStack() as stack:
+            from mojo.apps.dnsman.services import connection_config
+            stack.enter_context(connection_config.identity_lock())
+            try:
+                (identity_check or connection_config.require_current_identity)(consumer)
+            except connection_config.ConfigurationError:
+                raise SetupError("hub_identity_changed") from None
             # Domain first, NO Certificate row locks before trying all advisory
             # locks. An issuer owns its advisory lock before joined row locks.
             domain = Domain.objects.select_for_update().filter(name=target.name).first()
@@ -536,7 +542,7 @@ def _prepare(target, allocation_ref, consumer, actor, restart, cleanup=None):
                 hub_consumer_project_uuid=consumer, state="pending")
 
 
-def connect(target, allocation_ref, actor=None, restart=False, client=None, custody=None, cleanup=None):
+def connect(target, allocation_ref, actor=None, restart=False, client=None, custody=None, cleanup=None, identity_check=None):
     from mojo.apps.dnsman.models import AcmeDelegation
     target = _refresh(target, actor)
     if target.group is None:
@@ -561,7 +567,7 @@ def connect(target, allocation_ref, actor=None, restart=False, client=None, cust
                 AcmeDelegation.objects.filter(pk=old.pk).update(last_error_code="trust_revoked")
             else:
                 raise SetupError("stale_connection")
-        row = _prepare(target, allocation_ref, caps.consumer_project_uuid, actor, restart, cleanup)
+        row = _prepare(target, allocation_ref, caps.consumer_project_uuid, actor, restart, cleanup, identity_check)
         # First potentially ambiguous join is AFTER durable immutable intent.
         try:
             _refresh(target, actor, write=True)

@@ -392,6 +392,20 @@ class BlockHandler:
             result = (checked.get("status") == "verified" and
                       checked.get("ok") is True)
 
+            # A refused target (#8885) leaves the incident open, with the
+            # reason on its history so an operator can see why.
+            if checked.get("outcome") == "refused" and event.incident_id:
+                try:
+                    from mojo.apps.incident.models import Incident
+                    code = (checked.get("error") or {}).get("code") or "refused"
+                    Incident.objects.get(pk=event.incident_id).add_history(
+                        "handler:block",
+                        note=f"IP {ip} not blocked: refused ({code})")
+                except Exception:
+                    logger.exception(
+                        "BlockHandler: refusal note failed for %s",
+                        event.incident_id)
+
             # Record action on incident and resolve it
             if result and event.incident_id:
                 try:
