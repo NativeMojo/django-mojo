@@ -187,3 +187,103 @@ starts replacements; configuration activation never escalates to SIGKILL.
 A long job or unavailable replacement keeps activation unconfirmed, including
 after the observation timeout. Refresh fleet state for a later observation.
 `CONFIG_SYNC_RESTART=false` installs files without retiring processes.
+
+## Protected shared-validation configuration
+
+DNSMan registers the restart-required bundle `DNSMAN_ACME_HUB_PROFILE_ID`,
+`DNSMAN_ACME_HUB_URL`, and sensitive `DNSMAN_ACME_HUB_API_KEY` from the import-light
+`mojo.apps.dnsman.fleet_settings` module. No production hub is registered by the
+library. A deployment-owned module installs approved profiles with
+`register_hub_profile("opaque_id", label=..., origin=..., consumer_project_uuid=...,
+consumer_label=...)`. Origins are normalized HTTPS origins; explicitly installed
+loopback HTTP profiles retain the ACME client's existing local-development rule.
+UUIDs are canonicalized to lowercase hex for identity comparison. Profile IDs are
+bounded opaque identifiers, not network addresses or authority supplied by a browser.
+Conflicting profile IDs fail closed. The module performs no network or database work.
+
+The application's supported delivery/bootstrap source must install that module on
+all nodes, load the identical module list through `ADMIN_FLEET_CONFIG_SCHEMA_MODULES`
+and root `CONFIG_SYNC_SCHEMA_MODULES`, and delegate **all three** keys in
+`ADMIN_FLEET_CONFIG_ALLOWED_KEYS` and `CONFIG_SYNC_OVERRIDE_ALLOWED_KEYS`. The Admin
+process needs read-only static declarations of the sync module list/delegation to
+report this enrollment contract. These declarations do not establish live node
+transport or grant root privileges. Exact publisher/sync IAM and KMS grants, node
+membership and permissions still follow the preceding requirements. The application
+adoption work owns approved production values and reconciliation for both existing
+nodes and future launches. Missing installation returns typed unavailable reasons
+and the existing Setup/AWS/Capacity operator destination; an operator must use that
+supported delivery flow rather than an undocumented local configuration edit.
+
+`GET /api/account/admin/fleet/shared-validation` is the private typed topic.
+It returns `schema_version`, `available`, `unavailable_reasons`, `catalog_revision`,
+installed `profiles`, `selected_profile_id`, `expected_identity`, fresh authenticated
+`loaded_identity`, write-only `credential` provenance, `revision`, `loaded_revision`,
+`pending_restart`, `fleet`, and `setup_destination`. `available` describes the
+configuration workflow prerequisites. It does not imply that sharing is active or
+that all nodes are healthy. Each profile contains `id`, `label`, fixed `origin`,
+`consumer_project_uuid`, and `consumer_label`. The loaded observation includes
+`state`, `profile_id`, `observed_project_uuid`, `checked_at`, `error_code`, and
+`sharing_ready`. No key value, hint or credential length is returned.
+
+`POST` accepts only `action` (`preview` or `publish`), `expected_revision` (nullable
+before first publication), `expected_catalog_revision`, `profile_id`, `key_action`
+(`keep`, `replace`, `clear`), and optional `replacement_key` for replace. A blank
+replacement preserves the effective key. Keep reads the published credential
+server-side; adopting a legacy static key also requires its origin and authenticated
+v2 UUID to match the approved profile. Preview authenticates an explicit fresh
+candidate and returns `can_publish`, revisions, profile/expected identity, safe
+identity observation, `credential_changed`, and `consequences`. It saves nothing.
+Authenticated v2 capabilities with `shared_validation=false`/`can_consume=false`
+permit credential configuration; `sharing_ready` stays false until hub activation.
+This avoids a configure-before-activate dependency cycle.
+
+Publication reconstructs and revalidates the candidate under the installation
+lock, then uses the existing S3/KMS conditional writer. The success DTO remains
+`{published:true, revision, version_id, pending_restart:true, applied:false}`.
+Generic Fleet publications, historical restores and the legacy GeoIP writer all
+cross this same bundle-policy boundary. An unchanged bundle invokes no hub probe,
+so an unrelated GeoIP save remains usable during hub downtime. Changed bundles
+receive complete policy validation. Removing even one managed override or restoring
+a pre-bundle document is refused rather than exposing an unverified base fallback.
+Explicit clear writes three empty overrides to mask base values and is refused
+while any shared connection or retired identity-bearing row exists. Origin or
+recipient identity changes on a connected deployment require a separate migration.
+Publication and local shared-connection preparation share an app-owned transaction
+advisory lock; preparation rechecks the published tuple against the authenticated
+loaded identity, preventing a stale process from creating predecessor intent.
+
+Stale document/catalog revisions return 409. Invalid shapes/profile identities
+return 400, denied authority 403, and unavailable dependencies 503. Fixed topic
+codes include `profile_catalog_unavailable`, `profile_catalog_changed`,
+`profile_not_approved`, `hub_identity_mismatch`, `hub_identity_migration_required`,
+`connection_disable_ineligible`, `fleet_schema_unavailable`,
+`fleet_delegation_unavailable`, `publisher_unavailable`,
+`node_enrollment_unavailable`, `fleet_revision_changed`, and
+`publication_uncertain`, plus bounded `hub_*` failures. After uncertainty, refetch
+the authoritative head before deciding whether to retry; a timeout does not prove
+that S3 rejected the write. Upstream response bodies, AWS errors and credentials
+are never returned. Every topic response is non-cacheable.
+
+Root config-sync seals `CONFIG_SYNC_REQUEST_SERVICE_PROFILE` with the installed
+revision, digest and root-generated activation time. Only `opt_api_asgi_v1`
+(`/opt/api/var/asgi.sock`) and `run_mojo_asgi_v1` (`/run/mojo/asgi.sock`) exist.
+Both retain `/opt/api`, `mojo-asgi.service`, and the fixed signed proof route.
+Legacy sealed roles retain the opt-api profile; malformed explicit profiles fail
+unavailable. Browser values cannot select a socket or profile for the node role.
+Only an independently sealed disabled request-service role exempts workers from
+request proof. Both request and job processes authenticate their actual loaded
+credential to the approved UUID with proof-specific bounded timeouts and no retry.
+Safe `shared_validation` evidence is retained per expected node, and matching
+request/job identities join the existing digest, age, engine and scheduler checks.
+One node's hub probe, a publication, or a completed dispatch never satisfies the
+expected-node denominator. `sharing_ready` is separate from configuration health,
+hub activation eligibility, maintenance coverage, and future-launch coverage.
+
+The generic Fleet state supplies safe `shared_validation_required` and
+`shared_validation_identity` (`profile_id`, `consumer_project_uuid`) derived from
+the exact published document. Observation compares every managed node's evidence
+with that desired identity. Unmanaged, undelegated, or explicitly disabled topics
+add no hub dependency to legacy Fleet/GeoIP health and do not probe a legacy static
+hub. Their configuration-specific unavailable state remains visible on the topic.
+Legacy provider defaults and GET fields remain GeoIP-only; DNS schema registration
+does not add the sensitive key to that older response.

@@ -76,8 +76,8 @@ conditional write against the current document. A successful response is:
 ```
 
 Reload state after a rejected concurrent edit and let the operator reconcile
-changes; do not silently retry against the new revision. Publication errors,
-including stale revisions, currently use the normal validation-error response.
+changes; do not silently retry against the new revision. Stale publication revisions return HTTP 409. Other publication errors use the
+normal bounded validation-error response.
 An uncertain publication failure also requires reloading state before retrying.
 S3 versioning must be Enabled and the configured KMS key available. This
 versioning prerequisite also applies to the existing GeoIP publisher.
@@ -139,3 +139,84 @@ A correlated checked runner rejecting new work during drain reports
 `engine_draining`. A completed dispatch job without valid signed evidence
 reports a terminal `failed` result instead of leaving the browser polling
 forever. Legacy request-service-only health cannot certify jobs activation.
+
+## Shared-validation topic
+
+These private routes use the same interactive literal-superuser, same-origin and
+600-second fresh-auth rules, additionally denying user API keys on writes and
+reads. All responses, including denials, are `Cache-Control: no-store`.
+`GET /api/account/admin/fleet/shared-validation` accepts no fields and returns:
+
+```json
+{"schema_version":1,"available":true,"unavailable_reasons":[],"catalog_revision":"<64 hex>","profiles":[{"id":"approved_hub","label":"Hub","origin":"https://hub.example","consumer_project_uuid":"<32 hex>","consumer_label":"Original recipient"}],"selected_profile_id":"approved_hub","expected_identity":{"consumer_project_uuid":"<32 hex>","consumer_label":"Original recipient"},"loaded_identity":{"state":"verified","profile_id":"approved_hub","observed_project_uuid":"<32 hex>","checked_at":"<timestamp>","error_code":null,"sharing_ready":false},"credential":{"configured":true,"source":"published","overridden":true},"revision":"<32 hex>","loaded_revision":"<32 hex>","pending_restart":false,"fleet":{"status":"pending","nodes":[],"healthy_everywhere":false},"setup_destination":{"route":"setup","section":"aws","capacity_route":"capacity","actor":"deployment_operator","adoption_item":8903}}
+```
+
+`available` means the configuration workflow's installed prerequisites are present;
+`sharing_ready` means this fresh authenticated observation reports shared activation.
+An authenticated v2 UUID with sharing disabled is a valid configurable credential.
+Display both states: operators must be able to configure credentials before hub
+activation. Credential `source` is `published`, `static`, `none`, or `unknown`.
+It never includes a token, length or hint. Expected identity comes from installed
+trusted code; loaded identity comes from a timestamped authenticated capabilities
+check of this process's static configuration. Neither proves the entire fleet.
+
+The browser chooses an installed opaque profile ID; it cannot choose an origin,
+recipient UUID as authority, path, socket, module, command, bucket or grant rule.
+A missing catalog, schema, either delegation or publisher prerequisite produces
+bounded `unavailable_reasons`. Show the supplied Setup/AWS/Capacity operator
+handoff. Application adoption installs approved profiles and permissions for the
+existing estate and future launches; a successful local source test does not
+certify that delivery or live transport exists.
+
+Preview a candidate without saving a credential or verification state:
+
+```json
+{"action":"preview","expected_revision":"<32 hex>","expected_catalog_revision":"<64 hex>","profile_id":"approved_hub","key_action":"replace","replacement_key":"<secret>"}
+```
+
+The response includes `can_publish`, `revision`, `catalog_revision`, `profile_id`,
+`expected_identity`, safe `identity`, `credential_changed`, and `consequences`.
+Use `action:"publish"` with the same fields to reconstruct and reverify the
+candidate against the current head/catalog. `expected_revision:null` selects the
+first publication. Unknown fields are rejected. `key_action:"keep"` sends no
+replacement, and blank replacement preserves the current effective credential.
+Keep may adopt a loaded legacy static credential only when its normalized origin
+and authenticated UUID match the chosen approved profile. The publish success DTO
+is the existing `{published:true,revision,version_id,pending_restart:true,applied:false}`.
+Then call the existing Fleet Apply/operation APIs and observe every expected node.
+
+`key_action:"clear"` explicitly disables the connection by writing all three
+empty overrides together, masking any base key. It does not revoke the remote key
+or allocation trust. Existing shared connections, including retired identity rows,
+make disable ineligible. A connected origin/recipient change requires a separate
+identity migration. Generic Fleet edits and historical restore enforce the same
+bundle policy; per-field removal or restoring a pre-bundle version cannot expose
+unverified fallback values. An unchanged bundle does not probe the hub during an
+unrelated GeoIP publication.
+
+Stale revision/catalog is 409; invalid fields or profile/identity are 400; denied
+authority is 403; unavailable dependencies are 503. Stable codes include
+`profile_catalog_unavailable`, `profile_catalog_changed`, `profile_not_approved`,
+`hub_identity_mismatch`, `hub_identity_migration_required`,
+`connection_disable_ineligible`, `fleet_schema_unavailable`,
+`fleet_delegation_unavailable`, `publisher_unavailable`,
+`node_enrollment_unavailable`, `fleet_revision_changed`, `publication_uncertain`
+and bounded `hub_*` codes. A failed or uncertain publish requires authoritative
+state reload before another preview. Never blindly replay a secret-bearing write.
+
+Each expected node retains safe `shared_validation` evidence: `state`, `profile_id`,
+`observed_project_uuid`, `checked_at`, `error_code`, and `sharing_ready`. Offline
+nodes remain present with no proof. Configuration health requires its actual loaded
+credential to authenticate the approved UUID, plus existing installed-byte,
+revision/restart-age, engine and scheduler proofs. A serving node also requires
+matching request-process identity. The root-sealed fixed profiles support
+`/opt/api/var/asgi.sock` and `/run/mojo/asgi.sock`; this is enrollment metadata,
+never a browser-selectable path. One successful probe or completed dispatch does
+not certify other nodes, hub activation, or future launch coverage.
+
+Generic Fleet state also reports `shared_validation_required` and safe
+`shared_validation_identity` (`profile_id`, `consumer_project_uuid`) for the exact
+published target. Every managed node must match both fields. Unmanaged,
+undelegated and explicitly disabled topics preserve legacy Fleet/GeoIP health
+without contacting a legacy static hub; their topic-specific readiness remains a
+separate status.

@@ -629,3 +629,37 @@ terminal job (including completion), or a pending/issuing row without a Job.
 Only a real queued/running job or observed active issuer justifies
 `already_queued`; held work directs inspection. No extra scheduler or installer
 is introduced.
+
+## Operator connection and protected recipient keys
+
+Use the [protected Fleet topic](../account/admin_portal/fleet_configuration.md#protected-shared-validation-configuration)
+to configure an installed approved hub and write-only credential. Database Settings
+do not configure the downstream client. Application delivery owns the trusted
+profile catalog, both schema/delegation planes and fixed node-proof enrollment.
+Configuration can be verified against authenticated protocol v2 while sharing is
+inactive; sharing operations remain unavailable until actual hub activation.
+
+On the hub, `GET /api/account/admin/fleet/shared-validation/recipient` accepts only
+`consumer_project_uuid`, the exact original Group UUID. It returns the actual
+`consumer_project_uuid`, `consumer_label`, purpose `acme_validation_consumer`,
+permission `dnsman_acme_federation`, `can_issue`, and `grant_explanation`. It never
+lists all projects or derives hub identity from a downstream tenant.
+
+`POST` accepts exactly `consumer_project_uuid`, `expected_consumer_label`, `label`,
+and `purpose:"acme_validation_consumer"`. It rechecks the live literal interactive
+superuser, effective Group activity, confirmed current label and existing protected
+grant rules under the installation lock. The key is unlinked, non-override and has
+exactly `dnsman_acme_federation`. The response returns safe `api_key` identity,
+recipient identity, purpose, and a transient `token` in the existing no-store
+secret-response pattern. This does not grant allocation trust or activate the hub.
+The existing audited key-token reveal graph remains supported; do not describe this
+as an unrecoverable one-time key.
+
+For staged rotation: issue a replacement key, preview/publish the connection,
+Apply, verify every expected node, then explicitly deactivate the predecessor on
+the hub using `/api/account/admin/apikey/action`. The existing in-place `rotate`
+action immediately invalidates its previous token and must be presented with that
+consequence. Deactivate/revoke and audited reveal retain their existing owners.
+After ambiguous issuance, refetch the key inventory before replaying a secret-bearing
+mutation. Project administrators receive safe connection repair/status codes and
+the deployment-operator handoff, never this private catalog or an editable credential.

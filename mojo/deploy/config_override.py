@@ -60,6 +60,7 @@ DEFAULTS = {
 
 
 _REGISTRY = {}
+_PUBLICATION_POLICIES = {}
 _MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _RESERVED_KEYS = frozenset({
     "SECRET_KEY", "SECRET_KEY_FALLBACKS", "DATABASES", "CACHES",
@@ -75,6 +76,8 @@ _RESERVED_KEYS = frozenset({
     "ALLOW_EMAIL_CHANGE", "ALLOW_PHONE_CHANGE", "ALLOW_USERNAME_CHANGE",
     "ALLOW_SELF_DEACTIVATION", "WEBAPP_BASE_URL", "GEOIP_API_KEY_MOJO",
     "BASE_URL", "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS",
+    "DNSMAN_ACME_HUB_PROFILES", "DNSMAN_ACME_HUB_PROFILE_CATALOG",
+    "DNSMAN_ACME_HUB_PROFILE_MODULES", "DNSMAN_ACME_HUB_PUBLICATION_POLICY",
 })
 _RESERVED_PREFIXES = (
     "ADMIN_FLEET_CONFIG_", "CONFIG_SYNC_", "AWS_CONFIG_", "FLEET_CONFIG_",
@@ -162,6 +165,36 @@ def register_setting(key, *, label, section, description, value_type,
         raise ValueError("conflicting fleet setting definition")
     _REGISTRY[key] = definition
     return get_definition(key)
+
+
+def register_publication_policy(name, keys, callback):
+    """Register installed cross-field policy, separate from decode validation.
+
+    Callbacks execute only inside the common publisher's transaction. An owned
+    bundle is compared with key presence intact so removal cannot expose a base
+    fallback without policy. Callbacks may retain transaction-scoped locks.
+    """
+    if (not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", name)
+            or not isinstance(keys, (tuple, list)) or not keys or len(keys) > MAX_SETTINGS
+            or len(set(keys)) != len(keys) or any(key not in _REGISTRY for key in keys)
+            or not callable(callback)):
+        raise ValueError("invalid fleet publication policy")
+    definition = (tuple(keys), callback)
+    if name in _PUBLICATION_POLICIES and _PUBLICATION_POLICIES[name] != definition:
+        raise ValueError("conflicting fleet publication policy")
+    for other, (owned, unused) in _PUBLICATION_POLICIES.items():
+        if other != name and set(keys) & set(owned):
+            raise ValueError("overlapping fleet publication policy")
+    _PUBLICATION_POLICIES[name] = definition
+
+
+def validate_publication(old, candidate):
+    """Do not invoke policy (or any external dependency) for unchanged bundles."""
+    for keys, callback in _PUBLICATION_POLICIES.values():
+        before = {key: old[key] for key in keys if key in old}
+        after = {key: candidate[key] for key in keys if key in candidate}
+        if before != after:
+            callback(before, after)
 
 
 def get_definition(key):

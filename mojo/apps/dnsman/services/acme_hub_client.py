@@ -131,57 +131,12 @@ def _localhost(host):
 
 
 def _normalized_base_url(value):
-    if not isinstance(value, str) or not value or value != value.strip():
-        raise AcmeHubConfigurationError(
-            "DNSMAN_ACME_HUB_URL must be configured as an HTTPS origin")
-    if "\\" in value or any(char.isspace() or ord(char) < 32 for char in value):
-        raise AcmeHubConfigurationError(
-            "DNSMAN_ACME_HUB_URL must be configured as an HTTPS origin")
+    from mojo.apps.dnsman.fleet_settings import normalize_origin
     try:
-        parsed = urlsplit(value)
-        host = parsed.hostname
-        port = parsed.port
-    except (TypeError, ValueError):
-        raise AcmeHubConfigurationError(
-            "DNSMAN_ACME_HUB_URL must be configured as an HTTPS origin")
-    if (
-        not host or not parsed.netloc
-        or parsed.username is not None or parsed.password is not None
-        or parsed.path not in ("", "/") or parsed.query or parsed.fragment
-        or port == 0 or "%" in host
-    ):
-        raise AcmeHubConfigurationError(
-            "DNSMAN_ACME_HUB_URL must be configured as an HTTPS origin")
-
-    scheme = parsed.scheme.lower()
-    if scheme != "https" and not (scheme == "http" and _localhost(host.lower())):
-        raise AcmeHubConfigurationError(
-            "DNSMAN_ACME_HUB_URL requires HTTPS except for localhost")
-
-    try:
-        address = ipaddress.ip_address(host)
+        return normalize_origin(value)
     except ValueError:
-        try:
-            ascii_host = host.encode("idna").decode("ascii").lower()
-        except UnicodeError:
-            raise AcmeHubConfigurationError(
-                "DNSMAN_ACME_HUB_URL contains an invalid host")
-        if ascii_host != "localhost":
-            try:
-                ascii_host = normalize_domain(ascii_host)
-            except Exception:
-                raise AcmeHubConfigurationError(
-                    "DNSMAN_ACME_HUB_URL contains an invalid host")
-        normalized_host = ascii_host
-    else:
-        normalized_host = address.compressed
-        if address.version == 6:
-            normalized_host = f"[{normalized_host}]"
-
-    netloc = normalized_host
-    if port is not None:
-        netloc = f"{netloc}:{port}"
-    return urlunsplit((scheme, netloc, "", "", ""))
+        raise AcmeHubConfigurationError(
+            "DNSMAN_ACME_HUB_URL must be configured as an HTTPS origin") from None
 
 
 def _api_key(value):
@@ -647,6 +602,14 @@ def capabilities(*, transport=None):
             or (not data["shared_validation"] and data["can_manage_trust"])):
         raise AcmeHubResponseError("ACME hub returned invalid consumer capabilities")
     return objict(data)
+
+
+def capabilities_for(origin, api_key, *, post=None, proof=False):
+    """Authenticate a fresh explicit candidate, without mutating loaded settings."""
+    config = _Config(_normalized_base_url(origin), _api_key(api_key),
+                     0.5 if proof else 2, 1.5 if proof else 5, 0)
+    return capabilities(transport=lambda operation, payload: _wire(
+        operation, payload, config, post or requests.post))
 
 
 def lookup(domain, allocation_ref=None, cursor=None, *, transport=None):
