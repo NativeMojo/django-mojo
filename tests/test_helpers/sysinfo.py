@@ -39,3 +39,22 @@ def test_missing_psutil_is_explicit(opts):
     result = get_host_diagnostics(None, lambda key, default=None: default)
     assert result["cpu"]["reason"] == "psutil_unavailable", "missing optional psutil must be explicit"
     assert result["memory"]["status"] == "unavailable", "missing collector cannot imply zero memory usage"
+
+
+@th.django_unit_test()
+def test_unsupported_load_inodes_and_zero_capacity(opts):
+    from mojo.helpers.sysinfo import get_host_diagnostics
+    def unsupported(*args):
+        raise NotImplementedError()
+    fake = SimpleNamespace(cpu_percent=lambda interval: 3,
+                           virtual_memory=unsupported, swap_memory=unsupported, net_io_counters=unsupported,
+                           disk_partitions=lambda all: [],
+                           disk_usage=lambda path: SimpleNamespace(total=0, used=0, free=0, percent=0))
+    local_os = SimpleNamespace(path=SimpleNamespace(realpath=lambda p: p, exists=lambda p: True, ismount=lambda p: True),
+                               getloadavg=unsupported, statvfs=unsupported)
+    result = get_host_diagnostics(fake, lambda key, default=None: default, local_os)
+    root = result["filesystems"]["mounts"][0]
+    assert root["percent"] is None and root["reason"] == "zero_capacity", "zero total filesystem cannot establish a 0% healthy disk"
+    assert root["inodes"]["status"] == "unsupported", "unsupported statvfs must remain explicit"
+    assert result["load"]["status"] == "unsupported", "unsupported load averages must not abort other metric families"
+    assert result["cpu"]["percent"] == 3, "unsupported peers must preserve CPU evidence"

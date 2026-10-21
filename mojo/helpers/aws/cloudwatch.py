@@ -527,6 +527,8 @@ class CloudWatchHelper:
                     error = map_error(exc, "cloudwatch.list_metrics", "cloudwatch:ListMetrics")
                     return series, "provider_denied" if error.denied else (
                         "metric_budget_exceeded" if isinstance(exc, TimeoutError) else error.provider_code)
+                if len(page.get("Metrics") or []) > 500:
+                    return series, "discovery_row_limit"
                 for row in (page.get("Metrics") or [])[:500]:
                     dims = row.get("Dimensions") or []
                     if (row.get("Namespace") != namespace or row.get("MetricName") != metric

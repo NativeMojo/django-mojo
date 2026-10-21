@@ -320,3 +320,34 @@ on the channel, not only the ones you just reset. It is also bounded: a call
 with no `limit` is capped at `JOBS_REQUEUE_MAX` (default 5000), and a truncated
 sweep returns `'truncated': True` plus a `'remaining'` count — run it again
 until nothing remains.
+
+## Checked host diagnostics (Python service)
+
+Legacy `jobs.get_sysinfo(runner_id=None, timeout=5.0)` retains its list result and
+legacy targeted/broadcast dispatch. The opt-in mode is
+`jobs.get_sysinfo(diagnostic=True, roster=<bounded selected-node roster>,
+channel=None, deadline=None, revision=None, timeout=5.0)`. It returns the checked
+execution envelope and uses only the fixed
+`mojo.apps.jobs.services.sysinfo_task.collect_diagnostics` collector. The channel
+is local `ADMIN_FLEET_CONFIG_CHANNEL` (default `edge`); absent membership or older
+checked protocol never falls back to unchecked healthy proof. A node on custom
+worker channels needs the existing common diagnostics channel or remains
+unavailable; this read changes no production channels.
+
+`JobManager.broadcast_execute_checked(..., client=None, deadline=None)` is
+backward compatible for existing callers. Diagnostics pass a private primary
+`get_bounded_connection(..., deadline=...)`; roster discovery, subscription,
+publication, polling and local disconnect cleanup share a five-second deadline.
+No singleton/pool is modified and no retry fan-out occurs. A possibly delivered
+publish remains a partial/uncertain outcome even if its acknowledgement expires.
+Deadline-bound RedisCluster startup is unsupported and refuses before network
+discovery; non-deadline behavior is unchanged.
+
+The diagnostic collector returns stable local identity/type and independent
+CPU/load, memory/swap, per-mount bytes/free/capacity/inodes and cumulative network
+families. It includes no users, TCP endpoint lists, environment/config values or
+process output. Each family isolates errors. CPU declares its 0.1-second sample
+interval. The optional local revision binds root-controlled role/activation
+receipt evidence (including request-service profile); an activation receipt does
+not establish current service liveness. Installation scheduler summaries remain
+installation-scoped. Existing liveness detection/alert ownership is unchanged.

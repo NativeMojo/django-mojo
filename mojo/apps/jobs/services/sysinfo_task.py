@@ -21,11 +21,11 @@ def collect_sysinfo(data):
 
 def collect_diagnostics(data):
     """Fixed checked collector. Local receipt evidence has activation scope only."""
-    import socket
     from datetime import datetime, timezone
+    from mojo.apps.jobs.job_engine import host_channel
     from mojo.helpers.sysinfo import get_host_diagnostics
     from mojo.apps.edge.services.readiness import local_node_proof
-    result = {"hostname": socket.gethostname().lower(),
+    result = {"hostname": host_channel(),
               "observed_at": datetime.now(timezone.utc).isoformat(),
               "current": get_host_diagnostics(), "proof": None,
               "activation": {"status": "unavailable", "reason": "activation_unpublished",
@@ -48,6 +48,7 @@ def collect_diagnostics(data):
                     "status": "ok", "reason": None, "scope": "configuration_activation",
                     "revision": revision, "receipt_status": receipt.get("status"),
                     "request_service_required": role["request_service_required"],
+                    "request_service_profile": role.get("request_service_profile"),
                     "observed_at": result["observed_at"],
                     "health": "unknown", "health_reason": "receipt_is_not_current_service_proof"}
             else:

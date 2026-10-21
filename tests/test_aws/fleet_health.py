@@ -134,7 +134,7 @@ def test_unknown_node_refuses_before_remote_sources(opts):
 @th.django_unit_test()
 def test_shared_identity_cache_expiry_and_grant_partition(opts):
     import time
-    from mojo.apps.aws.services.fleet_health import IdentityRoster, reconcile
+    from mojo.apps.aws.services.fleet_health import IdentityRoster, reconcile, _revision
     data, clock, options = {}, [100], []
     class Client:
         def __enter__(self):
@@ -153,10 +153,152 @@ def test_shared_identity_cache_expiry_and_grant_partition(opts):
     reader = IdentityRoster(connect, clock=lambda: clock[0], prefix="testit")
     grants = {"platform": True, "aws": True, "jobs": False}
     rows = reconcile([{"node_id": "node-a", "hostname": "node-a", "source": "configuration"}])
-    assert writer.write(grants, "a" * 64, rows, time.monotonic() + 1), "bounded identity write must succeed"
+    assert writer.write(grants, _revision(rows), rows, time.monotonic() + 1), "bounded identity write must succeed"
     assert reader.read(grants, time.monotonic() + 1)["rows"][0]["node_id"] == "node-a", "another service instance/worker must resolve the same shared identity"
     denied_scope = dict(grants, aws=False)
     assert reader.read(denied_scope, time.monotonic() + 1) is None, "a cached source scope must not grant another scope identity access"
     assert all(item["read_from_replicas"] is False and item["deadline"] > 0 for item in options), "identity cache operations must share the primary deadline budget"
     clock[0] = 221
     assert reader.read(grants, time.monotonic() + 1) is None, "expired identity evidence must require a fresh fleet read"
+
+
+@th.django_unit_test()
+def test_checked_custom_alias_and_duplicate_proof(opts):
+    from mojo.apps.aws.services.fleet_health import reconcile
+    now = datetime.now(timezone.utc).isoformat()
+    declarations = [{"node_id": "logical-edge", "source": "edge_topology"},
+                    {"node_id": "physical-host", "hostname": "physical-host", "source": "configuration"}]
+    runners = [{"hostname": host, "runner_id": host + ":custom", "started": now,
+                "alive": True, "last_heartbeat": now} for host in ("physical-host", "other-host")]
+    proof = {"host": "physical-host", "started": now,
+             "proof": {"node_id": "logical-edge", "observed_at": now}}
+    rows = reconcile(declarations, runners=runners[:1], proofs=[proof])
+    assert len(rows) == 1 and rows[0]["node_id"] == "logical-edge", "fresh checked custom id must resolve the hostname declaration as one node"
+    assert rows[0]["hostname"] == "physical-host" and rows[0]["aliases"] == ["physical-host"], "checked aliases must remain explicit"
+    assert rows[0]["membership_sources"] == ["configuration", "edge_topology"], "reconciliation must preserve merged expectation provenance"
+    duplicate = dict(proof, host="other-host")
+    rows = reconcile(declarations, runners=runners, proofs=[proof, duplicate])
+    logical = next(row for row in rows if row["node_id"] == "logical-edge")
+    assert logical["identity_status"] == "ambiguous", "two hosts claiming one EDGE_NODE_ID cannot form a usable mapping"
+    replaced = dict(proof, started="2020-01-01T00:00:00+00:00")
+    rows = reconcile(declarations, runners=runners[:1], proofs=[replaced])
+    logical = next(row for row in rows if row["node_id"] == "logical-edge")
+    assert logical["hostname"] is None, "a predecessor incarnation cannot resolve a current custom alias"
+
+
+@th.django_unit_test()
+def test_inventory_pages_overflow_and_partial_facts(opts):
+    import time
+    from mojo.helpers.aws.ec2 import fleet_inventory_bounded
+    class Client:
+        def __init__(self, fail=False):
+            self.calls = 0
+            self.fail = fail
+        def describe_instances(self, **params):
+            self.calls += 1
+            if self.fail and self.calls == 2:
+                raise TimeoutError("provider unavailable")
+            return {"Reservations": [{"Instances": [{"InstanceId": "i-" + str(self.calls),
+                "State": {"Name": "running"}, "Tags": [
+                    {"Key": "mojo:project", "Value": "sample"},
+                    {"Key": "mojo:env", "Value": "prod"}, {"Key": "mojo:role", "Value": "node"}]}]}],
+                    "NextToken": str(self.calls)}
+    client = Client()
+    result = fleet_inventory_bounded("sample", "prod", client=client, deadline=time.monotonic() + 5)
+    assert client.calls == 4 and len(result["instances"]) == 4, "inventory must stop at four pages while retaining every bounded fact"
+    assert not result["complete"] and result["has_more"], "provider continuation cannot imply complete coverage"
+    assert "inventory_page_limit" in result["reasons"], "bounded provider continuation must be disclosed"
+    partial = fleet_inventory_bounded("sample", "prod", client=Client(True), deadline=time.monotonic() + 5)
+    assert len(partial["instances"]) == 1 and not partial["complete"], "a later provider failure must preserve valid independent facts"
+    overflow = fleet_inventory_bounded("sample", "prod", client=Client(), limit=1, deadline=time.monotonic() + 5)
+    assert "inventory_overflow" in overflow["reasons"], "row overflow must be explicit"
+
+
+@th.django_unit_test()
+def test_cache_rejects_malformed_identity_and_ambiguous_node(opts):
+    import json
+    import time
+    from mojo.apps.aws.services.fleet_health import IdentityRoster, node, FleetHealthError
+    class Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def get(self, key):
+            return json.dumps({"revision": "a" * 64, "expires_at": time.time() + 120,
+                               "rows": [{"node_id": "malformed"}]})
+    cache = IdentityRoster(lambda **kwargs: Client(), prefix="testit")
+    assert cache.read({"platform": True, "aws": True, "jobs": True}, time.monotonic() + 1) is None, "malformed shared-cache rows cannot be used as identity authority"
+    readers, calls = _readers()
+    readers["identity_cache"].data = {"rows": [{"node_id": "node-a", "identity_status": "ambiguous"}]}
+    try:
+        node(Actor("view_platform", "manage_aws", "view_jobs"), "node-a", readers=readers)
+    except FleetHealthError as exc:
+        assert exc.error_code == "identity_ambiguous", "known ambiguous id must refuse explicitly"
+    else:
+        raise AssertionError("ambiguous cached mapping cannot dispatch diagnostics")
+    assert not calls, "ambiguous identity must refuse before provider and runner collection"
+
+
+@th.django_unit_test()
+def test_configured_heartbeat_cadence_and_edge_only_identity(opts):
+    from datetime import timedelta
+    from mojo.apps.aws.services.fleet_health import reconcile
+    now = datetime.now(timezone.utc)
+    runners = [{"hostname": "edge-one", "runner_id": "custom-runner", "started": now.isoformat(),
+                "last_heartbeat": (now - timedelta(seconds=45)).isoformat(), "alive": True}]
+    rows = reconcile([{"node_id": "edge-one", "source": "edge_topology"}], runners=runners,
+                     now=now, heartbeat_ttl=60)
+    assert len(rows) == 1 and rows[0]["runner_id"] == "custom-runner", "a valid slower configured heartbeat must not split into a missing expected row plus observed host"
+    assert rows[0]["hostname"] == "edge-one", "exact stable id/hostname match must allow checked drill-down"
+    assert rows[0]["identity_status"] == "unresolved", "heartbeat alone is provisional identity evidence"
+
+
+@th.django_unit_test()
+def test_aws_only_cannot_claim_full_expected_denominator(opts):
+    import time
+    from mojo.apps.aws.services.fleet_health import _read_expected, _envelope
+    from mojo.deploy.provision.spec import Spec
+    def forbidden(*args):
+        raise AssertionError("AWS-only reader must not inspect configuration/edge sources")
+    expected = _read_expected({"platform": False, "aws": True, "jobs": False}, time.monotonic() + 1,
+                              get_static=forbidden, topology_reader=forbidden,
+                              spec_reader=lambda: Spec("sample", "prod", "us-east-1"))
+    assert expected["declarations"], "AWS-owned provision identities must remain available under manage_aws"
+    assert not expected["complete"], "denied independent declaration sources cannot establish the full expected denominator"
+    output = _envelope(expected, [], {}, False)
+    assert output["coverage"]["expected_total"] is None, "AWS-only denominator must remain explicitly unknown"
+
+
+@th.django_unit_test()
+def test_family_failure_preserves_trends_and_oversize_dimensions_are_whole(opts):
+    import json
+    from mojo.apps.aws.services.fleet_health import node
+    readers, calls = _readers(("node-a",))
+    now = datetime.now(timezone.utc).isoformat()
+    current = {name: {"status": "ok", "source": "host", "unit": "bytes", "observed_at": now}
+               for name in ("cpu", "load", "memory", "swap", "network")}
+    current["swap"] = {"status": "unavailable", "reason": "permission_denied"}
+    current["users"] = ["private-user"]
+    current["filesystems"] = {"status": "ok", "mounts": [
+        {"path": "/", "status": "ok", "inodes": {"status": "ok", "free": 100}}], "missing": [], "omitted_count": 0}
+    def diagnostics(*args):
+        return {"status": "verified", "anomalies": [], "results": [{
+            "host": "node-a", "status": "success", "started": now,
+            "result": {"hostname": "node-a", "observed_at": now, "current": current,
+                       "proof": {"node_id": "node-a", "observed_at": now}}}]}
+    readers["diagnostics"] = diagnostics
+    readers["trends"] = lambda *args: {"status": "ok", "cpu": {"status": "ok", "average": 0}, "filesystems": []}
+    output = node(Actor("view_platform", "manage_aws", "view_jobs"), "node-a", readers=readers)
+    assert output["collection_status"] == "partial" and not output["coverage"]["complete"], "one unavailable metric family prevents complete diagnostic coverage"
+    assert output["node"]["trends"]["cpu"]["average"] == 0, "current swap failure must preserve independent real cloud evidence"
+    assert "users" not in output["node"]["current"], "checked host payload cannot widen the projected diagnostic families"
+    dimensions = [{"Name": "dimension-" + str(i), "Value": "x" * 1024} for i in range(30)]
+    readers["trends"] = lambda *args: {"status": "ok", "cpu": {"status": "ok", "dimensions": dimensions,
+                                                                 "unit": "Percent", "buckets": [], "average": 0},
+                                       "filesystems": []}
+    output = node(Actor("view_platform", "manage_aws", "view_jobs"), "node-a", readers=readers)
+    assert len(json.dumps(output, separators=(",", ":")).encode()) <= 24 * 1024, "even no-bucket dimension-heavy evidence must fit the contract ceiling"
+    cpu = output["node"]["trends"]["cpu"]
+    assert cpu["dimensions"] is None and cpu["dimensions_omitted"] is True, "an oversized dimension identity must be omitted whole, never clipped into another series"
+    assert cpu["omitted_series_count"] == 1 and output["truncated"], "whole-series omission must be explicit"

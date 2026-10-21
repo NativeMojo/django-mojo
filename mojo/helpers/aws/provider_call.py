@@ -271,8 +271,8 @@ class DeadlineProviderClient:
                     unsupported_environment = any(os.environ.get(key) for key in (
                         "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
                         "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN"))
-                    refreshing = (cached is not None and hasattr(cached, "refresh_needed")
-                                  and cached.refresh_needed())
+                    refreshing = (not self.owned_session and cached is not None
+                                  and hasattr(cached, "refresh_needed"))
                     if (refreshing or (not self.owned_session and cached is None)
                             or (cached is None and (unsupported_profile or unsupported_environment))):
                         # Never remove a selected provider and silently use a

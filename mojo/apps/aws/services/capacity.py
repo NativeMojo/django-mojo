@@ -4325,6 +4325,9 @@ def health_inventory(fleet_spec, deadline, ec2_client=None, elbv2_client=None):
         client=ec2_client, region=fleet_spec.region, deadline=deadline)
     serving = {"groups": [], "complete": False, "reasons": []}
     inventory["serving"] = serving
+    if not provision_spec.wants_balancer(fleet_spec):
+        serving.update(complete=True, status="not_applicable")
+        return inventory
     resolved = names(fleet_spec)
     # Only this selected environment's named balancer; never whole-account ELB.
     client = DeadlineProviderClient("elbv2", deadline, region=fleet_spec.region,

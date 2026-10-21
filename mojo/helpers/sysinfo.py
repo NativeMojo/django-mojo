@@ -181,10 +181,10 @@ def get_host_diagnostics(psutil_module=_DIAGNOSTIC_UNSET, get_static=None,
     os_module = os_module or os
     observed = datetime.now(timezone.utc).isoformat()
 
-    def family(unit, collect):
+    def family(unit, collect, requires_psutil=True):
         base = {"status": "ok", "reason": None, "source": "host",
                 "observed_at": observed, "unit": unit}
-        if psutil_module is None:
+        if psutil_module is None and requires_psutil:
             return dict(base, status="unavailable", reason="psutil_unavailable", value=None)
         try:
             base.update(collect())
@@ -214,7 +214,7 @@ def get_host_diagnostics(psutil_module=_DIAGNOSTIC_UNSET, get_static=None,
         "cpu": family("percent", lambda: {
             "percent": psutil_module.cpu_percent(interval=0.1),
             "sampling_interval_seconds": 0.1, "sampling": "interval"}),
-        "load": family("load", lambda: dict(zip(("one", "five", "fifteen"), os_module.getloadavg()))),
+        "load": family("load", lambda: dict(zip(("one", "five", "fifteen"), os_module.getloadavg())), requires_psutil=False),
         "memory": family("bytes", memory),
         "swap": family("bytes", swap),
         "network": family("bytes_and_packets", network),

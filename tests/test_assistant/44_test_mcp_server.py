@@ -968,3 +968,21 @@ def test_second_grant_is_isolated(opts):
     assert_eq(_text(fetched), {"error": approvals.GENERIC_UNAVAILABLE},
               f"the refusal must be the same non-oracular one, got "
               f"{_text(fetched)}")
+
+
+@th.django_unit_test("fleet diagnostic MCP reads retain annotations and global source refusal")
+def test_fleet_health_mcp_read_contract(opts):
+    from mojo.apps.assistant import get_registry
+    from mojo.apps.assistant.mcp.server import _mcp_tool, projected_registry
+    for name in ("get_fleet_health", "get_node_health"):
+        assert_true(name in projected_registry(hide_infrastructure=True),
+                    f"{name} must remain available in external infrastructure mode")
+        annotations = _mcp_tool(get_registry()[name])["annotations"]
+        assert_eq(annotations, {"readOnlyHint": True, "destructiveHint": False},
+                  f"{name} must be a truthful MCP read")
+        events, reporter = _recorder()
+        result = _call(opts, name, {"node_id": "unknown"} if name == "get_node_health" else {},
+                       user=opts.limited, grant=opts.limited_grant, reporter=reporter)
+        assert_eq(result["isError"], True, f"{name} must refuse an Assistant user with no global source grants")
+        assert_true("Permission denied" in _text(result).get("error", ""),
+                    f"{name} must reuse the MCP dispatch permission refusal")

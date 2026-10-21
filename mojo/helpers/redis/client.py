@@ -252,13 +252,14 @@ def get_bounded_connection(timeout=1.0, max_connections=8,
             socket_connect_timeout=timeout, socket_timeout=timeout,
             max_connections=max_connections,
             read_from_replicas=bool(read_from_replicas),
-            reinitialize_steps=1, cluster_error_retry_attempts=0,
-            retry=no_retry, retry_on_timeout=False)
+            reinitialize_steps=5)
         return _DeadlineClient(client, deadline, max_timeout=timeout) if deadline is not None else client
+    retry_options = ({"retry": no_retry, "retry_on_timeout": False}
+                     if deadline is not None else {})
     pool = redis.ConnectionPool.from_url(
         url, decode_responses=True,
         socket_connect_timeout=timeout, socket_timeout=timeout,
-        max_connections=max_connections, retry=no_retry, retry_on_timeout=False)
+        max_connections=max_connections, **retry_options)
     client = redis.Redis(connection_pool=pool)
     return _DeadlineClient(client, deadline, max_timeout=timeout) if deadline is not None else client
 

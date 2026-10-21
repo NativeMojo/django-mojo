@@ -317,3 +317,24 @@ JOBS_DEFAULT_EXPIRES_SEC = 3600  # 1 hour
 JOBS_IDLE_TIMEOUT_MS = 300000    # 5 minutes
 JOBS_DEFAULT_BACKOFF_MAX = 7200  # 2 hours
 ```
+
+## On-demand diagnostic collection
+
+| File-only setting | Default | Purpose |
+|---|---|---|
+| `ADMIN_FLEET_CONFIG_CHANNEL` | `"edge"` | Existing concrete common channel used by checked node diagnostics; no channel is accepted from a tool caller. |
+| `SYSINFO_MOUNTS` | `[]` | Up to eight absolute exact additional local data mount points. Missing configured mounts are unavailable, never reported as the parent root filesystem. |
+
+`SYSINFO_MOUNTS` is read with `settings.get_static`, so DB/Redis settings writes
+cannot add a diagnostic filesystem path. Root plus existing application/var/media
+paths determine relevant actual filesystems; aliases on the same mount are
+deduplicated, and the collector caps results at sixteen mounts. Missing configured
+mounts, invalid configuration, omitted mounts, read-only posture and unsupported
+inodes/load/swap remain explicit. `JOBS_RUNNER_HEARTBEAT_SEC * 3` remains the
+existing bounded roster freshness rule; the fleet reader introduces no separate
+runner/scheduler failure detector.
+
+Legacy `get_host_info()` keys/root `disk` and `jobs.get_sysinfo()` list dispatch
+remain compatible. Diagnostic collection is an explicit opt-in Python mode and
+is exposed through the source-authorized Assistant health service, without a
+new generic filesystem, process or command execution endpoint.

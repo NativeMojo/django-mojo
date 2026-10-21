@@ -130,3 +130,30 @@ def test_provider_constructor_expiry_and_explicit_credentials(opts):
                                session=object(), client_factory=selected_factory)
     helper.get_node_evidence("i-one")
     assert observed and all(row["session"] is helper.session for row in observed), "evidence must preserve the helper's explicitly selected session"
+
+
+@th.django_unit_test()
+def test_supplied_refreshable_session_refuses_before_threshold_race(opts):
+    from types import SimpleNamespace
+    from mojo.helpers.aws.provider_call import DeadlineProviderClient, ProviderCallError
+    calls = []
+    class Session:
+        def get_scoped_config(self):
+            return {}
+    class Refreshable:
+        def refresh_needed(self):
+            calls.append("threshold_check")
+            return False
+    botocore_session = Session()
+    botocore_session._credentials = Refreshable()
+    provider = DeadlineProviderClient("cloudwatch", 100,
+                                      session=SimpleNamespace(_session=botocore_session),
+                                      client_factory=lambda *args, **kwargs: calls.append("construct"),
+                                      clock=lambda: 0)
+    try:
+        provider.get_metric_statistics()
+    except ProviderCallError as exc:
+        assert exc.provider_code == "credential_transport_unsupported", "a supplied refresh callback cannot promise the absolute collection budget"
+    else:
+        raise AssertionError("refreshable supplied session must refuse before its threshold can race")
+    assert not calls, "bounded caller must neither invoke an advisory refresh check nor construct the unbounded client"
