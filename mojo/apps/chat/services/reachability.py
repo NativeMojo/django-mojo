@@ -59,7 +59,8 @@ def parse_user_id(value):
 
 
 def _is_person(user):
-    # A real account.User; an ApiKey or the system pseudo-user is not one.
+    # A signed-in account.User. An ApiKey and the signed-out visitor are not;
+    # the system stand-in (system_request) still passes this test.
     return is_signed_in_user(user)
 
 

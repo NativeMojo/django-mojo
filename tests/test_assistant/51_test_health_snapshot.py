@@ -10,6 +10,7 @@ def test_snapshot_is_read_only_and_rejects_collector_parameters(opts):
     from mojo.apps.assistant.services.tools.cloud.reads import _tool_get_health_snapshot
     class Denied:
         is_active = True
+        is_authenticated = True
         is_request_user = True
         def has_permission(self, perms):
             return False

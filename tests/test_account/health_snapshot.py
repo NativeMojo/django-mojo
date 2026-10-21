@@ -256,6 +256,7 @@ def test_cached_service_has_no_collection_fallback_and_checks_entry_grant(opts):
     from mojo.apps.account.services import health_snapshot as hs
     class Actor:
         is_active = True
+        is_authenticated = True
         is_request_user = True
         def __init__(self, *perms):
             self.perms = set(perms)

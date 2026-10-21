@@ -6,6 +6,7 @@ from testit import helpers as th
 
 class Actor:
     is_active = True
+    is_authenticated = True
     is_request_user = True
     def __init__(self, *permissions):
         self.permissions = set(permissions)

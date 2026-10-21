@@ -10,6 +10,7 @@ def test_health_registry_projection_and_refusal(opts):
     from mojo.apps.assistant.services.tools.cloud.reads import _tool_get_fleet_health, _tool_get_node_health
     class Denied:
         is_active = True
+        is_authenticated = True
         is_request_user = True
         def has_permission(self, permissions):
             return False
@@ -50,6 +51,7 @@ def test_final_continuation_remains_incomplete_through_mcp_dispatch(opts):
     from mojo.apps.aws.services.fleet_health import report
     class Actor:
         is_active = True
+        is_authenticated = True
         is_request_user = True
         email = "fixture@example.com"
         pk = 1

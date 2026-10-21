@@ -10,6 +10,7 @@ def test_coverage_registry_and_input_refusals(opts):
     from mojo.apps.assistant.services.tools.cloud.reads import _tool_get_monitoring_coverage
     class Denied:
         is_active = True
+        is_authenticated = True
         is_request_user = True
         def has_permission(self, permissions):
             return False

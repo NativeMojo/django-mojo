@@ -731,7 +731,9 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
         except Exception:
             previous = None
         class InternalActor:
+            # signed in by construction, like system_request()'s user (#9125)
             is_active = True
+            is_authenticated = True
             is_request_user = True
             def has_permission(self, permissions):
                 return True
