@@ -24,14 +24,76 @@
     <link rel="manifest" href="/favicon/site.webmanifest">
     <link rel="shortcut icon" href="/favicon/favicon.ico">
     {% endif %}
-    <link rel="stylesheet" href="{{ api_base }}/api/account/static/mojo-auth-theme.css" />
+    <link rel="stylesheet" href="{{ api_base }}/api/account/static/mojo-auth-theme.css?v=15a88751b8" />
     {% if custom_css_url %}<link rel="stylesheet" href="{{ custom_css_url }}" />{% endif %}
     {% if custom_css %}<style>{{ custom_css|safe }}</style>{% endif %}
     {% block extra_css %}{% endblock %}
 </head>
-<body class="mat-layout-{{ auth_layout }} mat-appearance-{{ auth_appearance }} mat-hero-position-{{ hero_image_position }}" style="--mat-accent:{{ accent_color }}">
+<body class="mat-layout-{{ auth_layout }} mat-appearance-{{ auth_appearance }} mat-hero-position-{{ hero_image_position }}{% if oauth_callback %} mat-oauth-pending{% endif %}" style="--mat-accent:{{ accent_color }}">
+    {% if oauth_callback %}
+    {% comment %}
+       Back from a sign-in provider (#8579). Rendered, with the form hidden
+       (body.mat-oauth-pending) and inert, in the first byte of HTML: the
+       render-blocking theme stylesheet then never paints the form, even if
+       no script runs. The page script below drives data-state through
+       pending -> slow -> success -> redirect, or failure.
+    {% endcomment %}
+    <div class="mat-pending" id="mat-pending" data-state="pending" data-named="1">
+        <div class="mat-pending-brand">
+            {% if logo_url %}
+            <img class="mat-pending-logo" src="{{ logo_url }}" alt="{{ brand_name|default:'App' }}" />
+            {% elif brand_name %}
+            <span class="mat-pending-brand-name">{{ brand_name }}</span>
+            {% endif %}
+        </div>
+        <div class="mat-pending-col">
+            <div class="mat-pending-glyph" aria-hidden="true">
+                <span class="mat-pending-ripple"></span>
+                <span class="mat-pending-ripple mat-pending-ripple-2"></span>
+                <span class="mat-pending-ripple mat-pending-ripple-3"></span>
+                <svg class="mat-pending-ring mat-pending-track" width="180" height="180" viewBox="0 0 180 180" focusable="false"><circle cx="90" cy="90" r="70"></circle></svg>
+                <svg class="mat-pending-ring mat-pending-spin" width="180" height="180" viewBox="0 0 180 180" focusable="false"><circle class="mat-pending-dash" cx="90" cy="90" r="70"></circle></svg>
+                <span class="mat-pending-flash"></span>
+                <svg class="mat-pending-ring mat-pending-close" width="180" height="180" viewBox="0 0 180 180" focusable="false"><circle cx="90" cy="90" r="70"></circle></svg>
+                <svg class="mat-pending-ring mat-pending-fail-ring" width="180" height="180" viewBox="0 0 180 180" focusable="false"><circle cx="90" cy="90" r="70"></circle></svg>
+                <span class="mat-pending-disc mat-pending-disc-wait">
+                    <svg class="mat-pending-person" width="40" height="40" viewBox="0 0 24 24" focusable="false"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4.2 3.6-7 8-7s8 2.8 8 7"></path></svg>
+                </span>
+                <span class="mat-pending-disc mat-pending-disc-done">
+                    <span class="mat-pending-initials" id="mat-pending-initials"></span>
+                    <svg class="mat-pending-plain-check" width="40" height="40" viewBox="0 0 30 30" focusable="false"><path class="mat-pending-draw" d="M8.5 15.5l4.5 4.5 8.5-9"></path></svg>
+                </span>
+                <span class="mat-pending-badge">
+                    <svg width="26" height="26" viewBox="0 0 30 30" focusable="false"><path class="mat-pending-draw" d="M8.5 15.5l4.5 4.5 8.5-9"></path></svg>
+                </span>
+                <span class="mat-pending-disc mat-pending-disc-fail">
+                    <svg class="mat-pending-bang" width="36" height="36" viewBox="0 0 24 24" focusable="false"><path d="M12 6.5v7"></path><path d="M12 17.5h.01"></path></svg>
+                </span>
+            </div>
+            <div class="mat-pending-body">
+                <div class="mat-pending-status is-entering" id="mat-pending-status" role="status" aria-live="polite" aria-atomic="true">
+                    <h1 class="mat-pending-title"><span id="mat-pending-title">Signing you in</span><span class="mat-pending-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></h1>
+                    <p class="mat-pending-sub" id="mat-pending-sub">Confirming your account</p>
+                    <div class="mat-pending-bar"><span></span></div>
+                </div>
+                <div class="mat-pending-actions mat-pending-slow-actions">
+                    <a class="mat-btn mat-btn-outline mat-pending-btn" id="mat-pending-restart" href="{% if page_mode == 'register' %}{{ register_url }}{% else %}{{ auth_url }}{% endif %}">Start over</a>
+                </div>
+                <div class="mat-pending-actions mat-pending-fail-actions">
+                    <button type="button" class="mat-btn mat-btn-primary mat-pending-btn" id="mat-pending-retry"><span class="mat-btn-text" id="mat-pending-retry-label">Try again</span><span class="mat-spinner"></span></button>
+                    <button type="button" class="mat-pending-link" id="mat-pending-other">Use a different sign-in method</button>
+                </div>
+            </div>
+        </div>
+        <div class="mat-pending-footer">
+            <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>
+            <span>Secure sign-in</span>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Overlay — session check + post-auth redirect -->
-    <div class="mat-overlay" id="mat-overlay">
+    <div class="mat-overlay" id="mat-overlay"{% if oauth_callback %} aria-hidden="true"{% endif %}>
         <div class="mat-overlay-card">
             <div class="mat-overlay-spinner"></div>
             <p class="mat-overlay-title" id="mat-overlay-title">Checking session…</p>
@@ -39,7 +101,7 @@
         </div>
     </div>
 
-    <div class="mat-page">
+    <div class="mat-page" id="mat-page"{% if oauth_callback %} inert aria-hidden="true"{% endif %}>
         <div class="mat-card">
             {% include "account/auth_hero.html" %}
 
@@ -140,6 +202,15 @@
 
         var GROUP_UUID = "{{ group_uuid|default:''|escapejs }}";
 
+        // OAuth callback pending view (#8579). PENDING_SLOW_MS must equal the
+        // theme CSS reveal delay on .mat-pending[data-state="pending"]
+        // .mat-pending-slow-actions — the no-script fallback for Start over.
+        var BRAND_NAME = "{{ brand_name|default:''|escapejs }}";
+        var PENDING_SLOW_MS = 15000;
+        var PENDING_SUCCESS_MS = 900;
+        var PROVIDER_LABELS = { google: "Google", apple: "Apple", github: "GitHub" };
+        var pending = null;
+
         window._matConfig = {
             apiBase: API_BASE,
             redirectTo: redirectTo,
@@ -200,6 +271,9 @@
             },
             hideOverlay: function () {
                 $("mat-overlay").classList.remove("is-visible");
+                // Every "back to the form" path (destination or handoff
+                // refused, temporary password) also ends the OAuth pending view.
+                endPending();
             },
             redirect: function () {
                 // Same-origin (or relative) redirects don't need a handoff —
@@ -262,6 +336,19 @@
                     }
                     return;
                 }
+                // Back from a sign-in provider: the pending view plays the
+                // success and redirect states instead of the overlay.
+                if (pending && !pending.ended) {
+                    showPendingSuccess(data);
+                    setTimeout(function () {
+                        if (pending.ended || pending.abandoned) return;
+                        var dest = pendingDestination();
+                        setPendingState("redirect", null,
+                            dest ? "Taking you to " + dest + "\u2026" : "Taking you there now\u2026");
+                        window._mat.redirect();
+                    }, PENDING_SUCCESS_MS);
+                    return;
+                }
                 window._mat.showOverlay("Signed in!", "Taking you there now\u2026");
                 setTimeout(function () { window._mat.redirect(); }, 800);
             },
@@ -292,6 +379,99 @@
             if (resolved.protocol !== "http:" && resolved.protocol !== "https:") return null;
             return resolved.href;
         } // end safeNavUrl
+
+        // ---- OAuth callback pending view (#8579) ----
+        // The view is server-rendered on a ?code=&state= landing; these drive
+        // its data-state. All text goes through textContent.
+        function setPendingState(state, title, sub) {
+            var root = $("mat-pending");
+            if (!root) return;
+            // Slow is only ever a pending refinement: a result (or a failure)
+            // that arrived first is never overwritten by the slow timer.
+            if (state === "slow" && root.getAttribute("data-state") !== "pending") return;
+            root.setAttribute("data-state", state);
+            if (title != null) $("mat-pending-title").textContent = title;
+            if (sub != null) $("mat-pending-sub").textContent = sub;
+            // Restart the status entrance animation.
+            var status = $("mat-pending-status");
+            status.classList.remove("is-entering");
+            void status.offsetWidth;
+            status.classList.add("is-entering");
+        }
+
+        // Reveal the normal page. Idempotent; safe when no view was rendered.
+        function endPending() {
+            if (pending) {
+                pending.ended = true;
+                clearTimeout(pending.slowTimer);
+            }
+            document.body.classList.remove("mat-oauth-pending");
+            var page = $("mat-page");
+            if (page) {
+                page.removeAttribute("inert");
+                page.removeAttribute("aria-hidden");
+            }
+            var overlay = $("mat-overlay");
+            if (overlay) overlay.removeAttribute("aria-hidden");
+        }
+
+        // display_name only (the "basic" graph); never username or email.
+        function pendingNameWords(data) {
+            var user = data && data.user;
+            var name = user && typeof user.display_name === "string" ? user.display_name.trim() : "";
+            return name ? name.split(/\s+/) : [];
+        }
+
+        function pendingFirstName(data) {
+            return pendingNameWords(data)[0] || "";
+        }
+
+        function pendingInitials(data) {
+            var words = pendingNameWords(data);
+            if (!words.length) return "";
+            var initials = Array.from(words[0])[0] || "";
+            if (words.length > 1) initials += Array.from(words[words.length - 1])[0] || "";
+            return initials.toUpperCase();
+        }
+
+        function pendingDestination() {
+            var target = safeNavUrl(redirectTo);
+            if (!target) return "";
+            var url = new URL(target);
+            return url.origin === window.location.origin ? BRAND_NAME : url.host;
+        }
+
+        function showPendingSuccess(data) {
+            var first = pendingFirstName(data);
+            $("mat-pending").setAttribute("data-named", first ? "1" : "0");
+            $("mat-pending-initials").textContent = pendingInitials(data);
+            if (first) {
+                setPendingState("success",
+                    (data && data.is_new_user ? "Welcome, " : "Welcome back, ") + first,
+                    "You’re signed in.");
+            } else {
+                setPendingState("success", "You’re signed in", "");
+            }
+        }
+
+        function showPendingFailure(err) {
+            var message = (window.MojoAuth && MojoAuth.getError && MojoAuth.getError(err))
+                || "We could not complete your sign-in. Please try again.";
+            pending.lastError = message;
+            setPendingState("failure", "We couldn’t finish signing in", message);
+            // A fresh provider round trip cannot help a rate limit or a
+            // location block; only "different method" is offered then.
+            var retry = $("mat-pending-retry");
+            var canRetry = !!pending.retryProvider
+                && !(err && (err.code === 429 || err.error === "geofence_blocked"));
+            retry.hidden = !canRetry;
+            window._mat.setLoading(retry, false);
+            if (canRetry) {
+                $("mat-pending-retry-label").textContent =
+                    "Try again with " + PROVIDER_LABELS[pending.retryProvider];
+            }
+            (canRetry ? retry : $("mat-pending-other")).focus();
+        }
 
         // Override "Back to website" link when ?back= param is present.
         if (paramBack) {
@@ -349,19 +529,109 @@
                 });
         }
 
-        // OAuth callback
+        // OAuth callback \u2014 the ONE completion call site (#315): the authorization
+        // code is single use, so nothing here, or on any page extending this
+        // base, may post it twice. Try again / Start over never resend it.
         if (params.get("code") && params.get("state")) {
-            var provider = sessionStorage.getItem("oauth_provider") || "google";
-            sessionStorage.removeItem("oauth_provider");
-            var oauthBtn = $("btn-" + provider);
-            if (oauthBtn) window._mat.setLoading(oauthBtn, true);
-            window._mat.showMessage("Completing sign-in\u2026", "info");
-            MojoAuth.completeOAuthLogin(provider)
-                .then(window._mat.onAuthSuccess)
-                .catch(function (err) {
-                    if (oauthBtn) window._mat.setLoading(oauthBtn, false);
-                    window._mat.showMessage(MojoAuth.getError(err) || provider + " sign-in failed.", "error");
+            var storedProvider = null;
+            try {
+                storedProvider = sessionStorage.getItem("oauth_provider");
+                sessionStorage.removeItem("oauth_provider");
+            } catch (e) { storedProvider = null; }
+            var provider = storedProvider || "google";
+            var oauthCompletion;
+            try {
+                oauthCompletion = MojoAuth.completeOAuthLogin(provider);
+            } catch (e) {
+                oauthCompletion = Promise.reject(e);
+            }
+            // The completion has read code/state synchronously; drop them so a
+            // reload never re-posts a spent code.
+            try {
+                var cleaned = new URLSearchParams(location.search);
+                cleaned.delete("code");
+                cleaned.delete("state");
+                var cleanedQs = cleaned.toString();
+                history.replaceState(history.state, "", location.pathname + (cleanedQs ? "?" + cleanedQs : ""));
+            } catch (e) { /* the view still works with the old URL */ }
+
+            if ($("mat-pending")) {
+                var knownProvider = !!storedProvider
+                    && Object.prototype.hasOwnProperty.call(PROVIDER_LABELS, storedProvider);
+                var retryProvider = knownProvider ? storedProvider : null;
+                if (!storedProvider) {
+                    // Storage held nothing: Try again only when the choice is unambiguous.
+                    var oauthMethods = ["google", "apple", "github"].filter(hasMethod);
+                    if (oauthMethods.length === 1) retryProvider = oauthMethods[0];
+                }
+                pending = {
+                    retryProvider: retryProvider,
+                    label: knownProvider ? PROVIDER_LABELS[storedProvider] : "your provider",
+                    abandoned: false,
+                    ended: false,
+                    lastError: "",
+                    slowTimer: null,
+                };
+                $("mat-pending-sub").textContent = "Confirming your account with " + pending.label;
+                pending.slowTimer = setTimeout(function () {
+                    setPendingState("slow", "Still signing you in",
+                        "This is taking longer than usual. You can keep waiting, or start over.");
+                }, PENDING_SLOW_MS);
+                oauthCompletion.then(function (data) {
+                    clearTimeout(pending.slowTimer);
+                    if (pending.abandoned) return;
+                    window._mat.onAuthSuccess(data);
+                }, function (err) {
+                    clearTimeout(pending.slowTimer);
+                    if (pending.abandoned) return;
+                    showPendingFailure(err);
                 });
+
+                var retryBtn = $("mat-pending-retry");
+                retryBtn.addEventListener("click", function () {
+                    if (!pending.retryProvider || retryBtn.disabled) return;
+                    window._mat.setLoading(retryBtn, true);
+                    var begun;
+                    try { begun = MojoAuth.startOAuthLogin(pending.retryProvider); }
+                    catch (e) { begun = Promise.reject(e); }
+                    Promise.resolve(begun).catch(function (err) {
+                        window._mat.setLoading(retryBtn, false);
+                        pending.lastError = MojoAuth.getError(err)
+                            || "Could not start " + PROVIDER_LABELS[pending.retryProvider] + " sign-in.";
+                        setPendingState("failure", null, pending.lastError);
+                        retryBtn.focus();
+                    });
+                });
+                $("mat-pending-other").addEventListener("click", function () {
+                    endPending();
+                    if (pending.lastError) window._mat.showMessage(pending.lastError, "error");
+                    var view = document.querySelector(".mat-view.is-active") || $("mat-page");
+                    var first = view && view.querySelector("input, select, textarea, button");
+                    if (first) first.focus();
+                });
+                $("mat-pending-restart").addEventListener("click", function () {
+                    // A real link to a fresh sign-in page; a late result before
+                    // unload is ignored. Saved tokens still sign in there.
+                    pending.abandoned = true;
+                    clearTimeout(pending.slowTimer);
+                });
+                window.addEventListener("pageshow", function (e) {
+                    // Restored from the back/forward cache mid-flow: reload
+                    // (no code in the URL any more) instead of a frozen spinner.
+                    if (e.persisted && !pending.ended) location.reload();
+                });
+            } else {
+                // A consumer template without the pending view.
+                var oauthBtn = $("btn-" + provider);
+                if (oauthBtn) window._mat.setLoading(oauthBtn, true);
+                window._mat.showMessage("Completing sign-in\u2026", "info");
+                oauthCompletion
+                    .then(window._mat.onAuthSuccess)
+                    .catch(function (err) {
+                        if (oauthBtn) window._mat.setLoading(oauthBtn, false);
+                        window._mat.showMessage(MojoAuth.getError(err) || provider + " sign-in failed.", "error");
+                    });
+            }
         }
 
         // Password toggles
