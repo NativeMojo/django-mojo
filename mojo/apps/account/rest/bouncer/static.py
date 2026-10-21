@@ -32,10 +32,13 @@ _CACHE_MAX_AGE = settings.get_static('BOUNCER_CACHE_MAX_AGE', 86400)
 _VERSIONS = {}
 
 
-def _content_version(filepath, content):
+def _content_version(filepath, content, stat):
     """The first ten hex digits of the file's SHA-256 — the `?v=` the hosted
-    templates load it with (tests/test_auth/hosted_script_version.py)."""
-    stat = os.stat(filepath)
+    templates load it with (tests/test_auth/hosted_script_version.py).
+
+    `stat` must come from the same open handle `content` was read from, so a
+    deploy swapping the file mid-request can never store the old hash under
+    the new file's key."""
     key = (stat.st_mtime_ns, stat.st_size)
     cached = _VERSIONS.get(filepath)
     if cached and cached[0] == key:
@@ -61,11 +64,12 @@ def _serve_static(filename, version=None, debug=None):
     if not os.path.isfile(filepath):
         return HttpResponse('Not found', status=404, content_type='text/plain')
     with open(filepath, 'rb') as f:
+        stat = os.fstat(f.fileno())
         content = f.read()
 
     resp = HttpResponse(content, content_type=content_type)
     debug = settings.DEBUG if debug is None else debug
-    mismatched = bool(version) and version != _content_version(filepath, content)
+    mismatched = bool(version) and version != _content_version(filepath, content, stat)
     if debug or mismatched:
         resp['Cache-Control'] = 'no-store'
     else:
