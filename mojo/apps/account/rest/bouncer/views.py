@@ -438,15 +438,25 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None, h
         if public_message.get_kind(kind) is not None:
             fwd_params['kind'] = kind
     group_qs = f'?{urlencode(fwd_params)}' if fwd_params else ''
-    # Challenge branding follows the hosted sign-in theme. The tenant theme
-    # wins; an explicitly set BOUNCER_CHALLENGE_* setting fills a gap; else
-    # the sign-in page's own fallbacks (no logo, 'DJANGO MOJO').
+    # Challenge branding follows the hosted sign-in theme. A configured theme
+    # value wins; an explicitly set BOUNCER_CHALLENGE_* setting fills a gap;
+    # else the sign-in page's own value. resolve_auth_config deep-merges the
+    # code defaults, so app_title is never empty: a title equal to the
+    # DEFAULT_AUTH_CONFIG default counts as "not configured". The default
+    # logo_url is empty, so a plain truthiness check is enough there.
     cfg = auth_config.resolve_auth_config(group=group, request=request)
     theme = cfg.theme
     logo_url = theme.logo_url or settings.get(
         'BOUNCER_CHALLENGE_LOGO_URL', _DEFAULT_CHALLENGE_LOGO, group=group) or ''
-    brand_name = theme.app_title or settings.get(
-        'BOUNCER_CHALLENGE_BRAND', _DEFAULT_CHALLENGE_BRAND, group=group) or 'DJANGO MOJO'
+    default_title = auth_config.DEFAULT_AUTH_CONFIG['theme']['app_title']
+    challenge_brand = settings.get(
+        'BOUNCER_CHALLENGE_BRAND', _DEFAULT_CHALLENGE_BRAND, group=group)
+    if theme.app_title and theme.app_title != default_title:
+        brand_name = theme.app_title
+    elif challenge_brand:
+        brand_name = challenge_brand
+    else:
+        brand_name = theme.app_title or 'DJANGO MOJO'
     # Appearance is resolved exactly as _auth_context does, so the check uses
     # the light/dark/system look the sign-in page would use.
     auth_appearance = auth_config.normalize_appearance(

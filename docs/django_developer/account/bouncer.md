@@ -746,9 +746,14 @@ table in [Auth Config](auth_config.md).
 The bouncer challenge page follows the hosted sign-in theme: the group's
 `theme.logo_url` and `theme.app_title` head the page. An explicitly set
 challenge setting (deployment-wide or per group) fills a gap the theme leaves:
-`BOUNCER_CHALLENGE_LOGO_URL` whenever `theme.logo_url` is empty (its default),
-`BOUNCER_CHALLENGE_BRAND` only when `theme.app_title` is explicitly blank —
-`app_title` defaults to "DJANGO MOJO", so an unset theme title already wins.
+
+- **Brand name:** a configured `theme.app_title` (one that differs from the
+  `DEFAULT_AUTH_CONFIG` default, "DJANGO MOJO") wins; else an explicitly set,
+  non-empty `BOUNCER_CHALLENGE_BRAND`; else the sign-in page's own title
+  ("DJANGO MOJO").
+- **Logo:** `theme.logo_url` when set; else an explicitly set
+  `BOUNCER_CHALLENGE_LOGO_URL`; else no logo.
+
 Both settings default to empty:
 
 ```python
@@ -800,7 +805,7 @@ See [group.md](group.md) for the full `auth_domain` field and `resolve_by_auth_d
 ## Templates
 
 - `account/login.html` — full mojo-auth webapp. Override in your project's templates dir.
-- `account/bouncer_challenge.html` — hosted Continue/recovery page ("One quick check"); themed by the hosted sign-in theme (`mojo-auth-theme.css` tokens, tenant accent/logo/brand/appearance/custom CSS); `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` (both default empty) fill in only when explicitly set and the theme's logo is empty / title is blank.
+- `account/bouncer_challenge.html` — hosted Continue/recovery page ("One quick check"); themed by the hosted sign-in theme (`mojo-auth-theme.css` tokens, tenant accent/logo/brand/appearance/custom CSS); `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` (both default empty) fill in only when explicitly set and the theme has no logo / no configured title (an `app_title` equal to the code default counts as unconfigured).
 - `account/bouncer_decoy.html` — explicit scanner honeypot.
 - `account/bouncer_review_result.html` — no-JavaScript review receipt/error page.
 

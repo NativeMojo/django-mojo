@@ -89,9 +89,10 @@ time.
 
 The bouncer challenge page follows the group's hosted sign-in theme
 (`theme.logo_url`, `theme.app_title`, accent, appearance and custom CSS). Where
-the theme has no logo (`logo_url` empty) or a blank title (`app_title` defaults to
-"DJANGO MOJO", so an unset title already wins), explicitly set challenge settings
-fill the gap:
+the theme has no logo (`logo_url` empty) or no configured title (`app_title`
+still equal to the "DJANGO MOJO" code default), explicitly set challenge
+settings fill the gap. A configured tenant title always wins over
+`BOUNCER_CHALLENGE_BRAND`:
 
 ```python
 from mojo.helpers import settings

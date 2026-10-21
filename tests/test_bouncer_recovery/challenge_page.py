@@ -339,3 +339,42 @@ def test_challenge_without_ticket_explains_unavailable(opts):
                 in text(review), "without a ticket the review step explains why")
     assert_true(by_id(tree, 'mbg-review-open') is not None,
                 "Ask for a review still opens the step, which explains the unavailable path")
+
+
+BRAND_GROUP = "test-9132-challenge-brand"
+
+
+def _brand(tree):
+    brand = find_all(tree, lambda n: 'mbg-brand-name' in n['attrs'].get('class', ''))
+    return text(brand[0]).strip() if brand else None
+
+
+@th.django_unit_test("challenge brand: tenant app_title, then an explicit BOUNCER_CHALLENGE_BRAND, then the sign-in default")
+def test_challenge_brand_precedence(opts):
+    # The setting is written on a test-owned group only, so no other module
+    # can ever resolve it (no process-wide settings mutation).
+    from mojo.apps.account.models import Group
+    from mojo.apps.account.models.setting import Setting
+
+    Group.objects.filter(name=BRAND_GROUP).delete()
+    group = Group.objects.create(name=BRAND_GROUP, kind="organization", metadata={})
+    try:
+        assert_eq(_brand(parse(render(group=group))), 'DJANGO MOJO',
+                  "with no tenant title and no BOUNCER_CHALLENGE_BRAND the sign-in default names the page")
+
+        Setting.objects.create(key='BOUNCER_CHALLENGE_BRAND', value='Explicit Challenge Brand', group=group)
+        try:
+            Setting.warm_cache(group_id=group.pk)
+        except Exception:
+            pass
+        assert_eq(_brand(parse(render(group=group))), 'Explicit Challenge Brand',
+                  "an explicitly set BOUNCER_CHALLENGE_BRAND must win over the default title "
+                  "(resolve_auth_config always fills app_title with the code default)")
+
+        group.metadata = {"auth_config": {"theme": {"app_title": "Tenant Title 9132"}}}
+        group.save(update_fields=['metadata'])
+        assert_eq(_brand(parse(render(group=group))), 'Tenant Title 9132',
+                  "a tenant app_title must win over BOUNCER_CHALLENGE_BRAND")
+    finally:
+        Setting.objects.filter(key='BOUNCER_CHALLENGE_BRAND', group__name=BRAND_GROUP).delete()
+        Group.objects.filter(name=BRAND_GROUP).delete()

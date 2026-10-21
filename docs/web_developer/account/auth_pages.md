@@ -367,7 +367,8 @@ page — then names `theme.auth_provider_name` in its "Secure sign-in via …"
 footer. With no tenant logo or title it falls back as the sign-in page does
 (no logo, "DJANGO MOJO") unless the operator has explicitly set
 `BOUNCER_CHALLENGE_LOGO_URL` (fills an empty logo) or `BOUNCER_CHALLENGE_BRAND`
-(fills a blank title). This tells visitors both which destination they
+(used when the tenant has not configured its own title; a tenant `app_title`
+always wins). This tells visitors both which destination they
 are entering and whose account credentials they should use before the login
 form appears.
 
