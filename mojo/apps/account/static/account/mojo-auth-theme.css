@@ -10,7 +10,6 @@
     --mat-card-bg: #fffdf9;
     --mat-deep: #e8e3da;
     --mat-accent: #6384ff;
-    --mat-accent-hover: color-mix(in srgb, var(--mat-accent) 84%, #000);
     --mat-input-bg: #f7f4ee;
     --mat-border: #d9d4ca;
     --mat-text: #171923;
@@ -21,6 +20,10 @@
     --mat-success-bg: rgba(129, 199, 132, 0.1);
     --mat-info: #90caf9;
     --mat-info-bg: rgba(144, 202, 249, 0.1);
+    --mat-track: #e3ded4;
+    --mat-danger-text: #c62828;
+    --mat-success-strong: #2e7d32;
+    --mat-pending-shadow: 0 18px 50px rgba(22, 24, 31, 0.12), 0 0 0 1px var(--mat-border);
     --mat-radius: 24px;
     --mat-field-radius: 12px;
     --mat-transition: 0.2s ease;
@@ -34,6 +37,10 @@ body.mat-appearance-dark {
     --mat-border: #263246;
     --mat-text: #f5f7fb;
     --mat-muted: #9ca7ba;
+    --mat-track: #1c2534;
+    --mat-danger-text: #ef9a9a;
+    --mat-success-strong: #2e7d32;
+    --mat-pending-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--mat-border);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -45,6 +52,10 @@ body.mat-appearance-dark {
         --mat-border: #263246;
         --mat-text: #f5f7fb;
         --mat-muted: #9ca7ba;
+        --mat-track: #1c2534;
+        --mat-danger-text: #ef9a9a;
+        --mat-success-strong: #2e7d32;
+        --mat-pending-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--mat-border);
     }
 }
 
@@ -54,6 +65,14 @@ body.mat-appearance-dark {
     box-sizing: border-box;
     margin: 0;
     padding: 0;
+}
+
+/* Accent-derived tokens live on body, not :root: the tenant accent is set
+   inline on <body> (auth_base.html), and a :root derivation resolves against
+   the default accent instead. With no tenant accent, body inherits the :root
+   value, so the default look is unchanged. */
+body {
+    --mat-accent-hover: color-mix(in srgb, var(--mat-accent) 84%, #000);
 }
 
 html,
@@ -750,6 +769,456 @@ body {
 .mat-overlay-sub {
     font-size: 0.8125rem;
     color: var(--mat-muted);
+}
+
+/* ---- OAuth callback pending view (#8579) ----
+   Server-rendered on a ?code=&state= landing with body.mat-oauth-pending, so
+   this render-blocking sheet never paints the form behind it. The page script
+   moves data-state through pending -> slow -> success -> redirect, or
+   failure. */
+
+.mat-pending {
+    display: none;
+    /* Derived from the tenant accent, which is set inline on <body>: declare
+       here, never on :root. The strong shade keeps white initials readable. */
+    --mat-pending-strong: color-mix(in srgb, var(--mat-accent) 78%, #000);
+    --mat-pending-strong-hover: color-mix(in srgb, var(--mat-accent) 68%, #000);
+    --mat-pending-link: var(--mat-pending-strong);
+}
+body.mat-appearance-dark .mat-pending {
+    --mat-pending-link: var(--mat-accent);
+}
+@media (prefers-color-scheme: dark) {
+    body.mat-appearance-system .mat-pending {
+        --mat-pending-link: var(--mat-accent);
+    }
+}
+
+body.mat-oauth-pending .mat-page {
+    display: none;
+}
+body.mat-oauth-pending .mat-pending {
+    position: fixed;
+    inset: 0;
+    z-index: 9998;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    overflow-y: auto;
+    background: var(--mat-page-bg);
+    color: var(--mat-text);
+    padding: 40px 16px 32px;
+}
+.mat-pending [hidden] {
+    display: none !important;
+}
+
+.mat-pending-brand {
+    flex: none;
+    display: flex;
+    justify-content: center;
+    min-height: 28px;
+}
+.mat-pending-logo {
+    display: block;
+    height: 32px;
+    width: auto;
+}
+.mat-pending-brand-name {
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: .5px;
+    color: var(--mat-accent);
+}
+
+/* Centred by auto margins, not absolute positioning, so the brand, column
+   and footer never overlap on a short phone screen. */
+.mat-pending-col {
+    margin: auto 0;
+    padding: 40px 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 36px;
+    width: 100%;
+    max-width: 460px;
+    animation: mat-pending-enter .45s cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.mat-pending-footer {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 0.8125rem;
+    color: var(--mat-muted);
+}
+.mat-pending-footer svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* -- The glyph -- */
+
+.mat-pending-glyph {
+    position: relative;
+    flex: none;
+    width: 180px;
+    height: 180px;
+}
+.mat-pending-glyph > * {
+    position: absolute;
+    display: none;
+}
+.mat-pending-ring {
+    inset: 0;
+    width: 180px;
+    height: 180px;
+}
+.mat-pending-ring circle {
+    fill: none;
+    stroke-width: 3.5;
+    stroke-linecap: round;
+}
+.mat-pending-glyph > .mat-pending-track {
+    display: block;
+}
+.mat-pending-track circle {
+    stroke: var(--mat-track);
+    stroke-width: 3;
+}
+
+.mat-pending-ripple {
+    inset: 0;
+    border-radius: 50%;
+    border: 1.5px solid var(--mat-accent);
+    opacity: 0;
+    animation: mat-pending-ripple 2.4s cubic-bezier(.2, .6, .3, 1) infinite;
+}
+.mat-pending-ripple-2 { animation-delay: .8s; }
+.mat-pending-ripple-3 { animation-delay: 1.6s; }
+
+.mat-pending-spin {
+    animation: mat-pending-rotate 1.6s linear infinite;
+}
+.mat-pending-dash {
+    stroke: var(--mat-accent);
+    animation: mat-pending-dash 1.6s ease-in-out infinite;
+}
+
+.mat-pending-flash {
+    inset: 20px;
+    border-radius: 50%;
+    border: 2px solid var(--mat-accent);
+    opacity: 0;
+    animation: mat-pending-flash .9s .12s cubic-bezier(.2, .7, .3, 1) both;
+}
+.mat-pending-close {
+    transform: rotate(-90deg);
+}
+.mat-pending-close circle {
+    stroke: var(--mat-accent);
+    stroke-dasharray: 440;
+    animation: mat-pending-close .5s cubic-bezier(.4, 0, .2, 1) both;
+}
+.mat-pending-fail-ring {
+    animation: mat-pending-fade-up .5s cubic-bezier(.2, .8, .2, 1) both;
+}
+.mat-pending-fail-ring circle {
+    stroke: var(--mat-danger);
+    stroke-width: 3;
+}
+
+.mat-pending-disc {
+    left: 46px;
+    top: 46px;
+    width: 88px;
+    height: 88px;
+    border-radius: 50%;
+    align-items: center;
+    justify-content: center;
+}
+.mat-pending-disc-wait {
+    background: var(--mat-card-bg);
+    box-shadow: var(--mat-pending-shadow);
+    animation: mat-pending-breathe 2.4s ease-in-out infinite;
+}
+.mat-pending-person {
+    fill: none;
+    stroke: var(--mat-accent);
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.mat-pending-disc-done {
+    background: var(--mat-pending-strong);
+    color: #fff;
+    font-size: 1.875rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    animation: mat-pending-pop .55s cubic-bezier(.2, .9, .3, 1.2) both;
+}
+.mat-pending-plain-check {
+    display: none;
+}
+.mat-pending-draw {
+    fill: none;
+    stroke: #fff;
+    stroke-width: 3.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 24;
+    animation: mat-pending-draw .35s .6s ease-out both;
+}
+.mat-pending-plain-check .mat-pending-draw {
+    animation-delay: .3s;
+}
+.mat-pending-badge {
+    left: 106px;
+    top: 106px;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: var(--mat-success-strong);
+    border: 3px solid var(--mat-page-bg);
+    align-items: center;
+    justify-content: center;
+    animation: mat-pending-pop .45s .35s cubic-bezier(.2, .9, .3, 1.3) both;
+}
+.mat-pending-disc-fail {
+    background: var(--mat-card-bg);
+    border: 1.5px solid var(--mat-danger);
+    animation: mat-pending-shake .5s .05s ease-in-out both;
+}
+.mat-pending-bang {
+    fill: none;
+    stroke: var(--mat-danger-text);
+    stroke-width: 2.2;
+    stroke-linecap: round;
+}
+
+/* -- Status text and actions -- */
+
+.mat-pending-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    min-height: 168px;
+    text-align: center;
+}
+.mat-pending-status {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+}
+.mat-pending-title {
+    font-size: clamp(1.5rem, 6vw, 1.875rem);
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.035em;
+    overflow-wrap: anywhere;
+}
+.mat-pending-sub {
+    font-size: 0.9375rem;
+    line-height: 1.55;
+    color: var(--mat-muted);
+    overflow-wrap: anywhere;
+}
+.mat-pending-sub:empty {
+    display: none;
+}
+.mat-pending-status.is-entering .mat-pending-title {
+    animation: mat-pending-fade-up .5s cubic-bezier(.2, .8, .2, 1) both;
+}
+.mat-pending-status.is-entering .mat-pending-sub,
+.mat-pending-status.is-entering .mat-pending-bar {
+    animation: mat-pending-fade-up .5s .08s cubic-bezier(.2, .8, .2, 1) both;
+}
+.mat-pending-dots {
+    display: none;
+}
+.mat-pending-dots span {
+    animation: mat-pending-dot 1.2s infinite;
+}
+.mat-pending-dots span:nth-child(2) { animation-delay: .2s; }
+.mat-pending-dots span:nth-child(3) { animation-delay: .4s; }
+.mat-pending-bar {
+    display: none;
+    width: 180px;
+    height: 4px;
+    margin-top: 6px;
+    border-radius: 4px;
+    background: var(--mat-track);
+    overflow: hidden;
+}
+.mat-pending-bar span {
+    display: block;
+    height: 100%;
+    border-radius: 4px;
+    background: var(--mat-accent);
+    transform-origin: left center;
+    animation: mat-pending-bar 1.4s cubic-bezier(.4, 0, .2, 1) both;
+}
+
+.mat-pending-actions {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    animation: mat-pending-fade-up .5s .18s cubic-bezier(.2, .8, .2, 1) both;
+}
+.mat-pending .mat-pending-btn {
+    width: auto;
+    min-height: 48px;
+    margin-top: 0;
+    padding: 0 26px;
+    font-size: 0.9375rem;
+    text-decoration: none;
+}
+.mat-pending .mat-btn-primary {
+    background: var(--mat-pending-strong);
+}
+.mat-pending .mat-btn-primary:hover:not(:disabled) {
+    background: var(--mat-pending-strong-hover);
+}
+.mat-pending .mat-btn-outline {
+    background: var(--mat-card-bg);
+}
+.mat-pending-link {
+    padding: 0;
+    background: none;
+    border: none;
+    font: inherit;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--mat-pending-link);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+.mat-pending-btn:focus-visible,
+.mat-pending-link:focus-visible {
+    outline: 2px solid var(--mat-accent);
+    outline-offset: 3px;
+}
+
+/* -- What each state shows -- */
+
+.mat-pending[data-state="pending"] .mat-pending-ripple,
+.mat-pending[data-state="slow"] .mat-pending-ripple,
+.mat-pending[data-state="pending"] .mat-pending-spin,
+.mat-pending[data-state="slow"] .mat-pending-spin {
+    display: block;
+}
+.mat-pending[data-state="pending"] .mat-pending-disc-wait,
+.mat-pending[data-state="slow"] .mat-pending-disc-wait {
+    display: flex;
+}
+.mat-pending[data-state="pending"] .mat-pending-dots,
+.mat-pending[data-state="slow"] .mat-pending-dots {
+    display: inline;
+}
+.mat-pending[data-state="success"] .mat-pending-flash,
+.mat-pending[data-state="redirect"] .mat-pending-flash,
+.mat-pending[data-state="success"] .mat-pending-close,
+.mat-pending[data-state="redirect"] .mat-pending-close {
+    display: block;
+}
+.mat-pending[data-state="success"] .mat-pending-disc-done,
+.mat-pending[data-state="redirect"] .mat-pending-disc-done,
+.mat-pending[data-state="success"] .mat-pending-badge,
+.mat-pending[data-state="redirect"] .mat-pending-badge {
+    display: flex;
+}
+.mat-pending[data-named="0"] .mat-pending-initials,
+.mat-pending[data-state][data-named="0"] .mat-pending-badge {
+    display: none;
+}
+.mat-pending[data-named="0"] .mat-pending-plain-check {
+    display: block;
+}
+.mat-pending[data-state="redirect"] .mat-pending-bar {
+    display: block;
+}
+.mat-pending[data-state="failure"] .mat-pending-fail-ring {
+    display: block;
+}
+.mat-pending[data-state="failure"] .mat-pending-disc-fail,
+.mat-pending[data-state="failure"] .mat-pending-fail-actions,
+.mat-pending[data-state="slow"] .mat-pending-slow-actions {
+    display: flex;
+}
+/* No-script fallback: if the page script never ran, Start over still appears
+   at 15s (PENDING_SLOW_MS in auth_base.html). Scoped to pending only, so it
+   never surfaces during a redirect or over a failure. */
+.mat-pending[data-state="pending"] .mat-pending-slow-actions {
+    display: flex;
+    visibility: hidden;
+    animation: mat-pending-reveal 0s 15s forwards;
+}
+
+@keyframes mat-pending-enter { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes mat-pending-fade-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes mat-pending-ripple { 0% { transform: scale(.6); opacity: .5; } 100% { transform: scale(1.6); opacity: 0; } }
+@keyframes mat-pending-rotate { to { transform: rotate(360deg); } }
+@keyframes mat-pending-dash {
+    0% { stroke-dasharray: 1 440; stroke-dashoffset: 0; }
+    50% { stroke-dasharray: 250 440; stroke-dashoffset: -90; }
+    100% { stroke-dasharray: 250 440; stroke-dashoffset: -438; }
+}
+@keyframes mat-pending-close { from { stroke-dashoffset: 440; } to { stroke-dashoffset: 0; } }
+@keyframes mat-pending-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.045); } }
+@keyframes mat-pending-pop { 0% { transform: scale(.55); opacity: 0; } 60% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes mat-pending-flash { 0% { transform: scale(1); opacity: .5; } 100% { transform: scale(1.75); opacity: 0; } }
+@keyframes mat-pending-draw { from { stroke-dashoffset: 24; } to { stroke-dashoffset: 0; } }
+@keyframes mat-pending-shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-7px); }
+    40% { transform: translateX(6px); }
+    60% { transform: translateX(-4px); }
+    80% { transform: translateX(2px); }
+}
+@keyframes mat-pending-bar { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes mat-pending-dot { 0%, 80%, 100% { opacity: .15; } 40% { opacity: 1; } }
+@keyframes mat-pending-reveal { to { visibility: visible; } }
+
+/* Reduced motion: no ripples, flash or pulsing; a slower spinner; entrances
+   become instant. The 15s Start over reveal delay is deliberately untouched. */
+@media (prefers-reduced-motion: reduce) {
+    .mat-pending-ripple,
+    .mat-pending-flash {
+        animation: none;
+        opacity: 0;
+    }
+    .mat-pending-disc-wait {
+        animation: none;
+    }
+    .mat-pending-spin {
+        animation-duration: 3.2s;
+    }
+    .mat-pending-col,
+    .mat-pending-status.is-entering .mat-pending-title,
+    .mat-pending-status.is-entering .mat-pending-sub,
+    .mat-pending-status.is-entering .mat-pending-bar,
+    .mat-pending-close circle,
+    .mat-pending-fail-ring,
+    .mat-pending-disc-done,
+    .mat-pending-badge,
+    .mat-pending-draw,
+    .mat-pending-disc-fail,
+    .mat-pending-fail-actions,
+    .mat-pending[data-state="slow"] .mat-pending-slow-actions {
+        animation-duration: .01s;
+        animation-delay: 0s;
+    }
 }
 
 /* ---- Switcher ---- */

@@ -33,3 +33,22 @@ def test_hosted_script_version_matches_its_content(opts):
         assert_eq(version, expected,
                   f"mojo-auth.js changed: set its version in {name} to ?v={expected}, "
                   "or browsers keep the cached copy for a day")
+
+
+THEME = ROOT / "mojo/apps/account/static/account/mojo-auth-theme.css"
+
+
+@th.django_unit_test("hosted pages: the theme stylesheet's cache version follows its content")
+def test_hosted_theme_version_matches_its_content(opts):
+    # Same day-long public cache as the script: new auth_base markup (the
+    # #8579 OAuth pending view) must never meet a day-old stylesheet.
+    expected = hashlib.sha256(THEME.read_bytes()).hexdigest()[:10]
+    found = []
+    for template in sorted(TEMPLATES.glob("*.html")):
+        for version in re.findall(r"mojo-auth-theme\.css\?v=([^\"'&\s]+)", template.read_text(encoding="utf-8")):
+            found.append((template.name, version))
+    assert_true(found, "the hosted pages must load mojo-auth-theme.css behind a cache version")
+    for name, version in found:
+        assert_eq(version, expected,
+                  f"mojo-auth-theme.css changed: set its version in {name} to ?v={expected}, "
+                  "or browsers keep the cached copy for a day")

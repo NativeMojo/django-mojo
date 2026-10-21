@@ -334,6 +334,12 @@ def _auth_context(request, group=None, include_registration_extras=False):
     # straight back into another 440 response.
     context['skip_session_check'] = str(
         request_data.get('force_reauth', '')).lower() in ('1', 'true', 'yes')
+    # Back from a sign-in provider (?code=&state=): auth_base.html renders the
+    # "Signing you in" view and hides the form in the first byte of HTML, so
+    # the form never flashes while the completion runs (#8579). The page
+    # script reads the same query, so the two cannot disagree.
+    context['oauth_callback'] = bool(
+        request_data.get('code') and request_data.get('state'))
     # Only same-origin hosted sign-in returning to this installation's Admin
     # participates in the source-cookie generation protocol.
     from urllib.parse import urlsplit
