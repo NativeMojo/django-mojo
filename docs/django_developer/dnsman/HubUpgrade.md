@@ -7,8 +7,8 @@ each issuer keeps its own ACME account, certificates and private keys.
 ## Normal rollout
 
 1. Publish and deploy a normal framework release carrying this backend and the
-   matching Portal UI. It must be newer than **1.39.0**, which used the previous
-   activation contract. Local source still numbered 1.39.0 is not a qualifying
+   matching Portal UI. It must be newer than **1.39.1**, which used the previous
+   activation contract. Local source still numbered 1.39.1 is not a qualifying
    production release. This feature does not choose or publish the next version.
 2. Use the existing deployment page to deploy every expected node and verify
    the deployment. The latest attempt must be converged, with no deployment

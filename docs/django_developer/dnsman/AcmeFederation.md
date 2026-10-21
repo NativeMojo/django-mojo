@@ -425,7 +425,7 @@ zone IDs or secrets.
 
 ### Coordinated hub rollout
 
-Deploy a normal release newer than 1.39.0 to every expected node through the
+Deploy a normal release newer than 1.39.1 to every expected node through the
 existing deployment controls. Shared capabilities remain off until a genuine
 interactive superuser enables them in the existing Portal. The action checks
 the selected latest converged deployment, exact UUID/SHA/framework and complete
