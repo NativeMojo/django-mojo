@@ -26,6 +26,7 @@ INSTALLATION_SLUG = "MOJO_INSTALLATION_SLUG"
 MONITORING_TOPICS = "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS"
 EXPECTED_EDGE_TOPOLOGY = "EDGE_EXPECTED_TOPOLOGY"
 AUTH_CONFIG = "AUTH_CONFIG"
+HEALTH_PUBLICATION_STATE = "MOJO_HEALTH_PUBLICATION_STATE"
 
 _PROTECTED = {}
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,62}$")
@@ -211,7 +212,7 @@ def get_value(key, default=None):
 def set_value(actor, key, value):
     """Persist one protected global setting through the only allowed writer."""
     actor = require_system_admin(actor)
-    if key in (INSTALLATION_UUID, INSTALLATION_SLUG):
+    if key in (INSTALLATION_UUID, INSTALLATION_SLUG, HEALTH_PUBLICATION_STATE):
         raise merrors.PermissionDeniedException(
             "Installation identity can only be created by its initializer")
     return _store(key, _normalize_value(key, value))
@@ -465,6 +466,7 @@ def _register_defaults():
     register_protected_setting(MONITORING_TOPICS, _validate_list)
     register_protected_setting(EXPECTED_EDGE_TOPOLOGY, _validate_topology)
     register_protected_setting(AUTH_CONFIG, lambda key, value: value)
+    register_protected_setting(HEALTH_PUBLICATION_STATE)
 
 
 _register_defaults()

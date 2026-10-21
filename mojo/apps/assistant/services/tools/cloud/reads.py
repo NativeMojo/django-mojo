@@ -857,3 +857,89 @@ def _tool_fetch_cloud_metrics(params, user):
     # cutting every series back to its default 40.
     return bounded(projected, depth=4, max_items=MAX_METRIC_BUCKETS,
                    max_nodes=METRIC_NODE_BUDGET)
+
+
+# --- reconciled on-demand fleet diagnostics --------------------------------
+
+@tool(
+    name="get_fleet_health", domain="cloud",
+    permission=["view_platform", "manage_platform", "admin", "manage_aws", "manage_jobs", "view_jobs", "jobs"],
+    description=("Read the expected fleet, including missing nodes. Up to 20 summaries per page; "
+                 "follow next_cursor for coverage. Provider/runner presence does not prove application health. "
+                 "No per-node diagnostic or CloudWatch fan-out. Read-only."),
+    input_schema={"type": "object", "properties": {
+        "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+        "cursor": {"type": "string"}}, "additionalProperties": False},
+)
+def _tool_get_fleet_health(params, user):
+    from mojo.apps.aws.services import fleet_health
+    if set(params) - {"limit", "cursor"}:
+        return refuse("Only limit and cursor are accepted.", "invalid_request")
+    try:
+        result = fleet_health.report(user, limit=params.get("limit", 20), cursor=params.get("cursor"))
+    except fleet_health.FleetHealthError as error:
+        return refuse(error.message, error.error_code)
+    # The service applies whole-row byte trimming with signed continuation first.
+    return bounded(result, depth=12, max_items=128, max_nodes=14000, max_string=1024)
+
+
+@tool(
+    name="get_node_health", domain="cloud",
+    permission=["view_platform", "manage_platform", "admin", "manage_aws", "manage_jobs", "view_jobs", "jobs"],
+    description=("Read ONE stable node_id from get_fleet_health, including expected missing nodes. "
+                 "Checked current host diagnostics and separate CloudWatch history (1–168 hours). "
+                 "Each source enforces its own existing global read grants. Read-only."),
+    input_schema={"type": "object", "properties": {
+        "node_id": {"type": "string"},
+        "hours": {"type": "integer", "minimum": 1, "maximum": 168}},
+        "required": ["node_id"], "additionalProperties": False},
+)
+def _tool_get_node_health(params, user):
+    from mojo.apps.aws.services import fleet_health
+    if set(params) - {"node_id", "hours"}:
+        return refuse("Only node_id and hours are accepted.", "invalid_request")
+    try:
+        result = fleet_health.node(user, params.get("node_id"), hours=params.get("hours", 24))
+    except fleet_health.FleetHealthError as error:
+        return refuse(error.message, error.error_code)
+    return bounded(result, depth=14, max_items=128, max_nodes=18000, max_string=1024)
+
+
+@tool(
+    name="get_health_snapshot", domain="cloud",
+    permission=["view_platform", "manage_platform", "admin"],
+    description=("Read the protected cached schema2 five-minute health snapshot and one failure-only evidence page. "
+                 "No refresh or collection. Source times/deadlines, gaps and permissions are independent. "
+                 "Use REST drilldown if this24KiB projection is incomplete. Read-only."),
+    input_schema={"type": "object", "properties": {"evidence_cursor": {"type": "string"}},
+                  "additionalProperties": False},
+)
+def _tool_get_health_snapshot(params, user):
+    from mojo.apps.account.services import health_snapshot
+    if set(params) - {"evidence_cursor"}:
+        return refuse("Only evidence_cursor is accepted.", "invalid_request")
+    try:
+        result = health_snapshot.read_snapshot(user, params.get("evidence_cursor"))
+    except health_snapshot.SnapshotError as error:
+        return refuse(error.error_code, error.error_code)
+    return health_snapshot.mcp_projection(result, params.get("evidence_cursor"))
+
+
+@tool(
+    name="get_monitoring_coverage", domain="cloud",
+    permission=["view_platform", "manage_platform", "admin", "manage_aws", "manage_jobs", "view_jobs", "jobs"],
+    description=("Read monitoring configuration and actual sample coverage for ONE expected node. "
+                 "Use node_id or signed cursor, never both; traverse the same roster revision for fleet coverage. "
+                 "Recipe declaration is not installation proof. Read-only."),
+    input_schema={"type": "object", "properties": {"node_id": {"type": "string"}, "cursor": {"type": "string"}},
+                  "additionalProperties": False},
+)
+def _tool_get_monitoring_coverage(params, user):
+    from mojo.apps.aws.services import fleet_health
+    if set(params) - {"node_id", "cursor"}:
+        return refuse("Only node_id or cursor is accepted.", "invalid_request")
+    try:
+        result = fleet_health.coverage(user, node_id=params.get("node_id"), cursor=params.get("cursor"))
+    except fleet_health.FleetHealthError as error:
+        return refuse(error.message, error.error_code)
+    return bounded(result, depth=14, max_items=128, max_nodes=18000, max_string=4096)

@@ -326,3 +326,9 @@ at import time (e.g. mverify's `PAYMENTS_GEOFENCE_RULES`).
 For the framework-recognized setting names (without values), see:
 
 - [settings_reference.md](settings_reference.md)
+
+Health snapshots read the existing frozen installation identity and file-only
+`MOJO_ENVIRONMENT` (or explicit `HEALTH_SNAPSHOT_ENVIRONMENT_ID`). They never
+initialize identity. `MOJO_HEALTH_PUBLICATION_STATE` is an internal protected
+generation/configuration counter, unavailable through generic Settings/Setup
+writes; no snapshot history is stored in it. See [health snapshots](../account/health_snapshot.md).

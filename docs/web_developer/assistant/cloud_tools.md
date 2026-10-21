@@ -1,6 +1,6 @@
 # Cloud Domain Tools — Result Shapes
 
-What the `cloud` domain's twenty tools return, which block renders each, and
+What the `cloud` domain's twenty-four tools return, which block renders each, and
 what a client does after a mutating one is approved.
 
 The domain is **on demand**: the model loads it with
@@ -201,3 +201,99 @@ the Admin; starting, advancing, choosing and cancelling stay in the Admin UI.
 
 See also: [approvals.md](approvals.md) · [blocks.md](blocks.md) ·
 [../account/system_setup.md](../account/system_setup.md)
+
+### `get_fleet_health` and `get_node_health`
+
+Both are read-only MCP/Assistant tools. Inputs are
+`{"limit":20,"cursor":"..."}` (limit 1–20; cursor optional) and
+`{"node_id":"stable-id","hours":24}` (hours 1–168). Booleans do not satisfy
+integer inputs. Select `node_id` from the fleet result; hosts, regions, channels,
+functions and mount paths are never accepted as tool inputs.
+
+```json
+{
+  "schema_version": 1, "generated_at": "2026-10-20T12:00:00+00:00",
+  "roster_revision": "...", "collection_status": "partial",
+  "health": "unknown", "health_scope": "provider_and_runner_presence",
+  "coverage": {"expected_total": 3, "observed_total": 2,
+    "responding_total": 2, "returned": 3, "missing_total": 1,
+    "ambiguous_total": 0, "complete": false, "has_more": false,
+    "next_cursor": null, "reasons": ["expected_nodes_missing"]},
+  "sources": {}, "nodes": [], "truncated": false
+}
+```
+
+`collection_status` is `complete|partial|unavailable|unconfigured`; `health` is
+`healthy|unhealthy|unknown`. They answer different questions. Expected missing
+nodes remain rows. Null `expected_total` means the complete denominator cannot
+be read or established. An AWS-only reader cannot establish configuration/edge
+expectations. Presence alone does not establish application health, and every
+continuation page (including the last) has incomplete fleet-wide coverage.
+Follow `next_cursor`; refresh after `roster_changed`. Do not reinterpret
+`unconfigured`, denied, missing, stale or truncated evidence as healthy.
+
+A node contains stable `node_id`, separate hostname/instance/runner aliases,
+role, proved request-service applicability, expectation provenance, identity
+status, lifecycle, reasons and observation times. A node read adds `current`,
+`services` and `trends`. Current families carry `status`, `reason`, `source`,
+`observed_at`, `unit` and numbers/nulls. Network counters are cumulative since
+boot. Historical series add exact namespace/dimensions, UTC start/end,
+`period_seconds`, `aggregation`, `sample_count`, `last_sample_at`, null-preserving
+`buckets` and real-sample `minimum|maximum|average`. Never display a 24-hour
+average as current utilization. A missing CWAgent series is `no_series`, not 0%.
+
+Each source enforces existing global grants: platform readers see expectation,
+heartbeat and installation scheduler summaries; `manage_aws` reads provider
+inventory/trends and provision declarations; jobs readers may obtain checked
+host diagnostics. Other sections explicitly say `permission_denied`. Group-only
+grants do not authorize these global sources. Missing runner membership,
+incompatible checked protocol, draining, function unavailable, timeout, identity
+mismatch and collector failure stay distinct unavailable/unknown evidence.
+Worker/Sites service applicability needs proved role evidence; an installation
+scheduler lock does not prove a scheduler on every node.
+
+The fleet read has an eight-second collection budget and no per-node control or
+CloudWatch fan-out. One-node diagnostics use twenty seconds, checked replies at
+most five seconds. Identity-only aliases expire after 120 seconds and can be
+resolved across workers; expired observed-only IDs return `unknown_resource` and
+require a fresh fleet read. No diagnostic result cache is introduced here.
+Bounded cluster/credential transports that cannot honor collection deadlines
+return explicit unsupported/unavailable evidence. A fresh checked custom-id
+alias can return `roster_changed`, requiring a fresh fleet page.
+
+Output is bounded to 24 KiB. Omitted buckets/mounts/series carry counts and make
+coverage incomplete. An oversized CloudWatch dimension set is omitted whole
+(`dimensions:null`, `dimensions_omitted:true`, `omitted_series_count:1`); a
+partial dimension list must never be treated as an exact series identity.
+
+Collection deadlines cover bounded DNS, numeric connection establishment and
+complete socket transfers. Slow replies cannot renew a collection deadline.
+Unsupported proxy/OCSP/resolver transports remain unknown/unavailable evidence;
+clients must not turn such omissions into healthy service status.
+
+`roster_scope` is the selected environment/declaration fence used for short-lived
+identity aliases. An environment or expectation change invalidates old aliases.
+Fresh competing host claims remain `identity_ambiguous` even after one host
+replies again; clients must refresh rather than guess a logical alias.
+
+## Cached health and monitoring coverage
+
+`get_health_snapshot(evidence_cursor=None)` is read-only and cache-only, with
+current global platform entry permission, independent AWS/jobs projection and a
+24KiB MCP ceiling. It returns `django-mojo.health_snapshot` schema2, collected
+every300 seconds for60-second external polling. Its immutable publication digest
+and configuration hash survive permission projections. Each causal slot retains
+actual sample time and expiry; repeated reads do not renew health. MCP omissions
+return the frozen checkpoint before unread failure evidence and a REST reference.
+
+`get_monitoring_coverage(node_id=None,cursor=None)` is a read-only schema1
+on-demand drilldown over the shared bounded readers. It accepts an expected
+node or signed cursor, one node per page. Global roster counts stay separate
+from local measurement coverage, and every multi-node page stays incomplete.
+Runtime, continuous streams, recipe declaration and installation proof remain
+independent; partial/capped/missing/denied requirements stay visible.
+
+See [the health snapshot contract](../account/health_snapshot.md) for both tools,
+source permissions, three-second reads, durable failure cursors, fixed deadlines
+and the public-data boundary. Existing fleet/node and platform tools keep their
+existing public signatures and source permissions.
