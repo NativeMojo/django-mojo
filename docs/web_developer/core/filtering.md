@@ -37,6 +37,9 @@ GET /api/myapp/book?status__not=deleted
 GET /api/myapp/book?author=null
 ```
 
+On a Boolean field, `?flag=null` means `false`, as it always has. Use
+`?flag__isnull=true` for an IS NULL test.
+
 ### Relation / Foreign Key Filters
 
 Filter through related fields using `__` notation:
@@ -44,7 +47,49 @@ Filter through related fields using `__` notation:
 ```
 GET /api/myapp/book?author__id=5
 GET /api/myapp/book?author__username=alice
+GET /api/myapp/book?author__is_active=true
+GET /api/myapp/book?author__last_login__gte=2026-01-01
 ```
+
+A relation-path value is converted using the field the path ends on, exactly
+as a top-level filter is: `author__is_active=true` is a Boolean,
+`author__last_login__gte=...` a date. This applies to exact matches, `__in`,
+`__not`, `__not_in`, `__gt/__gte/__lt/__lte` and date components. Text
+lookups (`__startswith`, `__icontains`, ...) and a path ending on the relation
+itself (`?author=5`, `?author__in=5,6`) are passed as sent.
+
+### Value Types and Malformed Values
+
+Every filter value is converted to the field's type, and each element of an
+`__in` / `__not_in` list is converted separately, so the list stays a list:
+
+```
+GET /api/account/notification?is_unread__in=true,false   # both states
+GET /api/account/notification?is_unread__not_in=true     # read only
+```
+
+| Field type | Accepted values (any case, surrounding spaces ignored) |
+|---|---|
+| Boolean | `true` `1` `t` `y` `yes` `on` / `false` `0` `f` `n` `no` `off`, or a JSON boolean, or `0`/`1` |
+| Date / DateTime | an ISO date or datetime, or epoch seconds within the date range |
+| Integer | a whole number (text lookups such as `__startswith` take the text as sent) |
+
+A value the field cannot take is a **400** naming the key, on the list and on
+`_mode=count`:
+
+```
+GET /api/account/notification?is_unread=maybe
+→ 400 {"error": "Invalid boolean for is_unread: 'maybe'"}
+```
+
+Before this, an unrecognized Boolean silently meant `false`, and Boolean lists
+or relation-path Booleans answered 500. Inside a `_stats` bundle a malformed
+value makes that one chip `null`; the other chips and the request are
+unaffected.
+
+A filter on a [protected field](#protected-fields) is still dropped silently,
+whatever its value: the check runs before any conversion, so a malformed value
+on a protected path never produces a 400.
 
 ### Protected Fields
 
