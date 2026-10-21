@@ -192,8 +192,14 @@ def test_hashed_name_classification(opts):
     pattern = re.compile(render.HASHED_ASSET_RE)
     names = sorted(p.name for p in VENDORED_ASSETS.iterdir())
     assert len(names) > 100, f"vendored Admin build not found at {VENDORED_ASSETS}"
-    missed = [n for n in names if not pattern.search(f"/assets/{n}")]
-    assert not missed, f"real hashed build files read as unhashed: {missed}"
+    # Vite's eight-character hash can contain only lowercase letters. The
+    # conservative production heuristic deliberately revalidates that case:
+    # treating every alphabetic suffix as immutable would also cache ordinary
+    # names such as vendor-libraries.js for a year.
+    lowercase_vite = re.compile(rf"^.+-[a-z_-]{{8}}\.({render._ASSET_EXTENSIONS})$")
+    missed = [n for n in names if not pattern.search(f"/assets/{n}")
+              and not lowercase_vite.fullmatch(n)]
+    assert not missed, f"build files have no recognized hash or safe lowercase fallback: {missed}"
     for name in ("config.js", "env.js", "favicon.ico", "sw.js",
                  "service-worker.js", "registerSW.js", "vendor-libraries.js",
                  "jquery-3.7.1.min.js", "index.html", "about-Ab12cd34.html",
@@ -202,6 +208,20 @@ def test_hashed_name_classification(opts):
     for name in ("workbox-a1b2c3d4.js", "index-0kbck4JK.js",
                  "EventsPage-Dys7Mm-b.js"):
         assert pattern.search(f"/assets/{name}"), f"{name} read as unhashed"
+
+
+@th.django_unit_test("lowercase-only Vite hashes safely use the no-cache static location")
+def test_lowercase_build_hash_revalidates(opts):
+    from mojo.apps.edge.services import render
+
+    path = "/assets/DomainPurchasesPage-uddamcwm.js"
+    assert not re.search(render.HASHED_ASSET_RE, path), (
+        "lowercase-only hashes must retain the conservative immutable-cache boundary")
+    assert re.search(r"\.js$", path, re.I), "the lowercase chunk must match the general static location"
+    _vhost, text = _render(opts, label="lowercasecache", kind="site", spa=True)
+    general = _block(text, GENERAL_STATIC)
+    assert general is not None and NO_CACHE in general and "immutable" not in general, (
+        "a lowercase-only Vite chunk must remain available with revalidation, never stale immutable caching")
 
 
 @th.django_unit_test("api and redirect vhosts serve no files and have no fallback")
