@@ -26,6 +26,9 @@ MAX_GENERATION = 2 ** 53 - 1
 CACHE_TTL = 48 * 3600
 LEASE_SECONDS = 75
 READ_SECONDS = 3
+RESPONSE_FIELDS = ("contract", "schema_version", "source_id", "source_identity", "publication_generation",
+                   "publication_digest", "config_revision", "generated_at", "published_at", "served_at",
+                   "roster_revision", "profile_version", "collection_status", "components", "coverage", "failure_evidence")
 KINDS = ("api", "database", "redis", "jobman", "fleet", "monitoring")
 HEX = re.compile(r"^[a-f0-9]{64}$")
 ENVIRONMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -171,6 +174,7 @@ def publication(identity, generation, config_revision, components, *, generated_
              "components": copy.deepcopy(components), "coverage": coverage(components, reasons=reasons),
              "failure_evidence": {"capture_status": "best_effort", "summary_only": True}}
     value["collection_status"] = "complete" if value["coverage"]["complete"] else "partial" if components else "unknown"
+    value["publication_digest"] = evidence.digest(value)
     validate_publication(value, identity)
     return value
 
@@ -195,6 +199,8 @@ def validate_publication(value, identity):
                     and value["fresh_total"] == value["returned_total"] == value["expected_total"]
                     and value["unknown_total"] == 0, "coverage_omission_inconsistent")
     require(isinstance(value, dict))
+    if "publication_digest" in value:
+        require(value["publication_digest"] == evidence.digest({key: item for key, item in value.items() if key != "publication_digest"}), "publication_digest_mismatch")
     try:
         require(len(evidence.canonical(value).encode()) <= MAX_BYTES, "snapshot_oversize")
     except (TypeError, ValueError, RecursionError):
@@ -403,6 +409,7 @@ def unknown(identity, reason, now=None):
             "source_id": (identity or {}).get("source_id"),
             "source_identity": (identity or {}).get("source_identity"),
             "publication_generation": None, "generated_at": None, "published_at": None,
+            "publication_digest": None,
             "served_at": evidence.timestamp(now or evidence.utcnow()), "roster_revision": None,
             "profile_version": PROFILE_VERSION, "collection_status": "unknown", "components": [],
             "coverage": coverage([], reasons=[reason], denominator_known=False),
@@ -412,7 +419,8 @@ def unknown(identity, reason, now=None):
 def project_publication(value, grants, *, now=None):
     """Re-evaluate expiry and source grants without modifying immutable bytes."""
     now = now or evidence.utcnow()
-    result = copy.deepcopy(value)
+    result = {key: copy.deepcopy(value[key]) for key in RESPONSE_FIELDS if key in value}
+    result["publication_digest"] = evidence.digest({key: item for key, item in value.items() if key != "publication_digest"})
     components, denied, denied_components = [], False, {}
     for item in result["components"]:
         owner = item["identity_grant"]
@@ -507,6 +515,8 @@ def read_snapshot(actor, evidence_cursor=None, *, connect=None, identity_reader=
                   actor_loader=None, failure_reader=None, now=None, deadline=None):
     """Only cached bytes and one failure page; never collection/refresh on miss."""
     from mojo.apps.aws.services.fleet_health import source_grants, FleetHealthError
+    if evidence_cursor is not None and (not isinstance(evidence_cursor, str) or not 0 < len(evidence_cursor) <= 4096):
+        raise SnapshotError("invalid_evidence_cursor")
     now = now or evidence.utcnow()
     deadline = min(deadline or time.monotonic() + READ_SECONDS, time.monotonic() + READ_SECONDS)
     try:
@@ -542,7 +552,7 @@ def read_snapshot(actor, evidence_cursor=None, *, connect=None, identity_reader=
 
 def mcp_projection(value, evidence_cursor=None):
     """Fit transport bytes without advancing past evidence the caller never saw."""
-    result = copy.deepcopy(value)
+    result = {key: copy.deepcopy(value[key]) for key in RESPONSE_FIELDS if key in value}
     limit = 24 * 1024
     if len(evidence.canonical(result).encode()) <= limit:
         return result
@@ -551,7 +561,7 @@ def mcp_projection(value, evidence_cursor=None):
     if history.get("events") or history.get("terminal_fallback"):
         for name in ("events", "terminal_fallback"):
             history[name] = []
-        history.update(has_more=True, next_cursor=evidence_cursor)
+        history.update(has_more=True, next_cursor=history.get("checkpoint_cursor") or evidence_cursor)
         history["gaps"] = sorted(set(history.get("gaps", []) + ["mcp_output_limit"]))
     result["coverage"].update(complete=False, truncated=True)
     result["coverage"]["reasons"] = sorted(set(result["coverage"].get("reasons", []) + ["mcp_output_limit"]))
@@ -568,4 +578,10 @@ def mcp_projection(value, evidence_cursor=None):
         result["components"].pop()
         result["coverage"]["omitted_total"] += 1
         result["coverage"]["returned_total"] -= 1
+    if len(evidence.canonical(result).encode()) > limit:
+        checkpoint = history.get("checkpoint_cursor") or evidence_cursor
+        result = unknown(None, "mcp_output_limit")
+        result["rest_reference"] = "/api/account/admin/health/snapshot"
+        result["failure_evidence"] = {"capture_status": "best_effort", "has_more": True,
+                                      "next_cursor": checkpoint, "gaps": ["mcp_output_limit"]}
     return result

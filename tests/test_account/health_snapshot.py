@@ -17,6 +17,12 @@ def _identity(environment="production"):
                                get_static=lambda key, default=None: environment if key == "MOJO_ENVIRONMENT" else default)
 
 
+def _seal(value):
+    from mojo.apps.account.services import health_evidence as he
+    value["publication_digest"] = he.digest({key: item for key, item in value.items() if key != "publication_digest"})
+    return value
+
+
 def _publication(generation=1, with_cloud=False):
     from mojo.apps.account.services import health_evidence as he, health_snapshot as hs
     identity = _identity()
@@ -58,26 +64,26 @@ def test_schema_rejects_duplicates_wrong_source_and_forged_causal_basis(opts):
     duplicate = copy.deepcopy(good)
     duplicate["components"].append(copy.deepcopy(duplicate["components"][0]))
     with th.assert_raises(hs.SnapshotError):
-        hs.validate_publication(duplicate, _identity())
+        hs.validate_publication(_seal(duplicate), _identity())
     forged = copy.deepcopy(good)
     forged["components"][0]["conditions"][0]["basis"][0]["sample_id"] = "d" * 64
     with th.assert_raises(hs.SnapshotError):
-        hs.validate_publication(forged, _identity())
+        hs.validate_publication(_seal(forged), _identity())
     with th.assert_raises(hs.SnapshotError):
         hs.validate_publication(good, _identity("different"))
     for invalid in (True, 0, -1, "1"):
         bad = copy.deepcopy(good)
         bad["publication_generation"] = invalid
         with th.assert_raises(hs.SnapshotError):
-            hs.validate_publication(bad, _identity())
+            hs.validate_publication(_seal(bad), _identity())
     unsupported = copy.deepcopy(good)
     unsupported["schema_version"] = 1
     with th.assert_raises(hs.SnapshotError):
-        hs.validate_publication(unsupported, _identity())
+        hs.validate_publication(_seal(unsupported), _identity())
     oversized = copy.deepcopy(good)
     oversized["extra"] = "x" * hs.MAX_BYTES
     with th.assert_raises(hs.SnapshotError):
-        hs.validate_publication(oversized, _identity())
+        hs.validate_publication(_seal(oversized), _identity())
 
 
 @th.django_unit_test()
@@ -236,6 +242,14 @@ def test_mcp_compaction_preserves_unread_failure_cursor(opts):
     assert len(json.dumps(result).encode()) < 24 * 1024, "MCP compaction exceeded its projection byte boundary"
     assert result["failure_evidence"]["next_cursor"] == "original", "MCP dropped failure rows but advanced beyond unread evidence"
     assert not result["coverage"]["complete"] and result["rest_reference"], "MCP omission was reported as a complete report"
+    extra = _publication()
+    extra["extra"] = "x" * 300000
+    hs.validate_publication(_seal(extra), _identity())
+    result = hs.mcp_projection(extra)
+    assert len(json.dumps(result).encode()) < 24 * 1024 and "extra" not in result, "unbounded extension metadata escaped MCP output allowlist"
+    extra["coverage"]["reasons"] = ["x" * 300000]
+    result = hs.mcp_projection(extra)
+    assert len(json.dumps(result).encode()) < 24 * 1024 and result["collection_status"] == "unknown", "MCP final fallback exceeded the hard byte ceiling"
 
 
 @th.django_unit_test()
@@ -246,16 +260,16 @@ def test_well_shaped_cache_cannot_extend_old_source_deadline(opts):
     slot["fresh_until"] = (NOW + timedelta(days=1)).isoformat()
     value["components"][0]["conditions"][0]["basis"][0]["fresh_until"] = slot["fresh_until"]
     with th.assert_raises(hs.SnapshotError):
-        hs.validate_publication(value, _identity())
+        hs.validate_publication(_seal(value), _identity())
     forged_sample = _publication()
     forged_sample["components"][0]["evidence"][0]["sample_id"] = "e" * 64
     with th.assert_raises(hs.SnapshotError):
-        hs.validate_publication(forged_sample, _identity())
+        hs.validate_publication(_seal(forged_sample), _identity())
     for field in ("omitted_total", "truncated", "omitted_conditions"):
         omitted = _publication()
         omitted["components"][0]["coverage"][field] = True if field == "truncated" else 1
         with th.assert_raises(hs.SnapshotError):
-            hs.validate_publication(omitted, _identity())
+            hs.validate_publication(_seal(omitted), _identity())
         projected = hs.project_publication(omitted, {"platform": True}, now=NOW)
         assert not projected["coverage"]["complete"], f"required {field} omission survived as complete coverage"
 
@@ -293,3 +307,27 @@ def test_restored_old_redis_token_cannot_cross_durable_generation_head(opts):
         with cache.connection(time.monotonic() + 2) as client:
             client.delete(*keys.values())
         Setting.objects.filter(key="TESTIT_HEALTH_RESTORE_STATE").delete()
+
+
+@th.django_unit_test()
+def test_real_user_revocation_rereads_primary_before_cache_or_history(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import health_snapshot as hs
+    name = "testit-health-" + uuid.uuid4().hex
+    User.objects.filter(username=name).delete()
+    user = User.objects.create_user(username=name, email=name + "@example.test", password=None)
+    user.is_active = True
+    user.permissions = {"view_platform": True, "manage_aws": True, "view_jobs": True}
+    user.save()
+    calls = []
+    def forbidden(*args, **kwargs):
+        calls.append("forbidden")
+        raise AssertionError("revoked entry touched a protected source")
+    try:
+        User.objects.filter(pk=user.pk).update(permissions={})
+        with th.assert_raises(hs.SnapshotError):
+            hs.read_snapshot(user, connect=forbidden, identity_reader=forbidden, failure_reader=forbidden)
+        assert not calls, "stale User grants opened cache/history after primary revocation"
+        assert user.has_permission("manage_aws"), "fixture did not retain a stale privileged User copy"
+    finally:
+        User.objects.filter(pk=user.pk).delete()

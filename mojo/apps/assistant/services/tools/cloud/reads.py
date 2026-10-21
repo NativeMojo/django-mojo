@@ -923,3 +923,23 @@ def _tool_get_health_snapshot(params, user):
     except health_snapshot.SnapshotError as error:
         return refuse(error.error_code, error.error_code)
     return health_snapshot.mcp_projection(result, params.get("evidence_cursor"))
+
+
+@tool(
+    name="get_monitoring_coverage", domain="cloud",
+    permission=["view_platform", "manage_platform", "admin", "manage_aws", "manage_jobs", "view_jobs", "jobs"],
+    description=("Read monitoring configuration and actual sample coverage for ONE expected node. "
+                 "Use node_id or signed cursor, never both; traverse the same roster revision for fleet coverage. "
+                 "Recipe declaration is not installation proof. Read-only."),
+    input_schema={"type": "object", "properties": {"node_id": {"type": "string"}, "cursor": {"type": "string"}},
+                  "additionalProperties": False},
+)
+def _tool_get_monitoring_coverage(params, user):
+    from mojo.apps.aws.services import fleet_health
+    if set(params) - {"node_id", "cursor"}:
+        return refuse("Only node_id or cursor is accepted.", "invalid_request")
+    try:
+        result = fleet_health.coverage(user, node_id=params.get("node_id"), cursor=params.get("cursor"))
+    except fleet_health.FleetHealthError as error:
+        return refuse(error.message, error.error_code)
+    return bounded(result, depth=14, max_items=128, max_nodes=18000, max_string=4096)

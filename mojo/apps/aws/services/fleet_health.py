@@ -936,3 +936,208 @@ def node(actor, node_id, hours=24, *, readers=None, deadline=None):
     if size() > MAX_BYTES:
         raise FleetHealthError("output_limit", "The diagnostic contract could not fit its bounded response.")
     return output
+
+
+def acquire_snapshot(actor, *, deadline, readers=None, budget=None, now=None, node_ids=None, extra_series=None):
+    """Shared raw acquisition for snapshots/coverage, never a public-tool loop."""
+    from mojo.apps import jobs
+    from mojo.helpers.aws.cloudwatch import CloudWatchHelper
+    from mojo.deploy.provision.spec import names
+    readers = readers or {}
+    grants, expected, rows, sources, runners, overflow, inventory = readers.get("collected") or _collect(actor, deadline, readers)
+    selected = [row for row in rows if row["expected"] and (node_ids is None or row["node_id"] in node_ids)]
+    selected = selected[:128]
+    evidence = {row["node_id"]: {"current": _state("permission_denied"), "trends": _state("permission_denied"),
+                                "services": _services(row, sources)} for row in selected}
+    if grants["jobs"]:
+        try:
+            roster = [runner for runner in runners if any(row.get("hostname") == runner.get("hostname", "").lower() for row in selected)]
+            if roster:
+                if budget is not None:
+                    budget.take("checked_broadcasts")
+                    budget.take("checked_targets", len(roster))
+                checked = readers.get("diagnostics_batch", lambda roster, deadline: jobs.get_sysinfo(
+                    diagnostic=True, roster=roster, deadline=deadline, timeout=5,
+                    revision=settings.get_static("MOJO_FLEET_CONFIG_REVISION", None) if grants["platform"] else None))(
+                        roster, min(deadline, time.monotonic() + 5))
+            else:
+                checked = _state("unavailable", "diagnostic_channel_membership_missing", results=[])
+            for row in selected:
+                matching = [receipt for receipt in checked.get("results", []) if receipt.get("host") == row.get("hostname") and receipt.get("status") == "success"]
+                current = _state("unavailable", checked.get("reason") or "checked_reply_missing")
+                if len(matching) == 1 and not checked.get("anomalies") and checked.get("status") in ("verified", "partial"):
+                    payload = matching[0].get("result") or {}
+                    proof = payload.get("proof") or {}
+                    if payload.get("hostname") == row.get("hostname") and (not proof.get("node_id") or proof["node_id"] == row["node_id"]):
+                        current = _project_current(payload.get("current"))
+                evidence[row["node_id"]]["current"] = current
+        except Exception:
+            for row in evidence.values():
+                row["current"] = _state("unavailable", "checked_transport_unavailable")
+    cloud = None
+    if grants["aws"]:
+        try:
+            spec = expected.get("spec")
+            namespace = names(spec)["metrics_namespace"] if spec is not None else "CWAgent"
+            mounts = {}
+            for node_id, detail in evidence.items():
+                filesystems = detail["current"].get("filesystems") or {}
+                mounts[node_id] = [row["path"] for row in filesystems.get("mounts", []) + filesystems.get("missing", [])]
+            cloud = readers.get("recent", lambda rows, namespace, mounts, deadline: CloudWatchHelper(
+                region=spec.region if spec else None, static_configuration=True).get_recent_evidence(rows, namespace, mounts,
+                    deadline=deadline, budget=budget, now=now, extra_series=extra_series))(
+                        selected, namespace, mounts, deadline)
+            for node_id, detail in evidence.items():
+                detail["trends"] = (cloud.get("nodes") or {}).get(node_id) or _state("unavailable", "not_collected_budget")
+        except Exception:
+            for row in evidence.values():
+                row["trends"] = _state("unavailable", "cloudwatch_unavailable")
+    return {"grants": grants, "expected": expected, "rows": rows, "sources": sources,
+            "runners": runners, "overflow": overflow, "inventory": inventory, "evidence": evidence,
+            "cloud": cloud, "roster_revision": _revision(rows), "roster_scope": roster_scope(expected)}
+
+
+def _coverage_slot(raw, *, source, required=True, configuration="unknown", provenance=None, now=None, freshness=20):
+    from mojo.apps.account.services.health_evidence import parse_time, valid_time, utcnow
+    now, raw = now or utcnow(), raw or {}
+    at = valid_time(raw.get("observed_at") or raw.get("last_sample_at"), now) if raw.get("status") in ("ok", "stale") else None
+    age = (now - at).total_seconds() if at else None
+    status, reason = raw.get("status", "unknown"), raw.get("reason")
+    covered = ("permission_denied" if status == "permission_denied" else "unsupported" if status == "unsupported" else
+               "not_applicable" if status == "not_applicable" else "not_collected_budget" if reason in ("not_collected_budget", "metric_budget_exceeded") else
+               "permission_denied" if reason == "provider_denied" else "unknown" if at is None and status == "unknown" else
+               "missing" if at is None and reason in ("no_series", "no_datapoints", "no_sample_in_window", "configured_mount_absent", "checked_reply_missing") else
+               "collector_error" if at is None and source == "runtime" and status == "unavailable" else
+               "provider_error" if at is None and source == "cloudwatch" and status == "unavailable" else
+               "unknown" if at is None else "stale" if age > freshness else "covered")
+    if configuration == "not_configured" and at is None:
+        covered = "not_configured"
+    value = raw.get("value")
+    if value is None:
+        value = {key: raw[key] for key in ("percent", "total", "used", "free", "available", "scheduler_active") if key in raw} or None
+    return {"required": required, "configuration_status": configuration, "configuration_provenance": provenance,
+            "status": status, "reason": reason, "coverage_status": covered,
+            "last_real_sample_at": at.isoformat() if at else None, "collected_at": _now(),
+            "age_seconds": max(0, age) if age is not None else None, "freshness_limit_seconds": freshness,
+            "configuration_drift": bool(at is not None and configuration == "not_configured"),
+            "value": value, "unit": raw.get("unit"), "source_identity": {"source": source,
+                **{key: raw[key] for key in ("namespace", "dimensions", "metric", "period_seconds", "aggregation", "start", "end") if key in raw}}}
+
+
+def project_monitoring_coverage(acquired, node_id, *, now=None):
+    """Pure returned-node requirements/evidence projection."""
+    from mojo.apps.account.services.health_evidence import utcnow
+    now = now or utcnow()
+    row = next(row for row in acquired["rows"] if row["node_id"] == node_id)
+    detail = acquired["evidence"][node_id]
+    current, trends = detail["current"], detail["trends"]
+    declared = acquired["expected"].get("spec") is not None
+    measurements = []
+    def measurement(key, runtime, cloud=None, *, mount=None, cloud_config=None, required=True):
+        runtime = runtime or current if current.get("status") == "permission_denied" else runtime
+        slots = {"runtime": _coverage_slot(runtime, source="runtime", required=required,
+            configuration="declared" if runtime and runtime.get("status") == "ok" else "unknown", now=now)}
+        if cloud is not None:
+            cloud_config = cloud_config or ("declared" if declared else "unknown")
+            slots["cloudwatch"] = _coverage_slot(cloud, source="cloudwatch", required=required,
+                configuration=cloud_config, provenance="selected_provision_recipe" if declared else "fallback_candidate",
+                now=now, freshness=3 * (cloud.get("period_seconds") or (60 if key == "memory" else 300)))
+        measurements.append({"key": key, "node_id": node_id, "required": required,
+            "role_provenance": row["membership_sources"], "mount": mount, "sources": slots})
+    cloud_denied = _state("permission_denied")
+    for family in ("cpu", "memory"):
+        measurement(family, current.get(family), trends.get(family) or (cloud_denied if not acquired["grants"]["aws"] else _state("unknown", "instance_unresolved")))
+    filesystems = current.get("filesystems") or {}
+    mounts = {mount["path"]: mount for mount in filesystems.get("mounts", []) + filesystems.get("missing", [])}
+    mounts.setdefault("/", _state("unknown", "filesystem_inventory_unknown"))
+    for path, mount in sorted(mounts.items()):
+        cloud = next((item for item in trends.get("filesystems", []) if item.get("path") == path), None)
+        measurement("filesystem:" + path, mount, cloud or (cloud_denied if not acquired["grants"]["aws"] else _state("unavailable", "no_series")), mount=path,
+                    cloud_config="declared" if declared and path == "/" else "not_configured" if declared else "unknown")
+        measurement("inodes:" + path, mount.get("inodes") or _state("unknown", "inodes_unavailable"), mount=path)
+    measurement("filesystem_inventory", filesystems)
+    heartbeat = {"status": "ok" if row.get("last_heartbeat") else "unknown", "observed_at": row.get("last_heartbeat"), "value": bool(row.get("runner_id"))}
+    measurements.append({"key": "runner", "node_id": node_id, "required": True, "role_provenance": row["membership_sources"], "mount": None,
+        "sources": {"platform": _coverage_slot(heartbeat if acquired["grants"]["platform"] else _state("permission_denied"), source="heartbeat", now=now,
+            freshness=max(1, int(settings.get_static("JOBS_RUNNER_HEARTBEAT_SEC", 5))) * 3)}})
+    measurements.append({"key": "scheduler", "node_id": node_id, "required": True, "mount": None,
+        "sources": {"platform": _coverage_slot({**acquired["sources"].get("scheduler", {}), "observed_at": None}, source="scheduler_lock", now=now)},
+        "scope": "installation", "reason": "detector_evidence_unavailable"})
+    required = row.get("request_service_required")
+    measurements.append({"key": "request_service", "node_id": node_id, "required": required,
+        "sources": {"runtime": _coverage_slot(detail["services"]["request_service"], source="runtime", required=required is not False, now=now)}})
+    stats = {"scope": "returned_node", "expected_total": len(measurements) if required is not None else None,
+             "configured_total": 0, "observed_total": 0, "fresh_total": 0, "gap_total": 0,
+             "unknown_total": 0, "omitted_total": 0, "complete": False, "status_counts": {}}
+    for item in measurements:
+        values = list(item["sources"].values())
+        stats["configured_total"] += int(any(slot["configuration_status"] == "declared" for slot in values))
+        stats["observed_total"] += int(any(slot["last_real_sample_at"] for slot in values))
+        stats["fresh_total"] += int(all(slot["coverage_status"] in ("covered", "not_applicable") for slot in values))
+        for slot in values:
+            status = slot["coverage_status"]
+            stats["status_counts"][status] = stats["status_counts"].get(status, 0) + 1
+        stats["gap_total"] += int(any(slot["coverage_status"] not in ("covered", "not_applicable") for slot in values))
+        stats["unknown_total"] += int(any(slot["coverage_status"] == "unknown" for slot in values))
+    stats["complete"] = bool(stats["expected_total"] and not stats["gap_total"])
+    return {"measurements": measurements, "measurement_coverage": stats,
+            "agent_installation": _state("unknown", "no_current_installation_proof")}
+
+
+def coverage(actor, node_id=None, cursor=None, *, readers=None, deadline=None, now=None):
+    """Signed one-expected-node pages over the same bounded raw acquisition."""
+    if node_id is not None and cursor is not None:
+        raise FleetHealthError("invalid_request")
+    if node_id is not None and (not isinstance(node_id, str) or not NODE_RE.fullmatch(node_id)):
+        raise FleetHealthError("invalid_node_id")
+    continuation = None
+    if cursor is not None:
+        try:
+            continuation = signing.loads(cursor, salt="mojo.monitoring.coverage.v2", max_age=3600)
+            if not isinstance(continuation, dict) or continuation.get("profile") != 2:
+                raise ValueError()
+        except (ValueError, TypeError, signing.BadSignature):
+            raise FleetHealthError("invalid_cursor") from None
+    deadline = min(deadline or time.monotonic() + 20, time.monotonic() + 20)
+    readers = dict(readers or {})
+    # Resolve the roster once, then pass this exact acquisition into the raw
+    # detail phase. No public node/report call and no second inventory sweep.
+    collected = _collect(actor, deadline, readers)
+    grants, expected, rows, sources, runners, overflow, inventory = collected
+    revision = _revision(rows)
+    expected_ids = [row["node_id"] for row in rows if row["expected"]]
+    if continuation:
+        if continuation.get("revision") != revision or continuation.get("scope") != roster_scope(expected):
+            raise FleetHealthError("roster_changed")
+        if continuation.get("last") not in expected_ids:
+            raise FleetHealthError("invalid_cursor")
+        position = expected_ids.index(continuation["last"]) + 1
+    else:
+        position = expected_ids.index(node_id) if node_id in expected_ids else 0
+    if node_id is not None and node_id not in expected_ids:
+        raise FleetHealthError("unknown_resource")
+    if position >= len(expected_ids):
+        raise FleetHealthError("unknown_resource")
+    selected_id = expected_ids[position]
+    if next(row for row in rows if row["node_id"] == selected_id)["identity_status"] == "ambiguous":
+        raise FleetHealthError("identity_ambiguous")
+    # Private pre-collected seam prevents repeating _collect below.
+    from mojo.apps.account.services.health_evidence import CycleBudget
+    budget = CycleBudget(deadline, limits={"provider_operations": 12, "cloudwatch_series": 10})
+    acquired = acquire_snapshot(actor, deadline=deadline, readers={**readers, "collected": collected}, node_ids=[selected_id], now=now, budget=budget)
+    projected = project_monitoring_coverage(acquired, selected_id, now=now)
+    result = _envelope(expected, rows, sources, overflow)
+    result.update(health="unknown", health_scope="monitoring_coverage", node=next(row for row in rows if row["node_id"] == selected_id), **projected)
+    more = position + 1 < len(expected_ids)
+    result["coverage"].update(returned=1, has_more=more,
+        next_cursor=signing.dumps({"revision": revision, "scope": roster_scope(expected), "profile": 2, "last": selected_id}, salt="mojo.monitoring.coverage.v2", compress=True) if more else None,
+        complete=len(expected_ids) == 1 and projected["measurement_coverage"]["complete"] and result["coverage"]["complete"])
+    while len(json.dumps(result, separators=(",", ":")).encode()) > MAX_BYTES and result["measurements"]:
+        result["measurements"].pop()
+        result["measurement_coverage"]["omitted_total"] += 1
+        result["measurement_coverage"]["complete"] = False
+        result["coverage"]["complete"] = False
+        result.update(node_incomplete=True, truncated=True)
+    if not result["coverage"]["complete"]:
+        result["collection_status"] = "partial"
+    return result

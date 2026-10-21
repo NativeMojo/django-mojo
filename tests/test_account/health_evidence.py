@@ -115,7 +115,7 @@ def test_failure_windows_keep_unread_rows_and_requery_overlap(opts):
         if phase == "fallback":
             return []
         minimum = after[1] if after else 0
-        return [{"id": number, "job_id": "job", "channel": "testit_health", "event": "failed", "at": NOW, "attempt": 1}
+        return [{"id": number, "job_id": "c" * 32, "channel": "testit_health", "event": "failed", "at": NOW, "attempt": 1}
                 for number in range(minimum + 1, 251)][:limit + 1]
     first = he.failure_page(SOURCE, deadline=10, now=NOW, reader=rows)
     assert len(first["events"]) == 200 and first["has_more"], "first failure page did not retain its unread event continuation"
@@ -137,5 +137,33 @@ def test_failure_database_error_never_advances_cursor_or_claims_zero(opts):
     def broken(*args):
         raise RuntimeError("database unavailable")
     result = he.failure_page(SOURCE, deadline=10, now=NOW, reader=broken)
-    assert result["has_more"] and result["next_cursor"] is None, "failed database page advanced its window"
+    assert result["has_more"] and result["next_cursor"], "failed initial database page lost its frozen window checkpoint"
     assert "durable_read_unavailable" in result["gaps"] and result["total"] is None, "failed read reported reassuring zero actual failures"
+    from django.core import signing
+    saved = signing.loads(result["next_cursor"], salt=he.FAILURE_CURSOR_SALT)
+    retried = he.failure_page(SOURCE, result["next_cursor"], deadline=10, now=NOW + timedelta(seconds=60), reader=broken)
+    resumed = signing.loads(retried["next_cursor"], salt=he.FAILURE_CURSOR_SALT)
+    assert saved["start"] == resumed["start"] and saved["expires"] == resumed["expires"], "retry slid the unread lower bound or renewed its window expiry"
+
+
+@th.django_unit_test()
+def test_real_durable_rows_are_json_safe_and_keep_original_terminal_fields(opts):
+    import uuid
+    from mojo.apps.jobs.models import Job, JobEvent
+    from mojo.apps.account.services import health_evidence as he
+    job_id = uuid.uuid4().hex
+    Job.objects.filter(pk=job_id).delete()
+    try:
+        job = Job.objects.create(id=job_id, channel="testit_health_evidence", func="testit.health.evidence",
+                                 status="failed", attempt=2, finished_at=he.utcnow())
+        event = JobEvent.objects.create(job=job, channel=job.channel, event="failed", attempt=2)
+        now = he.utcnow() + timedelta(seconds=1)
+        events = he._failure_rows("events", event.at - timedelta(microseconds=1), now, None, 200, __import__("time").monotonic() + 3)
+        events = [row for row in events if str(row["job_id"]).replace("-", "") == job_id]
+        page = he.failure_page(SOURCE, deadline=10, now=now, reader=lambda phase, *args: events if phase == "events" else [])
+        assert page["events"][0]["job_id"] == job_id, "real durable failure UUID was not normalized to the canonical Job identifier"
+        assert isinstance(he.canonical(page), str), "real durable rows or their cursor were not JSON safe"
+        job.refresh_from_db()
+        assert job.status == "failed" and job.attempt == 2 and job.finished_at is not None, "read-only failure evidence mutated the original terminal Job"
+    finally:
+        Job.objects.filter(pk=job_id).delete()
