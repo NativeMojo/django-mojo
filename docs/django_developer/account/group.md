@@ -109,7 +109,8 @@ class RestMeta:
     VIEW_PERMS = ["view_groups", "manage_groups", "manage_group", "groups"]
     SAVE_PERMS = ["manage_groups", "manage_group", "groups"]
     PROTECTED_JSON_PERMS = ["admin_compliance", "admin_verify"]  # required to write metadata["protected"]
-    POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate']
+    POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate',
+                         'revoke_group_tokens', 'allow_member_subgroups']
     SEARCH_FIELDS = ["name"]
 ```
 
@@ -120,6 +121,7 @@ class RestMeta:
 | `realtime_message` | `{"realtime_message": {"topic": "group:<id>:...", "message": ...}}` | Publishes to a group-scoped realtime topic |
 | `disable` | `{"disable": {"reason": "admin\|abuse\|archived", "note": "..."}}` | Flips `is_active=False`, writes `metadata.protected.disable.*` |
 | `reactivate` | `{"reactivate": {"note": "..."}}` | Flips `is_active=True`, appends to `disable.history` (FIFO cap 20) |
+| `allow_member_subgroups` | `{"allow_member_subgroups": true}` | Switches the sub-group policy on (`true`) or off (`false`); same global gate as `disable`. See [Letting a parent's administrators create sub-groups](#letting-a-parents-administrators-create-sub-groups) |
 
 `disable`/`reactivate` require a global `manage_groups` grant held by a signed-in person — the combined `groups` term satisfies it too, since it includes `manage_groups` by definition (stricter than the broader Group `SAVE_PERMS` since these are destructive; a member-level `manage_group` grant is not sufficient, and a group API key or group token never passes, whatever it carries). See [disable_lifecycle.md](disable_lifecycle.md).
 
@@ -555,10 +557,30 @@ org.set_protected_metadata(SUBGROUP_POLICY_KEY, True)   # server code
 org.allows_member_subgroups()                           # True only for exactly True
 ```
 
-Over REST it is written like any protected key, so only a superuser or a
-holder of `admin_compliance` / `admin_verify` can set or clear it (see
-[Protected Metadata](#protected-metadata)). A tenant's own administrators
-cannot turn it on or off, by any spelling of the write.
+Over REST, a system admin switches it with the Group action
+`allow_member_subgroups` (#9126):
+
+```
+POST /api/group/<id>
+{"allow_member_subgroups": true}      # or false
+→ {"status": true, "allow_member_subgroups": true}
+```
+
+The action takes a signed-in person whose **own** global permissions hold
+`manage_groups` or `groups` (or a superuser), the same bar as `disable` /
+`reactivate`. A member-level grant, a group API key and a group token are
+refused, and so is a value that is not a boolean (400). Off removes the key.
+The action re-reads the row under its lock before it writes, so it never puts
+back protected metadata that was loaded earlier in the request. A no-op writes
+nothing, and every change is logged as `group:subgroup_policy_changed`. A
+body that carries the action alongside field edits, or a create, is refused
+in `on_rest_pre_save` before anything is written when the caller may not
+switch.
+
+It is also an ordinary protected key, so a superuser or a holder of
+`admin_compliance` / `admin_verify` can still write it through
+`metadata.protected` (see [Protected Metadata](#protected-metadata)). A
+tenant's own administrators cannot turn it on or off by any route.
 
 Once it is set, `Group.on_rest_handle_create` admits a create whose `parent`
 (or `parent_id`) is that group when the caller:

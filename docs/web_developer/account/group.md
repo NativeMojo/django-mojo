@@ -291,8 +291,8 @@ POST /api/group
 This works when all of these hold:
 
 - Group `42` carries `metadata.protected.allow_member_subgroups: true`. Only the
-  platform sets this: a superuser or a holder of `admin_compliance` /
-  `admin_verify`. The organization's own administrators cannot change it.
+  platform sets this, with the switch below. The organization's own
+  administrators cannot change it.
 - The caller is signed in as a person (a session, or their own per-user API
   key) and holds `manage_group` (or `manage_groups`/`groups`) **as a member** of
   group `42` or of a group above it.
@@ -310,6 +310,28 @@ details:
 - A group API key or group token cannot create groups this way.
 - The Assistant's generic model-create tool does not use this setting; use the
   Group API.
+
+#### Turning it on or off (system admins)
+
+```
+POST /api/group/42
+{"allow_member_subgroups": true}
+```
+
+Response: `{"status": true, "allow_member_subgroups": true}`. Send `false` to
+turn it off. The current state is `metadata.protected.allow_member_subgroups`
+in the group's `default` graph: `true` means on, anything else means off.
+
+- Only a signed-in person whose own account holds the global `manage_groups`
+  or `groups` permission (or a superuser) may call it, the same as Disable and
+  Reactivate. An organization's administrators, group API keys and group
+  tokens get `403`; signed out gets `401`.
+- The value must be `true` or `false`. A string or number is refused with
+  `400`.
+- Sending the current value changes nothing. Turning it off does not touch
+  groups that were already created under it.
+- If someone not allowed to switch sends it together with other changes in
+  the same request, the whole request is refused and nothing is saved.
 
 ---
 
