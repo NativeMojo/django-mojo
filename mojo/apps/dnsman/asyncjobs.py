@@ -27,7 +27,7 @@ def _certificate(job):
     return Certificate.objects.filter(pk=pk).select_related("domain").last()
 
 
-def _run(job, what):
+def _run(job, what, issuer=None):
     from mojo.apps.dnsman.services import certs
 
     pk = (job.payload or {}).get("certificate")
@@ -38,11 +38,24 @@ def _run(job, what):
         logit.info(f"dnsman: {what} — certificate {pk} no longer exists, skipping")
         return f"completed:missing={pk}"
 
-    result = certs.issue(cert)
+    result = (issuer or certs.issue)(cert)
+    if result.get("busy"):
+        from mojo.apps.jobs.models import Job
+        # Only a lock collision receives Jobs retries. Persist the ceiling
+        # before raising: old already-queued jobs may have max_retries=0.
+        Job.objects.filter(pk=job.pk).exclude(max_retries=certs.ISSUE_BUSY_RETRIES).update(
+            max_retries=certs.ISSUE_BUSY_RETRIES)
+        error = me.ValueException(certs.ISSUE_BUSY_ERROR)
+        error.retryable = True
+        raise error
     if not result.ok:
-        raise me.ValueException(
+        error = me.ValueException(
             f"dnsman: {what} failed for certificate {cert.pk} "
             f"({cert.common_name}): {result.error}")
+        # _record_issue_failure already owns certificate backoff. A prior busy
+        # collision must not turn the job's new retry budget into CA retries.
+        error.retryable = False
+        raise error
     return f"completed:certificate={cert.pk}"
 
 
@@ -51,14 +64,14 @@ def issue_certificate(job):
     return _run(job, "issue_certificate")
 
 
-def renew_certificate(job):
+def renew_certificate(job, issuer=None):
     """
     Reissue the certificate named in the payload.
 
     Renewal is issuance: ACME has no separate renew operation, and reusing the
     same code path means a renewal cannot drift from a first issuance.
     """
-    return _run(job, "renew_certificate")
+    return _run(job, "renew_certificate", issuer=issuer)
 
 
 def poll_domain_operations(job):
@@ -189,7 +202,7 @@ def publish_certificate_expiry_metric(job, put_metric=None):
     return f"completed:days={days}"
 
 
-def certificate_updated(job):
+def certificate_updated(job, publish=None):
     """
     Broadcast handler for the certificate sync channel.
 
@@ -216,7 +229,7 @@ def certificate_updated(job):
         from mojo.apps.edge.cronjobs import (
             CONVERGE_JOB, EDGE_CHANNEL, converge_pools)
 
-        jobs.publish(
+        (publish or jobs.publish)(
             func=CONVERGE_JOB,
             payload={"pools": converge_pools()},
             channel=EDGE_CHANNEL,

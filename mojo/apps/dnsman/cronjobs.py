@@ -72,11 +72,11 @@ def publish_certificate_expiry():
 
 
 @schedule(minutes="0", hours="*/6")
-def renew_certificates():
+def renew_certificates(renew=None):
     """Queue renewal for every certificate past its renew_after mark."""
     from mojo.apps.dnsman.services import certs
 
-    result = certs.renew_due()
+    result = (renew or certs.renew_due)()
     if result.count:
         logit.info(f"dnsman: queued {result.count} certificate renewals")
     return result

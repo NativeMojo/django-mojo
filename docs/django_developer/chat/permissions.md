@@ -264,7 +264,7 @@ room.
 | Capability | active | muted | banned |
 |---|---|---|---|
 | Read history / unread counts | yes | yes | no |
-| Mark read (`chat_read`, `POST room/read`) — receipts and `last_read_at` | yes | yes | **no** |
+| Mark read (`chat_read`, `POST room/read`) — legacy receipts or cursor state | yes | yes | **no** |
 | React (`chat_react`) | yes | yes | **no** |
 | Send (`chat_message`) | yes | no | no |
 | Edit (`chat_edit`) — own message, or any as a room admin | yes | no | no |

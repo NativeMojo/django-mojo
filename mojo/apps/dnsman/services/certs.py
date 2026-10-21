@@ -58,6 +58,8 @@ _ISSUE_LOCK_NAMESPACE = 1421
 ISSUE_JOB = "mojo.apps.dnsman.asyncjobs.issue_certificate"
 RENEW_JOB = "mojo.apps.dnsman.asyncjobs.renew_certificate"
 CERT_UPDATED_JOB = "mojo.apps.dnsman.asyncjobs.certificate_updated"
+ISSUE_BUSY_ERROR = "dnsman_certificate_busy"
+ISSUE_BUSY_RETRIES = 8
 
 
 # ----------------------------------------------------------------------
@@ -270,11 +272,63 @@ def publish_job(func_path, certificate, channel="default", idempotency_marker=No
     else:
         marker = int(certificate.renew_after.timestamp()) if certificate.renew_after else "due"
         idempotency_key = f"dnsman-cert-renew-{certificate.pk}-{marker}"
-    return jobs.publish(
+    job_id = jobs.publish(
         func_path,
         payload={"certificate": certificate.pk},
         channel=channel,
         idempotency_key=idempotency_key)
+    return _recover_busy_job(job_id, func_path, certificate.pk, channel)
+
+
+def _recover_busy_job(job_id, func_path, certificate_id, channel):
+    """Retry only an exact terminal busy leaf using the existing Jobs service.
+
+    A configured zero-retry worker and exhausted retry budget must not strand
+    an idempotency key forever. Lock the root and each replacement before
+    deciding: retry_job itself has no concurrency fence. Canceled, completed
+    and differently-failed replacements are explicit stop conditions. An
+    expired busy retry gets the existing service's fresh replacement lifetime.
+    """
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.jobs.services.job_actions import JobActionsService
+
+    with transaction.atomic():
+        root = Job.objects.select_for_update().filter(pk=job_id).first()
+        if root is None or root.status not in ("failed", "expired") or root.last_error != ISSUE_BUSY_ERROR:
+            return job_id
+        current, seen = root, set()
+        for unused in range(64):
+            if (current.pk in seen or current.func != func_path or current.channel != channel
+                    or current.payload != {"certificate": certificate_id} or current.broadcast):
+                return job_id
+            seen.add(current.pk)
+            if current.status not in ("failed", "expired") or current.last_error != ISSUE_BUSY_ERROR:
+                return current.pk
+            if not isinstance(current.metadata, dict):
+                return current.pk
+            successor = current.metadata.get("retried_as")
+            if not successor:
+                break
+            if not isinstance(successor, str):
+                return current.pk
+            child = Job.objects.select_for_update().filter(pk=successor).first()
+            if child is None:
+                return current.pk
+            current = child
+        else:
+            return current.pk
+        if current.status not in ("failed", "expired") or current.last_error != ISSUE_BUSY_ERROR:
+            return current.pk
+        result = JobActionsService.retry_job(current)
+        if result.get("status") is not True or not isinstance(result.get("new_job_id"), str):
+            return current.pk
+        replacement = result["new_job_id"]
+        if root.pk != current.pk:
+            # Keep the root pointed at the latest leaf; every intermediate
+            # retry event/back-link remains the durable historical trail.
+            root.metadata = dict(root.metadata or {}, retried_as=replacement)
+            root.save(update_fields=["metadata", "modified"])
+        return replacement
 
 
 def _require_delegated_profile(domain, names):
@@ -328,7 +382,8 @@ def has_still_valid_material(certificate, now=None):
         and certificate.cert_pem
         and certificate.mojo_secrets)
 
-def issue(certificate, *, acme=None, sync=None, wait_for_txt=None):
+def issue(certificate, *, acme=None, sync=None, wait_for_txt=None,
+          hub_client=None, store_key=None, resolve_cname=None):
     """
     Run the full DNS-01 issuance for a Certificate row.
 
@@ -347,12 +402,14 @@ def issue(certificate, *, acme=None, sync=None, wait_for_txt=None):
     with _issue_lock(certificate.pk) as acquired:
         if not acquired:
             current = Certificate.objects.get(pk=certificate.pk)
-            return objict(ok=True, certificate=current, skipped=True)
+            return objict(ok=True, certificate=current, skipped=True, busy=True)
         return _issue_locked(certificate, acme=acme, sync=sync,
-                             wait_for_txt=wait_for_txt)
+                             wait_for_txt=wait_for_txt, hub_client=hub_client,
+                             store_key=store_key, resolve_cname=resolve_cname)
 
 
-def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
+def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None,
+                  hub_client=None, store_key=None, resolve_cname=None):
     """Issue while the caller holds the certificate advisory lock."""
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.models.certificate import (
@@ -388,12 +445,13 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
 
     certificate = claimed
     domain = certificate.domain
-    try:
-        record_reservations.cleanup_for_certificate(certificate)
-    except Exception as err:
-        return _record_issue_failure(certificate, err, renewing)
     names = list(certificate.sans or [certificate.common_name])
-    delegated = delegation.for_domain(domain)
+    delegated = delegation.routing_for_domain(domain)
+    if delegated is None or delegated.connection_mode != "shared":
+        try:
+            record_reservations.cleanup_for_certificate(certificate)
+        except Exception as err:
+            return _record_issue_failure(certificate, err, renewing)
     if delegated is None and domain.provider == "mojo":
         return _record_issue_failure(
             certificate, me.ValueException("This delegated ACME domain is not verified"),
@@ -407,9 +465,10 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
         try:
             delegated = delegation.require_current_owner(delegated)
             _require_delegated_profile(domain, names)
+            delegation.require_shared_authority(delegated, client=hub_client)
             # Proof and any prior ambiguous cleanup happen before the CA order.
-            delegation.prove_alias(delegated)
-            _withdraw_pending_delegated_cleanup(delegated)
+            delegation.prove_alias(delegated, resolve_cname=resolve_cname)
+            _withdraw_pending_delegated_cleanup(delegated, client=hub_client)
         except Exception as err:
             return _record_issue_failure(certificate, err, renewing)
 
@@ -425,6 +484,7 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
         account, client = acme() if acme is not None else _get_account()
         if delegated is not None:
             delegated = delegation.require_current_owner(delegated)
+            delegation.require_shared_authority(delegated, client=hub_client)
         order = client.new_order(names)
         certificate.acme_order_url = order.get("url")
         certificate.save()
@@ -437,7 +497,7 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
         # exactly one of the two authorizations would fail.
         if delegated is not None:
             delegated_challenge_ref = _publish_delegated_challenges(
-                delegated, challenges, wait_for_txt=wait_for_txt)
+                delegated, challenges, wait_for_txt=wait_for_txt, client=hub_client)
         else:
             for record_name, digests in challenges.items():
                 reservation = record_reservations.reserve(
@@ -492,7 +552,7 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
 
         certificate.cert_pem = cert_pem
         certificate.chain_pem = chain_pem
-        certificate.set_private_key_pem(acme_helpers.dump_key(key))
+        (store_key or type(certificate).set_private_key_pem)(certificate, acme_helpers.dump_key(key))
         certificate.issuer = (details.issuer or "")[:255] or None
         certificate.serial = details.serial
         certificate.not_before = details.not_before
@@ -513,7 +573,7 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
                 delegated_challenge_ref
                 or delegated.cleanup_challenge_ref)
             if cleanup_ref:
-                _withdraw_delegated_cleanup(delegated, cleanup_ref)
+                _withdraw_delegated_cleanup(delegated, cleanup_ref, client=hub_client)
         else:
             cleanup_challenges(domain, planted)
 
@@ -650,7 +710,7 @@ def _delegated_quorum_query(target_name, digests, dns_probe=None):
     return query, state
 
 
-def _publish_delegated_challenges(row, challenges, wait_for_txt=None):
+def _publish_delegated_challenges(row, challenges, wait_for_txt=None, client=None):
     from mojo.apps.dnsman.models import AcmeDelegation
     from mojo.apps.dnsman.services import acme_hub_client, delegation
     from mojo.helpers.dns import probe
@@ -664,6 +724,7 @@ def _publish_delegated_challenges(row, challenges, wait_for_txt=None):
     digests = list(challenges[row.source_name])
     challenge_ref = uuid.uuid4().hex
     delegation.require_current_owner(row)
+    delegation.require_shared_authority(row, client=client)
 
     # Commit cleanup intent before the ambiguous remote publish call.
     AcmeDelegation.objects.filter(pk=row.pk).update(
@@ -673,7 +734,7 @@ def _publish_delegated_challenges(row, challenges, wait_for_txt=None):
     row.cleanup_challenge_ref = challenge_ref
     row.cleanup_requested_at = dates.utcnow()
 
-    result = acme_hub_client.publish(
+    result = (client or acme_hub_client).publish(
         str(row.client_ref), challenge_ref, digests)
     delegation.compare_challenge_result(row, result, challenge_ref)
     query, quorum = _delegated_quorum_query(row.target_name, digests)
@@ -687,18 +748,18 @@ def _publish_delegated_challenges(row, challenges, wait_for_txt=None):
     return challenge_ref
 
 
-def _withdraw_pending_delegated_cleanup(row):
+def _withdraw_pending_delegated_cleanup(row, client=None):
     if row.cleanup_challenge_ref:
-        _withdraw_delegated_cleanup(row, row.cleanup_challenge_ref, raise_errors=True)
+        _withdraw_delegated_cleanup(row, row.cleanup_challenge_ref, raise_errors=True, client=client)
 
 
-def _withdraw_delegated_cleanup(row, challenge_ref, raise_errors=False):
+def _withdraw_delegated_cleanup(row, challenge_ref, raise_errors=False, client=None):
     from mojo.apps.dnsman.models import AcmeDelegation
     from mojo.apps.dnsman.services import acme_hub_client, delegation
 
     try:
         row = delegation.require_current_owner(row)
-        result = acme_hub_client.withdraw(str(row.client_ref), challenge_ref)
+        result = (client or acme_hub_client).withdraw(str(row.client_ref), challenge_ref)
         delegation.compare_challenge_result(row, result, challenge_ref)
         AcmeDelegation.objects.filter(
             pk=row.pk, cleanup_challenge_ref=challenge_ref).update(
@@ -859,7 +920,8 @@ def renew_due(now=None, *, publish=None):
     (None means the real queue).
     """
     from mojo.apps.dnsman.models import Certificate
-    from mojo.apps.dnsman.models.certificate import STATUS_ACTIVE, STATUS_ISSUING
+    from mojo.apps.dnsman.models.certificate import STATUS_ACTIVE, STATUS_ISSUING, STATUS_PENDING
+    from mojo.apps.jobs.models import Job
 
     if publish is None:
         publish = publish_job
@@ -875,6 +937,19 @@ def renew_due(now=None, *, publish=None):
         except Exception as err:
             logit.error(
                 f"dnsman: could not queue renewal for certificate {cert.pk}: {err}")
+
+    # Busy issuance never touches Certificate state. Initial pending rows need
+    # the same exhausted-busy recovery as due active renewals; generic CA
+    # failures are excluded and keep their existing certificate retry policy.
+    pending_busy_ids = {pk for pk in Job.objects.filter(
+        func=ISSUE_JOB, status__in=("failed", "expired"), last_error=ISSUE_BUSY_ERROR
+    ).values_list("payload__certificate", flat=True).iterator() if type(pk) is int}
+    for cert in Certificate.objects.filter(status=STATUS_PENDING, pk__in=pending_busy_ids):
+        try:
+            job_ids.append(publish(ISSUE_JOB, cert))
+            certificates.append(cert.pk)
+        except Exception as err:
+            logit.error(f"dnsman: could not recover busy issuance for certificate {cert.pk}: {err}")
 
     # Worker death after the status claim leaves an issuing row behind.  The
     # grace period bounds recovery, and the try-lock refuses recovery while a

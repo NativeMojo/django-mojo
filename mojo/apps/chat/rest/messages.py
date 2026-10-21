@@ -6,7 +6,8 @@ from .rooms import _deny_cross_tenant_room, _refuse_by_policy
 from ..models import ChatRoom, ChatMessage, ChatMembership
 from ..services import reachability
 from ..services.messages import visible_messages
-from ..services.read_state import mark_read
+from ..services.read_state import mark_through, unread_counts
+from ..services.backend import read_backend
 
 
 @md.GET('room/messages')
@@ -48,12 +49,14 @@ def on_chat_room_messages(request):
 
     limit = int(request.DATA.get("limit", 50))
     limit = min(limit, 200)
-    messages = list(qs[:limit])
+    messages = list(qs.select_related("room")[:limit])
 
     data = []
     for msg in messages:
         data.append({
             "id": msg.pk,
+            "room_seq": msg.room_seq,
+            "generation": msg.room.read_state_generation,
             "user_id": msg.user_id,
             "body": msg.body,
             "kind": msg.kind,
@@ -216,16 +219,29 @@ def on_chat_room_read(request):
         return ChatRoom.rest_error_response(request, 404, error="Not a member")
     _refuse_by_policy(request, room)
 
-    target = mark_read(
+    result = mark_through(
         room, request.user, membership, request.DATA.up_to_message_id)
-
-    return {"status": True, "up_to_message_id": target.pk if target else None}
+    return {"status": True, "up_to_message_id": result.target.pk if result.target else None,
+            "position": result.position, "changed": result.changed}
 
 
 @md.GET('unread')
 @md.requires_auth()
 def on_chat_unread(request):
     """Get unread message counts per room for the authenticated user."""
+    if read_backend() == "cursor":
+        # Resolve tenant policy before returning any cursor snapshot.
+        allowed = []
+        memberships = ChatMembership.objects.filter(
+            user=request.user, status__in=["active", "muted"]).select_related("room", "room__group")
+        for member in memberships:
+            try:
+                _deny_cross_tenant_room(request, member.room)
+            except merrors.PermissionDeniedException:
+                continue
+            allowed.append(member.room_id)
+        return {"status": True, "data": [dict(p) for p in unread_counts(
+            request.user, allowed).values() if p.unread_count > 0]}
     memberships = ChatMembership.objects.filter(
         user=request.user,
         status__in=["active", "muted"],
