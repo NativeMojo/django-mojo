@@ -250,7 +250,8 @@ def send_message(room, user, body, kind="text", metadata=None, *,
                  client_authored=True, enforce_room_policy=True,
                  broadcast=True, broadcast_extra=None,
                  client_key=None, publisher=None,
-                 validators=_UNSET, max_bytes=_UNSET):
+                 validators=_UNSET, max_bytes=_UNSET,
+                 read_backend=None, read_handler=_UNSET, read_publisher=None):
     """Create, validate, persist and publish one chat message.
 
     Returns (message, None) on success, (None, error_dict) on refusal.
@@ -327,6 +328,7 @@ def send_message(room, user, body, kind="text", metadata=None, *,
 
     # 8. Persist
     with transaction.atomic():
+        from .read_state import _UNSET as READ_UNSET
         msg = ChatMessage.objects.create(
             room=room,
             user=user,
@@ -337,30 +339,37 @@ def send_message(room, user, body, kind="text", metadata=None, *,
             moderation_reasons=reasons,
             moderation_score=score,
             client_key=client_key,
+            read_backend=read_backend,
+            read_handler=READ_UNSET if read_handler is _UNSET else read_handler,
+            read_publisher=read_publisher,
         )
-
-    # 9. Publish
-    if broadcast:
-        # Extras may add consumer fields, but never replace authoritative
-        # persisted message data (especially moderation state).
-        msg_data = dict(broadcast_extra or {})
-        msg_data.update({
-            "type": "chat_message",
-            "message_id": msg.pk,
-            "room_id": room.pk,
-            "user_id": getattr(user, "pk", None),
-            "body": msg.body,
-            "kind": msg.kind,
-            "metadata": msg.metadata,
-            "moderation_decision": msg.moderation_decision,
-            "moderation_reasons": msg.moderation_reasons,
-            "moderation_score": msg.moderation_score,
-            "created": msg.created.isoformat(),
-        })
-        publish(room.topic, msg_data)
-
-    # 10. Bump the room so room lists reorder
-    room.save(update_fields=["modified"])
+        room.save(update_fields=["modified"])
+        # 9. Publish only after the OUTERMOST transaction commits.
+        if broadcast:
+            msg_data = dict(broadcast_extra or {})
+            msg_data.update({
+                "type": "chat_message", "message_id": msg.pk,
+                "room_id": room.pk, "room_seq": msg.room_seq,
+                "generation": getattr(msg, "_chat_read_generation", room.read_state_generation),
+                "user_id": getattr(user, "pk", None),
+                "body": msg.body, "kind": msg.kind, "metadata": msg.metadata,
+                "moderation_decision": msg.moderation_decision,
+                "moderation_reasons": msg.moderation_reasons,
+                "moderation_score": msg.moderation_score,
+                "created": msg.created.isoformat(),
+            })
+            generation = getattr(msg, "_chat_read_generation", None)
+            def committed_message():
+                # A maintenance operation can invalidate a delayed callback.
+                from ..models import ChatRoom
+                try:
+                    if generation is not None and not ChatRoom.objects.using("default").filter(
+                            pk=room.pk, read_state_generation=generation).exists():
+                        return
+                    publish(room.topic, msg_data)
+                except Exception:
+                    logger.exception("chat: committed message publication failed")
+            transaction.on_commit(committed_message)
 
     return msg, None
 

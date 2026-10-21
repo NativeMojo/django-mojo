@@ -1,0 +1,580 @@
+"""Irreversible activation and historical-schema contracts, isolated serially."""
+import uuid
+import time
+import importlib
+import threading
+import tempfile
+import json
+from pathlib import Path
+import inspect
+from unittest import mock
+from contextlib import contextmanager
+from types import SimpleNamespace
+
+from testit import helpers as th
+
+
+@th.django_unit_test()
+def test_private_build_manifest_is_actual_bytes_and_loaded_identity_is_frozen(opts):
+    from mojo.apps.dnsman import acme_hub_feature as feature
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory) / "mojo"
+        for name in feature.CRITICAL_FILES:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"reviewed critical file\n")
+        source = root / "apps/dnsman/acme_hub_feature.py"
+        source.write_text(Path(feature.__file__).read_text())
+        def load():
+            spec = importlib.util.spec_from_file_location("testit_acme_identity_" + uuid.uuid4().hex, source)
+            result = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(result)
+            return result
+        unbound = load()
+        assert unbound.loaded_identity() is None, "unbound source must never qualify as a published artifact"
+        identity = {key: value for key, value in artifact().items() if key != "wheel_sha256"}
+        identity["manifest_sha256"] = unbound.manifest()
+        unbound.BUILD_FILE.write_text(json.dumps(identity))
+        loaded = load()
+        assert loaded.loaded_identity() == identity, "embedded build identity must match actual critical bytes"
+        (root / "apps/edge/asyncjobs.py").write_bytes(b"different candidate bytes\n")
+        assert loaded.installed_identity() is None, "file substitution must invalidate on-disk artifact qualification"
+        assert loaded.loaded_identity() == identity, "new installed files cannot rewrite an already-loaded process identity"
+
+
+@th.django_unit_test()
+def test_real_postgres_admission_blocks_both_directions_and_lost_session(opts):
+    from django.db import connections
+    from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
+    state = SimpleNamespace(mode="compatibility")
+    shared_entered, release_shared = threading.Event(), threading.Event()
+    exclusive_entered, release_exclusive = threading.Event(), threading.Event()
+    later_entered = threading.Event()
+    pids, errors = {}, []
+    def run(label, exclusive, entered, release):
+        try:
+            db = connections["default"]
+            with db.cursor() as cursor:
+                cursor.execute("SELECT pg_backend_pid()")
+                pids[label] = cursor.fetchone()[0]
+            with upgrade.admission(exclusive=exclusive, state_reader=lambda: state):
+                entered.set()
+                assert release.wait(5), f"{label} admission was not released by fixture"
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            connections["default"].close()
+    def waiting(label):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            with connections["default"].cursor() as cursor:
+                cursor.execute("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=%s AND locktype='advisory' AND NOT granted)", [pids.get(label, -1)])
+                if cursor.fetchone()[0]:
+                    return
+            time.sleep(0.01)
+        assert False, f"{label} must wait on a real PostgreSQL admission lock"
+    threads = []
+    try:
+        first = threading.Thread(target=run, args=("shared", False, shared_entered, release_shared))
+        threads.append(first)
+        first.start()
+        assert shared_entered.wait(5), "existing writer must hold shared admission"
+        exclusive = threading.Thread(target=run, args=("exclusive", True, exclusive_entered, release_exclusive))
+        threads.append(exclusive)
+        exclusive.start()
+        waiting("exclusive")
+        assert not exclusive_entered.is_set(), "activation must not overtake admitted writer"
+        release_shared.set()
+        assert exclusive_entered.wait(5), "exclusive activation must enter after existing writer finishes"
+        later = threading.Thread(target=run, args=("later", False, later_entered, release_shared))
+        threads.append(later)
+        later.start()
+        waiting("later")
+        assert not later_entered.is_set(), "new writer must not enter while activation is exclusive"
+    finally:
+        release_shared.set()
+        release_exclusive.set()
+        for thread in threads:
+            thread.join(timeout=6)
+    assert not errors and later_entered.is_set(), f"admission locks must complete cleanly: {errors}"
+    with upgrade.admission(state_reader=lambda: state):
+        upgrade.check_session()
+        connections["default"].close()
+        refuses(upgrade.check_session, "admission_unavailable")
+
+
+@th.django_unit_test()
+def test_legacy_orm_and_compatibility_writer_share_allocation_lock(opts):
+    from django.db import connections
+    from django.db.migrations.executor import MigrationExecutor
+    from mojo.apps.dnsman.models import AcmeHubDelegation, AcmeHubChallengeLease, AcmeHubParticipant
+    from mojo.apps.dnsman.services import acme_hub as hub, acme_hub_legacy as legacy
+    from mojo.helpers import dates
+    old_apps = MigrationExecutor(connections["default"]).loader.project_state(
+        [("dnsman", "0004_dnsrecordreservation")]).apps
+    OldLease = old_apps.get_model("dnsman", "AcmeHubChallengeLease")
+    ref = uuid.uuid4().hex
+    allocation = AcmeHubDelegation.objects.create(owner_project_uuid=ref, client_ref=ref,
+        domain_name="mixed.example", source_name="_acme-challenge.mixed.example",
+        target_name=ref + ".hub.example", allocation_zone_name="hub.example", allocation_zone_id="TESTIT")
+    initial_participants = AcmeHubParticipant.objects.count()
+    try:
+        for old_first in (True, False):
+            AcmeHubChallengeLease.objects.filter(allocation=allocation).delete()
+            entered, release = threading.Event(), threading.Event()
+            pids, errors = {}, []
+            def writer(old, first):
+                try:
+                    db = connections["default"]
+                    with db.cursor() as cursor:
+                        cursor.execute("SELECT pg_backend_pid()")
+                        pids[old] = cursor.fetchone()[0]
+                    # Published legacy uses the same1422/allocation advisory
+                    # key. Its historical ORM deliberately has no participant.
+                    with hub._allocation_lock(allocation.pk):
+                        if old:
+                            row = OldLease.objects.filter(allocation_id=allocation.pk, challenge_ref=ref).first()
+                            if row is None:
+                                OldLease.objects.create(allocation_id=allocation.pk, challenge_ref=ref,
+                                    record_values=["preserved"], state="pending", expires_at=dates.add(seconds=60))
+                        else:
+                            legacy.persist(allocation, ref, ["preserved"])
+                        if first:
+                            entered.set()
+                            assert release.wait(5), "first mixed writer must be released by fixture"
+                except BaseException as error:
+                    errors.append(error)
+                finally:
+                    connections["default"].close()
+            first = threading.Thread(target=writer, args=(old_first, True))
+            second = threading.Thread(target=writer, args=(not old_first, False))
+            first.start()
+            try:
+                assert entered.wait(5), f"first mixed writer must acquire allocation lock: {errors}"
+                second.start()
+                deadline = time.monotonic() + 5
+                blocked = False
+                while time.monotonic() < deadline:
+                    with connections["default"].cursor() as cursor:
+                        cursor.execute("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=%s AND locktype='advisory' AND NOT granted)", [pids.get(not old_first, -1)])
+                        blocked = cursor.fetchone()[0]
+                    if blocked:
+                        break
+                    time.sleep(0.01)
+                assert blocked, "second old/new writer must block on the actual allocation advisory lock"
+            finally:
+                release.set()
+                first.join(timeout=6)
+                if second.ident is not None:
+                    second.join(timeout=6)
+            rows = list(AcmeHubChallengeLease.objects.filter(allocation=allocation))
+            assert not errors and len(rows) == 1 and rows[0].participant_id is None, f"mixed writer race must retain one unbound legacy lease: {errors}"
+            assert AcmeHubParticipant.objects.count() == initial_participants, "compatibility race must not lazily create owners/trust"
+    finally:
+        AcmeHubChallengeLease.objects.filter(allocation=allocation).delete()
+        AcmeHubDelegation.objects.filter(pk=allocation.pk).delete()
+
+
+@th.django_unit_test()
+def test_default_compatibility_complete_legacy_flow_has_exact_wire_and_no_participants(opts):
+    from mojo.apps.account.models import Group, ApiKey
+    from mojo.apps.dnsman.models import AcmeHubDelegation, AcmeHubChallengeLease, AcmeHubParticipant
+    from mojo.apps.dnsman.services import acme_hub as hub
+    rest = importlib.import_module("mojo.apps.dnsman.rest.acme_hub")
+    from mojo.helpers import dates
+    fixtures = importlib.import_module("tests.test_dnsman.16_acme_hub")
+    provider, probe = fixtures.FakeRoute53(), fixtures.FakeProbe()
+    group = Group.objects.create(name="acme_hub_test_compat_" + uuid.uuid4().hex)
+    key, unused_token = ApiKey.create_for_group(group, "acme_hub_test_compat", permissions={"dnsman_acme_federation": True})
+    request = SimpleNamespace(api_key=key, user=None, group=group, DATA={})
+    four = {"client_ref", "domain", "source", "target"}
+    six = four | {"challenge_ref", "active_value_count"}
+    try:
+        # Only the external provider/probe and read-only zone boundary are
+        # faked. The actual singleton reader, admission, mode dispatch, legacy
+        # services and REST serializers run with NO state_reader override.
+        with upgrade_schema(), installation(), mock.patch.object(hub, "route53", provider), mock.patch.object(hub, "probe", probe), mock.patch.object(hub, "_new_zone", lambda **kwargs: SimpleNamespace(name="hub.example.net", id="ZONE-HUB")):
+            request.DATA = dict(client_ref="compat-owner", domain="compat.example")
+            allocated = inspect.unwrap(rest.on_acme_delegation)(request)
+            replay = inspect.unwrap(rest.on_acme_delegation)(request)
+            assert set(allocated) == four and replay == allocated, "default owner allocation must retain exact four-field idempotent wire shape"
+            allocation = AcmeHubDelegation.objects.get(client_ref="compat-owner")
+            request.DATA = dict(client_ref="compat-owner", challenge_ref="compat-first", values=["compat-value"])
+            published = inspect.unwrap(rest.on_acme_publish)(request)
+            again = inspect.unwrap(rest.on_acme_publish)(request)
+            assert set(published) == six and again == published and published["active_value_count"] == 1, "default publish/replay must retain exact six fields and additive idempotence"
+            lease = AcmeHubChallengeLease.objects.get(allocation=allocation, challenge_ref="compat-first")
+            assert lease.participant_id is None and lease.record_values == ["compat-value"], "default publication must persist legacy unbound intent"
+            request.DATA = dict(client_ref="compat-owner", challenge_ref="compat-first")
+            withdrawn = inspect.unwrap(rest.on_acme_withdraw)(request)
+            repeated = inspect.unwrap(rest.on_acme_withdraw)(request)
+            assert set(withdrawn) == six and repeated == withdrawn and withdrawn["active_value_count"] == 0, "default withdrawal must retain exact six-field idempotence"
+            assert hub.reconcile(allocation) == [], "normal compatibility reconcile must retain empty desired union after withdraw"
+            request.DATA = dict(client_ref="compat-owner", challenge_ref="compat-expire", values=["elapsed-value"])
+            inspect.unwrap(rest.on_acme_publish)(request)
+            AcmeHubChallengeLease.objects.filter(allocation=allocation, challenge_ref="compat-expire").update(expires_at=dates.add(seconds=-1))
+            swept = hub.sweep()
+            assert swept.expired == 1 and swept.errors == 0, "normal compatibility sweep must expire and reconcile elapsed old-shape intent"
+            assert not AcmeHubParticipant.objects.exists(), "complete default legacy flow must create ZERO owner/trust participants"
+            request.DATA = {}
+            capabilities = inspect.unwrap(rest.on_acme_capabilities)(request)
+            assert set(capabilities) == {"version", "shared_validation", "consumer_project_uuid", "can_consume", "can_manage_trust", "trust_scope"}, "disabled capability wire must retain its exact six-key shape"
+            assert capabilities["shared_validation"] is False and capabilities["can_consume"] is False and capabilities["can_manage_trust"] is False, "default mode must leave every shared mutation capability off"
+            refuses(lambda: hub.lookup_participants(request, "compat.example"), "acme_hub_unavailable")
+            assert not AcmeHubParticipant.objects.exists(), "disabled shared read cannot lazily bind an owner"
+    finally:
+        ApiKey.objects.filter(pk=key.pk).delete()
+        Group.objects.filter(pk=group.pk).delete()
+
+
+@contextmanager
+def upgrade_schema():
+    from django.db import connection
+    from mojo.apps.dnsman.models import AcmeHubInstallation, AcmeHubDelegation, AcmeHubParticipant, AcmeHubChallengeLease
+    from mojo.apps.edge.models import PlatformDeployment
+    schema = "testit_acme_activation_" + uuid.uuid4().hex
+    with connection.cursor() as cursor:
+        cursor.execute('CREATE SCHEMA "' + schema + '"')
+        cursor.execute('SET search_path TO "' + schema + '", public')
+    try:
+        with connection.schema_editor() as editor:
+            for model in (AcmeHubInstallation, AcmeHubDelegation, AcmeHubParticipant, AcmeHubChallengeLease, PlatformDeployment):
+                editor.create_model(model)
+        yield
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute('SET search_path TO public')
+            cursor.execute('DROP SCHEMA "' + schema + '" CASCADE')
+
+
+def artifact():
+    return dict(epoch=1, source_sha="a" * 40, manifest_sha256="b" * 64,
+                wheel_sha256="c" * 64, release="1.38.0")
+
+
+@th.django_unit_test()
+def test_actual_legacy_release_cannot_be_an_activation_floor(opts):
+    from mojo.apps.dnsman import acme_hub_feature as feature
+    for version in ("1.37.4", "1.37.3", "1.37.2", "1.38.0.dev1", "1.38.0rc1", "1.38.0+local", "unknown"):
+        try:
+            feature.validate_artifact(dict(artifact(), release=version))
+        except ValueError:
+            pass
+        else:
+            assert False, f"new local epoch/source cannot make unqualified release {version} a production floor"
+
+
+@contextmanager
+def installation(mode="compatibility"):
+    from mojo.apps.dnsman.models import AcmeHubInstallation
+    from mojo.helpers import dates
+    saved = list(AcmeHubInstallation.objects.values())
+    AcmeHubInstallation.objects.all().delete()
+    AcmeHubInstallation.objects.bulk_create([AcmeHubInstallation(id=1)])
+    if mode == "enabled":
+        AcmeHubInstallation.objects.filter(pk=1).update(
+            mode="enabled", activation_uuid=uuid.uuid4(), deployment_uuid=uuid.uuid4(),
+            app_sha="d" * 40, minimum_release="1.38.0", source_sha="a" * 40,
+            wheel_sha256="c" * 64, manifest_sha256="b" * 64,
+            roster_sha256="e" * 64, attestation_sha256="f" * 64, activated_at=dates.utcnow())
+    try:
+        yield AcmeHubInstallation.objects.get(pk=1)
+    finally:
+        AcmeHubInstallation.objects.all().delete()
+        AcmeHubInstallation.objects.bulk_create([AcmeHubInstallation(**row) for row in saved])
+
+
+def refuses(function, text):
+    try:
+        function()
+    except Exception as error:
+        assert text in str(error), f"expected {text}, got {type(error).__name__}: {error}"
+    else:
+        assert False, f"operation must refuse {text}"
+
+
+def attestation(operation):
+    now = time.time()
+    holds = {name: True for name in (
+        "old_processes_absent", "request_held", "engine_held", "scheduler_held", "cron_held",
+        "supervisor_held", "launch_held", "no_root_launchers", "transaction_idle")}
+    return {key: operation[key] for key in (
+        "installation_uuid", "activation_uuid", "nonce", "deployment_uuid", "app_sha", "artifact") } | dict(
+        roster_digest=operation["roster_digest"], collector_identity="test operator",
+        classification="operator_attested", observed_at=now, expires_at=now + 60,
+        unmanaged_writer_statement=True, launch_exclusion_statement=True, provider_outcome_statement=True,
+        nodes=[dict(node_id=name, instance_id="i-test", boot_id=str(uuid.uuid4()),
+                    helper_pid=1234, helper_start=123, helper_session=uuid.uuid4().hex,
+                    nonce=operation["nonce"], activation_uuid=operation["activation_uuid"],
+                    floor_generation=1, artifact=operation["artifact"], helper_confirmed_at=now,
+                    installed_identity=operation["artifact"], updater_identity="a" * 64,
+                    lifecycle_identity="b" * 64, processes=[],
+                    **holds) for name in operation["roster"]])
+
+
+@th.django_unit_test()
+def test_empty_enabled_state_never_falls_back(opts):
+    from mojo.apps.dnsman.models import AcmeHubInstallation
+    from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
+    with installation("enabled"):
+        assert upgrade.read_state().mode == "enabled", "empty hub still has explicit enabled authority"
+        AcmeHubInstallation.objects.all().delete()
+        refuses(upgrade.read_state, "state_unavailable")
+        assert not AcmeHubInstallation.objects.exists(), "read must never reseed missing authority"
+
+
+@th.django_unit_test()
+def test_generic_settings_are_not_activation_authority(opts):
+    from mojo.apps.account.models import Setting
+    from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
+    with installation():
+        try:
+            Setting.set("TESTIT_ACME_HUB_SHARED_ENABLED", True)
+            assert upgrade.read_state().mode == "compatibility", "generic settings must not enable sharing"
+            refuses(lambda: upgrade.read_state().save(), "dedicated operator writer")
+            refuses(lambda: upgrade.read_state().delete(), "cannot be deleted")
+        finally:
+            Setting.objects.filter(key="TESTIT_ACME_HUB_SHARED_ENABLED").delete()
+
+
+@th.django_unit_test()
+def test_default_operator_and_unknown_evidence_refuse(opts):
+    from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
+    with installation():
+        operation = upgrade.plan(artifact(), ["node-engine"], str(uuid.uuid4()), "d" * 40)
+        refuses(lambda: upgrade.activate(operation, operator_uid=1000), "evidence_unavailable")
+        refuses(lambda: upgrade.activate(operation, operator_uid=0), "evidence_unavailable")
+        assert upgrade.read_state().mode == "compatibility", "unavailable evidence must not activate or bind"
+
+
+@th.django_unit_test()
+def test_wrong_installation_plan_refuses_before_observation_and_idempotence(opts):
+    from mojo.apps.dnsman.models import AcmeHubInstallation, AcmeHubParticipant
+    from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
+    for mode in ("compatibility", "enabled"):
+        with installation(mode):
+            operation = upgrade.plan(artifact(), ["node-engine"], str(uuid.uuid4()), "d" * 40)
+            operation["installation_uuid"] = str(uuid.uuid4())
+            before = list(AcmeHubInstallation.objects.values())
+            owners = AcmeHubParticipant.objects.count()
+            def forbidden(current):
+                assert False, "wrong installation must refuse before operator/root-floor observation"
+            refuses(lambda: upgrade.activate(operation, forbidden, lambda value: value, operator_uid=0), "activation_conflict")
+            assert list(AcmeHubInstallation.objects.values()) == before, f"wrong {mode} installation cannot mutate authority or claim idempotence"
+            assert AcmeHubParticipant.objects.count() == owners, "wrong installation must not bind owners"
+
+
+@th.django_unit_test()
+def test_enabled_dispatch_rechecks_exact_live_journal_and_runner(opts):
+    from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
+    from mojo.apps.edge.services import acme_hub_deploy as guard, deploy, platform_deploy
+    from mojo.apps.edge.models import PlatformDeployment
+    redis = deploy.get_client()
+    previous, ttl = redis.get(deploy.TARGET_KEY), redis.pttl(deploy.TARGET_KEY)
+    try:
+        with upgrade_schema(), installation("enabled"), upgrade.admission():
+            row = PlatformDeployment.objects.create(sha="d" * 40, framework_version="1.38.0", status="canary",
+                request_key=uuid.uuid4().hex, frozen_roster=["testit-upgrade-api"], detail={"api_roster": ["testit-upgrade-api"]})
+            redis.set(deploy.TARGET_KEY, json.dumps(dict(deployment=str(row.pk))))
+            payload = dict(deployment=str(row.pk), sha=row.sha, framework=row.framework_version,
+                           runner="testit-upgrade-api", migrate=True, api_cohort=True)
+            job = SimpleNamespace(runner_id="testit-upgrade-api", payload=payload)
+            guard.before_spawn(job)
+            for key, bad in (("deployment", str(uuid.uuid4())), ("sha", "e" * 40), ("framework", "1.37.4")):
+                bad_job = SimpleNamespace(runner_id=job.runner_id, payload=dict(payload, **{key: bad}))
+                refuses(lambda: guard.before_spawn(bad_job), "deployment_identity_mismatch")
+            refuses(lambda: guard.before_spawn(SimpleNamespace(runner_id=job.runner_id,
+                payload=dict(payload, runner="other"))), "deployment_runner_mismatch")
+            refuses(lambda: guard.check_dispatch(str(row.pk), row.sha, row.framework_version,
+                "other", False, True), "stale_deployment_dispatch")
+            refuses(lambda: guard.check_dispatch(str(row.pk), row.sha, row.framework_version,
+                job.runner_id, False, False), "stale_deployment_dispatch")
+            redis.set(deploy.TARGET_KEY, json.dumps(dict(deployment=str(uuid.uuid4()))))
+            refuses(lambda: guard.before_spawn(job), "stale_deployment_dispatch")
+            redis.set(deploy.TARGET_KEY, json.dumps(dict(deployment=str(row.pk))))
+            PlatformDeployment.objects.filter(pk=row.pk).update(status="superseded")
+            refuses(lambda: guard.before_spawn(job), "stale_deployment_dispatch")
+            refuses(lambda: guard.check_framework("1.37.4"), "framework_below_acme_floor")
+            refuses(guard.capacity_allowed, "launch_coverage_unavailable")
+            refuses(lambda: platform_deploy.set_framework(str(row.pk), "1.39.0"), "framework")
+            row.refresh_from_db()
+            assert row.framework_version == "1.38.0", "stale dispatch cannot rewrite frozen framework identity"
+    finally:
+        redis.delete(deploy.TARGET_KEY)
+        if previous is not None:
+            redis.set(deploy.TARGET_KEY, previous)
+            if ttl > 0:
+                redis.pexpire(deploy.TARGET_KEY, ttl)
+
+
+@th.django_unit_test()
+def test_strict_operator_attestation_and_retry_identity(opts):
+    from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
+    with installation():
+        operation = upgrade.plan(artifact(), ["node-engine"], str(uuid.uuid4()), "d" * 40)
+        receipt = attestation(operation)
+        assert len(upgrade.validate_attestation(receipt, operation)) == 64, "honestly classified complete operator assertion is digestible"
+        for key, bad in (("nonce", "wrong"), ("classification", "machine_verified"),
+                         ("provider_outcome_statement", False), ("launch_exclusion_statement", False)):
+            refuses(lambda: upgrade.validate_attestation(dict(receipt, **{key: bad}), operation), "unavailable" if key not in ("nonce",) else "conflict")
+        floor = dict(installation_uuid=operation["installation_uuid"], artifact=operation["artifact"],
+                     roster_digest=operation["roster_digest"], activation_uuid=operation["activation_uuid"])
+        retry = upgrade.plan(artifact(), operation["roster"], operation["deployment_uuid"], operation["app_sha"], previous_floor=floor)
+        assert retry["activation_uuid"] == operation["activation_uuid"] and retry["nonce"] != operation["nonce"], "partial-stamp retry must retain immutable activation and renew only session nonce"
+        refuses(lambda: upgrade.plan(artifact(), ["other"], operation["deployment_uuid"], operation["app_sha"], previous_floor=floor), "activation_conflict")
+
+
+@th.django_unit_test()
+def test_atomic_activation_and_immutable_readback(opts):
+    from mojo.apps.dnsman.models import AcmeHubDelegation, AcmeHubChallengeLease, AcmeHubParticipant
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
+    from mojo.helpers import dates
+    with upgrade_schema(), installation():
+        record = PlatformDeployment.objects.create(
+            sha="d" * 40, framework_version="1.38.0", status="converged", request_key=uuid.uuid4().hex,
+            frozen_roster=["node-engine"], actor="acme_upgrade_test")
+        ref = uuid.uuid4().hex
+        allocation = AcmeHubDelegation.objects.create(owner_project_uuid=ref, client_ref=ref,
+            domain_name="upgrade.example", source_name="_acme-challenge.upgrade.example", target_name=ref + ".hub.example",
+            allocation_zone_name="hub.example", allocation_zone_id="TESTIT")
+        lease = AcmeHubChallengeLease.objects.create(allocation=allocation, challenge_ref=ref,
+            record_values=["preserve"], state="expired", expires_at=dates.add(seconds=-100))
+        before = (lease.created, lease.modified, lease.record_values, lease.state, lease.expires_at)
+        operation = upgrade.plan(artifact(), ["node-engine"], str(record.pk), record.sha)
+        try:
+            result = upgrade.activate(operation, attestation, lambda digest: digest, operator_uid=0,
+                                      identity_reader=lambda: {k: v for k, v in artifact().items() if k != "wheel_sha256"})
+            lease.refresh_from_db()
+            assert result["mode"] == "enabled" and lease.participant_id, "binding and one-way enable must commit together"
+            assert before == (lease.created, lease.modified, lease.record_values, lease.state, lease.expires_at), "activation must preserve historical intent and timestamps"
+            owner = lease.participant_id
+            result2 = upgrade.activate(operation, operator_uid=0, attestation=attestation)
+            assert result2["activation_uuid"] == result["activation_uuid"] and AcmeHubParticipant.objects.get(pk=owner).role == "owner", "same-identity repeat must preserve owner refs"
+        finally:
+            AcmeHubChallengeLease.objects.filter(allocation=allocation).delete()
+            AcmeHubParticipant.objects.filter(allocation=allocation).delete()
+            AcmeHubDelegation.objects.filter(pk=allocation.pk).delete()
+            record.delete()
+
+
+@th.django_unit_test()
+def test_original_participants_refuse_compatibility_and_failed_binding_rolls_back(opts):
+    from mojo.apps.account.models import Group
+    from mojo.apps.dnsman.models import AcmeHubDelegation, AcmeHubChallengeLease, AcmeHubParticipant, AcmeHubInstallation
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade, acme_hub as hub
+    from mojo.helpers import dates
+    group = Group.objects.create(name="acme_hub_test_conflict_" + uuid.uuid4().hex)
+    group.get_uuid()
+    try:
+        with upgrade_schema(), installation():
+            allocations = []
+            for index in range(3):
+                ref = uuid.uuid4().hex
+                allocations.append(AcmeHubDelegation.objects.create(owner_project_uuid=ref, client_ref=ref,
+                    domain_name=f"atomic{index}.example", source_name=f"_acme-challenge.atomic{index}.example",
+                    target_name=ref + ".hub.example", allocation_zone_name="hub.example", allocation_zone_id="TESTIT",
+                    group=group if index == 2 else None))
+            lease = AcmeHubChallengeLease.objects.create(allocation=allocations[0], challenge_ref="atomic-existing",
+                record_values=["untouched"], state="expired", expires_at=dates.add(seconds=-100))
+            AcmeHubParticipant.objects.create(allocation=allocations[1], consumer_project_uuid=uuid.uuid4().hex,
+                client_ref="original-trusted", role="trusted", revoked_at=dates.utcnow())
+            before_state = list(AcmeHubInstallation.objects.values())
+            before_participants = list(AcmeHubParticipant.objects.values())
+            before_leases = list(AcmeHubChallengeLease.objects.values())
+            refuses(lambda: hub.allocate(None, "ignored", "atomic.example"), "legacy_state_requires_qualification")
+            assert list(AcmeHubParticipant.objects.values()) == before_participants, "exceptional original005 participants/revocation must survive refused compatibility"
+            record = PlatformDeployment.objects.create(sha="d" * 40, framework_version="1.38.0", status="converged",
+                request_key=uuid.uuid4().hex, frozen_roster=["node-engine"])
+            operation = upgrade.plan(artifact(), ["node-engine"], str(record.pk), record.sha)
+            refuses(lambda: upgrade.activate(operation, attestation, lambda value: value, operator_uid=0,
+                identity_reader=lambda: {k:v for k,v in artifact().items() if k != "wheel_sha256"}), "owner_conflict")
+            assert list(AcmeHubInstallation.objects.values()) == before_state, "late owner conflict must not enable installation"
+            assert list(AcmeHubParticipant.objects.values()) == before_participants, "late binding failure must roll back earlier owners and preserve original revoked trust"
+            assert list(AcmeHubChallengeLease.objects.values()) == before_leases, "late failure must roll back already-bound null leases without changing history"
+    finally:
+        Group.objects.filter(pk=group.pk).delete()
+
+
+@th.django_unit_test()
+def test_false_capabilities_stop_setup_before_lookup(opts):
+    from mojo.apps.dnsman.services import acme_hub_client as client, delegation_setup as setup
+    result = dict(version=2, shared_validation=False, consumer_project_uuid=str(uuid.uuid4()),
+                  can_consume=False, can_manage_trust=False, trust_scope="apex_and_wildcard")
+    assert client.capabilities(transport=lambda *args: result).shared_validation is False, "false is a supported v2 capability"
+    class Disabled:
+        def capabilities(self):
+            return result
+        def lookup(self, *args, **kwargs):
+            assert False, "disabled sharing must short-circuit before lookup/prepare"
+    try:
+        setup._preflight(SimpleNamespace(name="example.com"), Disabled())
+    except setup.SetupError as error:
+        assert error.error_code == "hub_unconfigured", "false capability must retain existing configure_hub action"
+    else:
+        assert False, "disabled sharing must refuse before preparing intent"
+
+
+@th.django_unit_test()
+def test_legacy_lease_insert_after_upgrade(opts):
+    from mojo.apps.dnsman.models import AcmeHubDelegation, AcmeHubChallengeLease
+    from mojo.helpers import dates
+
+    ref = uuid.uuid4().hex
+    allocation = AcmeHubDelegation.objects.create(
+        owner_project_uuid=ref, client_ref=ref, domain_name="legacy.example",
+        source_name="_acme-challenge.legacy.example", target_name=ref + ".hub.example",
+        allocation_zone_name="hub.example", allocation_zone_id="TESTIT")
+    try:
+        lease = AcmeHubChallengeLease.objects.create(
+            allocation=allocation, challenge_ref=ref, record_values=["legacy-value"],
+            expires_at=dates.add(seconds=60))
+        assert lease.participant_id is None, "published legacy writers must insert leases without participant after upgrade"
+    finally:
+        AcmeHubChallengeLease.objects.filter(allocation=allocation).delete()
+        AcmeHubDelegation.objects.filter(pk=allocation.pk).delete()
+
+
+def _http_identity(opts):
+    from testit.client import RestClient
+    from mojo.apps.account.models import ApiKey
+    from tests.test_dnsman._helpers import make_user, login
+    module = importlib.import_module("tests.test_dnsman.16_acme_hub")
+    allocation = module._allocation(opts)
+    key, token = ApiKey.create_for_group(opts.acme_group, "acme_hub_test_http_owner", permissions={"dnsman_acme_federation": True})
+    client = RestClient(opts.client.host)
+    headers = {"Authorization": "apikey " + token}
+    response = client.post("/api/dnsman/acme/consumer/lookup", {"domain": allocation.domain_name}, headers=headers)
+    assert response.status_code == 200 and len(response.response.data["items"]) == 1, f"own protected identity must resolve its binding over HTTP: {response}"
+    response = client.post("/api/dnsman/acme/trust/list", {"allocation_ref": allocation.target_name}, headers=headers)
+    assert response.status_code == 200, f"owner must manage its exact allocation over HTTP: {response}"
+    response = client.post("/api/dnsman/acme/consumer/lookup", {"domain": allocation.domain_name, "hub_url": "https://evil.example"}, headers=headers)
+    assert response.status_code == 400 and response.response.error == "acme_invalid_request", f"new HTTP shapes must reject arbitrary fields: {response}"
+    user, email, password = make_user(perms=["manage_dns", "security", "manage_sites", "manage_groups"])
+    try:
+        login(opts, email, password)
+        response = opts.client.post("/api/dnsman/acme/trust/list", {"allocation_ref": allocation.target_name})
+        assert response.status_code == 403 and response.response.error == "acme_not_authorized", f"ordinary global managers must not gain issuance controller authority: {response}"
+        response = opts.client.post("/api/dnsman/acme/consumer/lookup", {"domain": allocation.domain_name})
+        assert response.status_code == 403, f"human sessions cannot consume as an implicit project: {response}"
+    finally:
+        opts.client.logout()
+        user.delete()
+
+
+@th.django_unit_test()
+def test_shared_http_identity_serial(opts):
+    from mojo.apps.account.models import Group, ApiKey
+    from mojo.apps.dnsman.models import AcmeHubDelegation, AcmeHubParticipant, AcmeHubChallengeLease
+    group = Group.objects.create(name="acme_hub_test_serial_" + uuid.uuid4().hex)
+    try:
+        with installation("enabled"):
+            _http_identity(SimpleNamespace(acme_group=group, client=opts.client))
+    finally:
+        allocations = AcmeHubDelegation.objects.filter(group=group)
+        AcmeHubChallengeLease.objects.filter(allocation__in=allocations).delete()
+        AcmeHubParticipant.objects.filter(allocation__in=allocations).delete()
+        allocations.delete()
+        ApiKey.objects.filter(group=group).delete()
+        Group.objects.filter(pk=group.pk).delete()

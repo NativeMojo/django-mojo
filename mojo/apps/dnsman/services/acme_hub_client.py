@@ -638,12 +638,13 @@ def capabilities(*, transport=None):
     _shape(data, {"version", "shared_validation", "consumer_project_uuid", "can_consume",
                   "can_manage_trust", "trust_scope"})
     if (type(data["version"]) is not int or data["version"] != 2
-            or data["shared_validation"] is not True or data["trust_scope"] != "apex_and_wildcard"
+            or type(data["shared_validation"]) is not bool or data["trust_scope"] != "apex_and_wildcard"
             or type(data["can_consume"]) is not bool or type(data["can_manage_trust"]) is not bool):
         raise AcmeHubResponseError("ACME hub returned unsupported capabilities")
     if data["consumer_project_uuid"] is not None:
         _response_uuid(data["consumer_project_uuid"])
-    if data["can_consume"] != (data["consumer_project_uuid"] is not None):
+    if (data["can_consume"] != (data["shared_validation"] and data["consumer_project_uuid"] is not None)
+            or (not data["shared_validation"] and data["can_manage_trust"])):
         raise AcmeHubResponseError("ACME hub returned invalid consumer capabilities")
     return objict(data)
 

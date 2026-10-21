@@ -211,6 +211,12 @@ else:
             END $$;
         """)
 
+    # This launcher is bound above to THIS checkout's generated testproject
+    # and holds the run lock. TRUNCATE deliberately bypasses migration signals;
+    # restore only this explicit initial test fixture, never production state.
+    from testit_support.apps import seed_test_installation
+    seed_test_installation(using=connection.alias)
+
     if redis_client is not None:
         redis_client.flushdb()
         # The flush destroyed the stamp along with everything else. Re-stamp,

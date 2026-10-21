@@ -231,6 +231,16 @@ or a group deleted together with its rooms.
 Group topics protected by `REALTIME_GROUP_TOPIC_PERMISSIONS` are unaffected and
 still check every delivery.
 
+The re-check runs the whole subscribe rule, including a project's
+`REALTIME_SUBSCRIBE_HANDLER`. A project that restricts a user therefore stops
+their chat delivery at the next re-check (every frame with
+`WS_SUBSCRIPTION_RECHECK_SECONDS = 0`), or at once if it calls
+`realtime.disconnect_user` after the restriction commits: every later
+subscribe asks the hook again. The hook is never asked per frame inside the
+window, so delivery stays free of SQL. Non-chat topics are checked only at
+subscribe and last until the socket drops. See
+[Chat permissions](../chat/permissions.md#a-projects-own-rule-for-who-takes-part-realtime_subscribe_handler).
+
 ## Activity Timeout and Keepalive
 
 An authenticated socket is closed when no frame **from the client** has

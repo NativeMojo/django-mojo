@@ -75,12 +75,8 @@ class Migration(migrations.Migration):
             name='participant',
             field=models.ForeignKey(null=True, on_delete=django.db.models.deletion.PROTECT, related_name='challenge_leases', to='dnsman.acmehubparticipant'),
         ),
-        migrations.RunPython(backfill_owners),
-        migrations.AlterField(
-            model_name='acmehubchallengelease', name='participant',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT,
-                                    related_name='challenge_leases', to='dnsman.acmehubparticipant'),
-        ),
+        # Unpublished migration: legacy writers remain supported. Owner binding
+        # belongs to the explicit, quiesced installation activation instead.
         migrations.AddConstraint(
             model_name='acmehubchallengelease',
             constraint=models.UniqueConstraint(fields=('participant', 'challenge_ref'), name='dnsman_acme_hub_part_challenge_uniq'),

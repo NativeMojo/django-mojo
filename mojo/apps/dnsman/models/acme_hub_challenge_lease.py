@@ -20,7 +20,7 @@ class AcmeHubChallengeLease(models.Model, MojoModel):
         on_delete=models.PROTECT)
     participant = models.ForeignKey(
         "dnsman.AcmeHubParticipant", related_name="challenge_leases",
-        on_delete=models.PROTECT)
+        null=True, on_delete=models.PROTECT)
     challenge_ref = models.CharField(max_length=128)
     record_values = models.JSONField(default=list)
     state = models.CharField(max_length=24, default=STATE_PENDING, db_index=True)

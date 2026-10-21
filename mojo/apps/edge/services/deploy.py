@@ -56,6 +56,8 @@ from mojo.helpers import logit
 from mojo.helpers.redis import get_client
 from mojo.helpers.settings import settings
 
+from mojo.apps.edge.services import acme_hub_deploy
+
 logger = logit.get_logger("edge", "edge.log")
 
 
@@ -269,12 +271,10 @@ def deploy_script_argv():
     tiny stable endpoint and automatically execute the script from the
     framework version being installed; they do not vendor framework shell.
     """
-    default = [
-        "sudo", "-n", "bash", "-c",
-        'exec bash "$(python3 -m mojo.deploy locate update.sh)" '
-        '--parent-status "$@"',
-        "django-mojo-update",
-    ]
+    from mojo.deploy.acme_hub_entry import default_argv, required
+    default = default_argv()
+    if required():
+        return default
     argv = settings.get_static("EDGE_DEPLOY_SCRIPT", default, kind="list")
     if not argv:
         return None
@@ -499,20 +499,21 @@ def resolve_framework_version():
                 "EDGE_FRAMEWORK_VERSION is 'hold' but this fleet has no "
                 "converged deployment to hold at",
                 reason="hold_without_converged")
-        return version
+        return acme_hub_deploy.check_framework(version)
     if pin:
         # Validated on write and re-validated on read; PyPI is never asked
         # whether the version exists — pip is what discovers that, on the
         # node, with its own message.
-        return pin
+        return acme_hub_deploy.check_framework(pin)
     response = requests.get(pypi_url(), timeout=10)
     response.raise_for_status()
     version = (response.json().get("info") or {}).get("version")
     if not is_valid_version(version or ""):
         raise ValueError(f"unusable version from PyPI: {version!r}")
-    return version
+    return acme_hub_deploy.check_framework(version)
 
 
+@acme_hub_deploy.guarded
 def request_deploy(sha, actor=None, source="external", created_by=None,
                    idempotency_key=None, source_delivery="", retry_of=None,
                    return_deployment=False, links=None):
@@ -571,6 +572,7 @@ def request_deploy(sha, actor=None, source="external", created_by=None,
     return (True, row) if return_deployment else True
 
 
+@acme_hub_deploy.guarded
 def resume_stranded_target():
     """Republish the orchestrate job for a target whose deploy never started.
 

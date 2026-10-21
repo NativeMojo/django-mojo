@@ -195,6 +195,8 @@ def _preflight(target, client, allocation_ref=None):
         raise
     except Exception as error:
         raise SetupError(_hub_error(error, capabilities=True), status=429 if getattr(error, "http_status", None) == 429 else 503) from None
+    if caps.get("version") == 2 and caps.get("shared_validation") is False:
+        raise SetupError("hub_unconfigured", status=503)
     if caps.get("version") != 2 or caps.get("shared_validation") is not True:
         raise SetupError("hub_unsupported", status=503)
     if not caps.get("can_consume") or not caps.get("consumer_project_uuid"):

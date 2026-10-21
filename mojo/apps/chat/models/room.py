@@ -34,7 +34,7 @@ class ChatRoom(models.Model, MojoModel):
         # The owner is always the creator, through the create-time stamp. A
         # body `user` would let a caller make someone else the owner, and its
         # FK attach answers missing and unviewable ids differently (#8345).
-        NO_SAVE_FIELDS = ["user"]
+        NO_SAVE_FIELDS = ["user", "message_seq", "read_state_generation"]
         GROUP_FIELD = "group"
         SEARCH_FIELDS = ["name"]
         GRAPHS = {
@@ -64,6 +64,8 @@ class ChatRoom(models.Model, MojoModel):
     )
     rules = models.JSONField(default=dict, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
+    message_seq = models.PositiveBigIntegerField(default=0, db_default=0, editable=False)
+    read_state_generation = models.PositiveBigIntegerField(default=0, db_default=0, editable=False)
     created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
     modified = models.DateTimeField(auto_now=True, db_index=True)
 
@@ -72,6 +74,16 @@ class ChatRoom(models.Model, MojoModel):
 
     def __str__(self):
         return self.name or f"ChatRoom {self.pk}"
+
+    def save(self, *args, **kwargs):
+        from ..services.backend import read_backend, ordinary_save_fields
+        if self._state.adding and read_backend() == "cursor":
+            if self.pk is not None:
+                raise ValueError("New cursor rooms require a database-assigned primary key")
+            self.read_state_generation = 1
+        if not self._state.adding:
+            ordinary_save_fields(self, kwargs, {"message_seq", "read_state_generation"})
+        return super().save(*args, **kwargs)
 
     @property
     def topic(self):

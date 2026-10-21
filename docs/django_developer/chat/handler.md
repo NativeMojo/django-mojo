@@ -2,6 +2,15 @@
 
 Chat messages are sent and received over the existing realtime WebSocket connection (`ws/realtime/`). The User model's `on_realtime_message` hook routes `chat_*` message types to the chat handler.
 
+Every client frame below also asks the project's `REALTIME_SUBSCRIBE_HANDLER`,
+when one is set, for the room's topic after its own checks pass. A refusal is
+`Not allowed in this room` for `chat_message` (after the `client_key` dedupe,
+so a retry of a stored message still gets its ack) and `chat_read`,
+`Cannot edit this message` for `chat_edit`, `Message not found` for
+`chat_react`, `Permission denied` for `chat_flag`, and silence for
+`chat_typing`. Nothing is written or broadcast. See
+[Chat permissions](permissions.md#a-projects-own-rule-for-who-takes-part-realtime_subscribe_handler).
+
 ## Message Types
 
 ### chat_message — Send a message
@@ -20,7 +29,7 @@ Flow:
    whitelists the kind, validates `metadata`, applies the rate limit, the room
    rules, the card payload rules and moderation, persists the row and publishes
    to `chat:5`
-6. Return ack with `message_id`, `room_id`, `kind`, `metadata`, `created`,
+6. Return ack with `message_id`, `room_id`, `room_seq`, `generation`, `kind`, `metadata`, `created`,
    `moderation_decision`, `moderation_reasons`, `moderation_score`
 
 `_handle_send` owns the frame shape, the membership checks and the `client_key`
@@ -125,6 +134,14 @@ unchanged and rides on both. Both always carry the persisted
 `allow`/`[]`/`0` and unscored `null`. The single `_send_ack` builder covers
 fresh, retry and unique-constraint-race acks. Language scores, including
 `high_severity`, succeed; real non-language errors still echo valid keys.
+
+`room_seq` is the persisted cursor arrival sequence, or null for old/legacy
+rows; `generation` identifies the room's numbering version. Cursor creation
+atomically advances the author's seat through the new
+sequence, acknowledging older arrivals. Message/read publication waits for
+the outermost commit; a deduped retry returns the existing PK and current
+sequence/generation and does not advance again. Compare sequences only within
+one generation. See [Cursor Read State](read_state.md).
 
 **Test seam.** `_handle_send(user, data, *, publisher=None)` takes an optional
 `publisher` callable with the same signature as `publish_topic(topic, payload)`.
@@ -237,6 +254,20 @@ can assert on the broadcast — or its absence — without patching anything.
   marks read, because mute stops sending, not reading (a muted member who
   could not mark read would show as permanently unread to everyone else).
 - `up_to_message_id` is **resolved, not trusted** — see below
+- The ack adds `position` and `changed`:
+
+```json
+{"type": "chat_read_ack", "room_id": 5, "up_to_message_id": 482,
+ "position": null, "changed": true}
+```
+
+`position` is null in the default legacy backend and a durable cursor snapshot
+in cursor mode. Invalid IDs echo `up_to_message_id: null`; they write nothing
+and publish no read event. Both this handler and `POST room/read` call
+`services.read_state.mark_through`.
+
+#### Legacy backend — target resolution and last_read_at
+
 - For every kind **except `channel`**: bulk-creates `ChatReadReceipt` for
   unread messages up to the RESOLVED id. Same exclusion, same reason, as the
   history bound — an unrecognised kind is treated as invite-based, not
@@ -246,13 +277,6 @@ can assert on the broadcast — or its absence — without patching anything.
   `GET /api/chat/unread` *reads* it, but `mark_read` always writes it
 - Publishes `chat_read` for `direct`/`group` rooms only, carrying the
   **resolved** id, and only when something resolved
-- Acks `{"type": "chat_read_ack", "room_id": 5, "up_to_message_id": <resolved or null>}`
-
-#### Target resolution and last_read_at
-
-Both this handler and `POST /api/chat/room/read` go through
-`services.read_state.mark_read`; the two used to carry duplicate copies of the
-receipt block and could drift.
 
 `resolve_read_target(room, membership, up_to_message_id)` returns **the newest
 message at or below the supplied id that the caller was entitled to see**, or
@@ -285,6 +309,34 @@ how `GET /api/chat/unread` reads each. It is not a claim that they agree.
 
 **Test seam.** `_handle_read(user, data, *, publisher=None)`, same contract as
 `_handle_send`'s.
+
+#### Cursor backend — exact target and effective state
+
+With file-only `CHAT_READ_STATE_BACKEND = "cursor"`, resolution requires the
+exact entitled in-room PK. A foreign, missing, flagged or pre-join ID is
+invalid and does not clamp. TTL is still excluded from entitlement. Reads
+advance the member's sequence monotonically and clear sparse unread exceptions
+through the actual target; no `ChatReadReceipt` is written. A valid duplicate
+may return `changed=False` and still invoke the committed hook/frame.
+
+The ack's `up_to_message_id` is the actual resolved target. `position` includes
+the effective `generation`, `head_seq`, `read_seq`, `unread_count`, exception
+count, stored actual read identity/time, and `ack_target_*` facts. See the
+[full shape](read_state.md#position-shape). Do not rewind a UI to a stale ack
+target; the standing position may already cover a later read.
+
+The shared service publishes one post-commit `chat_read` frame for REST, WS
+and own-send advancement, for every room kind. The frame is a fresh standing
+position plus immutable actual acknowledgment facts; its `up_to_message_id`
+is `read_frontier_message_id`, null while sparse exceptions remain. The
+handler adds no second cursor frame. Treat the encoded prefix as a complete
+read prefix only when exceptions are zero; host notification decisions use
+the actual acknowledgment and exception-aware eligibility.
+
+Maintenance publishes `chat_read_state_invalidated {room_id, generation}`.
+Discard cached positions and refresh after it: sequences from two generations
+cannot be compared. Older queued callbacks are discarded after a generation
+change. See [maintenance](read_state.md#maintenance-and-reversible-relocation).
 
 ## Integration
 

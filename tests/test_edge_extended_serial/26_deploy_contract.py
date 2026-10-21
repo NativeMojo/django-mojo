@@ -59,7 +59,18 @@ def _node_calls(calls):
 
 
 def _drain(opts):
-    return th.run_pending_jobs(channel=CHANNEL)
+    from mojo.apps.jobs.job_engine import load_job_function
+    from mojo.apps.jobs.models import Job
+    def loader(path):
+        function = load_job_function(path)
+        def run(job):
+            try:
+                return function(job)
+            except Exception as error:
+                Job.objects.filter(pk=job.pk).update(last_error=type(error).__name__ + ": " + str(error))
+                raise
+        return run
+    return th.run_pending_jobs(channel=CHANNEL, loader=loader)
 
 
 def _set_pin(value):
@@ -113,10 +124,11 @@ def _publish_node(deployment, framework, migrate=True):
     from mojo.apps import jobs
     from mojo.apps.edge.services import deploy
 
+    type(deployment).objects.filter(pk=deployment.pk).update(framework_version=framework, status="canary" if migrate else "fleet")
     return jobs.publish(
         func=deploy.DEPLOY_NODE_JOB,
         payload=dict(sha=deployment.sha, framework=framework,
-                     migrate=bool(migrate), deployment=str(deployment.pk)),
+                     migrate=bool(migrate), deployment=str(deployment.pk), runner=deploy.local_runner_id()),
         channel=CHANNEL)
 
 
@@ -183,11 +195,11 @@ def test_default_deploy_endpoint_and_node_type(opts):
             side_effect=lambda key, default=None, **kwargs: default):
         argv = deploy.deploy_script_argv()
         node_type = deploy.local_node_type()
-    th.assert_eq(argv[:4], ["sudo", "-n", "bash", "-c"],
-                 "the default transaction must enter through passwordless sudo")
-    th.assert_in("mojo.deploy locate update.sh", argv[4],
-                 "API projects must not vendor or refresh framework shell")
-    th.assert_in("--parent-status", argv[4],
+    th.assert_eq(argv[:6], ["sudo", "-n", "/usr/bin/python3", "-I", "-S", "-c"],
+                 "the root selector must suppress candidate site and environment startup")
+    th.assert_in("mojo.deploy locate update.sh", argv[6],
+                 "positively unenrolled API projects retain the packaged locator")
+    th.assert_in("--parent-status", argv[6],
                  "the default outer sudo must carry parent-owned status in argv")
     th.assert_eq(node_type, "api",
                  "existing nodes remain API until explicitly specialized")
@@ -215,6 +227,12 @@ def test_default_deploy_endpoint_and_node_type(opts):
             "PATH": stubs + ":/usr/bin:/bin",
             "UPDATE_SCRIPT": update,
         })
+        # Linux root enrollment paths are fixture-owned here; the developer
+        # host may have /var as a platform symlink and must not be enrolled.
+        argv = list(argv)
+        argv[6] = argv[6].replace('value.st_uid!=0', 'value.st_uid!=' + str(os.getuid()))
+        argv[6] = argv[6].replace('("/var", "/var/lib", "/usr", "/usr/local", "/usr/local/libexec")', '(' + repr(root) + ',)')
+        argv[6] = argv[6].replace('/var/lib/django-mojo-deploy', root + '/absent-state').replace('/usr/local/libexec', root + '/absent-libexec')
         with mock.patch.dict(os.environ, environment, clear=True):
             done = deploy._run(
                 argv + ["--sha", SHA_A, "--framework", "1.24.15",

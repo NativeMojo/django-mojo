@@ -806,7 +806,7 @@ allocate another target or modify the public CNAME.
 
 | Path | Exact request | Response data / authorization |
 |---|---|---|
-| `capabilities` | `{}` | `{version:2,shared_validation:true,consumer_project_uuid:string|null,can_consume:boolean,can_manage_trust:boolean,trust_scope:"apex_and_wildcard"}`. Protected keys: true/true/own UUID; true human superuser: false/true/null; other authenticated humans: false/false/null. Hub configuration failure is 503. Eligibility is not row authority. |
+| `capabilities` | `{}` | `{version:2,shared_validation:boolean,consumer_project_uuid:string|null,can_consume:boolean,can_manage_trust:boolean,trust_scope:"apex_and_wildcard"}`. Protected keys: true/true/own UUID; true human superuser: false/true/null; other authenticated humans: false/false/null. Hub configuration failure is 503. Eligibility is not row authority. |
 | `consumer/lookup` | `{domain,allocation_ref?,cursor?}` | Own `ParticipantDTO` page for the exact domain/optional target, including revoked tombstones. Empty for unknown or foreign allocations. No DNS probe or write. Protected key only. |
 | `consumer/status` | `{client_ref}` | Own `ParticipantDTO` plus `alias:AliasDTO`, resolved before DNS lookup. Unknown/foreign refs are identical 404. Protected key only. |
 | `consumer/join` | `{allocation_ref,client_ref,domain}` | Exact legacy `{client_ref,domain,source,target}` after verifying an existing active grant (or exact owner binding), stored zone and one-hop CNAME. No creation, adoption or allocate fallback. Protected key only. |
@@ -901,10 +901,14 @@ for display and never persist arbitrary remote error prose:
 Legacy owner request/response keys, statuses and error behavior remain
 compatible. A trusted revoked publish can return `acme_trust_revoked`.
 Do not add participant metadata to legacy four/six-field replies or `/dnsman/config`.
-Upgrade the hub after draining **all old HTTP writers and sweep workers**, then
-migrate/backfill before resuming new writers. Old downstream clients work with
-the upgraded hub; mixed old/new hub binaries do not. Do not downgrade after
-trusted rows exist. See the [framework rollout guide](../../django_developer/dnsman/AcmeFederation.md#coordinated-hub-rollout).
+A newly upgraded hub remains owner-only until its dedicated local operator
+cutover. Capabilities returns the same v2 shape with `shared_validation:false`
+and both capability booleans false; setup uses the existing `configure_hub`
+action for the deployment operator. Shared operations return503. Missing
+installation state never falls back to owner-only. Mixed old/new owner writers
+may overlap only in this disabled compatibility phase. After activation,
+retained recovery floors and restarted qualified binaries are required. See
+[the framework rollout guide](../../django_developer/dnsman/HubUpgrade.md).
 
 ## Project shared-validation setup
 
@@ -1120,8 +1124,9 @@ validation and does not revoke an already-issued certificate.
 Hub URL/key remain server-only static deployment settings, delivered through
 the existing deployment configuration and never accepted/read back through
 these endpoints, CLI output or remote-agent input. Restart API and worker
-processes after their configuration/binary upgrade. Upgrade the hub first,
-apply the additive downstream schema, then drain/restart **all** old issuance
+processes after their configuration/binary upgrade. Deploy the hub compatibility release first and complete its separately authorized
+[operator cutover](../../django_developer/dnsman/HubUpgrade.md). Apply the
+additive downstream schema, then drain/restart **all** old issuance
 workers before enabling Connect; old workers do not understand shared pending
 guards. Keep legacy rows in allocated mode. Existing direct Domain/provider and
 certificate rows are preserved in place. Verify a stubbed scheduled renewal

@@ -56,6 +56,8 @@ ACTIONS_BY_STATUS = {
 # An attempt the orchestrator is still driving earns NO control: poking it
 # mid-flight only confuses the evidence. Derived from the model rather than
 # retyped, so the two can never disagree.
+from mojo.apps.edge.services import acme_hub_deploy
+
 ACTIVE_STATUSES = frozenset(PlatformDeployment.ACTIVE_STATUSES)
 
 
@@ -254,8 +256,12 @@ def transition(value, status, detail=None, expected=None, finished=None):
 
 
 def set_framework(value, framework):
-    PlatformDeployment.objects.filter(pk=value).update(
-        framework_version=_text(framework, 64), modified=timezone.now())
+    with transaction.atomic():
+        row = get(value, for_update=True)
+        if row is None or (row.framework_version and row.framework_version != framework):
+            raise ValueError("deployment_framework_conflict")
+        row.framework_version = _text(framework, 64)
+        row.save(update_fields=["framework_version", "modified"])
 
 
 def add_link(value, kind, target):
@@ -813,6 +819,7 @@ def _local_evidence(row, runner_id):
     return None
 
 
+@acme_hub_deploy.guarded
 def _finalize_local_outcome():
     """Consume the transient unit's result after a profile restarts its engine."""
     from mojo.apps.edge.services import deploy, readiness

@@ -67,7 +67,28 @@ def _runners(*alive_ids, dead=()):
 
 def _drain(opts):
     """Run the queued deploy job(s) with the real Job calling convention."""
-    return th.run_pending_jobs(channel=CHANNEL)
+    from mojo.apps.jobs.job_engine import load_job_function
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy
+    # These direct node fixtures model the already-admitted frozen node phase;
+    # orchestrator fixtures still start requested and freeze in production code.
+    for fixture in Job.objects.filter(channel=CHANNEL, status="pending", func=deploy.DEPLOY_NODE_JOB):
+        payload = dict(fixture.payload)
+        payload.setdefault("runner", opts.me)
+        Job.objects.filter(pk=fixture.pk).update(payload=payload)
+        PlatformDeployment.objects.filter(pk=payload["deployment"], status="requested").update(
+            framework_version=payload["framework"], status="canary" if payload.get("migrate") else "fleet")
+    def loader(path):
+        function = load_job_function(path)
+        def run(job):
+            try:
+                return function(job)
+            except Exception as error:
+                Job.objects.filter(pk=job.pk).update(last_error=type(error).__name__ + ": " + str(error))
+                raise
+        return run
+    return th.run_pending_jobs(channel=CHANNEL, loader=loader)
 
 
 @th.django_unit_setup()
@@ -107,10 +128,10 @@ def _node_payload(opts, sha, migrate):
     from mojo.apps.edge.models import PlatformDeployment
     row = PlatformDeployment.objects.create(
         sha=sha, actor="test", source="test", request_key=str(uuid.uuid4()),
-        frozen_roster=[opts.me], transitions=[])
+        frozen_roster=[opts.me], framework_version=FRAMEWORK, status="canary" if migrate else "fleet", transitions=[])
     return dict(
         sha=sha, framework=FRAMEWORK, migrate=bool(migrate),
-        deployment=str(row.pk)), row
+        deployment=str(row.pk), runner=opts.me), row
 
 
 @th.django_unit_test("single-runner fleet: local canary update, fire-and-forget")
@@ -324,12 +345,14 @@ def test_chain_on_moved_target(opts):
     deployment = _arm(SHA_A, [CANARY_ID, opts.me, FLEET_ID])
     _publish_orchestrate(SHA_A, deployment)
 
+    original_status = deploy.get_status
+    reads = []
     def status_with_push(*args, **kwargs):
-        # The canary proved SHA_A — and meanwhile a new push moved the target.
-        next_row = _arm(SHA_B, [CANARY_ID, opts.me, FLEET_ID], actor="github:later")
-        return dict(
-            state=deploy.STATUS_DEPLOYING, sha=SHA_A,
-            deployment=str(deployment.pk))
+        reads.append(1)
+        if len(reads) == 2:
+            _arm(SHA_B, [CANARY_ID, opts.me, FLEET_ID], actor="github:later")
+            return dict(state=deploy.STATUS_DEPLOYING, sha=SHA_A, deployment=str(deployment.pk))
+        return original_status(*args, **kwargs)
 
     with th.capture_publishes(_deploy_publish) as calls, \
          mock.patch.object(jobs_module, "get_runners",
@@ -340,9 +363,8 @@ def test_chain_on_moved_target(opts):
         _drain(opts)
 
     channels = [c["channel"] for c in _node_calls(calls)]
-    th.assert_eq(channels, [CANARY_ID, FLEET_ID],
-                 f"the proven release still ships to the fleet, but the stale "
-                 f"self-update must be skipped — got {channels!r}")
+    th.assert_eq(channels, [CANARY_ID],
+                 f"only the canary admitted before supersession may have been dispatched — got {channels!r}")
     chained = [c for c in calls
                if c.get("func") == deploy.DEPLOY_ORCHESTRATE_JOB]
     th.assert_eq(len(chained), 1,
@@ -503,9 +525,10 @@ def test_node_failure_no_rollback(opts):
     from mojo.apps.jobs.models import Job
 
     deployment = _arm(SHA_A, [opts.me])
+    type(deployment).objects.filter(pk=deployment.pk).update(framework_version=FRAMEWORK, status="fleet")
     payload = dict(
         sha=SHA_A, framework=FRAMEWORK, migrate=False,
-        deployment=str(deployment.pk))
+        deployment=str(deployment.pk), runner=opts.me)
     job_id = jobs.publish(
         func=deploy.DEPLOY_NODE_JOB,
         payload=payload,

@@ -24,6 +24,7 @@ from mojo.apps.dnsman.models.acme_hub_challenge_lease import (
     STATE_ACTIVE, STATE_EXPIRED, STATE_PENDING, STATE_WITHDRAWN)
 from mojo.apps.dnsman.services.naming import normalize_domain
 from mojo.apps.dnsman.services.authorization import is_platform_admin
+from mojo.apps.dnsman.services import acme_hub_upgrade as upgrade
 
 
 logger = logit.get_logger("dnsman.acme_hub", "dnsman.log")
@@ -241,7 +242,7 @@ def _existing_owner(participant, group, domain, request, **seams):
     return allocation
 
 
-def allocate(group, client_ref, domain, request=None, *, route53_client=None, dns_probe=None, zone_resolver=None):
+def _shared_allocate(group, client_ref, domain, request=None, *, route53_client=None, dns_probe=None, zone_resolver=None):
     group = _operation_group(group, request)
     owner_uuid = group.get_uuid()
     client_ref = _reference(client_ref, "client_ref")
@@ -313,12 +314,16 @@ def _desired_snapshot(allocation):
     snapshot_ids = []
     pending_ids = []
     leases = list(AcmeHubChallengeLease.objects.filter(allocation=allocation)
-        .select_related("participant").only("pk", "state", "record_values", "participant__revoked_at"))
+        .select_related("participant").only("pk", "state", "record_values", "participant__revoked_at", "participant__allocation_id"))
+    shared = upgrade.enabled()
     for lease in leases:
+        if shared and (lease.participant_id is None or lease.participant.allocation_id != allocation.pk):
+            upgrade.refuse("participant_state_unavailable")
+        live = not shared or lease.participant.revoked_at is None
         snapshot_ids.append(lease.pk)
-        if lease.state in (STATE_PENDING, STATE_ACTIVE) and lease.participant.revoked_at is None:
+        if lease.state in (STATE_PENDING, STATE_ACTIVE) and live:
             desired.update(lease.record_values or [])
-        if lease.state == STATE_PENDING and lease.participant.revoked_at is None:
+        if lease.state == STATE_PENDING and live:
             pending_ids.append(lease.pk)
     return sorted(desired), snapshot_ids, pending_ids
 
@@ -357,6 +362,7 @@ def _write_exact(allocation, values, *, route53_client=None, dns_probe=None):
     so a hub-side propagation wait could never be satisfied before the caller
     gave up.  The downstream owns the propagation gate on its own job worker.
     """
+    upgrade.check_session()
     client = route53_client or route53
     _stored_zone(allocation, route53_client=route53_client, dns_probe=dns_probe)
     if values:
@@ -426,6 +432,7 @@ def _reconcile_locked(allocation, request=None, audit_kind="reconciled",
     return values
 
 
+@upgrade.admitted
 def reconcile(allocation, request=None, audit_kind="reconciled",
               *, route53_client=None, dns_probe=None):
     """Replace the target RRset with the union of all durable live leases."""
@@ -469,7 +476,7 @@ def _persist_publish_lease(participant, challenge_ref, values):
                     "Could not persist the ACME challenge lease", code=503, status=503)
 
 
-def publish(group, client_ref, challenge_ref, values, request=None,
+def _shared_publish(group, client_ref, challenge_ref, values, request=None,
             *, route53_client=None, dns_probe=None):
     started = time.monotonic()
     dns = dns_probe or probe
@@ -508,7 +515,7 @@ def publish(group, client_ref, challenge_ref, values, request=None,
     return objict(allocation=allocation, participant=participant, lease=lease, active_value_count=len(desired))
 
 
-def withdraw(group, client_ref, challenge_ref, request=None,
+def _shared_withdraw(group, client_ref, challenge_ref, request=None,
              *, route53_client=None, dns_probe=None):
     started = time.monotonic()
     participant = _participant_for(group, client_ref, request)
@@ -585,6 +592,7 @@ def _sweep_candidates(limit, now):
     return ids
 
 
+@upgrade.admitted
 def sweep(limit=None, *, route53_client=None, dns_probe=None):
     """Expire stale leases and confirm or repair every allocation's RRset."""
     if limit is None:
@@ -700,6 +708,7 @@ def participant_payload(participant, request, controller=False):
     return data
 
 
+@upgrade.admitted
 def capabilities(request, *, route53_client=None, dns_probe=None, zone_resolver=None):
     actor = authorize(request)
     try:
@@ -707,12 +716,14 @@ def capabilities(request, *, route53_client=None, dns_probe=None, zone_resolver=
     except Exception:
         _fail("acme_hub_unavailable", 503)
     machine = getattr(request, "api_key", None) is not None
-    return dict(version=2, shared_validation=True,
+    shared = upgrade.enabled()
+    return dict(version=2, shared_validation=shared,
                 consumer_project_uuid=actor.group.get_uuid() if machine else None,
-                can_consume=machine, can_manage_trust=machine or bool(actor.is_superuser),
+                can_consume=shared and machine, can_manage_trust=shared and (machine or bool(actor.is_superuser)),
                 trust_scope="apex_and_wildcard")
 
 
+@upgrade.admitted(shared=True)
 def lookup_participants(request, domain, allocation_ref=None, cursor=None):
     key = authorize(request, consumer=True)
     query = AcmeHubParticipant.objects.select_related("allocation").filter(
@@ -747,6 +758,7 @@ def _alias(allocation, *, dns_probe=None):
         return failed
 
 
+@upgrade.admitted(shared=True)
 def participant_status(request, client_ref, *, dns_probe=None):
     key = authorize(request, consumer=True)
     participant = _participant_for(key.group, _input_ref(client_ref), request, new=True)
@@ -766,6 +778,7 @@ def _proof(allocation, *, route53_client=None, dns_probe=None):
         _fail("acme_alias_mismatch")
 
 
+@upgrade.admitted(shared=True)
 def join(request, domain, client_ref, allocation_ref, *, route53_client=None, dns_probe=None):
     key = authorize(request, consumer=True)
     participant = _participant_for(key.group, _input_ref(client_ref), request, new=True)
@@ -792,6 +805,7 @@ def _controlled_allocation(request, allocation_ref):
     return allocation
 
 
+@upgrade.admitted(shared=True)
 def list_allocations(request, domain, cursor=None):
     actor = require_controller(request)
     query = AcmeHubDelegation.objects.filter(domain_name=_input_domain(domain))
@@ -805,6 +819,7 @@ def list_allocations(request, domain, cursor=None):
     return _page(query, cursor, serialize)
 
 
+@upgrade.admitted(shared=True)
 def list_participants(request, allocation_ref, cursor=None):
     allocation = _controlled_allocation(request, allocation_ref)
     query = AcmeHubParticipant.objects.select_related("allocation", "group").filter(allocation=allocation)
@@ -820,6 +835,7 @@ def _recipient(consumer_project_uuid):
     return group
 
 
+@upgrade.admitted(shared=True)
 def resolve_recipient(request, allocation_ref, consumer_project_uuid):
     _controlled_allocation(request, allocation_ref)
     group = _recipient(consumer_project_uuid)
@@ -837,6 +853,7 @@ def _connection_request(value):
                 allocation_ref=_input_domain(value["allocation_ref"]))
 
 
+@upgrade.admitted(shared=True)
 def grant(request, connection_request, *, route53_client=None, dns_probe=None):
     require_controller(request)
     descriptor = _connection_request(connection_request)
@@ -867,6 +884,7 @@ def grant(request, connection_request, *, route53_client=None, dns_probe=None):
         return participant_payload(row, request, controller=True)
 
 
+@upgrade.admitted(shared=True)
 def revoke(request, allocation_ref, participant_ref, *, route53_client=None, dns_probe=None):
     allocation = _controlled_allocation(request, allocation_ref)
     participant_ref = _uuid(participant_ref)
@@ -892,3 +910,27 @@ def revoke(request, allocation_ref, participant_ref, *, route53_client=None, dns
         except Exception:
             _fail("acme_hub_unavailable", 503)
         return participant_payload(row, request, controller=True)
+
+
+@upgrade.admitted
+def allocate(*args, **kwargs):
+    if upgrade.enabled():
+        return _shared_allocate(*args, **kwargs)
+    from . import acme_hub_legacy
+    return acme_hub_legacy.allocate(*args, **kwargs)
+
+
+@upgrade.admitted
+def publish(*args, **kwargs):
+    if upgrade.enabled():
+        return _shared_publish(*args, **kwargs)
+    from . import acme_hub_legacy
+    return acme_hub_legacy.publish(*args, **kwargs)
+
+
+@upgrade.admitted
+def withdraw(*args, **kwargs):
+    if upgrade.enabled():
+        return _shared_withdraw(*args, **kwargs)
+    from . import acme_hub_legacy
+    return acme_hub_legacy.withdraw(*args, **kwargs)

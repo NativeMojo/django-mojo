@@ -16,19 +16,19 @@ Compiled assets use a relative base; Portal API requests always use same-origin
 
 ## Pinned identity and offline replacement
 
-The current artifact is portal-mojo **0.2.18**, source revision
-`9aee005308d3b6f220dfa78493f1df4ae4b30fd8`,
+The current artifact is portal-mojo **0.2.19**, source revision
+`1af371612752afa8771ae5aa12535473ba0d5b5c`,
 built clean with Node **24.21.0** / npm **11.19.0** and lockfile SHA-256
-`291fc4f7bd7f55a38e264847650d38c08cb229b18e685e792c606b1c4118351a`.
+`e82eb75dea18ab0cf1892e33c1752cb48fa3d4dbae16538b27174af5b729eed3`.
 Its 128-file inventory includes the Vite manifest and lazy chunks.
 The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 
-`ee17a868e91f6ff4b885ee36cafd78d62d6d717a5667149a8344e9704acf0895`
+`0e8c48fcb070de87a68bc7505b3b2d72d6ffa739b374bcf7d5aa057d0be85ea6`
 
-This pin comes from a clean canonical build verified against the artifact from
-[Portal CI run 39336711554](https://github.com/NativeMojo/portal-mojo/actions/runs/39336711554).
-It includes Assistant Setup changes after the `v0.2.18` tag; the source revision
-and manifest digest identify this bundle, while the sidebar still shows 0.2.18.
+This pin is the clean canonical artifact from
+[Portal release run 39521419171](https://github.com/NativeMojo/portal-mojo/actions/runs/39521419171).
+This pin is the canonical artifact for the `v0.2.19` release tag, including
+the version displayed in the Portal sidebar.
 portal-mojo promises identical bytes on one platform only, so another platform's
 build of the same revision may carry a different hash.
 The complete artifact includes hidden `.vite` content; verify the manifest
@@ -39,7 +39,7 @@ Stop processes serving/importing the checkout before replacing the artifact:
 ```bash
 uv run python scripts/vendor_admin_portal.py \
   --source /absolute/path/to/verified/dist/admin \
-  --expected-manifest-sha256 ee17a868e91f6ff4b885ee36cafd78d62d6d717a5667149a8344e9704acf0895
+  --expected-manifest-sha256 0e8c48fcb070de87a68bc7505b3b2d72d6ffa739b374bcf7d5aa057d0be85ea6
 uv run python scripts/vendor_admin_portal.py --check
 ```
 
@@ -66,7 +66,14 @@ startup and delivers only its validated allowlist. Provenance and
 
 ## Included Portal behavior
 
-This canonical build adds **Assistant → Setup**, an owner-only page for the
+This canonical build fixes the **Passkeys** view, which crashed for any user
+holding a passkey: `Passkey.transports` is a JSON list on the wire, and Portal
+now reads it as one. It also restores **Set temporary password** in the user
+header menu and Security section, over the existing
+`POST /api/account/admin/user/password/temporary` endpoint; no backend change
+or new permission is involved.
+
+The earlier canonical build added **Assistant → Setup**, an owner-only page for the
 encrypted, write-only API key and Assistant enablement. It supports automatic
 latest compatible Sonnet selection or a manual model pin, and shows the exact
 resolved runtime model and catalogue freshness. Provider catalogue discovery

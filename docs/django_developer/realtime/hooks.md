@@ -146,6 +146,12 @@ When `REALTIME_GROUP_TOPIC_PERMISSIONS` is configured, the framework independent
 
 The policy defaults to disabled (`None` or unset), preserving existing behavior. See [Group-topic permissions](architecture.md#group-topic-permissions-opt-in) for configuration and revocation behavior.
 
+The built-in User hook also asks the project's `REALTIME_SUBSCRIBE_HANDLER`,
+when one is set, after its own rule allows: `handler(user, topic, default)`
+must return `True` too. It can only narrow; with no setting nothing changes. A
+project that wants to restrict some users needs no User subclass for this. See
+[Chat permissions](../chat/permissions.md#a-projects-own-rule-for-who-takes-part-realtime_subscribe_handler).
+
 ```python
 def on_realtime_can_subscribe(self, topic):
     """

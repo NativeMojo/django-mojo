@@ -13,6 +13,10 @@ from objict import objict
 from testit import helpers as th
 
 
+def _shared_state():
+    return SimpleNamespace(mode="enabled")
+
+
 @th.django_unit_setup()
 def setup_acme_hub(opts):
     from mojo.apps.account.models import ApiKey, Group
@@ -158,9 +162,9 @@ def test_allocation_idempotency_and_target_non_reuse(opts):
             mock.patch.object(acme_hub, "_stored_zone", return_value=zone), \
             mock.patch.object(acme_hub, "_audit"), \
             mock.patch.object(acme_hub, "secrets", fake_secrets):
-        first = acme_hub.allocate(opts.acme_group, "client-a", "Example.COM.")
-        retry = acme_hub.allocate(opts.acme_group, "client-a", "example.com")
-        second = acme_hub.allocate(opts.acme_group, "client-b", "example.com")
+        first = acme_hub.allocate(opts.acme_group, "client-a", "Example.COM.", state_reader=_shared_state)
+        retry = acme_hub.allocate(opts.acme_group, "client-a", "example.com", state_reader=_shared_state)
+        second = acme_hub.allocate(opts.acme_group, "client-b", "example.com", state_reader=_shared_state)
 
     assert retry.pk == first.pk, "same project/client_ref/domain must return the original allocation"
     assert second.pk != first.pk, "a new client_ref must create a new allocation"
@@ -169,7 +173,7 @@ def test_allocation_idempotency_and_target_non_reuse(opts):
 
     try:
         with mock.patch.object(acme_hub, "_audit"):
-            acme_hub.allocate(opts.acme_group, "client-a", "different.example")
+            acme_hub.allocate(opts.acme_group, "client-a", "different.example", state_reader=_shared_state)
     except Exception as exc:
         assert "different domain" in str(exc), f"expected the immutable-ref refusal, got {exc}"
     else:
@@ -242,9 +246,9 @@ def test_publish_union_and_withdraw_without_cname(opts):
             mock.patch.object(acme_hub, "_write_exact", fake_write), \
             mock.patch.object(acme_hub, "_audit"):
         first = acme_hub.publish(
-            opts.acme_group, "client-a", "challenge-apex", ["digest-b", "digest-a"])
+            opts.acme_group, "client-a", "challenge-apex", ["digest-b", "digest-a"], state_reader=_shared_state)
         second = acme_hub.publish(
-            opts.acme_group, "client-a", "challenge-wildcard", ["digest-c"])
+            opts.acme_group, "client-a", "challenge-wildcard", ["digest-c"], state_reader=_shared_state)
 
     assert first.active_value_count == 2, "first complete digest set should be active"
     assert second.active_value_count == 3, "parallel leases must reconcile their complete union"
@@ -256,7 +260,7 @@ def test_publish_union_and_withdraw_without_cname(opts):
     with mock.patch.object(acme_hub, "_write_exact", fake_write), \
             mock.patch.object(acme_hub, "_audit"):
         withdrawn = acme_hub.withdraw(
-            opts.acme_group, "client-a", "challenge-apex")
+            opts.acme_group, "client-a", "challenge-apex", state_reader=_shared_state)
     assert withdrawn.active_value_count == 1, "withdraw must retire only the named lease"
     assert writes[-1][1] == ["digest-c"], "remaining challenge must stay published"
     assert AcmeHubChallengeLease.objects.get(
@@ -275,7 +279,7 @@ def test_ambiguous_write_is_sweep_recoverable(opts):
             mock.patch.object(acme_hub, "_write_exact", side_effect=RuntimeError("ambiguous")), \
             mock.patch.object(acme_hub, "_audit"):
         try:
-            acme_hub.publish(opts.acme_group, "client-a", "challenge-crash", ["digest-a"])
+            acme_hub.publish(opts.acme_group, "client-a", "challenge-crash", ["digest-a"], state_reader=_shared_state)
         except Exception as exc:
             assert getattr(exc, "status", None) == 503, f"provider failure should map to 503, got {exc}"
         else:
@@ -293,7 +297,7 @@ def test_ambiguous_write_is_sweep_recoverable(opts):
     # deliberate mismatch is what keeps the recovery write on the tested path.
     with mock.patch.object(acme_hub, "_write_exact", lambda row, values, **kwargs: recovered.append(list(values))), \
             mock.patch.object(acme_hub, "_audit"):
-        result = acme_hub.sweep(dns_probe=FakeProbe(txt=["digest-stale"]))
+        result = acme_hub.sweep(dns_probe=FakeProbe(txt=["digest-stale"]), state_reader=_shared_state)
     lease.refresh_from_db()
     assert result.errors == 0 and result.reconciled == 1, f"sweeper should recover intent, got {result}"
     assert lease.state == "active", "recovered pending lease should become active"
@@ -327,7 +331,7 @@ def test_reconcile_snapshot_does_not_ack_late_lease(opts):
             mock.patch.object(acme_hub, "_audit"):
         # A deliberate mismatch: reconcile() confirms first, and a matching
         # probe would skip the write entirely and leave this invariant untested.
-        acme_hub.reconcile(allocation, dns_probe=FakeProbe(txt=["digest-mismatch"]))
+        acme_hub.reconcile(allocation, dns_probe=FakeProbe(txt=["digest-mismatch"]), state_reader=_shared_state)
 
     original.refresh_from_db()
     late[0].refresh_from_db()
@@ -357,7 +361,7 @@ def test_sweeper_expires_stale_lease(opts):
     # and this test would then assert nothing at all.
     with mock.patch.object(acme_hub, "_write_exact", lambda row, values, **kwargs: writes.append(list(values))), \
             mock.patch.object(acme_hub, "_audit"):
-        result = acme_hub.sweep(dns_probe=FakeProbe(txt=["digest-expired"]))
+        result = acme_hub.sweep(dns_probe=FakeProbe(txt=["digest-expired"]), state_reader=_shared_state)
     lease.refresh_from_db()
     assert result.expired == 1, f"expected one expired lease, got {result}"
     assert lease.state == "expired", "stale lease must be retired durably"
@@ -376,7 +380,7 @@ def test_publish_replies_without_waiting_for_propagation(opts):
 
     result = acme_hub.publish(
         opts.acme_group, "client-a", "challenge-apex", ["digest-b", "digest-a"],
-        route53_client=r53, dns_probe=dns)
+        route53_client=r53, dns_probe=dns, state_reader=_shared_state)
 
     assert result.active_value_count == 2, \
         f"the complete digest set must be reported active, got {result.active_value_count}"
@@ -403,10 +407,10 @@ def test_withdraw_replies_without_waiting_for_propagation(opts):
 
     acme_hub.publish(
         opts.acme_group, "client-a", "challenge-apex", ["digest-b", "digest-a"],
-        route53_client=r53, dns_probe=dns)
+        route53_client=r53, dns_probe=dns, state_reader=_shared_state)
     result = acme_hub.withdraw(
         opts.acme_group, "client-a", "challenge-apex",
-        route53_client=r53, dns_probe=dns)
+        route53_client=r53, dns_probe=dns, state_reader=_shared_state)
 
     assert result.active_value_count == 0, \
         f"the last lease's withdrawal must empty the RRset, got {result.active_value_count}"
@@ -434,7 +438,7 @@ def test_sweep_confirms_without_writing_when_already_visible(opts):
     r53 = FakeRoute53()
     dns = FakeProbe(txt=["digest-a"])
 
-    result = acme_hub.sweep(route53_client=r53, dns_probe=dns)
+    result = acme_hub.sweep(route53_client=r53, dns_probe=dns, state_reader=_shared_state)
 
     lease.refresh_from_db()
     assert result.errors == 0, f"a confirming sweep must not error, got {result}"
@@ -460,7 +464,7 @@ def test_sweep_rewrites_and_stays_unconfirmed_on_mismatch(opts):
     r53 = FakeRoute53()
     dns = FakeProbe(txt=["digest-stale"])
 
-    result = acme_hub.sweep(route53_client=r53, dns_probe=dns)
+    result = acme_hub.sweep(route53_client=r53, dns_probe=dns, state_reader=_shared_state)
 
     lease.refresh_from_db()
     assert result.errors == 0, f"a rewriting sweep must not error, got {result}"
@@ -485,7 +489,7 @@ def test_sweep_probe_error_does_not_write(opts):
     r53 = FakeRoute53()
     dns = FakeProbe(txt=[], error="all nameservers failed to answer")
 
-    result = acme_hub.sweep(route53_client=r53, dns_probe=dns)
+    result = acme_hub.sweep(route53_client=r53, dns_probe=dns, state_reader=_shared_state)
 
     lease.refresh_from_db()
     assert result.errors == 0, f"an unreadable probe is not a sweep error, got {result}"
@@ -615,26 +619,26 @@ def test_shared_grant_join_and_canonical_refs(opts):
     dns, r53 = AliasProbe(allocation), FakeRoute53()
     seams = dict(dns_probe=dns, route53_client=r53)
     initial_count = AcmeHubDelegation.objects.count()
-    assert hub.lookup_participants(consumer, allocation.domain_name)["items"] == [], "public CNAME knowledge must grant nothing"
-    _error(lambda: hub.join(consumer, allocation.domain_name, "consumer-a", allocation.target_name, **seams),
+    assert hub.lookup_participants(consumer, allocation.domain_name, state_reader=_shared_state)["items"] == [], "public CNAME knowledge must grant nothing"
+    _error(lambda: hub.join(consumer, allocation.domain_name, "consumer-a", allocation.target_name, **seams, state_reader=_shared_state),
            404, "acme_not_authorized")
-    first = hub.grant(controller, descriptor, **seams)
-    retry = hub.grant(controller, descriptor, **seams)
+    first = hub.grant(controller, descriptor, **seams, state_reader=_shared_state)
+    retry = hub.grant(controller, descriptor, **seams, state_reader=_shared_state)
     assert first == retry and first["role"] == "trusted", "exact grant retry must return one permanent binding"
-    joined = hub.join(consumer, allocation.domain_name, "consumer-a", allocation.target_name, **seams)
+    joined = hub.join(consumer, allocation.domain_name, "consumer-a", allocation.target_name, **seams, state_reader=_shared_state)
     assert set(joined) == {"client_ref", "domain", "source", "target"}, "join must retain exact allocation wire shape"
     assert joined["client_ref"] == "consumer-a" and joined["target"] == allocation.target_name, "join must echo consumer ref and existing target"
     assert AcmeHubDelegation.objects.count() == initial_count, "lookup/grant/join must not mint any competing target"
-    _error(lambda: hub.allocate(opts.other_group, "consumer-a", allocation.domain_name, **seams),
+    _error(lambda: hub.allocate(opts.other_group, "consumer-a", allocation.domain_name, **seams, state_reader=_shared_state),
            409, "acme_reference_conflict")
-    _error(lambda: hub.grant(controller, dict(descriptor, domain="wrong.example"), **seams), 409, "acme_reference_conflict")
+    _error(lambda: hub.grant(controller, dict(descriptor, domain="wrong.example"), **seams, state_reader=_shared_state), 409, "acme_reference_conflict")
     owner = _owner(allocation)
-    _error(lambda: hub.revoke(controller, allocation.target_name, str(owner.participant_ref), **seams), 403)
-    revoked = hub.revoke(controller, allocation.target_name, first["participant_ref"], **seams)
+    _error(lambda: hub.revoke(controller, allocation.target_name, str(owner.participant_ref), **seams, state_reader=_shared_state), 403)
+    revoked = hub.revoke(controller, allocation.target_name, first["participant_ref"], **seams, state_reader=_shared_state)
     assert revoked["trust_state"] == "revoked", "revocation must persist as a tombstone"
-    _error(lambda: hub.grant(controller, descriptor, **seams), 409, "acme_reference_conflict")
-    _error(lambda: hub.join(consumer, allocation.domain_name, "consumer-a", allocation.target_name, **seams), 403, "acme_trust_revoked")
-    fresh = hub.grant(controller, dict(descriptor, client_ref="consumer-fresh"), **seams)
+    _error(lambda: hub.grant(controller, descriptor, **seams, state_reader=_shared_state), 409, "acme_reference_conflict")
+    _error(lambda: hub.join(consumer, allocation.domain_name, "consumer-a", allocation.target_name, **seams, state_reader=_shared_state), 403, "acme_trust_revoked")
+    fresh = hub.grant(controller, dict(descriptor, client_ref="consumer-fresh"), **seams, state_reader=_shared_state)
     assert fresh["participant_ref"] != first["participant_ref"], "regrant requires a fresh isolated namespace"
     assert AcmeHubParticipant.objects.filter(allocation=allocation).count() == 3, "owner, revoked and fresh binding must survive"
 
@@ -655,14 +659,14 @@ def test_shared_controller_authority(opts):
     try:
         human = SimpleNamespace(api_key=None, user=root)
         zone_resolver = lambda **kwargs: objict(name="hub.example.net", id="ZONE-HUB")
-        owner_cap = hub.capabilities(owner, zone_resolver=zone_resolver)
+        owner_cap = hub.capabilities(owner, zone_resolver=zone_resolver, state_reader=_shared_state)
         assert owner_cap == dict(version=2, shared_validation=True, consumer_project_uuid=opts.acme_group.get_uuid(),
                                  can_consume=True, can_manage_trust=True, trust_scope="apex_and_wildcard"), "protected capabilities must identify original project"
-        human_cap = hub.capabilities(human, zone_resolver=zone_resolver)
+        human_cap = hub.capabilities(human, zone_resolver=zone_resolver, state_reader=_shared_state)
         assert human_cap["can_manage_trust"] and not human_cap["can_consume"] and human_cap["consumer_project_uuid"] is None, "superuser may control but never implicitly consume"
-        ordinary_cap = hub.capabilities(SimpleNamespace(api_key=None, user=person), zone_resolver=zone_resolver)
+        ordinary_cap = hub.capabilities(SimpleNamespace(api_key=None, user=person), zone_resolver=zone_resolver, state_reader=_shared_state)
         assert not ordinary_cap["can_manage_trust"] and not ordinary_cap["can_consume"], "ordinary authenticated humans must get false capability flags"
-        _error(lambda: hub.capabilities(owner), 503, "acme_hub_unavailable")
+        _error(lambda: hub.capabilities(owner, state_reader=_shared_state), 503, "acme_hub_unavailable")
         assert hub.require_controller(human, allocation).pk == root.pk, "genuine platform superuser must control existing allocations"
         denied = _request(opts.other_group, permissions={"manage_dns": True, "manage_groups": True})
         denied.user = root
@@ -675,10 +679,10 @@ def test_shared_controller_authority(opts):
         _error(lambda: hub.require_controller(foreign, allocation), 403, "acme_not_authorized")
         dns = AliasProbe(allocation)
         for ref in ("foreign-ref", "missing-ref"):
-            _error(lambda: hub.participant_status(foreign, ref, dns_probe=dns), 404, "acme_not_authorized")
+            _error(lambda: hub.participant_status(foreign, ref, dns_probe=dns, state_reader=_shared_state), 404, "acme_not_authorized")
         assert dns.cname_calls == [], "foreign and missing refs must fail before DNS observation"
-        _error(lambda: hub.resolve_recipient(foreign, allocation.target_name, "bad-uuid"), 403, "acme_not_authorized")
-        _error(lambda: hub.resolve_recipient(foreign, "missing.hub.example.net", "bad-uuid"), 403, "acme_not_authorized")
+        _error(lambda: hub.resolve_recipient(foreign, allocation.target_name, "bad-uuid", state_reader=_shared_state), 403, "acme_not_authorized")
+        _error(lambda: hub.resolve_recipient(foreign, "missing.hub.example.net", "bad-uuid", state_reader=_shared_state), 403, "acme_not_authorized")
     finally:
         User.objects.filter(pk__in=[root.pk, person.pk]).delete()
 
@@ -692,27 +696,27 @@ def test_shared_lookup_and_alias(opts):
     for index in range(23):
         AcmeHubParticipant.objects.create(allocation=allocation, group=opts.other_group, role="trusted",
                                           consumer_project_uuid=opts.other_group.get_uuid(), client_ref=f"page-{index}")
-    first = hub.lookup_participants(consumer, allocation.domain_name)
+    first = hub.lookup_participants(consumer, allocation.domain_name, state_reader=_shared_state)
     assert len(first["items"]) == 20 and first["next_cursor"], "page must stop at twenty with a bounded cursor"
-    second = hub.lookup_participants(consumer, allocation.domain_name, cursor=first["next_cursor"])
+    second = hub.lookup_participants(consumer, allocation.domain_name, cursor=first["next_cursor"], state_reader=_shared_state)
     assert len(second["items"]) == 3 and second["next_cursor"] is None, "next page must contain only remaining own participants"
-    assert len(hub.lookup_participants(controller, allocation.domain_name)["items"]) == 1, "owner must not enumerate consumer participants through lookup"
+    assert len(hub.lookup_participants(controller, allocation.domain_name, state_reader=_shared_state)["items"]) == 1, "owner must not enumerate consumer participants through lookup"
     for cursor in ("0", "-1", "1 OR 1=1", "9" * 30, 1, "01"):
-        _error(lambda: hub.lookup_participants(consumer, allocation.domain_name, cursor=cursor), 400, "acme_invalid_request")
-    assert hub.lookup_participants(consumer, allocation.domain_name, cursor="9223372036854775807")["items"] == [], "forged valid cursor must only narrow"
+        _error(lambda: hub.lookup_participants(consumer, allocation.domain_name, cursor=cursor, state_reader=_shared_state), 400, "acme_invalid_request")
+    assert hub.lookup_participants(consumer, allocation.domain_name, cursor="9223372036854775807", state_reader=_shared_state)["items"] == [], "forged valid cursor must only narrow"
     for dns, state, observed, hop in [
             (AliasProbe(allocation), "match", allocation.target_name, True),
             (AliasProbe(allocation, source_targets=[]), "mismatch", None, None),
             (AliasProbe(allocation, source_targets=[allocation.target_name, "extra.example"]), "mismatch", None, None),
             (AliasProbe(allocation, target_targets=["chain.example"]), "mismatch", allocation.target_name, False),
             (AliasProbe(allocation, error="private resolver error"), "lookup_failed", None, None)]:
-        status = hub.participant_status(consumer, "page-0", dns_probe=dns)
+        status = hub.participant_status(consumer, "page-0", dns_probe=dns, state_reader=_shared_state)
         alias = status["alias"]
         assert set(alias) == {"state", "observed_target", "one_hop", "checked_at"}, "alias must expose only its fixed DTO"
         assert (alias["state"], alias["observed_target"], alias["one_hop"]) == (state, observed, hop), f"incorrect alias observation {alias}"
         assert "private resolver" not in str(status), "DNS raw errors must never escape"
-    assert hub.list_allocations(consumer, allocation.domain_name)["items"] == [], "consumer controller eligibility is not authority on this allocation"
-    assert len(hub.list_allocations(controller, allocation.domain_name)["items"]) == 1, "owner must resolve its allocation"
+    assert hub.list_allocations(consumer, allocation.domain_name, state_reader=_shared_state)["items"] == [], "consumer controller eligibility is not authority on this allocation"
+    assert len(hub.list_allocations(controller, allocation.domain_name, state_reader=_shared_state)["items"]) == 1, "owner must resolve its allocation"
 
 
 @th.django_unit_test("Shared ACME participants isolate equal challenge refs through revoke, expiry and retries")
@@ -724,42 +728,42 @@ def test_shared_union_revocation_and_cleanup(opts):
     owner, consumer = _request(opts.acme_group), _request(opts.other_group)
     dns, r53 = AliasProbe(allocation), FakeRoute53()
     seams = dict(dns_probe=dns, route53_client=r53)
-    first = hub.grant(owner, _descriptor(allocation, opts.other_group, "shared-1"), **seams)
-    hub.grant(owner, _descriptor(allocation, opts.other_group, "shared-2"), **seams)
+    first = hub.grant(owner, _descriptor(allocation, opts.other_group, "shared-1"), **seams, state_reader=_shared_state)
+    hub.grant(owner, _descriptor(allocation, opts.other_group, "shared-2"), **seams, state_reader=_shared_state)
     for group, request, ref, values in [
             (opts.acme_group, owner, "client-a", ["owner", "same"]),
             (opts.other_group, consumer, "shared-1", ["first", "same"]),
             (opts.other_group, consumer, "shared-2", ["second", "same"])]:
-        hub.publish(group, ref, "equal-ref", values, request=request, **seams)
+        hub.publish(group, ref, "equal-ref", values, request=request, **seams, state_reader=_shared_state)
     assert r53.writes[-1][2] == ["first", "owner", "same", "second"], "provider must get ONE deduplicated union across participants"
-    _error(lambda: hub.publish(opts.other_group, "shared-1", "equal-ref", ["changed"], request=consumer, **seams), 400)
+    _error(lambda: hub.publish(opts.other_group, "shared-1", "equal-ref", ["changed"], request=consumer, **seams, state_reader=_shared_state), 400)
     with mock.patch.object(r53, "upsert_record", side_effect=RuntimeError("ambiguous publish")):
-        _error(lambda: hub.publish(opts.other_group, "shared-1", "ambiguous", ["extra"], request=consumer, **seams), 503)
-    hub.publish(opts.other_group, "shared-1", "ambiguous", ["extra"], request=consumer, **seams)
+        _error(lambda: hub.publish(opts.other_group, "shared-1", "ambiguous", ["extra"], request=consumer, **seams, state_reader=_shared_state), 503)
+    hub.publish(opts.other_group, "shared-1", "ambiguous", ["extra"], request=consumer, **seams, state_reader=_shared_state)
     assert r53.writes[-1][2] == ["extra", "first", "owner", "same", "second"], "ambiguous publish retry must preserve every participant's intent"
-    hub.withdraw(opts.other_group, "shared-1", "ambiguous", request=consumer, **seams)
+    hub.withdraw(opts.other_group, "shared-1", "ambiguous", request=consumer, **seams, state_reader=_shared_state)
     with mock.patch.object(r53, "upsert_record", side_effect=RuntimeError("ambiguous")):
-        _error(lambda: hub.revoke(owner, allocation.target_name, first["participant_ref"], **seams), 503, "acme_hub_unavailable")
+        _error(lambda: hub.revoke(owner, allocation.target_name, first["participant_ref"], **seams, state_reader=_shared_state), 503, "acme_hub_unavailable")
     row = AcmeHubParticipant.objects.get(participant_ref=first["participant_ref"])
     assert row.revoked_at is not None, "provider failure must not roll back revocation"
     lease = AcmeHubChallengeLease.objects.get(participant=row, challenge_ref="equal-ref")
     assert lease.state == "withdrawn" and lease.reconciled_at is None, "revocation must retire only its durable leases before provider call"
-    _error(lambda: hub.publish(opts.other_group, "shared-1", "late", ["late"], request=consumer, **seams), 403, "acme_trust_revoked")
-    recovered = hub.sweep(route53_client=r53, dns_probe=AliasProbe(allocation, txt=["stale"]))
+    _error(lambda: hub.publish(opts.other_group, "shared-1", "late", ["late"], request=consumer, **seams, state_reader=_shared_state), 403, "acme_trust_revoked")
+    recovered = hub.sweep(route53_client=r53, dns_probe=AliasProbe(allocation, txt=["stale"]), state_reader=_shared_state)
     assert recovered.errors == 0 and recovered.reconciled == 1, f"sweep must repair durable revocation cleanup: {recovered}"
-    hub.revoke(owner, allocation.target_name, first["participant_ref"], **seams)
+    hub.revoke(owner, allocation.target_name, first["participant_ref"], **seams, state_reader=_shared_state)
     assert r53.writes[-1][2] == ["owner", "same", "second"], "repeat revoke must repair owed cleanup while retaining siblings"
     rotated = _request(opts.other_group)
-    hub.withdraw(opts.other_group, "shared-1", "equal-ref", request=rotated, **seams)
+    hub.withdraw(opts.other_group, "shared-1", "equal-ref", request=rotated, **seams, state_reader=_shared_state)
     assert r53.writes[-1][2] == ["owner", "same", "second"], "rotated authorized key must clean revoked namespace only"
     AcmeHubChallengeLease.objects.filter(participant__client_ref="shared-2").update(expires_at=dates.subtract(seconds=1))
-    hub.publish(opts.acme_group, "client-a", "new-owner", ["new"], request=owner, **seams)
+    hub.publish(opts.acme_group, "client-a", "new-owner", ["new"], request=owner, **seams, state_reader=_shared_state)
     assert r53.writes[-1][2] == ["new", "owner", "same"], "elapsed participant must be excluded before union even without a sweep"
     with mock.patch.object(r53, "upsert_record", side_effect=RuntimeError("ambiguous withdraw")):
-        _error(lambda: hub.withdraw(opts.acme_group, "client-a", "new-owner", request=owner, **seams), 503)
-    hub.withdraw(opts.acme_group, "client-a", "new-owner", request=owner, **seams)
+        _error(lambda: hub.withdraw(opts.acme_group, "client-a", "new-owner", request=owner, **seams, state_reader=_shared_state), 503)
+    hub.withdraw(opts.acme_group, "client-a", "new-owner", request=owner, **seams, state_reader=_shared_state)
     assert r53.writes[-1][2] == ["owner", "same"], "repeat retired withdrawal must repair prior ambiguous cleanup"
-    _error(lambda: hub.publish(opts.acme_group, "client-a", "new-owner", ["new"], request=owner, **seams), 400)
+    _error(lambda: hub.publish(opts.acme_group, "client-a", "new-owner", ["new"], request=owner, **seams, state_reader=_shared_state), 400)
 
 
 @th.django_unit_test("Shared ACME stale keys/projects cannot publish and rotations retain project authority")
@@ -773,7 +777,7 @@ def test_shared_fresh_principal(opts):
     for changes in [dict(is_active=False), dict(expires_at=dates.subtract(seconds=1)), dict(permissions={})]:
         ApiKey.objects.filter(pk=request.api_key.pk).update(**changes)
         _error(lambda: hub.publish(opts.acme_group, "client-a", "denied", ["secret"], request=request,
-                                  dns_probe=dns, route53_client=r53), 403)
+                                  dns_probe=dns, route53_client=r53, state_reader=_shared_state), 403)
         ApiKey.objects.filter(pk=request.api_key.pk).update(is_active=True, expires_at=None, permissions={"dnsman_acme_federation": True})
     parent = Group.objects.create(name="acme_hub_test_parent_" + uuid.uuid4().hex, is_active=False)
     try:
@@ -782,7 +786,7 @@ def test_shared_fresh_principal(opts):
         Group.objects.filter(pk=parent.pk).update(is_active=True)
         assert hub.federation_principal(request).group_id == opts.acme_group.pk, "fresh active ancestor should restore access"
         Group.objects.filter(pk=opts.acme_group.pk).update(is_active=False)
-        _error(lambda: hub.withdraw(opts.acme_group, "client-a", "unknown", request=request, dns_probe=dns, route53_client=r53), 403)
+        _error(lambda: hub.withdraw(opts.acme_group, "client-a", "unknown", request=request, dns_probe=dns, route53_client=r53, state_reader=_shared_state), 403)
     finally:
         Group.objects.filter(pk=opts.acme_group.pk).update(parent=None, is_active=True)
         parent.delete()
@@ -791,10 +795,10 @@ def test_shared_fresh_principal(opts):
     doomed_uuid = doomed.get_uuid()
     descriptor = _descriptor(allocation, doomed, "deleted-binding")
     controller = _request(opts.acme_group)
-    hub.grant(controller, descriptor, dns_probe=dns, route53_client=r53)
+    hub.grant(controller, descriptor, dns_probe=dns, route53_client=r53, state_reader=_shared_state)
     doomed.delete()
     replacement = Group.objects.create(name="acme_hub_test_replacement_" + uuid.uuid4().hex, uuid=doomed_uuid)
-    _error(lambda: hub.participant_status(_request(replacement), "deleted-binding", dns_probe=dns), 404, "acme_not_authorized")
+    _error(lambda: hub.participant_status(_request(replacement), "deleted-binding", dns_probe=dns, state_reader=_shared_state), 404, "acme_not_authorized")
 
 
 def _wait_for_advisory_waiter(pid):
@@ -818,7 +822,7 @@ def test_shared_concurrent_publications(opts):
         owner = _request(opts.acme_group)
         seams = dict(dns_probe=AliasProbe(allocation), route53_client=FakeRoute53())
         for ref in (first_ref, second_ref):
-            hub.grant(owner, _descriptor(allocation, opts.other_group, ref), **seams)
+            hub.grant(owner, _descriptor(allocation, opts.other_group, ref), **seams, state_reader=_shared_state)
         barrier = threading.Barrier(2)
         provider_entered, release_provider, second_proved = threading.Event(), threading.Event(), threading.Event()
         writes, db_pids = [], {}
@@ -851,7 +855,7 @@ def test_shared_concurrent_publications(opts):
                     db_pids[ref] = cursor.fetchone()[0]
                 request = _request(opts.other_group)
                 return hub.publish(opts.other_group, ref, "same-ref", [ref], request=request,
-                                   dns_probe=ConcurrentProbe(allocation, first), route53_client=r53)
+                                   dns_probe=ConcurrentProbe(allocation, first), route53_client=r53, state_reader=_shared_state)
             finally:
                 connection.close()
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -879,7 +883,7 @@ def test_shared_revoke_publish_race(opts):
     allocation = _allocation(opts)
     owner = _request(opts.acme_group)
     dns, r53 = AliasProbe(allocation), FakeRoute53()
-    first = hub.grant(owner, _descriptor(allocation, opts.other_group, "racing"), dns_probe=dns, route53_client=r53)
+    first = hub.grant(owner, _descriptor(allocation, opts.other_group, "racing"), dns_probe=dns, route53_client=r53, state_reader=_shared_state)
     proof_entered, proof_resume = threading.Event(), threading.Event()
     provider_entered, provider_resume = threading.Event(), threading.Event()
     rendezvous = threading.Barrier(2)
@@ -906,10 +910,10 @@ def test_shared_revoke_publish_race(opts):
                 pids[operation] = cursor.fetchone()[0]
             if operation == "publish":
                 return _error(lambda: hub.publish(opts.other_group, "racing", "losing-publish", ["must-not-publish"],
-                    request=_request(opts.other_group), dns_probe=SlowProof(allocation), route53_client=r53), 403, "acme_trust_revoked")
+                    request=_request(opts.other_group), dns_probe=SlowProof(allocation), route53_client=r53, state_reader=_shared_state), 403, "acme_trust_revoked")
             rendezvous.wait(timeout=10)
             return hub.revoke(_request(opts.acme_group), allocation.target_name, first["participant_ref"],
-                              dns_probe=dns, route53_client=SlowCleanup())
+                              dns_probe=dns, route53_client=SlowCleanup(), state_reader=_shared_state)
         finally:
             connection.close()
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -962,9 +966,9 @@ def test_shared_allocate_grant_collision(opts):
             seams = dict(route53_client=FakeRoute53(), dns_probe=RacingProof(allocation))
             try:
                 if kind == "allocate":
-                    hub.allocate(opts.other_group, "collision", allocation.domain_name, zone_resolver=racing_zone, **seams)
+                    hub.allocate(opts.other_group, "collision", allocation.domain_name, zone_resolver=racing_zone, **seams, state_reader=_shared_state)
                 else:
-                    hub.grant(owner, descriptor, **seams)
+                    hub.grant(owner, descriptor, **seams, state_reader=_shared_state)
                 outcomes.append((kind, "success"))
             except Exception as exc:
                 assert getattr(exc, "status", None) == 409, f"collision loser must be a safe 409, got {exc}"
@@ -1029,22 +1033,39 @@ def test_shared_historical_upgrade(opts):
         Participant = after.apps.get_model("dnsman", "AcmeHubParticipant")
         assert list(Allocation.objects.order_by("pk").values()) == allocations_before, "migration must preserve every allocation PK, field, target and timestamp"
         for old, new in zip(leases_before, Lease.objects.order_by("pk").values()):
-            participant = Participant.objects.get(pk=new.pop("participant_id"))
+            assert new.pop("participant_id") is None, "compatibility migration must leave all leases unbound"
             assert old == new, f"migration changed historical lease data: {old} -> {new}"
-            assert participant.role == "owner" and participant.allocation_id == old["allocation_id"], "each historical lease must bind its exact owner participant"
-        assert Participant.objects.count() == 2, "one owner participant per historical allocation is required"
-        assert Participant.objects.get(allocation_id=deleted.pk).group_id is None, "deleted-group owner must retain UUID with null group"
+        assert Participant.objects.count() == 0, "migration must create no new Group foreign-key owner rows"
+        legacy = old_lease.objects.create(allocation=allocation, challenge_ref="after-migration",
+                                          record_values=["legacy"], expires_at=dates.add(seconds=50))
+        assert Lease.objects.get(pk=legacy.pk).participant_id is None, "actual historical model must still insert after005"
+        OldGroup = before.apps.get_model("account", "Group")
+        historic_group = OldGroup.objects.create(name="acme_hub_test_historical_" + uuid.uuid4().hex)
+        old_allocation.objects.filter(pk=deleted.pk).update(group_id=historic_group.pk)
+        historic_group.delete()
+        assert Allocation.objects.get(pk=deleted.pk).group_id is None, "published ORM collector must delete Group after new schema without unknown populated Participant FK"
+        # Emulate the ORIGINAL, already-recorded005 physical state, then run
+        # the new migration's supported schema-editor repair on that state.
         with connection.schema_editor() as editor:
             migration.backfill_owners(after.apps, editor)
-        assert Participant.objects.count() == 2, "backfill retry must not duplicate owners"
-        Participant.objects.filter(allocation_id=allocation.pk).update(role="trusted")
-        try:
-            with connection.schema_editor() as editor:
-                migration.backfill_owners(after.apps, editor)
-        except RuntimeError:
-            pass
-        else:
-            assert False, "backfill must refuse inconsistent bindings instead of reassigning"
+        with connection.schema_editor() as editor:
+            field = Lease._meta.get_field("participant")
+            strict = field.clone()
+            strict.set_attributes_from_name("participant")
+            strict.model = Lease
+            strict.remote_field.model = field.remote_field.model
+            strict.null = False
+            editor.alter_field(Lease, field, strict)
+        original_rows = list(Lease.objects.order_by("pk").values())
+        repair = importlib.import_module("mojo.apps.dnsman.migrations.0007_acmehubinstallation")
+        with connection.schema_editor() as editor:
+            repair.repair_original_005(after.apps, editor)
+            repair.repair_original_005(after.apps, editor)
+        assert list(Lease.objects.order_by("pk").values()) == original_rows, "physical repair must preserve every original005 binding, timestamp and value"
+        with connection.cursor() as cursor:
+            columns = connection.introspection.get_table_description(cursor, Lease._meta.db_table)
+        assert next(c for c in columns if c.name == "participant_id").null_ok, "already-applied005 column must really become nullable, not only migration state"
+
     finally:
         with connection.cursor() as cursor:
             cursor.execute('SET search_path TO public')
@@ -1059,31 +1080,6 @@ def test_shared_http_denials(opts):
                  "trust/list", "trust/recipient", "trust/grant", "trust/revoke"):
         response = client.post("/api/dnsman/acme/" + path, {})
         assert response.status_code == 403 and response.response.status is False and response.response.error == "acme_not_authorized", f"unauthenticated {path} must fail auth before malformed body: {response}"
-@th.django_unit_test("Shared ACME real HTTP own lookup and controller filtering use the underlying credential")
-def test_shared_http_identity(opts):
-    from testit.client import RestClient
-    from mojo.apps.account.models import ApiKey
-    from tests.test_dnsman._helpers import make_user, login
-    allocation = _allocation(opts)
-    key, token = ApiKey.create_for_group(opts.acme_group, "acme_hub_test_http_owner", permissions={"dnsman_acme_federation": True})
-    client = RestClient(opts.client.host)
-    headers = {"Authorization": "apikey " + token}
-    response = client.post("/api/dnsman/acme/consumer/lookup", {"domain": allocation.domain_name}, headers=headers)
-    assert response.status_code == 200 and len(response.response.data["items"]) == 1, f"own protected identity must resolve its binding over HTTP: {response}"
-    response = client.post("/api/dnsman/acme/trust/list", {"allocation_ref": allocation.target_name}, headers=headers)
-    assert response.status_code == 200, f"owner must manage its exact allocation over HTTP: {response}"
-    response = client.post("/api/dnsman/acme/consumer/lookup", {"domain": allocation.domain_name, "hub_url": "https://evil.example"}, headers=headers)
-    assert response.status_code == 400 and response.response.error == "acme_invalid_request", f"new HTTP shapes must reject arbitrary fields: {response}"
-    user, email, password = make_user(perms=["manage_dns", "security", "manage_sites", "manage_groups"])
-    try:
-        login(opts, email, password)
-        response = opts.client.post("/api/dnsman/acme/trust/list", {"allocation_ref": allocation.target_name})
-        assert response.status_code == 403 and response.response.error == "acme_not_authorized", f"ordinary global managers must not gain issuance controller authority: {response}"
-        response = opts.client.post("/api/dnsman/acme/consumer/lookup", {"domain": allocation.domain_name})
-        assert response.status_code == 403, f"human sessions cannot consume as an implicit project: {response}"
-    finally:
-        opts.client.logout()
-        user.delete()
 
 
 @th.django_unit_setup()
