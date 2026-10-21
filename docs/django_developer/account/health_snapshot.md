@@ -14,6 +14,10 @@ plus the latest pending attempt. Pending older slots are replaced; expired jobs
 exit. There is no catch-up replay, per-node producer job, agent or remediation.
 Normal existing cron/job publication and channel configuration must be running.
 The bounded 60-second collection starts inside `produce_snapshot(job)`.
+If source identity is unresolved, the cron hook returns
+`{"status":"unknown","reason":"source_identity_unresolved"}` without
+initializing identity or dispatching a producer, so later scheduled maintenance
+can continue. Other snapshot errors still propagate.
 
 ## Identity, publication and storage
 
