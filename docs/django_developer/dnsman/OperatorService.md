@@ -94,3 +94,29 @@ real disposable Linux root/systemd/SSH/process/pipe/flock/PG and browser evidenc
 including a hostile application root-scope service worker and a fresh guardian
 sign-in with target HTTP/Jobs stopped. Source-only tests and unavailable fixtures
 are reported separately from that required qualification.
+
+## Unprivileged source fixture
+
+`UnavailableSourceFixture(asset_root)` in `acme_hub_operator.py` binds only an
+ephemeral127.0.0.1 TCP port and refuses root execution. It uses the actual HTTP
+framing and request safeguards but hardwires unavailable authority and labels
+facts fixture. It cannot enable enrollment, authentication, an action or provider
+proof. The caller owns its process and shuts it down. This fixture supports
+development UI/refusal checks; it supplies no production TLS/profile or browser
+isolation qualification. Production binds only the fixed retained Unix socket
+behind the independently approved HTTPS guardian vhost.
+
+Inherited seqpacket I/O is nonblocking. Select/monotonic deadlines bound both
+send and receive, each message preserves atomic packet and sequence semantics,
+and the channel retains an absolute600s ceiling plus30s received-peer heartbeat.
+A blocked send never resets deadlines or advances its sequence. Peer exit and
+failed registration close owned descriptors; a mirrored receipt cannot reconnect
+the same session. The Linux fixture's `--bridge-only` regression exercises actual
+backpressure, receive timeout, pidfd peer loss and failed-constructor cleanup.
+It is separate from full deployment/Linux/browser qualification.
+
+The shared nonroot producer constructor lives at
+`mojo.deploy.acme_dns_producer.frozen_producer` with an explicit existing writer
+session. The normal AWS helper is a convenience wrapper only; the isolated
+qualifier must not import its eager settings/logit package. Integration consumes
+the one reviewed common lower seam, not a second SDK/profile implementation.

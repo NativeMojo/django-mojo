@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""Owned Linux transport regression, not full root/deployment qualification."""
+import json
+import os
+from pathlib import Path
+import select
+import subprocess
+import sys
+import time
+import uuid
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'mojo/deploy'))
+import acme_hub_operator_bridge as bridge
+import acme_hub_operator_protocol as wire
+
+
+def check(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
+
+def transport_regressions():
+    bridge.linux_required()
+    left, right = bridge.socketpair()
+    child = subprocess.Popen([sys.executable, '-I', '-S', '-c',
+        'import os,sys;os.read(0,1)'], stdin=subprocess.PIPE,
+        pass_fds=(right.fileno(),), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    right.close()
+    channel = None
+    try:
+        identity = bridge.process_identity(child.pid)
+        channel = bridge.Channel(left, child.pid, identity['uid'], identity['gid'], identity['exe'],
+            identity['cgroup'], str(uuid.uuid4()), 1, str(uuid.uuid4()), 'a' * 64)
+        check(not channel.endpoint.getblocking(), 'seqpacket endpoint must be genuinely nonblocking')
+        channel.session = str(uuid.uuid4())
+        absolute = channel.deadline
+        started = time.monotonic()
+        stalled = False
+        for unused in range(128):
+            previous = channel.send_sequence
+            try:
+                channel.send('bounded_test', {'fixture_padding': 'x' * 60000}, timeout=0.05)
+            except wire.Refused:
+                stalled = True
+                check(channel.send_sequence == previous, 'backpressure refusal cannot consume a packet sequence')
+                break
+        check(stalled and time.monotonic() - started < 3, 'real socket backpressure must refuse within bounded wall time')
+        check(channel.deadline == absolute, 'I/O retry cannot reset the absolute operation deadline')
+        started = time.monotonic()
+        try:
+            channel.receive(timeout=0.05)
+        except wire.Refused:
+            pass
+        else:
+            raise AssertionError('a stalled actual peer must not produce a frame')
+        check(time.monotonic() - started < 1, 'receive must obey its monotonic timeout')
+        child.kill(); child.wait(timeout=2)
+        try:
+            channel.send('after_peer_exit', {}, timeout=0.05)
+        except wire.Refused:
+            pass
+        else:
+            raise AssertionError('exited real peer must invalidate the pidfd-bound channel')
+    finally:
+        if channel is not None:
+            channel.close()
+        else:
+            left.close()
+        if child.poll() is None:
+            child.kill(); child.wait(timeout=2)
+        child.stdin.close()
+    # A failed constructor owns and closes the newly supplied endpoint.
+    left, right = bridge.socketpair()
+    identity = bridge.process_identity(os.getpid())
+    try:
+        bridge.Channel(left, os.getpid(), identity['uid'] + 1, identity['gid'], identity['exe'],
+            identity['cgroup'], str(uuid.uuid4()), 1, str(uuid.uuid4()), 'b' * 64)
+    except wire.Refused:
+        check(left.fileno() == -1, 'failed peer validation must close the supplied channel')
+    else:
+        raise AssertionError('mismatched actual UID must refuse')
+    finally:
+        left.close(); right.close()
+    return {'status': 'passed', 'suite': 'owned_linux_transport', 'cases': 5,
+            'full_qualification': False, 'source_sha': subprocess.check_output(
+                ['git', 'rev-parse', 'HEAD'], cwd=Path(__file__).resolve().parents[3], text=True).strip()}
+
+
+if __name__ == '__main__':
+    if sys.argv[1:] != ['--bridge-only']:
+        raise SystemExit('qualification_environment_unavailable: full deployment fixture requires reviewed integration')
+    print(json.dumps(transport_regressions(), sort_keys=True))

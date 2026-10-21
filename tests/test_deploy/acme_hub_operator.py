@@ -106,3 +106,46 @@ def test_retained_root_import_does_not_enter_mojo_or_django(opts):
     result = subprocess.run([sys.executable, '-I', '-S', '-c', code, str(directory)],
                             capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, f'isolated stdlib-only root import refused: {result.stderr[-500:]}'
+
+
+@th.django_unit_test()
+def test_retained_real_http_refuses_without_authority(opts):
+    import http.client
+    import tempfile
+    import threading
+    from mojo.deploy import acme_hub_operator as guardian
+    from mojo.deploy import acme_hub_operator_protocol as wire
+    with tempfile.TemporaryDirectory() as directory:
+        Path(directory, 'index.html').write_text('<html><body>Declared unavailable fixture</body></html>')
+        server = guardian.UnavailableSourceFixture(directory)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        def request(method, route, body=None, headers=None):
+            conn = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=2)
+            try:
+                conn.request(method, wire.API_PREFIX + route, body=body,
+                             headers={'Sec-Fetch-Site': 'same-origin', **(headers or {})})
+                response = conn.getresponse()
+                return response.status, dict(response.getheaders()), json.loads(response.read())
+            finally:
+                conn.close()
+        try:
+            status, headers, reply = request('GET', 'status')
+            assert status == 200 and reply['ok'], 'real fixture handler must deliver actual retained envelope'
+            assert not any(item['enabled'] for item in reply['data']['actions']), 'source fixture must never enable authority'
+            assert reply['data']['facts'][0]['items'][0]['classification'] == 'fixture', 'fixture observations must stay explicitly labelled'
+            assert 'Secure' in headers['Set-Cookie'] and 'Domain=' not in headers['Set-Cookie'], 'actual handler must retain host-only secure cookie policy'
+            cookie = headers['Set-Cookie'].split(';', 1)[0]
+            post = {'Cookie': cookie, 'Origin': server.origin, 'Content-Type': 'application/json',
+                    'X-Mojo-Acme-CSRF': reply['data']['session']['csrf_token']}
+            options = {'purpose': 'sign_in', 'action': None, 'operation': None, 'expected_revision': 0, 'review': None}
+            code, unused, result = request('POST', 'session/options', json.dumps(options), post)
+            assert code == 503 and result['error']['code'] == 'dependent_integration_unavailable', 'actual missing account/runtime integration must refuse rather than create WebAuthn proof'
+            code, unused, result = request('POST', 'session/options', json.dumps(dict(options, helper_pid=42)), post)
+            assert code == 400, 'real handler must reject extra proof/selector fields before dispatch'
+            code, unused, result = request('GET', 'status', headers={'Origin': 'https://hostile.fixture.test'})
+            assert code == 403 and result['error']['code'] == 'origin_refused', 'foreign browser origin must fail without a status leak'
+            code, unused, result = request('POST', 'session/options', json.dumps(options), dict(post, **{'X-Mojo-Acme-CSRF': 'wrong'}))
+            assert code == 403 and result['error']['code'] == 'csrf_refused', 'actual wrong CSRF must fail before any verifier request'
+        finally:
+            server.shutdown(); worker.join(timeout=3); server.server_close()

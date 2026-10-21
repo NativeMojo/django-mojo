@@ -7,6 +7,7 @@ import select
 import socket
 import struct
 import sys
+import time
 
 if __package__:
     from . import acme_hub_operator_protocol as wire
@@ -56,6 +57,7 @@ def socketpair():
     for endpoint in (left, right):
         endpoint.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
         endpoint.set_inheritable(False)
+        endpoint.setblocking(False)
     return left, right
 
 
@@ -63,39 +65,74 @@ class Channel:
     """Exact spawned peer+socket incarnation, no listener or UID override."""
     def __init__(self, endpoint, peer_pid, expected_uid, expected_gid, expected_exe,
                  expected_cgroup, operation, root_revision, generation, nonce):
-        linux_required()
-        wire.uuid_text(operation); wire.revision(root_revision)
-        wire.uuid_text(generation); wire.digest(nonce)
-        wire.require(endpoint.family == socket.AF_UNIX and endpoint.type == socket.SOCK_SEQPACKET,
-                     'session_unavailable')
-        self.peer = process_identity(peer_pid)
-        wire.require(self.peer['uid'] == expected_uid and self.peer['gid'] == expected_gid
-                     and self.peer['exe'] == expected_exe and self.peer['cgroup'] == expected_cgroup,
-                     'session_unavailable')
-        self.pidfd = os.pidfd_open(peer_pid, 0)
+        self.pidfd = None
         self.endpoint = endpoint
-        self.socket_inode = os.fstat(endpoint.fileno()).st_ino
-        endpoint.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
-        self.operation = operation
-        self.root_revision = root_revision
-        self.generation = generation
-        self.nonce = nonce
-        self.session = None
-        self.receive_sequence = 0
-        self.send_sequence = 0
         self.closed = False
+        try:
+            linux_required()
+            wire.uuid_text(operation); wire.revision(root_revision)
+            wire.uuid_text(generation); wire.digest(nonce)
+            wire.require(endpoint.family == socket.AF_UNIX and endpoint.type == socket.SOCK_SEQPACKET,
+                         'session_unavailable')
+            self.peer = process_identity(peer_pid)
+            wire.require(self.peer['uid'] == expected_uid and self.peer['gid'] == expected_gid
+                         and self.peer['exe'] == expected_exe and self.peer['cgroup'] == expected_cgroup,
+                         'session_unavailable')
+            self.pidfd = os.pidfd_open(peer_pid, 0)
+            self.socket_inode = os.fstat(endpoint.fileno()).st_ino
+            endpoint.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+            endpoint.setblocking(False)
+            self.operation = operation
+            self.root_revision = root_revision
+            self.generation = generation
+            self.nonce = nonce
+            self.session = None
+            self.receive_sequence = 0
+            self.send_sequence = 0
+            self.started = time.monotonic()
+            self.deadline = self.started + 600
+            self.heartbeat = self.started + 30
+        except BaseException:
+            self.close()
+            raise
 
     def check(self):
-        wire.require(not self.closed and not select.select([self.pidfd], [], [], 0)[0]
+        wire.require(not self.closed and time.monotonic() < min(self.deadline, self.heartbeat)
+                     and not select.select([self.pidfd], [], [], 0)[0]
                      and os.fstat(self.endpoint.fileno()).st_ino == self.socket_inode
                      and process_identity(self.peer['pid']) == self.peer, 'session_unavailable')
 
+    def _wait(self, sending, deadline):
+        while True:
+            self.check()
+            remaining = min(deadline, self.deadline, self.heartbeat) - time.monotonic()
+            wire.require(remaining > 0, 'session_unavailable')
+            readable, writable, unused = select.select(
+                [self.pidfd] + ([] if sending else [self.endpoint]),
+                [self.endpoint] if sending else [], [], remaining)
+            self.check()
+            if (sending and writable) or (not sending and self.endpoint in readable):
+                return
+
     def receive(self, timeout=5):
-        self.check()
-        wire.require(0 < timeout <= 30, 'invalid_frame')
-        wire.require(select.select([self.endpoint, self.pidfd], [], [], timeout)[0], 'session_unavailable')
-        self.check()
-        raw, ancillary, flags, unused = self.endpoint.recvmsg(wire.MAX_FRAME + 1, socket.CMSG_SPACE(12))
+        wire.require(type(timeout) in (int, float) and 0 < timeout <= 30, 'invalid_frame')
+        deadline = time.monotonic() + timeout
+        while True:
+            self._wait(False, deadline)
+            try:
+                raw, ancillary, flags, unused = self.endpoint.recvmsg(wire.MAX_FRAME + 1, socket.CMSG_SPACE(12))
+                break
+            except BlockingIOError:
+                continue
+            except OSError:
+                raise wire.Refused('session_unavailable') from None
+        # Even an invalid sender must not leak an SCM_RIGHTS descriptor.
+        for level, kind, content in ancillary:
+            if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                descriptors = array.array('i')
+                descriptors.frombytes(content[:len(content) - len(content) % descriptors.itemsize])
+                for descriptor in descriptors:
+                    os.close(descriptor)
         wire.require(not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) and raw and len(raw) <= wire.MAX_FRAME,
                      'invalid_frame')
         wire.require(len(ancillary) == 1, 'session_unavailable')
@@ -117,24 +154,41 @@ class Channel:
             self.session = frame['session']
         wire.require(frame['session'] == self.session, 'session_unavailable')
         self.receive_sequence = frame['sequence']
+        self.heartbeat = min(time.monotonic() + 30, self.deadline)
         return frame
 
-    def send(self, action, data):
+    def send(self, action, data, timeout=5):
         self.check()
         wire.identifier(action)
+        wire.require(type(timeout) in (int, float) and 0 < timeout <= 30, 'invalid_frame')
         wire.require(self.session is not None and type(data) is dict, 'session_unavailable')
-        self.send_sequence += 1
+        sequence = self.send_sequence + 1
         raw = wire.encoded({'version': 1, 'operation': self.operation,
             'revision': self.root_revision, 'generation': self.generation,
-            'session': self.session, 'nonce': self.nonce, 'sequence': self.send_sequence,
+            'session': self.session, 'nonce': self.nonce, 'sequence': sequence,
             'action': action, 'data': data})
-        wire.require(self.endpoint.send(raw) == len(raw), 'session_unavailable')
+        deadline = time.monotonic() + timeout
+        while True:
+            self._wait(True, deadline)
+            try:
+                count = self.endpoint.send(raw)
+                break
+            except BlockingIOError:
+                continue
+            except OSError:
+                raise wire.Refused('session_unavailable') from None
+        # SOCK_SEQPACKET sends one full packet atomically or refuses. No stream
+        # fragment retry or new socket/nonce may replace this exact channel.
+        wire.require(count == len(raw), 'session_unavailable')
+        self.send_sequence = sequence
 
     def close(self):
         if not self.closed:
             self.closed = True
             self.endpoint.close()
-            os.close(self.pidfd)
+            if self.pidfd is not None:
+                os.close(self.pidfd)
+                self.pidfd = None
 
 
 class Registry:
@@ -156,13 +210,21 @@ class Registry:
             from .acme_hub_operator_runtime import USERS
         else:
             from acme_hub_operator_runtime import USERS
-        wire.require(role in USERS and role not in self.children and child.pid != os.getpid(), 'session_unavailable')
-        user = pwd.getpwnam(USERS[role])
-        channel = Channel(endpoint, child.pid, user.pw_uid, user.pw_gid, expected_exe,
-                          cgroup, self.operation, self.root_revision, self.generation, self.nonce)
-        wire.require(channel.peer['ppid'] == os.getpid(), 'session_unavailable')
-        self.children[role] = channel
-        return channel
+        channel = None
+        try:
+            wire.require(role in USERS and role not in self.children and child.pid != os.getpid(), 'session_unavailable')
+            user = pwd.getpwnam(USERS[role])
+            channel = Channel(endpoint, child.pid, user.pw_uid, user.pw_gid, expected_exe,
+                              cgroup, self.operation, self.root_revision, self.generation, self.nonce)
+            wire.require(channel.peer['ppid'] == os.getpid(), 'session_unavailable')
+            self.children[role] = channel
+            return channel
+        except BaseException:
+            if channel is not None:
+                channel.close()
+            else:
+                endpoint.close()
+            raise
 
     def admit(self, channel, frame):
         wire.require(self.children.get('coordinator') is channel and self.admission is None
