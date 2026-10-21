@@ -13,6 +13,10 @@ origin. Django ships the exact compiled artifact and needs no frontend build.
 For the pinned manifest hash, ownership, offline recovery and archive proof,
 see [the backend packaging guide](../../django_developer/account/admin.md).
 
+The bundled release is **portal-mojo 0.2.19**. **Users → Security** and a
+user’s action menu include **Set temporary password**, with a one-time copyable
+reveal and required replacement through hosted sign-in.
+
 The source-session response adds two integer fields while preserving `path`:
 
 ```json
