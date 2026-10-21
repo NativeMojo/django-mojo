@@ -278,7 +278,8 @@ Two helpers back this and are safe to reuse in a custom UI:
    `code`/`state` from the URL, so a reload never re-sends the single-use code
 5. Backend exchanges code for tokens, creates/links user
 6. The view shows "Welcome back, <first name>" (from `user.display_name`;
-   "Welcome," for a new account, "You're signed in" when there is no name),
+   "Welcome, <first name>" for a new account, "You're signed in" when there is
+   no name),
    then "Taking you to <destination>…", and the user is redirected — with the
    cross-origin handoff when the destination needs one
 

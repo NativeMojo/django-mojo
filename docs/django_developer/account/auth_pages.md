@@ -342,7 +342,9 @@ The tenant accent (`theme.accent_color`) is set inline on `<body>`
 on `body` or a descendant, never on `:root` — a `:root` `color-mix()` resolves
 against the default accent and ignores the tenant's. `--mat-accent-hover` lives
 on `body` for that reason; the pending view's darker accent shade
-(`--mat-pending-strong`) lives on `.mat-pending`.
+(`--mat-pending-strong`) lives on `.mat-pending`. Because `body` declares its
+own `--mat-accent-hover`, custom CSS that overrides it must target `body` too —
+a `:root { --mat-accent-hover: … }` value is shadowed by the `body` rule.
 
 The stylesheet is served with a day-long public cache, so `auth_base.html`
 loads it as `mojo-auth-theme.css?v=<first 10 hex of its SHA-256>`, the same
@@ -636,8 +638,8 @@ contract from #315), then immediately removes `code`/`state` from the URL with
 |---|---|---|
 | `pending` | On landing | Spinner, "Signing you in…", "Confirming your account with <Provider>" |
 | `slow` | Still pending after 15 s | "Still signing you in…" and a **Start over** link; the spinner keeps going and a late result still succeeds or fails normally |
-| `success` | Completion succeeded | "Welcome back, <first name>" (or "Welcome," for a new account) with initials from `user.display_name`; no name → plain check and "You're signed in" (`data-named="0"`) |
-| `redirect` | 0.9 s later | "Taking you to <brand or host>…" with a progress bar while `_mat.redirect()` and any desktop handoff run |
+| `success` | Completion succeeded | "Welcome back, <first name>" ("Welcome, <first name>" when `is_new_user`) with initials from `user.display_name`; no name → plain check and "You're signed in" (`data-named="0"`) |
+| `redirect` | 0.9 s later | "Taking you to <destination>…" (the brand name for a same-origin destination, the host otherwise) with a progress bar while `_mat.redirect()` and any cross-origin handoff run |
 | `failure` | Completion refused or threw | "We couldn't finish signing in", the sanitized server message, **Try again with <Provider>**, and **Use a different sign-in method** |
 
 - **Try again** calls `MojoAuth.startOAuthLogin(provider)` — a fresh provider
@@ -655,17 +657,19 @@ contract from #315), then immediately removes `code`/`state` from the URL with
   (`.mat-pending[data-state="pending"] .mat-pending-slow-actions`) —
   `PENDING_SLOW_MS` in `auth_base.html` must equal that delay.
 - A temporary-password result, a refused destination, or a refused handoff
-  code ends the view through `_mat.hideOverlay()` and shows the normal form
-  with its message.
-- Restored from the back/forward cache while still pending, the page reloads
-  (no code in the URL any more) instead of showing a frozen spinner.
+  code ends the view through `_mat.hideOverlay()` and shows the normal page:
+  the password-change view for a temporary password, the error message for a
+  refusal.
+- Restored from the back/forward cache while the view has not ended, the page
+  reloads (no code in the URL any more) instead of showing a frozen spinner.
 - `prefers-reduced-motion`: no ripples, flash or pulsing, a slower spinner,
   instant entrances; the 15 s reveal is unchanged.
 
 Only the OAuth callback uses this view. Password, passkey, SMS, magic-link and
-reset sign-ins keep the `.mat-overlay` "Signed in!" overlay. A consumer template
-that overrides `auth_base.html` without `#mat-pending` keeps the older inline
-"Completing sign-in…" message.
+reset sign-ins keep the `.mat-overlay` "Signed in!" overlay. A consumer
+override of `auth_base.html` keeps its own behavior: an older copy is
+unchanged, and a copy that has the new script but no `#mat-pending` falls back
+to the inline "Completing sign-in…" message.
 
 ### Registration page (`/register`)
 

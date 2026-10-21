@@ -31,13 +31,23 @@ PROBE = r"""
 (function () {
   if (location.search.indexOf('code=') !== -1) sessionStorage.setItem('oauth_provider', 'google');
   var p = window.__probe = {frames: 0, formShown: 0, focusInForm: 0, states: []};
+  var watching = false;
+  function record(state) {
+    if (!window.__endedByUser && p.states[p.states.length - 1] !== state) p.states.push(state);
+  }
   function tick() {
     var form = document.getElementById('mat-page');
     var view = document.getElementById('mat-pending');
+    // States are recorded on every attribute change, not per frame: under load
+    // the redirect state can be replaced by the navigation before a frame paints.
+    if (view && !watching) {
+      watching = true;
+      record(view.getAttribute('data-state'));
+      new MutationObserver(function () { record(view.getAttribute('data-state')); })
+        .observe(view, {attributes: true, attributeFilter: ['data-state']});
+    }
     if (form && !window.__endedByUser) {
       p.frames++;
-      var state = view ? view.getAttribute('data-state') : 'none';
-      if (p.states[p.states.length - 1] !== state) p.states.push(state);
       if (getComputedStyle(form).display !== 'none') p.formShown++;
       if (form.contains(document.activeElement)) p.focusInForm++;
     }
