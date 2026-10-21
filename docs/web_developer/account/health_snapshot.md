@@ -53,8 +53,14 @@ means unknown. Omitted required slots or conditions remain incomplete.
 Slots retain source identity, required grant, real `observed_at`, `collected_at`,
 `last_success_at`, `fresh_until`, `sample_id`, value/unit and provenance/limits.
 Direct evidence expires after 420 seconds; CloudWatch expires at the earlier of
-sample plus three collection periods and collection plus420 seconds. Heartbeats
-use three heartbeat intervals. Over30-second future/missing/invalid times are
+sample plus three collection periods and collection plus420 seconds. Worker
+admission still requires three heartbeat intervals (15 seconds by default).
+An admitted worker sample remains usable in cached snapshots for the existing
+420-second window anchored to its actual heartbeat time. Provenance records
+`heartbeat_interval_seconds` and `live_admission_window_seconds`. This is a
+point-in-time presence observation, not continuous worker liveness; stale or
+missing collection evidence is not admitted. On-demand runner evidence keeps
+its live lease policy. Over30-second future/missing/invalid times are
 unknown; tolerated clock skew grants no extra healthy lifetime. A read or new
 publication cannot renew an old provider sample. Failed collection retains old
 facts only as prior evidence. Keep expiring slots locally when polls fail.
