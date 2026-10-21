@@ -163,6 +163,9 @@ credentials before enabling a provider, or its button dead-ends on the
 provider's error page.
 
 The OAuth callback URL is the auth page itself (`/auth?code=xxx&state=yyy`).
+That landing renders a branded "Signing you in" view instead of the sign-in
+form while the completion runs — see
+[OAuth callback pending view](#oauth-callback-pending-view).
 The `mbp` pass and `mbs` hosted-session cookies use `SameSite=Lax` so they are included on the OAuth
 redirect back from the provider.
 
@@ -175,7 +178,7 @@ placing a file with the same path in your project's `TEMPLATES` directories.
 
 | Template | Purpose |
 |----------|---------|
-| `auth_base.html` | Base layout: overlay, card, hero include, script setup |
+| `auth_base.html` | Base layout: overlay, OAuth callback pending view, card, hero include, script setup |
 | `auth_hero.html` | Left panel partial — override to swap imagery/messaging |
 | `login.html` | Login page — extends base; all views + methods from auth config |
 | `register.html` | Registration page — extends base; redirects to `/passkey` when `passkey_prompt != off` |
@@ -326,8 +329,25 @@ same semantic form markup:
     --mat-border: #d9d4ca;
     --mat-text: #171923;
     --mat-muted: #696b73;
+    /* OAuth callback pending view */
+    --mat-track: #e3ded4;          /* dark: #1c2534 */
+    --mat-danger-text: #c62828;    /* dark: #ef9a9a */
+    --mat-success-strong: #2e7d32;
+    --mat-pending-shadow: …;       /* disc shadow, per appearance */
 }
 ```
+
+The tenant accent (`theme.accent_color`) is set inline on `<body>`
+(`style="--mat-accent:…"`), so any token **derived** from the accent is declared
+on `body` or a descendant, never on `:root` — a `:root` `color-mix()` resolves
+against the default accent and ignores the tenant's. `--mat-accent-hover` lives
+on `body` for that reason; the pending view's darker accent shade
+(`--mat-pending-strong`) lives on `.mat-pending`.
+
+The stylesheet is served with a day-long public cache, so `auth_base.html`
+loads it as `mojo-auth-theme.css?v=<first 10 hex of its SHA-256>`, the same
+rule as `mojo-auth.js`. Change the CSS and the version together —
+`tests/test_auth/hosted_script_version.py` fails with the value to set.
 
 ### Custom CSS — runtime overrides
 
@@ -584,11 +604,68 @@ including the first nested error, before a readable `error`. Machine codes
 without an explanation receive a retry/support fallback. The original error
 object remains available for diagnostics; enforcement and API responses are
 unchanged. Deploy `mojo-auth.js` together with `auth_base.html`, whose version
-query follows the script's SHA-256 so browsers fetch the updated formatter.
+query follows the script's SHA-256 so browsers fetch the updated formatter. The
+theme stylesheet `mojo-auth-theme.css` is versioned by the same rule.
 
 - Session check on load (auto-redirect if already authenticated)
-- OAuth callback handling (`?code=...&state=...`)
+- OAuth callback handling (`?code=...&state=...`) — see the pending view below
 - Magic link token handling (`?token=ml:...`)
+
+### OAuth callback pending view
+
+When a page built on `auth_base.html` loads with `?code=` **and** `?state=`
+(the return from Google, Apple or GitHub), `_auth_context` sets
+`oauth_callback = True` and the template renders, in the first byte of HTML:
+
+- `mat-oauth-pending` on `<body>` — the render-blocking theme stylesheet hides
+  `.mat-page` and shows `#mat-pending` full screen, so the sign-in form never
+  paints, even if no script runs;
+- `#mat-pending` with `data-state="pending"`: the tenant brand (logo or
+  `brand_name`), an animated glyph, a `role="status" aria-live="polite"` status
+  line, and a "Secure sign-in" footer;
+- `inert aria-hidden="true"` on `#mat-page` and `aria-hidden="true"` on the idle
+  `#mat-overlay`, so the hidden form is out of the keyboard and screen-reader
+  order.
+
+The page script makes the **one** `completeOAuthLogin` call (the single-fire
+contract from #315), then immediately removes `code`/`state` from the URL with
+`history.replaceState`, so a reload never re-posts a spent code. The call drives
+`data-state`:
+
+| `data-state` | When | Shows |
+|---|---|---|
+| `pending` | On landing | Spinner, "Signing you in…", "Confirming your account with <Provider>" |
+| `slow` | Still pending after 15 s | "Still signing you in…" and a **Start over** link; the spinner keeps going and a late result still succeeds or fails normally |
+| `success` | Completion succeeded | "Welcome back, <first name>" (or "Welcome," for a new account) with initials from `user.display_name`; no name → plain check and "You're signed in" (`data-named="0"`) |
+| `redirect` | 0.9 s later | "Taking you to <brand or host>…" with a progress bar while `_mat.redirect()` and any desktop handoff run |
+| `failure` | Completion refused or threw | "We couldn't finish signing in", the sanitized server message, **Try again with <Provider>**, and **Use a different sign-in method** |
+
+- **Try again** calls `MojoAuth.startOAuthLogin(provider)` — a fresh provider
+  redirect, never the old code. It is hidden for a 429 and for a geofence
+  refusal (retrying cannot help), and when the provider is unknown (blocked
+  `sessionStorage`, unless exactly one OAuth method is enabled).
+- **Use a different sign-in method** ends the view in place: the form returns,
+  the failure message stays in `#mat-message`, and focus moves to the first
+  control of the active view.
+- **Start over** is a plain link to a fresh `/auth` (or `/register`) carrying
+  `group_uuid`/`redirect`/`next`/`returnTo`/`back`/`force_reauth`/theme params,
+  never `code`/`state`. A late result after it is clicked is ignored; tokens
+  already saved still sign the person in on the fresh page. If the page script
+  never ran, CSS alone reveals it 15 s after load
+  (`.mat-pending[data-state="pending"] .mat-pending-slow-actions`) —
+  `PENDING_SLOW_MS` in `auth_base.html` must equal that delay.
+- A temporary-password result, a refused destination, or a refused handoff
+  code ends the view through `_mat.hideOverlay()` and shows the normal form
+  with its message.
+- Restored from the back/forward cache while still pending, the page reloads
+  (no code in the URL any more) instead of showing a frozen spinner.
+- `prefers-reduced-motion`: no ripples, flash or pulsing, a slower spinner,
+  instant entrances; the 15 s reveal is unchanged.
+
+Only the OAuth callback uses this view. Password, passkey, SMS, magic-link and
+reset sign-ins keep the `.mat-overlay` "Signed in!" overlay. A consumer template
+that overrides `auth_base.html` without `#mat-pending` keeps the older inline
+"Completing sign-in…" message.
 
 ### Registration page (`/register`)
 

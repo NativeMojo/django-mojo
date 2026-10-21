@@ -77,7 +77,7 @@ again in N minutes."; see
 | `?token=ml:...` | Magic login token — auto-consumed on page load |
 | `?token=pr:...` | Password reset token — opens "Set New Password" view |
 | `?token=iv:...` | Invite token — opens the same view as "Accept your invitation"; submitting it sets the password and signs the person in |
-| `?code=...&state=...` | OAuth callback — auto-completes the OAuth flow |
+| `?code=...&state=...` | OAuth callback — the page shows a branded "Signing you in" view (never the sign-in form), completes the OAuth flow once, and removes `code`/`state` from the address bar |
 | `?redirect=<url>` | Custom redirect after login (also `?next=` or `?returnTo=`). Preserved through the bouncer challenge **and** the OAuth provider round-trip. Only `http`/`https` URLs and same-origin relative paths are accepted — see below. |
 | `?back=<url>` | Override the destination back link. Relative and absolute HTTP(S) values are accepted; script/data schemes are ignored. |
 | `?group_uuid=<uuid>` | Load per-group branding and restrict to the group's enabled methods. Must be `group_uuid` — the framework reserves `?group=` for integer IDs. |
@@ -116,8 +116,10 @@ other application login effects remain the consuming application's responsibilit
 ### After Login
 
 1. Access and refresh tokens are stored in `localStorage`
-2. An overlay shows "Signed in! Taking you there now..."
-3. User is redirected to `theme.success_redirect` (default `/`)
+2. An overlay shows "Signed in! Taking you there now..." — or, after an OAuth
+   provider sign-in, the "Signing you in" view plays "Welcome back, <first
+   name>" and then "Taking you to <destination>…" (see [OAuth Flow](#oauth-flow))
+3. User is redirected to `?redirect=` (or `theme.success_redirect`, default `/`)
 
 ### Temporary passwords
 
@@ -270,9 +272,25 @@ Two helpers back this and are safe to reuse in a custom UI:
 1. User clicks "Google", "Apple", or "GitHub" button
 2. `MojoAuth.startGoogleLogin()` / `MojoAuth.startAppleLogin()` / `MojoAuth.startGitHubLogin()` redirects to provider
 3. Provider redirects back to `/auth?code=xxx&state=yyy`
-4. The page JS detects the `code` + `state` params and calls `MojoAuth.completeOAuthLogin()`
+4. The page opens on a full-screen "Signing you in…" view in the tenant's
+   theme — the username/password form is hidden and not focusable. The page JS
+   calls `MojoAuth.completeOAuthLogin()` **once** and immediately removes
+   `code`/`state` from the URL, so a reload never re-sends the single-use code
 5. Backend exchanges code for tokens, creates/links user
-6. User is redirected to success page
+6. The view shows "Welcome back, <first name>" (from `user.display_name`;
+   "Welcome," for a new account, "You're signed in" when there is no name),
+   then "Taking you to <destination>…", and the user is redirected — with the
+   cross-origin handoff when the destination needs one
+
+If the completion is refused, the view says "We couldn't finish signing in"
+with the server's message and offers **Try again with <Provider>** (a fresh
+provider redirect, never the old code; not offered after a 429 or a location
+block) and **Use a different sign-in method** (shows the normal form with the
+message). After 15 seconds without a result it says "Still signing you in…" and
+offers **Start over**, a link to a fresh sign-in page that keeps `?redirect=`
+and `?group_uuid=`; a late result still completes normally. The status line is
+announced to screen readers, and `prefers-reduced-motion` turns the animation
+down. Password, passkey, SMS, magic-link and reset sign-ins are unchanged.
 
 The `mbp` pass and `mbs` session cookies use `SameSite=Lax` so they are included on the OAuth
 redirect back from the provider.
@@ -472,7 +490,10 @@ GET /api/account/static/mojo-auth.js          → MojoAuth library
 GET /api/account/static/mojo-hosted-bouncer.js → hosted recovery and form-token provider
 ```
 
-Served with `Cache-Control: public, max-age=86400` in production.
+Served with `Cache-Control: public, max-age=86400` in production. The hosted
+pages load `mojo-auth.js` and `mojo-auth-theme.css` behind a `?v=` query that
+follows each file's content, so deploy the files together with the templates
+and browsers fetch the new copies immediately.
 
 ---
 
