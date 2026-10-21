@@ -167,3 +167,86 @@ def test_real_durable_rows_are_json_safe_and_keep_original_terminal_fields(opts)
         assert job.status == "failed" and job.attempt == 2 and job.finished_at is not None, "read-only failure evidence mutated the original terminal Job"
     finally:
         Job.objects.filter(pk=job_id).delete()
+
+
+def _assembly_configuration():
+    return {"source_id": SOURCE, "services": [], "services_complete": True, "channels": ["testit_health"], "channels_complete": True}
+
+
+def _assembly_fleet():
+    return {"rows": [], "evidence": {}, "expected": {"complete": True}, "roster_complete": True, "sources": {}}
+
+
+@th.django_unit_test()
+def test_queue_idle_and_drained_recover_and_database_reset_counters_are_unknown(opts):
+    from mojo.apps.account.services import health_evidence as he
+    config, fleet = _assembly_configuration(), _assembly_fleet()
+    def native(at, due, reset, deadlocks):
+        return {"observed_at": he.timestamp(at), "latency_seconds": 0, "reachable": True,
+            "database": {"incarnation": "one", "stats_reset": reset, "deadlocks": deadlocks},
+            "jobs": [{"channel": "testit_health", "due_pending": due, "overruns": 0}]}
+    first = he.build_components(config, native(NOW, 2, "reset-one", 2), {}, fleet, {}, now=NOW)
+    stalled = he.build_components(config, native(NOW+timedelta(seconds=300), 2, "reset-one", 2), {}, fleet, {}, previous={"components": first}, now=NOW+timedelta(seconds=300))
+    queue = next(row for row in stalled if row["kind"] == "jobman")
+    assert next(row for row in queue["conditions"] if row.get("rule") == "due_backlog_no_progress_300_seconds")["outcome"] == "fail", "two fresh due-backlog observations failed to prove stalled progress"
+    drained = he.build_components(config, native(NOW+timedelta(seconds=600), 0, "reset-two", 3), {}, fleet, {}, previous={"components": stalled}, now=NOW+timedelta(seconds=600))
+    queue = next(row for row in drained if row["kind"] == "jobman")
+    assert next(row for row in queue["conditions"] if row.get("rule") == "due_backlog_no_progress_300_seconds")["outcome"] == "pass", "fresh drained queue could not establish a recovery pass"
+    database = next(row for row in drained if row["kind"] == "database")
+    assert next(row for row in database["conditions"] if row.get("rule") == "deadlocks_positive_delta")["outcome"] == "unknown", "reset PostgreSQL counter was compared across different stats epochs"
+    idle = he.build_components(config, native(NOW, 0, "reset-one", 0), {}, fleet, {}, now=NOW)
+    assert next(row for row in next(item for item in idle if item["kind"] == "jobman")["conditions"] if row.get("rule") == "due_backlog_no_progress_300_seconds")["outcome"] == "pass", "initial fresh idle queue remained an unknown stall predicate"
+
+
+@th.django_unit_test()
+def test_api_tls_context_creation_cannot_start_a_late_handshake(opts):
+    from mojo.apps.account.services import health_evidence as he
+    from mojo.helpers.bounded_transport import BoundedTransportError
+    elapsed, handshakes = [0], []
+    class Socket:
+        def __init__(self):
+            self.timeout, self.closed = None, False
+        def settimeout(self, value):
+            self.timeout = value
+        def gettimeout(self):
+            return self.timeout
+        def close(self):
+            self.closed = True
+    raw = Socket()
+    class Context:
+        def wrap_socket(self, sock, **kwargs):
+            handshakes.append(kwargs)
+            return sock
+    def late_context():
+        elapsed[0] = 2
+        return Context()
+    with th.assert_raises(BoundedTransportError):
+        he.probe_service({"origin": "https://example.com", "path": "/api/version"}, 10,
+            resolver=lambda *args: ["8.8.8.8"], connector=lambda *args, **kwargs: raw,
+            context_factory=late_context, clock=lambda: elapsed[0])
+    assert not handshakes and raw.closed, "TLS began with a stale timeout after context setup consumed the HTTP deadline"
+
+
+@th.django_unit_test()
+def test_cluster_binding_uses_current_writer_after_failover(opts):
+    import time
+    from mojo.apps.account.services import health_evidence as he
+    from mojo.deploy.provision.spec import Spec, names
+    spec = Spec("testit-health", "production", "us-east-1")
+    resolved, calls = names(spec), []
+    class RDS:
+        def describe_db_instances(self, **params):
+            identifier = params["DBInstanceIdentifier"]
+            calls.append(identifier)
+            return {"DBInstances": [{"DBInstanceIdentifier": identifier, "DBClusterIdentifier": resolved["db_cluster"], "Endpoint": {"Address": identifier + ".example.com"}}]}
+        def describe_db_clusters(self, **params):
+            return {"DBClusters": [{"DBClusterIdentifier": resolved["db_cluster"], "Endpoint": "cluster.example.com", "DBClusterMembers": [
+                {"DBInstanceIdentifier": resolved["db_writer"], "IsClusterWriter": False}, {"DBInstanceIdentifier": "new-writer", "IsClusterWriter": True}]}]}
+    class Cache:
+        def describe_replication_groups(self, **params):
+            return {"ReplicationGroups": []}
+    deadline = time.monotonic()+5
+    result = he.managed_series({"expected": {"spec": spec}, "bindings": {"database_host": "cluster.example.com"}}, deadline,
+        budget=he.CycleBudget(deadline), provider_factory=lambda service: RDS() if service == "rds" else Cache())
+    assert result["database"]["resource"] == "new-writer" and calls == [resolved["db_writer"], "new-writer"], "stable cluster endpoint attributed failover pressure to the old configured writer"
+    assert all(row["resource"] == "new-writer" for row in result["series"]), "old instance dimensions survived current writer resolution"

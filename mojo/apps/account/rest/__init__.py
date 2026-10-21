@@ -24,6 +24,7 @@ from .admin_portal import *
 from .admin_people import *
 from .system_setup import *
 from .admin_platform import *
+from .health_snapshot import *
 from .admin_settings import *
 from .admin_sms import *
 from .admin_assistant import *

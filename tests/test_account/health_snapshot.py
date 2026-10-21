@@ -237,10 +237,10 @@ def test_mcp_compaction_preserves_unread_failure_cursor(opts):
     from mojo.apps.account.services import health_snapshot as hs
     value = _publication()
     value["failure_evidence"] = {"events": [{"channel": "x" * 250, "id": number} for number in range(200)],
-                                 "terminal_fallback": [], "next_cursor": "advanced", "gaps": []}
-    result = hs.mcp_projection(value, "original")
+                                 "terminal_fallback": [], "next_cursor": "advanced", "checkpoint_cursor": "page-start", "gaps": []}
+    result = hs.mcp_projection(value)
     assert len(json.dumps(result).encode()) < 24 * 1024, "MCP compaction exceeded its projection byte boundary"
-    assert result["failure_evidence"]["next_cursor"] == "original", "MCP dropped failure rows but advanced beyond unread evidence"
+    assert result["failure_evidence"]["next_cursor"] == "page-start", "MCP dropped initial failure rows but lost the frozen page-start checkpoint"
     assert not result["coverage"]["complete"] and result["rest_reference"], "MCP omission was reported as a complete report"
     extra = _publication()
     extra["extra"] = "x" * 300000

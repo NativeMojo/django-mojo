@@ -517,6 +517,8 @@ class CloudWatchHelper:
                     page = call("list_metrics", **params)
                     pages += 1
                     accounting["metric_discovery_pages"] += 1
+                    if len(page.get("Metrics") or []) > 500:
+                        raise TimeoutError("discovery_row_limit")
                     for raw in (page.get("Metrics") or [])[:500]:
                         dims = raw.get("Dimensions") or []
                         if not isinstance(dims, list) or len(dims) > 30 or any(not isinstance(item, dict) for item in dims):
@@ -575,8 +577,14 @@ class CloudWatchHelper:
             record = {"cpu": cpu, "memory": None, "filesystems": []}
             for metric, name in (("mem_used_percent", "memory"), ("disk_used_percent", "filesystems")):
                 discovered, error = discovery[metric]
-                paths = [None] if name == "memory" else sorted(set(["/"] + list((mounts or {}).get(node_id, []))))[:8]
-                for path in paths:
+                paths = [None] if name == "memory" else sorted(set(["/"] + list((mounts or {}).get(node_id, []))))
+                for path_index, path in enumerate(paths):
+                    if path is not None and path_index >= 8:
+                        row = {"source": "cloudwatch", "status": "unavailable", "reason": "not_collected_budget", "path": path, "value": None, "observed_at": None, "period_seconds": 300, "truncated": True}
+                        record["filesystems"].append(row)
+                        output["omitted_count"] += 1
+                        output["complete"] = False
+                        continue
                     matching = [dims for key, dims in discovered.items() if dict(key).get("InstanceId") == instance
                                 and (path is None or dict(key).get("path") == path)]
                     row = request(node_id, name + (path or ""), metric, 60 if path is None else 300,

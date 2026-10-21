@@ -2,6 +2,12 @@ from mojo.decorators.cron import schedule
 from mojo.apps import jobs
 
 
+@schedule(minutes="*/5")
+def health_snapshot():
+    from mojo.apps.account.services.health_snapshot import enqueue_snapshot
+    return enqueue_snapshot()
+
+
 @schedule(minutes="0", hours="*")
 def prune_notifications():
     jobs.publish(

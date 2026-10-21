@@ -9,7 +9,7 @@ import re
 import secrets
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import timedelta
 
 from mojo.apps.account.services import health_evidence as evidence
@@ -127,7 +127,7 @@ def reserve_generation(source_id, config_revision, deadline, *, key=STATE_KEY, c
 
 
 @contextmanager
-def publication_guard(source_id, generation, config_revision, deadline, *, key=STATE_KEY, cursor_context=None):
+def publication_guard(source_id, generation, config_revision, deadline, *, key=STATE_KEY, cursor_context=None, configuration_check=None):
     """Hold the durable latest-generation fence through the Redis transaction.
 
     A restored Redis backup can resurrect an old lease. Its durable reserved
@@ -146,6 +146,8 @@ def publication_guard(source_id, generation, config_revision, deadline, *, key=S
                 raise SnapshotError("durable_publication_fence_refused")
         except (ValueError, TypeError):
             raise SnapshotError("publication_state_invalid") from None
+        if configuration_check is not None:
+            configuration_check(cursor)
         yield
 
 
@@ -465,8 +467,8 @@ def project_publication(value, grants, *, now=None):
                                            and not item["coverage"].get("omitted_total") and not item["coverage"].get("truncated")
                                            and not item["coverage"].get("omitted_conditions"),
                                        reasons=["permission_required"] if denied_ids else item["reasons"], now=now)
-        for key in ("omitted_total", "truncated"):
-            projected["coverage"][key] = item["coverage"].get(key, 0 if key == "omitted_total" else False)
+        for key in ("expected_total", "omitted_total", "truncated", "omitted_conditions"):
+            projected["coverage"][key] = item["coverage"].get(key, False if key == "truncated" else 0)
         if denied_ids:
             # Composite identity can encode restricted observations and is not
             # confirmation proof; never expose the privileged cached hash.
@@ -487,7 +489,6 @@ def project_publication(value, grants, *, now=None):
     result["collection_status"] = "complete" if result["coverage"]["complete"] else "partial" if components else "unknown"
     if denied:
         result["roster_revision"] = None
-        result["config_revision"] = None
     result["failure_evidence"] = {"capture_status": "best_effort", "summary_only": True}
     result["served_at"] = evidence.timestamp(now)
     return result
@@ -585,3 +586,213 @@ def mcp_projection(value, evidence_cursor=None):
         result["failure_evidence"] = {"capture_status": "best_effort", "has_more": True,
                                       "next_cursor": checkpoint, "gaps": ["mcp_output_limit"]}
     return result
+
+
+PRODUCER_FUNC = "mojo.apps.account.asyncjobs.produce_health_snapshot"
+
+
+def enqueue_snapshot(*, now=None, configuration_reader=None, publisher=None):
+    """One running producer plus one latest pending slot, no catch-up replay."""
+    from django.db import connections, transaction
+    from mojo.apps import jobs
+    from mojo.apps.jobs.models import Job
+    now = now or evidence.utcnow()
+    configuration = (configuration_reader or evidence.source_configuration)(time.monotonic() + 3)
+    source_id = configuration["source_id"]
+    slot = int(now.timestamp()) // 300
+    idempotency = evidence.digest([source_id, slot])
+    channel = settings.get_static("ADMIN_FLEET_CONFIG_CHANNEL", "edge")
+    with transaction.atomic(using="default"):
+        with connections["default"].cursor() as cursor:
+            cursor.execute("SET LOCAL statement_timeout='750ms'")
+            cursor.execute("SELECT pg_try_advisory_xact_lock(%s,%s)", [int(source_id[:8], 16) - 2 ** 31, int(source_id[8:16], 16) - 2 ** 31])
+            if not cursor.fetchone()[0]:
+                return {"status": "coalesced", "reason": "dispatch_in_progress"}
+        existing = Job.objects.using("default").filter(idempotency_key=idempotency).first()
+        if existing and existing.status != "pending":
+            return {"status": "coalesced", "job_id": str(existing.pk)}
+        pending = list(Job.objects.using("default").select_for_update().filter(
+            func=PRODUCER_FUNC, status="pending", payload__source_id=source_id).order_by("created")[:128])
+        if len(pending) == 128:
+            return {"status": "unknown", "reason": "pending_producer_limit"}
+        payload = {"source_id": source_id, "slot": slot, "config_revision": configuration["config_revision"]}
+        expires = now + timedelta(seconds=300 - now.timestamp() % 300)
+        if pending:
+            chosen = existing if existing is not None else pending[0]
+            Job.objects.using("default").filter(pk=chosen.pk, status="pending").update(
+                payload=payload, idempotency_key=idempotency, expires_at=expires, modified=now)
+            for obsolete in pending:
+                if obsolete.pk != chosen.pk:
+                    Job.objects.using("default").filter(pk=obsolete.pk, status="pending").update(status="canceled", finished_at=now, modified=now)
+            return {"status": "coalesced", "job_id": str(chosen.pk), "slot": slot}
+        job_id = (publisher or jobs.publish)(PRODUCER_FUNC, payload=payload, channel=channel,
+            idempotency_key=idempotency, max_retries=0, expires_at=expires, max_exec_seconds=60)
+        return {"status": "queued", "job_id": job_id, "slot": slot}
+
+
+def _fit_publication(identity, generation, revision, components, *, generated_at, published_at, roster_revision, configuration):
+    components = copy.deepcopy(components)
+    def trim(component, count):
+        removed = component["evidence"][-count:]
+        component["evidence"] = component["evidence"][:-count]
+        ids = {row["slot_id"] for row in removed}
+        before = len(component["conditions"])
+        component["conditions"] = [row for row in component["conditions"] if not any(fact["slot_id"] in ids for fact in row["basis"])]
+        component["coverage"]["omitted_conditions"] = component["coverage"].get("omitted_conditions", 0) + before - len(component["conditions"])
+        component["coverage"]["omitted_total"] += len(removed)
+        component["coverage"]["returned_total"] = len(component["evidence"])
+        component["coverage"]["fresh_total"] = min(component["coverage"]["fresh_total"], len(component["evidence"]))
+        component["coverage"].update(complete=False, truncated=True)
+        failures = [row for row in component["conditions"] if row["outcome"] == "fail"]
+        down = any(row["impact"] == "availability" for row in failures)
+        component.update(status="unhealthy" if down else "degraded" if failures else "unknown", availability="down" if down else "unknown", observed_at=None, fresh_until=None)
+        component["reasons"] = sorted(set(component["reasons"] + ["publication_output_limit"]))
+    while sum(len(row["evidence"]) for row in components) > MAX_SLOTS:
+        largest = max(components, key=lambda row: len(row["evidence"]))
+        trim(largest, max(1, len(largest["evidence"]) // 8))
+    while sum(len(row["conditions"]) for row in components) > evidence.MAX_CONDITIONS:
+        largest = max(components, key=lambda row: len(row["conditions"]))
+        largest["conditions"].pop()
+        largest["coverage"]["omitted_conditions"] = largest["coverage"].get("omitted_conditions", 0) + 1
+        largest["coverage"].update(complete=False, truncated=True)
+        largest["status"] = "unknown"
+    for _ in range(256):
+        try:
+            result = publication(identity, generation, revision, components, generated_at=generated_at,
+                published_at=published_at, roster_revision=roster_revision)
+            if configuration.get("services_omitted") or not configuration.get("services_complete", True):
+                result["coverage"].update(expected_total=None if not configuration.get("services_complete", True) else result["coverage"]["expected_total"] + configuration.get("services_omitted", 0), omitted_total=configuration.get("services_omitted", 0), complete=False, truncated=True)
+                result["coverage"]["reasons"].append("api_roster_limit")
+                result["collection_status"] = "partial"
+                result["publication_digest"] = evidence.digest({key: item for key, item in result.items() if key != "publication_digest"})
+            validate_publication(result, identity)
+            return result
+        except SnapshotError as exc:
+            if exc.error_code != "snapshot_oversize":
+                raise
+            candidates = [row for row in components if row["evidence"]]
+            if not candidates:
+                raise
+            largest = max(candidates, key=lambda row: len(evidence.canonical(row)))
+            trim(largest, max(1, len(largest["evidence"]) // 8))
+    raise SnapshotError("snapshot_oversize")
+
+
+def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=None, reserve=None, guard=None, now=None, monotonic=None):
+    """One deterministic60s acquisition, never called by the fast read path."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from functools import partial
+    from mojo.apps.aws.services import fleet_health, capacity
+    from mojo.helpers.aws.provider_call import DeadlineProviderClient
+    from mojo.helpers.redis import get_bounded_connection
+    from mojo.apps.jobs.manager import get_manager
+    from mojo.apps.jobs.keys import JobKeys
+    from mojo.apps import jobs
+    now, monotonic = now or evidence.utcnow(), monotonic or time.monotonic
+    deadline, readers = monotonic() + 60, dict(readers or {})
+    payload = job.payload or {}
+    if type(payload.get("slot")) is not int or payload["slot"] != int(now.timestamp()) // 300:
+        return {"status": "expired", "reason": "superseded_slot"}
+    budget = evidence.CycleBudget(deadline, clock=monotonic)
+    config_reader = configuration_reader or partial(evidence.source_configuration, budget=budget)
+    configuration = config_reader(deadline)
+    identity = {key: configuration[key] for key in ("source_id", "source_identity")}
+    if payload.get("source_id") != identity["source_id"]:
+        raise SnapshotError("source_identity_mismatch")
+    def counted_connect(**kwargs):
+        return evidence.BudgetRedis((connect or get_bounded_connection)(**kwargs), budget)
+    cursor_context = lambda end: evidence.primary_cursor(end, budget=budget)
+    def check_configuration(cursor):
+        if configuration_reader is None:
+            from mojo.apps.account.models import Setting
+            cursor.execute('SELECT key FROM "%s" WHERE group_id IS NULL AND key IN (%%s,%%s,%%s,%%s) FOR SHARE' % Setting._meta.db_table,
+                [system_settings.INSTALLATION_UUID, system_settings.INSTALLATION_SLUG, system_settings.BASE_URL, system_settings.EXPECTED_EDGE_TOPOLOGY])
+            current = evidence.source_configuration(deadline, budget=budget, cursor_context=lambda end: nullcontext(cursor))
+        else:
+            current = configuration_reader(deadline)
+        if any(current[key] != configuration[key] for key in ("source_id", "source_identity", "config_revision")):
+            raise SnapshotError("publication_configuration_changed")
+    cache = PublicationCache(identity["source_id"], connect=counted_connect,
+        guard=guard or partial(publication_guard, cursor_context=cursor_context, configuration_check=check_configuration))
+    lease = cache.acquire(configuration["config_revision"], deadline)
+    if lease is None:
+        return {"status": "coalesced", "reason": "producer_running"}
+    try:
+        generation, reservation = cache.reserve(lease, configuration["config_revision"], deadline,
+            reserve=reserve or partial(reserve_generation, cursor_context=cursor_context))
+        try:
+            previous = cache.read(identity, deadline)
+        except Exception:
+            previous = None
+        class InternalActor:
+            is_active = True
+            is_request_user = True
+            def has_permission(self, permissions):
+                return True
+        class Provider:
+            def __init__(self, service):
+                self.service = service
+            def __getattr__(self, operation):
+                def call(**params):
+                    budget.take("provider_operations")
+                    if operation == "describe_instances":
+                        budget.take("inventory_pages")
+                    return getattr(DeadlineProviderClient(self.service, deadline, region=configuration["expected"].get("spec").region), operation)(**params)
+                return call
+        def inventory(spec, end):
+            if spec is None:
+                return {"instances": {}, "complete": False, "reasons": ["identity_unavailable"]}
+            result = capacity.health_inventory(spec, end, ec2_client=Provider("ec2"), elbv2_client=Provider("elbv2"))
+            result["observed_at"] = evidence.timestamp(evidence.utcnow())
+            return result
+        def heartbeats(end):
+            with counted_connect(timeout=0.5, max_connections=2, read_from_replicas=False, deadline=end) as client:
+                return get_manager().get_runners_bounded(settings.get_static("ADMIN_FLEET_CONFIG_CHANNEL", "edge"), limit=128, timeout=min(1, end - monotonic()), client=client)
+        def scheduler(end):
+            with counted_connect(timeout=0.5, max_connections=1, read_from_replicas=False, deadline=end) as client:
+                active = bool(client.get(JobKeys().scheduler_lock()))
+            return {"status": "ok", "scope": "installation", "scheduler_active": active, "observed_at": None}
+        def fleet_source():
+            managed = readers.get("managed", lambda: evidence.managed_series(configuration, deadline, budget=budget))()
+            raw_readers = {"expected": lambda grants, end: configuration["expected"], "inventory": inventory,
+                "heartbeats": heartbeats, "scheduler": scheduler, "identity_cache": fleet_health.IdentityRoster(connect=counted_connect),
+                "diagnostics_batch": lambda roster, end: jobs.get_sysinfo(diagnostic=True, roster=roster, deadline=end,
+                    connect=counted_connect, revision=settings.get_static("MOJO_FLEET_CONFIG_REVISION", None)), **readers.get("fleet", {})}
+            acquired = fleet_health.acquire_snapshot(InternalActor(), deadline=deadline, readers=raw_readers, budget=budget, now=now, extra_series=managed["series"])
+            return acquired, managed
+        values, probes = {}, {}
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {pool.submit(readers.get("native", lambda: evidence.database_and_job_facts(configuration["channels"], deadline, budget=budget))): "native",
+                       pool.submit(readers.get("redis", lambda: {"native": evidence.redis_facts(deadline, connect=counted_connect), "queues": evidence.queue_facts(configuration["channels"], deadline, connect=counted_connect, budget=budget)})): "redis",
+                       pool.submit(fleet_source): "fleet"}
+            for service in configuration["services"]:
+                budget.take("api_services")
+                futures[pool.submit(readers.get("probe", evidence.probe_service), service, deadline)] = service["resource_id"]
+            for future in as_completed(futures):
+                key = futures[future]
+                try:
+                    value = future.result()
+                except Exception:
+                    value = {"status": "unknown", "reason": "collector_unavailable"}
+                if key in ("native", "redis", "fleet"):
+                    values[key] = value
+                else:
+                    probes[key] = value
+        fleet_value = values.get("fleet")
+        if not isinstance(fleet_value, tuple):
+            acquired = {"expected": configuration["expected"], "rows": fleet_health.reconcile(configuration["expected"]["declarations"]), "evidence": {}, "roster_revision": None}
+            managed = {"series": []}
+        else:
+            acquired, managed = fleet_value
+        components = evidence.build_components(configuration, values.get("native", {}), values.get("redis", {}).get("native", {}), acquired, probes, managed=managed, previous=previous, queues=values.get("redis", {}).get("queues", {}), now=evidence.utcnow())
+        result = _fit_publication(identity, generation, configuration["config_revision"], components,
+            generated_at=evidence.timestamp(now), published_at=evidence.timestamp(evidence.utcnow()),
+            roster_revision=acquired.get("roster_revision"), configuration=configuration)
+        cache.publish(result, lease, reservation, deadline, current_identity=identity, current_config_revision=configuration["config_revision"])
+        return {"status": "published", "publication_generation": generation, "collection_status": result["collection_status"], "accounting": dict(budget.counts)}
+    finally:
+        if monotonic() < deadline:
+            try:
+                cache.release(lease, deadline)
+            except Exception:
+                pass

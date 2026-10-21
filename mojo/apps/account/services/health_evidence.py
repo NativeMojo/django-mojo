@@ -79,6 +79,10 @@ def slot(source_id, component_id, slot_id, *, source, required_grant,
         raise EvidenceError("invalid_slot_id")
     sample = valid_time(observed_at, now)
     collected = valid_time(collected_at, now)
+    try:
+        canonical(value)
+    except (ValueError, TypeError, OverflowError):
+        status, reason, value = "unknown", "source_value_invalid", None
     valid = status in GOOD_SOURCE_STATUSES and sample is not None and collected is not None
     identity = copy.deepcopy(source_identity or {})
     output = dict(slot_id=slot_id, source=source, source_identity=identity,
@@ -504,7 +508,7 @@ def source_configuration(deadline, *, get_static=None, cursor_context=None, budg
     revision = health_snapshot.configuration_revision(identity, {"roster_scope": fleet_health.roster_scope(expected),
         "services": services, "channels": channels, "bindings": binding})
     return {**identity, "config_revision": revision, "expected": expected, "services": services,
-            "services_omitted": max(0, len(apps) - 23), "channels": channels[:32],
+            "services_omitted": max(0, len(apps) - 23), "services_complete": len(apps) < 25, "channels": channels[:32],
             "channels_complete": bool(channels_valid and channels and len(channels) <= 32), "bindings": binding}
 
 
@@ -550,15 +554,41 @@ def redis_facts(deadline, *, connect=None, budget=None):
             "scope": "default_node", **{key: info.get(key) for key in keys}}
 
 
-def probe_service(service, deadline, *, resolver=None, connector=None, ssl_context=None, http_factory=None):
+def queue_facts(channels, deadline, *, connect=None, budget=None):
+    from mojo.apps.jobs.keys import JobKeys
+    from mojo.helpers.redis import get_bounded_connection
+    keys = JobKeys()
+    with (connect or get_bounded_connection)(timeout=0.5, max_connections=1, read_from_replicas=False, deadline=deadline) as client:
+        pipeline = client.pipeline(transaction=False)
+        for channel in channels[:32]:
+            if budget is not None:
+                budget.take("channels")
+            pipeline.llen(keys.queue(channel))
+            pipeline.zcard(keys.sched(channel))
+            pipeline.zcard(keys.sched_broadcast(channel))
+            pipeline.zcard(keys.processing(channel))
+            pipeline.zrange(keys.processing(channel), 0, 0, withscores=True)
+        values = pipeline.execute()
+    observed, output = utcnow(), {}
+    for index, channel in enumerate(channels[:32]):
+        queued, scheduled, broadcasts, processing, oldest = values[index*5:index*5+5]
+        # Processing scores are visibility deadlines, not original start times.
+        output[channel] = {"status": "ok", "observed_at": timestamp(observed), "queued": queued,
+            "scheduled": scheduled, "scheduled_broadcast": broadcasts, "processing": processing,
+            "earliest_visibility_deadline": oldest[0][1] if oldest else None}
+    return output
+
+
+def probe_service(service, deadline, *, resolver=None, connector=None, ssl_context=None, context_factory=None, http_factory=None, clock=None):
     """Fixed-origin, DNS-pinned HTTP/version probe with one absolute1.5s budget."""
     import http.client
     import ssl
     from urllib.parse import urlsplit
     from mojo.apps.account.services.system_settings import validate_base_url
-    from mojo.helpers.bounded_transport import connect_tcp, DeadlineSocket, remaining
+    from mojo.helpers.bounded_transport import connect_tcp, DeadlineSocket, DeadlineSSLContext, remaining
     from mojo.helpers.dns.probe import resolve_addresses
-    deadline = min(deadline, time.monotonic() + 1.5)
+    clock = clock or time.monotonic
+    deadline = min(deadline, clock() + 1.5)
     origin = validate_base_url(service["origin"])
     parsed = urlsplit(origin)
     addresses = (resolver or resolve_addresses)(parsed.hostname, deadline)
@@ -569,14 +599,15 @@ def probe_service(service, deadline, *, resolver=None, connector=None, ssl_conte
             raw = (connector or connect_tcp)(self.host, self.port, deadline,
                 resolver=lambda hostname, end: addresses)
             try:
-                raw.settimeout(remaining(deadline))
-                tls = (ssl_context or ssl.create_default_context()).wrap_socket(raw, server_hostname=self.host)
-                self.sock = DeadlineSocket(tls, deadline)
+                raw.settimeout(remaining(deadline, clock))
+                context = ssl_context or (context_factory or ssl.create_default_context)()
+                tls = DeadlineSSLContext(context, deadline, clock).wrap_socket(raw, server_hostname=self.host)
+                self.sock = DeadlineSocket(tls, deadline, clock=clock)
             except BaseException:
                 raw.close()
                 raise
-    connection = (http_factory or Connection)(parsed.hostname, parsed.port or 443, timeout=remaining(deadline))
-    started = time.monotonic()
+    connection = (http_factory or Connection)(parsed.hostname, parsed.port or 443, timeout=remaining(deadline, clock))
+    started = clock()
     try:
         connection.request("GET", service["path"], headers={"Host": parsed.netloc, "Accept": "application/json" if service["path"] == "/api/version" else "text/html", "Connection": "close"})
         response = connection.getresponse()
@@ -592,7 +623,7 @@ def probe_service(service, deadline, *, resolver=None, connector=None, ssl_conte
                 pass
         return {"reachable": 200 <= response.status < 300, "http_status": response.status,
                 "version": version, "body_truncated": len(raw) > body_limit,
-                "latency_seconds": time.monotonic() - started, "observed_at": timestamp(utcnow())}
+                "latency_seconds": clock() - started, "observed_at": timestamp(utcnow())}
     finally:
         connection.close()
 
@@ -618,15 +649,20 @@ def managed_series(configuration, deadline, *, budget, provider_factory=None):
         rows = call("rds", "describe_db_instances", DBInstanceIdentifier=resolved["db_writer"]).get("DBInstances") or []
         if len(rows) == 1 and rows[0].get("DBInstanceIdentifier") == resolved["db_writer"]:
             row = rows[0]
-            host = (row.get("Endpoint") or {}).get("Address")
+            host = str((row.get("Endpoint") or {}).get("Address") or "").rstrip(".").lower()
             bound = str(configuration["bindings"].get("database_host") or "").rstrip(".").lower()
-            # An Aurora cluster's writer endpoint is an exact declared binding.
-            cluster_endpoint = None
-            if row.get("DBClusterIdentifier") == resolved["db_cluster"] and host != bound:
+            matched = bool(bound and bound == host)
+            if bound and not matched and row.get("DBClusterIdentifier") == resolved["db_cluster"]:
                 clusters = call("rds", "describe_db_clusters", DBClusterIdentifier=resolved["db_cluster"]).get("DBClusters") or []
-                cluster_endpoint = clusters[0].get("Endpoint") if len(clusters) == 1 else None
-            if bound and bound in (host, cluster_endpoint):
-                result["database"] = {"status": "ok", "resource": row["DBInstanceIdentifier"], "binding": "validated_endpoint"}
+                cluster = clusters[0] if len(clusters) == 1 and clusters[0].get("DBClusterIdentifier") == resolved["db_cluster"] else {}
+                writers = [member.get("DBInstanceIdentifier") for member in cluster.get("DBClusterMembers", []) if member.get("IsClusterWriter") is True]
+                if bound == str(cluster.get("Endpoint") or "").rstrip(".").lower() and len(writers) == 1 and writers[0]:
+                    if writers[0] != row["DBInstanceIdentifier"]:
+                        current = call("rds", "describe_db_instances", DBInstanceIdentifier=writers[0]).get("DBInstances") or []
+                        row = current[0] if len(current) == 1 else {}
+                    matched = row.get("DBInstanceIdentifier") == writers[0] and row.get("DBClusterIdentifier") == resolved["db_cluster"]
+            if matched:
+                result["database"] = {"status": "ok", "resource": row["DBInstanceIdentifier"], "binding": "validated_current_endpoint"}
                 for metric, unit in (("CPUUtilization", "Percent"), ("DatabaseConnections", "Count"), ("FreeableMemory", "Bytes"),
                                      ("FreeStorageSpace", "Bytes"), ("ReadLatency", "Seconds"), ("WriteLatency", "Seconds")):
                     add("database", row["DBInstanceIdentifier"], metric, unit, [{"Name": "DBInstanceIdentifier", "Value": row["DBInstanceIdentifier"]}], "AWS/RDS")
@@ -657,7 +693,7 @@ def managed_series(configuration, deadline, *, budget, provider_factory=None):
     return result
 
 
-def build_components(configuration, native, redis, fleet, probes, *, managed=None, previous=None, now=None):
+def build_components(configuration, native, redis, fleet, probes, *, managed=None, previous=None, queues=None, now=None):
     """Profile2 current obligations and causal-slot proof from independent sources."""
     now, source_id = now or utcnow(), configuration["source_id"]
     components = []
@@ -673,7 +709,13 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
             previous=previous_slot, now=now)
     def predicate(kind, resource, rule, value, predicate_value, *, impact="operational", resource_key=None):
         outcome = "unknown" if predicate_value is None else "fail" if predicate_value else "pass"
-        return condition(kind + ":" + resource, rule, resource_key or resource, outcome, [value], impact=impact, now=now)
+        result = condition(kind + ":" + resource, rule, resource_key or resource, outcome, [value], impact=impact, now=now)
+        result["rule"] = rule
+        if "ge_90_percent" in rule:
+            result["evaluation"] = {"operator": ">=", "threshold": 90, "unit": "Percent", "profile_version": PROFILE_VERSION}
+        elif "ge_1_second" in rule:
+            result["evaluation"] = {"operator": ">=", "threshold": 1, "unit": "Seconds", "profile_version": PROFILE_VERSION}
+        return result
     def pressured(value, threshold=90):
         return value >= threshold if type(value) in (int, float) and math.isfinite(value) else None
     for service in configuration["services"]:
@@ -700,6 +742,8 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
             previous_value, current_value = (prior.get("value") or {}).get(counter), raw.get(counter)
             incarnation_key = "incarnation" if kind == "database" else "run_id"
             same = raw.get(incarnation_key) and raw.get(incarnation_key) == (prior.get("value") or {}).get(incarnation_key)
+            if kind == "database":
+                same = same and raw.get("stats_reset") == (prior.get("value") or {}).get("stats_reset")
             ordered = parse_time(prior.get("observed_at")) is not None and parse_time(raw.get("observed_at")) is not None and parse_time(raw["observed_at"]) > parse_time(prior["observed_at"])
             delta = current_value - previous_value if same and ordered and type(current_value) in (int, float) and type(previous_value) in (int, float) and current_value >= previous_value else None
             checks.append(predicate(kind, "default", counter + "_positive_delta", sample, delta > 0 if delta is not None else None))
@@ -710,6 +754,8 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
             slots.append(metric_slot)
             if request["unit"] == "Percent":
                 checks.append(predicate(kind, "default", request["metric"] + "_ge_90_percent", metric_slot, pressured(metric.get("value")), resource_key=request["resource"]))
+            elif request["unit"] == "Seconds" and request["metric"] in ("ReadLatency", "WriteLatency"):
+                checks.append(predicate(kind, "default", request["metric"] + "_ge_1_second", metric_slot, pressured(metric.get("value"), 1), resource_key=request["resource"]))
         if not requests:
             slots.append(make(kind, "default", "managed_pressure", {"status": "unknown", "reason": "managed_resource_unresolved"}, grant="aws", source="cloudwatch"))
         components.append(component(source_id, kind, "default", slots, checks, now=now, identity_grant="platform"))
@@ -718,16 +764,18 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
         if not row["expected"]:
             continue
         node_id = row["node_id"]
-        detail = fleet.get("evidence", {}).get(node_id, {})
+        ambiguous = row.get("identity_status") == "ambiguous"
+        detail = {} if ambiguous else fleet.get("evidence", {}).get(node_id, {})
         current = detail.get("current") or {}
         families = [("cpu", current.get("cpu")), ("memory", current.get("memory"))]
         fs = current.get("filesystems") or {}
+        fs = {**fs, "truncated": bool(fs.get("omitted_count") or fs.get("omitted_missing_count"))}
         families.append(("filesystem_inventory", fs))
         for mount in fs.get("mounts", []) + fs.get("missing", []):
             families.append(("filesystem:" + mount["path"], mount))
             families.append(("inodes:" + mount["path"], mount.get("inodes") or {"status": "unknown", "reason": "inodes_unavailable"}))
         for key, raw in families:
-            raw = raw or {"status": "unknown", "reason": current.get("reason", "collector_missing")}
+            raw = raw or {"status": "unknown", "reason": "identity_ambiguous" if ambiguous else current.get("reason", "collector_missing")}
             sample = make("fleet", "installation", "runtime:" + digest([node_id, key])[:32], raw, grant="jobs", source="runtime", identity={"node_id": node_id, "measurement": key})
             slots.append(sample)
             percent = raw.get("percent")
@@ -742,13 +790,13 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
             sample = make("fleet", "installation", "cloud:" + digest([node_id, key])[:32], raw, grant="aws", source="cloudwatch", value=raw.get("value"), identity={"node_id": node_id, "measurement": key})
             slots.append(sample)
             checks.append(predicate("fleet", "installation", "cloud_" + key.split(":")[0] + "_ge_90_percent", sample, pressured(raw.get("value")), resource_key=digest([node_id, key])))
-        presence = make("fleet", "installation", "presence:" + digest(node_id)[:32], {"status": "ok", "observed_at": fleet.get("inventory", {}).get("observed_at"), "value": row.get("provider_state")}, grant="aws", source="ec2", identity={"node_id": node_id, "instance_id": row.get("instance_id")})
+        presence = make("fleet", "installation", "presence:" + digest(node_id)[:32], {"status": "unknown" if ambiguous else "ok", "reason": "identity_ambiguous" if ambiguous else None, "observed_at": None if ambiguous else fleet.get("inventory", {}).get("observed_at"), "value": None if ambiguous else row.get("provider_state")}, grant="aws", source="ec2", identity={"node_id": node_id, "instance_id": row.get("instance_id")})
         slots.append(presence)
-        checks.append(predicate("fleet", "installation", "provider_stopped", presence, row.get("provider_state") in ("stopped", "stopping", "terminated", "shutting-down") if row.get("provider_state") else None, impact="availability", resource_key=digest(node_id)))
+        checks.append(predicate("fleet", "installation", "provider_stopped", presence, row.get("provider_state") in ("stopped", "stopping", "terminated", "shutting-down") if row.get("provider_state") and not ambiguous else None, impact="availability", resource_key=digest(node_id)))
     if not slots:
         slots.append(make("fleet", "installation", "roster", {"status": "unknown", "reason": "expected_roster_unresolved"}))
     fleet_component = component(source_id, "fleet", "installation", slots, checks,
-        coverage_complete=bool(fleet.get("expected", {}).get("complete") and not fleet.get("overflow")), now=now, identity_grant="platform")
+        coverage_complete=bool(fleet.get("expected", {}).get("complete") and not fleet.get("overflow") and fleet.get("roster_complete", False)), now=now, identity_grant="platform")
     components.append(fleet_component)
     job_slots, job_checks = [], []
     by_channel = {row["channel"]: row for row in native.get("jobs", [])}
@@ -759,24 +807,34 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
         job_slots.append(queue)
         job_checks.append(predicate("jobman", "installation", "runtime_overrun", queue, raw.get("overruns", 0) > 0 if raw.get("observed_at") else None, resource_key=channel))
         prior = next((row for row in old.get("jobman:installation", {}).get("evidence", []) if row["slot_id"] == queue["slot_id"]), None)
-        progress = None
+        progress = False if raw.get("observed_at") and raw.get("due_pending") == 0 else None
         if prior and raw.get("due_pending") and (prior.get("value") or {}).get("due_pending") and parse_time(prior.get("observed_at")) and parse_time(raw.get("observed_at")):
             duration = (parse_time(raw["observed_at"]) - parse_time(prior["observed_at"])).total_seconds()
             if duration >= 300:
                 current_completed, previous_completed = parse_time(raw.get("latest_completed")), parse_time((prior.get("value") or {}).get("latest_completed"))
                 progress = not current_completed or (previous_completed is not None and current_completed <= previous_completed)
         job_checks.append(predicate("jobman", "installation", "due_backlog_no_progress_300_seconds", queue, progress, resource_key=channel))
+    from mojo.helpers.settings import settings
+    interval = max(1, int(settings.get_static("JOBS_RUNNER_HEARTBEAT_SEC", 5)))
     for row in fleet.get("rows", []):
         if row["expected"]:
+            ambiguous = row.get("identity_status") == "ambiguous"
+            runner = next((item for item in fleet.get("runners", []) if item.get("runner_id") == row.get("runner_id")), {})
             heartbeat = make("jobman", "installation", "worker:" + digest(row["node_id"])[:32],
-                {"status": "ok" if row.get("last_heartbeat") else "unknown", "observed_at": row.get("last_heartbeat"), "runner_id": row.get("runner_id")},
-                source="heartbeat", identity={"node_id": row["node_id"], "runner_id": row.get("runner_id")})
+                {"status": "ok" if row.get("last_heartbeat") and not ambiguous else "unknown", "observed_at": None if ambiguous else row.get("last_heartbeat"), "runner_id": row.get("runner_id"), "period_seconds": interval},
+                grant="jobs", source="heartbeat", identity={"node_id": row["node_id"], "runner_id": row.get("runner_id"), "started": runner.get("started")})
             job_slots.append(heartbeat)
-    job_slots.append(make("jobman", "installation", "scheduler_detector", {"status": "unknown", "reason": "detector_evidence_unavailable"}, source="independent_detector"))
+    for channel in configuration["channels"]:
+        queue_raw = (queues or {}).get(channel) or {"status": "unknown", "reason": "queue_transport_unavailable"}
+        job_slots.append(make("jobman", "installation", "redis_queue:" + digest(channel)[:32], queue_raw, grant="jobs", source="redis_queue", identity={"channel": channel}))
+    job_slots.append(make("jobman", "installation", "scheduler_lock", {**fleet.get("sources", {}).get("scheduler", {}), "observed_at": None}, grant="jobs", source="scheduler_lock"))
+    job_slots.append(make("jobman", "installation", "scheduler_detector", {"status": "unknown", "reason": "detector_evidence_unavailable"}, grant="jobs", source="independent_detector"))
     components.append(component(source_id, "jobman", "installation", job_slots, job_checks,
                                 coverage_complete=configuration["channels_complete"], now=now, identity_grant="platform"))
     producer = make("monitoring", "producer", "attempt", {"observed_at": timestamp(now), "status": "ok"}, source="snapshot_producer",
                     value={"profile_version": PROFILE_VERSION, "roster_revision": fleet.get("roster_revision")})
+    if configuration.get("services_omitted") or not configuration.get("services_complete", True):
+        producer["limits"] = {"services_omitted": configuration.get("services_omitted", 0), "denominator_known": configuration.get("services_complete", True)}
     components.append(component(source_id, "monitoring", "producer", [producer], [],
-        coverage_complete=all(row["coverage"]["complete"] for row in components), now=now, identity_grant="platform"))
+        coverage_complete=all(row["coverage"]["complete"] for row in components) and not configuration.get("services_omitted") and configuration.get("services_complete", True), now=now, identity_grant="platform"))
     return components

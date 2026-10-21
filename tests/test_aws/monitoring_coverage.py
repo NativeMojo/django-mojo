@@ -25,7 +25,7 @@ def _readers():
     def diagnostics(roster, deadline):
         calls.append("diagnostics")
         family = {"status": "ok", "observed_at": now, "unit": "Percent", "percent": 0}
-        return {"status": "verified", "results": [{"host": row["hostname"], "status": "success", "result": {
+        return {"status": "verified", "results": [{"host": row["hostname"], "started": row["started"], "status": "success", "result": {
             "hostname": row["hostname"], "current": {"cpu": family, "memory": family,
             "filesystems": {"status": "ok", "observed_at": now, "mounts": [{**family, "path": "/", "total": 10, "free": 10,
                 "inodes": {"status": "unsupported", "reason": "statvfs_unsupported"}}],
@@ -37,7 +37,7 @@ def _readers():
     return {"expected": expected, "inventory": inventory,
         "heartbeats": lambda deadline: [{"hostname": node, "runner_id": node, "started": now, "alive": True, "last_heartbeat": now} for node in ("a", "b")],
         "scheduler": lambda deadline: {"status": "ok", "scope": "installation", "scheduler_active": True, "observed_at": now},
-        "identity_cache": SimpleNamespace(read=lambda *args, **kwargs: None), "diagnostics_batch": diagnostics, "recent": recent}, calls
+        "identity_cache": SimpleNamespace(read=lambda *args, **kwargs: None, write=lambda *args, **kwargs: True), "diagnostics_batch": diagnostics, "recent": recent}, calls
 
 
 @th.django_unit_test()
@@ -103,3 +103,47 @@ def test_recent_metrics_batch_keeps_exact_dimensions_zero_and_null(opts):
     assert {row["Name"] for row in filesystem["dimensions"]} == {"InstanceId", "ImageId", "path", "device"}, "recent batch lost exact full dimensions"
     assert next(row for row in result["nodes"]["one"]["filesystems"] if row["path"] == "/")["value"] is None, "missing root series became a reassuring zero"
     assert budget.counts["provider_operations"] == 3, "whole-cycle provider accounting omitted a data/discovery call"
+
+
+@th.django_unit_test()
+def test_checked_custom_alias_and_competing_proofs_are_reconciled_before_binding(opts):
+    from mojo.apps.aws.services import fleet_health as fh
+    readers, calls = _readers()
+    now = datetime.now(timezone.utc).isoformat()
+    declarations = [{"node_id": "logical", "source": "edge_topology"}]
+    readers["expected"] = lambda *args: {"configured": True, "complete": True, "spec": None, "sources": {}, "declarations": declarations}
+    runners = [{"hostname": "host-a", "runner_id": "runner-a", "started": now, "alive": True, "last_heartbeat": now}]
+    readers["heartbeats"] = lambda *args: runners
+    def diagnostics(roster, end):
+        family = {"status": "ok", "observed_at": now, "percent": 95}
+        return {"status": "verified", "results": [{"host": row["hostname"], "started": row["started"], "status": "success", "result": {
+            "hostname": row["hostname"], "proof": {"node_id": "logical", "observed_at": now}, "current": {"cpu": family, "memory": family}}} for row in roster]}
+    readers["diagnostics_batch"] = diagnostics
+    actor = Actor("view_platform", "manage_aws", "view_jobs")
+    acquired = fh.acquire_snapshot(actor, deadline=time.monotonic()+5, readers=readers)
+    assert acquired["rows"][0]["hostname"] == "host-a" and acquired["evidence"]["logical"]["current"]["cpu"]["percent"] == 95, "cold checked custom node alias required a prior manual drill-down"
+    runners.append({"hostname": "host-b", "runner_id": "runner-b", "started": now, "alive": True, "last_heartbeat": now})
+    acquired = fh.acquire_snapshot(actor, deadline=time.monotonic()+5, readers=readers)
+    row = next(row for row in acquired["rows"] if row["expected"])
+    assert row["identity_status"] == "ambiguous" and not acquired["roster_complete"], "competing checked aliases established a resolved complete roster"
+    assert acquired["evidence"]["logical"]["current"]["reason"] == "identity_ambiguous", "ambiguous logical identity accepted one claimant's runtime facts"
+    assert acquired["evidence"]["logical"]["trends"]["reason"] == "identity_ambiguous", "ambiguous identity accepted instance-specific provider facts"
+
+
+@th.django_unit_test()
+def test_recent_series_partial_and_mount_caps_remain_required_coverage_gaps(opts):
+    from mojo.helpers.aws.cloudwatch import CloudWatchHelper
+    from mojo.apps.aws.services import fleet_health as fh
+    now = datetime.now(timezone.utc)
+    class Provider:
+        def list_metrics(self, **params):
+            return {"Metrics": [{"Namespace": params["Namespace"], "MetricName": params["MetricName"], "Dimensions": [{"Name": "InstanceId", "Value": "i-one"}]}]}
+        def get_metric_data(self, **params):
+            return {"MetricDataResults": [{"Id": query["Id"], "StatusCode": "PartialData", "Timestamps": [now], "Values": [0]} for query in params["MetricDataQueries"]]}
+    cloud = CloudWatchHelper(access_key="fake", secret_key="fake").get_recent_evidence(
+        [{"node_id": "one", "instance_id": "i-one"}], "CWAgent", {"one": ["/data%d" % index for index in range(10)]}, deadline=time.monotonic()+5, client=Provider(), now=now)
+    filesystems = cloud["nodes"]["one"]["filesystems"]
+    assert len(filesystems) == 11 and cloud["omitted_count"] == 3, "metric cap redefined the known filesystem obligation roster"
+    assert sum(row.get("reason") == "not_collected_budget" for row in filesystems) == 3, "capped named mounts were mislabeled as absent provider series"
+    slot = fh._coverage_slot(cloud["nodes"]["one"]["cpu"], source="cloudwatch", now=now, freshness=900)
+    assert slot["truncated"] and slot["coverage_status"] == "incomplete" and slot["value"] == 0, "retained PartialData sample established complete series coverage"
