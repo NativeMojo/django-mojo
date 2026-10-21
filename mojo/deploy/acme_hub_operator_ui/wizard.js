@@ -107,7 +107,7 @@ function set(id, value) { document.getElementById(id).textContent = String(value
 function date(value) { return value ? new Date(value).toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'medium'}) : 'Not observed'; }
 function badge(state) { const severity = ['commit_unknown', 'mismatch', 'refused'].includes(state) ? 'danger' : ['unavailable', 'pending', 'held_recovery_required', 'fixture'].includes(state) ? 'warning' : ['qualified', 'verified'].includes(state) ? 'success' : ''; return el('span', 'badge ' + severity, words(state)); }
 function detail(container, key, value) { const row = el('div'); row.append(el('dt', '', key), el('dd', '', value)); container.append(row); }
-function link(container, destination, kind, origin) { if (!destination) return; const safe = validDestination(destination, kind, origin); const a = el('a', 'destination-link', safe.label); a.href = safe.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; container.append(a); }
+function link(container, destination, kind, origin) { if (!destination) return; const safe = validDestination(destination, kind, origin); if (!safe) return; const a = el('a', 'destination-link', safe.label); a.href = safe.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; container.append(a); }
 
 export function mountWizard({client, operationContext = null} = {}) {
   const origin = globalThis.location.origin;

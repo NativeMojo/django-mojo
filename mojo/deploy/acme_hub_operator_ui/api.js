@@ -36,9 +36,13 @@ export function validDestination(value, kind, origin) {
   require(url.protocol === 'https:' && !url.username && !url.password && (!url.port || url.port === '443'));
   if (kind === 'operator_wizard') {
     require(url.origin === origin && url.pathname === PREFIX && !url.hash && value.label === 'Open guarded operator wizard');
-    entryOperation(url);
+    const operation = entryOperation(url);
+    require(value.url === origin + PREFIX + (operation === null ? '' : '?operation=' + operation));
+    return {label: value.label, url: value.url};
   }
-  return {label: value.label, url: url.href};
+  // No approved owner/repository or provider role policy is projected yet.
+  // HTTPS alone cannot make an arbitrary response into a trusted destination.
+  return null;
 }
 
 function factGroups(value) {
@@ -121,11 +125,20 @@ function toBase64(value) {
   return btoa(String.fromCharCode(...new Uint8Array(value))).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
 }
 
+function eligibleRpId(value, hostname) {
+  if (typeof value !== 'string' || value.length > 253 || value !== value.toLowerCase() || !value.includes('.')) return false;
+  if (!value.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) return false;
+  return hostname === value || hostname.endsWith('.' + value);
+}
+
 export function credentialOptions(data, hostname, now = Date.now()) {
   require(own(data, ['request', 'publicKey', 'expires_at']) && UUID.test(data.request) && stamp(data.expires_at), 'invalid_authentication_options');
   const key = data.publicKey;
   require(key && typeof key === 'object' && Object.keys(key).every(k => ['challenge', 'rpId', 'allowCredentials', 'userVerification', 'timeout', 'extensions'].includes(k)), 'invalid_authentication_options');
-  require(key.rpId === hostname && key.userVerification === 'required' && Array.isArray(key.allowCredentials) && key.allowCredentials.length > 0 && key.allowCredentials.length <= 64, 'invalid_authentication_options');
+  // The guardian returns its exact enrolled RP. Existing credentials may use a
+  // parent RP on this dedicated child host; the browser enforces RP eligibility
+  // (including public suffix rules), and root verifies its exact pin and origin.
+  require(eligibleRpId(key.rpId, hostname) && key.userVerification === 'required' && Array.isArray(key.allowCredentials) && key.allowCredentials.length > 0 && key.allowCredentials.length <= 64, 'invalid_authentication_options');
   require(key.extensions === undefined || own(key.extensions, []), 'invalid_authentication_options');
   const timeout = Date.parse(data.expires_at) - now;
   require(timeout > 0, 'request_expired');

@@ -46,6 +46,26 @@ test('destinations are HTTPS-only and the guardian link is exact origin, fixed p
   assert.equal(validDestination({label: 'Open guarded operator wizard', url: origin + '/_mojo/acme-upgrade/?operation=' + op}, 'operator_wizard', origin).url, origin + '/_mojo/acme-upgrade/?operation=' + op, 'exact guardian destination must survive');
   for (const url of ['javascript:alert(1)', 'https://app.example/_mojo/acme-upgrade/', origin + '/_mojo/acme-upgrade/?token=secret', origin + '/_mojo/acme-upgrade/#x']) assert.throws(() => validDestination({label: 'Open guarded operator wizard', url}, 'operator_wizard', origin), GuardianError, 'unsafe destination must be rejected');
 });
+test('existing parent RP credentials work on a dedicated child guardian while foreign or confused suffixes refuse', () => {
+  const value = options(); value.publicKey.rpId = 'maestromojo.com';
+  assert.equal(credentialOptions(value, 'operator.maestromojo.com', at).rpId, 'maestromojo.com', 'an existing server-pinned parent RP must remain usable on its child guardian');
+  value.publicKey.rpId = 'operator.maestromojo.com';
+  assert.equal(credentialOptions(value, 'operator.maestromojo.com', at).rpId, 'operator.maestromojo.com', 'the exact guardian RP must remain usable');
+  for (const rp of ['evilmaestromojo.com', 'maestromojo.com.evil.test', 'sub.maestromojo.com', 'com', '.maestromojo.com', 'maestromojo.com.', 'MaestroMojo.com', 'maestromojo.com:443', 'https://maestromojo.com', '-bad.maestromojo.com']) {
+    value.publicKey.rpId = rp;
+    assert.throws(() => credentialOptions(value, 'operator.maestromojo.com', at), GuardianError, `foreign or noncanonical RP must refuse: ${rp}`);
+  }
+});
+test('canonical raw guardian destinations reject encoded hosts and noncanonical equivalent URLs', () => {
+  for (const url of ['https://%67uardian.example/_mojo/acme-upgrade/', 'https://GUARDIAN.example/_mojo/acme-upgrade/', origin + ':443/_mojo/acme-upgrade/', origin + '/_mojo/acme-upgrade/?operation=%31' + op.slice(1), origin + '/_mojo/acme-upgrade/?']) {
+    assert.throws(() => validDestination({label: 'Open guarded operator wizard', url}, 'operator_wizard', origin), GuardianError, `noncanonical raw guardian destination must refuse: ${url}`);
+  }
+});
+test('unavailable role policy never turns an arbitrary HTTPS response into an actionable approval or provider link', () => {
+  for (const kind of ['independent_approval', 'provider_console', 'history_console']) {
+    assert.equal(validDestination({label: 'Untrusted destination', url: 'https://arbitrary.example/path'}, kind, origin), null, `unavailable ${kind} policy must keep navigation disabled`);
+  }
+});
 test('strict status accepts declared source facts but rejects fabricated authority, action drift and malformed projections', () => {
   assert.equal(validateStatus(fixture(), origin).facts[0].items[0].classification, 'fixture', 'fixture label must remain visible');
   for (const mutate of [s => s.actions[0].enabled = true, s => s.actions.reverse(), s => s.session.actor = null, s => s.operation.revision = 2 ** 60, s => s.nodes.push({id: 'fake'}), s => s.extra = 'proof', s => s.facts[0].items[0].classification = 'proved']) {
