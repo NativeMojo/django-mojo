@@ -481,9 +481,14 @@ class CloudWatchHelper:
         end = mdates.parse_datetime(now or mdates.utcnow()).replace(minute=0, second=0, microsecond=0)
         start = end - datetime.timedelta(hours=hours)
         period = max(1, math.ceil(hours / 60)) * 3600
+        # A non-even UTC end hour can add a leading aligned bucket. Select
+        # against the actual count, preserving the honest requested window.
+        while len(_build_buckets(start, end, period)) > 60:
+            period += 3600
         provider = DeadlineProviderClient("cloudwatch", deadline, region=self.region,
                                            session=self.session, client=client,
-                                           client_factory=self.client_factory)
+                                           client_factory=self.client_factory,
+                                           access_key=self.access_key, secret_key=self.secret_key)
         accounting = {"calls": 0, "discovery_pages": 0}
         class BudgetClient:
             def __getattr__(self, operation):

@@ -20,7 +20,7 @@ TEST_PASSWORD = "TestPass1!"
 
 READ_TOOLS = (
     "get_platform_health", "get_platform_overview", "get_advanced_inventory",
-    "get_framework_status", "get_fleet_capacity",
+    "get_framework_status", "get_fleet_capacity", "get_fleet_health", "get_node_health",
     "get_capacity_operation_status", "get_managed_upgrades",
     "get_upgrade_status", "get_setup_readiness", "get_setup_operation",
     "get_version_drift", "list_cloud_resources", "fetch_cloud_metrics",
@@ -89,7 +89,7 @@ def setup_cloud_registry(opts):
 # Registration shape
 # ---------------------------------------------------------------------------
 
-@th.django_unit_test("the cloud domain registers exactly its twenty tools, none core")
+@th.django_unit_test("the cloud domain registers exactly its twenty-two tools, none core")
 def test_cloud_domain_roster(opts):
     from mojo.apps.assistant import DOMAIN_DESCRIPTIONS
 
@@ -97,7 +97,7 @@ def test_cloud_domain_roster(opts):
     expected = set(READ_TOOLS) | set(MUTATING_TOOLS)
     assert_eq(set(entries), expected,
               f"the cloud roster drifted: {sorted(set(entries) ^ expected)}")
-    assert_eq(len(entries), 20, f"expected 20 cloud tools, got {len(entries)}")
+    assert_eq(len(entries), 22, f"expected 22 cloud tools, got {len(entries)}")
     core = [name for name, entry in entries.items() if entry["core"]]
     assert_eq(core, [],
               f"cloud tools are on-demand; these declared core=True: {core}")
@@ -212,9 +212,9 @@ def test_domain_listing(opts):
     domains = get_available_domains(opts.root)
     assert_true("cloud" in domains,
                 f"a superuser's domain listing has no cloud entry: {sorted(domains)}")
-    assert_eq(domains["cloud"]["count"], 20,
+    assert_eq(domains["cloud"]["count"], 22,
               f"the cloud domain lists {domains['cloud']['count']} tools for a "
-              f"superuser, expected 20")
+              f"superuser, expected 22")
     security = {t["name"] for t in get_domain_tools_for_user(opts.root, ["security"])}
     assert_true("block_ip" in security and "query_incidents" in security,
                 f"an existing domain's tools moved: {sorted(security)[:8]}")

@@ -8,6 +8,9 @@ class _Metrics:
         self.calls = []
         self.duplicate = duplicate
 
+    def close(self):
+        pass
+
     def list_metrics(self, **params):
         self.calls.append(params)
         metric = params["MetricName"]
@@ -74,3 +77,56 @@ def test_provider_deadline_rejects_late_results(opts):
         assert exc.provider_code == "deadline_exceeded", "late provider response must carry deadline reason"
     else:
         raise AssertionError("late provider response must never be accepted")
+
+
+@th.django_unit_test()
+def test_utc_windows_never_exceed_sixty_buckets(opts):
+    from mojo.helpers.aws.cloudwatch import CloudWatchHelper
+    helper = CloudWatchHelper(access_key="selected-key", secret_key="selected-secret")
+    for hours in (1, 24, 25, 60, 120, 168):
+        result = helper.get_node_evidence(
+            "i-one", hours=hours, client=_Metrics(),
+            now=datetime(2026, 10, 20, 13, 45, tzinfo=timezone.utc))
+        cpu = result["cpu"]
+        assert len(cpu["buckets"]) <= 60, f"{hours}-hour odd-boundary window must stay within 60 buckets"
+        assert (datetime.fromisoformat(cpu["end"]) - datetime.fromisoformat(cpu["start"])).total_seconds() == hours * 3600, "period selection must not relabel the requested history window"
+
+
+@th.django_unit_test()
+def test_provider_constructor_expiry_and_explicit_credentials(opts):
+    from mojo.helpers.aws.provider_call import DeadlineProviderClient, ProviderCallError
+    clock, calls = [0], []
+    class Target:
+        def close(self):
+            calls.append("close")
+        def describe_instances(self, **params):
+            calls.append("operation")
+            return {}
+    def factory(*args, **kwargs):
+        calls.append(kwargs)
+        clock[0] = 2
+        return Target()
+    provider = DeadlineProviderClient("ec2", 1, session=object(), client_factory=factory,
+                                      clock=lambda: clock[0])
+    for _ in range(2):
+        try:
+            provider.describe_instances()
+        except ProviderCallError as exc:
+            assert exc.provider_code == "deadline_exceeded", "constructor expiry must retain its deadline refusal"
+        else:
+            raise AssertionError("constructor-expired provider must refuse")
+    assert len(calls) == 2 and calls[-1] == "close", "expired construction must close and prevent provider operation/next construction"
+    config = calls[0]["config"]
+    assert config.retries["total_max_attempts"] == 1, "provider retries must be disabled"
+    assert config.connect_timeout <= .25 and config.read_timeout <= .25, "constructor must receive remaining connect/read limits"
+    # Exercise the helper's selected identity at its own injection seam. A
+    # deliberately opaque test session avoids live credential lookup entirely.
+    observed = []
+    def selected_factory(*args, **kwargs):
+        observed.append(kwargs)
+        return _Metrics()
+    from mojo.helpers.aws.cloudwatch import CloudWatchHelper
+    helper = CloudWatchHelper(access_key="selected-key", secret_key="selected-secret",
+                               session=object(), client_factory=selected_factory)
+    helper.get_node_evidence("i-one")
+    assert observed and all(row["session"] is helper.session for row in observed), "evidence must preserve the helper's explicitly selected session"

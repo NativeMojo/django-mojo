@@ -808,9 +808,12 @@ class JobManager:
                     targeted, sort_keys=True, separators=(",", ":"),
                     allow_nan=False)
                 budget()
+                # Sending may reach the runner even when the remaining-budget
+                # wrapper rejects its late acknowledgement. Preserve dispatch
+                # uncertainty before send; never retry the collector/mutation.
+                dispatched += 1
                 transport.publish(
                     self.keys.runner_ctl(runner["runner_id"]), encoded)
-                dispatched += 1
                 budget()
 
             poll_deadline = min(deadline, started + timeout) if deadline is not None else started + timeout

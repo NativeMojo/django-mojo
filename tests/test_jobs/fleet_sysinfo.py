@@ -70,3 +70,63 @@ def test_checked_deadline_before_subscribe_publish_poll_cleanup(opts):
         assert state["closed"], f"{phase} exhaustion must always clean up the pubsub"
         if phase == "subscribe":
             assert state["published"] == 0, "failed subscription must prevent publication"
+
+
+@th.django_unit_test()
+def test_deadline_client_bounds_every_phase_and_closes_locally(opts):
+    from mojo.helpers.redis.client import _DeadlineClient
+    for phase in ("subscribe", "publish", "get_message", "execute", "cleanup"):
+        clock, calls, socket_limits = [0], [], []
+        connection = SimpleNamespace(socket_timeout=60, socket_connect_timeout=60,
+                                     _sock=SimpleNamespace(settimeout=socket_limits.append))
+        class Pool:
+            connection_kwargs = {}
+            _available_connections = [connection]
+            _in_use_connections = []
+            def disconnect(self):
+                calls.append("disconnect")
+        class Transport:
+            connection_pool = Pool()
+            def pubsub(self):
+                return self
+            def pipeline(self, **kwargs):
+                return self
+            def close(self):
+                calls.append("close")
+            def __getattr__(self, name):
+                def operation(*args, **kwargs):
+                    calls.append(name)
+                    if name == phase:
+                        clock[0] = 10
+                    return None
+                return operation
+        target = Transport()
+        bounded = _DeadlineClient(target, 10, clock=lambda: clock[0], max_timeout=1)
+        pubsub = bounded.pubsub()
+        pipeline = bounded.pipeline(transaction=False)
+        assert isinstance(pubsub, _DeadlineClient) and isinstance(pipeline, _DeadlineClient), "pubsub and pipeline must retain the same absolute deadline"
+        try:
+            if phase == "cleanup":
+                clock[0] = 10
+            elif phase == "execute":
+                pipeline.execute()
+            elif phase == "publish":
+                bounded.publish("channel", "message")
+            else:
+                getattr(pubsub, phase)("channel") if phase == "subscribe" else pubsub.get_message(timeout=5)
+        except TimeoutError:
+            pass
+        else:
+            assert phase == "cleanup", f"a late {phase} result must be rejected"
+        before = len(calls)
+        try:
+            bounded.publish("after", "expiry")
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError(f"{phase} expiry must prevent subsequent network operations")
+        assert len(calls) == before, f"{phase} expiry cannot start another network call"
+        assert connection.socket_timeout <= 1 and connection.socket_connect_timeout <= 1, "remaining socket/connect limits must replace the inherited 60s timeout"
+        assert socket_limits and all(value <= 1 for value in socket_limits), "live pubsub sockets must receive remaining-budget limits"
+        bounded.close()
+        assert calls[-2:] == ["close", "disconnect"], "cleanup after expiry must disconnect locally without another network operation"

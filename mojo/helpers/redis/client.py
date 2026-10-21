@@ -239,6 +239,11 @@ def get_bounded_connection(timeout=1.0, max_connections=8,
     is_cluster = str(settings.get_static("REDIS_CLUSTER", False)).lower() in (
         "1", "true")
     if is_cluster:
+        if deadline is not None:
+            # RedisCluster construction performs topology/credential discovery
+            # before a per-operation deadline can be installed. Refuse this
+            # collector path rather than promise an unbounded startup budget.
+            raise RuntimeError("bounded_cluster_startup_unsupported")
         if read_from_replicas is None:
             read_from_replicas = str(settings.get_static(
                 "REDIS_READ_FROM_REPLICAS", "1")) in ("1", "true", "True")
@@ -249,13 +254,13 @@ def get_bounded_connection(timeout=1.0, max_connections=8,
             read_from_replicas=bool(read_from_replicas),
             reinitialize_steps=1, cluster_error_retry_attempts=0,
             retry=no_retry, retry_on_timeout=False)
-        return _DeadlineClient(client, deadline) if deadline is not None else client
+        return _DeadlineClient(client, deadline, max_timeout=timeout) if deadline is not None else client
     pool = redis.ConnectionPool.from_url(
         url, decode_responses=True,
         socket_connect_timeout=timeout, socket_timeout=timeout,
         max_connections=max_connections, retry=no_retry, retry_on_timeout=False)
     client = redis.Redis(connection_pool=pool)
-    return _DeadlineClient(client, deadline) if deadline is not None else client
+    return _DeadlineClient(client, deadline, max_timeout=timeout) if deadline is not None else client
 
 
 class _DeadlineClient:
@@ -266,10 +271,12 @@ class _DeadlineClient:
     so exhaustion never starts another network cleanup operation.
     """
 
-    def __init__(self, target, deadline, root=None):
+    def __init__(self, target, deadline, root=None, clock=None, max_timeout=1.0):
         self.target = target
         self.deadline = deadline
         self.root = root or target
+        self.clock = clock or time.monotonic
+        self.max_timeout = max_timeout
 
     def __enter__(self):
         self.remaining()
@@ -279,7 +286,7 @@ class _DeadlineClient:
         self.close()
 
     def remaining(self):
-        remaining = self.deadline - time.monotonic()
+        remaining = self.deadline - self.clock()
         if remaining <= 0:
             raise TimeoutError("redis_deadline_exceeded")
         pools = []
@@ -292,7 +299,7 @@ class _DeadlineClient:
             if pool is not None:
                 pools.append(pool)
         # Reserve budget for connect, write and response in the same operation.
-        timeout = remaining / 4
+        timeout = min(self.max_timeout, remaining / 4)
         for pool in pools:
             pool.connection_kwargs.update(socket_timeout=timeout, socket_connect_timeout=timeout)
             connections = list(getattr(pool, "_available_connections", []))
@@ -307,11 +314,13 @@ class _DeadlineClient:
 
     def close(self):
         # PubSub.reset and unWATCHed Pipeline.reset are local disconnect/release.
-        self.target.close()
-        if self.target is self.root:
-            pool = getattr(self.root, "connection_pool", None)
-            if pool is not None:
-                pool.disconnect()
+        try:
+            self.target.close()
+        finally:
+            if self.target is self.root:
+                pool = getattr(self.root, "connection_pool", None)
+                if pool is not None:
+                    pool.disconnect()
 
     def __getattr__(self, name):
         value = getattr(self.target, name)
@@ -325,9 +334,15 @@ class _DeadlineClient:
             if name == "get_message":
                 kwargs["timeout"] = min(kwargs.get("timeout", 0), remaining / 4)
             result = value(*args, **kwargs)
-            self.remaining()
+            try:
+                self.remaining()
+            except TimeoutError:
+                if name in ("pubsub", "pipeline"):
+                    result.close()
+                raise
             if name in ("pubsub", "pipeline"):
-                return _DeadlineClient(result, self.deadline, self.root)
+                return _DeadlineClient(result, self.deadline, self.root,
+                                       clock=self.clock, max_timeout=self.max_timeout)
             return self if result is self.target else result
         return call
 

@@ -222,12 +222,16 @@ class DeadlineProviderClient:
     """
 
     def __init__(self, service, deadline, region=None, session=None,
-                 client=None, client_factory=None, clock=None):
+                 client=None, client_factory=None, clock=None,
+                 access_key=None, secret_key=None):
         import time
         self.service = service
         self.deadline = deadline
         self.region = region
         self.session = session
+        self.owned_session = session is None
+        self.access_key = access_key
+        self.secret_key = secret_key
         self.client = client
         self.client_factory = client_factory
         self.clock = clock or time.monotonic
@@ -245,16 +249,19 @@ class DeadlineProviderClient:
                 from mojo.helpers.settings import settings
                 factory = self.client_factory or get_client
                 if self.session is None:
-                    self.session = get_session(settings.get_static("AWS_KEY", None),
-                                               settings.get_static("AWS_SECRET", None), self.region)
+                    self.session = get_session(
+                        self.access_key if self.access_key is not None else settings.get_static("AWS_KEY", None),
+                        self.secret_key if self.secret_key is not None else settings.get_static("AWS_SECRET", None),
+                        self.region)
                 botocore_session = getattr(self.session, "_session", None)
                 if botocore_session is not None:
                     # Credential discovery is part of this private call budget.
                     # IMDS uses these per-session settings; interactive SSO,
                     # credential_process and container/STS refresh chains have
                     # independent transports and cannot provide this contract.
-                    botocore_session.set_config_variable("metadata_service_timeout", min(0.25, remaining / 8))
-                    botocore_session.set_config_variable("metadata_service_num_attempts", 1)
+                    if self.owned_session:
+                        botocore_session.set_config_variable("metadata_service_timeout", min(0.25, remaining / 8))
+                        botocore_session.set_config_variable("metadata_service_num_attempts", 1)
                     import os
                     profile = botocore_session.get_scoped_config()
                     cached = getattr(botocore_session, "_credentials", None)
@@ -264,7 +271,10 @@ class DeadlineProviderClient:
                     unsupported_environment = any(os.environ.get(key) for key in (
                         "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
                         "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN"))
-                    if cached is None and (unsupported_profile or unsupported_environment):
+                    refreshing = (cached is not None and hasattr(cached, "refresh_needed")
+                                  and cached.refresh_needed())
+                    if (refreshing or (not self.owned_session and cached is None)
+                            or (cached is None and (unsupported_profile or unsupported_environment))):
                         # Never remove a selected provider and silently use a
                         # different account's fallback credentials instead.
                         raise ProviderCallError(self.service + "." + operation,
