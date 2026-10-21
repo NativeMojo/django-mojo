@@ -29,7 +29,7 @@ User sends message via REST
                 approval card, fires "assistant_approval_required".
                 The operator resolves it later over
                 POST /api/assistant/action or the WS assistant_approval
-                message; only approvals.resolve() ever calls the handler.
+                message. An owner_state call returning True runs directly.
                 See approvals.md.
           → Yes, and not mutating: execute handler(params, user), return
             result to LLM
@@ -48,12 +48,14 @@ User sends message via REST
     → Return response + conversation_id + pending_actions
 ```
 
-> **Mutating tools do not execute on the model's call.** See
+> **Chat mutations use approval cards, apart from owner-state calls.** Explicit
+> MCP execution consent additionally permits eligible ordinary tools; protected
+> tools retain their cards. See
 > [Approvals](approvals.md) for the boundary, the `PendingAction` state machine,
 > the gate arguments (`fresh_auth_seconds`, `requires_superuser`,
-> `requires_managed_infrastructure`, `summarize`, `preview`, `authorize`), the
-> transports, and the tool → Admin-twin → gates table for all 38 built-in
-> mutating tools.
+> `requires_managed_infrastructure`, `requires_operator_approval`, `summarize`,
+> `preview`, `authorize`), the transports, and the tool → Admin-twin → gates table
+> for built-in mutating tools.
 
 ### Transports
 
@@ -72,7 +74,10 @@ clients that signed in through this installation's own OAuth 2.1 server. It
 runs no LLM of its own — the client's model does the reasoning and this
 installation only executes tools — and it dispatches through a *projected*
 registry, so the Admin's own conversation tools are not offered. It is off by
-default. See [MCP transport](mcp.md), and
+default. Plain `mcp` grants propose shared changes. Separately consented
+`mcp mcp:execute` grants at the exact MCP resource run eligible ordinary tools
+within the operator's live authority, with protected tools still pending for
+confirmation. Existing grants are never widened. See [MCP transport](mcp.md), and
 [account/oauth_server](../account/oauth_server.md) for token issuance and
 confinement.
 
@@ -370,6 +375,10 @@ credential nobody proved.
 | `FILEMAN_EXPORT_EXPIRES_DAYS` | `14` | Days until assistant `export_data` files expire and are deleted by the cleanup job |
 
 ## Built-in Tools
+
+The descriptions below use the built-in chat's approval behavior. Over MCP,
+explicit execution consent can run eligible ordinary mutations directly; see
+[MCP transport](mcp.md#explicit-delegated-execution).
 
 ### Security Domain (`view_security` / `manage_security`)
 
@@ -1002,7 +1011,9 @@ The assistant reports security-relevant actions and errors to the incident syste
 | `assistant:approval:canceled` | 4 | Operator declined |
 | `assistant:approval:denied` | 6 | A resolution was refused (suppressed + budgeted — see [Approvals](approvals.md)) |
 | `assistant:approval:failed` | 6 | An approved handler raised or returned an error |
-| `assistant:tool:<name>` | 5 | Successful mutating tool execution (block_ip, disable_user, etc.). Unchanged — it now fires from `approvals.resolve()`, so existing RuleSets keep working. |
+| `assistant:tool:<name>` | 5 | Successful mutating tool execution, from approval resolution or direct owner-state/delegated dispatch. Delegated evidence identifies the user, client, grant and conversation. |
+| `assistant:execution:<name>` | 5 | Unsuppressed delegated attempt before dispatch; server-owned invocation id and redacted argument fingerprint correlate the outcome |
+| `assistant:execution_failed:<name>` | 5 / 6 | Unsuppressed delegated returned error / exception; effects may be partial, so reconcile before retrying |
 | `assistant_sensitive_field` | 7 | A model tool refused a filter, ordering, aggregation, `group_by`, export field or search on a sensitive path. One event per refused call; the attempted value is never recorded. |
 | `assistant:error` | 6 | Tool handler raised an unhandled exception |
 | `assistant:error` | 7 | Agent loop crashed |
@@ -1016,7 +1027,7 @@ The assistant reports security-relevant actions and errors to the incident syste
 ### Design
 
 - **Permission denied = always an event.** These are security signals for probing/brute-force detection.
-- **Mutating tools = event on success only.** No event when the tool returns an error dict (operation failed) — that files `assistant:approval:failed` instead.
+- **Mutating tools = event on success only.** No success event when the tool returns an error dict; an approval-path failure files `assistant:approval:failed`.
 - **Approval lifecycle = evidence at every point.** Proposal, approval, cancel, denial and failure all file bounded events carrying actor, tool, conversation and a secret-free argument fingerprint — never argument values.
 - **Read-only tools = no events.** Too high volume, low signal.
 - **Events supplement, not replace, file logging.** Existing `logger` calls remain for debug.
@@ -1262,10 +1273,11 @@ Every tool call passes through a permission gate before execution. The gate chec
 
 Sensitive fields (`password`, `auth_key`, `onetime_code`) are never included in tool results.
 
-**Permission is necessary but not sufficient for a mutating tool.** Holding
-`manage_security` lets the model *propose* `block_ip`; only an operator approving
-that specific proposal executes it, and the permission is re-checked against a
-freshly reloaded `User` immediately before dispatch. See [Approvals](approvals.md).
+**Permission is necessary but not sufficient for a mutating tool.** Chat and
+proposal-only MCP grants propose shared changes for approval. Explicit MCP
+execution consent additionally opens eligible ordinary tools after live
+user/client/grant and argument checks; protected tools retain per-action
+confirmation. See [Approvals](approvals.md).
 
 ## Adding Custom Tools
 
@@ -1324,17 +1336,18 @@ def _tool_query_orders(params, user):
 | `permission` | Yes | Permission string checked via `user.has_permission()` |
 | `description` | Yes | Human-readable description shown to the LLM |
 | `input_schema` | Yes | JSON Schema dict for the tool's parameters |
-| `mutates` | No | Default `False`. If `True`, the tool **cannot execute on the model's call** — it produces an approval the operator must resolve, unless an `owner_state` predicate returns `True` for that call. See [Approvals](approvals.md). |
+| `mutates` | No | Default `False`. If `True`, chat and proposal-only MCP calls produce an approval, apart from owner-state calls. A separately consented MCP execution grant can run eligible ordinary tools directly. See [Approvals](approvals.md). |
 | `core` | No | Default `False`. If `True`, tool is always sent to the LLM (two-tier tier 1). Set this for tools that should be available in every conversation without loading a domain. |
 | `fresh_auth_seconds` | No | Mutating only. A positive recency window mirroring `@md.requires_fresh_auth(seconds=N)`, or `"configured"` to resolve the deployment's freshness policy at proposal and execution. A positive resolved window forces REST-only resolution; configured `0` adds no gate. |
 | `requires_superuser` | No | Mutating only. AND-check for a live literal `User.is_superuser`. |
 | `requires_managed_infrastructure` | No | Mutating only. Hidden and refused when `INFRASTRUCTURE_MODE=external`. |
 | `summarize` | No | Mutating only. `(params, user) -> str` — the card's one sentence. |
 | `preview` | No | Mutating only. `(params, user) -> {"summary", "details", "revision"}`, read-only; the revision is bound and re-checked. Raising it refuses the proposal. |
-| `owner_state` | No | Mutating only. `(params, user) -> bool`. Returning **exactly `True`** runs the handler directly on every transport (the `assistant:tool:<name>` event still fires); anything else proposes a card. Only for state the caller alone owns. Cannot be combined with `fresh_auth_seconds`, `requires_managed_infrastructure` or `preview`. |
+| `requires_operator_approval` | No | Mutating only. Default `False`; `True` keeps a per-action confirmation even with delegated MCP execution consent. Fresh-auth, preview, and handlers declaring `approval` or `**kwargs` already stay protected. |
+| `owner_state` | No | Mutating only. `(params, user) -> bool`. Returning **exactly `True`** runs the handler directly on every transport (the success event still fires); anything else proposes a card even with MCP execution consent. Only for state the caller alone owns. Cannot be combined with `fresh_auth_seconds`, `requires_managed_infrastructure`, `preview` or `requires_operator_approval`. |
 | `authorize` | No | **Any** tool. `(user) -> bool`, evaluated in addition to `permission` wherever that check runs. |
 
-> Passing any of the six mutating-only gates without `mutates=True` raises
+> Passing any mutating-only gate without `mutates=True` raises
 > `ValueError` **at import time** — a misdeclared tool breaks the import rather
 > than degrading into a silent no-op.
 
@@ -1385,10 +1398,10 @@ register_tool(
 | `input_schema` | Yes | JSON Schema dict for the tool's parameters |
 | `handler` | Yes | Callable `(params, user) -> dict or list` |
 | `permission` | Yes | Permission string checked via `user.has_permission()` |
-| `mutates` | No | Default `False`. If `True`, the tool is gated behind an operator approval. See [Approvals](approvals.md). |
+| `mutates` | No | Default `False`. Same approval/delegation behavior as on `@tool`. See [Approvals](approvals.md). |
 | `domain` | No | Default `"custom"`. Logical grouping for the tool |
 | `core` | No | Default `False`. If `True`, always included in every conversation (tier 1). |
-| `fresh_auth_seconds`, `requires_superuser`, `requires_managed_infrastructure`, `summarize`, `preview` | No | Mutating-only approval gates — same meaning as on `@tool`. |
+| `fresh_auth_seconds`, `requires_superuser`, `requires_managed_infrastructure`, `requires_operator_approval`, `summarize`, `preview`, `owner_state` | No | Mutating-only gates — same meaning as on `@tool`. |
 | `authorize` | No | `(user) -> bool`, allowed on any tool. |
 
 ### Tool Handler Guidelines

@@ -52,7 +52,8 @@ class AppConfig(BaseAppConfig):
         def enabled():
             return settings.get("ASSISTANT_MCP_ENABLED", False, kind="bool")
 
-        oauth_server.register_resource("/api/assistant/mcp", ["mcp"], enabled)
+        oauth_server.register_resource(
+            "/api/assistant/mcp", ["mcp", "mcp:execute"], enabled)
         # …and, behind the same switch, the whole REST API:
         oauth_server.register_resource(
             API_ROOT, ["mcp", "api"], enabled, prefix=True)
@@ -73,8 +74,9 @@ class AppConfig(BaseAppConfig):
   > WSGI `SCRIPT_NAME` prefix must register the prefixed form. Get it wrong and
   > the failure is fail-closed and total — every token is refused at the door —
   > rather than a hole, but nothing will work until it matches.
-- **`scopes`** is a list. Two scopes exist: `mcp` (the Assistant's tool door) and
-  `api` (full REST reach as the consenting person).
+- **`scopes`** is a list. The Assistant offers `mcp` (the tool door),
+  `mcp:execute` (explicit ordinary-tool execution consent at that exact door,
+  requiring `mcp`) and `api` (full REST reach as the consenting person).
 - **`enabled`** is a zero-arg callable, **re-evaluated on every read and never
   cached**. Flipping the setting takes effect immediately in both directions.
   A callable that raises counts as disabled — the registry fails closed.
@@ -224,8 +226,9 @@ resolving Assistant approval cards at `POST /api/assistant/action` when the
 person holds the permission for it. That is the equality the consent screen
 states, and in both cases the grant gains no reach: it could make the same
 mutation directly, under the same permission, superuser and fresh-auth gates.
-An `mcp`-only grant never leaves its tool door, and the approval step still
-protects it.
+A grant at the exact MCP resource never leaves its tool door. A plain `mcp`
+grant proposes shared mutations; adding explicit `mcp:execute` consent permits
+eligible ordinary tools there while protected tools retain per-action approval.
 
 An `ApiKey` or a group-scoped token is the opposite — a secret in a config file
 acting for somebody — which is what `denies_key_backed_session` exists to keep
@@ -263,12 +266,22 @@ Who emits it:
 
 ---
 
-## The two scopes
+## Scopes
 
 | Scope | Binds to | What it opens |
 |---|---|---|
 | `mcp` | an **exact** resource | That one endpoint. The Assistant's MCP door reads `grant.scopes` itself and answers `403 insufficient_scope` without it. |
+| `mcp:execute` | the **exact MCP resource**, with `mcp` | Eligible ordinary tools execute within the live user's permissions, without per-action Admin approval. Fresh-auth, preview and approval-bound tools remain proposals. |
 | `api` | a **prefix** resource | Every path beneath the API root, as the consenting person — the same permissions, the same `auth_time`, the same `requires_fresh_auth` behaviour their session JWT has. |
+
+`mcp:execute` is never added to existing grants or default requests. Native
+clients request `scope=mcp mcp:execute` and the exact MCP `resource` through
+PKCE or the device flow, then receive distinct execution-consent copy. The shared
+`consent.validate_scope_resource` requires `mcp` and an entry offering every
+requested scope. The shipped API-root entry does not offer `mcp:execute`, so
+combining it with `api` is refused; a request never silently widens to the root.
+Refresh preserves the granted scopes. See [MCP execution](../assistant/mcp.md#explicit-delegated-execution)
+for live checks, protected contracts, audit and direct-call retry semantics.
 
 **What `api` is.** Exactly what that account can already do through the API with
 its own session token: the same permission checks, the same group scoping, the
@@ -312,8 +325,8 @@ with the person's `auth_key`.
   so in those words — including that approving the Assistant's own pending
   actions is part of what is being granted.
 
-Both scopes ride the one `ASSISTANT_MCP_ENABLED` switch — "remote agents may
-sign in" — and both kinds of grant are listed and revoked from the same Admin
+All three scopes ride the one `ASSISTANT_MCP_ENABLED` switch — "remote agents may
+sign in" — and all these grants are listed and revoked from the same Admin
 section.
 
 **An installation with `MOJO_PREFIX=""` offers no `api` scope at all.** The root
@@ -543,12 +556,13 @@ itself (same origin, so the login page navigates straight back). With a session
 it shows the identity, the client name, the access in plain words, and
 Approve / Deny.
 
-**One sentence per granted scope**, tools first: `mcp` renders "Use the
-Assistant's tools as {email} — the same permissions as your account; changes
-still need your approval in the Admin", and `api` adds "Full API access as
-{email} — everything your account can do through the API, and nothing more,
-including approving the Assistant's own pending actions. The Assistant's
-approval step does not apply to direct API calls." The `{email}`
+**Scope-specific access copy**, tools first: plain `mcp` says that shared changes
+need approval in Admin. With `mcp:execute`, that line is replaced by explicit
+consent to execute ordinary tools within the account's permissions without
+approving each change, retaining additional operator-confirmation and
+fresh-sign-in requirements and explaining revocation. `api` adds the separate
+full-API statement, including the ability to approve Assistant pending actions
+and the absence of the Assistant approval step for direct API calls. The `{email}`
 placeholder is filled in client-side once `/me` answers; the sentences
 themselves are rendered and autoescaped by the template, so no server value is
 concatenated into executable text.
@@ -612,8 +626,9 @@ the installation also speaks the OAuth device authorization grant. It is
 **off by default** (`OAUTH_DEVICE_FLOW_ENABLED`) and, while off, behaves as if it
 did not exist: `device_authorization` and the page 404, the token endpoint answers
 `unsupported_grant_type` for the device grant, and discovery omits both.
-It is also **`mcp`-only** unless `OAUTH_DEVICE_ALLOW_API` is on; asking for `api`
-otherwise answers `invalid_scope`.
+It permits `mcp` and explicitly requested `mcp mcp:execute`; asking for `api`
+answers `invalid_scope` unless `OAUTH_DEVICE_ALLOW_API` is on. Delegation uses the
+same scope/resource validation and distinct consent copy as browser PKCE.
 
 `services/oauth_server/device.py` owns the whole flow, in three steps:
 
@@ -791,7 +806,7 @@ credential lifetime, switch on the device flow or widen it to `api` through a
 | `OAUTH_DEVICE_FLOW_ENABLED` | `False` | Turns the RFC 8628 device flow on. Off, it 404s and is not advertised. |
 | `OAUTH_DEVICE_CODE_TTL` | `600` | How long a device request waits for approval, seconds. Clamped to `60`–`1800`. |
 | `OAUTH_DEVICE_INTERVAL` | `5` | Minimum seconds between a device client's polls. Minimum `1`. |
-| `OAUTH_DEVICE_ALLOW_API` | `False` | Let device sign-ins request the `api` scope. Off, they are `mcp`-only. |
+| `OAUTH_DEVICE_ALLOW_API` | `False` | Let device sign-ins request `api`. This does not gate `mcp:execute` at the exact MCP resource. |
 | `OAUTH_DEVICE_MAX_TTL_DAYS` | `30` | Longest grant the approver may choose, days. Clamped to 1–90. |
 
 `BASE_URL` (System Setup, or the deployment file) and each resource's own enable
@@ -814,3 +829,5 @@ plaintext.
   grants and rotation, **confinement**, and the consent render.
 - `tests/test_oauth_server_extended_serial/` — the whole flow over the wire,
   which needs `BASE_URL` and the enable switch on the running server.
+- `tests/test_oauth_server/8_test_mcp_execution_consent.py` — exact-resource
+  execution scope, required `mcp`, distinct consent copy and device-flow parity.

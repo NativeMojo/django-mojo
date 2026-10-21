@@ -51,7 +51,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | [filevault/](filevault/README.md) | Encrypted file vault |
 | [docit/](docit/README.md) | Documentation system |
 | [assistant/](assistant/README.md) | LLM admin assistant — architecture, tools, extensibility, custom tool registration |
-| [assistant/approvals](assistant/approvals.md) | The approval boundary in front of every mutating assistant tool — `PendingAction`, the gate arguments, the transports, the audit trail |
+| [assistant/approvals](assistant/approvals.md) | Per-action assistant confirmations — `PendingAction`, protected tools, explicit MCP delegation, the transports and audit trail |
 | [assistant/mcp](assistant/mcp.md) | The Assistant's MCP transport — the stateless resource server at `/api/assistant/mcp`, the enabled gate, the token-kind checks, the tool projection and the per-grant conversation |
 | [account/health_snapshot](account/health_snapshot.md) | Protected five-minute health snapshots, failure cursors and source monitoring coverage |
 | [assistant/cloud_tools](assistant/cloud_tools.md) | The assistant's cloud/fleet domain — the twenty-four tools, the Admin endpoint each mirrors, the gates they declare, bounding and redaction |

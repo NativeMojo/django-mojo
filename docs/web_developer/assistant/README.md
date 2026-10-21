@@ -966,7 +966,12 @@ const resp2 = await fetch('/api/assistant', {
 
 ## Mutating Operations
 
-Tools that modify data (block IP, disable user, cancel job, update incident, create ticket) require `manage_*` permissions **and** an explicit operator approval. The server does not run them when the model asks — it creates a pending action and sends you an `approval` block.
+In the built-in Assistant, shared changes require the tool's permissions
+**and** explicit operator approval. The server creates a pending action and
+sends an `approval` block. Own user-tier memories and skills retain their direct
+write behavior. A separate [MCP execution consent](mcp.md#requesting-delegated-tool-execution)
+can authorize ordinary remote tool execution; protected tools still use cards.
+Existing MCP grants and these REST/WebSocket chat flows are unchanged.
 
 The flow:
 

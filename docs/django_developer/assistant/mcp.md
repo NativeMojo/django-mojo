@@ -47,15 +47,16 @@ POST /api/assistant/mcp
   → tools/call → agent._execute_tool(block, PROJECTED registry, …)
       unknown / hidden name → "Unknown tool: <name>"  + assistant:permission_denied (6)
       permission miss       → "Permission denied. …"  + assistant:permission_denied (5)
-      mutates=True          → approvals.propose() → an approval CARD, no side effect
       mutates=True, owner_state → True → the handler runs + assistant:tool:<name>
+      ordinary mutation + live mcp:execute grant → normalized handler call + audit
+      other mutation        → approvals.propose() → an approval CARD, no side effect
       otherwise             → the handler runs
 ```
 
 Nothing in that chain is MCP-specific except the projection and the per-grant
 conversation. **There is no second dispatch path**: a registry tool called over
 MCP runs through the same `agent._execute_tool` both agent loops use, so the
-approval gate, the permission gate, the incident events and the result
+approval/delegation gate, the permission gate, the incident events and the result
 serialization are the chat path's behaviour rather than a re-implementation that
 can drift from it.
 
@@ -134,7 +135,7 @@ existing connection back.
 ### Connecting a headless agent
 
 A browser-based sign-in does not suit an agent on a server or over SSH. For that,
-the account app's OAuth device flow (RFC 8628) issues the same `mcp` grant to a
+the account app's OAuth device flow (RFC 8628) issues the same MCP grant to a
 client with no browser. Full mechanics are in
 [account/oauth_server.md](../account/oauth_server.md#device-authorization-rfc-8628);
 the shape of it:
@@ -142,8 +143,8 @@ the shape of it:
 1. **Enable it in the deployment settings file** — `OAUTH_DEVICE_FLOW_ENABLED =
    True`. It is off by default, file-only (no database or Admin switch) and needs a
    restart. `ASSISTANT_MCP_ENABLED` must be on as well, since the door is the
-   resource being protected. Device sign-ins are `mcp`-only unless
-   `OAUTH_DEVICE_ALLOW_API` is also set.
+   resource being protected. Device sign-ins can request `mcp mcp:execute`;
+   requesting `api` additionally needs `OAUTH_DEVICE_ALLOW_API`.
 2. **The agent registers** with the device grant
    (`urn:ietf:params:oauth:grant-type:device_code` in `grant_types`; no
    `redirect_uris` needed), calls `device_authorization`, and prints the user code
@@ -184,7 +185,8 @@ grant can never be key-backed: a custom `AUTH_BEARER_HANDLERS` identity that
 happened to carry an `oauth_grant` attribute must not open this door.
 
 **The door sits beneath the API root.** `apps.py` registers two resources behind
-the one `ASSISTANT_MCP_ENABLED` switch: this exact path, offering `mcp`, and
+the one `ASSISTANT_MCP_ENABLED` switch: this exact path, offering `mcp` and
+`mcp:execute`, and
 `mojo.helpers.request.API_ROOT` as a **prefix** resource offering `mcp` and
 `api`. A grant at the root with `mcp api` therefore authenticates here as well —
 the chokepoint lets it through because the root covers this path — and the scope
@@ -199,6 +201,43 @@ The permission predicate is exactly the chat endpoint's —
 `@md.requires_global_perms('view_admin', 'assistant')` applies to
 `POST /api/assistant`. An operator who can use the chat can use the door, and
 nobody else can.
+
+### Explicit delegated execution
+
+Native clients can request `scope=mcp mcp:execute` with `resource` equal to the
+exact MCP URL, through PKCE or the device flow. Both use the shared consent
+validator. `mcp:execute` requires `mcp`, is not offered at the API root, and
+cannot be combined with `api` on the shipped resources. Consent explicitly
+authorizes ordinary tool changes without approving each one in Admin. Existing
+`mcp`, `api` and `mcp api` grants keep their previous behavior; reconnect with
+the new scope to opt in. Refresh cannot widen an existing grant.
+
+`services/mcp_execution.py` is called only from the shared dispatcher for an
+authenticated MCP execution grant. Before an ordinary mutation it re-reads the
+active grant, client and user, checks expiry, current access JTI, scopes,
+resource and the grant-owned MCP conversation, then checks the live tool
+permission, `authorize`, superuser and infrastructure requirements. It validates
+arguments through `approvals.normalize_args()` and dispatches as the live user.
+No `PendingAction`, synthetic approval or interactive identity is manufactured.
+
+Tools declaring `fresh_auth_seconds`, `preview` or
+`requires_operator_approval=True` still propose a card. So do handlers declaring
+an `approval` parameter or `**kwargs`, and handlers whose signature cannot be
+inspected. An `owner_state` tool whose predicate does not return exactly `True`
+also stays a proposal: shared/global memories and skills are never delegated.
+`save_model_instance` and `delete_model_instance` keep explicit per-action
+approval; generic save hooks/actions can carry dynamic freshness requirements,
+and generic deletion retains its human-confirmation contract.
+A `fresh_auth_seconds="configured"` declaration stays protected even
+when the current configured window is zero. Extensions can set
+`requires_operator_approval=True` to preserve an interactive confirmation
+contract explicitly.
+
+Direct calls return their actual handler result. They have ordinary API retry
+semantics: no pending-action dedupe, single-use claim or exactly-once guarantee.
+An uncertain mutation must be reconciled before retrying. `initialize` describes
+the connection's mode; `tools/list` marks eligible delegated mutations as
+immediate execution while retaining their mutating annotations.
 
 ---
 
@@ -227,7 +266,8 @@ The five memory and skill WRITERS — `write_memory`, `delete_memory`,
 readers. They carry an `owner_state` predicate, so a call that touches only the
 connected operator's own tier (a `user`-tier memory, a user-tier skill they own)
 executes and returns its result; a global or group tier, or anyone else's skill,
-still returns an approval card. That decision is made in `agent._execute_tool`,
+still returns an approval card, including under delegated execution consent.
+That decision is made in `agent._execute_tool`,
 never here — see [approvals.md](approvals.md#declaring-a-mutating-tool).
 
 `projected_registry` is deliberately **not** permission-filtered:
@@ -266,7 +306,7 @@ It does three jobs:
 
 1. gives `approvals.propose()` its dedupe and supersede scope, so calling the
    same tool with the same arguments twice is one card, not two;
-2. gives the Admin somewhere to see what the client proposed
+2. gives the Admin somewhere to see cards the client proposed
    (`GET /api/assistant/conversation/<id>?graph=detail`);
 3. **bounds what the client may read back** — see the MCP-only tools below.
 
@@ -311,9 +351,13 @@ returns the identical `{"error": "This action is no longer available."}`, and
 `approvals._load`'s `_deny` budget reports an id-guessing loop exactly as it does
 for a REST caller.
 
-**Resolution is never available over MCP.** `POST /api/assistant/action` refuses
-an MCP token (its audience is the MCP path and nothing else), so the operator
-resolves in the Admin over REST or the WebSocket. See
+**Resolution is never available over MCP.** A token bound to the exact MCP
+resource cannot reach `POST /api/assistant/action`, so the operator resolves
+protected proposals in the Admin over REST or the WebSocket. The separate `api`
+grant's existing REST reach is unchanged. An `approval_required` result includes
+`installation` and `approval_url` when a public origin resolves, plus
+`approval_location` directing the operator to Assistant conversation history.
+Clients must explain those fields, state that nothing ran, and stop. See
 [approvals.md](approvals.md).
 
 ---
@@ -360,11 +404,17 @@ client picks them, and `_execute_tool` files a level-6
 machine could mint one incident row per request indefinitely. Fail-closed is
 deliberate: a Redis outage must drop these, not remove the ceiling.
 
-**`UNSUPPRESSED_CATEGORIES` is the exception, and it is an audit decision.** A
-category matching `assistant:tool:` is filed **unsuppressed**, because that event
-means a mutating tool actually RAN — over this transport, an owner-state write to
-the operator's own memory or skills. One row per hour would record the first such
-write and silently drop every one after it. The flood argument does not apply
+**`UNSUPPRESSED_CATEGORIES` preserves execution evidence.** Successful writes
+emit `assistant:tool:<name>`. Delegated calls also emit
+`assistant:execution:<name>` (level 5) before dispatch and
+`assistant:execution_failed:<name>` on a returned error (level 5) or exception
+(level 6). An exception from the attempt reporter prevents handler dispatch.
+All three are unsuppressed. Each delegated event carries a server-owned
+invocation id, user, grant, client and conversation identifiers, and the
+redacted `approvals.fingerprint()` argument digest, never credentials or raw
+argument values. A failure can follow partial effects; inspect current state
+before retrying. One row per hour would silently lose that correlation and
+later writes. The flood argument does not apply
 here: the category is a bounded set the client cannot invent (a name outside the
 registry never reaches a handler), and the handlers carry their own entry and
 size caps.
@@ -392,7 +442,7 @@ size caps.
 
 | Method | Behaviour |
 |---|---|
-| `initialize` | Negotiates `2025-06-18`, accepts `2025-03-26` (the tools subset is identical). Advertises `capabilities.tools` only. `serverInfo` is `{"<MOJO_INSTALLATION_SLUG or "mojo">-assistant", <framework version>}`. Carries `instructions` explaining the approval hand-off. |
+| `initialize` | Negotiates `2025-06-18`, accepts `2025-03-26` (the tools subset is identical). Advertises `capabilities.tools` only. `serverInfo` is `{"<MOJO_INSTALLATION_SLUG or "mojo">-assistant", <framework version>}`. Carries mode-specific `instructions` for proposals or delegated execution. |
 | `notifications/*` | Accepted, 202, no-op. |
 | `ping` | `{}`. |
 | `tools/list` | The projection. No cursor. |
@@ -430,6 +480,7 @@ slot with a null id, and a batch of only notifications is a 202. `MAX_BATCH` is
 |---|---|
 | `mojo/apps/assistant/mcp/protocol.py` | JSON-RPC 2.0 framing. No Django imports. |
 | `mojo/apps/assistant/mcp/server.py` | Methods, projection, per-grant conversation, dispatch. |
+| `mojo/apps/assistant/services/mcp_execution.py` | Live delegation checks and protected-tool classification. |
 | `mojo/apps/assistant/mcp/auth.py` | The door's acceptance checks and the raw JSON response builder. |
 | `mojo/apps/assistant/rest/mcp.py` | The route, the enabled gate, the rate bucket. |
 | `mojo/apps/assistant/apps.py` | The two descriptors and **two** OAuth resource registrations — the exact MCP door and the prefix API root — behind one `enabled` callable. |
@@ -452,6 +503,9 @@ slot with a null id, and a batch of only notifications is a 202. `MAX_BATCH` is
   challenges, the disabled door over the wire (including that the rate-limit
   bucket is never touched), the sensitive-body label, and the descriptors,
   catalog protection, OAuth registration and route wiring.
+- `tests/test_assistant/53_test_mcp_execution.py` — ordinary delegated execution,
+  protected proposals, live authority refusals, argument normalization, audit
+  and mode-specific tool descriptions.
 - `tests/test_assistant_extended_serial/44_test_mcp_wire.py` — the enabled door
   end to end: transport, challenges, protocol shapes, a real `block_ip`
   proposal that only the operator's own session can resolve, and the switch

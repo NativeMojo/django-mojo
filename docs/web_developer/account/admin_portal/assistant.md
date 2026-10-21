@@ -208,9 +208,14 @@ Each row's **`access`** says what that connection can reach:
 
 | `access` | Means |
 |---|---|
-| `tools` | The Assistant's tools only. Every change still waits for an approval in the Admin |
+| `tools` | **Tools** — plain `mcp`; shared changes wait for approval in Admin, with the existing own-memory/skill exception |
+| `execute` | **Delegated tools** — explicit `mcp mcp:execute`; ordinary tools execute within the person's live permissions, while protected tools keep their confirmation checks |
 | `api` | Full REST API access as that person. The approval step does **not** apply |
-| `both` | Both of the above, on one credential |
+| `both` | **Tools + full API** — `mcp api`; MCP shared changes remain proposals, and direct REST calls have full-API reach |
+
+The execution scope is offered only at the exact MCP resource. It requires a
+new, explicit consent flow; switching on remote access or refreshing an old
+connection never upgrades it. See [MCP](../../assistant/mcp.md#requesting-delegated-tool-execution).
 
 `discovery.code` is one of:
 

@@ -16,11 +16,12 @@ Three things to know before you start:
    flow, which most MCP clients perform for you.
 2. **Tools run with the connected operator's own permissions.** You see exactly
    the tools that operator can use, and nothing else.
-3. **A tool that changes SHARED data never executes.** It returns an approval
-   card, and a human resolves it in the Admin. There is no way to approve over
-   MCP. The exception is the operator's own assistant state — a `user`-tier
-   memory, or a skill they own — which is written immediately. See
-   [Approvals](approvals.md).
+3. **The connection's consent decides how ordinary changes run.** A plain
+   `mcp` grant proposes shared changes for approval in Admin. A separately
+   consented `mcp mcp:execute` grant executes eligible tools immediately within
+   the operator's live permissions. Protected tools still return approval cards;
+   MCP cannot resolve them. The operator's own user-tier memories and skills
+   retain their existing direct-write behavior. See [Approvals](approvals.md).
 
 The transport is **stateless Streamable HTTP**: plain `application/json`
 responses, no SSE stream, and **no `Mcp-Session-Id`** — never send one and never
@@ -66,12 +67,39 @@ code, then send `Authorization: Bearer <access token>`.
 
 ---
 
+## Requesting delegated tool execution
+
+A native client that needs ordinary tools to execute asks for these values in
+its PKCE authorization request or device authorization request:
+
+```
+scope=mcp mcp:execute
+resource=https://<host>/api/assistant/mcp
+```
+
+Use the exact resource URL from discovery. `mcp:execute` requires `mcp` and is
+offered only at the MCP resource, so it cannot be combined with `api` on these
+resources. The consent page explicitly asks to let this agent execute ordinary
+tools without approving each change in Admin. A client whose built-in sign-in
+cannot request that scope remains in proposal mode. Existing grants never gain
+it silently; refresh cannot add it, so reconnect with explicit consent.
+
+Fresh-sign-in, revision/preview and explicit operator-confirmation tools retain
+their approval requirements. Generic model saves/deletes
+(`save_model_instance`, `delete_model_instance`) and
+shared/global memory or skill writes also remain proposals.
+`initialize.instructions` describes the mode, and `tools/list` describes eligible
+delegated mutations as immediate execution.
+Direct calls return the real tool result without a pending action. They carry
+no single-use or exactly-once guarantee: if a write's outcome is uncertain,
+inspect/reconcile it before retrying.
+
 ## Requesting full API access
 
 The sign-in above grants the **tool door** and nothing else: the token works at
 `/api/assistant/mcp` and returns `401` everywhere else. The same authorization
 server can also grant **full API access as that person** — every endpoint their
-account can already reach through the REST API — under a second scope, `api`.
+account can already reach through the REST API — under the separate `api` scope.
 
 A client asks for it by naming the **API root** as the resource:
 
@@ -157,9 +185,8 @@ elicitation. Follow with the usual `notifications/initialized`, which answers
 ```
 
 The list is not paginated — there is no cursor. `destructiveHint: true` means
-"this tool changes data" — on this server, that means an approval card rather
-than anything happening, *unless* the call touches only the operator's own
-memory or a skill they own.
+"this tool changes data" in either mode. Read the description and connection's
+instructions to distinguish delegated execution from a proposal.
 
 The list reflects the operator's permissions and this installation's
 configuration, so two operators may legitimately see different tools. A handful
@@ -172,8 +199,8 @@ The memory and skill tools ARE offered — both the readers (`read_memory`,
 `delete_memory`, `save_skill`, `update_skill`, `delete_skill`). A writer call in
 the operator's own `user` tier, or on a user-tier skill they own, runs
 immediately and returns the handler's result; a `global` or `group` tier, or
-anyone else's skill, returns an approval card. `initialize` says the same thing
-in its `instructions`:
+anyone else's skill, returns an approval card even on a delegated grant. For a
+plain grant, `initialize` says in its `instructions`:
 
 > Tools run with the connected operator's own permissions. A tool that changes
 > shared data never executes here: it returns an approval card (status
@@ -225,7 +252,8 @@ batching from the spec — sending one element at a time is always fine.
 
 ## The approval hand-off
 
-Calling a tool that changes data does **not** change anything:
+A proposal-only shared mutation, or a protected tool in delegated mode, returns
+`approval_required` and has **not** executed:
 
 ```json
 {"jsonrpc":"2.0","id":4,"result":{
@@ -236,13 +264,18 @@ Calling a tool that changes data does **not** change anything:
     "tool":"block_ip",
     "summary":"Block 203.0.113.10",
     "expires_at":"2026-08-22T18:41:00+00:00",
-    "message":"NOT EXECUTED. This operation requires operator approval. …"},
+    "installation":"https://<host>",
+    "approval_url":"https://<host>/admin/",
+    "approval_location":"This installation's built-in Admin: open Assistant, then its conversation history and the MCP connection's conversation.",
+    "message":"NOT EXECUTED. This tool requires a separate operator confirmation. …"},
   "isError":false}}
 ```
 
 `isError` is `false` because nothing went wrong — the proposal succeeded. **Do
 not call the tool again for the same request, and do not report the work as
-done.** Tell the operator an approval is waiting, then stop.
+done.** Tell the operator which `installation`, `approval_url` and
+`approval_location` to open, then stop. The URL follows the installation's
+configured Admin path; use the returned value rather than hard-coding `/admin/`.
 
 An approval card appears in the Admin. Only the operator it is bound to can
 resolve it, and only over an interactive session — presenting your MCP token at
@@ -318,7 +351,8 @@ If you are the person being asked to turn this on:
    [OAuth 2.1](../account/oauth_server.md).
 4. **Grant the operator `view_admin` or `assistant`.** The MCP door applies the
    same permission check as the in-Admin chat.
-5. **Watch the approvals.** Everything an external client tries to change lands
-   as a card in the Admin, addressed to the operator whose account authorized
-   the connection. Nothing runs until they approve it, and a connection can be
-   cut at any time by revoking its grant.
+5. **Check each connection's Access label.** **Tools** proposes shared changes;
+   **Delegated tools** executes ordinary tools and keeps protected confirmations.
+   Pending cards belong to the operator whose account authorized the connection,
+   in Assistant conversation history (`MCP: <client name>`). Revoke the grant
+   to disconnect the client at any time.

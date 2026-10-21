@@ -15,6 +15,7 @@ which by the scope you ask for:
 | Scope | Resource | Reach |
 |---|---|---|
 | `mcp` | the Assistant's MCP endpoint | That one path. Every other endpoint answers `401`. |
+| `mcp:execute` (with `mcp`) | the **exact MCP endpoint** | Eligible ordinary tools execute within the user's live permissions. Protected tools keep their per-action confirmation. |
 | `api` | the **API root** (`https://example.com/api`) | Every path beneath the root, as the user — exactly what their own session token can do, and nothing more. |
 
 Either way, presenting the token outside its resource returns `401`. That is by
@@ -67,7 +68,7 @@ If you were sent here by a `401` carrying a `WWW-Authenticate` header, its
   "code_challenge_methods_supported": ["S256"],
   "token_endpoint_auth_methods_supported": ["none"],
   "revocation_endpoint_auth_methods_supported": ["none"],
-  "scopes_supported": ["mcp", "api"],
+  "scopes_supported": ["mcp", "mcp:execute", "api"],
   "authorization_response_iss_parameter_supported": true,
   "client_id_metadata_document_supported": true
 }
@@ -83,7 +84,7 @@ asking for it answers `invalid_scope`.
 {
   "resource": "https://example.com/api/assistant/mcp",
   "authorization_servers": ["https://example.com/api/account/oauth"],
-  "scopes_supported": ["mcp"],
+  "scopes_supported": ["mcp", "mcp:execute"],
   "bearer_methods_supported": ["header"]
 }
 ```
@@ -205,8 +206,10 @@ GET /api/account/oauth/authorize
   If you omit it, the server defaults to the single resource that is eligible
   for the scopes you asked for; if several are eligible, you get
   `invalid_target`.
-- **`scope`** may be omitted (defaults to `mcp`), and may name `mcp`, `api`, or
-  both (`scope=mcp api`). A scope this installation does not offer is
+- **`scope`** may be omitted (defaults to `mcp`). Plain `mcp` proposes shared
+  tool changes; `mcp mcp:execute` explicitly delegates eligible ordinary tools;
+  `api` grants REST access, and `mcp api` also opens tools in proposal mode.
+  `mcp:execute` without `mcp`, or a scope the resource does not offer, is
   `invalid_scope`.
 - **`scope` and `resource` must agree.** `api` binds the API root and nothing
   else; `mcp` alone binds an exact endpoint and never the root. Naming the MCP
@@ -218,12 +221,17 @@ GET /api/account/oauth/authorize
   ```
 
   or, for one credential that does both, `&scope=mcp api`.
+  For delegated tools use `resource=https://example.com/api/assistant/mcp` and
+  `scope=mcp mcp:execute`. The execution scope is not offered at the API root;
+  combining it with `api` is refused. No request is silently widened.
 - **`state`** is echoed verbatim on every response, and is capped at 512
   characters.
 
 The user signs in on the installation's own pages if needed, then sees a consent
-screen naming your client and what the access means — one sentence per scope, and
-for `api` an explicit statement that the Assistant's approval step does not apply
+screen naming your client and what the access means. `mcp:execute` gets explicit
+consent to ordinary changes without approving each in Admin, retaining protected
+confirmations and explaining revocation; plain `mcp` keeps proposal-only copy.
+For `api`, it explicitly states that the Assistant's approval step does not apply
 to direct API calls. The screen also shows the
 host your `redirect_uri` points at, the resource being granted, and — for a DCR
 client — that your name is self-declared. Publishing a **Client ID Metadata
@@ -273,7 +281,7 @@ JSON bodies are accepted too. `200`:
   "token_type": "Bearer",
   "expires_in": 3600,
   "refresh_token": "hR3f…",
-  "scope": "mcp api"
+  "scope": "mcp"
 }
 ```
 
@@ -303,6 +311,9 @@ response; the old one stops working.
 byte for byte** — the server compares it to the stored value, so `api mcp` is
 not `mcp api` and a de-duplicated or re-ordered string is `invalid_grant`.
 Omitting `scope` entirely is always safe.
+
+Refresh cannot add execution authority. Existing grants keep their scopes;
+reconnect through explicit consent to obtain `mcp:execute`.
 
 Two things to know:
 
@@ -381,9 +392,11 @@ when it goes stale, the only way forward is re-consent). It widens nothing.
 | Any path **outside** the root — `/.well-known/…`, a differently-mounted app | `401`, with **no** `WWW-Authenticate` header. |
 | Calling the Assistant's MCP endpoint **without** the `mcp` scope | `403 insufficient_scope`. Ask for `scope=mcp api` if you want both. |
 
-**The approval step does not apply.** Changes an Assistant *tool* makes still
-wait for an operator's approval in the Admin; a direct API call under `api` does
-not. The consent screen says so.
+**The approval step does not apply to direct API calls under `api`.** Its existing
+REST reach is unchanged. MCP shared mutations on a plain `mcp` or `mcp api`
+grant remain proposals; only separate `mcp mcp:execute` consent at the exact MCP
+resource opens ordinary delegated tools. Protected tools still require their
+per-action checks. See [MCP](../assistant/mcp.md#requesting-delegated-tool-execution).
 
 Everything else is unchanged: the token expires in an hour, the refresh token
 rotates, the grant expires 30 days after consent, and an operator can disconnect
@@ -441,8 +454,10 @@ mention it. When on, discovery adds `device_authorization_endpoint` and lists
 `urn:ietf:params:oauth:grant-type:device_code` in `grant_types_supported`. Read the
 endpoints out of the metadata.
 
-**It is `mcp`-only** unless the deployment also allows `api`. Asking a device flow
-for `api` answers `invalid_scope` by default. The token you receive is otherwise
+**It allows MCP scopes** unless the deployment also enables `api`. Asking a device
+flow for `api` answers `invalid_scope` by default; explicitly requesting
+`scope=mcp mcp:execute` at the exact MCP URL is supported through the same consent
+checks as PKCE. The token you receive is otherwise
 the same confined credential described above: same audience, same refresh
 rotation, same revocation.
 
@@ -477,7 +492,9 @@ client_id=<client id>
 ```
 
 JSON bodies are accepted too. `scope` and `resource` follow the same rules as the
-authorization endpoint, including that they must agree. `200`, raw RFC JSON with no
+authorization endpoint, including that they must agree. To delegate ordinary
+tools, replace `scope=mcp` above with `scope=mcp mcp:execute`; the person must
+approve the distinct execution-consent statement. `200`, raw RFC JSON with no
 `{status, code, data}` envelope:
 
 ```json

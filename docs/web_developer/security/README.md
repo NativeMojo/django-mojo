@@ -1186,7 +1186,16 @@ authenticate with OAuth grants rather than API keys, and any of them can be
 disconnected from that same view; [Connecting an AI client over MCP](../assistant/mcp.md)
 is the operator's runbook.
 
-A connection is one of two kinds, shown in the **Access** column: tool-door access (`mcp`), where every change still waits for an approval in the Admin, or **full API access** (`api`), which equals that person's own session token in reach — the same permissions, nothing more — with no approval step on direct API calls. Both are revoked from the same place; a credential a full-API connection mints in turn (an API key, for instance) has its own lifetime and is revoked separately, exactly as one minted from a browser session would be.
+The **Access** column distinguishes **Tools** (`mcp`, shared changes proposed
+for approval), **Delegated tools** (`mcp mcp:execute`, eligible ordinary tools
+executed within live user permissions), **Full API** (`api`) and **Tools + full
+API** (`mcp api`). Delegation needs explicit connection consent at the exact MCP
+resource; protected tools and shared memory/skill writes keep per-action
+approval. Full API retains the person's REST reach without the Assistant's
+approval step on direct API calls. All connections are revoked from the same
+place. A credential a full-API connection mints (an API key, for instance) has
+its own lifetime and must be revoked separately. See the
+[MCP consent and retry contract](../assistant/mcp.md#requesting-delegated-tool-execution).
 
 ## IPSet Bulk Blocking
 
