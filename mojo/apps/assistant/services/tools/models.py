@@ -857,6 +857,7 @@ def _tool_query_model(params, user):
     name="delete_model_instance",
     domain="models",
     permission="view_admin",
+    requires_operator_approval=True,
     description=(
         "Delete a single model instance by primary key. "
         "Respects RestMeta permissions: the model must have CAN_DELETE=True and "
@@ -979,6 +980,9 @@ def _changed_field_names(model, data):
     domain="models",
     permission="view_admin",
     mutates=True,
+    # Generic model actions can require target-specific fresh authentication;
+    # this synthetic request cannot establish it for delegated execution.
+    requires_operator_approval=True,
     description=(
         "Create or update a single MojoModel instance. "
         "Pass `pk` to update an existing row; omit `pk` to create a new one. "

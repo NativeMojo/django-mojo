@@ -58,9 +58,10 @@ SUPPRESSION_BUDGET = 50
 
 # Category prefixes that are NEVER suppressed on this transport. Matched with
 # `str.startswith`, so a tuple. `assistant:tool:<name>` is filed only when a
-# mutating tool actually ran — the record that an owner-state write happened —
-# and one row per hour is not an audit trail. See `suppressed_reporter`.
-UNSUPPRESSED_CATEGORIES = ("assistant:tool:",)
+# mutating tool succeeded. Delegated attempts and failed outcomes also retain
+# one event per invocation. See `suppressed_reporter`.
+UNSUPPRESSED_CATEGORIES = (
+    "assistant:tool:", "assistant:execution:", "assistant:execution_failed:")
 
 
 # --- what this transport does not offer ------------------------------------
@@ -111,7 +112,8 @@ EXECUTION_INSTRUCTIONS = (
     "mutating tools execute as the connected operator, within their live "
     "permissions, and return their actual result. Tools with fresh-sign-in, "
     "revision/preview, approval-bound handlers or explicit operator-confirmation "
-    "requirements still propose an approval. An approval_required response means "
+    "requirements still propose an approval. Generic model mutations and shared "
+    "memory/skill writes also retain approval. An approval_required response means "
     "NOT EXECUTED: explain its installation and approval_url, then stop. "
     "Do not blindly retry an uncertain mutation; direct calls have normal API "
     "retry semantics, not a per-approval single-use guarantee."
@@ -354,11 +356,11 @@ def suppressed_reporter(user, _reporter=None):
     fail-CLOSED: a Redis outage must drop these, not open the floodgate.
 
     ``UNSUPPRESSED_CATEGORIES`` is the one exception, and it is an AUDIT
-    decision. An ``assistant:tool:<name>`` event is filed only when a mutating
-    tool actually RAN, which over this transport means an owner-state write to
-    the operator's own memory or skills. Suppressing it would record the first
-    such write of the hour and silently drop every one after it — the audit trail
-    for exactly the calls that changed something. The flood argument does not
+    decision. Successful writes emit ``assistant:tool:<name>``; delegated calls
+    first emit ``assistant:execution:<name>`` and failures emit
+    ``assistant:execution_failed:<name>``. These preserve grant/client and
+    invocation correlation even when a handler partially mutates then fails.
+    Suppressing them would silently lose the audit trail. The flood argument does not
     apply: the category is a bounded set the client cannot invent (a name outside
     the registry never reaches a handler), and the handlers carry their own entry
     and size caps.

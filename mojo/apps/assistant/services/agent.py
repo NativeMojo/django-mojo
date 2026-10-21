@@ -1042,7 +1042,12 @@ def _execute_tool(
     else:
         # `call_args` is the raw input for every read-only and meta tool, and the
         # normalized input for an owner-state tool taking the direct path.
+        delegated_correlation = ""
         try:
+            if delegated.exempt:
+                delegated_correlation = mcp_execution.record_attempt(
+                    tool_name, call_args, user, conversation, delegated.audit,
+                    reporter=_reporter)
             if on_event:
                 on_event("tool_call", {
                     "tool": tool_name,
@@ -1075,13 +1080,31 @@ def _execute_tool(
                 _report_event(
                     f"assistant:tool:{tool_name}", 5, f"Assistant tool: {tool_name}",
                     f"User {user.email} (id={user.pk}) executed "
-                    f"{delegated.audit or 'owner-state'} mutating "
+                    f"{delegated_correlation or 'owner-state'} mutating "
                     f"tool '{tool_name}' directly. conv={conversation.pk}",
                     user=user, model_name="account.User", model_id=user.pk,
                     _reporter=_reporter)
+            elif delegated_correlation:
+                _report_event(
+                    f"assistant:execution_failed:{tool_name}", 5,
+                    f"Delegated MCP failure: {tool_name}",
+                    f"User {user.email} (id={user.pk}) returned an error for "
+                    f"'{tool_name}' under {delegated_correlation}. "
+                    f"conv={conversation.pk}. Outcome potentially partial; "
+                    "inspect current state before retrying.",
+                    user=user, _reporter=_reporter)
         except Exception as exc:
             logger.exception("Tool %s failed", tool_name)
             tool_result = {"error": f"Tool '{tool_name}' encountered an internal error."}
+            if delegated_correlation:
+                _report_event(
+                    f"assistant:execution_failed:{tool_name}", 6,
+                    f"Delegated MCP exception: {tool_name}",
+                    f"User {user.email} (id={user.pk}) raised an exception for "
+                    f"'{tool_name}' under {delegated_correlation}. "
+                    f"conv={conversation.pk}. Outcome potentially partial; "
+                    "inspect current state before retrying.",
+                    user=user, _reporter=_reporter)
             try:
                 input_keys = list(call_args.keys()) if isinstance(call_args, dict) else []
             except Exception:

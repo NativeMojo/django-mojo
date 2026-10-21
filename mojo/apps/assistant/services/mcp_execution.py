@@ -5,6 +5,7 @@ before an ordinary mutation, and never manufactures a PendingAction or an
 interactive request. Protected tool contracts stay on the approval path.
 """
 import inspect
+import uuid
 from urllib.parse import urlsplit
 
 from objict import objict
@@ -24,6 +25,7 @@ def has_execution_scope(grant):
 def requires_approval(entry):
     """Conservative compatibility rule for existing and extension handlers."""
     if (entry.get("requires_operator_approval") or
+            entry.get("owner_state") is not None or
             entry.get("fresh_auth_seconds") or entry.get("preview")):
         return True
     try:
@@ -88,3 +90,24 @@ def decision(entry, raw_args, user, grant, conversation, request_meta, _external
     result.exempt = True
     result.audit = f"delegated MCP authority grant={live.pk} client={live.client.client_id}"
     return result
+
+
+def record_attempt(tool_name, args, user, conversation, audit, reporter=None):
+    """Record before dispatch; a failed audit write prevents the mutation.
+
+    Reuse the approvals fingerprint's redaction so audit evidence cannot reveal
+    low-entropy secrets by offline guessing. The invocation ID is server-owned.
+    """
+    from mojo.apps.assistant.services import approvals
+    if reporter is None:
+        from mojo.apps.incident import report_event
+        reporter = report_event
+    correlation = (f"{audit} invocation={uuid.uuid4().hex} "
+                   f"fingerprint={approvals.fingerprint(tool_name, args)}")
+    reporter(
+        f"User {user.email} (id={user.pk}) attempting '{tool_name}' under "
+        f"{correlation}. conv={conversation.pk}. Outcome not yet known.",
+        title=f"Delegated MCP attempt: {tool_name}",
+        category=f"assistant:execution:{tool_name}", level=5,
+        uid=user.pk, model_name="account.User", model_id=user.pk)
+    return correlation

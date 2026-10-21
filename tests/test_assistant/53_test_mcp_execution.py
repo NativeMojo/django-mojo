@@ -26,6 +26,15 @@ def _decline(params, user):
     return {"error": "fixture declined the change"}
 
 
+def _partial_failure(params, user):
+    CALLS.append({"partial_mutation": True})
+    raise RuntimeError("test-owned failure after a mutation")
+
+
+def _owned(params, user):
+    return params.get("target") == "owned"
+
+
 def _preview(params, user):
     return {"revision": "testit-execution-revision", "summary": "Test preview"}
 
@@ -60,6 +69,8 @@ def setup_execution(opts):
             ("operator", _write, {"requires_operator_approval": True}),
             ("superuser", _write, {"requires_superuser": True}),
             ("infra", _write, {"requires_managed_infrastructure": True}),
+            ("owner", _write, {"owner_state": _owned}),
+            ("partial", _partial_failure, {}),
             ("decline", _decline, {})]:
         name = "testit_delegation_" + suffix
         if name not in get_registry():
@@ -78,7 +89,7 @@ def _grant(opts, scopes=None):
     return grant
 
 
-def _call(opts, grant, args=None, name="testit_delegation_write"):
+def _call(opts, grant, args=None, name="testit_delegation_write", reporter=None):
     from mojo.apps.assistant.mcp import server
     from mojo.apps.assistant.services import agent
     request = th.get_mock_request(
@@ -89,8 +100,8 @@ def _call(opts, grant, args=None, name="testit_delegation_write"):
         name, {"target": "owned"} if args is None else args,
         opts.operator, grant, agent._build_request_meta(request),
         hide_infrastructure=False,
-        _reporter=lambda details, **kwargs: events.append({
-            "details": details, **kwargs}))
+        _reporter=reporter or (lambda details, **kwargs: events.append({
+            "details": details, **kwargs})))
     return json.loads(result["content"][0]["text"]), events
 
 
@@ -112,6 +123,13 @@ def test_execution_runs_handler_without_pending_action(opts):
     th.assert_true(str(grant.pk) in writes[0]["details"] and
                    CLIENT_ID in writes[0]["details"],
                    "execution audit must identify the OAuth grant and client")
+    attempts = [event for event in events
+                if event.get("category") == "assistant:execution:testit_delegation_write"]
+    th.assert_eq(len(attempts), 1, "each dispatch must first record a durable attempt")
+    th.assert_true("key" not in attempts[0], "attempt evidence must never be suppressed")
+    correlation = attempts[0]["details"].split("invocation=", 1)[1].split()[0]
+    th.assert_true("invocation=" + correlation in writes[0]["details"],
+                   "success must correlate with the recorded attempt")
 
 
 @th.django_unit_test("legacy consent and client trust flags do not grant execution")
@@ -219,6 +237,51 @@ def test_declined_handler_has_no_success_audit(opts):
     th.assert_true("error" in result, "the handler's refusal must reach the caller")
     th.assert_true(not any(event.get("category", "").startswith("assistant:tool:")
                            for event in events), "a refused change has no success audit")
+    th.assert_true(any(event.get("category", "").startswith("assistant:execution_failed:")
+                       for event in events), "an error result needs attributed failure evidence")
+
+
+@th.django_unit_test("owner-state exceptions cannot authorize shared prompt input writes")
+def test_shared_owner_state_stays_protected(opts):
+    before = len(CALLS)
+    result, events = _call(opts, _grant(opts), {"target": "shared"},
+                          name="testit_delegation_owner")
+    th.assert_eq(result.get("status"), "approval_required",
+                 "unearned owner-state exemptions must stay protected")
+    th.assert_eq(len(CALLS), before, "shared prompt inputs must not reach the handler")
+    result, events = _call(opts, _grant(opts), name="testit_delegation_owner")
+    th.assert_eq(result, {"changed": True}, "proven owner-state writes remain direct")
+
+
+@th.django_unit_test("partial failures retain unsuppressed delegated attempt attribution")
+def test_partial_failure_audit(opts):
+    grant = _grant(opts)
+    before = len(CALLS)
+    result, events = _call(opts, grant, name="testit_delegation_partial")
+    th.assert_true("error" in result, "a handler exception must reach the caller")
+    th.assert_eq(len(CALLS), before + 1, "the fixture must mutate before raising")
+    evidence = [event for event in events
+                if event.get("category", "").startswith("assistant:execution")]
+    th.assert_eq(len(evidence), 2, "both attempt and failure must be recorded")
+    th.assert_true(all("key" not in event and CLIENT_ID in event["details"]
+                       and "invocation=" in event["details"] for event in evidence),
+                   "partial failures must retain unsuppressed client and invocation attribution")
+    th.assert_true("potentially partial" in evidence[-1]["details"],
+                   "failure evidence must not imply a rollback")
+    th.assert_true(not any(event.get("category", "").startswith("assistant:tool:")
+                           for event in events), "a partial failure must never claim success")
+
+
+@th.django_unit_test("failed delegated attempt persistence prevents dispatch")
+def test_attempt_audit_failure_prevents_dispatch(opts):
+    before = len(CALLS)
+
+    def unavailable(details, **kwargs):
+        raise RuntimeError("test-owned unavailable audit storage")
+
+    result, events = _call(opts, _grant(opts), reporter=unavailable)
+    th.assert_true("error" in result, "audit failure must refuse the call")
+    th.assert_eq(len(CALLS), before, "no mutation may precede its recorded attempt")
 
 
 @th.django_unit_test("infrastructure ownership remains a runtime condition")
