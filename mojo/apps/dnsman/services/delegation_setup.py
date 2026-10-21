@@ -13,7 +13,7 @@ from objict import objict
 
 from mojo import errors as me
 from mojo.helpers import dates
-from mojo.helpers.request import restricted_identity
+from mojo.helpers.request import is_signed_in_user, restricted_identity
 from mojo.models.secrets import SecretsUnavailableError
 from mojo.apps.dnsman.services import acme_hub_client, delegation, naming
 
@@ -80,7 +80,7 @@ def can_access(actor, group, write=False):
     perms = WRITE if write else VIEW
     if group is None:
         # House-domain reads follow Domain VIEW_PERMS; mutations are ineligible.
-        return not write and bool(identity.has_permission(perms)) and hasattr(identity, "is_request_user")
+        return not write and bool(identity.has_permission(perms)) and is_signed_in_user(identity)
     if not group.is_effectively_active():
         return False
     if hasattr(identity, "is_group_allowed"):

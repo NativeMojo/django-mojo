@@ -33,7 +33,7 @@ def on_user(request, pk=None):
 @md.URL('account/user/me')
 @md.requires_auth()
 def on_user_me(request):
-    if not hasattr(request.user, "is_request_user"):
+    if not request_helpers.is_signed_in_user(request.user):
         raise merrors.PermissionDeniedException("not valid user", 401, 401)
     return User.on_rest_request(request, request.user.pk)
 

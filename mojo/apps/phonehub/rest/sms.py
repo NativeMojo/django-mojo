@@ -1,6 +1,7 @@
 """REST endpoints for SMS operations."""
 
 import mojo.decorators as md
+from mojo.helpers.request import is_signed_in_user
 from mojo.apps.phonehub.models import SMS
 from mojo.apps.phonehub.services.twilio import validate_webhook_signature
 from mojo.helpers.response import JsonResponse
@@ -46,7 +47,7 @@ def on_sms_send(request):
     # request.user is an ApiKey (not a User) when the caller authenticated
     # with an API key. SMS.user is a User ForeignKey, so only attach a real
     # User — the API-key path is identified by its group instead.
-    user = request.user if hasattr(request.user, "is_request_user") else None
+    user = request.user if is_signed_in_user(request.user) else None
 
     # Send SMS
     sms = SMS.send(

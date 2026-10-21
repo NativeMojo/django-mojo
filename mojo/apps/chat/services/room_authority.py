@@ -55,7 +55,7 @@ import json
 
 from mojo import errors as merrors
 from mojo.helpers import logit, modules
-from mojo.helpers.request import is_override_user_session
+from mojo.helpers.request import is_override_user_session, is_signed_in_user
 from mojo.helpers.settings import settings
 
 logger = logit.get_logger("chat", "chat.log")
@@ -269,7 +269,7 @@ def _group_grant(request, room, perms):
 
 def _membership(room, user):
     from ..models import ChatMembership
-    if user is None or not hasattr(user, "is_request_user"):
+    if not is_signed_in_user(user):
         return None
     return ChatMembership.objects.filter(room=room, user=user).first()
 

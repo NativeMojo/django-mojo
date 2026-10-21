@@ -2,7 +2,7 @@ from django.db import models, transaction
 from mojo.models import MojoModel, MojoSecrets
 from mojo.helpers import crypto, dates, logit
 from mojo.helpers.request import (
-    is_key_backed_session, is_request_user, restricted_identity)
+    is_key_backed_session, is_request_user, is_signed_in_user, restricted_identity)
 from mojo.apps import metrics
 from mojo.helpers.settings import settings
 from mojo import errors as merrors
@@ -234,7 +234,7 @@ class Group(MojoSecrets, MojoModel):
     def user_has_permission(self, user, perms, check_user=True):
         if check_user and user.has_permission(perms):
             return True
-        if not hasattr(user, "is_request_user"):
+        if not is_signed_in_user(user):
             return False
         ms = self.get_member_for_user(user, check_parents=True)
         if ms is not None:
@@ -496,7 +496,7 @@ class Group(MojoSecrets, MojoModel):
         # — has no member row, and `.members.filter(user=<ApiKey>)` makes Django
         # raise 'Must be "User" instance.'. Treat it as "no membership" so every
         # caller (guarded or not) degrades to deny/None instead of crashing.
-        if not hasattr(user, "is_request_user"):
+        if not is_signed_in_user(user):
             return None
         # DM-048: a group under a deactivated ancestor is effectively inactive —
         # no membership (direct OR inherited) may resolve from it. One check

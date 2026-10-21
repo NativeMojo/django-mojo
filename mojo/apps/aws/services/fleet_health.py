@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from django.core import signing
 
+from mojo.helpers.request import is_signed_in_user
 from mojo.helpers.settings import settings
 
 SCHEMA_VERSION = 1
@@ -43,7 +44,7 @@ def source_grants(actor):
     # has_permission is the global User helper; group membership and ApiKey
     # identities must never open installation-wide sources.
     if (not actor or not getattr(actor, "is_active", False)
-            or not hasattr(actor, "is_request_user")):
+            or not is_signed_in_user(actor)):
         raise FleetHealthError("permission_denied")
     grants = {"platform": bool(actor.has_permission(PLATFORM_PERMS)),
               "aws": bool(actor.has_permission(AWS_PERMS)),

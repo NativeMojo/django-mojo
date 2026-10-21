@@ -8,6 +8,7 @@ from mojo.helpers import content_guard
 from mojo.helpers import crypto
 from mojo.helpers import logit
 from mojo.helpers.perms import implied_perms
+from mojo.helpers.request import is_signed_in_user
 from mojo.apps.account.utils.jwtoken import JWToken
 from mojo.apps import metrics
 from .device import UserDevice
@@ -395,7 +396,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             request = self.active_request
         if request is None:
             return False
-        if hasattr(request.user, "is_request_user"):
+        if is_signed_in_user(request.user):
             return request.user.id == self.id
         return False
 

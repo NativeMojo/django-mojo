@@ -371,8 +371,18 @@ def is_request_user(request):
     # request.user really IS a User there. That is correct for attribution and
     # WRONG for any machine-identity or authorization gate — those must use
     # is_key_backed_session(request) above.
-    user = getattr(request, "user", None)
-    return user is not None and hasattr(user, "is_request_user")
+    return is_signed_in_user(getattr(request, "user", None))
+
+
+def is_signed_in_user(user):
+    # The test behind is_request_user, for a user object in hand. The marker
+    # alone is not enough: the signed-out user (ANONYMOUS_USER) is an objict,
+    # which answers hasattr for EVERY name, marker included, so it must also
+    # be signed in (#9125). The system stand-in (system_request) is signed in
+    # by construction and still passes; server code relies on that.
+    # Use this, never a hand-rolled hasattr(user, "is_request_user").
+    return user is not None and hasattr(user, "is_request_user") \
+        and bool(getattr(user, "is_authenticated", False))
 
 
 def normalize_ip(value):

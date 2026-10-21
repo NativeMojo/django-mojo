@@ -118,10 +118,10 @@ def _resolve_stamp_actor(request):
     also assumes that member's authority.
 
     Otherwise request.user, but ONLY when it is an actual model instance.
-    is_request_user() cannot tell a pseudo-user from a real User: ANONYMOUS_USER
-    and the system request's user are both objicts, and objict.__getattr__
-    answers EVERY attribute, so hasattr(user, "is_request_user") is True for
-    both (see board item 46). Assigning one to a ForeignKey raises
+    is_request_user() cannot tell the system request's user from a real User:
+    it is a signed-in objict, and objict.__getattr__ answers EVERY attribute,
+    marker included (see board item 46; ANONYMOUS_USER is refused since #9125
+    because it is not signed in). Assigning one to a ForeignKey raises
     ValueError: Cannot assign "{...}" ... must be a "User" instance.
 
     A non-attributable actor leaves the owner field alone — already the

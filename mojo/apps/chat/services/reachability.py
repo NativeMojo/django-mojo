@@ -30,7 +30,7 @@ active id is reachable, so a DM that opens tells the caller the id is an
 active account.
 """
 from mojo.helpers import logit, modules
-from mojo.helpers.request import is_override_user_session
+from mojo.helpers.request import is_override_user_session, is_signed_in_user
 from mojo.helpers.settings import settings
 
 logger = logit.get_logger("chat", "chat.log")
@@ -60,7 +60,7 @@ def parse_user_id(value):
 
 def _is_person(user):
     # A real account.User; an ApiKey or the system pseudo-user is not one.
-    return user is not None and hasattr(user, "is_request_user")
+    return is_signed_in_user(user)
 
 
 def is_caller(request, target_id):
