@@ -30,6 +30,16 @@ The build hook binds epoch1, full committed source SHA, critical-file manifest
 and release inside the wheel and reports the actual outer wheel SHA-256.
 Editable/unbound sources cannot qualify. The loaded identity is captured once
 per process; inspecting newer files cannot prove an old worker reloaded them.
+The tuple stays private and does not extend the existing public node-proof
+REST shape. A first import of this metadata into a long-lived old process
+after pip changes can describe new files while other old modules survive.
+It is never proof that HTTP/worker processes restarted: actual stopped/replaced
+PID/start identities and maintained operator holds remain mandatory.
+Fresh-shell output is installed evidence. This source supplies no automatic
+collector proving running HTTP/Jobs/scheduler imports. The operator must
+qualify actual startup/import and PID/start/restart sequencing while the
+reviewed installed artifact stays held; unsupported process observations
+remain `evidence_unavailable`, never a private-helper-only proof.
 
 The release policy accepts only canonical dotted numeric final releases with
 two through four components. Epoch, pre/dev/local/post releases, unknown

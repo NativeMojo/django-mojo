@@ -247,13 +247,15 @@ def local_node_proof(data=None):
         "platform_sha": deployed_sha,
         "platform_deployment": deployed_uuid,
         "node_type": deployed_type,
-        "acme_hub_loaded_identity": _acme_hub_loaded_identity(),
         "observed_at": dates.utcnow().isoformat(),
         "pools": evidence,
     }
 
 
 def _acme_hub_loaded_identity():
+    # Private local metadata only. A first import into an old process cannot
+    # prove its other modules or workers restarted; operator PID/quiescence
+    # observations remain mandatory. Keep the public node-proof DTO stable.
     from mojo.apps.dnsman.acme_hub_feature import loaded_identity
     return loaded_identity()
 
