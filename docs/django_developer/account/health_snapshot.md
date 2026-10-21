@@ -65,7 +65,13 @@ prior facts keep their original IDs/times/deadlines as prior evidence.
 
 Direct observations expire after 420 seconds. CloudWatch uses the earlier of
 sample time plus three declared/requested periods and successful collection
-plus 420 seconds. Worker heartbeats use three configured heartbeat intervals.
+plus 420 seconds. Worker admission still requires the existing live lease of
+three configured heartbeat intervals (15 seconds by default). An admitted worker
+sample uses the direct-observation window in cached snapshots, anchored to its
+actual heartbeat time. Its provenance records `heartbeat_interval_seconds` and
+`live_admission_window_seconds`. This is a point-in-time presence observation;
+it does not prove continuous worker liveness. Stale or missing collection evidence
+is not admitted. On-demand runner evidence retains its live lease policy.
 Source times over 30 seconds ahead, malformed times and missing times are
 unknown; tolerated skew grants no extra freshness. Cached reads re-evaluate
 actual deadlines. Collection, publication and served times cannot renew a source
