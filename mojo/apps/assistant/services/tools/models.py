@@ -489,6 +489,24 @@ def _validate_having_keys(having, aliases):
     return None
 
 
+def _list_group_refusal(model, request, model_label):
+    """The assistant twin of ``MojoModel.rest_check_list_group``.
+
+    The tools take no group, so a model that requires one for list callers
+    (RestMeta.LIST_REQUIRES_GROUP or the REST_LIST_REQUIRES_GROUP setting) is
+    refused outright for a non-platform caller — never answered with the
+    cross-group union. Returns an error dict, or None to continue.
+    """
+    requires = getattr(model, "rest_list_requires_group", None)
+    if requires is None or not requires():
+        return None
+    if model.rest_is_platform_list_caller(request):
+        return None
+    return {"error": (
+        f"{model_label} can only be listed for one group, and the assistant "
+        "cannot choose a group; use the app's list for that group instead")}
+
+
 def _apply_owner_group_filter(model, request, queryset):
     """Apply owner/group filtering based on VIEW_PERMS, same as on_rest_handle_list."""
     perms = model.get_rest_meta_prop("VIEW_PERMS", [])
@@ -769,6 +787,9 @@ def _tool_query_model(params, user):
             return search_err
 
     # Build queryset
+    refusal = _list_group_refusal(model, request, model_label)
+    if refusal:
+        return refusal
     queryset = model.objects.all()
 
     # Apply owner/group filtering (same as REST layer)
@@ -1360,6 +1381,9 @@ def _tool_aggregate_model(params, user):
             return having_err
 
     # Build queryset
+    refusal = _list_group_refusal(model, request, model_label)
+    if refusal:
+        return refusal
     queryset = model.objects.all()
     queryset = _apply_owner_group_filter(model, request, queryset)
 
@@ -1639,6 +1663,9 @@ def _tool_export_data(params, user):
             return search_err
 
     # Build queryset
+    refusal = _list_group_refusal(model, request, model_label)
+    if refusal:
+        return refusal
     queryset = model.objects.all()
     queryset = _apply_owner_group_filter(model, request, queryset)
 

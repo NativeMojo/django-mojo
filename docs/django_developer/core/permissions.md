@@ -79,6 +79,14 @@ def on_group_webhook_secret(request): ...   # touches request.group only
 def on_clear_queue(request): ...            # clears the global job queue
 ```
 
+The same **platform** test decides who may list a `LIST_REQUIRES_GROUP` model
+without naming a group: `Model.rest_is_platform_list_caller(request)` is true
+for a real user, not key-backed and not a group token, who is a superuser or
+holds one of the model's `VIEW_PERMS` globally (`all`, `authenticated`,
+`owner` and `member` never count). Everyone else gets 400 `"group required"`
+until they pass `?group=`. See
+[REST → Permissions](../rest/permissions.md#requiring-a-group-on-lists-list_requires_group).
+
 ## Instance-Level Permission Hooks
 
 A model may override two per-instance hooks that the generic permission layer

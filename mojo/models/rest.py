@@ -33,6 +33,12 @@ COMMON_GRAPH_NAMES = frozenset(settings.get_static(
     "REST_COMMON_GRAPH_NAMES",
     ("default", "basic", "list", "simple", "detail", "detailed", "full")))
 
+# Grants that never make a caller "platform" for the list group policy
+# (MojoModel.rest_is_platform_list_caller).
+_NOT_PLATFORM_PERMS = frozenset(("all", "authenticated", "owner", "member"))
+# Models already logged for LIST_REQUIRES_GROUP without group scoping.
+_LIST_GROUP_MISCONFIG_LOGGED = set()
+
 # Sentinel: the request carried no `graph` key (see on_rest_save).
 _GRAPH_UNSET = object()
 
@@ -405,6 +411,93 @@ class MojoModel:
         return getattr(cls.RestMeta, name, default)
 
     @classmethod
+    def _is_group_scoped(cls):
+        """True when the model has a direct ``group`` FK or declares a
+        ``RestMeta.GROUP_FIELD`` (which may be a related path). The ONE
+        definition the permission check and the list group policy share, so
+        they cannot drift."""
+        return bool(cls.get_rest_meta_prop("GROUP_FIELD", None)) or hasattr(cls, "group")
+
+    @classmethod
+    def rest_list_requires_group(cls):
+        """True when non-platform list callers must name a group.
+
+        Either the model opts in with ``RestMeta.LIST_REQUIRES_GROUP = True``,
+        or the site lists it in ``REST_LIST_REQUIRES_GROUP`` (model labels,
+        e.g. ``["account.GroupMember"]``) — the way in for models a site does
+        not own. Read per call so the setting needs no restart.
+        """
+        if cls.get_rest_meta_prop("LIST_REQUIRES_GROUP", False):
+            return True
+        labels = settings.get_static("REST_LIST_REQUIRES_GROUP", None)
+        if not labels:
+            return False
+        if isinstance(labels, str):
+            labels = [labels]
+        wanted = {str(label).lower() for label in labels}
+        return cls._meta.label_lower in wanted
+
+    @classmethod
+    def rest_is_platform_list_caller(cls, request):
+        """The platform-authority predicate for the list group policy.
+
+        Mirrors ``requires_global_perms``: a real User, not key-backed and not
+        a group token, who is a superuser or holds one of the model's
+        VIEW_PERMS in their GLOBAL permissions. ``all``, ``authenticated``,
+        ``owner`` and ``member`` never count — and a GroupMember grant can
+        never make a caller platform. Session, JWT, OAuth-grant and per-user
+        API key sessions all act as the person and qualify; an ApiKey, a group
+        token or a custom bearer identity never does.
+        """
+        user = getattr(request, "user", None)
+        if user is None or not getattr(user, "is_authenticated", False):
+            return False
+        if getattr(request, "group_token", None) is not None:
+            return False
+        if is_key_backed_session(request) or not is_request_user(request):
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
+        perms = cls.get_rest_meta_prop("VIEW_PERMS", []) or []
+        if isinstance(perms, str):
+            perms = [perms]
+        perms = [p for p in perms if p not in _NOT_PLATFORM_PERMS]
+        return bool(perms) and user.has_permission(perms)
+
+    @classmethod
+    def rest_check_list_group(cls, request):
+        """Refuse a list with no resolved group when the model requires one.
+
+        Returns None to let the list continue; raises
+        ``ValueException("group required")`` (400) otherwise. It only narrows:
+        it never sets ``request.group`` and never authorizes anything, so every
+        request it lets through meets the unchanged permission checks.
+        Custom list endpoints that build their own querysets may call it.
+        """
+        if not cls.rest_list_requires_group():
+            return None
+        group_scoped = cls._is_group_scoped()
+        if group_scoped and getattr(request, "group", None) is not None:
+            return None
+        if restricted_identity(request) is not None:
+            # An ApiKey or group token always carries its group; None means
+            # its tenant is suspended, which already answers 403 with no rows.
+            return None
+        user = getattr(request, "user", None)
+        if user is None or not getattr(user, "is_authenticated", False):
+            # Keep today's 401.
+            return None
+        if cls.rest_is_platform_list_caller(request):
+            return None
+        if not group_scoped and cls.__name__ not in _LIST_GROUP_MISCONFIG_LOGGED:
+            _LIST_GROUP_MISCONFIG_LOGGED.add(cls.__name__)
+            logit.error(
+                f"LIST_REQUIRES_GROUP on {cls.__name__}, which is not group-scoped "
+                "— every non-platform list is refused (fail-closed). Add a group "
+                "FK or RestMeta.GROUP_FIELD, or remove the flag.")
+        raise me.ValueException("group required")
+
+    @classmethod
     def get_no_save_fields(cls):
         """
         Names the REST save never takes from a request body.
@@ -593,8 +686,7 @@ class MojoModel:
         # group-membership branch below and the instance-group resolution —
         # otherwise a GROUP_FIELD-only model falls through to a flat, tenantless
         # user.has_permission check and leaks every tenant's rows.
-        GROUP_FIELD = cls.get_rest_meta_prop("GROUP_FIELD", None)
-        is_group_scoped = bool(GROUP_FIELD) or hasattr(cls, "group")
+        is_group_scoped = cls._is_group_scoped()
 
         if "all" not in perms:
             if request.user is None or not request.user.is_authenticated:
@@ -1112,6 +1204,10 @@ class MojoModel:
             JsonResponse representing the list of resources.
         """
         # cls.debug("on_rest_handle_list")
+        # FIRST, before any permission branch: a model whose VIEW_PERMS say
+        # "authenticated" or "all" passes the check below and would serve the
+        # whole table. Count, _stats and download share this entry point.
+        cls.rest_check_list_group(request)
         if cls.rest_check_permission(request, "VIEW_PERMS"):
             return cls.on_rest_list(request)
 
