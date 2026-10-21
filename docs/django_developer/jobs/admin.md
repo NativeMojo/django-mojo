@@ -358,3 +358,8 @@ retained for TLS certificate verification/SNI; no global resolver or pool is
 patched. Buffered/pipelined/slow-drip replies share the same deadline as roster,
 publication and polling. Extra OCSP network validation and cluster topology
 startup remain unsupported for this bounded diagnostic path.
+
+TLS handshake setup refreshes its remaining budget after TCP and local certificate
+configuration, then uses a single native handshake timeout. Existing TLS
+certificate/hostname requirements remain enforced. The private transport does not
+change the installation's global Redis/TLS connection classes.

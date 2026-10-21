@@ -121,3 +121,114 @@ def test_private_aws_and_redis_tls_preserve_original_hostname(opts):
     assert isinstance(result, DeadlineSocket), "Redis authentication/parser I/O must receive the absolute-deadline socket"
     assert wrapped_hosts == ["cache.example"] and redis.host == "cache.example", "Redis TLS must wrap the original hostname after numeric TCP dialing"
     assert calls[0][0] == "metrics.example" and calls[1][0] == "cache.example", "each private SDK must pass its own original identity to bounded resolution"
+
+
+@th.django_unit_test()
+def test_connection_close_preserves_real_http_body_file_lifetime(opts):
+    import http.client
+    import socket
+    import time
+    from mojo.helpers.bounded_transport import DeadlineSocket
+    client, peer = socket.socketpair()
+    connection = http.client.HTTPConnection("fixture.example", timeout=1)
+    response = None
+    try:
+        client.settimeout(1)
+        connection.sock = DeadlineSocket(client, time.monotonic() + 2)
+        connection.request("GET", "/")
+        peer.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\n")
+        response = connection.getresponse()
+        assert connection.sock is None, "HTTPConnection must exercise its real Connection:close owner release"
+        assert client.fileno() >= 0, "a live body makefile must retain the socket after connection close"
+        # Body bytes arrive only AFTER the connection releases its socket.
+        peer.sendall(b"hello")
+        assert response.read() == b"hello", "Connection:close body must remain readable under the absolute deadline"
+        response.close()
+        assert client.fileno() == -1, "closing the final body file must release the underlying socket"
+    finally:
+        if response is not None:
+            response.close()
+        connection.close()
+        client.close()
+        peer.close()
+
+
+@th.django_unit_test()
+def test_real_tls_handshake_drip_obeys_remaining_budget_after_late_tcp(opts):
+    import socket
+    import ssl
+    import threading
+    import time
+    from botocore.awsrequest import AWSHTTPSConnectionPool
+    from redis.connection import SSLConnection
+    from mojo.helpers.bounded_transport import bind_aws_client, bind_redis_pool
+    for driver in ("aws", "redis"):
+        client, peer = socket.socketpair()
+        client.settimeout(1)
+        peer.settimeout(1)
+        stop = threading.Event()
+        progress = []
+        def drip():
+            try:
+                hello = peer.recv(8192)
+                if hello:
+                    progress.append("client_hello")
+                # Deliberately incomplete TLS record header. Progress must not
+                # give the SSL handshake a fresh timeout for each fragment.
+                for part in (b"\x16", b"\x03", b"\x03", b"\x00"):
+                    if stop.wait(.025):
+                        break
+                    peer.sendall(part)
+                    progress.append("fragment")
+                stop.wait(1)
+            except OSError:
+                pass
+        thread = threading.Thread(target=drip)
+        thread.start()
+        started = time.monotonic()
+        deadline = started + .2
+        def connector(*args, **kwargs):
+            time.sleep(.12)
+            return client
+        connection = None
+        try:
+            if driver == "aws":
+                context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                manager = SimpleNamespace(connection_pool_kw={"ssl_context": context})
+                transport = SimpleNamespace(_manager=manager, _proxy_config=None)
+                sdk = SimpleNamespace(_endpoint=SimpleNamespace(http_session=transport, host="https://fixture.example"))
+                bind_aws_client(sdk, deadline, connector=connector)
+                connection = manager.pool_classes_by_scheme["https"].ConnectionCls(
+                    "fixture.example", port=443, timeout=1,
+                    ssl_context=manager.connection_pool_kw["ssl_context"])
+                try:
+                    connection.connect()
+                except OSError:
+                    pass
+                else:
+                    raise AssertionError("an incomplete TLS handshake cannot complete")
+            else:
+                pool = SimpleNamespace(connection_class=SSLConnection)
+                bind_redis_pool(pool, deadline, connector=connector)
+                connection = pool.connection_class(host="fixture.example", port=6379,
+                                                   socket_timeout=1, socket_connect_timeout=1,
+                                                   ssl_cert_reqs="none", ssl_check_hostname=False)
+                try:
+                    connection._connect()
+                except OSError:
+                    pass
+                else:
+                    raise AssertionError("an incomplete Redis TLS handshake cannot complete")
+            elapsed = time.monotonic() - started
+            assert elapsed < .6, f"{driver} TLS must use the remaining deadline after late TCP, took {elapsed:.3f}s"
+            assert "client_hello" in progress and "fragment" in progress, f"{driver} fixture must exercise actual TLS handshake writes and fragmented reads"
+        finally:
+            stop.set()
+            if connection is not None:
+                connection.close() if hasattr(connection, "close") else connection.disconnect()
+            client.close()
+            peer.close()
+            thread.join(1)
+        assert not thread.is_alive(), f"{driver} fixture must leave no detached handshake worker"

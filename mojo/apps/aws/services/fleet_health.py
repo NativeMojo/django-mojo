@@ -392,6 +392,17 @@ def reconcile(declarations, inventory=None, runners=None, proofs=None, now=None,
     return [rows[key] for key in sorted(rows)]
 
 
+def roster_scope(expected):
+    """Cache/consumer fence for selected environment and normalized declarations."""
+    spec = expected.get("spec")
+    identity = ({"project": getattr(spec, "project", None), "environment": getattr(spec, "env", None),
+                 "fleet": getattr(spec, "fleet", None)} if spec is not None else None)
+    declarations = sorted(expected.get("declarations", []),
+                          key=lambda row: (row.get("node_id", ""), row.get("source", "")))
+    return hashlib.sha256(json.dumps({"identity": identity, "declarations": declarations},
+                                     sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 class IdentityRoster:
     """Shared 120-second identity aliases, <=128 rows/96KiB; no health evidence."""
     FIELDS = ("node_id", "hostname", "instance_id", "role", "request_service_required",
@@ -409,21 +420,21 @@ class IdentityRoster:
         return connect(timeout=0.25, max_connections=1,
                        read_from_replicas=False, deadline=deadline)
 
-    def _key(self, grants):
+    def _key(self, grants, scope=None):
         mask = "".join("1" if grants[key] else "0" for key in ("platform", "aws", "jobs"))
         prefix = self.prefix if self.prefix is not None else settings.get_static("JOBS_REDIS_PREFIX", "mojo:jobs")
-        return prefix + ":fleet:health:identities:v1:" + mask
+        return prefix + ":fleet:health:identities:v1:" + mask + (":" + scope if scope else "")
 
-    def write(self, grants, revision, rows, deadline):
+    def write(self, grants, revision, rows, deadline, *, scope=None):
         identities = [{key: row.get(key) for key in self.FIELDS} for row in rows[:128]]
         if len(rows) > MAX_NODES or any(not self._valid_identity(row) for row in identities):
             return False
-        raw = json.dumps({"revision": revision, "expires_at": self.clock() + IDENTITY_TTL,
+        raw = json.dumps({"revision": revision, "scope": scope, "expires_at": self.clock() + IDENTITY_TTL,
                           "rows": identities}, separators=(",", ":"), allow_nan=False)
         if len(raw.encode()) > 96 * 1024:
             return False
         with self._connection(deadline) as client:
-            return bool(client.set(self._key(grants), raw, ex=IDENTITY_TTL))
+            return bool(client.set(self._key(grants, scope), raw, ex=IDENTITY_TTL))
 
     @staticmethod
     def _valid_identity(row):
@@ -456,14 +467,14 @@ class IdentityRoster:
         return (isinstance(sources, list) and len(sources) <= 5 and all(source in (
             "configuration", "edge_topology", "provision", "cloud_inventory", "runner_heartbeat") for source in sources))
 
-    def read(self, grants, deadline):
+    def read(self, grants, deadline, *, scope=None):
         with self._connection(deadline) as client:
-            raw = client.get(self._key(grants))
+            raw = client.get(self._key(grants, scope))
         if not isinstance(raw, (str, bytes)) or len(raw) > 96 * 1024:
             return None
         try:
             value = json.loads(raw)
-            if (not isinstance(value, dict) or type(value.get("expires_at")) not in (int, float)
+            if (not isinstance(value, dict) or value.get("scope") != scope or type(value.get("expires_at")) not in (int, float)
                     or not math.isfinite(value["expires_at"]) or value["expires_at"] <= self.clock()
                     or value["expires_at"] > self.clock() + IDENTITY_TTL + 5
                     or not isinstance(value.get("revision"), str)
@@ -520,7 +531,7 @@ def _collect(actor, deadline, readers):
     cached_proofs, cached_ambiguities = [], []
     if grants["jobs"]:
         try:
-            record = (readers.get("identity_cache") or IdentityRoster()).read(grants, deadline)
+            record = (readers.get("identity_cache") or IdentityRoster()).read(grants, deadline, scope=roster_scope(expected))
             for identity in (record or {}).get("rows", []):
                 if (identity.get("identity_status") == "ambiguous"
                         and _fresh(identity.get("proof_observed_at"), datetime.now(timezone.utc))):
@@ -596,7 +607,7 @@ def _envelope(expected, rows, sources, overflow):
         reasons.append("expected_nodes_missing")
     if ambiguous:
         reasons.append("identity_ambiguous")
-    return {"schema_version": 1, "generated_at": _now(), "roster_revision": _revision(rows),
+    return {"schema_version": 1, "generated_at": _now(), "roster_revision": _revision(rows), "roster_scope": roster_scope(expected),
             "collection_status": ("unconfigured" if not configured else "complete" if complete else "partial"),
             "health": "unhealthy" if any(row["health"] == "unhealthy" for row in rows) else "unknown",
             "health_scope": "provider_and_runner_presence", "coverage": {
@@ -643,7 +654,7 @@ def report(actor, limit=20, cursor=None, *, readers=None, deadline=None):
         coverage()
     try:
         cached = readers.get("identity_cache") or IdentityRoster()
-        if not cached.write(grants, revision, rows, deadline):
+        if not cached.write(grants, revision, rows, deadline, scope=roster_scope(expected)):
             output["sources"]["identity_cache"] = _state("unavailable", "identity_cache_unavailable")
     except Exception:
         output["sources"]["identity_cache"] = _state("unavailable", "identity_cache_unavailable")
@@ -728,7 +739,7 @@ def node(actor, node_id, hours=24, *, readers=None, deadline=None):
     cached = None
     try:
         cache = readers.get("identity_cache") or IdentityRoster()
-        record = cache.read(grants, deadline)
+        record = cache.read(grants, deadline, scope=roster_scope(expected))
         if record:
             cached = next((row for row in record["rows"] if row["node_id"] == node_id), None)
     except Exception:
@@ -743,7 +754,9 @@ def node(actor, node_id, hours=24, *, readers=None, deadline=None):
         raise FleetHealthError("roster_changed", "A checked node identity changed; refresh get_fleet_health.")
     if row is None:
         # Preserve a recently observed alias, but never manufacture its presence.
-        row = dict(cached or known, runner_id=None, lifecycle="missing", health="unknown",
+        row = dict(cached or known, hostname=None, instance_id=None, runner_id=None,
+                   role=None, request_service_required=None, aliases=[],
+                   lifecycle="missing", health="unknown",
                    reasons=["node_no_longer_observed"], last_heartbeat=None, observed_at=None,
                    provider_state=None, target_states=[])
     if row.get("identity_status") == "ambiguous":
@@ -769,6 +782,11 @@ def node(actor, node_id, hours=24, *, readers=None, deadline=None):
                 proof = payload.get("proof") or {}
                 if (proof.get("node_id") and proof["node_id"] != row["node_id"]
                         and any(item.get("node_id") == proof["node_id"] for item in expected["declarations"])):
+                    if any(item["node_id"] == proof["node_id"] and item.get("identity_status") == "ambiguous"
+                           and _fresh(item.get("proof_observed_at"), datetime.now(timezone.utc)) for item in rows):
+                        # A single refreshed claimant cannot erase a still-fresh
+                        # conflicting proof. Only expiry/new roster can clear it.
+                        raise FleetHealthError("identity_ambiguous")
                     prior_proofs = [{"host": item.get("hostname"), "started": item["proof_started"],
                                      "proof": {"node_id": item["node_id"], "observed_at": item["proof_observed_at"]}}
                                     for item in rows if item.get("proof_started") and item.get("proof_observed_at")]
@@ -777,7 +795,7 @@ def node(actor, node_id, hours=24, *, readers=None, deadline=None):
                         heartbeat_ttl=readers.get("heartbeat_ttl", max(1, int(settings.get_static("JOBS_RUNNER_HEARTBEAT_SEC", 5))) * 3))
                     try:
                         alias_saved = (readers.get("identity_cache") or IdentityRoster()).write(
-                            grants, _revision(aliases), aliases, deadline)
+                            grants, _revision(aliases), aliases, deadline, scope=roster_scope(expected))
                     except Exception:
                         alias_saved = False
                     if alias_saved:
@@ -810,7 +828,7 @@ def node(actor, node_id, hours=24, *, readers=None, deadline=None):
                         output["roster_revision"] = _revision(rows)
                         try:
                             (readers.get("identity_cache") or IdentityRoster()).write(
-                                grants, output["roster_revision"], rows, deadline)
+                                grants, output["roster_revision"], rows, deadline, scope=roster_scope(expected))
                         except Exception:
                             pass
                     if proof.get("node_type") == "sites":

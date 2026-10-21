@@ -16,11 +16,11 @@ class Actor:
 class Cache:
     def __init__(self):
         self.data = None
-    def write(self, grants, revision, rows, deadline):
+    def write(self, grants, revision, rows, deadline, **kwargs):
         import copy
         self.data = {"revision": revision, "rows": copy.deepcopy(rows)}
         return True
-    def read(self, grants, deadline):
+    def read(self, grants, deadline, **kwargs):
         return self.data
 
 
@@ -302,3 +302,98 @@ def test_family_failure_preserves_trends_and_oversize_dimensions_are_whole(opts)
     cpu = output["node"]["trends"]["cpu"]
     assert cpu["dimensions"] is None and cpu["dimensions_omitted"] is True, "an oversized dimension identity must be omitted whole, never clipped into another series"
     assert cpu["omitted_series_count"] == 1 and output["truncated"], "whole-series omission must be explicit"
+
+
+@th.django_unit_test()
+def test_identity_scope_fences_environment_and_declaration_changes(opts):
+    import time
+    from mojo.apps.aws.services.fleet_health import IdentityRoster, reconcile, _revision, roster_scope
+    from mojo.deploy.provision.spec import Spec
+    expected = {"spec": Spec("sample", "prod", "us-east-1"), "declarations": [
+        {"node_id": "node-a", "hostname": "node-a", "source": "configuration"}]}
+    scope = roster_scope(expected)
+    changed_environment = dict(expected, spec=Spec("sample", "stage", "us-east-1"))
+    changed_declaration = dict(expected, declarations=[{"node_id": "node-b", "source": "edge_topology"}])
+    assert scope != roster_scope(changed_environment), "selected environment must fence shared identity evidence"
+    assert scope != roster_scope(changed_declaration), "changed declaration ownership must fence shared identity evidence"
+    data = {}
+    class Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def set(self, key, value, **kwargs):
+            data[key] = value
+            return True
+        def get(self, key):
+            return data.get(key)
+    cache = IdentityRoster(lambda **kwargs: Client(), prefix="scope-test")
+    grants = {"platform": True, "aws": True, "jobs": True}
+    rows = reconcile(expected["declarations"])
+    assert cache.write(grants, _revision(rows), rows, time.monotonic() + 1, scope=scope), "scoped identity write must succeed"
+    assert cache.read(grants, time.monotonic() + 1, scope=scope), "same selected scope must preserve cross-worker identity reads"
+    assert cache.read(grants, time.monotonic() + 1, scope=roster_scope(changed_environment)) is None, "old environment identity cannot authorize a new environment diagnostic"
+
+
+@th.django_unit_test()
+def test_fresh_competing_alias_cannot_be_cleared_by_one_claimant_refresh(opts):
+    from mojo.apps.aws.services.fleet_health import report, node, FleetHealthError
+    now = datetime.now(timezone.utc).isoformat()
+    readers, calls = _readers(("physical-a", "physical-b"))
+    readers["expected"] = lambda grants, deadline: {"configured": True, "complete": True, "sources": {}, "spec": None,
+        "declarations": [{"node_id": "logical", "source": "edge_topology"}] + [
+            {"node_id": host, "hostname": host, "source": "configuration"} for host in ("physical-a", "physical-b")]}
+    def diagnostics(row, *args):
+        calls.append("diagnostics:" + row["node_id"])
+        return {"status": "verified", "anomalies": [], "results": [{"host": row["hostname"], "started": now,
+            "status": "success", "result": {"hostname": row["hostname"], "current": {},
+                "proof": {"node_id": "logical", "observed_at": now}}}]}
+    readers["diagnostics"] = diagnostics
+    readers["heartbeats"] = lambda deadline: [{"hostname": host, "runner_id": host, "started": now,
+        "last_heartbeat": now, "alive": True} for host in ("physical-a", "physical-b")]
+    actor = Actor("view_platform", "manage_aws", "view_jobs")
+    report(actor, readers=readers)
+    for host in ("physical-a", "physical-b"):
+        try:
+            node(actor, host, readers=readers)
+        except FleetHealthError as exc:
+            assert exc.error_code == "roster_changed", "new checked alias/conflict must require a fresh roster"
+        else:
+            raise AssertionError("a changed checked alias cannot silently keep the old roster")
+        report(actor, readers=readers)
+    try:
+        node(actor, "physical-b", readers=readers)
+    except FleetHealthError as exc:
+        assert exc.error_code == "identity_ambiguous", "one claimant refresh cannot erase a fresh two-host conflict"
+    else:
+        raise AssertionError("fresh alias ambiguity must persist")
+    before = len(calls)
+    try:
+        node(actor, "logical", readers=readers)
+    except FleetHealthError as exc:
+        assert exc.error_code == "identity_ambiguous", "logical alias must remain unusable while conflicting proofs are fresh"
+    else:
+        raise AssertionError("ambiguous logical alias cannot dispatch diagnostics")
+    assert len(calls) == before, "guessing the ambiguous logical alias must cause no provider, diagnostic or metric calls"
+
+
+@th.django_unit_test()
+def test_incomplete_serving_never_preserves_outer_complete(opts):
+    import time
+    from mojo.apps.aws.services import capacity
+    from mojo.deploy.provision.spec import Spec
+    # Test-owned narrow reader keeps source fixtures isolated and avoids
+    # process-wide patches of the shared provider module.
+    spec = Spec("sample", "prod", "us-east-1", want_balancer=True)
+    facts = {"i-one": {"instance_id": "i-one", "name": "sample1", "state": "running"}}
+    ec2 = SimpleNamespace(fleet_inventory_bounded=lambda *args, **kwargs: {
+        "instances": dict(facts), "complete": True, "reasons": []})
+    for balancers in ([], [{"LoadBalancerArn": "one"}, {"LoadBalancerArn": "two"}]):
+        client = SimpleNamespace(describe_load_balancers=lambda **kwargs: {"LoadBalancers": balancers})
+        result = capacity.health_inventory(spec, time.monotonic() + 1, elbv2_client=client,
+                                           inventory_reader=ec2.fleet_inventory_bounded)
+        assert result["instances"] == facts, "missing/ambiguous serving evidence must preserve independent EC2 facts"
+        assert not result["complete"] and not result["serving"]["complete"], "every incomplete serving return must make the inventory envelope incomplete"
+    result = capacity.health_inventory(spec, time.monotonic() - 1,
+                                       inventory_reader=ec2.fleet_inventory_bounded)
+    assert not result["complete"] and result["instances"] == facts, "elapsed serving budget must not manufacture complete cloud coverage"

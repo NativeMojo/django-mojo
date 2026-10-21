@@ -582,3 +582,9 @@ The private IMDS credential transport receives the same wrapper before SDK
 construction. Existing SDK/global socket pools are unchanged. Proxy transports
 and extra OCSP network validation are explicitly unsupported on this path;
 resolver failures return stable safe reason codes, without raw DNS exceptions.
+
+TLS itself receives the remaining budget immediately before its explicit native
+handshake, after DNS/TCP and local certificate-context setup. HTTP body makefiles
+retain their socket reference after `Connection: close` releases its owner, then
+close the underlying transport on the final file release. This preserves ordinary
+response-body semantics while keeping every read under the original deadline.

@@ -7,6 +7,7 @@ import io
 import ipaddress
 import math
 import socket
+import ssl
 import time
 
 
@@ -61,7 +62,8 @@ def connect_tcp(hostname, port, deadline, *, timeout=None, source_address=None,
             if source_address:
                 raw.bind(source_address)
             raw.connect((str(parsed), int(port)))
-            remaining(deadline, clock)
+            budget = remaining(deadline, clock)
+            raw.settimeout(min(timeout, budget) if timeout is not None else budget)
             return raw
         except (OSError, ValueError) as exc:
             last_error = exc
@@ -76,12 +78,20 @@ class _SocketReader(io.RawIOBase):
     def __init__(self, bounded_socket):
         super().__init__()
         self.bounded_socket = bounded_socket
+        bounded_socket._acquire_file()
 
     def readable(self):
         return True
 
     def readinto(self, buffer):
         return self.bounded_socket.recv_into(buffer)
+
+    def close(self):
+        if not self.closed:
+            try:
+                super().close()
+            finally:
+                self.bounded_socket._release_file()
 
 
 class DeadlineSocket:
@@ -91,6 +101,24 @@ class DeadlineSocket:
         self.deadline = deadline
         self.clock = clock or time.monotonic
         self.timeout = timeout if timeout is not None else target.gettimeout()
+        self._file_refs = 0
+        self._close_requested = False
+        self._target_closed = False
+
+    def _acquire_file(self):
+        if self._close_requested:
+            raise BoundedTransportError("connection_closed")
+        self._file_refs += 1
+
+    def _release_file(self):
+        self._file_refs -= 1
+        if self._close_requested and self._file_refs == 0:
+            self._close_target()
+
+    def _close_target(self):
+        if not self._target_closed:
+            self._target_closed = True
+            self.target.close()
 
     def _io(self, method, *args, **kwargs):
         budget = remaining(self.deadline, self.clock)
@@ -127,11 +155,46 @@ class DeadlineSocket:
         return self.target.gettimeout()
 
     def close(self):
-        # Local cleanup remains safe after expiration; no extra network I/O.
-        return self.target.close()
+        # Mirror socket.makefile lifetime: Connection:close can release its
+        # socket before the HTTP response body finishes reading the file.
+        self._close_requested = True
+        if self._file_refs == 0:
+            self._close_target()
 
     def __getattr__(self, name):
         return getattr(self.target, name)
+
+
+class DeadlineSSLContext:
+    """Keep TLS configuration; refresh/check the budget at the actual handshake."""
+    def __init__(self, target, deadline, clock=None):
+        object.__setattr__(self, "target", target)
+        object.__setattr__(self, "deadline", deadline)
+        object.__setattr__(self, "clock", clock or time.monotonic)
+
+    def __getattr__(self, name):
+        return getattr(self.target, name)
+
+    def __setattr__(self, name, value):
+        setattr(self.target, name, value)
+
+    def wrap_socket(self, sock, *args, **kwargs):
+        budget = remaining(self.deadline, self.clock)
+        previous = sock.gettimeout()
+        sock.settimeout(min(previous, budget) if previous is not None else budget)
+        kwargs["do_handshake_on_connect"] = False
+        wrapped = self.target.wrap_socket(sock, *args, **kwargs)
+        try:
+            budget = remaining(self.deadline, self.clock)
+            wrapped.settimeout(min(previous, budget) if previous is not None else budget)
+            # CPython's SSL handshake uses this as an overall handshake
+            # timeout, not a fresh timeout for each protocol record.
+            wrapped.do_handshake()
+            remaining(self.deadline, self.clock)
+            return wrapped
+        except BaseException:
+            wrapped.close()
+            raise
 
 
 def bind_aws_client(client, deadline, clock=None, connector=None):
@@ -181,6 +244,11 @@ def bind_aws_session(transport, deadline, *, clock=None, connector=None, url=Non
     class HTTPSPool(AWSHTTPSConnectionPool):
         ConnectionCls = HTTPSConnection
     classes = {"http": HTTPPool, "https": HTTPSPool}
+    context = transport._manager.connection_pool_kw.get("ssl_context") if hasattr(transport._manager, "connection_pool_kw") else None
+    if context is not None:
+        if isinstance(context, DeadlineSSLContext):
+            context = context.target
+        transport._manager.connection_pool_kw["ssl_context"] = DeadlineSSLContext(context, deadline, clock)
     transport._pool_classes_by_scheme = classes
     transport._manager.pool_classes_by_scheme = classes
 
@@ -212,7 +280,25 @@ def bind_redis_pool(pool, deadline, connector=None):
 
     if issubclass(original, SSLConnection):
         class PrivateConnection(DeadlineMixin, SSLConnection, NumericConnection):
-            pass
+            def _wrap_socket_with_ssl(self, raw):
+                # The ordinary Redis TLS settings stay intact; extra OCSP
+                # transports were refused before connecting above.
+                context = ssl.create_default_context()
+                context.check_hostname = self.check_hostname
+                context.verify_mode = self.cert_reqs
+                for flag in self.ssl_include_verify_flags or []:
+                    context.verify_flags |= flag
+                for flag in self.ssl_exclude_verify_flags or []:
+                    context.verify_flags &= ~flag
+                if self.certfile or self.keyfile:
+                    context.load_cert_chain(self.certfile, self.keyfile, password=self.certificate_password)
+                if self.ca_certs is not None or self.ca_path is not None or self.ca_data is not None:
+                    context.load_verify_locations(cafile=self.ca_certs, capath=self.ca_path, cadata=self.ca_data)
+                if self.ssl_min_version is not None:
+                    context.minimum_version = self.ssl_min_version
+                if self.ssl_ciphers:
+                    context.set_ciphers(self.ssl_ciphers)
+                return DeadlineSSLContext(context, deadline).wrap_socket(raw, server_hostname=self.host)
     elif issubclass(original, Connection):
         class PrivateConnection(DeadlineMixin, NumericConnection):
             pass

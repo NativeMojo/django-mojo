@@ -412,3 +412,12 @@ and Redis adapters consume the shared bounded DNS resolver, dial numeric
 addresses, preserve TLS SNI/Host, and guard each socket send/read (including
 buffered HTTP reads). A slow-drip reply cannot renew the deadline. Proxy/extra
 OCSP side channels and unsupported resolver transports return explicit failures.
+
+`roster_scope` is a stable SHA-256 fence of the selected project/environment/fleet
+and normalized expected declarations. Identity cache keys include this fence as
+well as current source grants; changing environments or declarations invalidates
+old aliases before provider/runtime diagnostics. A no-longer-observed cached ID
+retains an unknown row but loses callable instance/hostname aliases. This raw
+reader fence is separate from snapshot producer component ownership identity.
+Fresh competing checked claims remain ambiguous even if one claimant replies
+again; one fresh reply cannot erase a still-fresh conflicting identity proof.
