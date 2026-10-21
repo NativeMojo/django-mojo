@@ -263,6 +263,29 @@ def _unsafe_code(canonical, protected):
         canonical, protected=protected, whitelist=False)[1]
 
 
+def unsafe_target_marker(row):
+    """`unsafe_target: <code>` while `row` is an active block of an unsafe
+    target, else "" (#8885).
+
+    Reconciliation writes this instead of "" when the kernel matches the
+    planned absence, so the operator keeps seeing why the row is not enforced.
+    """
+    from mojo.apps.incident.services import block_safety
+    from mojo.helpers import dates
+
+    now = dates.utcnow()
+    if (not row.is_blocked or
+            (row.blocked_until is not None and row.blocked_until <= now) or
+            row.whitelist_active):
+        return ""
+    try:
+        canonical = canonical_ipv4_address(row.ip_address)
+    except FirewallTruthError:
+        return ""
+    code = _unsafe_code(canonical, block_safety.protected_networks())
+    return f"unsafe_target: {code}"[:MAX_FIREWALL_ERROR] if code else ""
+
+
 def permanent_snapshot():
     """Canonical aggregate truth; quarantine bad legacy rows independently.
 
@@ -350,6 +373,7 @@ def geolocated_snapshot_from_row(row, permanent=None):
     return {
         "row": row, "canonical": canonical, "permanent": permanent,
         "desired": desired, "fingerprint": state_fingerprint(source),
+        "unsafe": unsafe_target_marker(row),
     }
 
 
@@ -369,18 +393,13 @@ def ipset_snapshot_from_row(row):
             "reserved_set_name", "configured permanent set name is reserved")
     present = bool(row.is_enabled and not row.is_cache_only)
     name, cidrs = canonical_operator_ipset(name, row.cidrs, present)
+    carved = []
     if present:
         # The kernel set gets only safe networks (#8885); the stored data
         # keeps the operator's intent, and the digest describes what is kept.
-        from mojo.apps import metrics
+        # `carved` is reported once per sync by sync_firewall, not here.
         from mojo.apps.incident.services import block_safety
-        from mojo.helpers import logit
         cidrs, carved = block_safety.safe_block_networks(cidrs)
-        if carved:
-            logit.info(
-                f"firewall: IPSet {name} carves {len(carved)} unsafe network(s) "
-                "out of the kernel set")
-            metrics.record("firewall:ipset_carved", category="firewall")
     desired = {
         "name": name, "present": present,
         "count": len(cidrs) if present else 0,
@@ -391,7 +410,7 @@ def ipset_snapshot_from_row(row):
         "cidrs": cidrs, "desired": desired,
     }
     return {"row": row, "cidrs": cidrs if present else [], "desired": desired,
-            "fingerprint": state_fingerprint(source)}
+            "fingerprint": state_fingerprint(source), "carved": len(carved)}
 
 
 def ipset_snapshot(name):

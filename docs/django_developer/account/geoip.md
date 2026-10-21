@@ -46,7 +46,7 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 
 | Field | Description |
 |---|---|
-| `is_whitelisted` | Whitelisted IPs are never blocked, even by auto-escalation, and are carved out of operator, country and feed sets |
+| `is_whitelisted` | Whitelisted IPs are never newly blocked, even by auto-escalation, and are carved out of operator, country and feed sets. A set member whitelisted mid-sync can stay in the kernel until the next successful sync; see [Target safety](../deploy/firewall.md#target-safety) |
 | `whitelisted_reason` | Why this IP is whitelisted |
 | `whitelisted_until` | When the whitelist expires (`null` = permanent) — mirrors `blocked_until`. An expired whitelist stops suppressing blocks and stops exempting geofence. |
 
@@ -198,6 +198,11 @@ By default (`block=False`) the method only updates the threat level — no autom
 Pass `block=True` if you want the method to also block the IP when the new level reaches `high` or `critical`. When blocking is enabled, a 15-minute TTL (`ttl=900`) is applied via `block()`.
 
 Whitelisted IPs get the threat level update but are never blocked regardless of the `block` parameter.
+
+The same holds for any target the block refuses (non-global, protected,
+trusted-proxy): the raised `threat_level` persists, with its push-back to the
+`mojo` provider, because it records the incident's severity. The refused block
+does not undo it, and changes no block state.
 
 ### Expiry sweep
 

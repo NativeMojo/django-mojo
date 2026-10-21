@@ -615,7 +615,17 @@ def sync_firewall(job):
         set_plans = []
         for row in ipsets:
             try:
-                set_plans.append(firewall_truth.ipset_snapshot_from_row(row))
+                snapshot = firewall_truth.ipset_snapshot_from_row(row)
+                set_plans.append(snapshot)
+                if snapshot["carved"]:
+                    # Once per carved set per sync (#8885).
+                    from mojo.apps import metrics
+                    message = (f"IPSet {snapshot['desired']['name']} carves "
+                               f"{snapshot['carved']} unsafe network(s) out of "
+                               "the kernel set")
+                    job.add_log(f"sync_firewall: {message}")
+                    logit.info(f"firewall: {message}")
+                    metrics.record("firewall:ipset_carved", category="firewall")
             except firewall_truth.FirewallTruthError as err:
                 quarantined += 1
                 job.add_log(
@@ -964,8 +974,11 @@ def _aggregate_firewall_truth(job):
             snapshot["fingerprint"], snapshot["desired"], roster=roster)
         verified = aggregate_ok and result.get("ok") is True
         if verified:
+            # An unsafe blocked row keeps its marker (#8885): the kernel
+            # matches the planned absence, not the stored block.
             values = {
-                "firewall_pending": False, "firewall_sync_error": "",
+                "firewall_pending": False,
+                "firewall_sync_error": snapshot["unsafe"],
                 "firewall_observed_at": dates.utcnow(),
             }
         else:

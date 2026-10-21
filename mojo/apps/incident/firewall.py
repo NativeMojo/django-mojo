@@ -182,6 +182,8 @@ def _unsafe_networks(cidrs):
     and never repairs.
     """
     from mojo.apps.incident.services import block_safety
+    if not cidrs:
+        return ""  # nothing to block is never refused
     try:
         _kept, carved = block_safety.safe_block_networks(cidrs)
     except FirewallTruthError as err:
@@ -198,6 +200,31 @@ def _unsafe_networks(cidrs):
 def _unsafe_source(ip):
     """The refusal code for one present source (an address or network)."""
     return _unsafe_networks([ip])
+
+
+def _unsafe_permanent(cidrs):
+    """The refusal code for the permanent aggregate's list, or "" (#8885).
+
+    Like `_unsafe_networks`, except that malformed protection config narrows
+    to NON_GLOBAL_V4 and the active whitelist instead of refusing, as the
+    desired-state builder does: every new block is already refused at the
+    write, so the list holds only rows written while the config was valid or
+    legacy kernel state, and refusing it would stall removals.
+    """
+    from mojo.apps.incident.services import block_safety
+    if not cidrs or block_safety.protected_networks() is not None:
+        return _unsafe_networks(cidrs)
+    try:
+        _kept, carved = block_safety.safe_block_networks(cidrs, protected=[])
+    except FirewallTruthError as err:
+        logit.error("firewall dispatch refused networks: %s", err.code)
+        return err.code
+    if carved:
+        code = block_safety.check_block_target(
+            carved[0].split("/")[0], protected=[])[1] or "unsafe_network_member"
+        logit.error("firewall dispatch refused unsafe network member: %s", code)
+        return code
+    return ""
 
 
 def ip_status(ip):
@@ -253,7 +280,7 @@ def normalize_permanent_ipset(cidrs):
         canonical = canonical_ipv4_networks(cidrs)
     except FirewallTruthError as err:
         return {"ok": False, "error": {"code": err.code}}
-    unsafe = _unsafe_networks(canonical)
+    unsafe = _unsafe_permanent(canonical)
     if unsafe:
         return _broker_error(unsafe)
     return _broker_request(
@@ -272,8 +299,10 @@ def normalize_geolocated_ip(ip, permanent_set_name, permanent_cidrs,
         canonical = canonical_ipv4_networks(permanent_cidrs)
     except FirewallTruthError as err:
         return {"ok": False, "error": {"code": err.code}}
+    # A removal (temporary_present=False) is never refused for the source;
+    # the permanent list is narrowed, never refused, on malformed config.
     unsafe = ((_unsafe_source(ip) if temporary_present else "") or
-              _unsafe_networks(canonical))
+              _unsafe_permanent(canonical))
     if unsafe:
         return _broker_error(unsafe)
     return _broker_request(

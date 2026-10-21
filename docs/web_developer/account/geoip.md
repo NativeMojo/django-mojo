@@ -129,8 +129,17 @@ Actions are gated by the model's `SAVE_PERMS`: `manage_users`,
 `outcome: "refused"` and `error.code` one of `non_global_address` (private,
 internal, multicast or documentation ranges), `mojosec_protected_cidrs`,
 `mojosec_trusted_proxy_cidrs`, `whitelisted` or `protected_config_invalid`
-(the server's protection settings need fixing). Nothing is changed. Show the
-code to the operator; retrying will not help.
+(the server's protection settings need fixing). No block state is changed.
+Show the code to the operator; retrying will not help. An incident that raised
+the record's `threat_level` keeps that level even when its automatic block is
+refused. `unblock` is never refused for these reasons, even while the
+protection settings are broken.
+
+A blocked record whose address is unsafe keeps `is_blocked` and shows
+`firewall_sync_error: "unsafe_target: <code>"` after every sync, until it is
+unblocked: the firewall does not enforce it. `whitelist` stops new blocks at
+once; an address already inside a blocked set leaves the kernel at the next
+successful sync.
 
 `block`, `unblock`, `whitelist`, and `unwhitelist` return their checked result
 in `action_response`. Treat firewall enforcement as successful only when it has

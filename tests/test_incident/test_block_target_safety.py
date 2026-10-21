@@ -27,6 +27,8 @@ CONFIG = {
     "MOJOSEC_TRUSTED_PROXY_CIDRS": ["203.0.114.16/28"],
 }
 RECONCILE = "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip"
+PUSH = "mojo.apps.account.models.GeoLocatedIP._maybe_push_abuse_signals"
+MALFORMED = {"MOJOSEC_PROTECTED_CIDRS": {"bad": 1}}
 BROKER = "mojo.apps.incident.firewall._broker_request"
 VERIFIED = {"status": "verified", "ok": True}
 
@@ -75,6 +77,66 @@ def _broker_ok(operation, timeout=20, **values):
                 "forward_count": 0, "count": len(values.get("cidrs") or []),
                 "exists": bool(values.get("present", True))}
     return {"ok": True, "observed": observed}
+
+
+class _Redis:
+    """The desired-state lease, fences and sync locks, in memory."""
+
+    def __init__(self):
+        self.store = {}
+
+    def get(self, key):
+        return self.store.get(key)
+
+    def mget(self, keys):
+        return [self.store.get(key) for key in keys]
+
+    def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.store:
+            return False
+        self.store[key] = value
+        return True
+
+    def eval(self, script, count, *args):
+        keys, argv = args[:count], args[count:]
+        if "redis.call('incr'" in script:
+            if self.store.get(keys[0]) != argv[0]:
+                return False
+            self.store[keys[1]] = int(self.store.get(keys[1], 0)) + 1
+            values = []
+            for key in keys[2:]:
+                self.store[key] = int(self.store.get(key, 0)) + 1
+                values.append(self.store[key])
+            return values
+        if self.store.get(keys[0]) != argv[0]:
+            return 0
+        if "expire" not in script:
+            self.store.pop(keys[0], None)
+        return 1
+
+
+def _job():
+    from objict import objict
+    job = objict(logs=[], payload={"target": {"host": "t8885-host", "started": "t8885-start",
+                                              "runner_id": "t8885-runner"}},
+                 attempt=1, max_retries=8)
+    job.add_log = job.logs.append
+    return job
+
+
+@contextlib.contextmanager
+def _isolated_firewall_state():
+    """Own the whole desired snapshot inside a transaction that rolls back."""
+    from django.db import transaction
+    from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident.models import IPSet
+
+    with transaction.atomic():
+        GeoLocatedIP.objects.all().update(
+            is_blocked=False, is_whitelisted=False, firewall_pending=False)
+        IPSet.objects.all().update(is_enabled=False)
+        yield
+        transaction.set_rollback(True)
 
 
 def _assert_refused(result, code, label):
@@ -195,16 +257,28 @@ def test_write_paths_refuse_unsafe_targets(opts):
 
 @th.django_unit_test()
 def test_threat_escalation_does_not_block_unsafe_targets(opts):
+    """A refused block leaves block state alone; the threat level the incident
+    raised is a separate observation and persists with its push (#8885 R3)."""
     with _settings(CONFIG):
         for ip in (PRIVATE, PROXY_MEMBER):
-            geo = _fresh(ip)
-            with mock.patch(RECONCILE, return_value=VERIFIED) as reconcile:
+            geo = _fresh(ip, threat_level="low")
+            geo.refresh_from_db()
+            before = (geo.is_blocked, geo.blocked_until, geo.firewall_generation,
+                      geo.block_count, geo.firewall_pending, geo.firewall_sync_error)
+            with mock.patch(RECONCILE, return_value=VERIFIED) as reconcile, \
+                    mock.patch(BROKER, side_effect=_broker_ok) as broker, \
+                    mock.patch(PUSH) as push:
                 geo.update_threat_from_incident(13, block=True)
             geo.refresh_from_db()
-            th.assert_true(geo.is_blocked is False, f"threat escalation must not block {ip}")
-            th.assert_eq((geo.firewall_generation, geo.block_count), (0, 0),
-                         f"threat escalation must write no block state for {ip}")
+            th.assert_eq(geo.threat_level, "critical",
+                         f"the incident's threat level persists for {ip}")
+            th.assert_eq((geo.is_blocked, geo.blocked_until, geo.firewall_generation,
+                          geo.block_count, geo.firewall_pending, geo.firewall_sync_error),
+                         before, f"threat escalation must write no block state for {ip}")
             th.assert_true(not reconcile.called, f"threat escalation must not reconcile {ip}")
+            th.assert_true(not broker.called, f"threat escalation must not reach the broker for {ip}")
+            th.assert_eq(push.call_count, 1,
+                         f"only the threat-level rise is pushed for {ip}, got {push.call_count}")
 
 
 @th.django_unit_test()
@@ -397,3 +471,195 @@ def test_public_targets_block_as_before(opts):
     geo = _fresh("2001:db8::1")
     _assert_refused(geo.block_checked(reason="t8885", ttl=600), "unsupported_family",
                     "IPv6")
+
+
+# =============================================================================
+# Review 131555 / ruling 131611
+# =============================================================================
+
+@th.django_unit_test()
+def test_removals_dispatch_under_malformed_config(opts):
+    """R1: removals are never refused; the permanent list is narrowed to
+    NON_GLOBAL_V4 and the whitelist; every other present request refuses."""
+    from mojo.apps.incident import firewall
+    from mojo.apps.incident.services.firewall_truth import permanent_set_name
+
+    name = permanent_set_name()
+    with _settings(MALFORMED):
+        dispatched = (
+            ("normalize_geolocated_ip removal", lambda: firewall.normalize_geolocated_ip(
+                "10.0.0.1", name, [], False)),
+            ("normalize_geolocated_ip public removal", lambda: firewall.normalize_geolocated_ip(
+                PUBLIC, name, [f"{PUBLIC}/32"], False)),
+            ("normalize_permanent_ipset empty", lambda: firewall.normalize_permanent_ipset([])),
+            ("normalize_permanent_ipset public", lambda: firewall.normalize_permanent_ipset(
+                [f"{PUBLIC}/32"])),
+            ("normalize_ipset empty", lambda: firewall.normalize_ipset("t8885set", [])),
+            ("normalize_ip absent", lambda: firewall.normalize_ip("10.0.0.1", False)),
+        )
+        for label, call in dispatched:
+            with mock.patch(BROKER, side_effect=_broker_ok) as broker:
+                result = call()
+            th.assert_true(broker.called, f"{label} must be dispatched, got {result}")
+
+        refused = (
+            ("normalize_permanent_ipset non-global", "non_global_address",
+             lambda: firewall.normalize_permanent_ipset(["10.0.0.1/32"])),
+            ("normalize_geolocated_ip non-global permanent", "non_global_address",
+             lambda: firewall.normalize_geolocated_ip(PUBLIC, name, ["10.0.0.1/32"], False)),
+            ("normalize_ip present", "protected_config_invalid",
+             lambda: firewall.normalize_ip(PUBLIC, True)),
+            ("normalize_geolocated_ip present", "protected_config_invalid",
+             lambda: firewall.normalize_geolocated_ip(PUBLIC, name, [], True)),
+            ("normalize_ipset present", "protected_config_invalid",
+             lambda: firewall.normalize_ipset("t8885set", [f"{PUBLIC}/32"])),
+        )
+        for label, code, call in refused:
+            with mock.patch(BROKER, side_effect=_broker_ok) as broker:
+                result = call()
+            th.assert_eq((result.get("error") or {}).get("code"), code,
+                         f"{label} must refuse with {code}, got {result}")
+            th.assert_true(not broker.called, f"{label} must not reach the broker")
+        for label, call in (
+                ("block", lambda: firewall.block(PUBLIC) is False),
+                ("ipset_add", lambda: firewall.ipset_add(name, PUBLIC) is False),
+                ("ipset_load", lambda: firewall.ipset_load("t8885set", [f"{PUBLIC}/32"])[0] is False)):
+            with mock.patch(BROKER, side_effect=_broker_ok) as broker:
+                th.assert_true(call(), f"{label} must refuse under malformed config")
+            th.assert_true(not broker.called, f"{label} must not reach the broker")
+
+
+@th.django_unit_test()
+def test_unblock_dispatches_under_malformed_config(opts):
+    """R1 end to end: GeoLocatedIP.unblock reaches the broker's removal."""
+    from mojo.apps.incident import firewall
+    from mojo.apps.incident.services import firewall_truth
+
+    def dispatch(func, payload, **kwargs):
+        # The host runner's half, in process: the job would call this.
+        return firewall.normalize_geolocated_ip(
+            payload["ip"], payload["permanent_set_name"],
+            payload["permanent_ips"], payload["temporary_present"])
+
+    with _isolated_firewall_state():
+        geo = _fresh("10.20.30.43", is_blocked=True)
+        with _settings(MALFORMED), \
+                mock.patch("mojo.apps.jobs.adapters.get_adapter", return_value=_Redis()), \
+                mock.patch("mojo.apps.jobs.publish"), \
+                mock.patch.object(firewall_truth, "_dispatch_firewall", side_effect=dispatch), \
+                mock.patch(BROKER, side_effect=_broker_ok) as broker:
+            geo.unblock(reason="t8885")
+        operations = [call.args[0] for call in broker.call_args_list]
+        th.assert_true("geolocated.normalize" in operations,
+                       f"unblock must dispatch the removal under malformed config, got {operations}")
+        values = broker.call_args_list[operations.index("geolocated.normalize")].kwargs
+        th.assert_true(values.get("temporary_present") is False,
+                       f"the dispatched request is a removal, got {values}")
+
+
+@th.django_unit_test()
+def test_unsafe_marker_survives_reconcile(opts):
+    """R2: a verified reconcile keeps `unsafe_target: <code>` on an unsafe
+    blocked row, through aggregation and through the checked path."""
+    from mojo.apps.incident.asyncjobs import FirewallSyncRetry, _aggregate_firewall_truth
+    from mojo.apps.incident.services import firewall_truth
+
+    with _isolated_firewall_state():
+        unsafe = _fresh("10.222.33.44", is_blocked=True, firewall_pending=True)
+        public = _fresh("203.0.114.244", is_blocked=True, firewall_pending=True)
+        firewall_truth.permanent_snapshot()
+        unsafe.refresh_from_db()
+        th.assert_eq(unsafe.firewall_sync_error, "unsafe_target: non_global_address",
+                     "control: the snapshot flags the unsafe row")
+        with mock.patch("mojo.apps.jobs.adapters.get_adapter", return_value=_Redis()), \
+                mock.patch("mojo.apps.jobs.publish"), \
+                mock.patch.object(firewall_truth, "exact_compatible_roster",
+                                  return_value=[{"host": "t8885-host", "started": "t8885-start"}]), \
+                mock.patch.object(firewall_truth, "aggregate_observations",
+                                  return_value={"ok": True}):
+            try:
+                _aggregate_firewall_truth(_job())
+            except FirewallSyncRetry:
+                pass
+        unsafe.refresh_from_db()
+        public.refresh_from_db()
+        th.assert_eq(unsafe.firewall_sync_error, "unsafe_target: non_global_address",
+                     "aggregation must keep the unsafe-target marker")
+        th.assert_true(unsafe.is_blocked and not unsafe.firewall_pending,
+                       "the unsafe row stays blocked and is no longer pending")
+        th.assert_eq(public.firewall_sync_error, "",
+                     "a safe verified row is cleared as before")
+        th.assert_true(not public.firewall_pending, "the safe row is no longer pending")
+
+        for geo, expected in ((unsafe, "unsafe_target: non_global_address"), (public, "")):
+            GeoLocatedIP = type(geo)
+            GeoLocatedIP.objects.filter(pk=geo.pk).update(
+                firewall_pending=True, firewall_sync_error="pending")
+            geo.refresh_from_db()
+            geo._finish_firewall_reconcile(geo.firewall_generation, dict(VERIFIED))
+            geo.refresh_from_db()
+            th.assert_eq(geo.firewall_sync_error, expected,
+                         f"_finish_firewall_reconcile on {geo.ip_address} must write {expected!r}")
+            th.assert_true(not geo.firewall_pending, f"{geo.ip_address} is no longer pending")
+
+
+@th.django_unit_test()
+def test_carve_reported_once_per_sync(opts):
+    """R4: one metric, one job-log line and one logit line per carved set per
+    sync, though the snapshot is built more than once."""
+    from mojo.apps.incident import asyncjobs
+    from mojo.apps.incident.models import IPSet
+    from mojo.apps.incident.services import firewall_truth
+
+    def set_result(name, cidrs, present=True):
+        return {"ok": True, "observed": {
+            "name": name, "present": present, "exists": present,
+            "type": "hash:net" if present else None, "family": "inet" if present else None,
+            "count": len(cidrs) if present else 0,
+            "digest": firewall_truth.network_digest(cidrs if present else []),
+            "input_count": 1 if present else 0, "forward_count": 0,
+            "forwarding_required": False}}
+
+    def permanent_result(cidrs):
+        return set_result(firewall_truth.permanent_set_name(), cidrs, True)
+
+    def ip_result(ip, present):
+        return {"ok": True, "observed": {"ip": ip, "present": present,
+                                         "input_count": 1 if present else 0,
+                                         "forward_count": 0, "forwarding_required": False}}
+
+    job = _job()
+    with _isolated_firewall_state():
+        IPSet.objects.filter(name="t8885carve").delete()
+        row = IPSet.objects.create(name="t8885carve", kind="custom", source="manual",
+                                   data="10.0.0.0/8\n8.8.8.0/24")
+        row.set_enabled_desired(True)
+        with mock.patch("mojo.apps.incident.services.firewall_readiness.probe",
+                        return_value={"ready": True, "code": "ready"}), \
+                mock.patch.object(firewall_truth, "expected_hosts",
+                                  return_value=[asyncjobs._firewall_host()]), \
+                mock.patch.object(firewall_truth, "current_host_runner_target",
+                                  return_value=job.payload["target"]), \
+                mock.patch("mojo.apps.jobs.adapters.get_adapter", return_value=_Redis()), \
+                mock.patch("mojo.apps.jobs.publish"), \
+                mock.patch("mojo.apps.incident.firewall.normalize_ipset", side_effect=set_result), \
+                mock.patch("mojo.apps.incident.firewall.normalize_permanent_ipset",
+                           side_effect=permanent_result), \
+                mock.patch("mojo.apps.incident.firewall.normalize_ip", side_effect=ip_result), \
+                mock.patch.object(firewall_truth, "ipset_snapshot_from_row",
+                                  wraps=firewall_truth.ipset_snapshot_from_row) as built, \
+                mock.patch("mojo.apps.metrics.record") as record, \
+                mock.patch.object(asyncjobs.logit, "info") as info:
+            try:
+                asyncjobs.sync_firewall(job)
+            except asyncjobs.FirewallSyncRetry:
+                pass
+    carved_builds = [c for c in built.call_args_list if c.args[0].name == "t8885carve"]
+    th.assert_true(len(carved_builds) >= 2,
+                   f"control: the carved set's snapshot is built more than once, got {len(carved_builds)}")
+    metrics = [c for c in record.call_args_list if c.args and c.args[0] == "firewall:ipset_carved"]
+    th.assert_eq(len(metrics), 1, f"one carve metric per sync, got {len(metrics)}")
+    lines = [line for line in job.logs if "t8885carve carves" in str(line)]
+    th.assert_eq(len(lines), 1, f"one job-log line per sync, got {job.logs}")
+    infos = [c for c in info.call_args_list if "t8885carve carves" in str(c.args[0])]
+    th.assert_eq(len(infos), 1, f"one logit line per sync, got {len(infos)}")

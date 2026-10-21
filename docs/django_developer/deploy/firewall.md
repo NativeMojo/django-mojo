@@ -112,9 +112,9 @@ unsafe, and it runs at three boundaries:
 
 | Boundary | Where | What happens to an unsafe target |
 |---|---|---|
-| Desired-state write | `GeoLocatedIP._block_checked_locked`, reached by `block`, `block_checked`, the REST `block` action, threat escalation, the `block://` handler, the LLM and assistant tools and MojoSec execution | Refused with its code: no row write, no fence, no push-back, no dispatch |
-| Desired-state build | `firewall_truth.permanent_snapshot`, `geolocated_snapshot_from_row`, `ipset_snapshot_from_row` | A blocked row is planned absent and flagged `firewall_sync_error="unsafe_target: <code>"`, keeping `is_blocked` so an operator can see and unblock it. A set keeps only its safe networks |
-| Dispatch | every present-direction call in `mojo/apps/incident/firewall.py`, the only caller of the root broker | Refused with `{"ok": false, "error": {"code": ...}}` and no broker request. It never repairs. Unblocks and set removals are never refused |
+| Desired-state write | `GeoLocatedIP._block_checked_locked`, reached by `block`, `block_checked`, the REST `block` action, threat escalation, the `block://` handler, the LLM and assistant tools and MojoSec execution | Refused with its code: block state unchanged (`is_blocked`, `blocked_until`, generation, `block_count`, firewall fields), no fence, no push-back from the block, no dispatch |
+| Desired-state build | `firewall_truth.permanent_snapshot`, `geolocated_snapshot_from_row`, `ipset_snapshot_from_row` | A blocked row is planned absent and flagged `firewall_sync_error="unsafe_target: <code>"`, keeping `is_blocked` so an operator can see and unblock it. A verified sync keeps that marker (only `firewall_pending` clears), so it stays visible until the row is unblocked or the target is safe again. A set keeps only its safe networks |
+| Dispatch | every present-direction call in `mojo/apps/incident/firewall.py`, the only caller of the root broker | Refused with `{"ok": false, "error": {"code": ...}}` and no broker request. It never repairs. Removals are never refused: unblocks, set removals and an empty network list always dispatch |
 
 Unsafe, with the refusal code, checked in this order:
 
@@ -130,18 +130,33 @@ Unsafe, with the refusal code, checked in this order:
 
 Both CIDR settings are file-only and take a list or a comma-separated string of
 at most 64 IPv4 CIDRs; unset or empty means none. Anything else refuses every
-new block, logged with the setting's name. While it is malformed, sync sends no
-present-direction firewall request, so existing kernel state stays as it is
-until the setting is fixed.
+new block, logged with the setting's name. While it is malformed:
+
+- every present request refuses with `protected_config_invalid`: `block`,
+  `ipset_add`, `ipset_load`, `normalize_ip` and `normalize_ipset` with members,
+  and a geolocated request whose temporary source is present;
+- removals still dispatch, so an unblock never stalls on a config error;
+- the permanent aggregate's list is narrowed, not refused: it is checked
+  against `NON_GLOBAL_V4` and active whitelists only, as the desired-state
+  builder does. New blocks are already refused at the write, so the list holds
+  only rows written while the setting was valid, or legacy kernel state;
+- sync does not tear existing kernel state down because of the setting: what is
+  enforced stays as it is until the setting is fixed.
 
 **Sets are carved, not refused.** Operator, country and feed sets lose the
 unsafe ranges and every actively whitelisted address before they reach the
 kernel; the rest of the set still blocks. The stored `IPSet.data` keeps the
 operator's list, and the planned count and digest describe what is kept, so
-verification stays truthful. A carve-out is logged and counted as
-`firewall:ipset_carved`. One that would leave more than 250,000 networks
-refuses with `network_limit` rather than truncating. `whitelist()` and
-`unwhitelist()` publish a firewall sync so the carve-out follows at once;
+verification stays truthful. `sync_firewall` reports each carved set once per
+sync: one job-log line, one `mojo.log` line and one `firewall:ipset_carved`
+metric. One that would leave more than 250,000 networks refuses with
+`network_limit` rather than truncating.
+
+**Whitelists are repaired eventually, not atomically.** A whitelist visible when
+a block is written, or when dispatch re-reads desired state, prevents the
+block. An address whitelisted after that read can stay in a kernel set until
+the sync `whitelist()` publishes, or the hourly sync, succeeds. `whitelist()`
+and `unwhitelist()` publish that sync so the carve-out follows promptly;
 whitelist expiry is picked up by the hourly sync, and the stale window errs
 toward not blocking.
 

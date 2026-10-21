@@ -584,11 +584,17 @@ class GeoLocatedIP(models.Model, MojoModel):
         return firewall_truth.canonical_ipv4_networks(list(values))
 
     def _finish_firewall_reconcile(self, generation, result):
-        from mojo.apps.incident.services.firewall_truth import bounded_error
+        from mojo.apps.incident.services.firewall_truth import (
+            bounded_error, unsafe_target_marker)
         verified = result.get("status") == "verified" and result.get("ok") is True
         values = {}
         if verified:
-            values.update(firewall_pending=False, firewall_sync_error="",
+            # An unsafe blocked row keeps `unsafe_target: <code>` (#8885);
+            # read at this generation so the marker matches the stored block.
+            row = GeoLocatedIP.objects.filter(
+                pk=self.pk, firewall_generation=generation).first()
+            values.update(firewall_pending=False,
+                          firewall_sync_error=unsafe_target_marker(row) if row else "",
                           firewall_observed_at=dates.utcnow())
         else:
             code, message = bounded_error(result)
