@@ -874,8 +874,11 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
             ambiguous = row.get("identity_status") == "ambiguous"
             runner = next((item for item in fleet.get("runners", []) if item.get("runner_id") == row.get("runner_id")), {})
             heartbeat = make("jobman", "installation", "worker:" + digest(row["node_id"])[:32],
-                {"status": "ok" if row.get("last_heartbeat") and not ambiguous else "unknown", "observed_at": None if ambiguous else row.get("last_heartbeat"), "runner_id": row.get("runner_id"), "period_seconds": interval},
+                {"status": "ok" if row.get("last_heartbeat") and not ambiguous else "unknown", "observed_at": None if ambiguous else row.get("last_heartbeat"), "runner_id": row.get("runner_id")},
                 grant="jobs", source="heartbeat", identity={"node_id": row["node_id"], "runner_id": row.get("runner_id"), "started": runner.get("started")})
+            # The live roster already checked its lease; retain the actual sample.
+            heartbeat["provenance"].update(heartbeat_interval_seconds=interval,
+                                           live_admission_window_seconds=interval * 3)
             job_slots.append(heartbeat)
     for channel in configuration["channels"]:
         queue_raw = (queues or {}).get(channel) or {"status": "unknown", "reason": "queue_transport_unavailable"}
