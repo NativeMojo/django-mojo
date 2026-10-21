@@ -39,9 +39,12 @@ def test_shared_acme_floor_fences_late_root_launch_and_interrupted_recovery(opts
         (state / "update.lock").touch(mode=0o600)
         helper = root / "fixed-helper"
         runner = root / "check.py"
+        identity_file = root / "installed-identity.json"
+        identity_file.write_text(json.dumps(identity))
         runner.write_text(
             "import json,os,sys\nfrom mojo.deploy import acme_hub_floor as m\n"
-            f"m.check_update(json.loads(sys.stdin.buffer.readline()),{str(state)!r},uid=os.getuid())\n")
+            f"m.check_update(json.loads(sys.stdin.buffer.readline()),{str(state)!r},uid=os.getuid(),"
+            f"loader=lambda:json.load(open({str(identity_file)!r})))\n")
         _write_executable(str(helper), f'exec "{sys.executable}" "{runner}"\n')
         update = root / "update.sh"
         # Fixture replaces fixed production paths in a PRIVATE COPY; no env or
@@ -128,6 +131,12 @@ def test_shared_acme_floor_fences_late_root_launch_and_interrupted_recovery(opts
             + 'valid_sha() { return 0; }; valid_version() { return 0; }; valid_node_type() { return 0; }\n'
             + 'log() { :; }; refresh_mojosec() { :; }; write_outcome() { :; }\n'
             + body + "\nrollback_transaction\n")
+        identity_file.write_text(json.dumps(dict(identity, source_sha="a" * 40)))
+        refused = subprocess.run(["bash", "-c", isolated], env=environment, capture_output=True, timeout=10)
+        assert refused.returncode != 0 and active.is_dir(), "same-version substituted restore must retain ACTIVE"
+        assert "previous-activate" not in commands.read_text(), "unqualified reinstalled bytes must refuse before previous lifecycle"
+        commands.unlink()
+        identity_file.write_text(json.dumps(identity))
         restored = subprocess.run(["bash", "-c", isolated], env=environment, capture_output=True, timeout=10)
         assert restored.returncode == 0, f"qualified real rollback must remain supported: {restored.stderr!r}"
         assert not active.exists(), "qualified rollback must complete and remove its own ACTIVE transaction"

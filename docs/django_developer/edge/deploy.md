@@ -216,3 +216,23 @@ canary's box-direct channel because that engine had no free worker — or
 `started`, meaning the node took the job and the update script is what went
 quiet. Recovery for every failed attempt is the Admin **Retry same SHA**
 action once the cause is cleared.
+
+## Shared ACME hub upgrade boundary
+
+Hub installation state is separate from generic Settings. While enabled, each
+request/resume, orchestration publication, node delivery and final spawn checks
+the exact durable deployment UUID, app SHA, resolved framework, frozen roster,
+cohort and intended runner under shared admission. A superseded canary cannot
+continue stale fleet fan-out. Resolution rejects versions below the activation
+floor before dispatch; a retained root gate checks again under update.lock,
+including partial stamps and interrupted recovery. This does not make a queued
+old binary honor new code: the operator must quiesce pre-admitted deployers and
+root launchers through exclusive activation.
+
+The fixed enrolled entry replaces the default current-package locator before
+any root candidate import; its app account and retained bytes are root-bound
+enrollment data, not a caller command or environment. An enabled hub currently
+refuses new capacity (`launch_coverage_unavailable`) because future AMI/ASG/
+bootstrap floor coverage has no qualified automatic lane. See
+[the operator contract](../dnsman/HubUpgrade.md); no host enrollment, maintenance
+window, package publication or live authority follows from these source guards.

@@ -20,6 +20,14 @@ the installed framework scripts. When a legacy shim is launched as the
 application account, the packaged entry point re-enters itself once through
 passwordless `sudo` before it creates the transient unit or changes anything.
 
+Shared ACME hub enrollment adds a bounded exception: the default root argv uses
+a sealed stdlib selector and fixed retained updater instead of importing the
+possibly interrupted candidate to locate itself. Enrollment or any partial
+floor selects this route even while sharing is disabled. Enrolled nodes refuse
+manual/latest or alternate script/path/environment routes. The lock and sealed
+admission/recovery check precede current-package root execution. See
+[the one-time enrollment and cutover contract](../dnsman/HubUpgrade.md).
+
 ## The shim contract
 
 A shim contains project setup only, then delegates:

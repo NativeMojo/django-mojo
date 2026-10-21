@@ -92,7 +92,8 @@ ROLLING_BACK=0
 # from a candidate package to decide whether saved recovery is compatible.
 acme_floor_guard() {
     local phase="$1"
-    if [ ! -e "$TRANSACTION_ROOT/acme-hub-floor.json" ] && \
+    if [ "${MOJO_ACME_ROOT_ENTRY:-0}" != "1" ] && \
+            [ ! -e "$TRANSACTION_ROOT/acme-hub-floor.json" ] && \
             [ ! -L "$TRANSACTION_ROOT/acme-hub-floor.json" ]; then
         return 0
     fi
@@ -361,6 +362,10 @@ rollback_transaction() {
     fi
     python3 -m pip install "django-mojo==$previous_framework" || return 1
 
+    # pip's exact version may be satisfied by different same-release bytes.
+    # Prove restored critical code before any retained activation executes.
+    acme_floor_guard restored || return 1
+
     refresh_mojosec rollback || :
 
     if [ -x "$ACTIVE/previous_post.sh" ]; then
@@ -439,6 +444,32 @@ else
     valid_deployment "$DEPLOYMENT" || die "invalid deployment UUID"
 fi
 
+# On enrolled hosts only the retained, reviewed copy may enter the root
+# transaction. This data-only probe cannot load .pth or candidate Mojo.
+if [ "$RUN_UID" = "0" ]; then
+    MOJO_ACME_ROOT_ENTRY="$(/usr/bin/python3 -I -S - "$0" <<'PY'
+import os, stat, sys
+try:
+    def exists(path):
+        try: info = os.lstat(path)
+        except FileNotFoundError: return False
+        if info.st_uid != 0 or info.st_mode & 0o022 or stat.S_ISLNK(info.st_mode):
+            raise ValueError()
+        return True
+    marker = exists("/usr/local/libexec/mojo-acme-hub-enrollment.json")
+    state = exists("/var/lib/django-mojo-deploy")
+    floor = state and exists("/var/lib/django-mojo-deploy/acme-hub-floor.json")
+    enrolled = marker or floor
+    if enrolled and os.path.abspath(sys.argv[1]) != "/usr/local/libexec/mojo-acme-hub-update.sh":
+        raise ValueError()
+    print("1" if enrolled else "0")
+except (OSError, ValueError):
+    sys.exit(1)
+PY
+)" || { echo 'FATAL: shared ACME fixed entry unavailable' >&2; exit 1; }
+    export MOJO_ACME_ROOT_ENTRY
+fi
+
 # A custom profile may restart the engine service that launched this command.
 # Re-enter the complete transaction in its own bounded systemd cgroup first;
 # no checkout or package mutation happens before this boundary.
@@ -453,6 +484,7 @@ if [ "$TRANSACTION" = "0" ] && [ "${MOJO_DEPLOY_NO_SYSTEMD:-0}" != "1" ]; then
             --property "TimeoutStopSec=$ROLLBACK_SECONDS" \
             --setenv="MOJO_DEPLOY_IN_TRANSIENT_UNIT=1" \
             --setenv="MOJO_DEPLOY_PARENT_STATUS=${MOJO_DEPLOY_PARENT_STATUS:-}" \
+            --setenv="MOJO_ACME_ROOT_ENTRY=${MOJO_ACME_ROOT_ENTRY:-0}" \
             --setenv="PROJ_PATH=$PROJ_PATH" \
             --setenv="APP_USER=$APP_USER_CANDIDATE" \
             --setenv="PROBE_URL=${PROBE_URL:-https://127.0.0.1/api/version}" \
@@ -474,14 +506,14 @@ fi
 # systemd-run above), so the transient-unit boundary stays untouched. An
 # unresolvable account is a refusal, not a guess — a wrong owner bricks the
 # node's engine and log ownership permanently.
-APP_USER="$(python3 -m mojo.deploy app-user --root "$PROJ_PATH" \
-    --candidate "$APP_USER_CANDIDATE")" ||
-    die "cannot resolve a non-root application account"
-export APP_USER
+if [ "${MOJO_ACME_ROOT_ENTRY:-0}" != "1" ]; then
+    APP_USER="$(python3 -m mojo.deploy app-user --root "$PROJ_PATH" \
+        --candidate "$APP_USER_CANDIDATE")" ||
+        die "cannot resolve a non-root application account"
+    export APP_USER
+fi
 
-cd "$PROJ_PATH"
 ensure_state_root
-run_as_app mkdir -p "$PROJ_PATH/var"
 previous_umask="$(umask)"
 umask 077
 exec 9>"$LOCK_FILE"
@@ -493,12 +525,25 @@ else
     flock 9
 fi
 
+if [ "${MOJO_ACME_ROOT_ENTRY:-0}" = "1" ]; then
+    entry_context="$(/usr/local/libexec/mojo-acme-hub-upgrade --entry-context)" || {
+        echo 'FATAL: shared ACME fixed account unavailable' >&2; exit 1;
+    }
+    APP_USER="${entry_context%%$'\n'*}"
+    PROJ_PATH="${entry_context#*$'\n'}"
+    PATH="/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin"
+    export APP_USER PROJ_PATH PATH
+fi
+
 # A stale admitted parent may launch after losing its DB session. The durable
 # floor is checked under the actual root lock, before cleanup or recovery.
 if ! acme_floor_guard admit; then
     echo "FATAL: shared ACME floor refused deployment; transaction retained" >&2
     exit 1
 fi
+
+cd "$PROJ_PATH"
+run_as_app mkdir -p "$PROJ_PATH/var"
 
 for preparing in "$TRANSACTION_ROOT"/preparing.*; do
     [ -d "$preparing" ] || continue

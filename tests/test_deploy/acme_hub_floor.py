@@ -8,6 +8,9 @@ import sys
 import tempfile
 import time
 import uuid
+import threading
+import hashlib
+import pwd
 
 from testit import helpers as th
 
@@ -115,6 +118,11 @@ def test_floor_snapshot_guards_saved_recovery_before_mutation(opts):
                                           uid=os.getuid(), loader=loader))
         module.check_update(dict(phase="snapshot", framework="1.38.0"), root, uid=os.getuid(), loader=loader)
         module.check_update(dict(phase="rollback", framework="1.38.0"), root, uid=os.getuid(), loader=loader)
+        module.check_update(dict(phase="restored", framework="1.38.0"), root, uid=os.getuid(), loader=loader)
+        substituted = dict(_identity(floor), source_sha="f" * 40)
+        _error(lambda: module.check_update(dict(phase="restored", framework="1.38.0"), root,
+                                          uid=os.getuid(), loader=lambda: substituted), "recovery_unavailable")
+        assert active.is_dir(), "same-release substituted recovery must retain ACTIVE before lifecycle"
         (active / "previous_post.sh").write_text("changed lifecycle\n")
         _error(lambda: module.check_update(dict(phase="admit", framework="1.38.0"), root,
                                           uid=os.getuid(), loader=loader), "recovery_unavailable")
@@ -186,5 +194,138 @@ def test_floor_strict_frames_and_conservative_release_policy(opts):
     from mojo.deploy import acme_hub_floor as module
     for raw in (b'{"operation":"status","operation":"release"}', b'{"a":NaN}', b'[]', b'{}' * 40000):
         _error(lambda: module.decode(raw))
-    for value in ("1.38.0.dev1", "1.38.0rc1", "1.38.0+local", "v1.38.0", "garbage"):
+    for value in ("1.38.0.dev1", "1.38.0rc1", "1.38.0+local", "1.38.0.post1", "1!1.38.0", "v1.38.0", "garbage"):
         _error(lambda: module.release(value), "artifact_unavailable")
+    for value in ("1.37.3", "1.37.2", "1.0"):
+        _error(lambda: module.artifact(dict(_floor()["artifact"], release=value)), "artifact_unavailable")
+
+
+@th.django_unit_test()
+def test_floor_enrollment_pins_retained_bytes_and_prefloor_policy(opts):
+    from mojo.deploy import acme_hub_floor as module
+    with tempfile.TemporaryDirectory() as directory:
+        root = _root(directory)
+        helper, updater, marker = (root / name for name in ("helper", "updater", "enrollment"))
+        helper.write_bytes(b"reviewed helper")
+        updater.write_bytes(b"reviewed updater")
+        helper.chmod(0o755)
+        updater.chmod(0o755)
+        value = dict(schema=1, helper_sha256=hashlib.sha256(helper.read_bytes()).hexdigest(),
+                     updater_sha256=hashlib.sha256(updater.read_bytes()).hexdigest(),
+                     app_user=pwd.getpwuid(os.getuid()).pw_name, project_root=str(root), artifact=_floor()["artifact"])
+        marker.write_bytes(module.encoded(value))
+        marker.chmod(0o644)
+        read = lambda: module.enrollment(uid=os.getuid(), marker=marker, helper=helper, updater=updater)
+        assert read() == value, "enrollment must bind actual retained helper/updater bytes"
+        _error(lambda: module.check_update(dict(phase="admit", framework="1.37.3"), root,
+                                          uid=os.getuid(), enrolled=value), "incompatible_framework")
+        module.check_update(dict(phase="admit", framework="1.38.0"), root, uid=os.getuid(),
+                            enrolled=value, loader=lambda: _identity(_floor()))
+        updater.write_bytes(b"substituted updater")
+        _error(read, "enrollment_unavailable")
+        updater.unlink()
+        _error(read)
+        assert not (root / module.FLOOR_NAME).exists(), "prefloor enrollment checks cannot stamp or invent activation"
+
+
+@th.django_unit_test()
+def test_floor_root_selector_partial_stamp_and_poisoned_candidate(opts):
+    from mojo.deploy.acme_hub_entry import ROOT_GATE
+    with tempfile.TemporaryDirectory() as directory:
+        root = _root(directory)
+        state, libexec, poison = (root / name for name in ("state", "libexec", "poison"))
+        for path in (state, libexec, poison):
+            path.mkdir(mode=0o700)
+        selected, executed = root / "selected", root / "poison-executed"
+        helper = libexec / "mojo-acme-hub-upgrade"
+        helper.write_text("#!/bin/bash\nprintf '%s\\n' \"$@\" > " + str(selected) + "\n")
+        helper.chmod(0o755)
+        (poison / "sitecustomize.py").write_text("open(" + repr(str(executed)) + ", 'w').write('site')")
+        (poison / "mojo.py").write_text("open(" + repr(str(executed)) + ", 'w').write('mojo')")
+        # Only private fixture copies replace fixed paths/uid. Production has
+        # no path, command, uid or environment selector.
+        source = ROOT_GATE.replace('value.st_uid!=0', 'value.st_uid!=' + str(os.getuid()))
+        for old, new in (("/var/lib/django-mojo-deploy", str(state)), ("/usr/local/libexec", str(libexec))):
+            source = source.replace(old, new)
+        source = source.replace('("/var", "/var/lib", "/usr", "/usr/local", "' + str(libexec) + '")', '(' + repr(str(root)) + ',)')
+        floor = state / "acme-hub-floor.json"
+        floor.write_text("partial stamp")
+        environment = dict(os.environ, PYTHONPATH=str(poison))
+        done = subprocess.run(["/usr/bin/python3", "-I", "-S", "-c", source, "--framework", "1.38.0"],
+                              cwd=poison, env=environment, capture_output=True, timeout=5)
+        assert done.returncode == 0 and selected.read_text().splitlines()[0] == "--launch", "partial floor without DB enable must select fixed entry"
+        assert not executed.exists(), "root selection must never import candidate Mojo or startup poison"
+        selected.unlink()
+        helper.unlink()
+        refused = subprocess.run(["/usr/bin/python3", "-I", "-S", "-c", source], capture_output=True, timeout=5)
+        assert refused.returncode != 0 and not selected.exists(), "missing enrolled entry cannot fall back to current package locator"
+        floor.unlink()
+        floor.symlink_to(root / "missing")
+        refused = subprocess.run(["/usr/bin/python3", "-I", "-S", "-c", source], capture_output=True, timeout=5)
+        assert refused.returncode != 0, "unreadable or symlink stamp cannot become absence"
+
+
+@th.django_unit_test()
+def test_floor_sealed_startup_ignores_real_pth_and_dependency_poison(opts):
+    from mojo.deploy import acme_hub_floor as module
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(root / "venv")],
+                       check=True, capture_output=True, timeout=15)
+        interpreter = root / "venv/bin/python3"
+        found = subprocess.run([str(interpreter), "-I", "-c", "import sysconfig;print(sysconfig.get_path('purelib'))"],
+                               check=True, capture_output=True, text=True, timeout=5)
+        site = Path(found.stdout.strip())
+        executed = root / "startup-executed"
+        package = site / "packaging"
+        package.mkdir()
+        (package / "__init__.py").write_text("open(" + repr(str(executed)) + ", 'w').write('dependency')\n")
+        (site / "candidate.pth").write_text("import packaging\n")
+        # Control proves this is an executable real system-site .pth in the
+        # candidate pip environment, not merely PYTHONPATH text.
+        subprocess.run([str(interpreter), "-I", "-c", "pass"], check=True, capture_output=True, timeout=5)
+        assert executed.exists(), "control interpreter must execute candidate site/dependency poison"
+        executed.unlink()
+        result = subprocess.run([str(interpreter), "-I", "-S", module.__file__, "--updater-check"],
+                                input=b'{}\n', capture_output=True, timeout=5)
+        assert result.returncode != 0 and not executed.exists(), "sealed verifier must refuse without executing pip-mutable startup/dependency bytes"
+
+
+@th.django_unit_test()
+def test_floor_stdout_backpressure_obeys_deadline_and_releases_lock(opts):
+    from mojo.deploy import acme_hub_floor as module
+    with tempfile.TemporaryDirectory() as directory:
+        root = _root(directory)
+        floor = _floor()
+        script = ("import sys,os\nfrom mojo.deploy import acme_hub_floor as m\n"
+                  f"floor={floor!r}\ns=m.Session({str(root)!r},uid=os.getuid(),loader=lambda:{{k:v for k,v in floor['artifact'].items() if k!='wheel_sha256'}})\n"
+                  "s.deadline=s.clock()+0.6\nm.serve(sys.stdin.buffer,sys.stdout.buffer,s)\n")
+        child = subprocess.Popen([sys.executable, "-c", script], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        def flood(frame):
+            try:
+                child.stdin.write(frame * 1000)
+                child.stdin.flush()
+            except (BrokenPipeError, ValueError):
+                pass
+        try:
+            child.stdin.write(module.encoded(dict(operation="prepare_hold", floor=floor, nonce="6" * 32)) + b"\n")
+            child.stdin.flush()
+            receipt = json.loads(child.stdout.readline())
+            frame = module.encoded(dict(operation="confirm_hold", nonce="6" * 32,
+                                         helper_session=receipt["helper_session"])) + b"\n"
+            writer = threading.Thread(target=flood, args=(frame,), daemon=True)
+            writer.start()
+            # Deliberately never drain stdout again: the child must expire
+            # even when its next receipt cannot fit in the real pipe.
+            child.wait(timeout=3)
+            writer.join(timeout=2)
+            assert child.returncode != 0, "backpressured held helper must expire, not wait for its reader"
+            after = module.Session(root, uid=os.getuid()).handle(dict(operation="status"))
+            assert after["floor"] == floor, "output deadline must release flock and preserve irreversible floor"
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.stdin.close()
+            child.stdout.close()
+            child.stderr.close()

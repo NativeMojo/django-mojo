@@ -1,4 +1,4 @@
-#!/usr/bin/python3 -I
+#!/usr/bin/env -S /usr/bin/python3 -I -S
 """Fixed local root ACME cutover helper; no Django, configuration or transport.
 
 Enrollment copies this reviewed file to /usr/local/libexec/mojo-acme-hub-upgrade.
@@ -12,23 +12,26 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import select
 import stat
 import sys
+import sysconfig
 import time
 import uuid
 
-from packaging.version import Version, InvalidVersion
-
 STATE_ROOT = Path("/var/lib/django-mojo-deploy")
 ENTRY = "/usr/local/libexec/mojo-acme-hub-upgrade"
+UPDATER_ENTRY = "/usr/local/libexec/mojo-acme-hub-update.sh"
+ENROLLMENT_ENTRY = "/usr/local/libexec/mojo-acme-hub-enrollment.json"
 FLOOR_NAME = "acme-hub-floor.json"
 MAX_BYTES = 65536
 MAX_CODE_BYTES = 1024 * 1024
 MAX_SESSION_SECONDS = 600
 HEARTBEAT_SECONDS = 30
 EPOCH = 1
+LEGACY_RELEASE_CEILING = "1.37.3"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 NONCE = re.compile(r"^[0-9a-f]{32}$")
@@ -37,7 +40,7 @@ CRITICAL_FILES = (
     "apps/dnsman/services/acme_hub.py", "apps/dnsman/services/acme_hub_upgrade.py",
     "apps/dnsman/services/acme_hub_legacy.py", "apps/edge/services/acme_hub_deploy.py",
     "apps/edge/asyncjobs.py", "apps/edge/services/deploy.py",
-    "deploy/acme_hub_floor.py", "deploy/project_scripts/update.sh",
+    "deploy/acme_hub_floor.py", "deploy/acme_hub_entry.py", "deploy/project_scripts/update.sh",
     "deploy/project_scripts/post_deploy.sh",
     "apps/dnsman/migrations/0005_acmehubparticipant_and_more.py",
     "apps/dnsman/migrations/0007_acmehubinstallation.py",
@@ -85,16 +88,12 @@ def encoded(value):
 
 
 def release(value):
-    if not isinstance(value, str) or not 1 <= len(value) <= 64:
+    # Deliberately smaller than PEP440: no dependency imported from the pip
+    # environment being recovered. App policy accepts the identical subset.
+    if (not isinstance(value, str) or not 1 <= len(value) <= 64
+            or not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){1,3}", value)):
         _fail("artifact_unavailable")
-    try:
-        parsed = Version(value)
-    except (InvalidVersion, TypeError):
-        _fail("artifact_unavailable")
-    if (not isinstance(value, str) or str(parsed) != value or parsed.local is not None
-            or parsed.is_prerelease or parsed.is_devrelease):
-        _fail("artifact_unavailable")
-    return parsed
+    return tuple(int(part) for part in value.split(".")) + (0,) * (4 - len(value.split(".")))
 
 
 def _uuid(value):
@@ -112,7 +111,8 @@ def artifact(value):
             or any(not isinstance(value[key], str) or not HEX64.fullmatch(value[key])
                    for key in ("manifest_sha256", "wheel_sha256"))):
         _fail("artifact_unavailable")
-    release(value["release"])
+    if release(value["release"]) <= release(LEGACY_RELEASE_CEILING):
+        _fail("artifact_unavailable")
     return value
 
 
@@ -188,10 +188,84 @@ def read_floor(root=STATE_ROOT, *, uid=0):
         os.close(parent)
 
 
+def enrollment(*, uid=0, marker=ENROLLMENT_ENTRY, helper=ENTRY, updater=UPDATER_ENTRY, missing=False):
+    """Read pinned operator facts as data; never import the current package."""
+    parent = _parent(Path(marker).parent, uid)
+    try:
+        raw = _read(parent, Path(marker).name, uid, missing=missing, mode=0o644)
+    finally:
+        os.close(parent)
+    if raw is None:
+        return None
+    value = decode(raw)
+    if (set(value) != {"schema", "helper_sha256", "updater_sha256", "app_user", "project_root", "artifact"}
+            or type(value["schema"]) is not int or value["schema"] != 1
+            or any(not isinstance(value[k], str) or not HEX64.fullmatch(value[k]) for k in ("helper_sha256", "updater_sha256"))
+            or not isinstance(value["project_root"], str) or not value["project_root"].startswith("/")
+            or len(value["project_root"]) > 1024 or any(ord(c) < 32 for c in value["project_root"])
+            or os.path.normpath(value["project_root"]) != value["project_root"]
+            or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}", value["app_user"])):
+        _fail("enrollment_unavailable")
+    artifact(value["artifact"])
+    try:
+        if pwd.getpwnam(value["app_user"]).pw_uid == 0:
+            _fail("enrollment_unavailable")
+    except KeyError:
+        _fail("enrollment_unavailable")
+    for name, path in (("helper_sha256", helper), ("updater_sha256", updater)):
+        parent = _parent(Path(path).parent, uid)
+        try:
+            body = _read(parent, Path(path).name, uid, mode=0o755, maximum=MAX_CODE_BYTES)
+        finally:
+            os.close(parent)
+        if hashlib.sha256(body).hexdigest() != value[name]:
+            _fail("enrollment_unavailable")
+    return value
+
+
+def launch(argv):
+    """Only the fixed packaged updater argv is accepted at the root entry."""
+    value = enrollment()
+    allowed = {"--sha", "--framework", "--deployment", "--node-type"}
+    parsed = {}
+    migrate = False
+    index = 0
+    while index < len(argv):
+        key = argv[index]
+        if key == "--migrate" and not migrate:
+            migrate = True
+            index += 1
+            continue
+        if key not in allowed or key in parsed or index + 1 >= len(argv):
+            _fail("invalid_frame")
+        parsed[key] = argv[index + 1]
+        index += 2
+    if (set(parsed) != allowed or not HEX40.fullmatch(parsed["--sha"])
+            or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", parsed["--node-type"])
+            or (migrate and parsed["--node-type"] != "api")):
+        _fail("invalid_frame")
+    _uuid(parsed["--deployment"])
+    if release(parsed["--framework"]) < release(value["artifact"]["release"]):
+        _fail("incompatible_framework")
+    environment = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin",
+                   "PROJ_PATH": value["project_root"], "APP_USER": value["app_user"],
+                   "MOJO_ACME_ROOT_ENTRY": "1"}
+    os.chdir("/")
+    os.execve("/bin/bash", ["bash", UPDATER_ENTRY, "--parent-status"] + argv, environment)
+
+
 def installed_identity(*, uid=0):
     """Inspect distribution bytes without importing the candidate package."""
     try:
-        distribution = importlib.metadata.distribution("django-mojo")
+        # -S suppresses site startup. Enumerate the fixed interpreter's
+        # distribution metadata as DATA, never import candidate modules or
+        # execute .pth/sitecustomize to discover them.
+        site = sysconfig.get_path("purelib")
+        distributions = [dist for dist in importlib.metadata.distributions(path=[site])
+                         if (dist.metadata.get("Name") or "").lower().replace("_", "-") == "django-mojo"]
+        if len(distributions) != 1:
+            _fail("artifact_unavailable")
+        distribution = distributions[0]
         root = Path(distribution.locate_file("mojo"))
         fd = _parent(root / "apps/dnsman", uid)
         try:
@@ -227,6 +301,10 @@ def _qualifies(identity, floor):
             or not isinstance(identity["manifest_sha256"], str) or not HEX64.fullmatch(identity["manifest_sha256"])
             or release(identity["release"]) < release(floor["artifact"]["release"])):
         _fail("incompatible_framework")
+    if release(identity["release"]) == release(floor["artifact"]["release"]):
+        expected = {key: value for key, value in floor["artifact"].items() if key != "wheel_sha256"}
+        if identity != expected:
+            _fail("artifact_unavailable")
 
 
 def _transaction(root, uid):
@@ -358,14 +436,18 @@ def _saved_files(fd, uid):
     return result
 
 
-def check_update(request, root=STATE_ROOT, *, uid=0, loader=None):
+def check_update(request, root=STATE_ROOT, *, uid=0, loader=None, enrolled=None):
     """Caller owns update.lock; this helper never releases or reacquires it."""
     if not isinstance(request, dict) or set(request) != {"phase", "framework"}:
         _fail("invalid_frame")
     phase = request["phase"]
-    if phase not in {"admit", "snapshot", "candidate", "rollback", "publication"}:
+    if phase not in {"admit", "snapshot", "candidate", "rollback", "restored", "publication"}:
         _fail("invalid_frame")
     floor = read_floor(root, uid=uid)
+    if floor is None and enrolled is not None:
+        # Enrollment precedes the activation stamp. It already fences package
+        # admission/recovery at the reviewed baseline during partial cutover.
+        floor = {"artifact": enrolled["artifact"]}
     if floor is None:
         return {"floor": False}
     if phase == "admit":
@@ -378,7 +460,9 @@ def check_update(request, root=STATE_ROOT, *, uid=0, loader=None):
             finally:
                 os.close(active)
             check_update(dict(phase="publication" if committed else "rollback", framework=request["framework"]),
-                         root, uid=uid, loader=loader)
+                         root, uid=uid, loader=loader, enrolled=enrolled)
+        else:
+            _qualifies((loader or (lambda: installed_identity(uid=uid)))(), floor)
         return {"floor": True}
     identity_loader = loader or (lambda: installed_identity(uid=uid))
     fd = _active(root, uid)
@@ -402,7 +486,7 @@ def check_update(request, root=STATE_ROOT, *, uid=0, loader=None):
             _qualifies(identity, floor)
             if release(_text(fd, "candidate_framework", uid)) != release(identity["release"]):
                 _fail("artifact_unavailable")
-        elif phase == "rollback":
+        elif phase in {"rollback", "restored"}:
             saved = decode(_read(fd, "acme_previous_identity.json", uid, mode=0o600))
             if (set(saved) != {"identity", "sha", "files"}
                     or saved["sha"] != _text(fd, "previous_sha", uid)
@@ -413,9 +497,35 @@ def check_update(request, root=STATE_ROOT, *, uid=0, loader=None):
             expected = "django-mojo==" + saved["identity"]["release"]
             if _text(fd, "acme_previous_framework_constraint.txt", uid) != expected:
                 _fail("recovery_unavailable")
+            if phase == "restored":
+                identity = identity_loader()
+                if identity != saved["identity"]:
+                    _fail("recovery_unavailable")
+                _qualifies(identity, floor)
         return {"floor": True}
     finally:
         os.close(fd)
+
+
+def _reply(output, value, session):
+    fd = output.fileno()
+    previous = fcntl.fcntl(fd, fcntl.F_GETFL)
+    try:
+        fcntl.fcntl(fd, fcntl.F_SETFL, previous | os.O_NONBLOCK)
+        pending = memoryview(encoded(value) + b"\n")
+        while pending:
+            remaining = min(session.deadline, session.heartbeat) - session.clock()
+            if remaining <= 0 or not select.select([], [fd], [], remaining)[1]:
+                _fail("session_expired")
+            try:
+                written = os.write(fd, pending)
+            except BlockingIOError:
+                continue
+            if written <= 0:
+                _fail("session_unavailable")
+            pending = pending[written:]
+    finally:
+        fcntl.fcntl(fd, fcntl.F_SETFL, previous)
 
 
 def serve(stream, output, session):
@@ -443,8 +553,7 @@ def serve(stream, output, session):
             pending = bytearray(rest)
             request = decode(bytes(raw))
             result = session.handle(request)
-            output.write(encoded(dict(ok=True, **result)) + b"\n")
-            output.flush()
+            _reply(output, dict(ok=True, **result), session)
             if request["operation"] in {"status", "release"}:
                 return 0
     finally:
@@ -456,12 +565,40 @@ def main(argv=None):
     try:
         if os.geteuid() != 0:
             _fail("root_required")
+        if argv and argv[0] == "--launch":
+            launch(argv[1:])
+            return 1
+        if argv == ["--entry-context"]:
+            value = enrollment()
+            # The retained script calls this only after acquiring fd9. Check
+            # the actual lock inode and a competing description, as data.
+            parent = _parent(STATE_ROOT, 0)
+            try:
+                held = os.fstat(9)
+                expected = os.stat("update.lock", dir_fd=parent, follow_symlinks=False)
+                if (held.st_dev, held.st_ino) != (expected.st_dev, expected.st_ino):
+                    _fail("entry_unavailable")
+                other = os.open("update.lock", os.O_RDWR | os.O_NOFOLLOW, dir_fd=parent)
+                try:
+                    try:
+                        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        pass
+                    else:
+                        _fail("entry_unavailable")
+                finally:
+                    os.close(other)
+            finally:
+                os.close(parent)
+            sys.stdout.write(value["app_user"] + "\n" + value["project_root"] + "\n")
+            return 0
         if argv == ["--updater-check"]:
-            result = check_update(decode(sys.stdin.buffer.readline(MAX_BYTES + 1)))
+            result = check_update(decode(sys.stdin.buffer.readline(MAX_BYTES + 1)), enrolled=enrollment())
             sys.stdout.buffer.write(encoded(dict(ok=True, **result)) + b"\n")
             return 0
         if argv:
             _fail("invalid_frame")
+        enrollment()
         return serve(sys.stdin.buffer, sys.stdout.buffer, Session())
     except (FloorError, OSError, ValueError, KeyError, TypeError):
         # Never expose paths, config values or arbitrary provider exceptions.

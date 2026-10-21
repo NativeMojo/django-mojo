@@ -180,6 +180,15 @@ line would only reach one of them.
 from django.apps import AppConfig
 
 
+def seed_test_installation(using):
+    # Testit flushes migration data before a run. This is a TEST-PROJECT
+    # fixture, not a production reader/recovery path; a row deleted inside a
+    # test stays missing until the next explicit database flush.
+    from mojo.apps.dnsman.models import AcmeHubInstallation
+    AcmeHubInstallation.objects.using(using).bulk_create(
+        [AcmeHubInstallation(id=1)], ignore_conflicts=True)
+
+
 class TestitSupportConfig(AppConfig):
     name = "testit_support"
 
