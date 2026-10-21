@@ -1,7 +1,6 @@
 """Revision-bound configuration activation through the existing job transport."""
 import re
 import time
-import uuid
 
 from django.utils import timezone
 from django.core import signing
@@ -48,8 +47,9 @@ def _topic_evidence(value):
     if profile is not None and (not isinstance(profile, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", profile)):
         return None
     if observed is not None:
+        from mojo.apps.dnsman.fleet_settings import project_uuid
         try:
-            if not isinstance(observed, str) or uuid.UUID(observed).hex != observed:
+            if project_uuid(observed) != observed:
                 return None
         except ValueError:
             return None

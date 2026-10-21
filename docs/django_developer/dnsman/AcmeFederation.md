@@ -356,6 +356,12 @@ allocations whose group was deleted; historical leases are bound to that owner
 without changing PKs, values, state, expiry, errors or reconciliation timestamps.
 A null original group cannot be inherited by a recreated project.
 
+Project identity validation accepts existing sixteen-character lowercase hex
+Group IDs as well as canonical full UUIDs. Hub lookups and trust bindings retain
+the exact stored identity; no Group is rewritten or padded. Installed profiles
+retain short IDs and continue normalizing full UUIDs to compact hex. Participant,
+deployment and connection reference validation is unchanged.
+
 Grant creates a trusted participant; join only validates that grant and exact
 one-hop alias, and creates nothing. Revocation is a permanent tombstone. Exact
 active grant retries are idempotent; revoked references never reactivate or

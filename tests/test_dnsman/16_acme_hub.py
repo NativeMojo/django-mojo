@@ -584,6 +584,49 @@ def _descriptor(allocation, group, ref="consumer-a"):
                 domain=allocation.domain_name, allocation_ref=allocation.target_name)
 
 
+@th.django_unit_test("Existing short project identities retain exact trust and independent challenge ownership")
+def test_legacy_project_identity_shared_round_trip(opts):
+    from mojo.apps.account.models import ApiKey, Group
+    from mojo.apps.dnsman.models import AcmeHubDelegation, AcmeHubParticipant, AcmeHubChallengeLease
+    from mojo.apps.dnsman.services import acme_hub as hub, acme_hub_client as client
+    owner_id, recipient_id = "a" + uuid.uuid4().hex[:15], "b" + uuid.uuid4().hex[:15]
+    owner = Group.objects.create(name="acme_hub_test_legacy_owner", uuid=owner_id)
+    recipient = Group.objects.create(name="acme_hub_test_legacy_recipient", uuid=recipient_id)
+    allocation = _allocation(SimpleNamespace(acme_group=owner), client_ref="legacy-owner")
+    controller, consumer = _request(owner), _request(recipient)
+    seams = dict(route53_client=FakeRoute53(), dns_probe=AliasProbe(allocation), state_reader=_shared_state)
+    try:
+        resolved = client.resolve_recipient(allocation.target_name, recipient_id, transport=lambda operation, payload:
+            hub.resolve_recipient(controller, state_reader=_shared_state, **payload))
+        assert resolved["consumer_project_uuid"] == recipient_id, "Recipient resolution must retain the existing sixteen-character identity"
+        allocations = client.list_allocations(allocation.domain_name, transport=lambda operation, payload:
+            hub.list_allocations(controller, state_reader=_shared_state, **payload))
+        assert allocations["items"][0]["owner_project_uuid"] == owner_id, "The real controller response must pass downstream validation without changing its short owner identity"
+        descriptor = _descriptor(allocation, recipient, "legacy-recipient")
+        _error(lambda: hub.grant(consumer, descriptor, **seams), 403, "acme_not_authorized")
+        granted = client.grant(descriptor, transport=lambda operation, payload:
+            hub.grant(controller, payload["connection_request"], **seams))
+        assert granted["consumer_project_uuid"] == recipient_id, "Explicit trust must bind the original recipient project unchanged"
+        joined = hub.join(consumer, allocation.domain_name, "legacy-recipient", allocation.target_name, **seams)
+        assert joined["target"] == allocation.target_name, "Legacy project trust must reuse the owner's DNS target"
+        hub.publish(owner, "legacy-owner", "legacy-owner-order", ["owner-digest"], request=controller, **seams)
+        hub.publish(recipient, "legacy-recipient", "legacy-recipient-order", ["recipient-digest"], request=consumer, **seams)
+        record = seams["route53_client"].records[("TXT", allocation.target_name)]
+        assert set(record.record_values) == {"owner-digest", "recipient-digest"}, "Independent issuers must publish their exact lease union for legacy projects"
+        hub.withdraw(recipient, "legacy-recipient", "legacy-recipient-order", request=consumer, **seams)
+        assert seams["route53_client"].records[("TXT", allocation.target_name)].record_values == ["owner-digest"], "Recipient cleanup must preserve the owner's live challenge"
+        _error(lambda: hub.revoke(controller, allocation.target_name, recipient_id, **seams), 400, "acme_invalid_request")
+        _error(lambda: hub.resolve_recipient(controller, allocation.target_name, recipient_id.upper(), state_reader=_shared_state), 400, "acme_invalid_request")
+        owner.refresh_from_db(); recipient.refresh_from_db(); allocation.refresh_from_db()
+        assert (owner.uuid, recipient.uuid, allocation.owner_project_uuid) == (owner_id, recipient_id, owner_id), "Compatibility must never rewrite existing project or allocation identities"
+    finally:
+        AcmeHubChallengeLease.objects.filter(allocation=allocation).delete()
+        AcmeHubParticipant.objects.filter(allocation=allocation).delete()
+        AcmeHubDelegation.objects.filter(pk=allocation.pk).delete()
+        ApiKey.objects.filter(group__in=[owner, recipient]).delete()
+        Group.objects.filter(pk__in=[owner.pk, recipient.pk]).delete()
+
+
 def _error(func, status, token=None):
     try:
         func()

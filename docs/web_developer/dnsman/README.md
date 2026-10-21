@@ -833,6 +833,11 @@ under a revoked grant. `ControllerParticipantDTO` adds exactly
 `consumer_project_uuid` and `consumer_label` (max200). Consumer DTOs reveal no
 other consumer identity, lease refs or values.
 
+Owner and consumer project identities may be existing sixteen-character
+lowercase hex Group IDs or canonical full UUIDs. Preserve the exact supplied
+project string in connection requests and trust operations; do not pad it or
+replace the Group. Participant and connection reference validation is unchanged.
+
 `AllocationDTO` has exactly
 `{allocation_ref,domain,source,target,owner_project_uuid,can_manage_trust:true}`.
 `AliasDTO` has exactly

@@ -665,6 +665,15 @@ def _uuid(value):
     return value
 
 
+def _project_identity(value):
+    from mojo.apps.dnsman.fleet_settings import project_uuid
+    try:
+        project_uuid(value)
+    except ValueError:
+        _fail("acme_invalid_request")
+    return value
+
+
 def _cursor(value):
     if value is None:
         return None
@@ -829,7 +838,7 @@ def list_participants(request, allocation_ref, cursor=None):
 def _recipient(consumer_project_uuid):
     from mojo.apps.account.models import Group
 
-    group = Group.objects.filter(uuid=_uuid(consumer_project_uuid)).first()
+    group = Group.objects.filter(uuid=_project_identity(consumer_project_uuid)).first()
     if group is None or not group.is_effectively_active():
         _fail("acme_not_authorized", 403)
     return group
@@ -848,7 +857,7 @@ def _connection_request(value):
         _fail("acme_invalid_request")
     if type(value["version"]) is not int or value["version"] != 1:
         _fail("acme_invalid_request")
-    return dict(version=1, consumer_project_uuid=_uuid(value["consumer_project_uuid"]),
+    return dict(version=1, consumer_project_uuid=_project_identity(value["consumer_project_uuid"]),
                 client_ref=_input_ref(value["client_ref"]), domain=_input_domain(value["domain"]),
                 allocation_ref=_input_domain(value["allocation_ref"]))
 

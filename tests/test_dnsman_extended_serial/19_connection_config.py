@@ -23,7 +23,7 @@ def caps(*args, **kwargs):
 
 
 @contextmanager
-def fixture():
+def fixture(consumer_uuid=UUID):
     from mojo.apps.dnsman import fleet_settings as schema
     from mojo.apps.dnsman.services import connection_config as topic, acme_hub_client
     from mojo.apps.account.services import provider_setup as provider, fleet_config, fleet_apply
@@ -32,7 +32,7 @@ def fixture():
     with ExitStack() as stack:
         stack.enter_context(mock.patch.dict(schema._PROFILES, {}, clear=True))
         schema.register_hub_profile("test_hub", label="Test hub", origin="https://hub.example",
-                                    consumer_project_uuid=UUID, consumer_label="Original recipient")
+                                    consumer_project_uuid=consumer_uuid, consumer_label="Original recipient")
         values = dict(zip(schema.KEYS, ("test_hub", "https://hub.example", SECRET)))
         static = dict(values, ADMIN_FLEET_CONFIG_ALLOWED_KEYS=list(schema.KEYS) + list(codec.DEFAULTS),
                       CONFIG_SYNC_OVERRIDE_ALLOWED_KEYS=list(schema.KEYS),
@@ -358,6 +358,23 @@ def test_compatibility_credentials_preview_publish_and_write_only_state(opts):
         assert state["loaded_identity"]["observed_project_uuid"] == UUID, "Loaded identity must come from authenticated capabilities"
         assert SECRET not in repr(state) + repr(preview) + repr(published), "State, preview and publication receipts must be write-only"
         assert state["fleet"]["nodes"][0]["hostname"] == "offline", "Topic state must retain the expected offline node"
+
+
+@th.django_unit_test()
+def test_legacy_project_catalog_proof_and_exact_identity(opts):
+    legacy = "74a3c6699bed4ddf"
+    with fixture(consumer_uuid=legacy) as (topic, schema, provider, fleet, s3, actor, values, static, payload, probe):
+        probe.side_effect = lambda *args, **kwargs: dict(caps(), consumer_project_uuid=legacy)
+        preview = topic.mutate(actor, payload)
+        assert preview["identity"]["observed_project_uuid"] == legacy, "Protected preview must prove the existing short recipient identity"
+        assert topic.state(actor)["loaded_identity"]["observed_project_uuid"] == legacy, "Loaded proof must retain exactly the installed project identity"
+        assert schema.profile("test_hub")["consumer_project_uuid"] == legacy, "Catalog registration must never pad or replace a legacy project identity"
+        probe.side_effect = lambda *args, **kwargs: dict(caps(), consumer_project_uuid="0" * 16 + legacy)
+        refused("hub_identity_mismatch", lambda: topic.mutate(actor, payload))
+        assert not s3.put_object.called, "A lookalike full UUID must not authorize publication for the short project"
+        for invalid in (legacy.upper(), " " + legacy, legacy[:-1], legacy + "0", "g" * 16):
+            with th.assert_raises(ValueError):
+                schema.project_uuid(invalid)
 
 
 @th.django_unit_test()

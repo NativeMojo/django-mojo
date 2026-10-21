@@ -160,6 +160,11 @@ It never includes a token, length or hint. Expected identity comes from installe
 trusted code; loaded identity comes from a timestamped authenticated capabilities
 check of this process's static configuration. Neither proves the entire fleet.
 
+Expected and observed project identities also accept existing sixteen-character
+lowercase hex Group IDs without rewriting them. Fleet health still requires an
+exact match to both the installed profile and its project identity. Revision,
+operation and deployment identifiers retain their existing UUID formats.
+
 The browser chooses an installed opaque profile ID; it cannot choose an origin,
 recipient UUID as authority, path, socket, module, command, bucket or grant rule.
 A missing catalog, schema, either delegation or publisher prerequisite produces

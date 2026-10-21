@@ -53,6 +53,10 @@ def normalize_origin(value):
 
 
 def project_uuid(value):
+    # Group UUIDs minted by older installations are sixteen lowercase hex
+    # characters. Preserve them; padding would select a different project.
+    if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{16}", value):
+        return value
     if not isinstance(value, str) or len(value) not in (32, 36):
         raise ValueError("invalid project UUID")
     try:

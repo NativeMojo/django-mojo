@@ -294,3 +294,19 @@ def test_unmanaged_fleet_keeps_legacy_health_without_topic_evidence(opts):
     reply["results"][0]["result"].pop("shared_validation", None)
     assert fleet_apply._nodes(REVISION, ["node-a"], reply)[0]["healthy"], "Unmanaged legacy Fleet health must remain backward compatible without a hub proof"
     assert not fleet_apply._nodes(REVISION, ["node-a"], reply, topic_required=True, topic_identity={"profile_id": "approved_hub", "consumer_project_uuid": "d" * 32})[0]["healthy"], "A managed active target must require authenticated topic proof from every node"
+
+
+@th.django_unit_test()
+def test_legacy_project_proof_keeps_exact_profile_and_identity_health(opts):
+    from mojo.apps.account.services import fleet_apply
+    project = "74a3c6699bed4ddf"
+    identity = dict(state="verified", profile_id="approved_hub", observed_project_uuid=project,
+                    checked_at="2026-10-21T00:00:00+00:00", error_code=None, sharing_ready=False)
+    reply = _reply(shared_validation=identity)
+    target = dict(profile_id="approved_hub", consumer_project_uuid=project)
+    nodes = fleet_apply._nodes(REVISION, ["node-a"], reply, topic_required=True, topic_identity=target)
+    assert nodes[0]["healthy"] and nodes[0]["shared_validation"]["observed_project_uuid"] == project, "Fleet health must retain authenticated proof of the exact existing short project"
+    for changed in (dict(target, consumer_project_uuid="0" * 16 + project), dict(target, profile_id="other_hub")):
+        assert not fleet_apply._nodes(REVISION, ["node-a"], reply, topic_required=True, topic_identity=changed)[0]["healthy"], "A lookalike project or different profile must never satisfy managed fleet health"
+    reply["results"][0]["result"]["shared_validation"] = dict(identity, observed_project_uuid=project.upper())
+    assert not fleet_apply._nodes(REVISION, ["node-a"], reply, topic_required=True, topic_identity=target)[0]["healthy"], "Malformed short project proof must fail closed"

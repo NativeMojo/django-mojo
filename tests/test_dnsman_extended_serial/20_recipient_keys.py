@@ -7,11 +7,11 @@ from testit import helpers as th
 
 
 @contextmanager
-def fixture():
+def fixture(consumer_uuid=None):
     from mojo.apps.account.models import User, Group, ApiKey
     token = uuid.uuid4().hex
     actor = User.objects.create(username="testit_recipient_" + token, is_active=True, is_superuser=True)
-    group = Group.objects.create(name="Original recipient " + token, uuid=uuid.uuid4().hex, is_active=True)
+    group = Group.objects.create(name="Original recipient " + token, uuid=consumer_uuid or uuid.uuid4().hex, is_active=True)
     request = SimpleNamespace(user=actor, bearer="bearer", api_key=None, user_api_key=None,
                               group_token=None, auth_token=None, group=None)
     try:
@@ -37,6 +37,21 @@ def test_named_recipient_issues_only_protected_unlinked_group_key(opts):
         assert issued["token"] == key.get_token(), "Issuance must use the existing recoverable-token secret response contract"
         assert "token" not in state and "permissions" not in state, "Recipient lookup must not expose a token or general grant editor"
         assert ApiKey.objects.filter(group=group).count() == 1, "Named issuance must not create competing keys or grant trust implicitly"
+
+
+@th.django_unit_test()
+def test_legacy_project_recipient_issues_on_the_original_group(opts):
+    from mojo.apps.dnsman.services import recipient_keys as service
+    from mojo.apps.account.models import ApiKey
+    legacy = uuid.uuid4().hex[:16]
+    with fixture(consumer_uuid=legacy) as (request, actor, group):
+        observed = service.lookup(request, {"consumer_project_uuid": legacy})
+        issued = service.issue(request, {"consumer_project_uuid": legacy, "expected_consumer_label": group.name,
+                                         "label": "Legacy shared validation", "purpose": service.PURPOSE})
+        key = ApiKey.objects.get(pk=issued["api_key"]["id"])
+        group.refresh_from_db()
+        assert observed["consumer_project_uuid"] == issued["consumer_project_uuid"] == group.uuid == legacy, "Lookup and issuance must retain the exact original short project identity"
+        assert key.group_id == group.pk and key.permissions == {service.PERMISSION: True}, "Compatibility must issue only the existing protected purpose on the original Group"
 
 
 @th.django_unit_test()

@@ -137,6 +137,29 @@ def _capability_data(**overrides):
     return data
 
 
+@th.django_unit_test("Client accepts existing short project identities without relaxing participant UUIDs")
+def test_legacy_project_identity_client_contract(opts):
+    from mojo.apps.dnsman.services import acme_hub_client as client
+    project = "74a3c6699bed4ddf"
+    caps = client.capabilities(transport=lambda *args: _capability_data(consumer_project_uuid=project))
+    assert caps.consumer_project_uuid == project, "Authenticated capabilities must preserve the legacy project identity"
+    allocations = client.list_allocations(DOMAIN, transport=lambda *args: dict(items=[dict(
+        allocation_ref=TARGET, domain=DOMAIN, source=SOURCE, target=TARGET,
+        owner_project_uuid=project, can_manage_trust=True)], next_cursor=None))
+    assert allocations["items"][0].owner_project_uuid == project, "Controller allocation DTOs must accept an existing short owner identity"
+    recipient = client.resolve_recipient(TARGET, project, transport=lambda operation, payload: dict(
+        consumer_project_uuid=payload["consumer_project_uuid"], label="Original", active=True))
+    assert recipient.consumer_project_uuid == project, "Recipient request and response must preserve exact project bytes"
+    descriptor = dict(version=1, consumer_project_uuid=project, client_ref=CLIENT_REF, domain=DOMAIN, allocation_ref=TARGET)
+    granted = client.grant(descriptor, transport=lambda *args: _participant_data(controller=True, consumer_project_uuid=project))
+    assert granted.consumer_project_uuid == project and granted.participant_ref == PARTICIPANT_REF, "Legacy project grants must retain the full participant UUID"
+    for invalid in (project.upper(), " " + project, project[:-1], project + "0", "g" * 16):
+        _caught(client.AcmeHubResponseError, lambda: client.capabilities(transport=lambda *args: _capability_data(consumer_project_uuid=invalid)))
+    _caught(client.AcmeHubResponseError, lambda: client.lookup(DOMAIN, TARGET, transport=lambda *args: dict(
+        items=[_participant_data(participant_ref=project)], next_cursor=None)))
+    _caught(client.AcmeHubRequestError, lambda: client.revoke(TARGET, project, transport=lambda *args: None))
+
+
 def _alias_data(**overrides):
     data = dict(state="match", observed_target=TARGET, one_hop=True, checked_at=STAMP)
     data.update(overrides)

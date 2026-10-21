@@ -491,6 +491,22 @@ def _request_uuid(value):
         raise AcmeHubRequestError("a valid project or participant UUID is required")
 
 
+def _response_project_uuid(value):
+    from mojo.apps.dnsman.fleet_settings import project_uuid
+    try:
+        project_uuid(value)
+    except ValueError:
+        raise AcmeHubResponseError("ACME hub returned an invalid project UUID") from None
+    return value
+
+
+def _request_project_uuid(value):
+    try:
+        return _response_project_uuid(value)
+    except AcmeHubResponseError:
+        raise AcmeHubRequestError("a valid project UUID is required") from None
+
+
 def _timestamp(value):
     try:
         if not isinstance(value, str) or not value or len(value) > 40:
@@ -547,7 +563,7 @@ def _participant(data, controller=False, expected_client_ref=None, expected_doma
     elif data["revoked_at"] is not None:
         raise AcmeHubResponseError("ACME hub returned an invalid revocation timestamp")
     if controller:
-        _response_uuid(data["consumer_project_uuid"])
+        _response_project_uuid(data["consumer_project_uuid"])
         if (expected_consumer_uuid is not None and data["consumer_project_uuid"] != expected_consumer_uuid
                 or not isinstance(data["consumer_label"], str) or len(data["consumer_label"]) > 200):
             raise AcmeHubResponseError("ACME hub returned an invalid recipient")
@@ -597,7 +613,7 @@ def capabilities(*, transport=None):
             or type(data["can_consume"]) is not bool or type(data["can_manage_trust"]) is not bool):
         raise AcmeHubResponseError("ACME hub returned unsupported capabilities")
     if data["consumer_project_uuid"] is not None:
-        _response_uuid(data["consumer_project_uuid"])
+        _response_project_uuid(data["consumer_project_uuid"])
     if (data["can_consume"] != (data["shared_validation"] and data["consumer_project_uuid"] is not None)
             or (not data["shared_validation"] and data["can_manage_trust"])):
         raise AcmeHubResponseError("ACME hub returned invalid consumer capabilities")
@@ -644,7 +660,7 @@ def _controller_allocation(data, domain):
                              "validate", expected_domain=domain)
     if data["allocation_ref"] != allocation.target or data["can_manage_trust"] is not True:
         raise AcmeHubResponseError("ACME hub returned an invalid allocation authority")
-    _response_uuid(data["owner_project_uuid"])
+    _response_project_uuid(data["owner_project_uuid"])
     return objict(data)
 
 
@@ -666,7 +682,7 @@ def list_participants(allocation_ref, cursor=None, *, transport=None):
 
 
 def resolve_recipient(allocation_ref, consumer_project_uuid, *, transport=None):
-    allocation_ref, consumer_project_uuid = _domain(allocation_ref), _request_uuid(consumer_project_uuid)
+    allocation_ref, consumer_project_uuid = _domain(allocation_ref), _request_project_uuid(consumer_project_uuid)
     data = (transport or _post)("resolve_recipient", dict(allocation_ref=allocation_ref, consumer_project_uuid=consumer_project_uuid))
     _shape(data, {"consumer_project_uuid", "label", "active"})
     if (data["consumer_project_uuid"] != consumer_project_uuid or data["active"] is not True
@@ -681,7 +697,7 @@ def grant(connection_request, *, transport=None):
         raise AcmeHubRequestError("a version 1 connection request is required")
     if type(connection_request["version"]) is not int or connection_request["version"] != 1:
         raise AcmeHubRequestError("a version 1 connection request is required")
-    descriptor = dict(version=1, consumer_project_uuid=_request_uuid(connection_request["consumer_project_uuid"]),
+    descriptor = dict(version=1, consumer_project_uuid=_request_project_uuid(connection_request["consumer_project_uuid"]),
                       client_ref=_reference(connection_request["client_ref"], "client_ref"),
                       domain=_domain(connection_request["domain"]), allocation_ref=_domain(connection_request["allocation_ref"]))
     result = _participant((transport or _post)("grant", dict(connection_request=descriptor)), controller=True,
