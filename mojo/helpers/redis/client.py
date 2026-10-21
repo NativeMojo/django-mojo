@@ -260,6 +260,9 @@ def get_bounded_connection(timeout=1.0, max_connections=8,
         url, decode_responses=True,
         socket_connect_timeout=timeout, socket_timeout=timeout,
         max_connections=max_connections, **retry_options)
+    if deadline is not None:
+        from mojo.helpers.bounded_transport import bind_redis_pool
+        bind_redis_pool(pool, deadline)
     client = redis.Redis(connection_pool=pool)
     return _DeadlineClient(client, deadline, max_timeout=timeout) if deadline is not None else client
 

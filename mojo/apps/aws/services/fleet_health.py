@@ -287,6 +287,8 @@ def reconcile(declarations, inventory=None, runners=None, proofs=None, now=None,
         hosts = {receipt["host"] for receipt in receipts}
         if len(hosts) != 1:
             row["identity_status"] = "ambiguous"
+            row["proof_observed_at"] = max(receipt["proof"]["observed_at"] for receipt in receipts)
+            row["aliases"] = sorted(hosts)[:4]
             row["reasons"].append("node_proof_ambiguous")
             continue
         proof = receipts[0]
@@ -515,11 +517,14 @@ def _collect(actor, deadline, readers):
     expected = readers.get("expected", _read_expected)(grants, deadline)
     sources = {"expected": {"status": "ok" if expected["complete"] else "unknown",
                             "details": expected["sources"]}}
-    cached_proofs = []
+    cached_proofs, cached_ambiguities = [], []
     if grants["jobs"]:
         try:
             record = (readers.get("identity_cache") or IdentityRoster()).read(grants, deadline)
             for identity in (record or {}).get("rows", []):
+                if (identity.get("identity_status") == "ambiguous"
+                        and _fresh(identity.get("proof_observed_at"), datetime.now(timezone.utc))):
+                    cached_ambiguities.append(identity)
                 if identity.get("proof_started") and identity.get("proof_observed_at"):
                     cached_proofs.append({"host": identity.get("hostname"),
                                           "started": identity["proof_started"],
@@ -564,6 +569,12 @@ def _collect(actor, deadline, readers):
             heartbeat_ttl = 15
     rows = reconcile(expected["declarations"], inventory, runners, cached_proofs,
                      heartbeat_ttl=heartbeat_ttl)
+    for identity in cached_ambiguities:
+        for row in rows:
+            if row["node_id"] == identity["node_id"]:
+                row.update(identity_status="ambiguous", health="unknown", aliases=identity.get("aliases", []),
+                           proof_observed_at=identity["proof_observed_at"])
+                row["reasons"] = sorted(set(row["reasons"] + ["node_proof_ambiguous"]))
     overflow = len(rows) > MAX_NODES
     if overflow:
         sources["roster"] = _state("unknown", "identity_limit", omitted_count=len(rows) - MAX_NODES)
@@ -758,7 +769,10 @@ def node(actor, node_id, hours=24, *, readers=None, deadline=None):
                 proof = payload.get("proof") or {}
                 if (proof.get("node_id") and proof["node_id"] != row["node_id"]
                         and any(item.get("node_id") == proof["node_id"] for item in expected["declarations"])):
-                    aliases = reconcile(expected["declarations"], inventory, runners, [{
+                    prior_proofs = [{"host": item.get("hostname"), "started": item["proof_started"],
+                                     "proof": {"node_id": item["node_id"], "observed_at": item["proof_observed_at"]}}
+                                    for item in rows if item.get("proof_started") and item.get("proof_observed_at")]
+                    aliases = reconcile(expected["declarations"], inventory, runners, prior_proofs + [{
                         "host": matching[0]["host"], "started": matching[0].get("started"), "proof": proof}],
                         heartbeat_ttl=readers.get("heartbeat_ttl", max(1, int(settings.get_static("JOBS_RUNNER_HEARTBEAT_SEC", 5))) * 3))
                     try:
@@ -805,7 +819,22 @@ def node(actor, node_id, hours=24, *, readers=None, deadline=None):
                                                        observed_at=payload.get("observed_at"))
             else:
                 errors = [receipt.get("error") for receipt in receipts if receipt.get("error")]
-                row["current"] = _state("unavailable", errors[0] if errors else checked.get("reason") or "checked_reply_missing")
+                anomalies = checked.get("anomalies") or []
+                reason = errors[0] if errors else checked.get("reason")
+                if not reason:
+                    if any(str(value).startswith("incompatible_host:") for value in anomalies):
+                        reason = "checked_protocol_incompatible"
+                    elif "identity_mismatch" in anomalies:
+                        reason = "identity_mismatch"
+                    elif any(str(value).startswith("duplicate_reply:") for value in anomalies):
+                        reason = "checked_reply_ambiguous"
+                    elif checked.get("missing_hosts"):
+                        reason = "checked_reply_timeout"
+                    else:
+                        reason = "checked_reply_missing"
+                if reason == "runner_draining":
+                    row["lifecycle"] = "draining"
+                row["current"] = _state("unknown" if reason in ("identity_mismatch", "checked_reply_ambiguous") else "unavailable", reason)
         except FleetHealthError:
             raise
         except Exception as exc:

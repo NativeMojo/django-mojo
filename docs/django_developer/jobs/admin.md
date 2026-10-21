@@ -351,3 +351,10 @@ interval. The optional local revision binds root-controlled role/activation
 receipt evidence (including request-service profile); an activation receipt does
 not establish current service liveness. Installation scheduler summaries remain
 installation-scoped. Existing liveness detection/alert ownership is unchanged.
+
+The private diagnostic Redis pool uses bounded DNS, numeric TCP dialing and an
+absolute-deadline socket over plain/TLS connections. The original hostname is
+retained for TLS certificate verification/SNI; no global resolver or pool is
+patched. Buffered/pipelined/slow-drip replies share the same deadline as roster,
+publication and polling. Extra OCSP network validation and cluster topology
+startup remain unsupported for this bounded diagnostic path.

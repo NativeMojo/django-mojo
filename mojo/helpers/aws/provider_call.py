@@ -152,7 +152,13 @@ def map_error(exc, operation, iam_action="", mutation=False):
         retryable = str(code) in _RETRYABLE or metadata.get("HTTPStatusCode") in (
             429, 500, 502, 503, 504)
     elif isinstance(exc, BotoCoreError):
-        code = "provider_error"
+        from mojo.helpers.bounded_transport import BoundedTransportError
+        nested = getattr(exc, "kwargs", {}).get("error")
+        code = nested.code if isinstance(nested, BoundedTransportError) else "provider_error"
+    else:
+        from mojo.helpers.bounded_transport import BoundedTransportError
+        if isinstance(exc, BoundedTransportError):
+            code = exc.code
     state = "unknown" if mutation and retryable else "attempted" if mutation else "none"
     return ProviderCallError(
         operation, code, iam_action, request_id, retryable, state, denied, message)
@@ -248,6 +254,10 @@ class DeadlineProviderClient:
                 from .client import get_client, get_session
                 from mojo.helpers.settings import settings
                 factory = self.client_factory or get_client
+                import os
+                if factory is get_client and any(os.environ.get(key) for key in (
+                        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")):
+                    raise ProviderCallError(self.service + "." + operation, "proxy_transport_unsupported")
                 if self.session is None:
                     self.session = get_session(
                         self.access_key if self.access_key is not None else settings.get_static("AWS_KEY", None),
@@ -263,6 +273,16 @@ class DeadlineProviderClient:
                         botocore_session.set_config_variable("metadata_service_timeout", min(0.25, remaining / 8))
                         botocore_session.set_config_variable("metadata_service_num_attempts", 1)
                     import os
+                    from urllib.parse import urlsplit
+                    import ipaddress
+                    metadata_endpoint = (os.environ.get("AWS_EC2_METADATA_SERVICE_ENDPOINT")
+                                         or getattr(botocore_session, "get_config_variable", lambda key: None)("ec2_metadata_service_endpoint"))
+                    if metadata_endpoint:
+                        try:
+                            ipaddress.ip_address(urlsplit(metadata_endpoint).hostname)
+                        except (ValueError, TypeError):
+                            raise ProviderCallError(self.service + "." + operation,
+                                                    "credential_transport_unsupported") from None
                     profile = botocore_session.get_scoped_config()
                     cached = getattr(botocore_session, "_credentials", None)
                     unsupported_profile = any(profile.get(key) for key in (
@@ -279,14 +299,35 @@ class DeadlineProviderClient:
                         # different account's fallback credentials instead.
                         raise ProviderCallError(self.service + "." + operation,
                                                 "credential_transport_unsupported")
-                target = factory(self.service, region=self.region, session=self.session,
-                                 timeout=min(1.0, remaining / 4), max_attempts=0,
-                                 config=Config(connect_timeout=min(1.0, remaining / 4),
-                                               read_timeout=min(1.0, remaining / 4),
-                                               retries={"total_max_attempts": 1, "mode": "standard"}))
+                metadata_sessions = []
+                if botocore_session is not None and self.owned_session and cached is None:
+                    from mojo.helpers.bounded_transport import bind_aws_session
+                    resolver = botocore_session.get_component("credential_provider")
+                    for provider in resolver.providers:
+                        if getattr(provider, "METHOD", None) == "iam-role":
+                            fetcher = provider._role_fetcher
+                            bind_aws_session(fetcher._session, self.deadline, clock=self.clock,
+                                             url=fetcher.get_base_url())
+                            metadata_sessions.append(fetcher._session)
+                try:
+                    target = factory(self.service, region=self.region, session=self.session,
+                                     timeout=min(1.0, remaining / 4), max_attempts=0,
+                                     config=Config(connect_timeout=min(1.0, remaining / 4),
+                                                   read_timeout=min(1.0, remaining / 4),
+                                                   retries={"total_max_attempts": 1, "mode": "standard"}))
+                except Exception:
+                    if self.clock() >= self.deadline:
+                        raise ProviderCallError(self.service + "." + operation, "deadline_exceeded") from None
+                    raise
+                finally:
+                    for transport in metadata_sessions:
+                        transport.close()
             try:
                 if self.clock() >= self.deadline:
                     raise ProviderCallError(self.service + "." + operation, "deadline_exceeded")
+                if self.client is None:
+                    from mojo.helpers.bounded_transport import bind_aws_client
+                    bind_aws_client(target, self.deadline, self.clock)
                 result = getattr(target, operation)(**kwargs)
                 if self.clock() >= self.deadline:
                     raise ProviderCallError(self.service + "." + operation, "deadline_exceeded")

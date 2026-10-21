@@ -265,3 +265,8 @@ Output is bounded to 24 KiB. Omitted buckets/mounts/series carry counts and make
 coverage incomplete. An oversized CloudWatch dimension set is omitted whole
 (`dimensions:null`, `dimensions_omitted:true`, `omitted_series_count:1`); a
 partial dimension list must never be treated as an exact series identity.
+
+Collection deadlines cover bounded DNS, numeric connection establishment and
+complete socket transfers. Slow replies cannot renew a collection deadline.
+Unsupported proxy/OCSP/resolver transports remain unknown/unavailable evidence;
+clients must not turn such omissions into healthy service status.

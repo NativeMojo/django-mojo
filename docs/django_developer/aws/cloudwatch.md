@@ -571,3 +571,14 @@ that has an independently unbounded process/SSO/STS/container refresh path,
 returns `credential_transport_unsupported` on this bounded path. Normal chart
 credential-chain behavior is unchanged. Callers may inject a bounded client for
 deterministic evidence tests.
+
+The bounded path also controls DNS and transfer lifetime. Private SDK pool
+classes dial numeric addresses from `dns.probe.resolve_addresses(hostname,
+deadline)` while retaining the original TLS SNI and signed Host. The resolver
+shares its A/AAAA budget and returns at most sixteen numeric addresses. A
+`DeadlineSocket` guards every send/receive, including buffered HTTP file reads,
+so a slow response cannot renew the overall deadline one packet at a time.
+The private IMDS credential transport receives the same wrapper before SDK
+construction. Existing SDK/global socket pools are unchanged. Proxy transports
+and extra OCSP network validation are explicitly unsupported on this path;
+resolver failures return stable safe reason codes, without raw DNS exceptions.

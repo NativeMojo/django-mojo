@@ -406,3 +406,9 @@ explicit. Output fits 24 KiB: bucket omissions are counted; an oversized full
 dimension set is omitted as a whole series with `dimensions_omitted:true` and
 `omitted_series_count`, never clipped into another CloudWatch identity. Any
 omission or family failure prevents complete coverage.
+
+DNS and complete transfers are included in these deadlines: private provider
+and Redis adapters consume the shared bounded DNS resolver, dial numeric
+addresses, preserve TLS SNI/Host, and guard each socket send/read (including
+buffered HTTP reads). A slow-drip reply cannot renew the deadline. Proxy/extra
+OCSP side channels and unsupported resolver transports return explicit failures.
