@@ -146,6 +146,29 @@ acmecorp.welcome     → used automatically when sending from an acmecorp mailbo
 
 Templates use `{{variable}}` syntax. Context values are substituted into both the subject and body fields.
 
+### Sender Display Name
+
+Set `EmailTemplate.metadata["sender_name"]` to brand the sender of that template:
+
+```python
+template.metadata["sender_name"] = "CAMACTIVE PORTAL"
+template.save(update_fields=["metadata"])
+```
+
+The message then uses `CAMACTIVE PORTAL <no-reply@example.com>`, retaining the
+selected mailbox's verified address, permissions and default reply-to. The
+name comes from the final selected database template, including domain or
+group-prefixed overrides. Set it only on the tenant's templates to leave
+other tenants' emails unchanged. Template context cannot override it, and
+the name is not rendered as a Django template.
+
+Missing or whitespace-only names retain the exact bare mailbox source.
+An explicit name must be a string of at most 255 characters without ASCII
+control characters (including tabs, CR/LF and DEL); invalid values raise
+`ValueError` before any provider call or `SentMessage` creation. Unicode and
+punctuation are encoded as an email display name. Plain emails and templates
+stored directly in SES do not use this database-template setting.
+
 ### Examples
 
 ```python

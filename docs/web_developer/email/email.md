@@ -125,6 +125,30 @@ permissions, encryption and verification details.
 
 Template variables use `{{variable_name}}` syntax.
 
+### Template Sender Branding
+
+The selected database template can brand its sender with
+`metadata.sender_name`. For example, an authorized template update can include:
+
+```json
+{
+  "metadata": {"sender_name": "CAMACTIVE PORTAL"}
+}
+```
+
+This produces a sender such as `CAMACTIVE PORTAL <no-reply@example.com>`.
+The verified mailbox address and default reply-to stay the same. Configure
+only the group's selected templates when other groups share the mailbox.
+Group-themed login pages select templates through the existing group/org
+email-template routing; the browser does not supply the sender name.
+
+The value is literal text, not a context variable. Missing or whitespace-only
+names retain the bare address. Explicit values must be strings no longer than
+255 characters and cannot contain ASCII control characters, including tabs,
+CR/LF or DEL. Invalid branding prevents sending; Unicode and punctuation are
+formatted safely. This setting applies to database templates, not plain emails
+or templates hosted directly in SES.
+
 ## Mailboxes
 
 ### List Mailboxes
