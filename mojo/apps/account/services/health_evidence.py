@@ -494,7 +494,12 @@ def source_configuration(deadline, *, get_static=None, cursor_context=None, budg
     webapps_sql = "NULL"
     if django_apps.is_installed("mojo.apps.edge"):
         from mojo.apps.edge.models import WebApp, Vhost
-        webapps_sql = '(SELECT jsonb_agg(jsonb_build_object(\'id\', w.id, \'origin\', v.server_name)) FROM (SELECT id, vhost_id FROM "%s" ORDER BY id LIMIT 25) w LEFT JOIN "%s" v ON v.id=w.vhost_id)' % (WebApp._meta.db_table, Vhost._meta.db_table)
+        from mojo.apps.edge.validators import server_name_for
+        from mojo.apps.dnsman.models import Domain
+        webapps_sql = '''(SELECT jsonb_agg(jsonb_build_object('id', w.id, 'domain_name', d.name, 'label', v.label) ORDER BY w.id)
+            FROM (SELECT id, vhost_id FROM "%s" ORDER BY id LIMIT 25) w
+            LEFT JOIN "%s" v ON v.id=w.vhost_id
+            LEFT JOIN "%s" d ON d.id=v.domain_id)''' % (WebApp._meta.db_table, Vhost._meta.db_table, Domain._meta.db_table)
     with (cursor_context or (lambda end: primary_cursor(end, budget=budget)))(deadline) as cursor:
         cursor.execute('SELECT (SELECT jsonb_object_agg(key, value) FROM "%s" WHERE group_id IS NULL AND key=ANY(%%s)), %s' % (Setting._meta.db_table, webapps_sql), [keys])
         stored, apps = cursor.fetchone()
@@ -508,8 +513,9 @@ def source_configuration(deadline, *, get_static=None, cursor_context=None, budg
         get_static=get_static, topology_reader=lambda key: topology)
     services = [{"resource_id": "primary", "service_id": "primary", "origin": stored.get(system_settings.BASE_URL), "path": "/api/version"}]
     for app in apps[:23]:
+        name = server_name_for(app["domain_name"], app.get("label") or "") if app.get("domain_name") is not None else None
         services.append({"resource_id": "webapp-%s" % app["id"], "service_id": "webapp-%s" % app["id"],
-                         "origin": "https://" + app["origin"] if app.get("origin") else None, "path": "/"})
+                         "origin": "https://" + name if name else None, "path": "/"})
     channels = get_static("JOBS_CHANNELS", [])
     if isinstance(channels, str):
         channels = [part.strip() for part in channels.split(",") if part.strip()]
