@@ -186,7 +186,8 @@ def safe_block_networks(cidrs, *, protected=_UNSET, whitelist=_UNSET):
     `kept` is the canonical networks left after subtracting NON_GLOBAL_V4,
     both protected settings and every actively whitelisted address. `carved`
     lists the input networks that lost addresses. Raises FirewallTruthError
-    `protected_config_invalid` on malformed settings and `network_limit` when
+    `protected_config_invalid` on malformed settings (an empty list returns
+    ([], []) first) and `network_limit` when
     the carve-out leaves more than MAX_FIREWALL_NETWORKS networks; it never
     truncates.
 
@@ -194,6 +195,9 @@ def safe_block_networks(cidrs, *, protected=_UNSET, whitelist=_UNSET):
     production reads the settings and the database.
     """
     canonical = canonical_ipv4_networks(cidrs)
+    if not canonical:
+        # Nothing to block is never refused, even on malformed config.
+        return [], []
     if protected is _UNSET:
         protected = protected_networks()
     if protected is None:

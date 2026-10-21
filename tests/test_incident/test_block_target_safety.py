@@ -663,3 +663,33 @@ def test_carve_reported_once_per_sync(opts):
     th.assert_eq(len(lines), 1, f"one job-log line per sync, got {job.logs}")
     infos = [c for c in info.call_args_list if "t8885carve carves" in str(c.args[0])]
     th.assert_eq(len(infos), 1, f"one logit line per sync, got {len(infos)}")
+
+
+@th.django_unit_test()
+def test_empty_lists_never_refused_under_malformed_config(opts):
+    """Ruling 131872: an empty network list is never refused, even while the
+    protection settings are malformed; a non-empty load still refuses."""
+    from mojo.apps.incident import firewall
+    from mojo.apps.incident.models import IPSet
+    from mojo.apps.incident.services import block_safety, firewall_truth
+
+    with _settings(MALFORMED):
+        th.assert_eq(block_safety.safe_block_networks([]), ([], []),
+                     "an empty list is safe under malformed config")
+
+        with mock.patch(BROKER, side_effect=_broker_ok) as broker:
+            got = firewall.ipset_load("t8885set", [])
+        th.assert_eq(got, (True, 0), f"an empty ipset_load succeeds with 0, got {got}")
+        th.assert_eq(broker.call_count, 1, f"one broker call, got {broker.call_count}")
+        th.assert_eq(broker.call_args.kwargs.get("cidrs"), [],
+                     f"the broker is asked for an empty set, got {broker.call_args}")
+
+        row = IPSet(name="t8885empty", data="", is_enabled=True)
+        plan = firewall_truth.ipset_snapshot_from_row(row)
+        th.assert_eq(plan["desired"]["count"], 0, f"an empty enabled set plans 0, got {plan['desired']}")
+        th.assert_eq(plan["carved"], 0, "nothing is carved from an empty set")
+
+        with mock.patch(BROKER, side_effect=_broker_ok) as broker:
+            got = firewall.ipset_load("t8885set", [f"{PUBLIC}/32"])
+        th.assert_eq(got, (False, 0), f"a non-empty load still refuses, got {got}")
+        th.assert_true(not broker.called, "a refused load must not reach the broker")
