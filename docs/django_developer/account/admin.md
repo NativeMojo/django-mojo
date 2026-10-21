@@ -16,19 +16,19 @@ Compiled assets use a relative base; Portal API requests always use same-origin
 
 ## Pinned identity and offline replacement
 
-The current artifact is portal-mojo **0.2.18**, source revision
-`ea414d196f1e727be310681a9d36c97513784908`,
+The current artifact is portal-mojo **0.2.19**, source revision
+`1af371612752afa8771ae5aa12535473ba0d5b5c`,
 built clean with Node **24.21.0** / npm **11.19.0** and lockfile SHA-256
-`291fc4f7bd7f55a38e264847650d38c08cb229b18e685e792c606b1c4118351a`.
+`e82eb75dea18ab0cf1892e33c1752cb48fa3d4dbae16538b27174af5b729eed3`.
 Its 128-file inventory includes the Vite manifest and lazy chunks.
 The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 
-`03f4d7cb0d0ba718531c7254e928970affd736c052b1a783683325648da6cd6a`
+`0e8c48fcb070de87a68bc7505b3b2d72d6ffa739b374bcf7d5aa057d0be85ea6`
 
 This pin is the clean canonical artifact from
-[Portal CI run 39516512697](https://github.com/NativeMojo/portal-mojo/actions/runs/39516512697).
-It includes changes after the `v0.2.18` tag; the source revision and manifest
-digest identify this bundle, while the sidebar still shows 0.2.18.
+[Portal release run 39521419171](https://github.com/NativeMojo/portal-mojo/actions/runs/39521419171).
+This pin is the canonical artifact for the `v0.2.19` release tag, including
+the version displayed in the Portal sidebar.
 portal-mojo promises identical bytes on one platform only, so another platform's
 build of the same revision may carry a different hash.
 The complete artifact includes hidden `.vite` content; verify the manifest
@@ -39,7 +39,7 @@ Stop processes serving/importing the checkout before replacing the artifact:
 ```bash
 uv run python scripts/vendor_admin_portal.py \
   --source /absolute/path/to/verified/dist/admin \
-  --expected-manifest-sha256 03f4d7cb0d0ba718531c7254e928970affd736c052b1a783683325648da6cd6a
+  --expected-manifest-sha256 0e8c48fcb070de87a68bc7505b3b2d72d6ffa739b374bcf7d5aa057d0be85ea6
 uv run python scripts/vendor_admin_portal.py --check
 ```
 
