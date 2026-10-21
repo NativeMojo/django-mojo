@@ -10,6 +10,7 @@ import re
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from mojo.apps.incident.models.rule import BundleBy, MatchBy
+from .mojosec_rule_facts import FIELD_SCHEMAS as MOJOSEC_FIELD_SCHEMAS
 
 
 SCHEMA_VERSION = 1
@@ -165,6 +166,7 @@ FIELD_SCHEMAS = {
     "ip_recent_distinct_targets": "int",
     "ip_recent_distinct_devices": "int",
 }
+FIELD_SCHEMAS.update(MOJOSEC_FIELD_SCHEMAS)
 
 OPERATORS = {
     "int": ("==", "eq", ">", ">=", "<", "<="),
@@ -966,6 +968,9 @@ def _legacy_field_value(rule, event):
         field_name = field_name[9:]
     if not _FIELD_RE.fullmatch(field_name) or field_name.startswith("_"):
         return None
+    if field_name in MOJOSEC_FIELD_SCHEMAS:
+        from .mojosec_rule_facts import field_value
+        return field_value(event, field_name)
     metadata = event.metadata if isinstance(
         getattr(event, "metadata", None), dict) else {}
     # Model columns are the authoritative facts. Metadata is a fallback for

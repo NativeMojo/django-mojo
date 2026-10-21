@@ -410,6 +410,8 @@ class RuleSet(models.Model, MojoModel):
         cls.ensure_health_rules()
         cls.ensure_traffic_rules()
         cls.ensure_catchall_rules()
+        from mojo.apps.incident.services.mojosec_defaults import ensure_defaults
+        ensure_defaults()
 
     @classmethod
     def ensure_cloudwatch_rules(cls):

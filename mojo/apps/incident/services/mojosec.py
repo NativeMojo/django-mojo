@@ -260,6 +260,7 @@ def _event_projection(batch, sensor_event):
             f"{sensor_event['recommendation']} (advisory only)."
         ),
         model_name="mojosec_sensor",
+        model_id=batch["installation_key_id"],
         metadata={
             "mojosec": projected_metadata,
         },
@@ -742,6 +743,9 @@ def dispatch_mojosec_receipt(job):
 
 
 def ingest_batch(api_key, batch, *, volume_observer=None):
+    from .mojosec_defaults import ensure_defaults
+
+    ensure_defaults()
     if protocol.has_unstorable_text(batch["policy_revision"]):
         # Every event in the batch would fail on this one field; one line,
         # zero database work, and the sensor frees its spool slots.
