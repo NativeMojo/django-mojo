@@ -13,7 +13,7 @@ def test_contact_page_renders_contact_us_form(opts):
     assert_eq(resp.status_code, 200, f"contact page should return 200, got {resp.status_code}")
     body = resp.response if isinstance(resp.response, str) else (resp.text or "")
     # We either see the full form (contact_us fields) or the challenge page.
-    is_challenge = "bouncer_challenge" in body or "mat-challenge" in body or "gate_challenge" in body.lower()
+    is_challenge = 'id="mbg-root"' in body  # account/bouncer_challenge.html
     has_contact = "Contact Us" in body or "name=\"message\"" in body
     assert_true(
         is_challenge or has_contact,
@@ -26,7 +26,7 @@ def test_contact_page_renders_support_form(opts):
     resp = opts.client.get("/contact?kind=support")
     assert_eq(resp.status_code, 200, f"support contact page should return 200, got {resp.status_code}")
     body = resp.response if isinstance(resp.response, str) else (resp.text or "")
-    is_challenge = "bouncer_challenge" in body or "mat-challenge" in body or "gate_challenge" in body.lower()
+    is_challenge = 'id="mbg-root"' in body  # account/bouncer_challenge.html
     # If we got past the challenge, we should see support-specific fields.
     has_support = ("Get Support" in body and "name=\"category\"" in body) or "severity" in body
     assert_true(
