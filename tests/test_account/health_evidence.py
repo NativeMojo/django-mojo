@@ -123,8 +123,11 @@ def test_failure_windows_keep_unread_rows_and_requery_overlap(opts):
     assert len(second["events"]) == 50 and not second["has_more"], "failure keyset cursor skipped or duplicated same-time event IDs"
     assert second["events"][0]["id"] == 201, "failure cursor used job UUID or max-ID watermark rather than frozen(at,id) position"
     later = NOW + timedelta(seconds=300)
-    he.failure_page(SOURCE, second["next_cursor"], deadline=10, now=later, reader=rows)
-    assert calls[-2][1] == NOW - timedelta(seconds=600), "completed window did not reread600seconds of overlap"
+    overlap_start = len(calls)
+    overlap = he.failure_page(SOURCE, second["next_cursor"], deadline=10, now=later, reader=rows)
+    overlap_calls = calls[overlap_start:]
+    assert overlap_calls and overlap_calls[0][:3] == ("events", NOW - timedelta(seconds=600), later), "completed window did not query the new closed window with 600 seconds of overlap"
+    assert overlap["events"][0]["id"] == 1 and overlap["has_more"], "overlap query skipped available prior evidence or acknowledged unread rows"
     assert first["capture_status"] == "best_effort" and "retention_unproven" in first["limitations"], "available failure rows overstated capture or retention completeness"
     assert not second["gaps"], "standing best-effort limitations became permanent observed gaps"
     with th.assert_raises(he.EvidenceError):
