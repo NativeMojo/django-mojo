@@ -298,6 +298,12 @@ def test_restart_tombstones_and_immutability(opts):
     new = AcmeDelegation.objects.get(pk=result["connection"]["id"])
     row.refresh_from_db()
     assert row.state == "retired" and new.client_ref != row.client_ref, "restart retires rather than revives an immutable ref"
+    retained = list(AcmeDelegation.objects.filter(group=env.group).order_by("pk").values())
+    caught("stale_connection", lambda: setup._prepare(
+        env.target, env.hub.target, env.hub.consumer, None, True,
+        identity_check=lambda consumer: None,
+        revoked_ref=(row.pk, str(row.client_ref), row.hub_participant_ref)))
+    assert list(AcmeDelegation.objects.filter(group=env.group).order_by("pk").values()) == retained, "A predecessor's revocation observation must not authorize or write to its new pending generation"
     assert result["trust"]["state"] == "missing" and result["connection_request"]["allocation_ref"] == old_target, "fresh generation requires a new exact controller grant"
     env.hub.grant(new)
     setup.connect(env.target, env.hub.target, client=env.hub, custody=lambda cert: True)

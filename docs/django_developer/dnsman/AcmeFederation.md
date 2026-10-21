@@ -649,6 +649,9 @@ mutation. A retry rechecks the complete published and authenticated loaded tuple
 a changed identity is still refused as `hub_identity_changed`. Applications do not
 need a private framework lock context. Unchanged managed tuples continue to bypass
 identity admission and hub probes for unrelated Fleet/GeoIP publication.
+Even a newly observed participant revocation leaves all connection diagnostics
+unchanged on busy refusal. Admitted restart records that observation only after
+fresh tenant/immutable-reference checks bind it to the exact predecessor.
 
 On the hub, `GET /api/account/admin/fleet/shared-validation/recipient` accepts only
 `consumer_project_uuid`, the exact original Group UUID. It returns the actual

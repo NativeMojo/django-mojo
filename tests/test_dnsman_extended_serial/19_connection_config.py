@@ -188,6 +188,55 @@ def test_opposing_domain_identity_owners_refuse_without_mutation(opts):
         env.group.delete()
 
 
+@th.django_unit_test("busy revoked-participant restart preserves every diagnostic in autocommit")
+def test_busy_revoked_restart_preserves_complete_connection_snapshot(opts):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+    from mojo.apps.dnsman.models import AcmeDelegation
+    from mojo.apps.dnsman.rest import delegation_setup as api
+    from mojo.apps.dnsman.services import delegation_setup as setup
+    shared = importlib.import_module("test_dnsman.23_shared_setup")
+    env = shared.fixture()
+    cleanup_calls = []
+    try:
+        old = shared.verified(env)
+        AcmeDelegation.objects.filter(pk=old.pk).update(last_error_code="alias_lookup_failed")
+        old.refresh_from_db()
+        participant = env.hub.participants[str(old.client_ref)]
+        participant.trust_state, participant.can_publish = "revoked", False
+        env.hub.calls.clear()
+        assert not connection.in_atomic_block, "The direct Native action regression must use autocommit, without an outer rollback hiding writes"
+        before = list(AcmeDelegation.objects.filter(group=env.group).order_by("pk").values())
+        with competing_identity_owner():
+            with CaptureQueriesContext(connection) as queries:
+                result = api._action(setup.connect, env.target, env.hub.target, restart=True,
+                                     client=env.hub, custody=lambda cert: True,
+                                     cleanup=lambda *args: cleanup_calls.append("cleanup"),
+                                     identity_check=lambda consumer: None)
+            after = list(AcmeDelegation.objects.filter(group=env.group).order_by("pk").values())
+            assert result.get("error_code") == "configuration_busy" and result.get("code") == 409, "The direct action must preserve busy409 for a newly observed revoked participant"
+            changed = [key for key in before[0] if before[0][key] != after[0][key]] if len(before) == len(after) == 1 else ["row_count"]
+            assert after == before, f"Busy restart must preserve all connection fields, including diagnostics and modified timestamps: changed={changed}"
+            writes = [q["sql"] for q in queries.captured_queries if q["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))]
+            assert not writes, "Busy revoked restart must issue no local write, even if a caller catches and commits the refusal"
+            assert not cleanup_calls and not any(call[0] in ("join", "publish", "withdraw") for call in env.hub.calls), "Busy revoked restart must not invoke cleanup or mutate the injected hub"
+        # A deliberate retry after admission succeeds still records the explicit
+        # revocation observation on the retired immutable predecessor.
+        success = setup.connect(env.target, env.hub.target, restart=True, client=env.hub,
+                                custody=lambda cert: True,
+                                cleanup=lambda *args: cleanup_calls.append("cleanup"),
+                                identity_check=lambda consumer: None)
+        old.refresh_from_db()
+        new = AcmeDelegation.objects.get(pk=success["connection"]["id"])
+        assert old.state == "retired" and old.last_error_code == "trust_revoked", "Admitted explicit restart must retain the observed revocation diagnostic on its predecessor"
+        assert new.pk != old.pk and new.client_ref != old.client_ref and AcmeDelegation.objects.filter(group=env.group).count() == 2, "Admitted restart must create exactly one isolated generation"
+        assert new.hub_allocation_ref == old.hub_allocation_ref and new.hub_consumer_project_uuid == old.hub_consumer_project_uuid, "Admitted restart must preserve immutable allocation and consumer identity"
+        assert cleanup_calls == ["cleanup"], "Cleanup must run exactly once, only after successful identity admission"
+    finally:
+        env.domain.delete()
+        env.group.delete()
+
+
 @th.django_unit_test("busy publication is bounded across topic, common writer and restore")
 def test_busy_publication_boundaries_and_unchanged_tuple_bypass(opts):
     from mojo import errors as me

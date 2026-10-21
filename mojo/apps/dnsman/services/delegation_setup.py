@@ -481,7 +481,7 @@ def _settle_cleanup(domain, certificates, old, cleanup=None):
             raise SetupError("cleanup_pending") from None
 
 
-def _prepare(target, allocation_ref, consumer, actor, restart, cleanup=None, identity_check=None):
+def _prepare(target, allocation_ref, consumer, actor, restart, cleanup=None, identity_check=None, revoked_ref=None):
     from mojo.apps.account.models import Group
     from mojo.apps.dnsman.models import AcmeDelegation, Certificate, Domain
     from mojo.apps.dnsman.services import certs
@@ -522,10 +522,18 @@ def _prepare(target, allocation_ref, consumer, actor, restart, cleanup=None, ide
                     if old.state == "retired":
                         raise SetupError("stale_connection")
                     return old
-                if old.hub_participant_ref and old.last_error_code != "trust_revoked":
+                observed_revoked = revoked_ref == (old.pk, str(old.client_ref), old.hub_participant_ref)
+                if revoked_ref is not None and not observed_revoked:
+                    raise SetupError("stale_connection")
+                if old.hub_participant_ref and old.last_error_code != "trust_revoked" and not observed_revoked:
                     raise SetupError("stale_connection")
                 if not old.hub_participant_ref and old.state != "pending":
                     raise SetupError("stale_connection")
+                if observed_revoked:
+                    # Only admitted preparation may persist an explicit restart
+                    # observation, bound to this freshly locked predecessor.
+                    old.last_error_code = "trust_revoked"
+                    old.save(update_fields=["last_error_code", "modified"])
             elif restart:
                 raise SetupError("stale_connection")
             if domain:
@@ -559,17 +567,20 @@ def connect(target, allocation_ref, actor=None, restart=False, client=None, cust
     try:
         caps, unused = _preflight(target, client, allocation_ref)
         old = _current(target)
+        revoked_ref = None
         if restart and old and old.hub_participant_ref:
             try:
                 _shared_status(old, client, caps)
             except SetupError as error:
                 if error.error_code != "trust_revoked":
                     raise
-                # Persist only the explicit restart observation, never a plan.
-                AcmeDelegation.objects.filter(pk=old.pk).update(last_error_code="trust_revoked")
+                # Keep remote observation read-only until identity admission and
+                # the current row/tenant/immutable-reference checks succeed.
+                revoked_ref = (old.pk, str(old.client_ref), old.hub_participant_ref)
             else:
                 raise SetupError("stale_connection")
-        row = _prepare(target, allocation_ref, caps.consumer_project_uuid, actor, restart, cleanup, identity_check)
+        row = _prepare(target, allocation_ref, caps.consumer_project_uuid, actor, restart, cleanup,
+                       identity_check, revoked_ref=revoked_ref)
         # First potentially ambiguous join is AFTER durable immutable intent.
         try:
             _refresh(target, actor, write=True)

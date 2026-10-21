@@ -1182,6 +1182,9 @@ do not automatically replay Connect/restart. Refreshed identity changes can stil
 require the existing `hub_identity_changed` repair. Protected preview, publish and
 historical restore use the same bounded busy response; the private operator flow
 must Refresh configuration and preview again before an explicit publication.
+Busy refusal also preserves every connection diagnostic, including a newly
+observed revocation. A later admitted restart retains that observation on its
+retired predecessor; it cannot authorize a different pending generation.
 
 On the hub, `GET /api/account/admin/fleet/shared-validation/recipient` accepts only
 `consumer_project_uuid=<exact original hub Group UUID>`. Its response is
