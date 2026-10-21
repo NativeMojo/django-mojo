@@ -1172,10 +1172,10 @@ _STYLE_INTERPOLATIONS_REVIEWED = {
     # deliberate (the value IS CSS) and it is admin-set group config, not
     # visitor input — the same trust level as uploading a .css file.
     ("auth_base.html", "custom_css|safe"),
-    # _serve_challenge runs the tenant accent through normalize_accent_color:
-    # only a six-digit hex colour is returned, with a fixed hex fallback.
-    # A visitor/config value cannot contribute CSS metacharacters here.
-    ("bouncer_challenge.html", "accent_color|default:'#6384ff'"),
+    # The bot-check page loads the same tenant stylesheet the same way
+    # (#9132): theme.custom_css is admin-set group config, never visitor
+    # input, and the challenge is the tenant's own page.
+    ("bouncer_challenge.html", "custom_css|safe"),
     # _auth_context normalizes the decoy accent to six-digit hex too.
     ("bouncer_decoy.html", "accent_color"),
 }

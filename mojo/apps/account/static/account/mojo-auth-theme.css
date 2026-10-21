@@ -23,6 +23,8 @@
     --mat-track: #e3ded4;
     --mat-danger-text: #c62828;
     --mat-success-strong: #2e7d32;
+    --mat-warn: #d9952b;
+    --mat-warn-text: #8a5a12;
     --mat-pending-shadow: 0 18px 50px rgba(22, 24, 31, 0.12), 0 0 0 1px var(--mat-border);
     --mat-radius: 24px;
     --mat-field-radius: 12px;
@@ -40,6 +42,8 @@ body.mat-appearance-dark {
     --mat-track: #1c2534;
     --mat-danger-text: #ef9a9a;
     --mat-success-strong: #2e7d32;
+    --mat-warn: #e0a43a;
+    --mat-warn-text: #f0c27a;
     --mat-pending-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--mat-border);
 }
 
@@ -55,6 +59,8 @@ body.mat-appearance-dark {
         --mat-track: #1c2534;
         --mat-danger-text: #ef9a9a;
         --mat-success-strong: #2e7d32;
+        --mat-warn: #e0a43a;
+        --mat-warn-text: #f0c27a;
         --mat-pending-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--mat-border);
     }
 }
@@ -784,6 +790,15 @@ body {
     --mat-pending-strong: color-mix(in srgb, var(--mat-accent) 78%, #000);
     --mat-pending-strong-hover: color-mix(in srgb, var(--mat-accent) 68%, #000);
     --mat-pending-link: var(--mat-pending-strong);
+}
+/* Browsers without color-mix() (Safari/WebView before 16.2) would drop the
+   strong shades, leaving the primary button transparent behind white text.
+   Fall back to the plain tenant accent. */
+@supports not (color: color-mix(in srgb, #000 50%, #fff)) {
+    .mat-pending {
+        --mat-pending-strong: var(--mat-accent);
+        --mat-pending-strong-hover: var(--mat-accent);
+    }
 }
 body.mat-appearance-dark .mat-pending {
     --mat-pending-link: var(--mat-accent);
