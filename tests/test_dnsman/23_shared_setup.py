@@ -298,6 +298,12 @@ def test_restart_tombstones_and_immutability(opts):
     new = AcmeDelegation.objects.get(pk=result["connection"]["id"])
     row.refresh_from_db()
     assert row.state == "retired" and new.client_ref != row.client_ref, "restart retires rather than revives an immutable ref"
+    retained = list(AcmeDelegation.objects.filter(group=env.group).order_by("pk").values())
+    caught("stale_connection", lambda: setup._prepare(
+        env.target, env.hub.target, env.hub.consumer, None, True,
+        identity_check=lambda consumer: None,
+        revoked_ref=(row.pk, str(row.client_ref), row.hub_participant_ref)))
+    assert list(AcmeDelegation.objects.filter(group=env.group).order_by("pk").values()) == retained, "A predecessor's revocation observation must not authorize or write to its new pending generation"
     assert result["trust"]["state"] == "missing" and result["connection_request"]["allocation_ref"] == old_target, "fresh generation requires a new exact controller grant"
     env.hub.grant(new)
     setup.connect(env.target, env.hub.target, client=env.hub, custody=lambda cert: True)
@@ -1124,13 +1130,13 @@ def test_busy_budget_preserves_ca_backoff(opts):
         Job.objects.filter(pk=root_id).delete()
 
 
-@th.django_unit_test("profile publication serializes preparation and refuses authenticated stale identity")
+@th.django_unit_test("busy preparation requires an explicit retry that still refuses stale identity")
 def test_profile_publication_preparation_race(opts):
     from django.db import close_old_connections
     from mojo.apps.dnsman.models import AcmeDelegation
     from mojo.apps.dnsman.services import connection_config, delegation_setup as setup
     env = fixture()
-    publishing, attempted, finished = threading.Event(), threading.Event(), threading.Event()
+    attempted, finished = threading.Event(), threading.Event()
     current = {"consumer": env.hub.consumer}
     outcomes = []
 
@@ -1151,15 +1157,16 @@ def test_profile_publication_preparation_race(opts):
             finished.set()
     try:
         with connection_config.identity_lock():
-            publishing.set()
             thread = threading.Thread(target=prepare_paused)
             thread.start()
             assert attempted.wait(3), "Connection preparation must reach the held publication lock"
-            assert not finished.wait(0.15), "Preparation must not persist old-identity intent while publication holds the app identity lock"
+            assert finished.wait(3), "Preparation must promptly refuse while publication holds identity admission"
+            assert outcomes == ["configuration_busy"], "Contention must remain distinct from a changed authenticated identity"
+            assert not AcmeDelegation.objects.filter(group=env.group).exists(), "Busy admission must persist no old-identity intent"
             current["consumer"] = uuid.uuid4().hex
-        assert finished.wait(5), "Paused preparation must resume after profile publication commits"
         thread.join(5)
-        assert outcomes == ["hub_identity_changed"], "Resumed preparation must refuse its authenticated predecessor identity"
+        caught("hub_identity_changed", lambda: setup._prepare(
+            env.target, env.hub.target, env.hub.consumer, None, False, identity_check=current_identity))
         assert not AcmeDelegation.objects.filter(group=env.group).exists(), "The profile transition race must leave no stale shared connection row"
     finally:
         if env.domain:

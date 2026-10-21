@@ -20,7 +20,7 @@ ERRORS = {
     "publisher_unavailable": 503, "node_enrollment_unavailable": 503,
     "fleet_revision_changed": 409, "hub_unconfigured": 503,
     "hub_unavailable": 503, "hub_unauthorized": 403, "hub_unsupported": 503,
-    "invalid_request": 400, "publication_uncertain": 503,
+    "invalid_request": 400, "publication_uncertain": 503, "configuration_busy": 409,
 }
 
 
@@ -31,12 +31,21 @@ class ConfigurationError(me.ValueException):
         super().__init__(code, code=status, status=status)
 
 
+def _admit_identity():
+    # A nested caller may already own Domain/issuer fences. Never wait for an
+    # identity owner that can itself be waiting on those fences. PostgreSQL
+    # retains successful admission through the outer transaction, reentrantly.
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_try_advisory_xact_lock(%s, %s)", [0x444e534d, 8986])
+        if not cursor.fetchone()[0]:
+            raise ConfigurationError("configuration_busy")
+
+
 @contextmanager
 def identity_lock():
-    """One app-owned lock orders profile publication and connection creation."""
+    """Admit profile publication/connection creation without waiting on fences."""
     with transaction.atomic():
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT pg_advisory_xact_lock(%s, %s)", [0x444e534d, 8986])
+        _admit_identity()
         yield
 
 
@@ -140,8 +149,7 @@ def validate_candidate(old, candidate, *, probe=None, has_connections=None):
 def publication_policy(old, candidate):
     # Called only when presence/values of this owned bundle actually change.
     # Lock survives through the common conditional S3 write's transaction.
-    with connection.cursor() as cursor:
-        cursor.execute("SELECT pg_advisory_xact_lock(%s, %s)", [0x444e534d, 8986])
+    _admit_identity()
     validate_candidate(old, candidate)
 
 
@@ -312,7 +320,7 @@ def mutate(actor, payload, *, probe=None):
             User.objects.select_for_update().order_by("pk").first()
             actor = provider._superuser(actor, lock=True)
             with identity_lock():
-                # Re-evaluate installed catalog after waiting on any writer.
+                # Re-evaluate installed catalog after installation/actor locks.
                 _request(payload)
                 try:
                     current = fleet_config._read(s3, bucket, key, allowed)

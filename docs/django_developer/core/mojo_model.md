@@ -102,6 +102,7 @@ class Book(models.Model, MojoModel):
 > Assuming `NO_SAVE_FIELDS` alone protects a tenant field is how a real
 > cross-tenant write happened (mverify WalletSession, maestro item 2956).
 | `GROUP_FIELD` | str | `"group"` | Field name (or related path, e.g. `"agent__project"`) for group scoping — governs detail, list, and `?group=` permission checks |
+| `LIST_REQUIRES_GROUP` | bool | `False` | Non-platform list callers must name a group: with none resolved, list, count, `_stats` and download answer 400 `"group required"`. Group-scoped models only. The `REST_LIST_REQUIRES_GROUP` setting applies it to models you don't own — see [REST → Permissions](../rest/permissions.md#requiring-a-group-on-lists-list_requires_group) |
 | `CREATED_BY_OWNER_FIELD` | str or None | `"user"` | Auto-stamped with `request.user` on create **only when the body omits it**, and only when there is a real user to attribute to. `None` disables. See [REST Permissions — Create-time owner stamping](../rest/permissions.md#create-time-owner-stamping). |
 | `UPDATED_BY_OWNER_FIELD` | str or None | `"modified_by"` | Set to `request.user` on every update (who last modified). Left unchanged when there is no real user — e.g. a system-context save. See [REST Permissions](../rest/permissions.md). |
 | `ALT_PK_FIELD` | str | `"uuid"` | Field used for non-integer PK lookups |

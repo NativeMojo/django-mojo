@@ -248,9 +248,17 @@ a pre-bundle document is refused rather than exposing an unverified base fallbac
 Explicit clear writes three empty overrides to mask base values and is refused
 while any shared connection or retired identity-bearing row exists. Origin or
 recipient identity changes on a connected deployment require a separate migration.
-Publication and local shared-connection preparation share an app-owned transaction
-advisory lock; preparation rechecks the published tuple against the authenticated
-loaded identity, preventing a stale process from creating predecessor intent.
+Publication and local shared-connection preparation share nonblocking app-owned
+transaction advisory admission. Successful ownership lasts through the outer
+conditional-write transaction and is reentrant through nested savepoints.
+Preparation rechecks the published tuple against the authenticated loaded identity,
+preventing a stale process from creating predecessor intent. A competing owner
+returns `configuration_busy` (409) before preparation or publication side effects;
+this is not an uncertain S3 outcome or a changed identity. Let existing caller
+fences unwind, Refresh the current plan/configuration and require a deliberate
+retry, with a new preview before publication. Never automatically replay a
+secret-bearing mutation. Unchanged complete bundles bypass admission as well as
+the hub probe, including while another identity owner is active.
 
 Stale document/catalog revisions return 409. Invalid shapes/profile identities
 return 400, denied authority 403, and unavailable dependencies 503. Fixed topic
@@ -258,7 +266,7 @@ codes include `profile_catalog_unavailable`, `profile_catalog_changed`,
 `profile_not_approved`, `hub_identity_mismatch`, `hub_identity_migration_required`,
 `connection_disable_ineligible`, `fleet_schema_unavailable`,
 `fleet_delegation_unavailable`, `publisher_unavailable`,
-`node_enrollment_unavailable`, `fleet_revision_changed`, and
+`node_enrollment_unavailable`, `fleet_revision_changed`, `configuration_busy`, and
 `publication_uncertain`, plus bounded `hub_*` failures. After uncertainty, refetch
 the authoritative head before deciding whether to retry; a timeout does not prove
 that S3 rejected the write. Upstream response bodies, AWS errors and credentials
