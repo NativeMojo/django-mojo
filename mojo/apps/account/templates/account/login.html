@@ -183,8 +183,10 @@
 <!-- VIEW: Magic Login Link -->
 <div id="view-magic" class="mat-view">
     <button class="mat-back" type="button" id="btn-back-signin-magic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
-    <p class="mat-view-title">Email Me a Login Link</p>
-    <p class="mat-view-sub">We'll send a one-click login link to your inbox.</p>
+    <div id="magic-intro">
+        <p class="mat-view-title">Email Me a Login Link</p>
+        <p class="mat-view-sub">We'll send a one-click login link to your inbox.</p>
+    </div>
     <form id="form-magic" novalidate>
         <div class="mat-field">
             <label class="mat-label" for="magic-email">Email Address</label>
@@ -192,6 +194,12 @@
         </div>
         <button class="mat-btn mat-btn-primary" type="submit" id="btn-magic"><span class="mat-btn-text">Send Login Link</span><span class="mat-spinner"></span></button>
     </form>
+    <div id="magic-sent" hidden role="status" aria-live="polite">
+        <p class="mat-view-title">Check your inbox</p>
+        <p class="mat-view-sub">If an account matches <strong id="magic-sent-email"></strong>, check your inbox for a sign-in link. Check your spam folder too.</p>
+        <button class="mat-btn mat-btn-primary" type="button" id="btn-magic-resend" disabled>Resend in 60s</button>
+        <button class="mat-btn mat-btn-outline" style="margin-top:.5rem" type="button" id="btn-magic-change">Use a different email</button>
+    </div>
 </div>
 {% endif %}
 {% endblock %}
@@ -530,14 +538,77 @@
             });
     });
 
+    // ---- Magic-link sent state ------------------------------------------
+    var magicPending = false, magicSent = null, magicTimer = null;
+    var magicKey = "mat_magic_sent:" + (cfg.groupUuid || "default");
+    try {
+        var savedMagic = JSON.parse(sessionStorage.getItem(magicKey));
+        if (savedMagic && typeof savedMagic.email === "string" &&
+                typeof savedMagic.until === "number" && savedMagic.until > Date.now() &&
+                savedMagic.until <= Date.now() + 60000) magicSent = savedMagic;
+    } catch (_) {}
+    function magicRemaining() {
+        return magicSent ? Math.max(0, Math.ceil((magicSent.until - Date.now()) / 1000)) : 0;
+    }
+    function updateMagicResend() {
+        var btn = $("btn-magic-resend");
+        if (!btn) return;
+        var seconds = magicRemaining();
+        btn.disabled = magicPending || seconds > 0;
+        btn.textContent = magicPending ? "Sending…" : seconds ? "Resend in " + seconds + "s" : "Resend Login Link";
+        if (!seconds && magicTimer) { clearInterval(magicTimer); magicTimer = null; }
+    }
+    function showMagicSent() {
+        if (!$("magic-sent") || !magicSent) return;
+        $("form-magic").hidden = true;
+        $("magic-intro").hidden = true;
+        $("magic-sent").hidden = false;
+        $("magic-sent-email").textContent = magicSent.email;
+        updateMagicResend();
+        if (magicTimer) clearInterval(magicTimer);
+        if (magicRemaining()) magicTimer = setInterval(updateMagicResend, 1000);
+    }
+    function sendMagic(email) {
+        if (magicPending) return;
+        if (magicSent && magicSent.email.toLowerCase() === email.toLowerCase() && magicRemaining()) {
+            showMagicSent(); return;
+        }
+        magicPending = true;
+        m.setLoading($("btn-magic"), true); m.hideMessage(); updateMagicResend();
+        $("btn-magic-change").disabled = true;
+        MojoAuth.sendMagicLink(email)
+            .then(function () {
+                magicSent = { email: email, until: Date.now() + 60000 };
+                try { sessionStorage.setItem(magicKey, JSON.stringify(magicSent)); } catch (_) {}
+                magicPending = false;
+                m.setLoading($("btn-magic"), false);
+                $("btn-magic-change").disabled = false;
+                showMagicSent();
+            })
+            .catch(function (err) {
+                magicPending = false;
+                m.setLoading($("btn-magic"), false);
+                $("btn-magic-change").disabled = false;
+                updateMagicResend();
+                m.showMessage(MojoAuth.getError(err) || "Could not send login link.", "error");
+            });
+    }
+    on("btn-magic-resend", "click", function () {
+        if (magicSent && !magicRemaining()) sendMagic(magicSent.email);
+    });
+    on("btn-magic-change", "click", function () {
+        if (magicPending) return;
+        $("magic-sent").hidden = true;
+        $("magic-intro").hidden = false;
+        $("form-magic").hidden = false;
+        m.hideMessage(); $("magic-email").focus();
+    });
+    if (magicSent) showMagicSent();
     onForm("form-magic", function (e) {
         e.preventDefault();
         var email = $("magic-email").value.trim();
         if (!email) { m.showMessage("Please enter your email address.", "error"); return; }
-        var btn = $("btn-magic"); m.setLoading(btn, true); m.hideMessage();
-        MojoAuth.sendMagicLink(email)
-            .then(function () { m.setLoading(btn, false); m.showMessage("Check your inbox \u2014 a login link is on its way.", "success"); })
-            .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Could not send login link.", "error"); });
+        sendMagic(email);
     });
 })();
 </script>
