@@ -137,8 +137,10 @@ Entry requires current global `view_platform|manage_platform|admin`. The service
 re-reads the actual primary User permissions for every request, so an old loaded
 User cannot retain revoked grants. AWS slots require `manage_aws`; checked
 runtime, queue and durable job pages require `manage_jobs|view_jobs|jobs`.
-Group-only/API-key authority does not suffice. Denied slots and canonical
-resource/service/owner identities are removed; grant-level denial has an unknown
+Group-only grants and group `ApiKey` identities do not authorize this report.
+Validated per-user `UserAPIKey` credentials retain their User's global grants.
+Denied slots and canonical resource/service/owner identities are removed;
+grant-level denial has an unknown
 denominator. No denied source is queried. Fast reads use one private primary
 Redis acquisition (500 ms commands), bounded primary reads (750 ms operations),
 a three-second total deadline and one 200-row failure page. MCP fits 24 KiB and

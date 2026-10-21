@@ -9,9 +9,10 @@ This endpoint reads the cache and never starts a collector. The existing
 
 Entry needs current global `view_platform`, `manage_platform` or `admin`.
 AWS facts additionally need `manage_aws`; checked host, queue and durable job
-facts need `manage_jobs`, `view_jobs` or `jobs`. Group-only grants and API keys
-do not authorize this installation-wide report. Permissions are re-read from
-the primary User on every request. Revocation removes protected facts and
+facts need `manage_jobs`, `view_jobs` or `jobs`. Group-only grants and group
+`ApiKey` identities do not authorize this installation-wide report. Validated
+per-user `UserAPIKey` credentials retain their User's global grants. Permissions
+are re-read from the primary User on every request. Revocation removes protected facts and
 resource identities even from a previously privileged cache. Denied grant-level
 sections have an unknown denominator.
 
