@@ -13,7 +13,7 @@ from types import MappingProxyType
 
 
 MANIFEST = "admin-artifact.json"
-PINNED_MANIFEST_SHA256 = "07c68e4e9a67a021614ecae73eefab2fb64c72a71f8b173b9f669c38832495eb"
+PINNED_MANIFEST_SHA256 = "9d11a4dfa44da3030cffc64227b90b7d34022f5bb8da78521e5cd0b876fb0ee1"
 DOCUMENT_CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; "
                 "script-src 'self'; connect-src 'self'; base-uri 'none'; "
                 "form-action 'self'; frame-ancestors 'none'")
