@@ -1244,6 +1244,17 @@ registered resource is enabled; until then every endpoint answers 404.
   `@md.requires_global_perms(...)` instead (see
   [permissions.md](../core/permissions.md#global-vs-group-scoped-permission-checks)).
 
+### REST
+
+- `REST_LIST_REQUIRES_GROUP` — list of model labels (e.g.
+  `["account.GroupMember"]`), default unset. **file-only** (`settings.get_static`,
+  read per request). Each listed model behaves as if it declared
+  `RestMeta.LIST_REQUIRES_GROUP = True`: a non-platform caller who lists it with
+  no resolved group gets 400 `"group required"` (list, count, `_stats` and
+  download). The way to apply the policy to models a site doesn't own. Labels
+  match case-insensitively. See
+  [REST → Permissions](../rest/permissions.md#requiring-a-group-on-lists-list_requires_group).
+
 ### ROUTE53
 
 - `ROUTE53_PRICE_CACHE_HOURS` — per-TLD registrar price cache in the route53

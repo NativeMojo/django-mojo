@@ -771,7 +771,7 @@ The AI gate runs **before** the REST permission check, so denied requests return
 
 The tool delegates to `instance.on_rest_save(request, data)` so all model-level save hooks, validators, and `POST_SAVE_ACTIONS` fire exactly as they would through the REST API. The `action_response` from `POST_SAVE_ACTIONS` is included in the return dict when present. Setting `CAN_CREATE = False` in `RestMeta` blocks creates; setting `CAN_UPDATE = False` blocks updates to existing instances.
 
-All five tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter, order, group, aggregate, search or narrow an export by a sensitive path are refused and reported as security events — see [What a caller may ask by](#what-a-caller-may-ask-by-sensitive_fields).
+All five tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. The tools take no group, so `query_model`, `aggregate_model` and `export_data` refuse a model whose lists require a group (`RestMeta.LIST_REQUIRES_GROUP` or the `REST_LIST_REQUIRES_GROUP` setting) with an error and no rows, unless the caller is a platform caller (superuser or a global view grant) — never the cross-group union. Attempts to filter, order, group, aggregate, search or narrow an export by a sensitive path are refused and reported as security events — see [What a caller may ask by](#what-a-caller-may-ask-by-sensitive_fields).
 
 #### `add_context` — Clickable model references
 
