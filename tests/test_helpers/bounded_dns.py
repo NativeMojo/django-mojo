@@ -221,13 +221,14 @@ def test_answer_cap_bounds_iteration_across_both_families(opts):
 
 @th.django_unit_test()
 def test_numeric_literals_and_localhost_bypass_dns(opts):
+    import ipaddress
     from mojo.helpers.dns import probe
 
     factory = _Factory(AssertionError("numeric/local names must not reach DNS"))
     for hostname, expected in (
             ("10.0.0.1", ["10.0.0.1"]),
             ("2001:0db8:0:0:0:0:0:1", ["2001:db8::1"]),
-            ("::ffff:192.0.2.1", ["::ffff:c000:201"]),
+            ("::ffff:192.0.2.1", [str(ipaddress.IPv6Address("::ffff:c000:201"))]),
             ("LOCALHOST.", ["127.0.0.1", "::1"])):
         result = probe.resolve_addresses(hostname, 110, resolver_factory=factory, clock=_Clock())
         assert result == expected, f"Literal/local hostname {hostname} must return fixed numeric endpoints"
