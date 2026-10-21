@@ -41,6 +41,62 @@ def _publication(generation=1, with_cloud=False):
                           published_at=he.timestamp(NOW), roster_revision="c" * 64)
 
 
+def _worker_publication(heartbeat_at):
+    from mojo.apps.account.services import health_evidence as he, health_snapshot as hs
+    from mojo.apps.aws.services import fleet_health
+    from mojo.helpers.settings import settings
+    identity = _identity()
+    interval = max(1, int(settings.get_static("JOBS_RUNNER_HEARTBEAT_SEC", 5)))
+    runners = [] if heartbeat_at is None else [{"hostname": "worker-one", "runner_id": "worker-runner",
+        "started": he.timestamp(NOW - timedelta(hours=1)), "last_heartbeat": he.timestamp(heartbeat_at), "alive": True}]
+    rows = fleet_health.reconcile([{"node_id": "worker-one", "hostname": "worker-one", "source": "configuration"}],
+                                  runners=runners, now=NOW, heartbeat_ttl=interval * 3)
+    fleet = {"rows": rows, "runners": runners, "evidence": {}, "sources": {},
+             "expected": {"complete": True}, "roster_complete": True}
+    configuration = {**identity, "services": [], "channels": [], "channels_complete": True}
+    components = he.build_components(configuration, {}, {}, fleet, {}, now=NOW)
+    jobman = next(row for row in components if row["kind"] == "jobman")
+    value = hs.publication(identity, 1, CONFIG, [jobman], generated_at=he.timestamp(NOW),
+                           published_at=he.timestamp(NOW), roster_revision="c" * 64)
+    return value, rows
+
+
+@th.django_unit_test()
+def test_cached_worker_sample_survives_poll_without_renewing_heartbeat(opts):
+    from mojo.apps.account.services import health_evidence as he, health_snapshot as hs
+    heartbeat_at = NOW - timedelta(seconds=2)
+    value, rows = _worker_publication(heartbeat_at)
+    assert rows[0]["runner_id"] == "worker-runner", "a fresh real heartbeat was not admitted by the fleet reconciler"
+    worker = next(slot for slot in value["components"][0]["evidence"] if slot["source"] == "heartbeat")
+    original = copy.deepcopy(value)
+    deadline = he.timestamp(heartbeat_at + timedelta(seconds=420))
+    for at, expected in ((NOW + timedelta(seconds=60), "ok"), (NOW + timedelta(seconds=61), "ok"),
+                         (NOW + timedelta(seconds=300), "ok"), (heartbeat_at + timedelta(seconds=419), "ok"),
+                         (heartbeat_at + timedelta(seconds=420), "stale")):
+        report = hs.project_publication(value, {"platform": True, "jobs": True, "aws": False}, now=at)
+        observed = next(slot for slot in report["components"][0]["evidence"] if slot["source"] == "heartbeat")
+        assert observed["status"] == expected, "cached worker evidence expired before the supported poll or survived its 420-second deadline"
+        assert observed["observed_at"] == he.timestamp(heartbeat_at), "cached projection replaced the actual heartbeat instant"
+        assert observed["fresh_until"] == deadline, "cached projection renewed or shortened the original worker sample deadline"
+        assert observed["sample_id"] == worker["sample_id"] and observed["collected_at"] == worker["collected_at"], "repeated reads fabricated a new worker sample or collection"
+        assert not report["components"][0]["coverage"]["complete"], "worker freshness erased the unrelated missing scheduler detector"
+    assert value == original, "repeated worker projections mutated the immutable cached publication"
+
+
+@th.django_unit_test()
+def test_stale_or_missing_worker_is_not_admitted_as_cached_health(opts):
+    from mojo.apps.account.services import health_evidence as he, health_snapshot as hs
+    from mojo.helpers.settings import settings
+    live_window = max(1, int(settings.get_static("JOBS_RUNNER_HEARTBEAT_SEC", 5))) * 3
+    for heartbeat_at in (NOW - timedelta(seconds=live_window + 1), None):
+        value, rows = _worker_publication(heartbeat_at)
+        assert rows[0]["last_heartbeat"] is None and rows[0]["runner_id"] is None, "the snapshot fixture admitted an expired or absent live runner"
+        report = hs.project_publication(value, {"platform": True, "jobs": True, "aws": False}, now=NOW + timedelta(seconds=60))
+        worker = next(slot for slot in report["components"][0]["evidence"] if slot["source"] == "heartbeat")
+        assert worker["status"] == "unknown", "a stale or missing heartbeat became a healthy cached observation"
+        assert worker["observed_at"] is None and worker["fresh_until"] is None and worker["sample_id"] is None, "collection or read time fabricated evidence for an unadmitted heartbeat"
+
+
 @th.django_unit_test()
 def test_source_identity_is_explicit_stable_and_never_created(opts):
     from mojo.apps.account.services import health_snapshot as hs
