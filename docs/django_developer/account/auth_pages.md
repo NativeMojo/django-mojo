@@ -455,6 +455,23 @@ Methods rendered are those listed in the resolved auth config's
 - Reset code entry / set new password (from `?token=pr:...`)
 - Accept an invitation: choose a password (from `?token=iv:...`)
 
+#### Magic-link request confirmation
+
+The hosted magic-link view permits one pending request at a time. A successful
+API response replaces the email form with a **Check your inbox** state showing
+the submitted address as plain text. **Resend Login Link** remains disabled
+for 60 seconds, then becomes available; **Use a different email** restores the
+form. Request errors restore the controls and show the usual error message.
+
+The last submitted address and resend deadline are stored in `sessionStorage`
+under `mat_magic_sent:<group_uuid>` (`default` for unscoped pages), so a reload
+in the same tab retains an unexpired wait. Storage failures leave the current
+page functional, but the wait then lasts only for that page load. No login
+token is stored by this flow. The countdown is a convenience, not a security
+limit: server-side send limits still apply, and the generic API response does
+not prove account existence or inbox delivery. See
+[Magic Login Links](../../web_developer/account/magic_login.md).
+
 #### A reset link survives a cold bouncer challenge
 
 A `pr:` reset or `iv:` invite link handed to somebody with **no session** does not land on `/auth`

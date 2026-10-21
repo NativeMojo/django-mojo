@@ -60,6 +60,22 @@ For `method=sms`, the token is sent as a text message to the user's phone number
 
 **The response never varies.** Not on account existence, not on the send outcome: a transport failure, a provider refusal and a successful send all return the same 200 body above. That uniformity is the anti-enumeration guarantee, so there is nothing for a client to branch on — never present "we sent it" as certainty.
 
+### Hosted-page request state
+
+The hosted `/auth` magic-link form blocks duplicate submissions while a request
+is pending. On success it replaces the form with **Check your inbox**, displays
+the submitted address as plain text, and disables **Resend Login Link** for
+60 seconds. **Use a different email** restores the form; request errors restore
+the controls so the user can retry.
+
+The submitted address and deadline use group-scoped `sessionStorage`, retaining
+an unexpired wait across reloads in the same tab. If storage is unavailable,
+the page still works and retains the wait only in memory. The countdown does
+not replace server-side send limits, and the confirmation does not establish
+account existence or delivery. Custom frontends should keep the same generic
+messaging and guard pending requests rather than leaving a success toast over
+an immediately reusable send button.
+
 ### Step 2 — Complete Login
 
 **POST** `/api/auth/magic/login`
