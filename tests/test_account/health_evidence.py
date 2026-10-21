@@ -276,3 +276,15 @@ def test_scheduler_lock_presence_remains_noncausal_installation_metadata(opts):
     lock = next(row for row in jobman["evidence"] if row["slot_id"] == "scheduler_lock")
     assert lock["provenance"]["installation_lock_present"] is True and lock["provenance"]["scope"] == "installation", "snapshot lost the actually read installation scheduler-lock presence"
     assert lock["observed_at"] is None and lock["fresh_until"] is None and not jobman["coverage"]["complete"], "lock presence fabricated independent scheduler heartbeat freshness"
+
+
+@th.django_unit_test()
+def test_unknown_role_keeps_named_service_obligation_and_unknown_denominator(opts):
+    from mojo.apps.account.services import health_evidence as he
+    fleet = _assembly_fleet()
+    fleet["rows"] = [{"node_id": "unknown-role", "expected": True, "identity_status": "resolved"}]
+    result = he.build_components(_assembly_configuration(), {}, {}, fleet, {}, now=NOW)
+    component = next(row for row in result if row["kind"] == "fleet")
+    service = next(row for row in component["evidence"] if row["source"] == "request_service")
+    assert service["source_identity"]["node_id"] == "unknown-role" and service["status"] == "unknown", "unknown role silently removed or invented a current service obligation"
+    assert component["coverage"]["expected_total"] is None and not component["coverage"]["complete"], "unknown role requirements established a known complete measurement denominator"

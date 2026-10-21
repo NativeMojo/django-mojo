@@ -148,6 +148,8 @@ def test_pending_producer_reconciles_a_lost_queue_mirror_after_commit(opts):
 @th.django_unit_test()
 def test_counted_acquisition_exhaustion_keeps_publication_headroom(opts):
     from mojo.apps.account.services import health_snapshot as hs, health_evidence as he
+    from threading import Event
+    native_ready = Event()
     configuration, now, stored, bounds = _configuration(), he.utcnow(), {}, {}
     configuration["channels"] = ["testit_channel_%d" % index for index in range(32)]
     class Pipeline:
@@ -184,10 +186,12 @@ def test_counted_acquisition_exhaustion_keeps_publication_headroom(opts):
         def ping(self):
             return True
         def info(self):
+            native_ready.set()
             return {"run_id": "one", "maxmemory": 100, "used_memory": 1}
         def pipeline(self, **kwargs):
             return Pipeline()
         def zrangebyscore(self, *args, **kwargs):
+            assert native_ready.wait(1), "fixture did not collect independent native Redis facts before exhausting roster commands"
             return ["runner-%d" % index for index in range(128)]
         def zcount(self, *args):
             return 0
@@ -212,4 +216,5 @@ def test_counted_acquisition_exhaustion_keeps_publication_headroom(opts):
     publication = json.loads(next(value for key, value in stored.items() if key.endswith(":current")))
     assert result["status"] == "published" and 253 <= result["accounting"]["redis_commands"] <= 256, "acquisition command exhaustion consumed the reserved atomic-publication allowance"
     assert bounds["publication"]-bounds["acquisition"] == 10, "source collection had no reserved finalization time before the whole-cycle deadline"
+    assert next(row for row in publication["components"] if row["kind"] == "redis")["availability"] == "up", "queue/roster budget failure discarded completed Redis PING/INFO evidence"
     assert next(row for row in publication["components"] if row["kind"] == "api")["availability"] == "down" and not publication["coverage"]["complete"], "budget exhaustion discarded completed independent evidence or established complete health"

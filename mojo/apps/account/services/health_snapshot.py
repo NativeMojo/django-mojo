@@ -766,10 +766,24 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
                     connect=counted_connect, revision=settings.get_static("MOJO_FLEET_CONFIG_REVISION", None)), **readers.get("fleet", {})}
             acquired = fleet_health.acquire_snapshot(InternalActor(), deadline=collection_deadline, readers=raw_readers, budget=budget, extra_series=managed["series"])
             return acquired, managed
+        def failed(exc):
+            reason = getattr(exc, "code", None) or getattr(exc, "error_code", None) or str(exc)
+            allowed = ("not_collected_budget", "bounded_cluster_startup_unsupported", "deadline_exceeded", "redis_deadline_exceeded", "database_deadline_exceeded", "database_engine_unsupported", "database_connection_mode_unsupported")
+            return {"status": "unknown", "reason": reason if reason in allowed else "collector_unavailable"}
+        def redis_source():
+            try:
+                native_redis = evidence.redis_facts(collection_deadline, connect=counted_connect)
+            except Exception as exc:
+                native_redis = failed(exc)
+            try:
+                queues = evidence.queue_facts(configuration["channels"], collection_deadline, connect=counted_connect, budget=budget)
+            except Exception as exc:
+                queues = {channel: failed(exc) for channel in configuration["channels"]}
+            return {"native": native_redis, "queues": queues}
         values, probes = {}, {}
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures = {pool.submit(readers.get("native", lambda: evidence.database_and_job_facts(configuration["channels"], collection_deadline, budget=budget))): "native",
-                       pool.submit(readers.get("redis", lambda: {"native": evidence.redis_facts(collection_deadline, connect=counted_connect), "queues": evidence.queue_facts(configuration["channels"], collection_deadline, connect=counted_connect, budget=budget)})): "redis",
+                       pool.submit(readers.get("redis", redis_source)): "redis",
                        pool.submit(fleet_source): "fleet"}
             for service in configuration["services"]:
                 budget.take("api_services")
@@ -778,8 +792,12 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
                 key = futures[future]
                 try:
                     value = future.result()
-                except Exception:
-                    value = {"status": "unknown", "reason": "collector_unavailable"}
+                except Exception as exc:
+                    value = failed(exc)
+                    if key == "native":
+                        value = {**value, "database": value}
+                    elif key == "redis":
+                        value = {"native": value, "queues": {channel: value for channel in configuration["channels"]}}
                 if key in ("native", "redis", "fleet"):
                     values[key] = value
                 else:
@@ -787,7 +805,7 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
         budget.begin_finalization()
         fleet_value = values.get("fleet")
         if not isinstance(fleet_value, tuple):
-            acquired = {"expected": configuration["expected"], "rows": fleet_health.reconcile(configuration["expected"]["declarations"]), "evidence": {}, "roster_revision": None}
+            acquired = {"expected": configuration["expected"], "rows": fleet_health.reconcile(configuration["expected"]["declarations"]), "evidence": {}, "roster_revision": None, "collection_error": fleet_value}
             managed = {"series": []}
         else:
             acquired, managed = fleet_value

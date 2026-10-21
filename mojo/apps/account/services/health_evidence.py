@@ -718,7 +718,7 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
     now, source_id = now or utcnow(), configuration["source_id"]
     components = []
     old = {row["component_id"]: row for row in (previous or {}).get("components", [])}
-    def make(kind, resource, slot_id, raw, *, grant="platform", source=None, value=None, identity=None):
+    def make(kind, resource, slot_id, raw, *, grant="platform", source=None, value=None, identity=None, required=True):
         previous_slot = next((row for row in old.get(kind + ":" + resource, {}).get("evidence", []) if row["slot_id"] == slot_id), None)
         raw = raw or {}
         provenance = {key: raw[key] for key in ("namespace", "metric", "dimensions", "start", "end", "aggregation") if key in raw}
@@ -732,7 +732,7 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
             source_identity=identity or {}, observed_at=raw.get("observed_at"), collected_at=raw.get("collected_at") or timestamp(now),
             status=raw.get("status", "ok" if raw.get("observed_at") else "unknown"), reason=raw.get("reason"),
             value=raw if value is None else value, unit=raw.get("unit"), period_seconds=raw.get("period_seconds"),
-            truncated=raw.get("truncated", False), provenance=provenance,
+            truncated=raw.get("truncated", False), provenance=provenance, required=required,
             previous=previous_slot, now=now)
     def predicate(kind, resource, rule, value, predicate_value, *, impact="operational", resource_key=None):
         outcome = "unknown" if predicate_value is None else "fail" if predicate_value else "pass"
@@ -793,7 +793,11 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
         node_id = row["node_id"]
         ambiguous = row.get("identity_status") == "ambiguous"
         detail = {} if ambiguous else fleet.get("evidence", {}).get(node_id, {})
-        current = detail.get("current") or {}
+        current = detail.get("current") or fleet.get("collection_error") or {}
+        required_service = row.get("request_service_required")
+        service = (detail.get("services") or {}).get("request_service") or {"status": "unknown", "reason": "role_or_service_evidence_unknown"}
+        slots.append(make("fleet", "installation", "service:" + digest(node_id)[:32], service,
+            grant="jobs", source="request_service", identity={"node_id": node_id, "required": required_service}, required=required_service is not False))
         families = [("cpu", current.get("cpu")), ("memory", current.get("memory"))]
         fs = current.get("filesystems") or {}
         fs = {**fs, "truncated": bool(fs.get("omitted_count") or fs.get("omitted_missing_count"))}
@@ -828,12 +832,16 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
         slots.append(make("fleet", "installation", "roster", {"status": "unknown", "reason": "expected_roster_unresolved"}))
     fleet_component = component(source_id, "fleet", "installation", slots, checks,
         coverage_complete=bool(fleet.get("expected", {}).get("complete") and not fleet.get("overflow") and fleet.get("roster_complete", False)), now=now, identity_grant="platform")
+    if (not fleet.get("expected", {}).get("complete") or fleet.get("overflow")
+            or any(row.get("request_service_required") is None for row in fleet.get("rows", []) if row["expected"])):
+        fleet_component["coverage"]["expected_total"] = None
+        fleet_component["coverage"]["complete"] = False
     components.append(fleet_component)
     job_slots, job_checks = [], []
     by_channel = {row["channel"]: row for row in native.get("jobs", [])}
     for channel in configuration["channels"]:
         raw = by_channel.get(channel) or {"channel": channel, "due_pending": 0, "running": 0, "overruns": 0}
-        raw = {**raw, "observed_at": native.get("observed_at"), "status": "ok" if native.get("observed_at") else "unknown"}
+        raw = {**raw, "observed_at": native.get("observed_at"), "status": "ok" if native.get("observed_at") else "unknown", "reason": None if native.get("observed_at") else native.get("reason")}
         raw["events_last_300_seconds"] = {row["event"]: row["count"] for row in native.get("events", []) if row["channel"] == channel}
         queue = make("jobman", "installation", "queue:" + digest(channel)[:32], raw, grant="jobs", source="job_queue", identity={"channel": channel})
         job_slots.append(queue)
