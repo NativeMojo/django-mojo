@@ -155,6 +155,14 @@ _DEPRECATED_CAN_SAVE_WARNED = set()
 _ALWAYS_SENSITIVE_FIELDS = frozenset(["mojo_secrets"])
 
 
+def _dotted_protected_keys(value):
+    """The top-level keys of a JSON write that spell a path into the
+    "protected" root key ("protected.x"), sorted. objict item assignment
+    follows dots, so a merge into an objict would write them into it."""
+    return sorted(key for key in value
+                  if isinstance(key, str) and key.startswith("protected."))
+
+
 def _model_sensitive_fields(model):
     """RestMeta.SENSITIVE_FIELDS for `model`, unioned with the baseline.
 
@@ -2605,8 +2613,8 @@ class MojoModel:
         - The incoming dict contains "__replace": true (stripped before saving)
 
         The "protected" root key is guarded on every path — merge, replace, and
-        non-dict overwrite — whether the incoming value carries it or an existing
-        one would be clobbered.
+        non-dict overwrite — whether the incoming value carries it (as "protected"
+        or as a dotted "protected.x" key) or an existing one would be clobbered.
         """
         # parse JSON strings into dicts/lists (e.g. form submissions send strings)
         if isinstance(field_value, str):
@@ -2623,7 +2631,11 @@ class MojoModel:
             # guard the "protected" root key — only superuser or users with PROTECTED_JSON_PERMS
             # can modify it; a merge touches it only when the incoming dict carries it, but a
             # replace also clobbers any existing protected subtree
-            touches_protected = "protected" in field_value or (should_replace and "protected" in existing_value)
+            # A dotted key ("protected.x") is a path into "protected" once the
+            # existing value is an objict, whose item assignment follows dots.
+            dotted = _dotted_protected_keys(field_value)
+            touches_protected = "protected" in field_value or bool(dotted) or \
+                (should_replace and "protected" in existing_value)
             if touches_protected:
                 if not self._can_edit_protected_json(request):
                     raise me.PermissionDeniedException("Permission denied: cannot modify protected metadata")
@@ -2640,6 +2652,7 @@ class MojoModel:
                     changed_keys = sorted(k for k in keys if incoming_prot.get(k) != existing_prot.get(k))
                 else:
                     changed_keys = ["*"]
+                changed_keys = changed_keys + dotted
                 self.model_logit(request, f"{username} modified {field_name}.protected keys: {', '.join(changed_keys)} on pk={self.pk}", kind="meta:protected_changed")
 
             if should_replace:
@@ -2656,7 +2669,8 @@ class MojoModel:
         else:
             # wholesale overwrite with/of a non-dict can also create or clobber "protected"
             if (isinstance(existing_value, dict) and "protected" in existing_value) or \
-                    (isinstance(field_value, dict) and "protected" in field_value):
+                    (isinstance(field_value, dict) and (
+                        "protected" in field_value or _dotted_protected_keys(field_value))):
                 if not self._can_edit_protected_json(request):
                     raise me.PermissionDeniedException("Permission denied: cannot modify protected metadata")
                 username = getattr(getattr(request, "user", None), "username", "unknown")

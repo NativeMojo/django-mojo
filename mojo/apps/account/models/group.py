@@ -24,6 +24,12 @@ WEBAPP_URL_KEYS = ("webapp_base_url", "webapp_auth_path")
 WEBAPP_URL_PERMS = ["manage_groups", "groups"]
 _ABSENT = object()
 
+# A parent that carries this key, set to true, under metadata["protected"] lets
+# a person who manages it as a member create groups directly under it, with no
+# global permission (#9107). Only the protected-metadata gate, or server code
+# through set_protected_metadata, can set it; it does not pass to descendants.
+SUBGROUP_POLICY_KEY = "allow_member_subgroups"
+
 GROUP_LAST_ACTIVITY_FREQ = settings.get_static("GROUP_LAST_ACTIVITY_FREQ", 300)
 METRICS_TIMEZONE = settings.get_static("METRICS_TIMEZONE", "America/Los_Angeles")
 MOJO_REST_LIST_PERM_DENY = settings.get_static("MOJO_REST_LIST_PERM_DENY", True)
@@ -420,6 +426,15 @@ class Group(MojoSecrets, MojoModel):
             meta.protected = objict.fromdict(meta.get("protected") or {})
         meta.protected[key] = value
         self.save(update_fields=["metadata", "modified"])
+
+    def allows_member_subgroups(self):
+        """True when this group's own row opts it into member-created
+        sub-groups: metadata["protected"][SUBGROUP_POLICY_KEY] is exactly
+        True. Anything else, a truthy string or number included, is False.
+        Not inherited: a parent's or ancestor's value says nothing here."""
+        metadata = self.metadata if isinstance(self.metadata, dict) else {}
+        protected = metadata.get("protected")
+        return isinstance(protected, dict) and protected.get(SUBGROUP_POLICY_KEY) is True
 
     # ------------------------------------------------------------------
     # Group-scoped token epoch (bulk revocation, no migration)
@@ -968,8 +983,14 @@ class Group(MojoSecrets, MojoModel):
         save(), for a move and for a new group: this row and the chains of
         every parent involved are locked by then, and the new parent is read
         again (see _parent_as_stored).
+
+        A new group admitted only by its parent's sub-group policy (see
+        on_rest_handle_create) is judged by _guard_policy_create instead.
         """
         if created or not self.pk:
+            if self.__dict__.get("_subgroup_policy_parent_id") is not None:
+                self._guard_policy_create(locked)
+                return
             if self.parent_id is None or self._has_global_permission(WEBAPP_URL_PERMS):
                 return
             if not self._may_manage_tree_position(self._parent_as_stored(locked)):
@@ -994,6 +1015,23 @@ class Group(MojoSecrets, MojoModel):
         if not (self._may_manage_tree_position(old_parent)
                 and self._may_manage_tree_position(new_parent)):
             self._refuse_parent_change(stored_parent_id, "Moving a group to another parent")
+
+    def _guard_policy_create(self, locked):
+        """Judge again a create that the parent's sub-group policy admitted.
+
+        The parent must still be the one admitted, still carry the policy,
+        still be effectively active, and the caller must still manage it as a
+        member. Under `locked` the parent and its ancestors are locked by
+        save() and the parent is read again, so a policy switched off, a
+        deactivation or a move that landed first is seen here, and one that
+        comes later waits for this write. Member rows are not locked.
+        """
+        parent = self._parent_as_stored(locked)
+        if parent is None or parent.pk != self._subgroup_policy_parent_id \
+                or not parent.allows_member_subgroups() \
+                or not parent.is_effectively_active() \
+                or not self._may_manage_tree_position(parent):
+            self._refuse_parent_change(None, "Creating a group under this parent")
 
     def _refuse_parent_change(self, stored_parent_id, what):
         logit.warning(
@@ -1173,6 +1211,75 @@ class Group(MojoSecrets, MojoModel):
         if group is not None and not group.is_effectively_active():
             return None
         return group
+
+    @classmethod
+    def on_rest_handle_create(cls, request):
+        """POST /api/group. Group has no tenant field, so the base create
+        gate is the caller's GLOBAL permission. One exception (#9107): a
+        parent the platform opted in (allows_member_subgroups) admits a create
+        directly under it by a person who manages it as a member. Every other
+        create, and every refusal, takes the base path unchanged."""
+        parent = None
+        if cls.get_rest_meta_prop("CAN_CREATE", True) and not cls.rest_check_permission(
+                request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"]):
+            parent = cls._parent_admitting_member_create(request)
+        if parent is None:
+            return super().on_rest_handle_create(request)
+        # The base steps, with the admitted parent put on the new row before
+        # on_rest_save runs: save() judges the create against it again under
+        # its locks (_guard_policy_create). create_from_request cannot carry
+        # it, since the model constructor takes fields only.
+        cls.rest_resolve_request_graph(request, "default")
+        instance = cls()
+        instance._subgroup_policy_parent_id = parent.pk
+        instance.on_rest_save(request, request.DATA)
+        instance.on_rest_created()
+        if cls.get_rest_meta_prop("LOG_CHANGES", False):
+            instance.log(kind="model:created", log=f"{request.user.username} created {instance.pk}")
+        instance.log(
+            kind="group:subgroup_created",
+            log=f"{request.user.username} created {instance.pk} under parent {parent.pk} "
+                "by the parent's sub-group policy")
+        return instance.on_rest_get(request)
+
+    @classmethod
+    def _parent_admitting_member_create(cls, request):
+        """The parent whose sub-group policy admits this create, or None.
+
+        A person only (the bar _has_global_permission uses): a group API key
+        or group token never takes this path. The parent is read from the
+        body's `parent` / `parent_id`, converted the way on_rest_save converts
+        it; two spellings that disagree, or one that is not an id, admit
+        nothing. request.group is never read, so a `group=` naming an opted-in
+        parent cannot lend it to another one.
+        """
+        if is_key_backed_session(request) or not is_request_user(request):
+            return None
+        data = request.DATA
+        parent_id = None
+        for name in ("parent", "parent_id"):
+            if name not in data:
+                continue
+            value = data.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, str)):
+                return None
+            try:
+                value = int(value)
+            except ValueError:
+                return None
+            if parent_id is not None and value != parent_id:
+                return None
+            parent_id = value
+        if not parent_id:
+            return None
+        parent = cls.objects.filter(pk=parent_id).first()
+        if parent is None or not parent.allows_member_subgroups() \
+                or not parent.is_effectively_active():
+            return None
+        if not parent.user_has_permission(
+                request.user, cls.RestMeta.SAVE_PERMS, check_user=False):
+            return None
+        return parent
 
     @classmethod
     def on_rest_handle_list(cls, request):
