@@ -96,6 +96,7 @@ def test_fleet_proof_challenge(opts):
 def test_fleet_proof_result(opts):
     from mojo.apps.account.rest import admin_fleet
     from mojo.apps.account.services import admin_platform
+    from mojo.deploy import fleet_config_node
     from mojo.helpers.request import sensitive_body_label, API_ROOT
 
     revision, nonce = "a" * 32, "b" * 32
@@ -103,13 +104,14 @@ def test_fleet_proof_result(opts):
                            "node": socket.gethostname().lower()}, salt="mojo.fleet.config.proof")
     request = SimpleNamespace(META={"HTTP_X_MOJO_FLEET_PROOF": token})
     view = inspect.unwrap(admin_fleet.on_fleet_serving_proof)
-    with mock.patch.object(admin_platform, "_database", return_value={"reachable": True}), \
+    with mock.patch.object(fleet_config_node, "loaded_topic_identity", return_value={"state": "disabled"}), \
+            mock.patch.object(admin_platform, "_database", return_value={"reachable": True}), \
             mock.patch.object(admin_platform, "_redis", return_value={"reachable": True}), \
             mock.patch.object(admin_fleet.settings, "get_static", return_value=revision):
         result = view(request)
         assert result["loaded_revision"] == revision and result["nonce"] == nonce, 'Fleet configuration contract failed: result["loaded_revision"] == revision and result["nonce"] == nonce'
         assert result["healthy"] is True and result["pid"] > 0, 'Fleet configuration contract failed: result["healthy"] is True and result["pid"] > 0'
-        assert set(result) == {"loaded_revision", "nonce", "healthy", "pid", "node"}, 'Fleet configuration contract failed: set(result) == {"loaded_revision", "nonce", "healthy", "pid", "node"}'
+        assert set(result) == {"loaded_revision", "nonce", "healthy", "pid", "node", "shared_validation"}, 'Fleet configuration contract failed: set(result) == {"loaded_revision", "nonce", "healthy", "pid", "node", "shared_validation"}'
     with mock.patch.object(admin_platform, "_database", side_effect=RuntimeError("secret-value")):
         result = view(request)
         assert result["healthy"] is False and "secret-value" not in str(result), 'Fleet configuration contract failed: result["healthy"] is False and "secret-value" not in str(result)'
@@ -140,8 +142,8 @@ def test_fleet_proof_http_dispatch(opts):
     assert isinstance(envelope, dict) and isinstance(envelope.get("data"), dict), \
         "HTTP proof must use the data-object response envelope consumed by the node"
     proof = envelope["data"]
-    assert set(proof) == {"loaded_revision", "pid", "node", "nonce", "healthy"}, \
-        "The real proof response must expose only the five non-secret evidence fields"
+    assert set(proof) == {"loaded_revision", "pid", "node", "nonce", "healthy", "shared_validation"}, \
+        "The real proof response must expose only the bounded non-secret evidence fields"
     assert proof["loaded_revision"] == settings.get_static("MOJO_FLEET_CONFIG_REVISION", None), \
         "The HTTP proof must report the serving project's actual loaded revision"
     assert type(proof["pid"]) is int and proof["pid"] > 0, \
@@ -156,3 +158,18 @@ def test_fleet_proof_http_dispatch(opts):
         "action": "apply", "expected_revision": "a" * 32})
     assert refused_write.status_code in (401, 403), \
         "Anonymous HTTP clients must not enter the fleet mutation workflow"
+
+
+@th.django_unit_test()
+def test_shared_validation_routes_are_private_fresh_and_no_store(opts):
+    from mojo.apps.account.rest import admin_shared_validation as topic, admin_shared_validation_recipient as recipient
+    for view in (topic.on_shared_validation, topic.on_shared_validation_mutate,
+                 recipient.on_shared_validation_recipient, recipient.on_shared_validation_recipient_issue):
+        assert view._mojo_denies_key_backed_session, "Protected topic routes must refuse every key-backed session"
+    for view in (topic.on_shared_validation_mutate, recipient.on_shared_validation_recipient_issue):
+        assert view._mojo_requires_fresh_auth and view._mojo_fresh_auth_seconds == 600, "Credential mutations must retain the existing ten-minute fresh-auth gate"
+    opts.client.logout()
+    for endpoint in ("/api/account/admin/fleet/shared-validation", "/api/account/admin/fleet/shared-validation/recipient"):
+        denied = opts.client.get(endpoint)
+        assert denied.status_code in (401, 403), "Anonymous callers must not discover the private approved catalog or recipient"
+        assert "no-store" in {key.lower(): value for key, value in opts.client.last_response.headers.items()}.get("cache-control", ""), "Private topic denials must be non-cacheable"

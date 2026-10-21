@@ -21,7 +21,7 @@ def _job():
 
 def _reply(revision=REVISION, **flags):
     result = dict(revision=revision, node="node-a", installed=True,
-                  restarted=True, healthy=True, jobs_verified=True, error_code=None)
+                  restarted=True, healthy=True, jobs_verified=True, error_code=None, shared_validation={"state": "disabled"})
     result.update(flags)
     return {"status": "verified", "anomalies": [], "results": [
         {"host": "node-a", "status": "success", "result": result}]}
@@ -267,3 +267,30 @@ def test_draining_reply_reports_pending_activation(opts):
     result = fleet_apply._nodes(REVISION, ["node-a"], {"status": "partial", "anomalies": [],
         "results": [{"host": "node-a", "status": "error", "error": "runner_draining"}]})[0]
     assert result["status"] == "draining" and not result["healthy"], "Draining must be visible and never healthy"
+
+
+@th.django_unit_test()
+def test_loaded_identity_projection_is_bounded_and_required_for_health(opts):
+    from mojo.apps.account.services import fleet_apply
+    reply = _reply()
+    result = reply["results"][0]["result"]
+    identity = dict(state="verified", profile_id="approved_hub", observed_project_uuid="d" * 32,
+                    checked_at="2026-10-20T00:00:00+00:00", error_code=None, sharing_ready=False,
+                    api_key="secret-canary", origin="https://untrusted.example")
+    result["shared_validation"] = identity
+    nodes = fleet_apply._nodes(REVISION, ["node-a", "offline"], reply, topic_required=True, topic_identity={"profile_id": "approved_hub", "consumer_project_uuid": "d" * 32})
+    assert nodes[0]["healthy"] and not nodes[1]["healthy"], "Authenticated compatibility identity must certify only the responding node"
+    assert "secret-canary" not in repr(nodes) and "origin" not in nodes[0]["shared_validation"], "Fleet DTO must retain only bounded safe identity evidence"
+    for invalid in (None, dict(identity, observed_project_uuid="not-a-uuid"), dict(identity, profile_id="/tmp/socket"),
+                    dict(identity, state="unavailable"), dict(identity, observed_project_uuid="e" * 32), dict(identity, profile_id="other_hub"), dict(identity, checked_at="x" * 41)):
+        result["shared_validation"] = invalid
+        assert not fleet_apply._nodes(REVISION, ["node-a"], reply, topic_required=True, topic_identity={"profile_id": "approved_hub", "consumer_project_uuid": "d" * 32})[0]["healthy"], "Absent, malformed or unavailable loaded identity must fail fleet health closed"
+
+
+@th.django_unit_test()
+def test_unmanaged_fleet_keeps_legacy_health_without_topic_evidence(opts):
+    from mojo.apps.account.services import fleet_apply
+    reply = _reply()
+    reply["results"][0]["result"].pop("shared_validation", None)
+    assert fleet_apply._nodes(REVISION, ["node-a"], reply)[0]["healthy"], "Unmanaged legacy Fleet health must remain backward compatible without a hub proof"
+    assert not fleet_apply._nodes(REVISION, ["node-a"], reply, topic_required=True, topic_identity={"profile_id": "approved_hub", "consumer_project_uuid": "d" * 32})[0]["healthy"], "A managed active target must require authenticated topic proof from every node"

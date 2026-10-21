@@ -87,7 +87,7 @@ def test_fleet_trigger_uses_fixed_command(opts):
                                   "actor_id": 1, "nodes": [socket.gethostname().lower()]},
                                  salt="mojo.fleet.apply.intent")
 
-    with mock.patch.object(node, "_supported", return_value=True), mock.patch.object(
+    with mock.patch.object(node, "loaded_topic_identity", return_value={"state": "disabled"}), mock.patch.object(node, "_supported", return_value=True), mock.patch.object(
             fleet_config_role, "read", return_value={"request_service_required": True, "installed_at": 100}), mock.patch.object(
             node.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
         result = node.trigger({"revision": "a" * 32, "authorization": authorization})
@@ -109,7 +109,7 @@ def test_fleet_report_requires_new_serving_proof(opts):
     revision = "a" * 32
     receipt = {"installed_revision": revision, "status": "restart_requested",
                "installed_at": 100, "target_revision": revision, "installed_digest": "b" * 64}
-    with mock.patch.object(node, "_supported", return_value=True), mock.patch.object(
+    with mock.patch.object(node, "loaded_topic_identity", return_value={"state": "disabled"}), mock.patch.object(node, "_supported", return_value=True), mock.patch.object(
             fleet_config_role, "read", return_value={"request_service_required": True, "installed_at": 100}), mock.patch.object(
             node, "read_receipt", return_value=receipt), mock.patch.object(
             node, "current_digest", return_value="b" * 64), mock.patch.object(
@@ -123,7 +123,7 @@ def test_fleet_report_requires_new_serving_proof(opts):
         th.assert_eq(result["error_code"], "proof_unavailable", "Verify result['error_code']")
         proof.return_value = {"healthy": False}
         th.assert_eq(node.report({"revision": revision})["error_code"], "dependency_health_failed", "Verify node.report({'revision': revision})['error_code']")
-        proof.return_value = {"healthy": True}
+        proof.return_value = {"healthy": True, "shared_validation": {"state": "disabled"}}
         result = node.report({"revision": revision})
         th.assert_true(result["healthy"] and result["restarted"], "Verify result['healthy'] and result['restarted']")
 
@@ -153,7 +153,7 @@ def test_fleet_report_detects_same_revision_file_drift(opts):
     revision = "a" * 32
     receipt = {"installed_revision": revision, "installed_digest": "b" * 64,
                "status": "restart_requested", "installed_at": 100}
-    with mock.patch.object(node, "_supported", return_value=True), mock.patch.object(
+    with mock.patch.object(node, "loaded_topic_identity", return_value={"state": "disabled"}), mock.patch.object(node, "_supported", return_value=True), mock.patch.object(
             fleet_config_role, "read", return_value={"request_service_required": True, "installed_at": 100}), mock.patch.object(
             node, "read_receipt", return_value=receipt), mock.patch.object(
             node, "current_digest", return_value="c" * 64):
@@ -250,3 +250,77 @@ def test_fleet_config_permissions_survive_deploy_lifecycle(opts):
                      "Configuration rotation followed by deployment remains private")
         th.assert_eq(node_setup.sync_var_dirs(str(var), "", False), [],
                      "Protected configuration modes must converge idempotently")
+
+
+@th.django_unit_test("fixed socket profiles perform actual signed Unix HTTP proof")
+def test_fixed_profiles_real_unix_http_proof(opts):
+    import json
+    import socket
+    import socketserver
+    import threading
+    from contextlib import contextmanager
+    from http.server import BaseHTTPRequestHandler
+    from django.core import signing
+    from mojo.deploy import fleet_config_node as node, fleet_config_role as role
+
+    @contextmanager
+    def server(path, mode):
+        received = []
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                token = self.headers.get("X-Mojo-Fleet-Proof")
+                challenge = signing.loads(token, salt=node.PROOF_SALT, max_age=30)
+                received.append((self.path, challenge))
+                proof = dict(loaded_revision=challenge["revision"], nonce=challenge["nonce"],
+                             node=challenge["node"], pid=os.getpid(), healthy=True,
+                             shared_validation={"state": "disabled"})
+                if mode == "replay":
+                    proof["nonce"] = "f" * 32
+                elif mode == "wrong_node":
+                    proof["node"] = "other-node"
+                elif mode == "stale":
+                    proof["loaded_revision"] = "c" * 32
+                raw = b"not-json" if mode == "malformed" else json.dumps({"data": proof}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+            def log_message(self, *args):
+                pass
+        local = socketserver.UnixStreamServer(path, Handler)
+        thread = threading.Thread(target=local.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        thread.start()
+        try:
+            yield received
+        finally:
+            local.shutdown()
+            local.server_close()
+            thread.join(3)
+
+    revision = "a" * 32
+    destination = ("/api/account/admin/fleet/proof", {"Host": "test.example"})
+    assert role.REQUEST_PROFILES == {"opt_api_asgi_v1": "/opt/api/var/asgi.sock",
+                                     "run_mojo_asgi_v1": "/run/mojo/asgi.sock"}, "Production profiles must remain a closed reviewed two-socket map"
+    with tempfile.TemporaryDirectory() as root:
+        for index, profile in enumerate(role.REQUEST_PROFILES):
+            for mode, expected in (("valid", None), ("replay", "proof_invalid"), ("wrong_node", "proof_invalid"),
+                                   ("stale", "serving_revision_pending"), ("malformed", "proof_unavailable")):
+                path = str(Path(root) / f"{index}-{mode}.sock")
+                with server(path, mode) as received:
+                    result = node._serving_proof(revision, profile, socket_paths={profile: path}, destination=destination)
+                    assert result.get("error_code") == expected, "Actual Unix HTTP proof must enforce fresh nonce, exact node, revision and JSON"
+                    assert len(received) == 1 and received[0][0] == destination[0], "Each fixed-profile proof must use the signed fixed route exactly once"
+                    assert set(received[0][1]) == {"revision", "nonce", "node"}, "Actual socket request must carry only the signed revision, node and nonce"
+                    assert received[0][1]["revision"] == revision and received[0][1]["node"] == socket.gethostname().lower(), "Signed UDS challenge must bind the real node and selected revision"
+                    if mode == "valid":
+                        assert result["healthy"] and result["pid"] == os.getpid(), "Successful proof must be actual server process evidence"
+                    os.chmod(path, 0)
+                    denied = node._serving_proof(revision, profile, socket_paths={profile: path}, destination=destination)
+                    assert denied["error_code"] == "proof_socket_permission_denied", "A real inaccessible Unix socket must report its bounded permission failure"
+                    os.chmod(path, 0o700)
+        missing = str(Path(root) / "missing.sock")
+        result = node._serving_proof(revision, "run_mojo_asgi_v1", socket_paths={"opt_api_asgi_v1": missing, "run_mojo_asgi_v1": missing}, destination=destination)
+        assert result["error_code"] == "proof_socket_unavailable", "Wrong fixed profile must fail instead of discovering another socket"
+        result = node._serving_proof(revision, "/tmp/arbitrary.sock", socket_paths={"/tmp/arbitrary.sock": missing}, destination=destination)
+        assert result["error_code"] == "request_service_profile_unknown", "An arbitrary path can never become a request proof profile"

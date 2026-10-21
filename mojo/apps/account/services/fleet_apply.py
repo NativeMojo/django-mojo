@@ -1,6 +1,7 @@
 """Revision-bound configuration activation through the existing job transport."""
 import re
 import time
+import uuid
 
 from django.utils import timezone
 from django.core import signing
@@ -38,7 +39,36 @@ def _channel():
     return settings.get_static("ADMIN_FLEET_CONFIG_CHANNEL", "edge")
 
 
-def _nodes(revision, expected, reply=None, error=None):
+def _topic_evidence(value):
+    """Project only bounded, non-secret identity fields from an untrusted reply."""
+    if not isinstance(value, dict) or value.get("state") not in ("disabled", "verified", "unavailable"):
+        return None
+    profile = value.get("profile_id")
+    observed = value.get("observed_project_uuid")
+    if profile is not None and (not isinstance(profile, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", profile)):
+        return None
+    if observed is not None:
+        try:
+            if not isinstance(observed, str) or uuid.UUID(observed).hex != observed:
+                return None
+        except ValueError:
+            return None
+    checked = value.get("checked_at")
+    if checked is not None and (not isinstance(checked, str) or len(checked) > 40):
+        return None
+    code = value.get("error_code")
+    if code is not None and (not isinstance(code, str) or not re.fullmatch(r"[a-z0-9_]{1,80}", code)):
+        return None
+    if value["state"] == "disabled" and (profile or observed or code or value.get("sharing_ready")):
+        return None
+    if value["state"] == "verified" and (not profile or not observed or not checked or code):
+        return None
+    return {"state": value["state"], "profile_id": profile,
+            "observed_project_uuid": observed, "checked_at": checked, "error_code": code,
+            "sharing_ready": value.get("sharing_ready") is True}
+
+
+def _nodes(revision, expected, reply=None, error=None, *, topic_required=False, topic_identity=None):
     responses = {row.get("host"): row for row in (reply or {}).get("results", [])
                  if isinstance(row, dict) and row.get("status") == "success"}
     draining = {row.get("host") for row in (reply or {}).get("results", [])
@@ -57,16 +87,23 @@ def _nodes(revision, expected, reply=None, error=None):
             "published": True, "installed": False, "restart_requested": False,
             "restarted": False, "healthy": False,
             "status": "unknown", "error_code": error or "node_did_not_reply",
+            "shared_validation": None,
         }
         if hostname in draining and not anomalies:
             node.update(status="draining", error_code="engine_draining")
         if matches:
+            node["shared_validation"] = _topic_evidence(result.get("shared_validation"))
             for flag in ("installed", "restart_requested", "restarted", "healthy"):
                 node[flag] = result.get(flag) is True
             # Never accept health on a predecessor or an unactivated file.
             node["healthy"] = (
                 node["healthy"] and node["installed"] and node["restarted"]
                 and result.get("jobs_verified") is True
+                and (not topic_required or node["shared_validation"] is not None
+                     and node["shared_validation"]["state"] == "verified"
+                     and isinstance(topic_identity, dict)
+                     and node["shared_validation"]["profile_id"] == topic_identity.get("profile_id")
+                     and node["shared_validation"]["observed_project_uuid"] == topic_identity.get("consumer_project_uuid"))
                 and not anomalies and (reply or {}).get("status") in ("verified", "partial"))
             node["status"] = next((status for flag, status in (
                 ("healthy", "healthy"), ("restarted", "restarted"),
@@ -85,7 +122,7 @@ def _nodes(revision, expected, reply=None, error=None):
     return nodes
 
 
-def observe(revision, expected=None, *, manager=None):
+def observe(revision, expected=None, *, manager=None, topic_required=False, topic_identity=None):
     if not revision:
         return {"status": "unpublished", "nodes": [], "healthy_everywhere": False, "health_scope": HEALTH_SCOPE}
     try:
@@ -103,7 +140,7 @@ def observe(revision, expected=None, *, manager=None):
         reply = manager.broadcast_execute_checked(
             REPORT_FUNCTION, {"revision": revision}, timeout=5.0,
             channel=channel, roster=roster)
-        nodes = _nodes(revision, expected, reply)
+        nodes = _nodes(revision, expected, reply, topic_required=topic_required, topic_identity=topic_identity)
     except Exception:
         nodes = _nodes(revision, expected, error="node_transport_unavailable")
     healthy = bool(nodes) and all(node["healthy"] for node in nodes)
@@ -214,12 +251,15 @@ def operation(actor, operation_id):
         # The dispatching engine may now drain. Poll from the request process;
         # requiring that engine to wait for its own replacement deadlocks.
         from mojo.apps.account.services import fleet_config
-        if fleet_config.state(actor).get("revision") != intent["revision"]:
+        current = fleet_config.state(actor)
+        if current.get("revision") != intent["revision"]:
             report = dict(report, status="superseded", healthy_everywhere=False,
                           error_code="publication_superseded")
         else:
             dispatch = report
-            report = observe(intent["revision"], intent["nodes"])
+            report = observe(intent["revision"], intent["nodes"],
+                             topic_required=current.get("shared_validation_required", False),
+                             topic_identity=current.get("shared_validation_identity"))
             for node, triggered in zip(report["nodes"], dispatch["nodes"]):
                 if not node["healthy"] and triggered.get("error_code"):
                     node.update(status="failed", error_code=triggered["error_code"])
