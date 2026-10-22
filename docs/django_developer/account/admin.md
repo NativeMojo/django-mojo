@@ -16,18 +16,20 @@ Compiled assets use a relative base; Portal API requests always use same-origin
 
 ## Pinned identity and offline replacement
 
-The current artifact is portal-mojo **0.2.19**, source revision
-`018273e228621e89938bc031ebf543a93c4233de`,
+The current artifact is portal-mojo **0.2.20**, source revision
+`95905e8c3d73d4d0e0d39e8886504a410be27925` (tag `v0.2.20`),
 built clean with Node **24.21.0** / npm **11.19.0** and lockfile SHA-256
-`e82eb75dea18ab0cf1892e33c1752cb48fa3d4dbae16538b27174af5b729eed3`.
-Its 131-file inventory includes the Vite manifest and lazy chunks.
+`0bb2a0e10eb24a8bcc07fd1f58cd5b78d9d7688d20a2bd33ee42f601f09b64d3`.
+Its 132-file inventory includes the Vite manifest and lazy chunks.
 The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 
-`07c68e4e9a67a021614ecae73eefab2fb64c72a71f8b173b9f669c38832495eb`
+`139569a335abe0d89eae94ee6847ea31c9f34dbef7eb99091f602a2a3f46251e`
 
-This pin carries the reviewed shared-validation configuration, trust and hub
-enable controls for the next normal framework release. The canonical build and
-its clean packed consumer were verified with the existing Portal tooling.
+This is the canonical build portal-mojo's `v0.2.20` publish workflow produced
+and stored (two fresh byte-identical builds in its `verify:admin-artifact`
+step); the vendored copy was taken from that stored artifact and checked against
+the same manifest digest. The runtime pin is
+`services/admin_artifact.PINNED_MANIFEST_SHA256`.
 portal-mojo promises identical bytes on one platform only, so another platform's
 build of the same revision may carry a different hash.
 The complete artifact includes hidden `.vite` content; verify the manifest
@@ -38,7 +40,7 @@ Stop processes serving/importing the checkout before replacing the artifact:
 ```bash
 uv run python scripts/vendor_admin_portal.py \
   --source /absolute/path/to/verified/dist/admin \
-  --expected-manifest-sha256 07c68e4e9a67a021614ecae73eefab2fb64c72a71f8b173b9f669c38832495eb
+  --expected-manifest-sha256 139569a335abe0d89eae94ee6847ea31c9f34dbef7eb99091f602a2a3f46251e
 uv run python scripts/vendor_admin_portal.py --check
 ```
 
@@ -65,7 +67,16 @@ startup and delivers only its validated allowlist. Provenance and
 
 ## Included Portal behavior
 
-This canonical build fixes the **Passkeys** view, which crashed for any user
+This canonical build (portal-mojo 0.2.20) adds the system admin's
+**Administrators can create sub-groups** switch to a group's **Sub-Groups**
+section (#9127). It is shown only to callers with the global `groups` or
+`manage_groups` permission and calls the Group action `allow_member_subgroups`
+(#9126; see [Group](group.md#letting-a-parents-administrators-create-sub-groups)).
+It also carries portal-mojo #9108: a Portal confirmation that needs a fresh
+sign-in uses the configured hosted sign-in page, and the MFA step is loaded only
+when a challenge asks for it.
+
+An earlier canonical build fixed the **Passkeys** view, which crashed for any user
 holding a passkey: `Passkey.transports` is a JSON list on the wire, and Portal
 now reads it as one. It also restores **Set temporary password** in the user
 header menu and Security section, over the existing

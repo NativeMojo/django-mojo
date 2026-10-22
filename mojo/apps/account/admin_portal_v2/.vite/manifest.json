@@ -8,40 +8,40 @@
     "src": "../../node_modules/bootstrap-icons/font/fonts/bootstrap-icons.woff2"
   },
   "../../packages/portal-mojo/src/account/index.ts": {
-    "file": "assets/index-VllhcR90.js",
+    "file": "assets/index-CgcIcj73.js",
     "name": "index",
     "src": "../../packages/portal-mojo/src/account/index.ts",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_ui-DD6qsfH5.js",
-      "_FormView-CdYtIxjH.js",
-      "_NotificationPreferences-DMilyOsk.js",
-      "_secret-dialog-Bc9dltd9.js",
-      "_password-Brt8v47w.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_Tabs-DVDt8foU.js",
-      "_FormFields-DFvivYWD.js",
-      "_DetailView-C_G0aXQh.js",
-      "_safe-node-Db1vMVOA.js"
+      "_field-registry-DsiLSjQz.js",
+      "_ui-B8d3EtZn.js",
+      "_FormView-Neqj1Z1p.js",
+      "_NotificationPreferences-B5IGmAb_.js",
+      "_secret-dialog-N1ylf0Yo.js",
+      "_password-I87AeIlg.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_Tabs-CiV6Lw7K.js",
+      "_FormFields-D7vvSra6.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/assistant/AssistantPanel.tsx": {
-    "file": "assets/AssistantPanel-CGn7C7kx.js",
+    "file": "assets/AssistantPanel-BxW_HJhV.js",
     "name": "AssistantPanel",
     "src": "../../packages/portal-mojo/src/admin/assistant/AssistantPanel.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_streaming-BseepYh-.js",
-      "_api-D9ukgmt2.js",
-      "_field-registry-BTrOoG8A.js",
-      "_models-DtjfUqb0.js"
+      "_streaming-DPWWE37_.js",
+      "_api-DX3a2RJg.js",
+      "_field-registry-DsiLSjQz.js",
+      "_models-Cu-WAb5L.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/assistant/AssistantSetupPage.tsx": {
-    "file": "assets/AssistantSetupPage-DU2vBiyf.js",
+    "file": "assets/AssistantSetupPage-BpYm_IGX.js",
     "name": "AssistantSetupPage",
     "src": "../../packages/portal-mojo/src/admin/assistant/AssistantSetupPage.tsx",
     "isDynamicEntry": true,
@@ -50,1181 +50,1181 @@
     ]
   },
   "../../packages/portal-mojo/src/admin/assistant/pages.tsx": {
-    "file": "assets/pages-x8tE_4IU.js",
+    "file": "assets/pages-BFdGhBi6.js",
     "name": "pages",
     "src": "../../packages/portal-mojo/src/admin/assistant/pages.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_streaming-BseepYh-.js",
-      "_api-D9ukgmt2.js",
-      "_safe-node-Db1vMVOA.js",
-      "_models-DtjfUqb0.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_streaming-DPWWE37_.js",
+      "_api-DX3a2RJg.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_models-Cu-WAb5L.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/bouncer/devices.tsx": {
-    "file": "assets/devices-D3QzJJ_q.js",
+    "file": "assets/devices-C1N_a0Vh.js",
     "name": "devices",
     "src": "../../packages/portal-mojo/src/admin/bouncer/devices.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
       "../../packages/portal-mojo/src/admin/bouncer/signals.tsx",
-      "_models-Boy7LBSR.js",
+      "_models-rEiAm_h5.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
       "_countryCentroids-CiPWDXva.js",
-      "_safe-node-Db1vMVOA.js",
-      "_DataView-CSqZWTKl.js",
-      "_grouping-B2RKh4sF.js"
+      "_safe-node-Cxmo4f_j.js",
+      "_DataView-BE2ESFuT.js",
+      "_grouping-DL5HYcBX.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/bouncer/signals.tsx": {
-    "file": "assets/signals-D-ESN2Uq.js",
+    "file": "assets/signals-U10q5YtK.js",
     "name": "signals",
     "src": "../../packages/portal-mojo/src/admin/bouncer/signals.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_DataView-CSqZWTKl.js",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_grouping-B2RKh4sF.js",
-      "_safe-node-Db1vMVOA.js"
+      "_DataView-BE2ESFuT.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
+      "_grouping-DL5HYcBX.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/bouncer/signatures.tsx": {
-    "file": "assets/signatures-Dvd9BoGp.js",
+    "file": "assets/signatures-Dklmsk0C.js",
     "name": "signatures",
     "src": "../../packages/portal-mojo/src/admin/bouncer/signatures.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_safe-node-Db1vMVOA.js"
+      "_ui-B8d3EtZn.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/cloudwatch/CloudWatchResourceDetail.tsx": {
-    "file": "assets/CloudWatchResourceDetail-DSPL7As3.js",
+    "file": "assets/CloudWatchResourceDetail-CDT2Jvb1.js",
     "name": "CloudWatchResourceDetail",
     "src": "../../packages/portal-mojo/src/admin/cloudwatch/CloudWatchResourceDetail.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_CloudWatchDashboardPage-Cjw7X8Zd.js",
-      "_safe-node-Db1vMVOA.js",
-      "_ui-DD6qsfH5.js",
-      "_MetricsChart-BeDK3TDU.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_CloudWatchDashboardPage-BW6Eu-Fx.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_ui-B8d3EtZn.js",
+      "_MetricsChart-BSzvjSE1.js",
       "_countryCentroids-CiPWDXva.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/credentials/AcmeConsumerKeyDialog.tsx": {
-    "file": "assets/AcmeConsumerKeyDialog-BNr3K6Jp.js",
+    "file": "assets/AcmeConsumerKeyDialog-C9_wrX2O.js",
     "name": "AcmeConsumerKeyDialog",
     "src": "../../packages/portal-mojo/src/admin/credentials/AcmeConsumerKeyDialog.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_secret-dialog-Bc9dltd9.js",
-      "_DetailView-C_G0aXQh.js",
-      "_shared-validation-data-CVTMCxvH.js",
-      "_safe-node-Db1vMVOA.js"
+      "_field-registry-DsiLSjQz.js",
+      "_secret-dialog-N1ylf0Yo.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_shared-validation-data-CgeqBJNf.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/credentials/group-api-keys.tsx": {
-    "file": "assets/group-api-keys-wB4Y766Q.js",
+    "file": "assets/group-api-keys-COgNSJaA.js",
     "name": "group-api-keys",
     "src": "../../packages/portal-mojo/src/admin/credentials/group-api-keys.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_guardrail-AgMSCjuv.js",
-      "_ui-DD6qsfH5.js",
-      "_secret-dialog-Bc9dltd9.js",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_safe-node-Db1vMVOA.js"
+      "_guardrail-Bjb3Kd1u.js",
+      "_ui-B8d3EtZn.js",
+      "_secret-dialog-N1ylf0Yo.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_safe-node-Cxmo4f_j.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/credentials/AcmeConsumerKeyDialog.tsx"
     ]
   },
   "../../packages/portal-mojo/src/admin/credentials/webhook-subscriptions.tsx": {
-    "file": "assets/webhook-subscriptions-CjWul8om.js",
+    "file": "assets/webhook-subscriptions-6IZ6EYwU.js",
     "name": "webhook-subscriptions",
     "src": "../../packages/portal-mojo/src/admin/credentials/webhook-subscriptions.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_guardrail-AgMSCjuv.js",
-      "_ui-DD6qsfH5.js",
-      "_secret-dialog-Bc9dltd9.js",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_safe-node-Db1vMVOA.js"
+      "_guardrail-Bjb3Kd1u.js",
+      "_ui-B8d3EtZn.js",
+      "_secret-dialog-N1ylf0Yo.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/dashboard/AdminDashboardPage.tsx": {
-    "file": "assets/AdminDashboardPage-z6BXhK_Y.js",
+    "file": "assets/AdminDashboardPage-xYuEI0j6.js",
     "name": "AdminDashboardPage",
     "src": "../../packages/portal-mojo/src/admin/dashboard/AdminDashboardPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_MetricsChart-BeDK3TDU.js",
+      "_MetricsChart-BSzvjSE1.js",
       "_countryCentroids-CiPWDXva.js",
-      "_field-registry-BTrOoG8A.js",
-      "_LoginLocationMap-K52OdZOQ.js",
-      "_use-world-land-2DEI402H.js"
+      "_field-registry-DsiLSjQz.js",
+      "_LoginLocationMap-xoytjz9e.js",
+      "_use-world-land-3jvqSvW2.js"
     ],
     "dynamicImports": [
-      "_UserDetail-BNSPMsVk.js",
+      "_UserDetail-Cpy8jV_t.js",
       "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx",
       "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx"
     ]
   },
   "../../packages/portal-mojo/src/admin/dns/CertificatesPage.tsx": {
-    "file": "assets/CertificatesPage-ByxSFGUh.js",
+    "file": "assets/CertificatesPage-ByPhF-BQ.js",
     "name": "CertificatesPage",
     "src": "../../packages/portal-mojo/src/admin/dns/CertificatesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_api-Dbfml4ce.js",
-      "_CertificateRequestDialog-TA9w380U.js",
-      "_safe-node-Db1vMVOA.js",
-      "_DetailView-C_G0aXQh.js",
-      "_operator-destinations-B6pfzv0y.js",
-      "_shared-validation-data-CVTMCxvH.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_api-lwME8N5e.js",
+      "_CertificateRequestDialog-Bh-IL9yb.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_operator-destinations-CYKsUqbR.js",
+      "_shared-validation-data-CgeqBJNf.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/dns/DnsRecordsPage.tsx": {
-    "file": "assets/DnsRecordsPage-tr3DPa_v.js",
+    "file": "assets/DnsRecordsPage-DouRR2o4.js",
     "name": "DnsRecordsPage",
     "src": "../../packages/portal-mojo/src/admin/dns/DnsRecordsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_DnsRecordsPanel-CcKB7CGw.js",
-      "_api-Dbfml4ce.js"
+      "_field-registry-DsiLSjQz.js",
+      "_DnsRecordsPanel-D213ERN2.js",
+      "_api-lwME8N5e.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/dns/DomainPurchasesPage.tsx": {
-    "file": "assets/DomainPurchasesPage-BjuDn3Yn.js",
+    "file": "assets/DomainPurchasesPage-Dhu_eVnB.js",
     "name": "DomainPurchasesPage",
     "src": "../../packages/portal-mojo/src/admin/dns/DomainPurchasesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_DetailView-C_G0aXQh.js",
-      "_api-Dbfml4ce.js",
-      "_FormWizard-XfQtW5E9.js",
-      "_safe-node-Db1vMVOA.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_Tabs-DVDt8foU.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_api-lwME8N5e.js",
+      "_FormWizard-DYPmQAj1.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_Tabs-CiV6Lw7K.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/dns/DomainsPage.tsx": {
-    "file": "assets/DomainsPage-C1T7svk7.js",
+    "file": "assets/DomainsPage-Bx8RUn4a.js",
     "name": "DomainsPage",
     "src": "../../packages/portal-mojo/src/admin/dns/DomainsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_DetailView-C_G0aXQh.js",
-      "_api-Dbfml4ce.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_api-lwME8N5e.js",
       "_data-Bl3FzE6B.js",
-      "_DnsRecordsPanel-CcKB7CGw.js",
-      "_CertificateRequestDialog-TA9w380U.js",
-      "_safe-node-Db1vMVOA.js",
-      "_operator-destinations-B6pfzv0y.js",
-      "_shared-validation-data-CVTMCxvH.js"
+      "_DnsRecordsPanel-D213ERN2.js",
+      "_CertificateRequestDialog-Bh-IL9yb.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_operator-destinations-CYKsUqbR.js",
+      "_shared-validation-data-CgeqBJNf.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/dns/ProviderCredentialsPage.tsx": {
-    "file": "assets/ProviderCredentialsPage-DHqLV0FJ.js",
+    "file": "assets/ProviderCredentialsPage-29g0G_VX.js",
     "name": "ProviderCredentialsPage",
     "src": "../../packages/portal-mojo/src/admin/dns/ProviderCredentialsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_ui-DD6qsfH5.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_api-Dbfml4ce.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ui-B8d3EtZn.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
+      "_api-lwME8N5e.js",
       "_data-Bl3FzE6B.js",
-      "_safe-node-Db1vMVOA.js"
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/dns/RegistrantContactPage.tsx": {
-    "file": "assets/RegistrantContactPage-BDCsX8_I.js",
+    "file": "assets/RegistrantContactPage-DNHR2a0Q.js",
     "name": "RegistrantContactPage",
     "src": "../../packages/portal-mojo/src/admin/dns/RegistrantContactPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_ui-DD6qsfH5.js",
-      "_api-Dbfml4ce.js"
+      "_field-registry-DsiLSjQz.js",
+      "_ui-B8d3EtZn.js",
+      "_api-lwME8N5e.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/edge/BlocklistPage.tsx": {
-    "file": "assets/BlocklistPage-Cacr_h64.js",
+    "file": "assets/BlocklistPage-DZ_BqPkc.js",
     "name": "BlocklistPage",
     "src": "../../packages/portal-mojo/src/admin/edge/BlocklistPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_armed-button-D83OhpZz.js",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_models-A36AmewM.js",
-      "_safe-node-Db1vMVOA.js"
+      "_armed-button-CXV3_3gJ.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_models-B-EmlVYS.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/edge/UpstreamsPage.tsx": {
-    "file": "assets/UpstreamsPage-pzv6KOHI.js",
+    "file": "assets/UpstreamsPage-ZGnN4ZCv.js",
     "name": "UpstreamsPage",
     "src": "../../packages/portal-mojo/src/admin/edge/UpstreamsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_armed-button-D83OhpZz.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ui-DD6qsfH5.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_api-z4_XXSuH.js",
-      "_models-A36AmewM.js",
-      "_safe-node-Db1vMVOA.js"
+      "_armed-button-CXV3_3gJ.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ui-B8d3EtZn.js",
+      "_ModelTable-D37l1xlL.js",
+      "_api-FWA6ZAo8.js",
+      "_models-B-EmlVYS.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/edge/VhostsPage.tsx": {
-    "file": "assets/VhostsPage-B0ruragB.js",
+    "file": "assets/VhostsPage-BWcmPujw.js",
     "name": "VhostsPage",
     "src": "../../packages/portal-mojo/src/admin/edge/VhostsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_models-A36AmewM.js",
-      "_armed-button-D83OhpZz.js",
-      "_DetailView-C_G0aXQh.js",
-      "_api-z4_XXSuH.js",
-      "_FormWizard-XfQtW5E9.js",
-      "_safe-node-Db1vMVOA.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_Tabs-DVDt8foU.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_models-B-EmlVYS.js",
+      "_armed-button-CXV3_3gJ.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_api-FWA6ZAo8.js",
+      "_FormWizard-DYPmQAj1.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_Tabs-CiV6Lw7K.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/fleet-configuration/FleetConfigurationPage.tsx": {
-    "file": "assets/FleetConfigurationPage-BNIJ2WtF.js",
+    "file": "assets/FleetConfigurationPage-BfnqnH0u.js",
     "name": "FleetConfigurationPage",
     "src": "../../packages/portal-mojo/src/admin/fleet-configuration/FleetConfigurationPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js"
+      "_field-registry-DsiLSjQz.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/fleet-configuration/SharedValidationConnectionPanel.tsx"
     ]
   },
   "../../packages/portal-mojo/src/admin/fleet-configuration/SharedValidationConnectionPanel.tsx": {
-    "file": "assets/SharedValidationConnectionPanel-kPhuPzbT.js",
+    "file": "assets/SharedValidationConnectionPanel-JTab3TKq.js",
     "name": "SharedValidationConnectionPanel",
     "src": "../../packages/portal-mojo/src/admin/fleet-configuration/SharedValidationConnectionPanel.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_shared-validation-data-CVTMCxvH.js",
-      "_operator-destinations-B6pfzv0y.js",
-      "_safe-node-Db1vMVOA.js"
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_shared-validation-data-CgeqBJNf.js",
+      "_operator-destinations-CYKsUqbR.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/identity/groups/GroupsPage.tsx": {
-    "file": "assets/GroupsPage-BIpef6PS.js",
+    "file": "assets/GroupsPage-Dezi42-w.js",
     "name": "GroupsPage",
     "src": "../../packages/portal-mojo/src/admin/identity/groups/GroupsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
+      "_ui-B8d3EtZn.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
       "_countryCentroids-CiPWDXva.js",
-      "_UserDetail-BNSPMsVk.js",
-      "_DetailView-C_G0aXQh.js",
+      "_UserDetail-Cpy8jV_t.js",
+      "_DetailView-CW_8Ms3J.js",
       "../../packages/portal-mojo/src/admin/credentials/group-api-keys.tsx",
       "../../packages/portal-mojo/src/admin/credentials/webhook-subscriptions.tsx",
-      "_MemberDetail-C89jhh0X.js",
+      "_MemberDetail-7iCILPnC.js",
       "../../packages/portal-mojo/src/admin/security/tickets.tsx",
       "../../packages/portal-mojo/src/admin/security/devices/LoginLocationsPage.tsx",
-      "_models-Boy7LBSR.js",
+      "_models-rEiAm_h5.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
       "../../packages/portal-mojo/src/admin/security/geoip/GeoIpCachePage.tsx",
-      "_HandlerChainBuilder-BE0jQ_62.js",
+      "_HandlerChainBuilder-B7lJq3CV.js",
       "../../packages/portal-mojo/src/admin/bouncer/signatures.tsx",
-      "_models-D-COWECm.js",
+      "_models-DdOtR7yW.js",
       "../../packages/portal-mojo/src/admin/network/BlockedIPsPage.tsx",
       "../../packages/portal-mojo/src/admin/network/FirewallLogPage.tsx",
-      "_IPSetEditor-wc45aMhA.js",
-      "_BlocksTab-DYHd3da_.js",
-      "_Timeline-dyeCxh-0.js",
-      "_FormView-CdYtIxjH.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_safe-node-Db1vMVOA.js",
-      "_secret-dialog-Bc9dltd9.js",
-      "_password-Brt8v47w.js",
-      "_NotificationPreferences-DMilyOsk.js",
+      "_IPSetEditor-DL0DrBVe.js",
+      "_BlocksTab-BIHO6x1b.js",
+      "_Timeline-CHjah23T.js",
+      "_FormView-Neqj1Z1p.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_secret-dialog-N1ylf0Yo.js",
+      "_password-I87AeIlg.js",
+      "_NotificationPreferences-B5IGmAb_.js",
       "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx",
-      "_KnownFieldsCard-CDW6Hulv.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
       "../../packages/portal-mojo/src/admin/bouncer/devices.tsx",
       "../../packages/portal-mojo/src/admin/bouncer/signals.tsx",
-      "_DataView-CSqZWTKl.js",
-      "_grouping-B2RKh4sF.js",
-      "_GeoIpDossier-oahcjzho.js",
-      "_armed-button-D83OhpZz.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_use-world-land-2DEI402H.js",
+      "_DataView-BE2ESFuT.js",
+      "_grouping-DL5HYcBX.js",
+      "_GeoIpDossier-CjbtlrHp.js",
+      "_armed-button-CXV3_3gJ.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_use-world-land-3jvqSvW2.js",
       "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx",
-      "_LoginLocationMap-K52OdZOQ.js",
-      "_guardrail-AgMSCjuv.js",
-      "_api-D9ukgmt2.js",
-      "_launchers-DezqZMCE.js",
+      "_LoginLocationMap-xoytjz9e.js",
+      "_guardrail-Bjb3Kd1u.js",
+      "_api-DX3a2RJg.js",
+      "_launchers-BGD9P2QB.js",
       "../../packages/portal-mojo/src/admin/monitoring/LogsPage.tsx",
-      "_MetricsChart-BeDK3TDU.js",
-      "_MetricsMiniWidget-DvmteMPL.js",
-      "_MiniChart-BlWndme9.js",
-      "_Tabs-DVDt8foU.js"
+      "_MetricsChart-BSzvjSE1.js",
+      "_MetricsMiniWidget-dbaP7OHl.js",
+      "_MiniChart-D_8WSy9c.js",
+      "_Tabs-CiV6Lw7K.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/identity/members/MembersPage.tsx": {
-    "file": "assets/MembersPage-CI_gKKbb.js",
+    "file": "assets/MembersPage-BxF56ei1.js",
     "name": "MembersPage",
     "src": "../../packages/portal-mojo/src/admin/identity/members/MembersPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_MemberDetail-C89jhh0X.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_safe-node-Db1vMVOA.js",
-      "_guardrail-AgMSCjuv.js",
-      "_DataView-CSqZWTKl.js",
-      "_FormView-CdYtIxjH.js",
-      "_Tabs-DVDt8foU.js",
-      "_DetailView-C_G0aXQh.js",
+      "_ui-B8d3EtZn.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_MemberDetail-7iCILPnC.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_guardrail-Bjb3Kd1u.js",
+      "_DataView-BE2ESFuT.js",
+      "_FormView-Neqj1Z1p.js",
+      "_Tabs-CiV6Lw7K.js",
+      "_DetailView-CW_8Ms3J.js",
       "_countryCentroids-CiPWDXva.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/identity/users/PersonalApiKeysPage.tsx": {
-    "file": "assets/PersonalApiKeysPage-BU63lLdR.js",
+    "file": "assets/PersonalApiKeysPage-CoWic9yM.js",
     "name": "PersonalApiKeysPage",
     "src": "../../packages/portal-mojo/src/admin/identity/users/PersonalApiKeysPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_armed-button-D83OhpZz.js",
-      "_ui-DD6qsfH5.js",
-      "_secret-dialog-Bc9dltd9.js",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
+      "_armed-button-CXV3_3gJ.js",
+      "_ui-B8d3EtZn.js",
+      "_secret-dialog-N1ylf0Yo.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
       "../../packages/portal-mojo/src/admin/credentials/group-api-keys.tsx",
-      "_schema-form-core-4NwDqDQl.js",
-      "_safe-node-Db1vMVOA.js",
-      "_guardrail-AgMSCjuv.js"
+      "_schema-form-core-Bvosjf-w.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_guardrail-Bjb3Kd1u.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/identity/users/UsersPage.tsx": {
-    "file": "assets/UsersPage-CgbGdCJt.js",
+    "file": "assets/UsersPage-CgRqWFUw.js",
     "name": "UsersPage",
     "src": "../../packages/portal-mojo/src/admin/identity/users/UsersPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_grouping-B2RKh4sF.js",
-      "_UserDetail-BNSPMsVk.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_safe-node-Db1vMVOA.js",
-      "_FormView-CdYtIxjH.js",
-      "_Tabs-DVDt8foU.js",
-      "_DetailView-C_G0aXQh.js",
+      "_ui-B8d3EtZn.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_grouping-DL5HYcBX.js",
+      "_UserDetail-Cpy8jV_t.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_FormView-Neqj1Z1p.js",
+      "_Tabs-CiV6Lw7K.js",
+      "_DetailView-CW_8Ms3J.js",
       "_countryCentroids-CiPWDXva.js",
-      "_secret-dialog-Bc9dltd9.js",
-      "_password-Brt8v47w.js",
-      "_NotificationPreferences-DMilyOsk.js",
-      "_models-Boy7LBSR.js",
+      "_secret-dialog-N1ylf0Yo.js",
+      "_password-I87AeIlg.js",
+      "_NotificationPreferences-B5IGmAb_.js",
+      "_models-rEiAm_h5.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
       "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx",
-      "_Timeline-dyeCxh-0.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_KnownFieldsCard-CDW6Hulv.js",
+      "_Timeline-CHjah23T.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
       "../../packages/portal-mojo/src/admin/bouncer/devices.tsx",
       "../../packages/portal-mojo/src/admin/bouncer/signals.tsx",
-      "_DataView-CSqZWTKl.js",
-      "_GeoIpDossier-oahcjzho.js",
-      "_armed-button-D83OhpZz.js",
-      "_use-world-land-2DEI402H.js",
+      "_DataView-BE2ESFuT.js",
+      "_GeoIpDossier-CjbtlrHp.js",
+      "_armed-button-CXV3_3gJ.js",
+      "_use-world-land-3jvqSvW2.js",
       "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx",
-      "_LoginLocationMap-K52OdZOQ.js",
-      "_guardrail-AgMSCjuv.js"
+      "_LoginLocationMap-xoytjz9e.js",
+      "_guardrail-Bjb3Kd1u.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/incidents/EventDetail.tsx": {
-    "file": "assets/EventDetail-BiqO9qmY.js",
+    "file": "assets/EventDetail-Y8OCa4_S.js",
     "name": "EventDetail",
     "src": "../../packages/portal-mojo/src/admin/incidents/EventDetail.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_StatusPanel-C8ElbF73.js",
-      "_KnownFieldsCard-CDW6Hulv.js",
-      "_DataView-CSqZWTKl.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_forensics-DQ70X-Kc.js",
-      "_models-Boy7LBSR.js",
-      "_safe-node-Db1vMVOA.js",
-      "_ui-DD6qsfH5.js"
+      "_StatusPanel-Dq6976vw.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
+      "_DataView-BE2ESFuT.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_forensics-CgJqxwv6.js",
+      "_models-rEiAm_h5.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_ui-B8d3EtZn.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx": {
-    "file": "assets/EventsPage-wW_die69.js",
+    "file": "assets/EventsPage-CYCjSwrl.js",
     "name": "EventsPage",
     "src": "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_grouping-B2RKh4sF.js",
-      "_models-Boy7LBSR.js",
-      "_safe-node-Db1vMVOA.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_grouping-DL5HYcBX.js",
+      "_models-rEiAm_h5.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/incidents/IncidentDetail.tsx": {
-    "file": "assets/IncidentDetail-DEyV_gzV.js",
+    "file": "assets/IncidentDetail-D2MCnwtE.js",
     "name": "IncidentDetail",
     "src": "../../packages/portal-mojo/src/admin/incidents/IncidentDetail.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_api-D9ukgmt2.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_KnownFieldsCard-CDW6Hulv.js",
-      "_DataView-CSqZWTKl.js",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_launchers-DezqZMCE.js",
-      "_GeoIpDossier-oahcjzho.js",
-      "_forensics-DQ70X-Kc.js",
-      "_models-Boy7LBSR.js",
-      "_safe-node-Db1vMVOA.js",
-      "_armed-button-D83OhpZz.js",
-      "_FormFields-DFvivYWD.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_use-world-land-2DEI402H.js",
+      "_api-DX3a2RJg.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
+      "_DataView-BE2ESFuT.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_launchers-BGD9P2QB.js",
+      "_GeoIpDossier-CjbtlrHp.js",
+      "_forensics-CgJqxwv6.js",
+      "_models-rEiAm_h5.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_armed-button-CXV3_3gJ.js",
+      "_FormFields-D7vvSra6.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_use-world-land-3jvqSvW2.js",
       "_countryCentroids-CiPWDXva.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx": {
-    "file": "assets/IncidentsPage-C9s2spOy.js",
+    "file": "assets/IncidentsPage-BfA2RSg8.js",
     "name": "IncidentsPage",
     "src": "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_models-Boy7LBSR.js",
-      "_safe-node-Db1vMVOA.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_models-rEiAm_h5.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/jobs/JobDashboardPage.tsx": {
-    "file": "assets/JobDashboardPage-D8G2OrOj.js",
+    "file": "assets/JobDashboardPage-C0QJXSVb.js",
     "name": "JobDashboardPage",
     "src": "../../packages/portal-mojo/src/admin/jobs/JobDashboardPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_KPITile-BxPlNdXK.js",
+      "_KPITile-CpQzEwfy.js",
       "_countryCentroids-CiPWDXva.js",
-      "_armed-button-D83OhpZz.js",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_queries-5PTq28O3.js",
-      "_DataView-CSqZWTKl.js",
-      "_RunnerDetail-BPINv989.js",
-      "_MetricsChart-BeDK3TDU.js",
-      "_MetricsMiniWidget-DvmteMPL.js",
-      "_MiniChart-BlWndme9.js",
-      "_safe-node-Db1vMVOA.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_KnownFieldsCard-CDW6Hulv.js",
-      "_DetailView-C_G0aXQh.js"
+      "_armed-button-CXV3_3gJ.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_queries-BvnOIyqC.js",
+      "_DataView-BE2ESFuT.js",
+      "_RunnerDetail-C8G2RRC1.js",
+      "_MetricsChart-BSzvjSE1.js",
+      "_MetricsMiniWidget-dbaP7OHl.js",
+      "_MiniChart-D_8WSy9c.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
+      "_DetailView-CW_8Ms3J.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/jobs/JobRunnersPage.tsx": {
-    "file": "assets/JobRunnersPage-DFA4KIps.js",
+    "file": "assets/JobRunnersPage-B9LB-vn3.js",
     "name": "JobRunnersPage",
     "src": "../../packages/portal-mojo/src/admin/jobs/JobRunnersPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_RunnerDetail-BPINv989.js",
-      "_queries-5PTq28O3.js",
-      "_safe-node-Db1vMVOA.js",
-      "_armed-button-D83OhpZz.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_KnownFieldsCard-CDW6Hulv.js",
-      "_DataView-CSqZWTKl.js",
-      "_DetailView-C_G0aXQh.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_RunnerDetail-C8G2RRC1.js",
+      "_queries-BvnOIyqC.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_armed-button-CXV3_3gJ.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
+      "_DataView-BE2ESFuT.js",
+      "_DetailView-CW_8Ms3J.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/jobs/JobsTablePage.tsx": {
-    "file": "assets/JobsTablePage-5BMiaEBl.js",
+    "file": "assets/JobsTablePage-DkrSwbgg.js",
     "name": "JobsTablePage",
     "src": "../../packages/portal-mojo/src/admin/jobs/JobsTablePage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_ui-DD6qsfH5.js",
-      "_armed-button-D83OhpZz.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_Timeline-dyeCxh-0.js",
-      "_DataView-CSqZWTKl.js",
-      "_DetailView-C_G0aXQh.js",
-      "_queries-5PTq28O3.js",
-      "_safe-node-Db1vMVOA.js"
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_ui-B8d3EtZn.js",
+      "_armed-button-CXV3_3gJ.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_Timeline-CHjah23T.js",
+      "_DataView-BE2ESFuT.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_queries-BvnOIyqC.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/jobs/ScheduledTasksPage.tsx": {
-    "file": "assets/ScheduledTasksPage-OqkBYt0Z.js",
+    "file": "assets/ScheduledTasksPage-C_cLXtXx.js",
     "name": "ScheduledTasksPage",
     "src": "../../packages/portal-mojo/src/admin/jobs/ScheduledTasksPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_DataView-CSqZWTKl.js",
-      "_DetailView-C_G0aXQh.js",
-      "_safe-node-Db1vMVOA.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_DataView-BE2ESFuT.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/messaging/EmailDomainsPage.tsx": {
-    "file": "assets/EmailDomainsPage-IFBDnTn2.js",
+    "file": "assets/EmailDomainsPage-D8I8TbUR.js",
     "name": "EmailDomainsPage",
     "src": "../../packages/portal-mojo/src/admin/messaging/EmailDomainsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_armed-button-D83OhpZz.js",
-      "_ui-DD6qsfH5.js",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_api-B3V03khI.js",
-      "_data-C-x3WES5.js",
-      "_FormWizard-XfQtW5E9.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_safe-node-Db1vMVOA.js",
-      "_Tabs-DVDt8foU.js"
+      "_armed-button-CXV3_3gJ.js",
+      "_ui-B8d3EtZn.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
+      "_api-B-Hkn5y_.js",
+      "_data-BGhO4yaN.js",
+      "_FormWizard-DYPmQAj1.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_Tabs-CiV6Lw7K.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/messaging/EmailTemplatesPage.tsx": {
-    "file": "assets/EmailTemplatesPage-CJ7FppTr.js",
+    "file": "assets/EmailTemplatesPage-B_EI0Ua3.js",
     "name": "EmailTemplatesPage",
     "src": "../../packages/portal-mojo/src/admin/messaging/EmailTemplatesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_Tabs-DVDt8foU.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_data-C-x3WES5.js",
-      "_SandboxedEmailPreview-TmrEzPep.js",
-      "_safe-node-Db1vMVOA.js"
+      "_field-registry-DsiLSjQz.js",
+      "_Tabs-CiV6Lw7K.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
+      "_data-BGhO4yaN.js",
+      "_SandboxedEmailPreview-CZz6qQs6.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/messaging/MailboxesPage.tsx": {
-    "file": "assets/MailboxesPage-6AUaMHFl.js",
+    "file": "assets/MailboxesPage-CRfsBPHS.js",
     "name": "MailboxesPage",
     "src": "../../packages/portal-mojo/src/admin/messaging/MailboxesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_api-B3V03khI.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_safe-node-Db1vMVOA.js"
+      "_ui-B8d3EtZn.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
+      "_api-B-Hkn5y_.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/messaging/PublicMessagesPage.tsx": {
-    "file": "assets/PublicMessagesPage-CFdQ8_mt.js",
+    "file": "assets/PublicMessagesPage-CgXyAICV.js",
     "name": "PublicMessagesPage",
     "src": "../../packages/portal-mojo/src/admin/messaging/PublicMessagesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_grouping-B2RKh4sF.js",
-      "_data-C-x3WES5.js",
-      "_safe-node-Db1vMVOA.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
+      "_grouping-DL5HYcBX.js",
+      "_data-BGhO4yaN.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/messaging/SentMessagesPage.tsx": {
-    "file": "assets/SentMessagesPage-Cl2aMzmV.js",
+    "file": "assets/SentMessagesPage-DsB5bOln.js",
     "name": "SentMessagesPage",
     "src": "../../packages/portal-mojo/src/admin/messaging/SentMessagesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_grouping-B2RKh4sF.js",
-      "_data-C-x3WES5.js",
-      "_SandboxedEmailPreview-TmrEzPep.js",
-      "_safe-node-Db1vMVOA.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
+      "_grouping-DL5HYcBX.js",
+      "_data-BGhO4yaN.js",
+      "_SandboxedEmailPreview-CZz6qQs6.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/messaging/push/PushPage.tsx": {
-    "file": "assets/PushPage-B4fwb-wG.js",
+    "file": "assets/PushPage-R0Zvj_y5.js",
     "name": "PushPage",
     "src": "../../packages/portal-mojo/src/admin/messaging/push/PushPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_MetricsChart-BeDK3TDU.js",
-      "_KPITile-BxPlNdXK.js",
+      "_MetricsChart-BSzvjSE1.js",
+      "_KPITile-CpQzEwfy.js",
       "_countryCentroids-CiPWDXva.js",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_Tabs-DVDt8foU.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_MiniChart-BlWndme9.js",
-      "_safe-node-Db1vMVOA.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_Tabs-CiV6Lw7K.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
+      "_MiniChart-D_8WSy9c.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/monitoring/LogsPage.tsx": {
-    "file": "assets/LogsPage-DirPuDGj.js",
+    "file": "assets/LogsPage-BPss61GB.js",
     "name": "LogsPage",
     "src": "../../packages/portal-mojo/src/admin/monitoring/LogsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_DataView-CSqZWTKl.js",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_grouping-B2RKh4sF.js",
-      "_DetailView-C_G0aXQh.js",
-      "_safe-node-Db1vMVOA.js"
+      "_DataView-BE2ESFuT.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_grouping-DL5HYcBX.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/monitoring/MetricsExplorerPage.tsx": {
-    "file": "assets/MetricsExplorerPage-jC9HDOsA.js",
+    "file": "assets/MetricsExplorerPage-DuB28pYM.js",
     "name": "MetricsExplorerPage",
     "src": "../../packages/portal-mojo/src/admin/monitoring/MetricsExplorerPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_MetricsChart-BeDK3TDU.js",
-      "_KPITile-BxPlNdXK.js",
+      "_MetricsChart-BSzvjSE1.js",
+      "_KPITile-CpQzEwfy.js",
       "_countryCentroids-CiPWDXva.js",
-      "_field-registry-BTrOoG8A.js",
-      "_MiniChart-BlWndme9.js"
+      "_field-registry-DsiLSjQz.js",
+      "_MiniChart-D_8WSy9c.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/monitoring/MetricsPermissionsPage.tsx": {
-    "file": "assets/MetricsPermissionsPage-fJrvZy31.js",
+    "file": "assets/MetricsPermissionsPage-6M8bbt27.js",
     "name": "MetricsPermissionsPage",
     "src": "../../packages/portal-mojo/src/admin/monitoring/MetricsPermissionsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js"
+      "_field-registry-DsiLSjQz.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/network/BlockedIPsPage.tsx": {
-    "file": "assets/BlockedIPsPage-BwAD9K0h.js",
+    "file": "assets/BlockedIPsPage-JWIvMisl.js",
     "name": "BlockedIPsPage",
     "src": "../../packages/portal-mojo/src/admin/network/BlockedIPsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
+      "_ui-B8d3EtZn.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
       "_countryCentroids-CiPWDXva.js",
-      "_GeoIpDossier-oahcjzho.js",
-      "_models-Boy7LBSR.js",
+      "_GeoIpDossier-CjbtlrHp.js",
+      "_models-rEiAm_h5.js",
       "../../packages/portal-mojo/src/admin/security/geoip/GeoIpCachePage.tsx",
-      "_armed-button-D83OhpZz.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_DetailView-C_G0aXQh.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_safe-node-Db1vMVOA.js",
-      "_KnownFieldsCard-CDW6Hulv.js",
-      "_use-world-land-2DEI402H.js"
+      "_armed-button-CXV3_3gJ.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
+      "_use-world-land-3jvqSvW2.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/network/FirewallLogPage.tsx": {
-    "file": "assets/FirewallLogPage-BCjtnFaH.js",
+    "file": "assets/FirewallLogPage-Da-HEA9z.js",
     "name": "FirewallLogPage",
     "src": "../../packages/portal-mojo/src/admin/network/FirewallLogPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_grouping-B2RKh4sF.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_grouping-DL5HYcBX.js",
       "../../packages/portal-mojo/src/admin/monitoring/LogsPage.tsx",
       "_countryCentroids-CiPWDXva.js",
-      "_models-D-COWECm.js",
-      "_safe-node-Db1vMVOA.js",
-      "_DataView-CSqZWTKl.js",
-      "_DetailView-C_G0aXQh.js"
+      "_models-DdOtR7yW.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_DataView-BE2ESFuT.js",
+      "_DetailView-CW_8Ms3J.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/network/IPSetsPage.tsx": {
-    "file": "assets/IPSetsPage-B80vr_Tq.js",
+    "file": "assets/IPSetsPage-CYJDybNU.js",
     "name": "IPSetsPage",
     "src": "../../packages/portal-mojo/src/admin/network/IPSetsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_models-D-COWECm.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_DetailView-C_G0aXQh.js",
-      "_IPSetEditor-wc45aMhA.js",
-      "_safe-node-Db1vMVOA.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_models-DdOtR7yW.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_IPSetEditor-DL0DrBVe.js",
+      "_safe-node-Cxmo4f_j.js",
       "_countryCentroids-CiPWDXva.js",
-      "_FormFields-DFvivYWD.js",
-      "_schema-form-core-4NwDqDQl.js"
+      "_FormFields-D7vvSra6.js",
+      "_schema-form-core-Bvosjf-w.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/network/geofence/GeofencingPage.tsx": {
-    "file": "assets/GeofencingPage-CDIEBSBv.js",
+    "file": "assets/GeofencingPage-DpKeB-KM.js",
     "name": "GeofencingPage",
     "src": "../../packages/portal-mojo/src/admin/network/geofence/GeofencingPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_models-D-COWECm.js",
-      "_field-registry-BTrOoG8A.js",
-      "_armed-button-D83OhpZz.js",
-      "_ui-DD6qsfH5.js",
-      "_BlocksTab-DYHd3da_.js",
+      "_models-DdOtR7yW.js",
+      "_field-registry-DsiLSjQz.js",
+      "_armed-button-CXV3_3gJ.js",
+      "_ui-B8d3EtZn.js",
+      "_BlocksTab-BIHO6x1b.js",
       "_countryCentroids-CiPWDXva.js",
-      "_FormFields-DFvivYWD.js",
-      "_models-Boy7LBSR.js",
+      "_FormFields-D7vvSra6.js",
+      "_models-rEiAm_h5.js",
       "../../packages/portal-mojo/src/admin/security/geoip/GeoIpCachePage.tsx",
-      "_ModelTable-6bPrcuS_.js",
-      "_safe-node-Db1vMVOA.js",
-      "_grouping-B2RKh4sF.js",
-      "_MetricsChart-BeDK3TDU.js",
-      "_MetricsMiniWidget-DvmteMPL.js",
-      "_MiniChart-BlWndme9.js",
+      "_ModelTable-D37l1xlL.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_grouping-DL5HYcBX.js",
+      "_MetricsChart-BSzvjSE1.js",
+      "_MetricsMiniWidget-dbaP7OHl.js",
+      "_MiniChart-D_8WSy9c.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
-      "_schema-form-core-4NwDqDQl.js",
-      "_GeoIpDossier-oahcjzho.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_KnownFieldsCard-CDW6Hulv.js",
-      "_DetailView-C_G0aXQh.js",
-      "_use-world-land-2DEI402H.js"
+      "_schema-form-core-Bvosjf-w.js",
+      "_GeoIpDossier-CjbtlrHp.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_use-world-land-3jvqSvW2.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/phonehub/PhoneHubPage.tsx": {
-    "file": "assets/PhoneHubPage-b2We8JHA.js",
+    "file": "assets/PhoneHubPage-DdoUD6JN.js",
     "name": "PhoneHubPage",
     "src": "../../packages/portal-mojo/src/admin/phonehub/PhoneHubPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_Tabs-DVDt8foU.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_safe-node-Db1vMVOA.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_Tabs-CiV6Lw7K.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/rules/RuleSetsPage.tsx": {
-    "file": "assets/RuleSetsPage-C8LeVHO5.js",
+    "file": "assets/RuleSetsPage-DvB5O7ev.js",
     "name": "RuleSetsPage",
     "src": "../../packages/portal-mojo/src/admin/rules/RuleSetsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_HandlerChainBuilder-BE0jQ_62.js",
-      "_FormFields-DFvivYWD.js",
-      "_DataView-CSqZWTKl.js",
-      "_DetailView-C_G0aXQh.js",
-      "_safe-node-Db1vMVOA.js",
-      "_schema-form-core-4NwDqDQl.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_HandlerChainBuilder-B7lJq3CV.js",
+      "_FormFields-D7vvSra6.js",
+      "_DataView-BE2ESFuT.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_schema-form-core-Bvosjf-w.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx": {
-    "file": "assets/LoginEventDetail-BV0RkIbx.js",
+    "file": "assets/LoginEventDetail-DmeojatY.js",
     "name": "LoginEventDetail",
     "src": "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_GeoIpDossier-oahcjzho.js",
-      "_safe-node-Db1vMVOA.js",
-      "_armed-button-D83OhpZz.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_KnownFieldsCard-CDW6Hulv.js",
-      "_FormFields-DFvivYWD.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_use-world-land-2DEI402H.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_GeoIpDossier-CjbtlrHp.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_armed-button-CXV3_3gJ.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
+      "_FormFields-D7vvSra6.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_use-world-land-3jvqSvW2.js",
       "_countryCentroids-CiPWDXva.js",
-      "_models-Boy7LBSR.js"
+      "_models-rEiAm_h5.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/security/devices/LoginLocationsPage.tsx": {
-    "file": "assets/LoginLocationsPage-BluX2CmJ.js",
+    "file": "assets/LoginLocationsPage-DLeh9Cwz.js",
     "name": "LoginLocationsPage",
     "src": "../../packages/portal-mojo/src/admin/security/devices/LoginLocationsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_grouping-B2RKh4sF.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_grouping-DL5HYcBX.js",
       "_countryCentroids-CiPWDXva.js",
-      "_LoginLocationMap-K52OdZOQ.js",
+      "_LoginLocationMap-xoytjz9e.js",
       "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx",
       "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx",
-      "_safe-node-Db1vMVOA.js",
-      "_use-world-land-2DEI402H.js",
-      "_DetailView-C_G0aXQh.js",
-      "_GeoIpDossier-oahcjzho.js",
-      "_armed-button-D83OhpZz.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_KnownFieldsCard-CDW6Hulv.js",
-      "_FormFields-DFvivYWD.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_models-Boy7LBSR.js",
-      "_Timeline-dyeCxh-0.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_use-world-land-3jvqSvW2.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_GeoIpDossier-CjbtlrHp.js",
+      "_armed-button-CXV3_3gJ.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
+      "_FormFields-D7vvSra6.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_models-rEiAm_h5.js",
+      "_Timeline-CHjah23T.js",
       "../../packages/portal-mojo/src/admin/bouncer/devices.tsx",
       "../../packages/portal-mojo/src/admin/bouncer/signals.tsx",
-      "_DataView-CSqZWTKl.js",
+      "_DataView-BE2ESFuT.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx"
     ]
   },
   "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx": {
-    "file": "assets/UserDeviceDetail-DgSKbfGr.js",
+    "file": "assets/UserDeviceDetail-Dnh_0wPE.js",
     "name": "UserDeviceDetail",
     "src": "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_Timeline-dyeCxh-0.js",
-      "_KnownFieldsCard-CDW6Hulv.js",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
+      "_Timeline-CHjah23T.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
       "../../packages/portal-mojo/src/admin/bouncer/devices.tsx",
-      "_GeoIpDossier-oahcjzho.js",
+      "_GeoIpDossier-CjbtlrHp.js",
       "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx",
-      "_models-Boy7LBSR.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_safe-node-Db1vMVOA.js",
-      "_ModelTable-6bPrcuS_.js",
+      "_models-rEiAm_h5.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_ModelTable-D37l1xlL.js",
       "../../packages/portal-mojo/src/admin/bouncer/signals.tsx",
-      "_DataView-CSqZWTKl.js",
-      "_grouping-B2RKh4sF.js",
+      "_DataView-BE2ESFuT.js",
+      "_grouping-DL5HYcBX.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
       "_countryCentroids-CiPWDXva.js",
-      "_armed-button-D83OhpZz.js",
-      "_FormFields-DFvivYWD.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_use-world-land-2DEI402H.js"
+      "_armed-button-CXV3_3gJ.js",
+      "_FormFields-D7vvSra6.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_use-world-land-3jvqSvW2.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/security/devices/UserDevicesPage.tsx": {
-    "file": "assets/UserDevicesPage-Oz8tr4ET.js",
+    "file": "assets/UserDevicesPage-BwEdfbEG.js",
     "name": "UserDevicesPage",
     "src": "../../packages/portal-mojo/src/admin/security/devices/UserDevicesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
       "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx",
-      "_safe-node-Db1vMVOA.js",
-      "_Timeline-dyeCxh-0.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_KnownFieldsCard-CDW6Hulv.js",
-      "_ui-DD6qsfH5.js",
-      "_DetailView-C_G0aXQh.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_Timeline-CHjah23T.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
+      "_ui-B8d3EtZn.js",
+      "_DetailView-CW_8Ms3J.js",
       "../../packages/portal-mojo/src/admin/bouncer/devices.tsx",
       "../../packages/portal-mojo/src/admin/bouncer/signals.tsx",
-      "_DataView-CSqZWTKl.js",
-      "_grouping-B2RKh4sF.js",
-      "_models-Boy7LBSR.js",
+      "_DataView-BE2ESFuT.js",
+      "_grouping-DL5HYcBX.js",
+      "_models-rEiAm_h5.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
       "_countryCentroids-CiPWDXva.js",
-      "_GeoIpDossier-oahcjzho.js",
-      "_armed-button-D83OhpZz.js",
-      "_FormFields-DFvivYWD.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_use-world-land-2DEI402H.js",
+      "_GeoIpDossier-CjbtlrHp.js",
+      "_armed-button-CXV3_3gJ.js",
+      "_FormFields-D7vvSra6.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_use-world-land-3jvqSvW2.js",
       "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx"
     ]
   },
   "../../packages/portal-mojo/src/admin/security/geoip/GeoIpCachePage.tsx": {
-    "file": "assets/GeoIpCachePage-2mWJVFHA.js",
+    "file": "assets/GeoIpCachePage-DMSxJb4A.js",
     "name": "GeoIpCachePage",
     "src": "../../packages/portal-mojo/src/admin/security/geoip/GeoIpCachePage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
+      "_ui-B8d3EtZn.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
       "_countryCentroids-CiPWDXva.js",
-      "_GeoIpDossier-oahcjzho.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_safe-node-Db1vMVOA.js",
-      "_armed-button-D83OhpZz.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_KnownFieldsCard-CDW6Hulv.js",
-      "_DetailView-C_G0aXQh.js",
-      "_use-world-land-2DEI402H.js",
-      "_models-Boy7LBSR.js"
+      "_GeoIpDossier-CjbtlrHp.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_armed-button-CXV3_3gJ.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_use-world-land-3jvqSvW2.js",
+      "_models-rEiAm_h5.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/security/tickets.tsx": {
-    "file": "assets/tickets-HrcdRJu0.js",
+    "file": "assets/tickets-ahM2TcEg.js",
     "name": "tickets",
     "src": "../../packages/portal-mojo/src/admin/security/tickets.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_api-D9ukgmt2.js",
-      "_ui-DD6qsfH5.js",
-      "_FormFields-DFvivYWD.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_launchers-DezqZMCE.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_safe-node-Db1vMVOA.js"
+      "_field-registry-DsiLSjQz.js",
+      "_api-DX3a2RJg.js",
+      "_ui-B8d3EtZn.js",
+      "_FormFields-D7vvSra6.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
+      "_launchers-BGD9P2QB.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/settings/SettingsPage.tsx": {
-    "file": "assets/SettingsPage-I63zzDqU.js",
+    "file": "assets/SettingsPage-dCrusxw1.js",
     "name": "SettingsPage",
     "src": "../../packages/portal-mojo/src/admin/settings/SettingsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_DetailView-C_G0aXQh.js",
-      "_DataView-CSqZWTKl.js",
-      "_safe-node-Db1vMVOA.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_DataView-BE2ESFuT.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/shortlinks/ShortlinkHistoryPage.tsx": {
-    "file": "assets/ShortlinkHistoryPage-a25FU4Vh.js",
+    "file": "assets/ShortlinkHistoryPage-Ce4S1TDt.js",
     "name": "ShortlinkHistoryPage",
     "src": "../../packages/portal-mojo/src/admin/shortlinks/ShortlinkHistoryPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_safe-node-Db1vMVOA.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/shortlinks/ShortlinksPage.tsx": {
-    "file": "assets/ShortlinksPage-BLSEw9EY.js",
+    "file": "assets/ShortlinksPage-wzpDhJxW.js",
     "name": "ShortlinksPage",
     "src": "../../packages/portal-mojo/src/admin/shortlinks/ShortlinksPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_DetailView-C_G0aXQh.js",
-      "_safe-node-Db1vMVOA.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/signin/SigninPage.tsx": {
-    "file": "assets/SigninPage-BRsdBOn3.js",
+    "file": "assets/SigninPage-BDmIQMAr.js",
     "name": "SigninPage",
     "src": "../../packages/portal-mojo/src/admin/signin/SigninPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_ui-DD6qsfH5.js"
+      "_field-registry-DsiLSjQz.js",
+      "_ui-B8d3EtZn.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/storage/BackendsPage.tsx": {
-    "file": "assets/BackendsPage-BwcZIxtu.js",
+    "file": "assets/BackendsPage-BB6eyMlX.js",
     "name": "BackendsPage",
     "src": "../../packages/portal-mojo/src/admin/storage/BackendsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_DetailView-C_G0aXQh.js",
-      "_FileView-BtHv6hIw.js",
-      "_models-DtjfUqb0.js",
-      "_safe-node-Db1vMVOA.js",
-      "_DataView-CSqZWTKl.js",
-      "_FormFields-DFvivYWD.js",
-      "_schema-form-core-4NwDqDQl.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ModelTable-D37l1xlL.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_FileView-joDf7Se6.js",
+      "_models-Cu-WAb5L.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_DataView-BE2ESFuT.js",
+      "_FormFields-D7vvSra6.js",
+      "_schema-form-core-Bvosjf-w.js",
       "_file-renditions-BBuFZJ24.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/storage/BucketsPage.tsx": {
-    "file": "assets/BucketsPage-B_ydhKFd.js",
+    "file": "assets/BucketsPage-DqWmKdDc.js",
     "name": "BucketsPage",
     "src": "../../packages/portal-mojo/src/admin/storage/BucketsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_armed-button-D83OhpZz.js",
-      "_FormFields-DFvivYWD.js",
-      "_DetailView-C_G0aXQh.js",
-      "_models-DtjfUqb0.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_safe-node-Db1vMVOA.js"
+      "_field-registry-DsiLSjQz.js",
+      "_armed-button-CXV3_3gJ.js",
+      "_FormFields-D7vvSra6.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_models-Cu-WAb5L.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/storage/FilesPage.tsx": {
-    "file": "assets/FilesPage-B4bjxiEn.js",
+    "file": "assets/FilesPage-semeROmR.js",
     "name": "FilesPage",
     "src": "../../packages/portal-mojo/src/admin/storage/FilesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_ui-DD6qsfH5.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_models-DtjfUqb0.js",
-      "_FileView-BtHv6hIw.js",
-      "_safe-node-Db1vMVOA.js",
-      "_DataView-CSqZWTKl.js",
-      "_FormFields-DFvivYWD.js",
-      "_schema-form-core-4NwDqDQl.js",
-      "_DetailView-C_G0aXQh.js",
+      "_field-registry-DsiLSjQz.js",
+      "_ui-B8d3EtZn.js",
+      "_ModelTable-D37l1xlL.js",
+      "_models-Cu-WAb5L.js",
+      "_FileView-joDf7Se6.js",
+      "_safe-node-Cxmo4f_j.js",
+      "_DataView-BE2ESFuT.js",
+      "_FormFields-D7vvSra6.js",
+      "_schema-form-core-Bvosjf-w.js",
+      "_DetailView-CW_8Ms3J.js",
       "_file-renditions-BBuFZJ24.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/storage/MediaRenderingPage.tsx": {
-    "file": "assets/MediaRenderingPage-tp_3z57m.js",
+    "file": "assets/MediaRenderingPage-BubKJ7Tb.js",
     "name": "MediaRenderingPage",
     "src": "../../packages/portal-mojo/src/admin/storage/MediaRenderingPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_Tabs-DVDt8foU.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_Tabs-CiV6Lw7K.js",
       "_file-renditions-BBuFZJ24.js"
     ]
   },
@@ -1234,349 +1234,349 @@
     "src": "../../packages/portal-mojo/src/charts/worldmap/world-land.ts",
     "isDynamicEntry": true
   },
-  "_BlocksTab-DYHd3da_.js": {
-    "file": "assets/BlocksTab-DYHd3da_.js",
+  "_BlocksTab-BIHO6x1b.js": {
+    "file": "assets/BlocksTab-BIHO6x1b.js",
     "name": "BlocksTab",
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_models-D-COWECm.js",
+      "_field-registry-DsiLSjQz.js",
+      "_models-DdOtR7yW.js",
       "_countryCentroids-CiPWDXva.js",
-      "_ui-DD6qsfH5.js",
-      "_ModelTable-6bPrcuS_.js",
-      "_grouping-B2RKh4sF.js",
-      "_MetricsChart-BeDK3TDU.js",
-      "_MetricsMiniWidget-DvmteMPL.js",
-      "_models-Boy7LBSR.js",
+      "_ui-B8d3EtZn.js",
+      "_ModelTable-D37l1xlL.js",
+      "_grouping-DL5HYcBX.js",
+      "_MetricsChart-BSzvjSE1.js",
+      "_MetricsMiniWidget-dbaP7OHl.js",
+      "_models-rEiAm_h5.js",
       "../../packages/portal-mojo/src/admin/security/geoip/GeoIpCachePage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx"
     ]
   },
-  "_CertificateRequestDialog-TA9w380U.js": {
-    "file": "assets/CertificateRequestDialog-TA9w380U.js",
+  "_CertificateRequestDialog-Bh-IL9yb.js": {
+    "file": "assets/CertificateRequestDialog-Bh-IL9yb.js",
     "name": "CertificateRequestDialog",
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_api-Dbfml4ce.js",
-      "_operator-destinations-B6pfzv0y.js"
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_api-lwME8N5e.js",
+      "_operator-destinations-CYKsUqbR.js"
     ]
   },
-  "_CloudWatchDashboardPage-Cjw7X8Zd.js": {
-    "file": "assets/CloudWatchDashboardPage-Cjw7X8Zd.js",
+  "_CloudWatchDashboardPage-BW6Eu-Fx.js": {
+    "file": "assets/CloudWatchDashboardPage-BW6Eu-Fx.js",
     "name": "CloudWatchDashboardPage",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_MetricsChart-BeDK3TDU.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_MetricsChart-BSzvjSE1.js",
       "_countryCentroids-CiPWDXva.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/cloudwatch/CloudWatchResourceDetail.tsx"
     ]
   },
-  "_DataView-CSqZWTKl.js": {
-    "file": "assets/DataView-CSqZWTKl.js",
+  "_DataView-BE2ESFuT.js": {
+    "file": "assets/DataView-BE2ESFuT.js",
     "name": "DataView",
     "imports": [
       "index.html",
-      "_safe-node-Db1vMVOA.js",
-      "_ui-DD6qsfH5.js"
+      "_safe-node-Cxmo4f_j.js",
+      "_ui-B8d3EtZn.js"
     ]
   },
-  "_DetailView-C_G0aXQh.js": {
-    "file": "assets/DetailView-C_G0aXQh.js",
+  "_DetailView-CW_8Ms3J.js": {
+    "file": "assets/DetailView-CW_8Ms3J.js",
     "name": "DetailView",
     "imports": [
       "index.html",
-      "_safe-node-Db1vMVOA.js"
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
-  "_DnsRecordsPanel-CcKB7CGw.js": {
-    "file": "assets/DnsRecordsPanel-CcKB7CGw.js",
+  "_DnsRecordsPanel-D213ERN2.js": {
+    "file": "assets/DnsRecordsPanel-D213ERN2.js",
     "name": "DnsRecordsPanel",
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_api-Dbfml4ce.js"
+      "_field-registry-DsiLSjQz.js",
+      "_api-lwME8N5e.js"
     ]
   },
-  "_FileView-BtHv6hIw.js": {
-    "file": "assets/FileView-BtHv6hIw.js",
+  "_FileView-joDf7Se6.js": {
+    "file": "assets/FileView-joDf7Se6.js",
     "name": "FileView",
     "imports": [
       "index.html",
-      "_DataView-CSqZWTKl.js",
-      "_ui-DD6qsfH5.js",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_models-DtjfUqb0.js",
+      "_DataView-BE2ESFuT.js",
+      "_ui-B8d3EtZn.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_models-Cu-WAb5L.js",
       "_file-renditions-BBuFZJ24.js"
     ]
   },
-  "_FormFields-DFvivYWD.js": {
-    "file": "assets/FormFields-DFvivYWD.js",
+  "_FormFields-D7vvSra6.js": {
+    "file": "assets/FormFields-D7vvSra6.js",
     "name": "FormFields",
     "imports": [
       "index.html",
-      "_schema-form-core-4NwDqDQl.js"
+      "_schema-form-core-Bvosjf-w.js"
     ]
   },
-  "_FormView-CdYtIxjH.js": {
-    "file": "assets/FormView-CdYtIxjH.js",
+  "_FormView-Neqj1Z1p.js": {
+    "file": "assets/FormView-Neqj1Z1p.js",
     "name": "FormView",
     "imports": [
       "index.html",
-      "_schema-form-core-4NwDqDQl.js",
-      "_Tabs-DVDt8foU.js",
-      "_field-registry-BTrOoG8A.js"
+      "_schema-form-core-Bvosjf-w.js",
+      "_Tabs-CiV6Lw7K.js",
+      "_field-registry-DsiLSjQz.js"
     ]
   },
-  "_FormWizard-XfQtW5E9.js": {
-    "file": "assets/FormWizard-XfQtW5E9.js",
+  "_FormWizard-DYPmQAj1.js": {
+    "file": "assets/FormWizard-DYPmQAj1.js",
     "name": "FormWizard",
     "imports": [
       "index.html",
-      "_schema-form-core-4NwDqDQl.js",
-      "_Tabs-DVDt8foU.js"
+      "_schema-form-core-Bvosjf-w.js",
+      "_Tabs-CiV6Lw7K.js"
     ]
   },
-  "_GeoIpDossier-oahcjzho.js": {
-    "file": "assets/GeoIpDossier-oahcjzho.js",
+  "_GeoIpDossier-CjbtlrHp.js": {
+    "file": "assets/GeoIpDossier-CjbtlrHp.js",
     "name": "GeoIpDossier",
     "imports": [
       "index.html",
-      "_armed-button-D83OhpZz.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_KnownFieldsCard-CDW6Hulv.js",
-      "_ui-DD6qsfH5.js",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_use-world-land-2DEI402H.js",
+      "_armed-button-CXV3_3gJ.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
+      "_ui-B8d3EtZn.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_use-world-land-3jvqSvW2.js",
       "_countryCentroids-CiPWDXva.js",
-      "_models-Boy7LBSR.js"
+      "_models-rEiAm_h5.js"
     ]
   },
-  "_HandlerChainBuilder-BE0jQ_62.js": {
-    "file": "assets/HandlerChainBuilder-BE0jQ_62.js",
+  "_HandlerChainBuilder-B7lJq3CV.js": {
+    "file": "assets/HandlerChainBuilder-B7lJq3CV.js",
     "name": "HandlerChainBuilder",
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js"
+      "_field-registry-DsiLSjQz.js"
     ]
   },
-  "_IPSetEditor-wc45aMhA.js": {
-    "file": "assets/IPSetEditor-wc45aMhA.js",
+  "_IPSetEditor-DL0DrBVe.js": {
+    "file": "assets/IPSetEditor-DL0DrBVe.js",
     "name": "IPSetEditor",
     "imports": [
       "index.html",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
       "_countryCentroids-CiPWDXva.js",
-      "_models-D-COWECm.js"
+      "_models-DdOtR7yW.js"
     ]
   },
-  "_KPITile-BxPlNdXK.js": {
-    "file": "assets/KPITile-BxPlNdXK.js",
+  "_KPITile-CpQzEwfy.js": {
+    "file": "assets/KPITile-CpQzEwfy.js",
     "name": "KPITile",
     "imports": [
       "index.html",
-      "_MiniChart-BlWndme9.js",
-      "_MetricsChart-BeDK3TDU.js"
+      "_MiniChart-D_8WSy9c.js",
+      "_MetricsChart-BSzvjSE1.js"
     ]
   },
-  "_KnownFieldsCard-CDW6Hulv.js": {
-    "file": "assets/KnownFieldsCard-CDW6Hulv.js",
+  "_KnownFieldsCard-DXHP2W3e.js": {
+    "file": "assets/KnownFieldsCard-DXHP2W3e.js",
     "name": "KnownFieldsCard",
     "imports": [
       "index.html",
-      "_safe-node-Db1vMVOA.js"
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
-  "_LoginLocationMap-K52OdZOQ.js": {
-    "file": "assets/LoginLocationMap-K52OdZOQ.js",
+  "_LoginLocationMap-xoytjz9e.js": {
+    "file": "assets/LoginLocationMap-xoytjz9e.js",
     "name": "LoginLocationMap",
     "imports": [
       "index.html",
-      "_use-world-land-2DEI402H.js",
+      "_use-world-land-3jvqSvW2.js",
       "_countryCentroids-CiPWDXva.js",
-      "_field-registry-BTrOoG8A.js"
+      "_field-registry-DsiLSjQz.js"
     ]
   },
-  "_MemberDetail-C89jhh0X.js": {
-    "file": "assets/MemberDetail-C89jhh0X.js",
+  "_MemberDetail-7iCILPnC.js": {
+    "file": "assets/MemberDetail-7iCILPnC.js",
     "name": "MemberDetail",
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_FormFields-DFvivYWD.js",
-      "_guardrail-AgMSCjuv.js",
-      "_DataView-CSqZWTKl.js",
-      "_ui-DD6qsfH5.js",
-      "_FormView-CdYtIxjH.js",
-      "_DetailView-C_G0aXQh.js",
-      "_ModelTable-6bPrcuS_.js",
+      "_field-registry-DsiLSjQz.js",
+      "_FormFields-D7vvSra6.js",
+      "_guardrail-Bjb3Kd1u.js",
+      "_DataView-BE2ESFuT.js",
+      "_ui-B8d3EtZn.js",
+      "_FormView-Neqj1Z1p.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_ModelTable-D37l1xlL.js",
       "_countryCentroids-CiPWDXva.js"
     ]
   },
-  "_MetricsChart-BeDK3TDU.js": {
-    "file": "assets/MetricsChart-BeDK3TDU.js",
+  "_MetricsChart-BSzvjSE1.js": {
+    "file": "assets/MetricsChart-BSzvjSE1.js",
     "name": "MetricsChart",
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js"
+      "_field-registry-DsiLSjQz.js"
     ]
   },
-  "_MetricsMiniWidget-DvmteMPL.js": {
-    "file": "assets/MetricsMiniWidget-DvmteMPL.js",
+  "_MetricsMiniWidget-dbaP7OHl.js": {
+    "file": "assets/MetricsMiniWidget-dbaP7OHl.js",
     "name": "MetricsMiniWidget",
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_MetricsChart-BeDK3TDU.js",
-      "_MiniChart-BlWndme9.js"
+      "_field-registry-DsiLSjQz.js",
+      "_MetricsChart-BSzvjSE1.js",
+      "_MiniChart-D_8WSy9c.js"
     ]
   },
-  "_MiniChart-BlWndme9.js": {
-    "file": "assets/MiniChart-BlWndme9.js",
+  "_MiniChart-D_8WSy9c.js": {
+    "file": "assets/MiniChart-D_8WSy9c.js",
     "name": "MiniChart",
     "imports": [
       "index.html",
-      "_MetricsChart-BeDK3TDU.js"
+      "_MetricsChart-BSzvjSE1.js"
     ]
   },
-  "_ModelTable-6bPrcuS_.js": {
-    "file": "assets/ModelTable-6bPrcuS_.js",
+  "_ModelTable-D37l1xlL.js": {
+    "file": "assets/ModelTable-D37l1xlL.js",
     "name": "ModelTable",
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_safe-node-Db1vMVOA.js"
+      "_field-registry-DsiLSjQz.js",
+      "_safe-node-Cxmo4f_j.js"
     ]
   },
-  "_NotificationPreferences-DMilyOsk.js": {
-    "file": "assets/NotificationPreferences-DMilyOsk.js",
+  "_NotificationPreferences-B5IGmAb_.js": {
+    "file": "assets/NotificationPreferences-B5IGmAb_.js",
     "name": "NotificationPreferences",
     "imports": [
       "index.html",
-      "_ui-DD6qsfH5.js",
-      "_FormFields-DFvivYWD.js",
-      "_field-registry-BTrOoG8A.js",
-      "_secret-dialog-Bc9dltd9.js",
-      "_DetailView-C_G0aXQh.js"
+      "_ui-B8d3EtZn.js",
+      "_FormFields-D7vvSra6.js",
+      "_field-registry-DsiLSjQz.js",
+      "_secret-dialog-N1ylf0Yo.js",
+      "_DetailView-CW_8Ms3J.js"
     ]
   },
-  "_RunnerDetail-BPINv989.js": {
-    "file": "assets/RunnerDetail-BPINv989.js",
+  "_RunnerDetail-C8G2RRC1.js": {
+    "file": "assets/RunnerDetail-C8G2RRC1.js",
     "name": "RunnerDetail",
     "imports": [
       "index.html",
-      "_armed-button-D83OhpZz.js",
-      "_StatusPanel-C8ElbF73.js",
-      "_KnownFieldsCard-CDW6Hulv.js",
-      "_DataView-CSqZWTKl.js",
-      "_ui-DD6qsfH5.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js",
-      "_queries-5PTq28O3.js"
+      "_armed-button-CXV3_3gJ.js",
+      "_StatusPanel-Dq6976vw.js",
+      "_KnownFieldsCard-DXHP2W3e.js",
+      "_DataView-BE2ESFuT.js",
+      "_ui-B8d3EtZn.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js",
+      "_queries-BvnOIyqC.js"
     ]
   },
-  "_SandboxedEmailPreview-TmrEzPep.js": {
-    "file": "assets/SandboxedEmailPreview-TmrEzPep.js",
+  "_SandboxedEmailPreview-CZz6qQs6.js": {
+    "file": "assets/SandboxedEmailPreview-CZz6qQs6.js",
     "name": "SandboxedEmailPreview",
     "imports": [
       "index.html"
     ]
   },
-  "_StatusPanel-C8ElbF73.js": {
-    "file": "assets/StatusPanel-C8ElbF73.js",
+  "_StatusPanel-Dq6976vw.js": {
+    "file": "assets/StatusPanel-Dq6976vw.js",
     "name": "StatusPanel",
     "imports": [
       "index.html"
     ]
   },
-  "_Tabs-DVDt8foU.js": {
-    "file": "assets/Tabs-DVDt8foU.js",
+  "_Tabs-CiV6Lw7K.js": {
+    "file": "assets/Tabs-CiV6Lw7K.js",
     "name": "Tabs",
     "imports": [
       "index.html"
     ]
   },
-  "_Timeline-dyeCxh-0.js": {
-    "file": "assets/Timeline-dyeCxh-0.js",
+  "_Timeline-CHjah23T.js": {
+    "file": "assets/Timeline-CHjah23T.js",
     "name": "Timeline",
     "imports": [
       "index.html",
-      "_StatusPanel-C8ElbF73.js"
+      "_StatusPanel-Dq6976vw.js"
     ]
   },
-  "_UserDetail-BNSPMsVk.js": {
-    "file": "assets/UserDetail-BNSPMsVk.js",
+  "_UserDetail-Cpy8jV_t.js": {
+    "file": "assets/UserDetail-Cpy8jV_t.js",
     "name": "UserDetail",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js",
-      "_FormView-CdYtIxjH.js",
-      "_DetailView-C_G0aXQh.js",
+      "_field-registry-DsiLSjQz.js",
+      "_FormView-Neqj1Z1p.js",
+      "_DetailView-CW_8Ms3J.js",
       "_countryCentroids-CiPWDXva.js",
-      "_secret-dialog-Bc9dltd9.js",
-      "_password-Brt8v47w.js",
-      "_FormFields-DFvivYWD.js",
-      "_NotificationPreferences-DMilyOsk.js",
-      "_ui-DD6qsfH5.js",
-      "_models-Boy7LBSR.js",
+      "_secret-dialog-N1ylf0Yo.js",
+      "_password-I87AeIlg.js",
+      "_FormFields-D7vvSra6.js",
+      "_NotificationPreferences-B5IGmAb_.js",
+      "_ui-B8d3EtZn.js",
+      "_models-rEiAm_h5.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
       "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx",
-      "_LoginLocationMap-K52OdZOQ.js",
+      "_LoginLocationMap-xoytjz9e.js",
       "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx",
-      "_DataView-CSqZWTKl.js",
-      "_guardrail-AgMSCjuv.js",
-      "_Timeline-dyeCxh-0.js",
-      "_armed-button-D83OhpZz.js"
+      "_DataView-BE2ESFuT.js",
+      "_guardrail-Bjb3Kd1u.js",
+      "_Timeline-CHjah23T.js",
+      "_armed-button-CXV3_3gJ.js"
     ]
   },
-  "_api-B3V03khI.js": {
-    "file": "assets/api-B3V03khI.js",
+  "_api-B-Hkn5y_.js": {
+    "file": "assets/api-B-Hkn5y_.js",
     "name": "api",
     "imports": [
       "index.html"
     ]
   },
-  "_api-D9ukgmt2.js": {
-    "file": "assets/api-D9ukgmt2.js",
+  "_api-DX3a2RJg.js": {
+    "file": "assets/api-DX3a2RJg.js",
     "name": "api",
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js"
+      "_field-registry-DsiLSjQz.js"
     ]
   },
-  "_api-Dbfml4ce.js": {
-    "file": "assets/api-Dbfml4ce.js",
+  "_api-FWA6ZAo8.js": {
+    "file": "assets/api-FWA6ZAo8.js",
+    "name": "api",
+    "imports": [
+      "index.html",
+      "_models-B-EmlVYS.js"
+    ]
+  },
+  "_api-lwME8N5e.js": {
+    "file": "assets/api-lwME8N5e.js",
     "name": "api",
     "isDynamicEntry": true,
     "imports": [
       "index.html"
     ]
   },
-  "_api-z4_XXSuH.js": {
-    "file": "assets/api-z4_XXSuH.js",
-    "name": "api",
-    "imports": [
-      "index.html",
-      "_models-A36AmewM.js"
-    ]
-  },
-  "_armed-button-D83OhpZz.js": {
-    "file": "assets/armed-button-D83OhpZz.js",
+  "_armed-button-CXV3_3gJ.js": {
+    "file": "assets/armed-button-CXV3_3gJ.js",
     "name": "armed-button",
     "imports": [
       "index.html"
@@ -1586,19 +1586,19 @@
     "file": "assets/countryCentroids-CiPWDXva.js",
     "name": "countryCentroids"
   },
-  "_data-Bl3FzE6B.js": {
-    "file": "assets/data-Bl3FzE6B.js",
-    "name": "data"
-  },
-  "_data-C-x3WES5.js": {
-    "file": "assets/data-C-x3WES5.js",
+  "_data-BGhO4yaN.js": {
+    "file": "assets/data-BGhO4yaN.js",
     "name": "data",
     "imports": [
       "index.html"
     ]
   },
-  "_field-registry-BTrOoG8A.js": {
-    "file": "assets/field-registry-BTrOoG8A.js",
+  "_data-Bl3FzE6B.js": {
+    "file": "assets/data-Bl3FzE6B.js",
+    "name": "data"
+  },
+  "_field-registry-DsiLSjQz.js": {
+    "file": "assets/field-registry-DsiLSjQz.js",
     "name": "field-registry",
     "imports": [
       "index.html"
@@ -1608,145 +1608,145 @@
     "file": "assets/file-renditions-BBuFZJ24.js",
     "name": "file-renditions"
   },
-  "_forensics-DQ70X-Kc.js": {
-    "file": "assets/forensics-DQ70X-Kc.js",
+  "_forensics-CgJqxwv6.js": {
+    "file": "assets/forensics-CgJqxwv6.js",
     "name": "forensics",
     "imports": [
       "index.html",
-      "_KnownFieldsCard-CDW6Hulv.js",
-      "_field-registry-BTrOoG8A.js",
-      "_DetailView-C_G0aXQh.js"
+      "_KnownFieldsCard-DXHP2W3e.js",
+      "_field-registry-DsiLSjQz.js",
+      "_DetailView-CW_8Ms3J.js"
     ]
   },
-  "_grouping-B2RKh4sF.js": {
-    "file": "assets/grouping-B2RKh4sF.js",
+  "_grouping-DL5HYcBX.js": {
+    "file": "assets/grouping-DL5HYcBX.js",
     "name": "grouping",
     "imports": [
       "index.html"
     ]
   },
-  "_guardrail-AgMSCjuv.js": {
-    "file": "assets/guardrail-AgMSCjuv.js",
+  "_guardrail-Bjb3Kd1u.js": {
+    "file": "assets/guardrail-Bjb3Kd1u.js",
     "name": "guardrail",
     "imports": [
       "index.html"
     ]
   },
-  "_launchers-DezqZMCE.js": {
-    "file": "assets/launchers-DezqZMCE.js",
+  "_launchers-BGD9P2QB.js": {
+    "file": "assets/launchers-BGD9P2QB.js",
     "name": "launchers",
     "imports": [
       "index.html",
-      "_api-D9ukgmt2.js"
+      "_api-DX3a2RJg.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/assistant/AssistantPanel.tsx"
     ]
   },
-  "_models-A36AmewM.js": {
-    "file": "assets/models-A36AmewM.js",
+  "_models-B-EmlVYS.js": {
+    "file": "assets/models-B-EmlVYS.js",
     "name": "models",
     "imports": [
       "index.html"
     ]
   },
-  "_models-Boy7LBSR.js": {
-    "file": "assets/models-Boy7LBSR.js",
+  "_models-Cu-WAb5L.js": {
+    "file": "assets/models-Cu-WAb5L.js",
     "name": "models",
     "imports": [
-      "index.html",
-      "_field-registry-BTrOoG8A.js"
-    ],
-    "dynamicImports": [
-      "../../packages/portal-mojo/src/admin/incidents/IncidentDetail.tsx",
-      "../../packages/portal-mojo/src/admin/incidents/EventDetail.tsx"
+      "index.html"
     ]
   },
-  "_models-D-COWECm.js": {
-    "file": "assets/models-D-COWECm.js",
+  "_models-DdOtR7yW.js": {
+    "file": "assets/models-DdOtR7yW.js",
     "name": "models",
     "imports": [
       "index.html",
       "_countryCentroids-CiPWDXva.js"
     ]
   },
-  "_models-DtjfUqb0.js": {
-    "file": "assets/models-DtjfUqb0.js",
+  "_models-rEiAm_h5.js": {
+    "file": "assets/models-rEiAm_h5.js",
     "name": "models",
     "imports": [
-      "index.html"
+      "index.html",
+      "_field-registry-DsiLSjQz.js"
+    ],
+    "dynamicImports": [
+      "../../packages/portal-mojo/src/admin/incidents/IncidentDetail.tsx",
+      "../../packages/portal-mojo/src/admin/incidents/EventDetail.tsx"
     ]
   },
-  "_operator-destinations-B6pfzv0y.js": {
-    "file": "assets/operator-destinations-B6pfzv0y.js",
+  "_operator-destinations-CYKsUqbR.js": {
+    "file": "assets/operator-destinations-CYKsUqbR.js",
     "name": "operator-destinations",
     "imports": [
       "index.html",
-      "_shared-validation-data-CVTMCxvH.js"
+      "_shared-validation-data-CgeqBJNf.js"
     ]
   },
-  "_password-Brt8v47w.js": {
-    "file": "assets/password-Brt8v47w.js",
+  "_password-I87AeIlg.js": {
+    "file": "assets/password-I87AeIlg.js",
     "name": "password",
     "imports": [
       "index.html"
     ]
   },
-  "_queries-5PTq28O3.js": {
-    "file": "assets/queries-5PTq28O3.js",
+  "_queries-BvnOIyqC.js": {
+    "file": "assets/queries-BvnOIyqC.js",
     "name": "queries",
     "imports": [
       "index.html"
     ]
   },
-  "_safe-node-Db1vMVOA.js": {
-    "file": "assets/safe-node-Db1vMVOA.js",
+  "_safe-node-Cxmo4f_j.js": {
+    "file": "assets/safe-node-Cxmo4f_j.js",
     "name": "safe-node",
     "imports": [
       "index.html"
     ]
   },
-  "_schema-form-core-4NwDqDQl.js": {
-    "file": "assets/schema-form-core-4NwDqDQl.js",
+  "_schema-form-core-Bvosjf-w.js": {
+    "file": "assets/schema-form-core-Bvosjf-w.js",
     "name": "schema-form-core",
     "imports": [
       "index.html",
-      "_field-registry-BTrOoG8A.js"
+      "_field-registry-DsiLSjQz.js"
     ]
   },
-  "_secret-dialog-Bc9dltd9.js": {
-    "file": "assets/secret-dialog-Bc9dltd9.js",
+  "_secret-dialog-N1ylf0Yo.js": {
+    "file": "assets/secret-dialog-N1ylf0Yo.js",
     "name": "secret-dialog",
     "imports": [
       "index.html"
     ]
   },
-  "_shared-validation-data-CVTMCxvH.js": {
-    "file": "assets/shared-validation-data-CVTMCxvH.js",
+  "_shared-validation-data-CgeqBJNf.js": {
+    "file": "assets/shared-validation-data-CgeqBJNf.js",
     "name": "shared-validation-data",
     "imports": [
       "index.html"
     ]
   },
-  "_streaming-BseepYh-.js": {
-    "file": "assets/streaming-BseepYh-.js",
+  "_streaming-DPWWE37_.js": {
+    "file": "assets/streaming-DPWWE37_.js",
     "name": "streaming",
     "imports": [
       "index.html",
-      "_api-D9ukgmt2.js",
-      "_field-registry-BTrOoG8A.js",
-      "_models-DtjfUqb0.js"
+      "_api-DX3a2RJg.js",
+      "_field-registry-DsiLSjQz.js",
+      "_models-Cu-WAb5L.js"
     ]
   },
-  "_ui-DD6qsfH5.js": {
-    "file": "assets/ui-DD6qsfH5.js",
+  "_ui-B8d3EtZn.js": {
+    "file": "assets/ui-B8d3EtZn.js",
     "name": "ui",
     "imports": [
       "index.html"
     ]
   },
-  "_use-world-land-2DEI402H.js": {
-    "file": "assets/use-world-land-2DEI402H.js",
+  "_use-world-land-3jvqSvW2.js": {
+    "file": "assets/use-world-land-3jvqSvW2.js",
     "name": "use-world-land",
     "imports": [
       "index.html",
@@ -1757,17 +1757,17 @@
     ]
   },
   "index.html": {
-    "file": "assets/index-DFfru2JD.js",
+    "file": "assets/index-ndxMRvk3.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
     "dynamicImports": [
-      "_api-Dbfml4ce.js",
+      "_api-lwME8N5e.js",
       "../../packages/portal-mojo/src/admin/dashboard/AdminDashboardPage.tsx",
       "../../packages/portal-mojo/src/admin/monitoring/LogsPage.tsx",
       "../../packages/portal-mojo/src/admin/monitoring/MetricsExplorerPage.tsx",
       "../../packages/portal-mojo/src/admin/monitoring/MetricsPermissionsPage.tsx",
-      "_CloudWatchDashboardPage-Cjw7X8Zd.js",
+      "_CloudWatchDashboardPage-BW6Eu-Fx.js",
       "../../packages/portal-mojo/src/admin/identity/users/UsersPage.tsx",
       "../../packages/portal-mojo/src/admin/identity/members/MembersPage.tsx",
       "../../packages/portal-mojo/src/admin/credentials/group-api-keys.tsx",
@@ -1823,6 +1823,7 @@
       "../../packages/portal-mojo/src/admin/assistant/pages.tsx",
       "../../packages/portal-mojo/src/admin/assistant/AssistantPanel.tsx",
       "../../packages/portal-mojo/src/account/index.ts",
+      "src/pages/auth/MfaPanel.tsx",
       "src/pages/auth/LoginPage.tsx",
       "src/pages/auth/ForgotPage.tsx",
       "src/pages/auth/ResetPage.tsx",
@@ -1837,7 +1838,7 @@
     ]
   },
   "src/pages/auth/ForgotPage.tsx": {
-    "file": "assets/ForgotPage-MTBgHPbZ.js",
+    "file": "assets/ForgotPage-D6nmivX_.js",
     "name": "ForgotPage",
     "src": "src/pages/auth/ForgotPage.tsx",
     "isDynamicEntry": true,
@@ -1846,16 +1847,17 @@
     ]
   },
   "src/pages/auth/LoginPage.tsx": {
-    "file": "assets/LoginPage-BbX3V3Ko.js",
+    "file": "assets/LoginPage-DDEbTCnR.js",
     "name": "LoginPage",
     "src": "src/pages/auth/LoginPage.tsx",
     "isDynamicEntry": true,
     "imports": [
-      "index.html"
+      "index.html",
+      "src/pages/auth/MfaPanel.tsx"
     ]
   },
   "src/pages/auth/MagicPage.tsx": {
-    "file": "assets/MagicPage-CmzinylA.js",
+    "file": "assets/MagicPage-n5K9Be2e.js",
     "name": "MagicPage",
     "src": "src/pages/auth/MagicPage.tsx",
     "isDynamicEntry": true,
@@ -1863,14 +1865,23 @@
       "index.html"
     ]
   },
+  "src/pages/auth/MfaPanel.tsx": {
+    "file": "assets/MfaPanel-BNL_usId.js",
+    "name": "MfaPanel",
+    "src": "src/pages/auth/MfaPanel.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "index.html"
+    ]
+  },
   "src/pages/auth/ResetPage.tsx": {
-    "file": "assets/ResetPage-j6PuCpr_.js",
+    "file": "assets/ResetPage-fWofMjcI.js",
     "name": "ResetPage",
     "src": "src/pages/auth/ResetPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_password-Brt8v47w.js"
+      "_password-I87AeIlg.js"
     ]
   }
 }
