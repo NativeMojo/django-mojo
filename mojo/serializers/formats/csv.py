@@ -3,7 +3,7 @@ import io
 from decimal import Decimal
 from datetime import datetime, date
 from django.http import StreamingHttpResponse, HttpResponse
-from django.db.models import QuerySet
+from django.db.models import Model, QuerySet
 from mojo.helpers import logit
 
 logger = logit.get_logger("csv_formatter", "csv_formatter.log")
@@ -382,8 +382,8 @@ class CsvFormatter:
         if value is None:
             return ""
 
-        # Handle model instances
-        if hasattr(value, 'pk'):
+        # Handle model instances (an objict answers hasattr(value, 'pk'))
+        if isinstance(value, Model):
             return str(value.pk)
 
         # Handle datetime objects

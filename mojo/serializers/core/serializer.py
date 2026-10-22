@@ -468,12 +468,9 @@ class OptimizedGraphSerializer:
         elif isinstance(value, datetime.date):
             return value.isoformat()
 
-        # Handle foreign key relationships
-        if field and isinstance(field, (ForeignKey, OneToOneField)) and hasattr(value, 'pk'):
-            return value.pk
-
-        # Handle model instances
-        elif hasattr(value, 'pk') and hasattr(value, '_meta'):
+        # Handle foreign keys and model instances. isinstance, not
+        # hasattr: an objict answers every attribute (pk reads as None).
+        if isinstance(value, Model):
             return value.pk
 
         # Handle basic types (most common)
