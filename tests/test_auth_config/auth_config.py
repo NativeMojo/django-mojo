@@ -22,7 +22,10 @@ AC_PARENT_UUID = 'ac99234567890abcdef01234567890ab'
 AC_ADMIN_USER = 'ac_admin'
 AC_ADMIN_PWORD = 'ac##admin99'
 
-ALL_LOGIN_METHODS = ["password", "sms", "passkey", "magic", "google", "apple", "github"]
+# The methods a site gets with nothing configured. Microsoft is a valid
+# method but stays off until an admin switches it on (#9105).
+DEFAULT_LOGIN_METHODS = ["password", "sms", "passkey", "magic", "google", "apple", "github"]
+DEFAULT_REGISTRATION_METHODS = ["password", "google", "apple", "github"]
 
 
 @th.django_unit_setup()
@@ -76,8 +79,13 @@ def test_resolve_defaults(opts):
               f"default passkey_prompt must be 'off', got {cfg.registration.passkey_prompt!r}")
     assert cfg.registration.enabled is True, \
         "registration must be enabled by default"
-    assert_eq(sorted(cfg.login.methods), sorted(ALL_LOGIN_METHODS),
-              f"default login.methods must be every LOGIN_METHODS token, got {cfg.login.methods}")
+    assert_eq(sorted(cfg.login.methods), sorted(DEFAULT_LOGIN_METHODS),
+              f"default login.methods must be the DEFAULT_LOGIN_METHODS list, got {cfg.login.methods}")
+    assert_eq(sorted(cfg.registration.methods), sorted(DEFAULT_REGISTRATION_METHODS),
+              f"default registration.methods must be the DEFAULT_REGISTRATION_METHODS list, "
+              f"got {cfg.registration.methods}")
+    assert "microsoft" not in cfg.login.methods, \
+        "microsoft must not be on by default (a site switches it on in Sign-in settings)"
     assert_eq(cfg.theme.layout, "minimal",
               f"the framework default must be the quiet minimal layout, got {cfg.theme.layout!r}")
     assert_eq(cfg.theme.appearance, "system",
@@ -185,6 +193,21 @@ def test_validate_css_external_url(opts):
         assert False, "validator must reject custom_css that loads external resources"
     except merrors.ValueException:
         pass
+
+
+@th.django_unit_test("validate_auth_config accepts microsoft as a login and registration method")
+def test_validate_microsoft_method(opts):
+    from mojo.apps.account.services import auth_config as ac
+    assert "microsoft" in ac.LOGIN_METHODS, "microsoft must be a toggleable login method"
+    assert "microsoft" in ac.REGISTRATION_METHODS, "microsoft must be a toggleable registration method"
+    assert "microsoft" not in ac.DEFAULT_LOGIN_METHODS, "microsoft must not be a default login method"
+    assert "microsoft" not in ac.DEFAULT_REGISTRATION_METHODS, \
+        "microsoft must not be a default registration method"
+    # Must not raise.
+    ac.validate_auth_config({
+        "login": {"methods": ["password", "microsoft"]},
+        "registration": {"methods": ["password", "microsoft"]},
+    })
 
 
 @th.django_unit_test("validate_auth_config accepts a fully valid config")
@@ -327,8 +350,8 @@ def test_public_config_endpoint_default(opts):
     assert_eq(resp.status_code, 200,
               f"config endpoint must return 200 with no group, got {resp.status_code}")
     data = resp.response.data
-    assert_eq(sorted(data.login.methods), sorted(ALL_LOGIN_METHODS),
-              f"default config must offer all login methods, got {data.login.methods}")
+    assert_eq(sorted(data.login.methods), sorted(DEFAULT_LOGIN_METHODS),
+              f"default config must offer the default login methods, got {data.login.methods}")
 
 
 # ---------------------------------------------------------------------------

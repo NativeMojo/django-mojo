@@ -7,7 +7,11 @@ credential Setting rows.
 from testit import helpers as th
 
 KEYS = ("APPLE_TEAM_ID", "APPLE_CLIENT_ID", "APPLE_KEY_ID", "APPLE_PRIVATE_KEY",
-        "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET")
+        "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
+        "MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET", "MICROSOFT_TENANT",
+        "MICROSOFT_CLIENT_SECRET_EXPIRES")
+MS_GROUP_UUID = "msg1234567890abcdef01234567890ab"
+MS_CLIENT_ID = "6731de76-14a6-49ae-97bc-6eba6914391e"
 PEM = "-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMGByqGSM49\nAgEGCCqGSM49AwEHBHkwdwIB\n-----END PRIVATE KEY-----"
 
 
@@ -147,4 +151,94 @@ def test_signin_refusals(opts):
         assert resp.status_code == 400, f"a foreign key was accepted for Apple: {resp.response!r}"
     finally:
         opts.client.logout()
+        _reset()
+
+
+def _notices(provider):
+    return [(n["tone"], n["text"]) for n in provider.get("notices", [])]
+
+
+@th.django_unit_test("a manage_settings admin configures Microsoft sign-in: write-only secret, validation, expiry notices, on/off")
+def test_signin_microsoft_rest(opts):
+    import datetime
+    from mojo.apps.account.models import Group
+    from mojo.helpers.settings import settings
+    Group.objects.filter(uuid=MS_GROUP_UUID).delete()
+    # A group with no auth_config of its own inherits the system methods.
+    group = Group.objects.create(name="test-signin-ms", uuid=MS_GROUP_UUID, is_active=True)
+    try:
+        assert opts.client.login("signin-admin@test.com", "example"), "admin login failed"
+        resp = opts.client.get("/api/account/admin/signin")
+        assert resp.status_code == 200, f"GET signin failed: {resp.response!r}"
+        data = resp.response.data
+        ms = _provider(data, "microsoft")
+        assert ms["label"] == "Microsoft", f"card label: {ms['label']!r}"
+        assert ms["enabled"] is False, "Microsoft must start switched off"
+        assert ms["ready"] is False and "Client secret value" in ms["missing"], \
+            f"Microsoft without a secret must need setup: {ms!r}"
+        assert "Tenant" not in ms["missing"], "an empty tenant reads as common and is not missing"
+        assert "Secret expires on (YYYY-MM-DD)" not in ms["missing"], "the expiry date is optional"
+        assert ms["callback_url"] and ms["callback_url"].endswith(
+            "/api/auth/oauth/microsoft/callback"), f"bad callback URL: {ms!r}"
+        assert ("info", "Record the secret's expiry date so this page can warn you") in _notices(ms), \
+            f"no expiry recorded must give the info notice: {ms.get('notices')!r}"
+        assert all(p.get("notices") == [] for p in data["providers"] if p["name"] != "microsoft"), \
+            "other providers must report notices: []"
+        assert "microsoft" in data["options"]["login_methods"], "microsoft must be an offered login method"
+
+        # Validation: client ID must be a GUID, tenant a word or a GUID, expiry an ISO date.
+        for values, why in (
+                ({"MICROSOFT_CLIENT_ID": "not-a-guid"}, "a client ID that is not a GUID"),
+                ({"MICROSOFT_TENANT": "contoso.com"}, "a tenant domain name"),
+                ({"MICROSOFT_CLIENT_SECRET_EXPIRES": "12/31/2027"}, "a non-ISO expiry date")):
+            resp = opts.client.post("/api/account/admin/signin",
+                                    json={"provider": "microsoft", "values": values})
+            assert resp.status_code == 400, f"{why} was accepted: {resp.status_code} {resp.response!r}"
+
+        soon = (datetime.date.today() + datetime.timedelta(days=10)).isoformat()
+        resp = opts.client.post("/api/account/admin/signin", json={
+            "provider": "microsoft",
+            "values": {"MICROSOFT_CLIENT_ID": MS_CLIENT_ID.upper(),
+                       "MICROSOFT_CLIENT_SECRET": "ms~secret-value-9105",
+                       "MICROSOFT_TENANT": "Organizations",
+                       "MICROSOFT_CLIENT_SECRET_EXPIRES": soon},
+            "enabled": True,
+        })
+        assert resp.status_code == 200, f"saving Microsoft failed: {resp.response!r}"
+        ms = _provider(resp.response.data, "microsoft")
+        assert ms["ready"] is True and ms["enabled"] is True, f"Microsoft not ready+enabled: {ms!r}"
+        secret = next(f for f in ms["fields"] if f["key"] == "MICROSOFT_CLIENT_SECRET")
+        assert secret["value"] is None and secret["hint"], f"the secret must be write-only with a hint: {secret!r}"
+        assert "ms~secret-value-9105" not in str(resp.response), "the secret appeared in the response"
+        assert settings.get("MICROSOFT_CLIENT_ID") == MS_CLIENT_ID, "the client ID must be stored lower-case"
+        assert settings.get("MICROSOFT_TENANT") == "organizations", "the tenant must be stored lower-case"
+        assert ("warning", f"Client secret expires on {soon}") in _notices(ms), \
+            f"an expiry under 30 days must warn: {ms.get('notices')!r}"
+
+        cfg = opts.client.get("/api/auth/config").response.data
+        assert "microsoft" in cfg["login"]["methods"] and "microsoft" in cfg["registration"]["methods"], \
+            f"enabling Microsoft did not reach the hosted config: {cfg!r}"
+        resp = opts.client.get(f"/api/auth/oauth/microsoft/begin?group_uuid={MS_GROUP_UUID}")
+        assert resp.status_code == 200, f"begin must work once enabled: {resp.status_code} {resp.response!r}"
+
+        past = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        resp = opts.client.post("/api/account/admin/signin", json={
+            "provider": "microsoft", "values": {"MICROSOFT_CLIENT_SECRET_EXPIRES": past}})
+        ms = _provider(resp.response.data, "microsoft")
+        assert ("danger", f"Client secret expired on {past}; Microsoft sign-in fails until it is replaced") \
+            in _notices(ms), f"a past expiry must give the danger notice: {ms.get('notices')!r}"
+
+        resp = opts.client.post("/api/account/admin/signin", json={
+            "provider": "microsoft", "enabled": False})
+        ms = _provider(resp.response.data, "microsoft")
+        assert ms["enabled"] is False and ms["ready"] is True, f"disable did not behave: {ms!r}"
+        cfg = opts.client.get("/api/auth/config").response.data
+        assert "microsoft" not in cfg["login"]["methods"] and \
+            "microsoft" not in cfg["registration"]["methods"], f"disabling left Microsoft offered: {cfg!r}"
+        resp = opts.client.get(f"/api/auth/oauth/microsoft/begin?group_uuid={MS_GROUP_UUID}")
+        assert resp.status_code == 403, \
+            f"begin must be refused once Microsoft is switched off: {resp.status_code} {resp.response!r}"
+    finally:
+        opts.client.logout()
+        group.delete()
         _reset()

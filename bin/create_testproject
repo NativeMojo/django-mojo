@@ -332,6 +332,9 @@ ALLOWED_REDIRECT_URLS = ["https://example.com/"]
 # response; tests covering the shipped default do so in-process.
 AUTH_CSP_ENABLED = True
 GITHUB_CLIENT_ID = "test-client-id-123"
+# Pinned so tests/test_oauth/oauth_microsoft.py stays parallel-safe (#9105).
+MICROSOFT_CLIENT_ID = "00000000-0000-0000-0000-000000000001"
+MICROSOFT_TENANT = "common"
 
 # Deterministic embeddings for the docit knowledge base — no AWS calls in
 # tests. Tests exercising the provider-unavailable path override this via
