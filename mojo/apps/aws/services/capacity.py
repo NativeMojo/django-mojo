@@ -1458,16 +1458,24 @@ def node_user_data(base_name, root=None, systemd_dir=None, cron_dir=None):
 
     Order is the whole point:
 
+    0. The profile check, FIRST (#9315). A clone whose disk carries no
+       non-empty ``var/profile`` is quarantined and powered off, and it never
+       takes its own hostname. The image is a copy of the source's disk, so a
+       source that booted ``settings.local`` would otherwise multiply.
+       Admission depends on this order: the join leg waits for exactly
+       ``expected_runner_id``, which is derived from THIS instance's id, and
+       the engine names its runner after the hostname. The AMI cannot carry
+       that hostname, and only a clone that passed the check is given it. So
+       an engine that starts on a markerless clone (the jobs cron, before the
+       quarantine below moves it aside) can only answer as the source or as
+       the stock EC2 name, never as the runner the join leg admits. Stopping
+       the app once is not enough either: the jobs cron restarts the engine
+       every minute and config-sync restarts the app, so the refusal has to
+       outlive this script. See ``_quarantine_lines``.
     1. IMDSv2 (token first — the launch forces ``HttpTokens=required``, so an
        unauthenticated metadata read would simply fail) for this instance's own
        id, and a hostname derived from it. Unique by construction, and derived
        from something only this box knows.
-       Then, before any of 2-4, a clone whose disk carries no ``var/profile`` is
-       quarantined and powered off (#9315). The image is a copy of the source's
-       disk, so a source that booted ``settings.local`` would otherwise
-       multiply. Stopping the app once is not enough: the jobs cron restarts
-       the engine every minute and config-sync restarts the app, so the
-       refusal has to outlive this script. See ``_quarantine_lines``.
     2. config-sync, so the node pulls ITS OWN ``django.conf`` from S3 rather
        than running on whatever the AMI happened to bake. The baked config is
        deliberately NOT deleted: config-sync failing on a node with no config
@@ -1488,6 +1496,11 @@ def node_user_data(base_name, root=None, systemd_dir=None, cron_dir=None):
     return "\n".join([
         "#!/bin/bash",
         "set -u",
+        f'if [ ! -s "{safe_root}/var/profile" ]; then',
+        *_quarantine_lines(safe_root,
+                           str(systemd_dir or "/etc/systemd/system").replace('"', ""),
+                           str(cron_dir or "/etc/cron.d").replace('"', "")),
+        "fi",
         "TOKEN=$(curl -sS -X PUT "
         '"http://169.254.169.254/latest/api/token" '
         '-H "X-aws-ec2-metadata-token-ttl-seconds: 300" || true)',
@@ -1495,11 +1508,6 @@ def node_user_data(base_name, root=None, systemd_dir=None, cron_dir=None):
         '"http://169.254.169.254/latest/meta-data/instance-id" || true)',
         'if [ -n "$IID" ]; then',
         f'  hostnamectl set-hostname "{safe_base}-${{IID##*-}}"',
-        "fi",
-        f'if [ ! -s "{safe_root}/var/profile" ]; then',
-        *_quarantine_lines(safe_root,
-                           str(systemd_dir or "/etc/systemd/system").replace('"', ""),
-                           str(cron_dir or "/etc/cron.d").replace('"', "")),
         "fi",
         "systemctl start config-sync.service || true",
         f'python3 -m mojo.deploy.node_setup --root "{safe_root}" || true',
@@ -1521,15 +1529,17 @@ def _quarantine_lines(root, systemd_dir, cron_dir):
     Every piece has to hold after this script exits, because nothing here is
     the only thing that starts the app:
 
-    * a systemd drop-in puts ``ConditionPathExists=<root>/var/profile`` on the
-      app, config-sync and its timer. A start from anywhere — config-sync's own
-      ``restart_app``, an operator, the next boot — is skipped while the marker
-      is absent. A drop-in rather than ``systemctl mask``: node_setup installs
+    * every cron file that names the project root moves out of the cron
+      directory, FIRST, so no new engine start is scheduled while the rest
+      runs. The jobs cron starts the engine every minute and the engine has
+      no profile gate of its own;
+    * a systemd drop-in puts ``ConditionFileNotEmpty=<root>/var/profile`` on
+      the app, config-sync and its timer — the same test as the shell's
+      ``! -s``, so an empty marker is refused too. A start from anywhere —
+      config-sync's own ``restart_app``, an operator, the next boot — is
+      skipped while the marker is missing or empty. A drop-in rather than ``systemctl mask``: node_setup installs
       the units into /etc/systemd/system, and systemd refuses to mask a unit
       whose file is already there;
-    * every cron file that names the project root moves out of the cron
-      directory. The jobs cron starts the engine every minute and the engine
-      has no profile gate of its own;
     * the engine is stopped, and each step is CHECKED — a failed stop is
       reported as an incomplete quarantine, never as a clean one;
     * the box powers off. It was never registered, so it serves nothing either
@@ -1540,12 +1550,17 @@ def _quarantine_lines(root, systemd_dir, cron_dir):
     quarantine_dir = f"{cron_dir.rstrip('/')}.mojo-quarantine"
     units = " ".join(QUARANTINE_UNITS)
     dropin = (f"'[Unit]' '# django-mojo capacity: this clone booted with no "
-              f"var/profile' 'ConditionPathExists={root.replace(chr(39), '')}/var/profile'")
+              f"var/profile' 'ConditionFileNotEmpty={root.replace(chr(39), '')}/var/profile'")
     return [
         f'  echo "mojo clone: {root}/var/profile is missing; the app would boot '
         'settings.local, so this node is quarantined, powered off and will not '
         'join" >&2',
         '  FAILED=""',
+        f'  mkdir -p "{quarantine_dir}" || FAILED="$FAILED quarantine-dir"',
+        f'  for CRON in "{cron_dir}"/*; do',
+        f'    [ -f "$CRON" ] && grep -qF -- "{root}" "$CRON" || continue',
+        f'    mv -f "$CRON" "{quarantine_dir}/" || FAILED="$FAILED cron:${{CRON##*/}}"',
+        "  done",
         f"  for UNIT in {units}; do",
         f'    mkdir -p "{systemd_dir}/$UNIT.d" && printf "%s\\n" {dropin} '
         f'> "{systemd_dir}/$UNIT.d/{QUARANTINE_DROPIN}" '
@@ -1554,11 +1569,6 @@ def _quarantine_lines(root, systemd_dir, cron_dir):
         '  systemctl daemon-reload || FAILED="$FAILED daemon-reload"',
         f"  systemctl stop {units} || true",
         '  systemctl disable config-sync.timer || true',
-        f'  mkdir -p "{quarantine_dir}" || FAILED="$FAILED quarantine-dir"',
-        f'  for CRON in "{cron_dir}"/*; do',
-        f'    [ -f "$CRON" ] && grep -qF -- "{root}" "$CRON" || continue',
-        f'    mv -f "$CRON" "{quarantine_dir}/" || FAILED="$FAILED cron:${{CRON##*/}}"',
-        "  done",
         f'  "{root}/bin/jobman" stop || FAILED="$FAILED jobman-stop"',
         f"  for UNIT in {units}; do",
         '    systemctl is-active --quiet "$UNIT" && FAILED="$FAILED active:$UNIT"',

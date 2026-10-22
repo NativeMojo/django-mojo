@@ -66,15 +66,15 @@ of diffing the roster and guessing which new heartbeat is the node it launched.
 ```bash
 #!/bin/bash
 set -u
+if [ ! -s "<root>/var/profile" ]; then
+  ...  # quarantine, power off, exit 1: see "A clone with no var/profile"
+fi
 TOKEN=$(curl -sS -X PUT "http://169.254.169.254/latest/api/token" \
   -H "X-aws-ec2-metadata-token-ttl-seconds: 300" || true)
 IID=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" \
   "http://169.254.169.254/latest/meta-data/instance-id" || true)
 if [ -n "$IID" ]; then
   hostnamectl set-hostname "<base>-${IID##*-}"
-fi
-if [ ! -s "<root>/var/profile" ]; then
-  ...  # quarantine, power off, exit 1: see "A clone with no var/profile"
 fi
 systemctl start config-sync.service || true
 python3 -m mojo.deploy.node_setup --root "<root>" || true
@@ -84,7 +84,7 @@ systemctl restart mojo-asgi.service || true
 
 Five things, each load-bearing:
 
-1. **IMDSv2 token first.** The launch forces `HttpTokens=required`, so an
+1. **IMDSv2 token first**, once the profile check has passed. The launch forces `HttpTokens=required`, so an
    unauthenticated metadata read would simply fail.
 2. **config-sync**, so the node pulls **its own** `django.conf` from S3 rather
    than running on whatever the AMI baked. The baked config is deliberately
@@ -110,26 +110,35 @@ notices.
 The image is a copy of the source's disk. `settings/helper.py` boots
 `settings.local` when `var/profile` is missing, so a markerless source would
 produce markerless clones (maestro #9315). The server cannot read the source's
-disk before cloning it. Instead, the clone checks right after setting its
-hostname, and with no marker it quarantines itself instead of booting. Only a
-**missing** marker is refused. A staging fleet whose profile is not `prod` boots
-normally.
+disk before cloning it. Instead, the clone checks first thing, and with a
+missing or empty marker it quarantines itself instead of booting. Only a
+missing or empty marker is refused. A staging fleet whose profile is not `prod`
+boots normally.
+
+**The check runs before the clone takes its own hostname.** That ordering is
+the admission control. The join leg admits exactly one runner,
+`<base>-<instance-id suffix>-engine`, and the engine names its runner after the
+hostname. The AMI cannot carry that name, because it holds this instance's id,
+and only a clone that passed the check is given it. An engine that starts on a
+markerless clone, for example from the jobs cron before the quarantine moves it
+aside, can only answer as the source's or the stock EC2 hostname. The join leg
+never admits either.
 
 Stopping the app once is not enough. The jobs cron starts the engine every
 minute, and config-sync restarts the app. So every step of the quarantine is
 built to outlast the script:
 
-1. **A systemd drop-in**, `zz-mojo-clone-refused.conf`, on `mojo-asgi.service`,
+1. **Every `/etc/cron.d` file that names the root** moves to
+   `/etc/cron.d.mojo-quarantine/`, first, so no new engine start is scheduled
+   while the rest runs. The job engine has no profile gate of its own.
+2. **A systemd drop-in**, `zz-mojo-clone-refused.conf`, on `mojo-asgi.service`,
    `config-sync.service` and `config-sync.timer`. It adds
-   `ConditionPathExists=<root>/var/profile`, so systemd skips any later start
-   while the marker is missing: config-sync's restart, the timer, an operator,
-   the next boot. It is a drop-in, not `systemctl mask`, because systemd refuses
-   to mask a unit whose file is already in `/etc/systemd/system`, and that is
-   where `node_setup` installs these units. Then `daemon-reload`, `stop`, and
-   `disable` the timer.
-2. **Every `/etc/cron.d` file that names the root** moves to
-   `/etc/cron.d.mojo-quarantine/`. The job engine has no profile gate of its
-   own.
+   `ConditionFileNotEmpty=<root>/var/profile`, the same test as the shell's
+   `! -s`. systemd then skips any later start while the marker is missing or
+   empty: config-sync's restart, the timer, an operator, the next boot. It is a
+   drop-in, not `systemctl mask`, because systemd refuses to mask a unit whose
+   file is already in `/etc/systemd/system`, and that is where `node_setup`
+   installs these units. Then `daemon-reload`, `stop`, and `disable` the timer.
 3. **`jobman stop`.**
 4. **Checks.** A failed drop-in write, `daemon-reload`, cron move or
    `jobman stop` is reported, and so is a gated unit that is still active.
