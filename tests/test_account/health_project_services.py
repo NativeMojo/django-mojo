@@ -209,3 +209,151 @@ def test_project_pool_publishes_independent_callback_outcomes(opts):
     assert len(callback_threads) == 2 and all("ThreadPoolExecutor" in name for name in callback_threads), "project callbacks did not use the existing source worker pool"
     assert services["mcp"]["availability"] == "down" and services["sites-dns"]["status"] == "unknown", "one failed callback discarded independent proved service failure"
     assert "private resolver exception" not in json.dumps(value), "raw callback exceptions reached the cached publication"
+
+
+def _produce_acquisition(project, collect, readers, *, config=None, clock=None):
+    from mojo.apps.account.services import health_evidence as he, health_snapshot as hs
+    config, now, stored = config or _configuration(project), he.utcnow(), {}
+    trace = {"configuration": [], "guard": [], "opened": 0, "closed": 0}
+    class Redis:
+        def __enter__(self):
+            trace["opened"] += 1
+            return self
+        def __exit__(self, *args):
+            trace["closed"] += 1
+        def set(self, key, value, **kwargs):
+            stored[key] = value
+            return True
+        def get(self, key):
+            return stored.get(key)
+        def eval(self, script, count, *args):
+            keys, values = args[:count], args[count:]
+            if script == hs._RESERVE_LUA:
+                stored[keys[1]] = values[1]
+            elif script == hs._READ_LUA:
+                return ["", "missing", ""]
+            elif script == hs._PUBLISH_LUA:
+                stored[keys[2]] = values[2]
+            return 1
+    def configuration(end):
+        trace["configuration"].append(end)
+        return config
+    def guard(source_id, generation, revision, end):
+        trace["guard"].append(end)
+        return nullcontext()
+    module = SimpleNamespace(configuration=lambda *args: {}, collect=collect)
+    sources = {"native": lambda: {}, "redis": lambda: {"native": {}, "queues": {}},
+        "managed": lambda: {"series": []}, "project_loader": lambda name: module,
+        "probe": lambda *args: {}, "fleet": {
+            "inventory": lambda *args: {"complete": True, "instances": {}}, "heartbeats": lambda end: [],
+            "scheduler": lambda end: {}, "identity_cache": SimpleNamespace(read=lambda *args, **kwargs: None,
+                write=lambda *args, **kwargs: True), "recent": lambda *args: {"nodes": {}}}}
+    sources.update(readers)
+    result = hs.produce_snapshot(SimpleNamespace(payload={"source_id": config["source_id"], "slot": int(now.timestamp()) // 300}),
+        readers=sources, connect=lambda **kwargs: Redis(), configuration_reader=configuration,
+        reserve=lambda *args: 1, guard=guard, now=now, monotonic=clock)
+    publication = json.loads(next(raw for key, raw in stored.items() if key.endswith(":current")))
+    return result, publication, trace
+
+
+@th.django_unit_test()
+def test_project_cleanup_and_other_sources_finish_before_fleet_acquisition(opts):
+    from threading import Event, current_thread
+    from mojo.apps.account.services import health_evidence as he
+    project = _project(_declaration({"id": "mcp", "impact": "availability"}, {"id": "sites-dns", "impact": "operational"}))
+    entered = Event()
+    finished = {key: Event() for key in ("native", "redis", "http", "mcp", "sites-dns")}
+    waits, fleet_starts, workers = [], [], []
+    def source(name):
+        workers.append(current_thread())
+        try:
+            waits.append(entered.wait(2))
+            if name == "redis":
+                raise RuntimeError("private redis exception")
+            return {"reachable": False, "latency_seconds": 0, "observed_at": he.timestamp(he.utcnow())}
+        finally:
+            finished[name].set()
+    def collect(check, end, budget):
+        workers.append(current_thread())
+        entered.set()
+        try:
+            if check["id"] == "sites-dns":
+                raise RuntimeError("private project exception")
+            return {"outcome": "fail", "observed_at": he.timestamp(he.utcnow()), "reason": "protocol_invalid"}
+        finally:
+            finished[check["id"]].set()
+    def managed():
+        workers.append(current_thread())
+        fleet_starts.append({key: event.is_set() for key, event in finished.items()})
+        return {"series": []}
+    result, value, trace = _produce_acquisition(project, collect, {
+        "native": lambda: source("native"), "redis": lambda: source("redis"),
+        "probe": lambda *args: source("http"), "managed": managed})
+    assert len(fleet_starts) == 1 and all(fleet_starts[0].values()), "fleet acquisition overlapped unfinished source work or project cleanup"
+    assert all(waits), "the original nonfleet sources lost concurrency with project checks"
+    components = {row["component_id"]: row for row in value["components"]}
+    assert components["service:mcp"]["availability"] == "down" and components["api:primary"]["availability"] == "down", "waiting flattened independently proved project or HTTP failures"
+    assert components["service:sites-dns"]["status"] == components["redis:default"]["status"] == "unknown", "a phase-one exception skipped collection or became healthy"
+    assert result["status"] == "published" and result["accounting"]["project_services"] == 2, "phase-one exceptions prevented independent fleet collection/publication or changed project accounting"
+    assert len({worker.name.rsplit("_", 1)[0] for worker in workers}) == 1 and all(not worker.is_alive() for worker in workers), "acquisition created another pool or left source workers running"
+    assert trace["opened"] == trace["closed"] and "private" not in json.dumps(value), "the cycle leaked cache resources or private exception text"
+
+
+@th.django_unit_test()
+def test_default_off_keeps_fleet_ahead_of_queued_http_probes(opts):
+    from threading import Event
+    from mojo.apps.account.services import health_snapshot as hs
+    from mojo.apps.aws.services import fleet_health
+    config, fleet_entered, waits, calls = _configuration(), Event(), [], []
+    config["services"] = [{**config["services"][0], "resource_id": "probe-%d" % index,
+        "service_id": "probe-%d" % index} for index in range(4)]
+    config["config_revision"] = hs.configuration_revision(config, {
+        "roster_scope": fleet_health.roster_scope(config["expected"]), "services": config["services"],
+        "channels": config["channels"], "bindings": config["bindings"]})
+    def source(value):
+        waits.append(fleet_entered.wait(2))
+        return value
+    def managed():
+        calls.append("fleet")
+        fleet_entered.set()
+        return {"series": []}
+    result, value, trace = _produce_acquisition(None, None, {
+        "native": lambda: source({}), "redis": lambda: source({"native": {}, "queues": {}}),
+        "probe": lambda *args: source({}), "managed": managed}, config=config)
+    assert calls == ["fleet"] and len(waits) == 6 and all(waits), "default-off fleet moved behind HTTP work or was collected more than once"
+    assert result["status"] == "published" and "project_services" not in result["accounting"], "default-off scheduling introduced project collection"
+    assert trace["opened"] == trace["closed"], "default-off acquisition leaked cache resources"
+
+
+@th.django_unit_test()
+def test_deferred_fleet_keeps_original_deadline_and_independent_failure(opts):
+    from mojo.apps.account.services import health_evidence as he
+    from mojo.helpers.bounded_transport import remaining
+    project, base, observed, deadlines, external_calls, budgets = _project(), time.monotonic(), he.timestamp(he.utcnow()), [], [], []
+    clock = [base]
+    def collect(check, end, budget):
+        deadlines.append(("project", end))
+        budgets.append(budget)
+        clock[0] = base + 4
+        return {"outcome": "fail", "observed_at": observed, "reason": "protocol_invalid"}
+    def managed():
+        clock[0] = base + 50
+        return {"series": []}
+    def inventory(spec, end):
+        deadlines.append(("fleet", end))
+        remaining(end, clock=lambda: clock[0])
+        external_calls.append("inventory")
+        return {"complete": True, "instances": {}}
+    result, value, trace = _produce_acquisition(project, collect, {
+        "managed": managed, "fleet": {"inventory": inventory, "heartbeats": lambda end: [],
+            "scheduler": lambda end: {}, "identity_cache": SimpleNamespace(read=lambda *args, **kwargs: None,
+                write=lambda *args, **kwargs: True), "recent": lambda *args: {"nodes": {}}}}, clock=lambda: clock[0])
+    components = {row["component_id"]: row for row in value["components"]}
+    assert deadlines == [("project", base + 5), ("fleet", base + 50)], "a new wave reset the five-second callback or absolute collection deadline"
+    assert trace["configuration"] == [base + 50] and trace["guard"] == [base + 60], "acquisition or publication gained a second producer deadline"
+    assert not external_calls and components["fleet:installation"]["availability"] == "unknown", "expired remaining fleet time performed I/O or fabricated availability"
+    assert components["service:mcp"]["availability"] == "down", "late independent fleet failure erased a valid project failure"
+    sample = components["service:mcp"]["evidence"][0]
+    assert sample["observed_at"] == observed and sample["fresh_until"] == (he.parse_time(observed) + timedelta(seconds=420)).isoformat(), "waiting renewed or replaced the actual project observation"
+    assert budgets[0].deadline == base + 60 and budgets[0].limits == he.CycleBudget.LIMITS and budgets[0].reserved == {"redis_commands": 4, "db_queries": 5}, "deferral changed shared operation caps or finalization reserves"
+    assert result["status"] == "published" and trace["opened"] == trace["closed"], "expired fleet evidence prevented bounded publication or cache cleanup"

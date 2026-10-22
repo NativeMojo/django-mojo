@@ -105,6 +105,10 @@ and one `service_check` condition. Slot identity contains `module`, `check_id`,
 credentials are withheld. Slot values are boolean true (pass), false (proved
 failure), or null (Unknown). Availability-impact checks can establish up/down;
 operational checks can degrade status but never establish availability.
+With project checks enabled, their calls and the native, Redis and HTTP calls
+finish before fleet collection starts in the same worker pool. Fleet uses the
+remaining original collection deadline; insufficient time remains Unknown.
+Default-off collection order and the five-second per-check limit are unchanged.
 
 Only the server's static configuration selects the callback module and roster.
 Missing, malformed, failed or late callbacks retain Unknown obligations; invalid

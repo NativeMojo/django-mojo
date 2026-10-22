@@ -163,6 +163,10 @@ deadline. Collection runs in the existing four-worker pool, charges one of eight
 `project_services` allowances and receives at most five seconds or the remaining
 acquisition time. Late results are Unknown. Trusted Python must cooperate with
 the bound; there is no detached timeout thread or forced cancellation claim.
+When project checks are configured, native, Redis, HTTP and project calls finish
+before fleet acquisition starts in the same pool. Fleet receives the remaining
+original acquisition time; exhaustion stays Unknown. Without project checks,
+the original scheduling order is unchanged.
 
 The framework constructs `service:<id>`, with service scope, matching
 `resource_id`/`service_id`, platform identity grant, one required platform `check`

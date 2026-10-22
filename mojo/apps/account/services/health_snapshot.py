@@ -715,7 +715,7 @@ def _fit_publication(identity, generation, revision, components, *, generated_at
 
 def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=None, reserve=None, guard=None, now=None, monotonic=None):
     """One deterministic60s acquisition, never called by the fast read path."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ThreadPoolExecutor, as_completed, wait
     from functools import partial
     from mojo.apps.aws.services import fleet_health, capacity
     from mojo.apps.account.services import project_health
@@ -816,16 +816,20 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
         values, probes, project_results = {}, {}, {}
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures = {pool.submit(readers.get("native", lambda: evidence.database_and_job_facts(configuration["channels"], collection_deadline, budget=budget))): "native",
-                       pool.submit(readers.get("redis", redis_source)): "redis",
-                       pool.submit(fleet_source): "fleet"}
+                       pool.submit(readers.get("redis", redis_source)): "redis"}
+            project = configuration.get("project_services")
+            if project is None:
+                futures[pool.submit(fleet_source)] = "fleet"
             for service in configuration["services"]:
                 budget.take("api_services")
                 futures[pool.submit(readers.get("probe", evidence.probe_service), service, collection_deadline)] = service["resource_id"]
-            project = configuration.get("project_services")
             if project is not None:
                 for check in project["checks"]:
                     futures[pool.submit(project_health.collect, project, check, collection_deadline, budget,
                         loader=readers.get("project_loader"), clock=monotonic)] = ("project", check["id"])
+                # Short project checks finish cleanup before AWS client setup.
+                wait(futures)
+                futures[pool.submit(fleet_source)] = "fleet"
             for future in as_completed(futures):
                 key = futures[future]
                 try:
