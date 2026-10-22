@@ -280,8 +280,8 @@ def _primary_connection(deadline, *, resolver=None, clock=None):
 
 
 @contextmanager
-def primary_cursor(deadline, *, connect=None, clock=None, max_queries=16, budget=None):
-    """A short-lived primary transaction; every SQL operation has <=750ms."""
+def primary_cursor(deadline, *, connect=None, clock=None, max_queries=16, budget=None, transactional=True):
+    """Private primary cursor; optional transaction, <=750ms per SQL operation."""
     clock = clock or time.monotonic
     connection = (connect or _primary_connection)(deadline)
     raw = connection.cursor()
@@ -302,9 +302,11 @@ def primary_cursor(deadline, *, connect=None, clock=None, max_queries=16, budget
             return raw.fetchall()
     cursor = Cursor()
     try:
-        cursor.execute("BEGIN")
+        if transactional:
+            cursor.execute("BEGIN")
         yield cursor
-        cursor.execute("COMMIT")
+        if transactional:
+            cursor.execute("COMMIT")
     finally:
         # Closing libpq locally also aborts an unfinished transaction. No
         # rollback network operation may outlive the claimed deadline.
@@ -501,7 +503,7 @@ def source_configuration(deadline, *, get_static=None, cursor_context=None, budg
             FROM (SELECT id, vhost_id FROM "%s" ORDER BY id LIMIT 25) w
             LEFT JOIN "%s" v ON v.id=w.vhost_id
             LEFT JOIN "%s" d ON d.id=v.domain_id)''' % (WebApp._meta.db_table, Vhost._meta.db_table, Domain._meta.db_table)
-    with (cursor_context or (lambda end: primary_cursor(end, budget=budget)))(deadline) as cursor:
+    with (cursor_context or (lambda end: primary_cursor(end, budget=budget, transactional=False)))(deadline) as cursor:
         cursor.execute('SELECT (SELECT jsonb_object_agg(key, value) FROM "%s" WHERE group_id IS NULL AND key=ANY(%%s)), %s' % (Setting._meta.db_table, webapps_sql), [keys])
         stored, apps = cursor.fetchone()
     stored, apps = stored or {}, apps or []
@@ -562,7 +564,7 @@ def database_and_job_facts(channels, deadline, *, budget=None, cursor_context=No
           FROM "%s" WHERE channel=ANY(%%s) AND at>=CURRENT_TIMESTAMP-interval '5 minutes'
           AND event IN ('completed','failed','expired','retry') GROUP BY channel,event) e), CURRENT_TIMESTAMP, 1''' % (Job._meta.db_table, JobEvent._meta.db_table)
     started = time.monotonic()
-    with (cursor_context or (lambda end: primary_cursor(end, budget=budget)))(deadline) as cursor:
+    with (cursor_context or (lambda end: primary_cursor(end, budget=budget, transactional=False)))(deadline) as cursor:
         cursor.execute(sql, [channels, channels])
         database, jobs, events, observed, one = cursor.fetchone()
     return {"database": database or {}, "jobs": jobs or [], "events": events or [],

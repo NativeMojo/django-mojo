@@ -148,6 +148,10 @@ obligations. Current/previous publications are retained48h; TTL does not imply
 health. The durable generation/configuration fence rejects old collectors and
 restored Redis state. Bounded RedisCluster startup is unsupported and appears as
 a collection/read gap; no default connection fallback supplies green status.
+Standalone configuration and grouped database/job reads use one autocommit
+query each, leaving room for project checks within the unchanged SQL cap.
+Generation/publication transactions and locks remain required; exhausted
+checks still report Unknown rather than a fabricated pass.
 
 ## Monitoring coverage drilldown
 

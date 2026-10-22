@@ -104,6 +104,32 @@ def test_sql_deadline_and_cleanup_are_per_operation(opts):
         with he.primary_cursor(10, connect=lambda deadline: limited, clock=lambda: 5, max_queries=2) as cursor:
             cursor.execute("SELECT 1")
     assert limited.closed, "query-budget refusal leaked its private connection"
+    standalone = Connection()
+    budget = he.CycleBudget(10, clock=lambda: 5)
+    with he.primary_cursor(10, connect=lambda deadline: standalone, clock=lambda: 5,
+                           max_queries=1, budget=budget, transactional=False) as cursor:
+        cursor.execute("SELECT 1")
+        assert standalone.operation_deadline == 5.75, "standalone SQL lost its750ms operation bound"
+        with th.assert_raises(he.EvidenceError):
+            cursor.execute("SELECT 2")
+    assert [sql for sql, _ in standalone.raw.calls] == ["SELECT 1"], "standalone SELECT emitted a transaction or exceeded its real query allowance"
+    assert budget.counts == {"db_queries": 1} and standalone.closed and standalone.raw.closed, "standalone SQL accounting or private cleanup changed"
+
+
+@th.django_unit_test()
+def test_real_primary_standalone_select_is_autocommit_and_default_is_transactional(opts):
+    import time
+    from psycopg.pq import TransactionStatus
+    from mojo.apps.account.services import health_evidence as he
+    for transactional, state, count in ((False, TransactionStatus.IDLE, 1), (True, TransactionStatus.INTRANS, 3)):
+        deadline = time.monotonic() + 3
+        connection = he._primary_connection(deadline)
+        budget = he.CycleBudget(deadline)
+        with he.primary_cursor(deadline, connect=lambda end: connection, budget=budget, transactional=transactional) as cursor:
+            cursor.execute("SELECT 1")
+            assert cursor.fetchone() == (1,), "real primary SELECT did not return its result"
+            assert connection.autocommit is True and connection.pgconn.transaction_status == state, "standalone/default primary SQL did not use the intended real libpq transaction state"
+        assert connection.closed and budget.counts == {"db_queries": count}, "real primary cursor cleanup or actual SQL accounting changed"
 
 
 @th.django_unit_test()

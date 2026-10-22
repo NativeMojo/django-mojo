@@ -198,8 +198,14 @@ same budget. Caps retain named/countable obligations as unknown or
 caps. Independent completed sources survive other sources' failures.
 
 Primary PostgreSQL acquisition uses bounded DNS/numeric dialing and nonblocking
-libpq connect/operations, a private transaction, 750 ms SQL/lock limits and closed
-local resources. Unsupported engines/connection modes remain unknown. HTTP
+libpq connect/operations, 750 ms SQL/lock limits and closed local resources.
+Standalone configuration and grouped database/job reads each use one autocommit
+SELECT. Generation reservation and publication retain their transactions and
+row locks, including an injected configuration recheck on the same locked
+cursor. Core collection plus a two-query project check and publication costs
+14 of the unchanged 16 SQL operations; five are reserved until finalization.
+Genuine exhaustion remains `not_collected_budget`. Unsupported engines and
+connection modes remain unknown. HTTP
 probes use validated fixed public HTTPS origins, pinned numeric addresses,
 original Host/TLS name, one 1.5-second absolute deadline, no redirects and bounded
 version/HTML bodies. TLS checks its remaining budget after local context setup.
