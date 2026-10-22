@@ -1,7 +1,7 @@
 # Sign-in Setup (Admin)
 
 One Admin page configures the platform's own login: the hosted login page's
-look and feel, and the Google, Apple and GitHub sign-in providers. It is
+look and feel, and the Google, Apple, GitHub and Microsoft sign-in providers. It is
 ordinary admin configuration — global `manage_settings` or `admin` (or a
 superuser) may use it, with no step-up or approval.
 
@@ -21,6 +21,7 @@ the providers already read with `settings.get`:
 | Google | `GOOGLE_CLIENT_ID`, **`GOOGLE_CLIENT_SECRET`** |
 | Apple | `APPLE_TEAM_ID`, `APPLE_CLIENT_ID` (the Services ID), `APPLE_KEY_ID`, **`APPLE_PRIVATE_KEY`** (whole `.p8`) |
 | GitHub | `GITHUB_CLIENT_ID`, **`GITHUB_CLIENT_SECRET`** |
+| Microsoft | `MICROSOFT_CLIENT_ID`, **`MICROSOFT_CLIENT_SECRET`**, `MICROSOFT_TENANT`, `MICROSOFT_CLIENT_SECRET_EXPIRES` |
 
 `settings.get` resolves a database row before `django.conf`, so a value saved
 here overrides the deployment file and takes effect on the next sign-in — no
@@ -35,7 +36,34 @@ never returned; reads report `configured`, `source` and a four-character hint.
 Group `metadata.auth_config` overrides still layer on top, unchanged.
 
 A provider is **enabled** when it is in the system `login.methods`; switching
-it on or off edits both `login.methods` and `registration.methods`.
+it on or off edits both `login.methods` and `registration.methods`. Google,
+Apple and GitHub start enabled; Microsoft starts off.
+
+A provider is **ready** when every required field is configured. The fields in
+`signin_setup.OPTIONAL_FIELDS` are not required: `MICROSOFT_TENANT` (empty
+reads as `common`) and `MICROSOFT_CLIENT_SECRET_EXPIRES`.
+
+## The Microsoft card
+
+| Field | Saved as | Checked |
+|---|---|---|
+| Application (client) ID | `MICROSOFT_CLIENT_ID` | a GUID, stored lower-case |
+| Client secret value | `MICROSOFT_CLIENT_SECRET` (secret) | write-only |
+| Tenant | `MICROSOFT_TENANT` | `common`, `organizations`, `consumers` or a GUID, stored lower-case |
+| Secret expires on (YYYY-MM-DD) | `MICROSOFT_CLIENT_SECRET_EXPIRES` | an ISO date |
+
+Entra does not tell the app when its secret expires, so the admin types the
+date and the card warns from it. Each provider carries `notices`
+(`[{tone, text}]`, empty for the others):
+
+| Expiry | Notice |
+|---|---|
+| not recorded | `info` "Record the secret's expiry date so this page can warn you" |
+| under 30 days away | `warning` "Client secret expires on {date}" |
+| past | `danger` "Client secret expired on {date}; Microsoft sign-in fails until it is replaced" |
+
+Registration steps and the provider's validation rules are in
+[OAuth](oauth.md#microsoft-settings).
 
 ## Callback URLs
 

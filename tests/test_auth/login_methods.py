@@ -27,6 +27,8 @@ LM_GROUP_A_UUID = 'lma1234567890abcdef01234567890ab'
 LM_GROUP_B_UUID = 'lmb1234567890abcdef01234567890ab'
 # only github offered — exercises the OAuth-row render for a github-only config
 LM_GROUP_C_UUID = 'lmc1234567890abcdef01234567890ab'
+# only microsoft offered — the OAuth row for a microsoft-only config (#9105)
+LM_GROUP_D_UUID = 'lmd1234567890abcdef01234567890ab'
 
 
 @th.django_unit_setup()
@@ -37,7 +39,7 @@ def setup_login_methods(opts):
 
     User.objects.filter(username=LM_USER).delete()
     Group.objects.filter(uuid__in=[
-        LM_GROUP_A_UUID, LM_GROUP_B_UUID, LM_GROUP_C_UUID]).delete()
+        LM_GROUP_A_UUID, LM_GROUP_B_UUID, LM_GROUP_C_UUID, LM_GROUP_D_UUID]).delete()
 
     user = User(username=LM_USER, email=f'{LM_USER}@test.com')
     user.save()
@@ -57,6 +59,9 @@ def setup_login_methods(opts):
     opts.group_c = Group.objects.create(
         name='test-lm-group-c', uuid=LM_GROUP_C_UUID, is_active=True,
         metadata={"auth_config": {"login": {"methods": ["github"]}}})
+    opts.group_d = Group.objects.create(
+        name='test-lm-group-d', uuid=LM_GROUP_D_UUID, is_active=True,
+        metadata={"auth_config": {"login": {"methods": ["microsoft"]}}})
 
 
 # ---------------------------------------------------------------------------
@@ -185,8 +190,28 @@ def test_login_html_default_signin_primary(opts):
 def test_login_html_github_default_on(opts):
     html = _render_login(group=None)
     assert_true('id="btn-github"' in html,
-                "github is in LOGIN_METHODS, so the default config must render "
+                "github is in DEFAULT_LOGIN_METHODS, so the default config must render "
                 "the GitHub button on the hosted login page")
+
+
+@th.django_unit_test("login.html omits the Microsoft button by default (microsoft is off by default)")
+def test_login_html_microsoft_default_off(opts):
+    html = _render_login(group=None)
+    assert_true('id="btn-microsoft"' not in html,
+                "microsoft is not a default login method, so the default config "
+                "must not render the Microsoft button")
+
+
+@th.django_unit_test("login.html renders the Microsoft button for a microsoft-only group")
+def test_login_html_microsoft_only_group(opts):
+    html = _render_login(group=opts.group_d)
+    assert_true('id="btn-microsoft"' in html,
+                "a group with login.methods=['microsoft'] must render the Microsoft "
+                "button (OAuth row must not be dropped for a microsoft-only config)")
+    assert_true('startMicrosoftLogin' in html,
+                "the login page must wire the Microsoft button to MojoAuth.startMicrosoftLogin")
+    assert_true('id="btn-github"' not in html,
+                "github must NOT render for a microsoft-only group")
 
 
 @th.django_unit_test("login.html renders the GitHub button for a github-only group")

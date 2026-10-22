@@ -37,10 +37,15 @@ from mojo.helpers.settings import settings
 
 
 # Every login method the group config can toggle on/off.
-LOGIN_METHODS = ("password", "sms", "passkey", "magic", "google", "apple", "github")
+LOGIN_METHODS = ("password", "sms", "passkey", "magic", "google", "apple", "github",
+                 "microsoft")
 # Registration methods. Passkey-at-signup is `passkey_prompt`, not a method;
 # SMS-verified phone signup is the `password` method with a phone identity.
-REGISTRATION_METHODS = ("password", "google", "apple", "github")
+REGISTRATION_METHODS = ("password", "google", "apple", "github", "microsoft")
+# The methods on when nothing is configured. A method added later (microsoft)
+# stays off until a site switches it on, so no site shows a dead button.
+DEFAULT_LOGIN_METHODS = ("password", "sms", "passkey", "magic", "google", "apple", "github")
+DEFAULT_REGISTRATION_METHODS = ("password", "google", "apple", "github")
 PASSKEY_PROMPTS = ("off", "optional", "required")
 LAYOUTS = ("minimal", "compact", "branded-panel", "editorial")
 LAYOUT_ALIASES = {"card": "compact", "fullscreen": "branded-panel"}
@@ -57,7 +62,7 @@ THEME_PUBLIC_KEYS = (
 
 
 # Code defaults — reproduce today's behavior when nothing is customized:
-# email + password registration, every login method on, no passkey prompt.
+# email + password registration, the default login methods on, no passkey prompt.
 DEFAULT_AUTH_CONFIG = {
     "theme": {
         "app_title": "DJANGO MOJO",
@@ -91,11 +96,11 @@ DEFAULT_AUTH_CONFIG = {
         # "" -> register_schema auto-picks (email > phone).
         "identity_field": "",
         "min_age": None,
-        "methods": list(REGISTRATION_METHODS),
+        "methods": list(DEFAULT_REGISTRATION_METHODS),
         "passkey_prompt": "off",
     },
     "login": {
-        "methods": list(LOGIN_METHODS),
+        "methods": list(DEFAULT_LOGIN_METHODS),
         "heading": "Sign In",
         "supporting_copy": "",
     },

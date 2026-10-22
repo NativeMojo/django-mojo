@@ -218,8 +218,32 @@ def test_register_github_default_on(opts):
     html = _render('account/register.html', group=None)
     assert_true(
         'id="btn-github"' in html,
-        "github is in REGISTRATION_METHODS, so the default config must render "
+        "github is in DEFAULT_REGISTRATION_METHODS, so the default config must render "
         "the GitHub button on the hosted register page")
+
+
+@th.django_unit_test("register.html offers Microsoft only when the group enables it")
+def test_register_microsoft_button(opts):
+    html = _render('account/register.html', group=None)
+    assert_true(
+        'id="btn-microsoft"' not in html,
+        "microsoft is not a default registration method, so the default "
+        "register page must not render the Microsoft button")
+    opts.group.metadata = {"auth_config": {
+        "registration": {"methods": ["password", "microsoft"]}}}
+    opts.group.save(update_fields=["metadata"])
+    try:
+        html = _render('account/register.html', group=opts.group)
+        assert_true(
+            'id="btn-microsoft"' in html,
+            "a group whose registration.methods include microsoft must render "
+            "the Microsoft button on the register page")
+        assert_true(
+            'startMicrosoftLogin' in html,
+            "the register page must wire the Microsoft button to MojoAuth.startMicrosoftLogin")
+    finally:
+        opts.group.metadata = {}
+        opts.group.save(update_fields=["metadata"])
 
 
 @th.django_unit_test("register.html omits the GitHub button when the group disables github registration")

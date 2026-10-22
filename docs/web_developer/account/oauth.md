@@ -4,13 +4,14 @@
 
 OAuth allows users to log in with a third-party provider (Google, etc.) without a password. The server handles the token exchange — your frontend only needs to redirect the user and handle the callback.
 
-**Supported providers:** `google`, `apple`, `github`
+**Supported providers:** `google`, `apple`, `github`, `microsoft`
 
-All three are group-toggleable auth-config methods: a group can disable a
+All four are group-toggleable auth-config methods: a group can disable a
 provider for login (`auth_config.login.methods`) or new-user signup
 (`auth_config.registration.methods`), and the hosted `/auth` and `/register`
 pages render a button for each enabled provider. See
-[Auth Config](auth_config.md).
+[Auth Config](auth_config.md). Google, Apple and GitHub are on by default;
+**Microsoft is off until an admin switches it on** on the Sign-in page.
 
 > **Trusted second factor.** OAuth is treated as a strong, trusted authentication event. Completing an OAuth login automatically confirms the user's email address and bypasses any local MFA requirement — see [Security Behaviour](#security-behaviour) below.
 
@@ -146,9 +147,23 @@ The server automatically resolves which account to log in to:
 
 No manual linking step is required.
 
+**Microsoft is stricter about email.** It links by email only when Microsoft
+verified the address. If the address is unverified and already belongs to an
+account, `complete` refuses with `403`:
+
+```json
+{"status": false, "error": "An account already uses this email. Sign in with your existing method.", "code": 403}
+```
+
+Show that message and offer the person's usual sign-in method. If the address
+is unverified and unknown, the account is created **without an email**
+(`email: null`, not verified); the person can add one later through the
+normal change-email flow. Microsoft sign-ins that fail token validation
+return `401` "Microsoft sign-in could not be verified".
+
 ### Email Verification on Auto-Link
 
-Because the provider has confirmed ownership of the email address, the framework marks `is_email_verified = True` on the resolved account in all three cases above:
+For Google, Apple and GitHub the provider has confirmed ownership of the email address, so the framework marks `is_email_verified = True` on the resolved account in all three cases above (Microsoft: only when it verified the address, see above):
 
 - **Existing connection** — user was already verified when they first connected; flag unchanged
 - **Email match** — if the matched account was not yet verified, it is marked verified at link time
@@ -374,6 +389,22 @@ GitHub Sign In uses the standard redirect flow — identical to Google. Replace 
 
 > **Note:** If a GitHub user has set their email to private, the server automatically falls back to the GitHub emails API to retrieve their primary verified address. No extra configuration or frontend changes are needed.
 
+### Microsoft Settings
+
+```python
+MICROSOFT_CLIENT_ID     = "6731de76-14a6-49ae-97bc-6eba6914391e"
+MICROSOFT_CLIENT_SECRET = "your-client-secret-value"
+MICROSOFT_TENANT        = "common"   # or organizations, consumers, or a tenant GUID
+```
+
+Microsoft uses the same redirect flow as Google (a `GET` callback): replace
+`google` with `microsoft` in the endpoint URLs. Personal and work or school
+accounts can sign in with `common`. PKCE and the nonce are handled on the
+server; the frontend sees only `auth_url` and `state`. With the hosted pages or
+`mojo-auth.js`, call `MojoAuth.startMicrosoftLogin()`, like
+`startGoogleLogin()`. Setup steps for the Entra app are in the
+[Django developer OAuth reference](../../django_developer/account/oauth.md#microsoft-settings).
+
 ### Optional Settings
 
 | Setting | Default | Purpose |
@@ -463,3 +494,6 @@ Admins with `manage_users` (or the combined `users` permission) bypass the locko
 | `400` | Unknown provider, missing params, or `redirect_uri` not on the allowlist |
 | `401` | Invalid or expired OAuth state token |
 | `403` | Account is disabled |
+| `403` | `begin`: the provider is switched off — for the named group, or, for a provider that is off by default (Microsoft), system-wide even with no group |
+| `403` | Microsoft: an account already uses this (unverified) email |
+| `401` | Microsoft: the ID token could not be verified |
