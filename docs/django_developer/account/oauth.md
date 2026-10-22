@@ -6,13 +6,17 @@
 
 OAuth2 social login is built into the framework. The full flow — CSRF state management, provider token exchange, user resolution, and JWT issuance — is handled by the framework. Your project only needs to configure credentials and (optionally) register additional providers.
 
-**Current providers:** `google`, `apple`, `github`
+**Current providers:** `google`, `apple`, `github`, `microsoft`
 
-All three are toggleable auth-config methods (`LOGIN_METHODS` /
-`REGISTRATION_METHODS` in `services/auth_config.py`): enabled by default,
-disable per group via `login.methods` / `registration.methods`, and the hosted
-auth pages render a button for each enabled provider — see
-[Auth Pages](auth_pages.md).
+All four are toggleable auth-config methods (`LOGIN_METHODS` /
+`REGISTRATION_METHODS` in `services/auth_config.py`), and the hosted auth pages
+render a button for each enabled provider — see [Auth Pages](auth_pages.md).
+Google, Apple and GitHub are on by default (`DEFAULT_LOGIN_METHODS` /
+`DEFAULT_REGISTRATION_METHODS`); disable them per group via `login.methods` /
+`registration.methods`. **Microsoft is off by default**: switch it on from the
+Admin Sign-in page, or add `microsoft` to the methods yourself. A group that
+sets its own `login.methods` replaces the inherited list wholesale, so such a
+group must list `microsoft` itself.
 
 ---
 
@@ -39,6 +43,7 @@ Key files:
 | `mojo/apps/account/services/oauth/google.py` | Google implementation |
 | `mojo/apps/account/services/oauth/apple.py` | Apple implementation |
 | `mojo/apps/account/services/oauth/github.py` | GitHub implementation |
+| `mojo/apps/account/services/oauth/microsoft.py` | Microsoft (Entra ID) implementation |
 | `mojo/apps/account/services/oauth/__init__.py` | Provider registry |
 
 ---
@@ -83,6 +88,61 @@ GitHub does not always return an email on the `/user` endpoint — if the user h
 | `GITHUB_CLIENT_ID` | — | OAuth App client ID from GitHub Developer Settings |
 | `GITHUB_CLIENT_SECRET` | — | OAuth App client secret |
 | `GITHUB_SCOPES` | `"read:user user:email"` | OAuth scopes requested from GitHub |
+
+### Microsoft Settings
+
+```python
+MICROSOFT_CLIENT_ID     = "6731de76-14a6-49ae-97bc-6eba6914391e"  # Application (client) ID
+MICROSOFT_CLIENT_SECRET = "your-client-secret-value"              # the secret's Value, not its ID
+MICROSOFT_TENANT        = "common"                                # see below
+```
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `MICROSOFT_CLIENT_ID` | — | Application (client) ID of the Entra app registration (a GUID) |
+| `MICROSOFT_CLIENT_SECRET` | — | Client secret **Value** |
+| `MICROSOFT_TENANT` | `"common"` | Who may sign in: `common` (personal and work or school accounts), `organizations` (work or school only), `consumers` (personal only), or one tenant's GUID |
+| `MICROSOFT_SCOPES` | `"openid profile email"` | Scopes; no `offline_access` and no Graph scope are needed |
+| `MICROSOFT_CLIENT_SECRET_EXPIRES` | — | `YYYY-MM-DD`; only feeds the Sign-in card's expiry notices |
+
+Register the app in the [Microsoft Entra admin center](https://entra.microsoft.com/)
+(App registrations):
+
+- choose the supported account types to match `MICROSOFT_TENANT`;
+- add a **Web** platform redirect URI for each callback URL the Sign-in card
+  shows (`https://<login host>/api/auth/oauth/microsoft/callback`);
+- under Token configuration add the optional ID-token claims `email` and
+  `xms_edov`;
+- create a client secret and copy its Value. Microsoft caps a secret at 24
+  months and recommends under 12 ([add credentials](https://learn.microsoft.com/en-us/entra/identity-platform/how-to-add-credentials));
+  record the expiry date on the card so it can warn you, and rotate it before
+  then.
+
+The callback host is the origin of the page that starts sign-in
+(`rest/oauth.py` `_get_origin`). Behind a TLS-terminating proxy set
+`SECURE_PROXY_SSL_HEADER`, or the callback is built as `http://` and Entra
+rejects it.
+
+How the provider works:
+
+- Authorization code flow on the v2.0 endpoints of
+  `https://login.microsoftonline.com/<tenant>`, with PKCE (S256), an OIDC
+  `nonce`, `response_mode=query` and `prompt=select_account`. The PKCE
+  verifier and the nonce live only in the server-side state record; the
+  browser sees only the opaque `state`.
+- **Identity is the ID token, validated in full** before anything is trusted:
+  RS256 only, signature against the tenant's published keys (cached in Redis
+  for 24 hours, re-fetched at most once per 5 minutes for an unknown `kid`),
+  `aud`, `exp`, `nbf` and `iat` with 60 seconds of leeway, the `nonce`, a
+  lower-case GUID `tid`, `iss` equal to
+  `https://login.microsoftonline.com/<tid>/v2.0`, the signing key's own
+  `issuer` matching that `iss`, and the tenant policy above. Any failure is a
+  `401` with "Microsoft sign-in could not be verified"; the reason goes to the
+  log only. There is no Graph or UserInfo call.
+- `provider_uid` is `<tid>:<oid>`, not `sub` (`sub` is pairwise per client ID,
+  so a new app registration would orphan every connection). A guest in another
+  tenant is a separate identity by design.
+- Certificate credentials are not supported yet; use a client secret.
 
 ### Optional Settings
 
@@ -487,9 +547,14 @@ Access/refresh tokens from the provider are stored encrypted in `mojo_secrets` (
 2. **Existing `User` with matching email** → create a new `OAuthConnection` linking this provider to that user
 3. **No match** → create a new `User` + `OAuthConnection`
 
+How far the email is trusted depends on the provider. A provider whose profile
+carries `email_verified` (today: Microsoft) gets the rule in
+[Email trust for Microsoft](#email-trust-for-microsoft); the others (Google,
+Apple, GitHub) send no such key and keep the rule below.
+
 ### Email Verification on Auto-Link
 
-OAuth is treated as a trusted identity provider. When any of the three paths above runs, the framework guarantees `is_email_verified=True` on the resolved user:
+For Google, Apple and GitHub, OAuth is treated as a trusted identity provider. When any of the three paths above runs, the framework guarantees `is_email_verified=True` on the resolved user:
 
 - **Path 1 (existing connection):** no change to `is_email_verified` — the user was already verified when they first connected
 - **Path 2 (email match):** if `is_email_verified` is currently `False`, it is set to `True` and saved — the provider has confirmed ownership of the address
@@ -498,6 +563,36 @@ OAuth is treated as a trusted identity provider. When any of the three paths abo
 This means a user who has never clicked a verification email will be automatically marked verified the first time they log in via OAuth. This is intentional: OAuth provider confirmation is considered equivalent to email link verification.
 
 **`is_email_verified` is a `SUPERUSER_ONLY_FIELDS` write.** It cannot be cleared by a normal REST update. The only code paths that set it are internal (token flows, OAuth, magic login).
+
+### Email trust for Microsoft
+
+Microsoft can report an email it never verified (a work tenant's admin can type
+any address on a user), so the email is trusted only when the validated ID
+token says `xms_edov: true`. The profile's `email_verified` is `True` only then;
+`false`, an absent claim or no email at all count as unverified.
+
+| Case | Result |
+|---|---|
+| Existing connection for `tid:oid` | Signs in to that user, whatever the email says |
+| Verified email matches a user | Links to it and sets `is_email_verified=True` |
+| Verified email, no match | New user with that email, `is_email_verified=True` |
+| Unverified email matches a user | **Refused** (`403`, "An account already uses this email. Sign in with your existing method.") — nothing is created |
+| Unverified or no email, no match | New user with `email=None`, `is_email_verified=False`; the reported address is kept only on `OAuthConnection.email` |
+
+Why the last row withholds the address: magic login and forgot-password find
+users by email. If the new account held an unverified `victim@example.com`, the
+real owner could later reach an account whose Microsoft connection belongs to
+someone else. Such a user signs in by `tid:oid` and can add an email through
+the normal change-email and verify flow. The post-credential geofence check
+(`_lookup_known_user`) also ignores an unverified email, so it cannot borrow
+another account's `bypass_geofence`.
+
+An email-less account gets a username from the token's given and family names,
+falling back to `ms-<first 12 characters of the oid>`.
+
+Whether personal Microsoft accounts carry `xms_edov` is not documented by
+Microsoft. If they do not, personal users still sign up and sign in, but cannot
+link to an existing local account by email.
 
 ---
 
@@ -519,6 +614,17 @@ Requiring an *additional* TOTP or SMS step after a successful OAuth assertion wo
 ---
 
 ## Adding a New Provider
+
+Two optional hooks on `OAuthProvider`:
+
+- `begin_state()` returns per-sign-in secrets (a PKCE verifier, a nonce) to keep
+  in the server-side state record. A provider that overrides it is called as
+  `get_auth_url(state, redirect_uri, state_data=...)`,
+  `exchange_code(code, redirect_uri, state_data=...)` and
+  `get_profile(tokens, state_data=...)`; other providers keep the plain call
+  shape. `microsoft.py` is the example.
+- A profile may include `email_verified` (bool) to opt into the
+  [Microsoft email-trust rule](#email-trust-for-microsoft).
 
 1. Create `mojo/apps/account/services/oauth/<provider>.py` subclassing `OAuthProvider`:
 
@@ -619,6 +725,14 @@ Each OAuth flow begins with a `state` token stored in Redis (key prefix `oauth:s
 - Consumed (deleted) immediately on use — single-use
 
 If `consume_state()` returns `None` (expired, already used, or forged), the complete endpoint raises a `401`. This protects against CSRF and replay attacks regardless of provider.
+
+Switching a provider off removes its button from the hosted pages. `begin`
+refuses a disabled provider (`403`) only when the request names a group
+(`group_uuid`) whose resolved `login.methods` omit it; a call without a group is
+not gated (the per-group method list is a UX restriction, see
+`auth_config.assert_login_method`). `/complete` does not re-check the method,
+so a sign-in already in flight finishes within `OAUTH_STATE_TTL`. To stop a
+provider outright, also clear its credentials. This holds for every provider.
 
 Redis is a hard dependency for the OAuth flow. If Redis is unavailable, `begin` will raise and no state token will be issued.
 
