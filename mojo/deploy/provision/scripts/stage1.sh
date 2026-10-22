@@ -23,6 +23,8 @@
 #   4. render the JUST-INSTALLED framework's cron/systemd templates into
 #      var/deploy. A fresh node has no previous post-deploy render to inherit.
 #   5. ec2_deploy.sh — the project: nginx vhosts, systemd units, var/ layout.
+#      var/profile = "prod" is written just before it too: it starts the
+#      config-sync timer and the jobs cron, which must not see settings.local.
 #      Note it does an unconditional `cp -f` of the shipped nginx config, so
 #      anything written into /etc/nginx before this point is lost here.
 #   6. var/profile = "prod" — BEFORE config_sync. settings/helper.py defaults
@@ -169,6 +171,12 @@ python3 -m mojo.deploy render --dest "${PROJ_PATH}/var/deploy" \
     die "the rendered node contract has no mojo-asgi.service"
 
 # ── 5. the project ───────────────────────────────────────────────────────────
+
+# The profile goes down BEFORE ec2_deploy.sh as well (#9315): it starts the
+# config-sync timer and installs the jobs cron, and either can bring the app
+# up while it runs. Step 6 writes it again after its var/ ownership sweep.
+mkdir -p "${PROJ_PATH}/var"
+echo prod > "${PROJ_PATH}/var/profile"
 
 log "running ec2_deploy.sh (nginx vhosts, systemd units, var layout)"
 bash "${PROJ_PATH}/aws/ec2_deploy.sh"
