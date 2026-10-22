@@ -394,11 +394,24 @@ on-demand readers every minute.
 
 Node `current` contains allowlisted CPU/load, memory/swap, relevant filesystems
 and since-boot network counters. `services` keeps request-role applicability,
-checked runner and revision-bound configuration activation evidence separate.
+checked runner, revision-bound configuration activation and current request
+readiness evidence separate. With both platform and jobs grants, the fixed
+collector reuses the existing signed nonce proof through the root-bound socket
+profile. `request_service.status:ok` means a known observation: its boolean
+`healthy` can be false. The raw physical `node`, loaded revision, positive worker
+PID, profile and actual proof-completion `observed_at` remain in the observation.
+The checked host/current runner start, fresh exact logical node proof, selected
+revision and root-bound role must agree; missing, stale or conflicting proof
+stays Unknown. Physical hostnames use the existing runner channel normalization
+when joined. Jobs-only dispatch omits the platform revision and cannot expose
+activation or request proof gathered under a broader grant.
 Only a proved `request_service_required:false` excludes API service checks;
 opaque role names do not. The scheduler lock has installation scope and leaves
 per-node scheduler health unknown. Activation receipts are not current service
-liveness. No pressure thresholds or second liveness detector are introduced.
+liveness. Node diagnostics, monitoring coverage and the snapshot
+`fleet:installation` component share this service interpretation. The
+eight-second `report()` remains provider/runner presence only, without control
+fan-out, and its cache contains identity aliases only.
 
 `trends` contains separate CPU, memory and at most eight mount series, with exact
 namespace/dimensions, UTC window, units, aggregation, actual sample timestamps,

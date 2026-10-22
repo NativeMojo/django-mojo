@@ -20,7 +20,7 @@ def collect_sysinfo(data):
     return get_host_info()
 
 def collect_diagnostics(data):
-    """Fixed checked collector. Local receipt evidence has activation scope only."""
+    """Fixed checked collector with separate activation and current serving proof."""
     from datetime import datetime, timezone
     from mojo.apps.jobs.job_engine import host_channel
     from mojo.helpers.sysinfo import get_host_diagnostics
@@ -29,13 +29,14 @@ def collect_diagnostics(data):
               "observed_at": datetime.now(timezone.utc).isoformat(),
               "current": get_host_diagnostics(), "proof": None,
               "activation": {"status": "unavailable", "reason": "activation_unpublished",
-                             "scope": "configuration_activation"}}
+                             "scope": "configuration_activation"},
+              "request_service": {"status": "unknown", "reason": "current_service_proof_unavailable"}}
     try:
         result["proof"] = local_node_proof()
     except Exception:
         result["proof_status"] = "node_proof_unavailable"
-    # Read bounded local files only. The full activation report performs
-    # subprocess/dependency probes; on-demand host collection never starts those.
+    # Reuse the fixed local serving proof, never the full convergence report
+    # (which also performs jobs/scheduler/topic activation checks).
     revision = (data or {}).get("revision")
     if revision:
         try:
@@ -43,7 +44,8 @@ def collect_diagnostics(data):
             receipt = fleet_config_node.read_receipt()
             digest = fleet_config_node.current_digest()
             role = fleet_config_role.read(revision, digest)
-            if receipt.get("installed_revision") == revision and role:
+            if (receipt.get("installed_revision") == revision and digest
+                    and receipt.get("installed_digest") == digest and role):
                 result["activation"] = {
                     "status": "ok", "reason": None, "scope": "configuration_activation",
                     "revision": revision, "receipt_status": receipt.get("status"),
@@ -51,6 +53,16 @@ def collect_diagnostics(data):
                     "request_service_profile": role.get("request_service_profile"),
                     "observed_at": result["observed_at"],
                     "health": "unknown", "health_reason": "receipt_is_not_current_service_proof"}
+                if role["request_service_required"] is True:
+                    profile = role["request_service_profile"]
+                    proof = fleet_config_node._serving_proof(revision, profile)
+                    if proof.get("error_code") or type(proof.get("healthy")) is not bool:
+                        result["request_service"]["reason"] = proof.get("error_code") or "proof_invalid"
+                    else:
+                        result["request_service"] = {
+                            "status": "ok", "reason": None, "profile": profile,
+                            "observed_at": datetime.now(timezone.utc).isoformat(),
+                            **{key: proof.get(key) for key in ("node", "loaded_revision", "pid", "healthy")}}
             else:
                 result["activation"]["reason"] = "activation_unbound"
         except Exception:

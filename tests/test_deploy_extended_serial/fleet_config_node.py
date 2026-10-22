@@ -262,6 +262,8 @@ def test_fixed_profiles_real_unix_http_proof(opts):
     from http.server import BaseHTTPRequestHandler
     from django.core import signing
     from mojo.deploy import fleet_config_node as node, fleet_config_role as role
+    from mojo.apps.jobs.services.sysinfo_task import collect_diagnostics
+    from datetime import datetime
 
     @contextmanager
     def server(path, mode):
@@ -280,6 +282,10 @@ def test_fixed_profiles_real_unix_http_proof(opts):
                     proof["node"] = "other-node"
                 elif mode == "stale":
                     proof["loaded_revision"] = "c" * 32
+                elif mode == "not_ready":
+                    proof["healthy"] = False
+                elif mode == "invalid_pid":
+                    proof["pid"] = 0
                 raw = b"not-json" if mode == "malformed" else json.dumps({"data": proof}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -304,7 +310,7 @@ def test_fixed_profiles_real_unix_http_proof(opts):
                                      "run_mojo_asgi_v1": "/run/mojo/asgi.sock"}, "Production profiles must remain a closed reviewed two-socket map"
     with tempfile.TemporaryDirectory() as root:
         for index, profile in enumerate(role.REQUEST_PROFILES):
-            for mode, expected in (("valid", None), ("replay", "proof_invalid"), ("wrong_node", "proof_invalid"),
+            for mode, expected in (("valid", None), ("not_ready", None), ("invalid_pid", "proof_invalid"), ("replay", "proof_invalid"), ("wrong_node", "proof_invalid"),
                                    ("stale", "serving_revision_pending"), ("malformed", "proof_unavailable")):
                 path = str(Path(root) / f"{index}-{mode}.sock")
                 with server(path, mode) as received:
@@ -315,6 +321,26 @@ def test_fixed_profiles_real_unix_http_proof(opts):
                     assert received[0][1]["revision"] == revision and received[0][1]["node"] == socket.gethostname().lower(), "Signed UDS challenge must bind the real node and selected revision"
                     if mode == "valid":
                         assert result["healthy"] and result["pid"] == os.getpid(), "Successful proof must be actual server process evidence"
+                    real_proof = node._serving_proof
+                    with mock.patch.object(node, "read_receipt", return_value={"installed_revision": revision, "installed_digest": "b" * 64}), mock.patch.object(
+                            node, "current_digest", return_value="b" * 64), mock.patch.object(
+                            role, "read", return_value={"request_service_required": True, "request_service_profile": profile}) as bound_role, mock.patch.object(
+                            node, "_serving_proof", side_effect=lambda rev, selected: real_proof(rev, selected, socket_paths={profile: path}, destination=destination)), mock.patch(
+                            "mojo.helpers.sysinfo.get_host_diagnostics", return_value={}), mock.patch(
+                            "mojo.apps.edge.services.readiness.local_node_proof", return_value={}):
+                        collected = collect_diagnostics({"revision": revision})
+                    bound_role.assert_called_once_with(revision, "b" * 64)
+                    service = collected["request_service"]
+                    if expected is None:
+                        assert service["status"] == "ok" and service["healthy"] is (mode != "not_ready"), "The fixed collector must preserve validated positive and negative readiness"
+                        assert service["node"] == socket.gethostname().lower() and service["loaded_revision"] == revision and service["pid"] == os.getpid(), "Collected readiness must retain exact signed process identity"
+                        assert service["profile"] == profile and datetime.fromisoformat(service["observed_at"]) >= datetime.fromisoformat(collected["observed_at"]), "The actual proof completion must stamp its independent observation"
+                        assert "nonce" not in service and "shared_validation" not in service, "The collector must project only bounded service-proof fields"
+                    else:
+                        assert service["status"] == "unknown" and service["reason"] == expected, "A rejected actual socket proof must remain unknown in the collector"
+                        assert "observed_at" not in service, "Rejected proof cannot acquire a new successful observation time"
+                    assert collected["activation"]["health"] == "unknown", "Activation progress cannot become request liveness"
+                    assert len(received) == 2, "The fixed collector must obtain its own fresh signed socket response"
                     os.chmod(path, 0)
                     denied = node._serving_proof(revision, profile, socket_paths={profile: path}, destination=destination)
                     assert denied["error_code"] == "proof_socket_permission_denied", "A real inaccessible Unix socket must report its bounded permission failure"
@@ -324,3 +350,56 @@ def test_fixed_profiles_real_unix_http_proof(opts):
         assert result["error_code"] == "proof_socket_unavailable", "Wrong fixed profile must fail instead of discovering another socket"
         result = node._serving_proof(revision, "/tmp/arbitrary.sock", socket_paths={"/tmp/arbitrary.sock": missing}, destination=destination)
         assert result["error_code"] == "request_service_profile_unknown", "An arbitrary path can never become a request proof profile"
+
+
+@th.django_unit_test()
+def test_diagnostic_collector_requires_bound_digest_and_skips_excluded_role(opts):
+    from mojo.apps.jobs.services.sysinfo_task import collect_diagnostics
+    from mojo.deploy import fleet_config_node as node, fleet_config_role as role
+    revision, digest = "a" * 32, "b" * 64
+    for label, requested, receipt, bound in (
+            ("no revision", {}, {"installed_revision": revision, "installed_digest": digest}, True),
+            ("wrong receipt", {"revision": revision}, {"installed_revision": "c" * 32, "installed_digest": digest}, True),
+            ("digest drift", {"revision": revision}, {"installed_revision": revision, "installed_digest": "c" * 64}, True),
+            ("unbound role", {"revision": revision}, {"installed_revision": revision, "installed_digest": digest}, None),
+            ("excluded role", {"revision": revision}, {"installed_revision": revision, "installed_digest": digest}, False)):
+        value = None if bound is None else {"request_service_required": bound, "request_service_profile": "opt_api_asgi_v1"}
+        with mock.patch.object(node, "read_receipt", return_value=receipt), mock.patch.object(
+                node, "current_digest", return_value=digest), mock.patch.object(role, "read", return_value=value), mock.patch.object(
+                node, "_serving_proof") as proof, mock.patch.object(node, "report") as convergence, mock.patch(
+                "mojo.helpers.sysinfo.get_host_diagnostics", return_value={}), mock.patch(
+                "mojo.apps.edge.services.readiness.local_node_proof", return_value={}):
+            result = collect_diagnostics(requested)
+        assert proof.call_count == 0 and convergence.call_count == 0, f"{label}: no request probe or full convergence report is authorized"
+        assert result["request_service"]["status"] == "unknown", f"{label}: activation alone cannot fabricate request readiness"
+        assert (result["activation"]["status"] == "ok") is (bound is False), f"{label}: only the bound excluded role establishes activation applicability"
+
+
+@th.django_unit_test()
+def test_snapshot_default_checked_dispatch_suppresses_denied_platform_revision(opts):
+    import copy
+    import time
+    from test_aws.fleet_health import Actor
+    from test_aws.fleet_service_readiness import _fixture, REVISION
+    from mojo.apps import jobs
+    from mojo.apps.aws.services.fleet_health import acquire_snapshot
+    real_sysinfo, dispatched = jobs.get_sysinfo, []
+    class Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+    class Manager:
+        def broadcast_execute_checked(self, path, data, **kwargs):
+            dispatched.append((path, data))
+            return copy.deepcopy(checked)
+    def sysinfo(**kwargs):
+        return real_sysinfo(**{**kwargs, "manager": Manager(), "connect": lambda **options: Client()})
+    for permissions, expected in ((("view_platform", "view_jobs"), {"revision": REVISION}), (("view_jobs",), {})):
+        readers, receipt, checked, calls, host = _fixture(True)
+        readers.pop("diagnostics_batch")
+        with mock.patch.object(jobs, "get_sysinfo", side_effect=sysinfo):
+            result = acquire_snapshot(Actor(*permissions), deadline=time.monotonic() + 5, readers=readers)
+        assert dispatched[-1][0].endswith("collect_diagnostics") and dispatched[-1][1] == expected, "The production default batch must send the selected revision only under platform authority"
+        service = result["evidence"][host]["services"]["request_service"]
+        assert service["status"] == ("ok" if expected else "unknown"), "Default dispatch and source projection must enforce the same platform boundary"

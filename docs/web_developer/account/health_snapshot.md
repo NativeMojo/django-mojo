@@ -83,6 +83,19 @@ capacity remains raw facts rather than invented percentages. Scheduler lock
 presence has installation scope and no independent heartbeat. Missing detector
 evidence is explicit unknown.
 
+The fleet component's existing `source:request_service` slot carries current
+signed request readiness for each required node, with the same interpretation
+as node diagnostics and monitoring coverage. It requires exact node/host,
+current runner start, revision and root-bound role/profile agreement. Installed
+configuration or deployment completion alone is not readiness. A known boolean
+`healthy:false` produces a failing availability condition and can keep the fleet
+down while other sources are unknown. Missing/stale/mismatched proof remains
+Unknown; explicit proved exclusion is `not_applicable` and adds no availability
+pass. Request evidence expires 420 seconds after actual proof completion;
+collection/publication/polling times cannot renew it. Removing jobs permission
+removes the slot and its causal condition. `get_fleet_health` still reports only
+provider/runner presence, without request-proof fan-out or cached service health.
+
 ## Failure cursor and limits
 
 One read has a three-second budget, a 512KiB cached publication and one200-row

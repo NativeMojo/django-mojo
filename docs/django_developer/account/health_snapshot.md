@@ -101,6 +101,20 @@ provenance remain in the evidence. Values without capacity (for example
 FreeableMemory/FreeStorageSpace) remain raw facts with unknown utilization.
 Pressure degrades status; only proved availability failures establish down.
 
+The existing per-node `source:request_service` slot in `fleet:installation`
+uses the same checked service projection as node diagnostics and monitoring
+coverage. A fresh signed local socket response must bind the physical host,
+current admitted runner start, exact logical node, selected revision and
+root-controlled request role/profile. Activation receipts alone remain progress
+evidence. A validated boolean `healthy:false` is a known availability failure
+and keeps the fleet down despite unrelated coverage gaps. Missing, stale,
+mismatched or conflicting proof remains Unknown; only explicit proved role
+exclusion is not applicable and it adds no availability pass. The slot's
+420-second expiry starts at actual proof completion; collection, publication
+and polling cannot renew it. Jobs grant removal removes the slot and its causal
+condition. The on-demand fleet `report()` retains provider/runner presence scope
+and never gathers request proofs or caches health in the identity roster.
+
 ## Bounded sources
 
 One private batch composes the fleet readers; it does not loop public fleet/node

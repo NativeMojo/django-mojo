@@ -61,6 +61,67 @@ def _worker_publication(heartbeat_at):
     return value, rows
 
 
+def _service_publication(healthy, required=True):
+    from mojo.apps.account.services import health_evidence as he, health_snapshot as hs
+    identity = _identity()
+    observed = NOW - timedelta(seconds=2)
+    service = {"status": "ok", "observed_at": he.timestamp(observed), "healthy": healthy,
+               "node": "api_private.example", "loaded_revision": "a" * 32, "pid": 123,
+               "profile": "opt_api_asgi_v1", "source": "signed_request_proof", "required": required}
+    if healthy is None:
+        service = {"status": "unknown", "reason": "current_service_proof_unavailable", "required": required}
+    if required is False:
+        service = {"status": "not_applicable", "reason": "bound_role_excludes_request_service", "required": False}
+    fleet = {"rows": [{"node_id": "api-private-example", "expected": True, "request_service_required": required}],
+             "evidence": {"api-private-example": {"services": {"request_service": service}}},
+             "expected": {"complete": True}, "roster_complete": True}
+    configuration = {**identity, "services": [], "channels": [], "channels_complete": True}
+    components = he.build_components(configuration, {}, {}, fleet, {}, now=NOW)
+    component = next(row for row in components if row["kind"] == "fleet")
+    return hs.publication(identity, 1, CONFIG, [component], generated_at=he.timestamp(NOW),
+                          published_at=he.timestamp(NOW), roster_revision="c" * 64)
+
+
+@th.django_unit_test()
+def test_signed_service_slot_preserves_failure_expiry_and_revoked_jobs(opts):
+    from mojo.apps.account.services import health_evidence as he, health_snapshot as hs
+    observed = NOW - timedelta(seconds=2)
+    for healthy in (True, False):
+        value = _service_publication(healthy)
+        original = copy.deepcopy(value)
+        sample = next(slot for slot in value["components"][0]["evidence"] if slot["source"] == "request_service")
+        for at in (NOW, NOW + timedelta(seconds=60), NOW + timedelta(seconds=300), observed + timedelta(seconds=419)):
+            result = hs.project_publication(value, {"platform": True, "jobs": True, "aws": False}, now=at)
+            component = result["components"][0]
+            service = next(slot for slot in component["evidence"] if slot["source"] == "request_service")
+            condition = next(row for row in component["conditions"] if row.get("rule") == "request_service_availability")
+            assert service["status"] == "ok" and service["value"]["healthy"] is healthy, "Cached polling must preserve a known positive or negative service observation"
+            assert service["observed_at"] == he.timestamp(observed) and service["fresh_until"] == he.timestamp(observed + timedelta(seconds=420)), "Collection/publication/read times cannot renew request proof"
+            assert service["sample_id"] == sample["sample_id"] and service["collected_at"] == sample["collected_at"], "Polling cannot fabricate another current request sample"
+            assert condition["outcome"] == ("pass" if healthy else "fail") and condition["impact"] == "availability", "The existing service slot must cause the correct availability predicate"
+            assert component["availability"] == ("up" if healthy else "down"), "A proved service failure must survive independent source gaps"
+            assert not component["coverage"]["complete"], "Current service proof cannot erase unrelated missing fleet evidence"
+        expired = hs.project_publication(value, {"platform": True, "jobs": True, "aws": False}, now=observed + timedelta(seconds=420))
+        service = next(slot for slot in expired["components"][0]["evidence"] if slot["source"] == "request_service")
+        condition = next(row for row in expired["components"][0]["conditions"] if row.get("rule") == "request_service_availability")
+        assert service["status"] == "stale" and condition["outcome"] == "unknown", "Service availability must expire independently at its actual 420-second deadline"
+        revoked = hs.project_publication(value, {"platform": True, "jobs": False, "aws": False}, now=NOW)
+        assert "request_service" not in json.dumps(revoked) and "api_private.example" not in json.dumps(revoked), "Revoked jobs authority must remove the service slot and its causal identities"
+        assert revoked["coverage"]["expected_total"] is None and not revoked["coverage"]["complete"], "Revoked service authority cannot preserve complete health"
+        assert value == original, "Expiry and permission projection must preserve the immutable service publication"
+
+
+@th.django_unit_test()
+def test_excluded_or_unknown_service_cannot_fabricate_availability_pass(opts):
+    from mojo.apps.account.services import health_snapshot as hs
+    for healthy, required in ((None, True), (None, False)):
+        result = hs.project_publication(_service_publication(healthy, required), {"platform": True, "jobs": True, "aws": False}, now=NOW)
+        component = result["components"][0]
+        conditions = [row for row in component["conditions"] if row.get("rule") == "request_service_availability"]
+        assert not conditions or all(row["outcome"] == "unknown" for row in conditions), "An unknown or excluded request service cannot fabricate a causal availability pass"
+        assert component["availability"] == "unknown" and not component["coverage"]["complete"], "Unknown/excluded service evidence cannot hide independent coverage gaps"
+
+
 @th.django_unit_test()
 def test_cached_worker_sample_survives_poll_without_renewing_heartbeat(opts):
     from mojo.apps.account.services import health_evidence as he, health_snapshot as hs

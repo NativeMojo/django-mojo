@@ -663,9 +663,10 @@ def report(actor, limit=20, cursor=None, *, readers=None, deadline=None):
     return output
 
 
-def _services(row, sources):
+def _services(row, sources, *, checked=None, runners=None, revision=None, now=None, heartbeat_ttl=None):
+    """One interpretation of checked, current, role-bound request readiness."""
     required = row.get("request_service_required")
-    return {"request_service": _state("not_applicable" if required is False else "unknown",
+    services = {"request_service": _state("not_applicable" if required is False else "unknown",
                                       "role_excludes_request_service" if required is False else "current_service_proof_unavailable",
                                       source="declared_role", observed_at=None, unit=None,
                                       required=required),
@@ -675,6 +676,64 @@ def _services(row, sources):
             "scheduler": _state("unknown", "per_node_scheduler_unproved", scope="node",
                                  installation=sources.get("scheduler"), source="scheduler_lock",
                                  observed_at=None, unit=None)}
+    if not revision or not checked or row.get("identity_status") == "ambiguous":
+        return services
+    now = now or datetime.now(timezone.utc)
+    heartbeat_ttl = heartbeat_ttl if heartbeat_ttl is not None else max(1, int(settings.get_static("JOBS_RUNNER_HEARTBEAT_SEC", 5))) * 3
+    if checked.get("status") not in ("verified", "partial") or checked.get("anomalies"):
+        return services
+    matching = [receipt for receipt in checked.get("results", [])
+                if receipt.get("host") == row.get("hostname") and receipt.get("status") == "success"]
+    if len(matching) != 1 or not row.get("runner_id"):
+        return services
+    receipt = matching[0]
+    if not any(runner.get("hostname", "").lower() == receipt.get("host")
+               and runner.get("started") == receipt.get("started") and runner.get("alive")
+               and _fresh(runner.get("last_heartbeat"), now, max_age=heartbeat_ttl) for runner in runners or []):
+        return services
+    payload = receipt.get("result") or {}
+    proof = payload.get("proof") or {}
+    if (payload.get("hostname") != row.get("hostname") or proof.get("node_id") != row["node_id"]
+            or not _fresh(proof.get("observed_at"), now)):
+        return services
+    activation = payload.get("activation") or {}
+    services["activation"] = {key: activation.get(key) for key in (
+        "status", "reason", "scope", "revision", "receipt_status", "request_service_required",
+        "request_service_profile", "observed_at", "health", "health_reason")}
+    bound_required = activation.get("request_service_required")
+    if (activation.get("status") != "ok" or activation.get("scope") != "configuration_activation"
+            or activation.get("revision") != revision or type(bound_required) is not bool
+            or not _fresh(activation.get("observed_at"), now)):
+        return services
+    if required not in (None, bound_required):
+        row["request_service_required"] = None
+        services["request_service"] = _state("unknown", "role_conflict", required=None)
+        return services
+    row["request_service_required"] = bound_required
+    services["request_service"]["required"] = bound_required
+    if bound_required is False:
+        services["request_service"] = _state("not_applicable", "bound_role_excludes_request_service",
+            source="configuration_activation", observed_at=activation.get("observed_at"), unit=None, required=False)
+        return services
+    from mojo.deploy.fleet_config_role import REQUEST_PROFILES
+    service = payload.get("request_service") or {}
+    if service.get("status") != "ok":
+        services["request_service"]["reason"] = service.get("reason") or "current_service_proof_unavailable"
+        return services
+    physical = service.get("node")
+    profile = activation.get("request_service_profile")
+    # This is host_channel's existing normalization. Keep the raw socket proof
+    # hostname in the observation rather than replacing its physical identity.
+    host = physical.lower().replace(".", "-").replace("_", "-") if isinstance(physical, str) else None
+    if (host != row.get("hostname")
+            or service.get("loaded_revision") != revision or type(service.get("pid")) is not int
+            or service["pid"] <= 0 or type(service.get("healthy")) is not bool
+            or type(profile) is not str or profile not in REQUEST_PROFILES or service.get("profile") != profile
+            or not _fresh(service.get("observed_at"), now, max_age=20)):
+        return services
+    services["request_service"] = _state("ok", source="signed_request_proof", required=True, unit=None,
+        **{key: service[key] for key in ("node", "loaded_revision", "pid", "healthy", "profile", "observed_at")})
+    return services
 
 
 def _project_current(value):
@@ -769,11 +828,13 @@ def node(actor, node_id, hours=24, *, readers=None, deadline=None):
     row["services"] = _services(row, sources)
     row["current"] = _state("permission_denied")
     row["trends"] = _state("permission_denied")
+    revision = readers.get("revision", settings.get_static("MOJO_FLEET_CONFIG_REVISION", None)) if grants["platform"] else None
+    checked = None
     if grants["jobs"] and time.monotonic() < deadline:
         try:
             checked = readers.get("diagnostics", _read_diagnostics)(
                 row, runners, min(deadline, time.monotonic() + 5),
-                settings.get_static("MOJO_FLEET_CONFIG_REVISION", None) if grants["platform"] else None)
+                revision)
             row["runtime"] = {key: checked.get(key) for key in (
                 "status", "reason", "anomalies", "missing_hosts", "failed_hosts") if key in checked}
             receipts = checked.get("results") or []
@@ -810,20 +871,6 @@ def node(actor, node_id, hours=24, *, readers=None, deadline=None):
                     row["current"] = _state("unknown", "identity_mismatch")
                 else:
                     row["current"] = _project_current(payload.get("current"))
-                    activation = payload.get("activation") or {}
-                    row["services"]["activation"] = {key: activation.get(key) for key in (
-                        "status", "reason", "scope", "revision", "receipt_status", "request_service_required",
-                        "request_service_profile", "observed_at", "health", "health_reason")}
-                    bound_required = activation.get("request_service_required")
-                    if activation.get("status") == "ok" and type(bound_required) is bool:
-                        if row.get("request_service_required") not in (None, bound_required):
-                            row["request_service_required"] = None
-                            row["services"]["request_service"] = _state("unknown", "role_conflict")
-                        elif bound_required is False:
-                            row["request_service_required"] = False
-                            row["services"]["request_service"] = _state(
-                                "not_applicable", "bound_role_excludes_request_service",
-                                source="configuration_activation", observed_at=activation.get("observed_at"), unit=None)
                     if proof.get("node_id") == row["node_id"] and _fresh(proof.get("observed_at"), datetime.now(timezone.utc)):
                         row.update(identity_status="resolved", proof_started=matching[0].get("started"),
                                    proof_observed_at=proof["observed_at"])
@@ -863,6 +910,11 @@ def node(actor, node_id, hours=24, *, readers=None, deadline=None):
                                     "bounded_cluster_startup_unsupported" if unsupported else "checked_transport_unavailable")
     elif grants["jobs"]:
         row["current"] = _state("unavailable", "deadline_exceeded")
+    services = _services(row, sources, checked=checked, runners=runners, revision=revision,
+                         heartbeat_ttl=readers.get("heartbeat_ttl"))
+    row["services"]["request_service"] = services["request_service"]
+    if "activation" in services:
+        row["services"]["activation"] = services["activation"]
     if grants["aws"] and time.monotonic() < deadline:
         try:
             mounts = [item["path"] for item in (row.get("current", {}).get("filesystems") or {}).get("mounts", [])]
@@ -940,7 +992,7 @@ def node(actor, node_id, hours=24, *, readers=None, deadline=None):
     return output
 
 
-def _snapshot_readers(deadline, budget, readers, *, connect_factory=None, provider_factory=None, topology_key=None):
+def _snapshot_readers(deadline, budget, readers, *, connect_factory=None, provider_factory=None, topology_key=None, revision=None):
     """Private default readers all charge the same source-operation budget."""
     from mojo.apps.account.services import health_evidence as he
     from mojo.helpers.redis import get_bounded_connection
@@ -992,7 +1044,7 @@ def _snapshot_readers(deadline, budget, readers, *, connect_factory=None, provid
     readers.setdefault("identity_cache", IdentityRoster(connect=connect))
     readers.setdefault("diagnostics_batch", lambda roster, end: jobs.get_sysinfo(diagnostic=True, roster=roster,
         deadline=end, timeout=5, connect=connect,
-        revision=settings.get_static("MOJO_FLEET_CONFIG_REVISION", None)))
+        revision=revision))
     return readers
 
 
@@ -1003,7 +1055,9 @@ def acquire_snapshot(actor, *, deadline, readers=None, budget=None, now=None, no
     from mojo.deploy.provision.spec import names
     phase_now = lambda: now if now is not None else (wall_clock or (lambda: datetime.now(timezone.utc)))()
     budget = budget or CycleBudget(deadline)
-    readers = _snapshot_readers(deadline, budget, readers or {})
+    readers = readers or {}
+    revision = readers.get("revision", settings.get_static("MOJO_FLEET_CONFIG_REVISION", None)) if source_grants(actor)["platform"] else None
+    readers = _snapshot_readers(deadline, budget, readers, revision=revision)
     grants, expected, rows, sources, runners, overflow, inventory = readers.get("collected") or _collect(actor, deadline, readers)
     checked = _state("unavailable", "diagnostic_channel_membership_missing", results=[])
     if grants["jobs"]:
@@ -1046,6 +1100,9 @@ def acquire_snapshot(actor, *, deadline, readers=None, budget=None, now=None, no
         except Exception:
             checked = _state("unavailable", "checked_transport_unavailable", results=[])
     selected = [row for row in rows if row["expected"] and (node_ids is None or row["node_id"] in node_ids)][:128]
+    # Role/readiness observations below do not change the reconciled identity
+    # revision used by coverage cursors. Declaration changes still fence it.
+    roster_revision = _revision(rows)
     evidence = {}
     for row in selected:
         current = _state("permission_denied") if not grants["jobs"] else _state("unavailable", checked.get("reason") or "checked_reply_missing")
@@ -1059,7 +1116,9 @@ def acquire_snapshot(actor, *, deadline, readers=None, budget=None, now=None, no
                 proof = payload.get("proof") or {}
                 if payload.get("hostname") == row.get("hostname") and (not proof.get("node_id") or proof["node_id"] == row["node_id"]):
                     current = _project_current(payload.get("current"))
-        evidence[row["node_id"]] = {"current": current, "trends": _state("permission_denied"), "services": _services(row, sources)}
+        evidence[row["node_id"]] = {"current": current, "trends": _state("permission_denied"),
+            "services": _services(row, sources, checked=checked if grants["jobs"] else None,
+                runners=runners, revision=revision, now=phase_now(), heartbeat_ttl=readers.get("heartbeat_ttl"))}
     cloud = None
     if grants["aws"]:
         try:
@@ -1079,7 +1138,7 @@ def acquire_snapshot(actor, *, deadline, readers=None, budget=None, now=None, no
     roster_complete = _envelope(expected, rows, sources, overflow)["coverage"]["complete"]
     return {"grants": grants, "expected": expected, "rows": rows, "sources": sources,
             "runners": runners, "overflow": overflow, "inventory": inventory, "evidence": evidence,
-            "cloud": cloud, "roster_complete": roster_complete, "roster_revision": _revision(rows), "roster_scope": roster_scope(expected)}
+            "cloud": cloud, "roster_complete": roster_complete, "roster_revision": roster_revision, "roster_scope": roster_scope(expected)}
 
 
 def _coverage_slot(raw, *, source, required=True, configuration="unknown", provenance=None, now=None, freshness=20):
@@ -1099,7 +1158,7 @@ def _coverage_slot(raw, *, source, required=True, configuration="unknown", prove
         covered = "not_configured"
     value = raw.get("value")
     if value is None:
-        value = {key: raw[key] for key in ("percent", "total", "used", "free", "available", "scheduler_active") if key in raw} or None
+        value = {key: raw[key] for key in ("percent", "total", "used", "free", "available", "scheduler_active", "healthy") if key in raw} or None
     return {"required": required, "configuration_status": configuration, "configuration_provenance": provenance,
             "status": status, "reason": reason, "coverage_status": covered,
             "last_real_sample_at": at.isoformat() if at else None, "collected_at": _now(), "truncated": bool(raw.get("truncated")),
@@ -1188,7 +1247,9 @@ def coverage(actor, node_id=None, cursor=None, *, readers=None, deadline=None, n
     deadline = min(deadline or time.monotonic() + 20, time.monotonic() + 20)
     from mojo.apps.account.services.health_evidence import CycleBudget
     budget = CycleBudget(deadline, limits={"provider_operations": 32, "cloudwatch_series": 10})
-    readers = _snapshot_readers(deadline, budget, {**(readers or {}), "metric_operations": 12})
+    readers = {**(readers or {}), "metric_operations": 12}
+    selected_revision = readers.get("revision", settings.get_static("MOJO_FLEET_CONFIG_REVISION", None)) if source_grants(actor)["platform"] else None
+    readers = _snapshot_readers(deadline, budget, readers, revision=selected_revision)
     # Resolve the roster once, then pass this exact acquisition into the raw
     # detail phase. No public node/report call and no second inventory sweep.
     collected = _collect(actor, deadline, readers)
@@ -1218,7 +1279,7 @@ def coverage(actor, node_id=None, cursor=None, *, readers=None, deadline=None, n
         raise FleetHealthError("roster_changed")
     projected = project_monitoring_coverage(acquired, selected_id, now=now)
     result = _envelope(expected, rows, sources, overflow)
-    result.update(health="unknown", health_scope="monitoring_coverage", node=next(row for row in rows if row["node_id"] == selected_id), **projected)
+    result.update(health="unknown", health_scope="monitoring_coverage", node=next(row for row in acquired["rows"] if row["node_id"] == selected_id), **projected)
     more = position + 1 < len(expected_ids)
     result["coverage"].update(returned=1, has_more=more,
         next_cursor=signing.dumps({"revision": revision, "scope": roster_scope(expected), "profile": 2, "last": selected_id}, salt="mojo.monitoring.coverage.v2", compress=True) if more else None,

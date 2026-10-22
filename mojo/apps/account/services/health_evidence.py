@@ -802,8 +802,13 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
         current = detail.get("current") or fleet.get("collection_error") or {}
         required_service = row.get("request_service_required")
         service = (detail.get("services") or {}).get("request_service") or {"status": "unknown", "reason": "role_or_service_evidence_unknown"}
-        slots.append(make("fleet", "installation", "service:" + digest(node_id)[:32], service,
-            grant="jobs", source="request_service", identity={"node_id": node_id, "required": required_service}, required=required_service is not False))
+        service_slot = make("fleet", "installation", "service:" + digest(node_id)[:32], service,
+            grant="jobs", source="request_service", identity={"node_id": node_id, "required": required_service}, required=required_service is not False)
+        slots.append(service_slot)
+        if required_service is not False:
+            checks.append(predicate("fleet", "installation", "request_service_availability", service_slot,
+                not service["healthy"] if type(service.get("healthy")) is bool else None,
+                impact="availability", resource_key=digest(node_id)))
         families = [("cpu", current.get("cpu")), ("memory", current.get("memory"))]
         fs = current.get("filesystems") or {}
         fs = {**fs, "truncated": bool(fs.get("omitted_count") or fs.get("omitted_missing_count"))}

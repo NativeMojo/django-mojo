@@ -252,8 +252,22 @@ mismatch and collector failure stay distinct unavailable/unknown evidence.
 Worker/Sites service applicability needs proved role evidence; an installation
 scheduler lock does not prove a scheduler on every node.
 
+Node `services.request_service` and the snapshot fleet component accept the
+same current signed local request-process proof. Platform and jobs grants are
+both required. `status:ok` is a known observation; inspect boolean `healthy`
+for readiness, including a known `false`. Evidence retains the actual physical
+`node`, `loaded_revision`, positive worker `pid`, fixed `profile` and
+proof-completion `observed_at`. The exact logical node, checked host/current
+runner start, selected revision and root-bound role must agree. Missing, stale,
+replaced or conflicting evidence remains Unknown. Only explicit proved role
+exclusion is `not_applicable`; activation/deployment progress alone cannot
+prove request health. Jobs-only collection omits the platform revision and
+withholds activation/request proof.
+
 The fleet read has an eight-second collection budget and no per-node control or
-CloudWatch fan-out. One-node diagnostics use twenty seconds, checked replies at
+CloudWatch fan-out; its health scope remains provider/runner presence. Current
+request readiness is in node/coverage reads and the snapshot fleet component.
+One-node diagnostics use twenty seconds, checked replies at
 most five seconds. Identity-only aliases expire after 120 seconds and can be
 resolved across workers; expired observed-only IDs return `unknown_resource` and
 require a fresh fleet read. No diagnostic result cache is introduced here.
