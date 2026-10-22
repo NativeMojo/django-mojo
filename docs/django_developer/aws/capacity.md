@@ -66,6 +66,9 @@ of diffing the roster and guessing which new heartbeat is the node it launched.
 ```bash
 #!/bin/bash
 set -u
+if [ ! -s "<root>/var/profile" ]; then
+  ...  # quarantine, power off, exit 1: see "A clone with no var/profile"
+fi
 TOKEN=$(curl -sS -X PUT "http://169.254.169.254/latest/api/token" \
   -H "X-aws-ec2-metadata-token-ttl-seconds: 300" || true)
 IID=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" \
@@ -81,7 +84,7 @@ systemctl restart mojo-asgi.service || true
 
 Five things, each load-bearing:
 
-1. **IMDSv2 token first.** The launch forces `HttpTokens=required`, so an
+1. **IMDSv2 token first**, once the profile check has passed. The launch forces `HttpTokens=required`, so an
    unauthenticated metadata read would simply fail.
 2. **config-sync**, so the node pulls **its own** `django.conf` from S3 rather
    than running on whatever the AMI baked. The baked config is deliberately
@@ -102,6 +105,55 @@ notices.
 `ADMIN_CAPACITY_NODE_ROOT` (default `/opt/api`) is the `--root` passed to
 `node_setup`.
 
+### A clone with no `var/profile`
+
+The image is a copy of the source's disk. `settings/helper.py` boots
+`settings.local` when `var/profile` is missing, so a markerless source would
+produce markerless clones (maestro #9315). The server cannot read the source's
+disk before cloning it. Instead, the clone checks first thing, and with a
+missing or empty marker it quarantines itself instead of booting. Only a
+missing or empty marker is refused. A staging fleet whose profile is not `prod`
+boots normally.
+
+**The check runs before the clone takes its own hostname.** That ordering is
+the admission control. The join leg admits exactly one runner,
+`<base>-<instance-id suffix>-engine`, and the engine names its runner after the
+hostname. The AMI cannot carry that name, because it holds this instance's id,
+and only a clone that passed the check is given it. An engine that starts on a
+markerless clone, for example from the jobs cron before the quarantine moves it
+aside, can only answer as the source's or the stock EC2 hostname. The join leg
+never admits either.
+
+Stopping the app once is not enough. The jobs cron starts the engine every
+minute, and config-sync restarts the app. So every step of the quarantine is
+built to outlast the script:
+
+1. **Every `/etc/cron.d` file that names the root** moves to
+   `/etc/cron.d.mojo-quarantine/`, first, so no new engine start is scheduled
+   while the rest runs. The job engine has no profile gate of its own.
+2. **A systemd drop-in**, `zz-mojo-clone-refused.conf`, on `mojo-asgi.service`,
+   `config-sync.service` and `config-sync.timer`. It adds
+   `ConditionFileNotEmpty=<root>/var/profile`, the same test as the shell's
+   `! -s`. systemd then skips any later start while the marker is missing or
+   empty: config-sync's restart, the timer, an operator, the next boot. It is a
+   drop-in, not `systemctl mask`, because systemd refuses to mask a unit whose
+   file is already in `/etc/systemd/system`, and that is where `node_setup`
+   installs these units. Then `daemon-reload`, `stop`, and `disable` the timer.
+3. **`jobman stop`.**
+4. **Checks.** A failed drop-in write, `daemon-reload`, cron move or
+   `jobman stop` is reported, and so is a gated unit that is still active.
+   The script then prints `quarantine incomplete: …`. It never reports a
+   failed stop as a clean quarantine.
+5. **Power off**, whether or not the checks passed, then `exit 1`.
+
+The add operation then fails with `clone_refused`. It sees this either while
+waiting for the launch or after the runner wait, when the instance is
+`stopping` or `stopped`. The clone was never registered.
+
+**Recovery:** Terminate the clone, write `prod` (or the fleet's profile) to the
+source node's `var/profile`, and add again. Leave the stopped clone alone: if it
+is started, the gated units are skipped and the cron files stay set aside.
+
 ## Adding a node, end to end
 
 `POST /api/aws/capacity/apply {action: "add_node"}` does the bounded part
@@ -113,7 +165,7 @@ ladder and writes each phase onto the record:
 |---|---|---|
 | `capturing` | Reuse a `mojo:fleet-image` AMI younger than `ADMIN_CAPACITY_IMAGE_MAX_AGE_DAYS` (14), else `create_image(NoReboot=True)` on a healthy **non-primary** member — or on the member the request NAMED — and poll until `available` | `image_timeout` after 30 min — **nothing was launched** |
 | `launching` | `run_instances` into the **recorded** subnet (the source's, or the one the request named and proved), cloning instance type, security groups and instance profile, with `HttpTokens=required`, `mojo:created-by=admin-capacity`, and the source's identity tags (`mojo:project`/`mojo:env`/`managed-by`) so the clone is born a provable fleet member | `launch_timeout` — the instance exists and is NOT registered |
-| `booting` | Wait for `<node_id>-engine` on the `edge` channel | `runner_missing` after 20 min — running, unregistered, serving nothing |
+| `booting` | Wait for `<node_id>-engine` on the `edge` channel | `runner_missing` after 20 min — running, unregistered, serving nothing; `clone_refused` if the clone powered itself off (no `var/profile`, see above) |
 | `converging` | ONE targeted `_publish_deploy_node(runner_id, row.sha, row.framework_version, migrate=False, deployment_id=row.pk)` for `platform_deploy.last_converged_deployment()` | `no_converged_deployment` |
 | `proving` | Poll `readiness.local_node_proof` over `execute_on_runner` until `platform_deploy.proof_matches` accepts it | `proof_timeout` — **NOT registered** |
 | `addressing` | Only while stable outbound IPs are on: reuse a reserved `mojo:eip=stable-egress` address, else allocate one, associate it, before registration | `address_failed` / `address_quota` — **NOT registered**; `policy_unreadable` if the policy row cannot even be read |
