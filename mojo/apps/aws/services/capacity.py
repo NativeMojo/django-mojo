@@ -1453,7 +1453,7 @@ def report(refresh=False, elbv2_client=None, ec2_client=None, rds_client=None,
 
 # ── user data ───────────────────────────────────────────────────────────────
 
-def node_user_data(base_name, root=None):
+def node_user_data(base_name, root=None, systemd_dir=None, cron_dir=None):
     """The clone's first-boot script.
 
     Order is the whole point:
@@ -1462,11 +1462,12 @@ def node_user_data(base_name, root=None):
        unauthenticated metadata read would simply fail) for this instance's own
        id, and a hostname derived from it. Unique by construction, and derived
        from something only this box knows.
-       Then, before any of 2-4, a clone whose disk carries no ``var/profile`` stops
-       the app and the job engine and exits non-zero (#9315). The image is a copy
-       of the source's disk, so a source that booted ``settings.local`` would
-       otherwise multiply; with no engine the join leg never sees the runner and
-       the clone is never put behind the load balancer.
+       Then, before any of 2-4, a clone whose disk carries no ``var/profile`` is
+       quarantined and powered off (#9315). The image is a copy of the source's
+       disk, so a source that booted ``settings.local`` would otherwise
+       multiply. Stopping the app once is not enough: the jobs cron restarts
+       the engine every minute and config-sync restarts the app, so the
+       refusal has to outlive this script. See ``_quarantine_lines``.
     2. config-sync, so the node pulls ITS OWN ``django.conf`` from S3 rather
        than running on whatever the AMI happened to bake. The baked config is
        deliberately NOT deleted: config-sync failing on a node with no config
@@ -1496,11 +1497,9 @@ def node_user_data(base_name, root=None):
         f'  hostnamectl set-hostname "{safe_base}-${{IID##*-}}"',
         "fi",
         f'if [ ! -s "{safe_root}/var/profile" ]; then',
-        f'  echo "mojo clone: {safe_root}/var/profile is missing; the app would '
-        'boot settings.local, so it is stopped and this node will not join" >&2',
-        "  systemctl stop mojo-asgi.service || true",
-        f'  "{safe_root}/bin/jobman" stop || true',
-        "  exit 1",
+        *_quarantine_lines(safe_root,
+                           str(systemd_dir or "/etc/systemd/system").replace('"', ""),
+                           str(cron_dir or "/etc/cron.d").replace('"', "")),
         "fi",
         "systemctl start config-sync.service || true",
         f'python3 -m mojo.deploy.node_setup --root "{safe_root}" || true',
@@ -1508,6 +1507,68 @@ def node_user_data(base_name, root=None):
         f'"{safe_root}/bin/jobman" restart || true',
         "",
     ])
+
+
+# Units the clone's quarantine gates. config-sync.timer would restart the app
+# when it next pulls a config; config-sync.service is what it starts.
+QUARANTINE_UNITS = ("mojo-asgi.service", "config-sync.service", "config-sync.timer")
+QUARANTINE_DROPIN = "zz-mojo-clone-refused.conf"
+
+
+def _quarantine_lines(root, systemd_dir, cron_dir):
+    """The refusal a markerless clone runs instead of booting (#9315).
+
+    Every piece has to hold after this script exits, because nothing here is
+    the only thing that starts the app:
+
+    * a systemd drop-in puts ``ConditionPathExists=<root>/var/profile`` on the
+      app, config-sync and its timer. A start from anywhere — config-sync's own
+      ``restart_app``, an operator, the next boot — is skipped while the marker
+      is absent. A drop-in rather than ``systemctl mask``: node_setup installs
+      the units into /etc/systemd/system, and systemd refuses to mask a unit
+      whose file is already there;
+    * every cron file that names the project root moves out of the cron
+      directory. The jobs cron starts the engine every minute and the engine
+      has no profile gate of its own;
+    * the engine is stopped, and each step is CHECKED — a failed stop is
+      reported as an incomplete quarantine, never as a clean one;
+    * the box powers off. It was never registered, so it serves nothing either
+      way; powered off it cannot join the job fleet even if a step above
+      failed. The add operation fails with ``clone_refused``; recovery is to
+      Terminate the clone, give the source a ``var/profile`` and add again.
+    """
+    quarantine_dir = f"{cron_dir.rstrip('/')}.mojo-quarantine"
+    units = " ".join(QUARANTINE_UNITS)
+    dropin = (f"'[Unit]' '# django-mojo capacity: this clone booted with no "
+              f"var/profile' 'ConditionPathExists={root.replace(chr(39), '')}/var/profile'")
+    return [
+        f'  echo "mojo clone: {root}/var/profile is missing; the app would boot '
+        'settings.local, so this node is quarantined, powered off and will not '
+        'join" >&2',
+        '  FAILED=""',
+        f"  for UNIT in {units}; do",
+        f'    mkdir -p "{systemd_dir}/$UNIT.d" && printf "%s\\n" {dropin} '
+        f'> "{systemd_dir}/$UNIT.d/{QUARANTINE_DROPIN}" '
+        '|| FAILED="$FAILED dropin:$UNIT"',
+        "  done",
+        '  systemctl daemon-reload || FAILED="$FAILED daemon-reload"',
+        f"  systemctl stop {units} || true",
+        '  systemctl disable config-sync.timer || true',
+        f'  mkdir -p "{quarantine_dir}" || FAILED="$FAILED quarantine-dir"',
+        f'  for CRON in "{cron_dir}"/*; do',
+        f'    [ -f "$CRON" ] && grep -qF -- "{root}" "$CRON" || continue',
+        f'    mv -f "$CRON" "{quarantine_dir}/" || FAILED="$FAILED cron:${{CRON##*/}}"',
+        "  done",
+        f'  "{root}/bin/jobman" stop || FAILED="$FAILED jobman-stop"',
+        f"  for UNIT in {units}; do",
+        '    systemctl is-active --quiet "$UNIT" && FAILED="$FAILED active:$UNIT"',
+        "  done",
+        '  if [ -n "$FAILED" ]; then',
+        '    echo "mojo clone: quarantine incomplete:$FAILED; powering off" >&2',
+        "  fi",
+        "  systemctl poweroff || shutdown -h now || true",
+        "  exit 1",
+    ]
 
 
 def expected_node_id(base_name, instance_id):
@@ -3636,6 +3697,8 @@ def _run_add_node(record):
         facts = ec2_helper.instance_facts(instance_id) or {}
         if facts.get("state") == "running":
             break
+        if facts.get("state") in ("stopping", "stopped"):
+            return _fail(record, "clone_refused", _refused_message(instance_id))
         if facts.get("state") in ("terminated", "shutting-down"):
             return _fail(record, "launch_failed",
                          f"{instance_id} stopped before it finished booting.")
@@ -3648,6 +3711,14 @@ def _run_add_node(record):
     _advance(record, "booting",
              f"waiting for {runner_id} to join the edge channel")
     if not _await_runner(runner_id, RUNNER_TIMEOUT):
+        # A clone that powered itself off is the first-boot quarantine
+        # (node_user_data), not a slow boot: say what the operator must fix.
+        try:
+            state = (ec2_helper.instance_facts(instance_id) or {}).get("state")
+        except Exception:
+            state = None
+        if state in ("stopping", "stopped"):
+            return _fail(record, "clone_refused", _refused_message(instance_id))
         return _fail(record, "runner_missing",
                      f"{instance_id} is running but never joined the job fleet "
                      f"as {runner_id}. It is NOT registered behind the "
@@ -3738,6 +3809,13 @@ def _run_add_node(record):
     return _finish(record,
                    f"{instance_id} is serving as {node_id}",
                    healthy=True)
+
+
+def _refused_message(instance_id):
+    return (f"{instance_id} powered itself off on first boot: the source's disk "
+            f"has no var/profile, so the clone would have run settings.local. "
+            f"It quarantined itself and is NOT registered behind the balancer. "
+            f"Terminate it, give the source node a var/profile, then add again.")
 
 
 def _await_runner(runner_id, timeout):

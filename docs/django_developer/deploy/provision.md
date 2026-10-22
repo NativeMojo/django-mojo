@@ -759,10 +759,16 @@ uvicorn runs, `/api/version` returns 200. It is the failure that costs an
 afternoon, so `configure` reads the file back over SSH and fails loudly with
 the remedy rather than reporting a converge that did not happen.
 
-Stage 1 writes it between `ec2_deploy.sh` and `config_sync` — after the
-former's `var/` ownership sweep, and before the latter's
-role-aware `CONFIG_SYNC_RESTART` restart, which would otherwise bring a request
-node up on the wrong profile.
+Stage 1 writes it twice (maestro #9315):
+
+- **before `ec2_deploy.sh`**, because that script starts the config-sync timer
+  and installs the jobs cron, and either can bring the app or the job engine up
+  while it is still running;
+- **again after it**, then chowns it `ec2-user:www` and sets mode 640. The
+  `var/` ownership sweep in `ec2_deploy.sh` keeps the contents but changes the
+  owner and mode, and the second write restores both. It also lands before
+  `config_sync`'s role-aware `CONFIG_SYNC_RESTART` restart, which would
+  otherwise bring a request node up on the wrong profile.
 
 ## Stage 0 and stage 1
 
@@ -801,8 +807,8 @@ published to the config bucket with the version pin substituted, and logged to
 | 2 | `aws/ec2_bootstrap.sh` | the OS: users, packages, nginx, certbot, and an **unpinned** `pip install django-mojo` |
 | 3 | `pip install --upgrade "django-mojo==<version>"`, converged with bounded retries (`--no-cache-dir` after the first attempt) | **after** step 2, precisely so it overwrites that unpinned install; a freshly published version can lag pip's Simple-index caches, and a fresh node has nothing to fall back on, so exhaustion stays fatal here |
 | 4 | `python3 -m mojo.deploy render --dest /opt/api/var/deploy …` | materializes the JUST-PINNED package's cron/systemd templates before the project tries to converge them; a fresh node has no earlier post-deploy render to inherit |
-| 5 | `aws/ec2_deploy.sh` | the project: nginx vhosts, systemd units, `var/` ownership |
-| 6 | `echo prod > var/profile`, chown `ec2-user:www`, chmod 640 | after step 5's ownership sweep, before step 8's restart |
+| 5 | `echo prod > var/profile`, then `aws/ec2_deploy.sh` | the project: nginx vhosts, systemd units, `var/` ownership. The profile goes first because this script starts the config-sync timer and the jobs cron |
+| 6 | `echo prod > var/profile` again, chown `ec2-user:www`, chmod 640 | after step 5's ownership sweep, which changes the owner and mode; before step 8's restart |
 | 7 | CloudWatch agent | installed if absent, configured, enabled — before the restart, so the app's first minutes are logged |
 | 8 | `python3 -m mojo.deploy.config_sync` | last: it installs `django.conf` and restarts `mojo-asgi` |
 
