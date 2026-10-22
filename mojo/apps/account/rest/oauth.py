@@ -485,8 +485,17 @@ def on_oauth_begin(request, provider):
     # toggleable login method (google/apple/github); providers outside
     # LOGIN_METHODS are never gated here.
     if provider in auth_config.LOGIN_METHODS:
-        auth_config.assert_login_method(
-            provider, auth_config.resolve_group_from_request(request))
+        group = auth_config.resolve_group_from_request(request)
+        auth_config.assert_login_method(provider, group)
+        # With no group, a provider that is off by default (microsoft) is
+        # still refused unless the system config switches it on: that switch
+        # is the admin's only way to turn it off. Default-on providers stay
+        # ungated here, as before.
+        if group is None and provider not in auth_config.DEFAULT_LOGIN_METHODS:
+            methods = auth_config.resolve_auth_config(None, request=request).login.methods or []
+            if provider not in methods:
+                raise merrors.PermissionDeniedException(
+                    "This sign-in method is not available for this app", 403, 403)
 
     # frontend_uri = where the browser lands after the callback bounce
     custom_frontend_uri = request.DATA.get("redirect_uri", "")
