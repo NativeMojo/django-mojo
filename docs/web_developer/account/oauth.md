@@ -494,5 +494,6 @@ Admins with `manage_users` (or the combined `users` permission) bypass the locko
 | `400` | Unknown provider, missing params, or `redirect_uri` not on the allowlist |
 | `401` | Invalid or expired OAuth state token |
 | `403` | Account is disabled |
+| `403` | `begin`: the provider is switched off — for the named group, or, for a provider that is off by default (Microsoft), system-wide even with no group |
 | `403` | Microsoft: an account already uses this (unverified) email |
 | `401` | Microsoft: the ID token could not be verified |

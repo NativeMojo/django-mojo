@@ -727,10 +727,14 @@ Each OAuth flow begins with a `state` token stored in Redis (key prefix `oauth:s
 If `consume_state()` returns `None` (expired, already used, or forged), the complete endpoint raises a `401`. This protects against CSRF and replay attacks regardless of provider.
 
 Switching a provider off removes its button from the hosted pages. `begin`
-refuses a disabled provider (`403`) only when the request names a group
-(`group_uuid`) whose resolved `login.methods` omit it; a call without a group is
-not gated (the per-group method list is a UX restriction, see
-`auth_config.assert_login_method`). `/complete` does not re-check the method,
+refuses a disabled provider (`403`) when the request names a group
+(`group_uuid`) whose resolved `login.methods` omit it (see
+`auth_config.assert_login_method`). Without a group, a provider that is on by
+default (Google, Apple, GitHub) is not gated, but a provider that is off by
+default (`LOGIN_METHODS` minus `DEFAULT_LOGIN_METHODS`, today only Microsoft)
+is refused unless the system-wide `login.methods` lists it. So once switched
+off, Microsoft is refused at `begin` whether or not a group is named.
+`/complete` does not re-check the method,
 so a sign-in already in flight finishes within `OAUTH_STATE_TTL`. To stop a
 provider outright, also clear its credentials. This holds for every provider.
 
