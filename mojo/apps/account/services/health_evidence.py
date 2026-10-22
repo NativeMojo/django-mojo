@@ -435,7 +435,8 @@ def failure_page(source_id, cursor=None, *, deadline, now=None, reader=None):
 class CycleBudget:
     LIMITS = {"provider_operations": 32, "inventory_pages": 4, "metric_discovery_pages": 4,
               "cloudwatch_series": 256, "checked_broadcasts": 4, "checked_targets": 128,
-              "redis_commands": 256, "db_queries": 16, "api_services": 24, "channels": 32}
+              "redis_commands": 256, "db_queries": 16, "api_services": 24, "channels": 32,
+              "project_services": 8}
     def __init__(self, deadline, *, limits=None, clock=None, reserved=None):
         self.reserved, self.finalizing = dict(reserved or {}), False
         self.clock, self.deadline = clock or time.monotonic, deadline
@@ -480,7 +481,7 @@ def bounded_redis_connection(*, budget, connect=None, **kwargs):
     return BudgetRedis((connect or get_bounded_connection)(**kwargs), budget)
 
 
-def source_configuration(deadline, *, get_static=None, cursor_context=None, budget=None):
+def source_configuration(deadline, *, get_static=None, cursor_context=None, budget=None, project_reader=None):
     """One bounded primary query for frozen settings and the declared API roster."""
     from mojo.apps.account.models import Setting
     from mojo.apps.account.services import system_settings, health_snapshot
@@ -525,11 +526,19 @@ def source_configuration(deadline, *, get_static=None, cursor_context=None, budg
     redis_origin = str(get_static("REDIS_URL", "") or "")
     binding = {"database_host": connections["default"].settings_dict.get("HOST"),
                "redis_host": urlsplit(redis_origin).hostname if redis_origin else get_static("REDIS_SERVER", "localhost")}
-    revision = health_snapshot.configuration_revision(identity, {"roster_scope": fleet_health.roster_scope(expected),
-        "services": services, "channels": channels, "bindings": binding})
-    return {**identity, "config_revision": revision, "expected": expected, "services": services,
+    from mojo.apps.account.services import project_health
+    project = (project_reader or (lambda end: project_health.freeze(end, get_static=get_static, budget=budget)))(deadline)
+    revision_config = {"roster_scope": fleet_health.roster_scope(expected),
+        "services": services, "channels": channels, "bindings": binding}
+    if project is not None:
+        revision_config["project_services"] = project
+    revision = health_snapshot.configuration_revision(identity, revision_config)
+    result = {**identity, "config_revision": revision, "expected": expected, "services": services,
             "services_omitted": max(0, len(apps) - 23), "services_complete": len(apps) < 25, "channels": channels[:32],
             "channels_complete": bool(channels_valid and channels and len(channels) <= 32), "bindings": binding}
+    if project is not None:
+        result["project_services"] = project
+    return result
 
 
 def database_and_job_facts(channels, deadline, *, budget=None, cursor_context=None):
@@ -719,7 +728,7 @@ def managed_series(configuration, deadline, *, budget, provider_factory=None):
     return result
 
 
-def build_components(configuration, native, redis, fleet, probes, *, managed=None, previous=None, queues=None, now=None):
+def build_components(configuration, native, redis, fleet, probes, *, managed=None, previous=None, queues=None, project_results=None, now=None):
     """Profile2 current obligations and causal-slot proof from independent sources."""
     now, source_id = now or utcnow(), configuration["source_id"]
     components = []
@@ -758,6 +767,28 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
                             not raw["reachable"] if type(raw.get("reachable")) is bool else None, impact="availability")]
         components.append(component(source_id, "api", service["resource_id"], [sample], checks,
                                     service_id=service["service_id"], resource_scope="service", now=now))
+    project = configuration.get("project_services")
+    if project is not None:
+        from mojo.apps.account.services import project_health
+        for check in project["checks"]:
+            resource = check["id"]
+            identity = project_health.source_identity(project, check)
+            prior = next((row for row in old.get("service:" + resource, {}).get("evidence", [])
+                          if row["slot_id"] == "check" and row["source_identity"] == identity), None)
+            raw = (project_results or {}).get(resource) or {"outcome": "unknown", "observed_at": None,
+                "reason": project["reason"] or "project_check_unavailable"}
+            known = raw.get("outcome") in ("pass", "fail") and not project["reason"]
+            sample = slot(source_id, "service:" + resource, "check", source="project_service",
+                required_grant="platform", source_identity=identity,
+                observed_at=raw.get("observed_at") if known else None, collected_at=now,
+                status="ok" if known else "unknown", reason=project["reason"] or raw.get("reason"),
+                value=raw["outcome"] == "pass" if known else None, previous=prior, now=now)
+            proof = condition("service:" + resource, "service_check", resource,
+                raw["outcome"] if known else "unknown", [sample] if known else [],
+                impact=check["impact"], reason=project["reason"] or raw.get("reason"), now=now)
+            proof["rule"] = "service_check"
+            components.append(component(source_id, "service", resource, [sample], [proof],
+                service_id=resource, resource_scope="service", identity_grant="platform", now=now))
     for kind, raw in (("database", native.get("database", {})), ("redis", redis)):
         raw = dict(raw or {})
         if kind == "database" and native.get("observed_at"):

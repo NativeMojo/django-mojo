@@ -291,3 +291,41 @@ def test_unknown_role_keeps_named_service_obligation_and_unknown_denominator(opt
     service = next(row for row in component["evidence"] if row["source"] == "request_service")
     assert service["source_identity"]["node_id"] == "unknown-role" and service["status"] == "unknown", "unknown role silently removed or invented a current service obligation"
     assert component["coverage"]["expected_total"] is None and not component["coverage"]["complete"], "unknown role requirements established a known complete measurement denominator"
+
+
+@th.django_unit_test()
+def test_project_conditions_use_actual_boolean_observations_and_declared_impact(opts):
+    from test_account.health_project_services import _components, _declaration, _project, _result, NOW as observed
+    project = _project(_declaration({"id": "mcp", "impact": "availability"}, {"id": "sites-dns", "impact": "operational"}))
+    for outcome in ("pass", "fail", "unknown"):
+        rows = _components(project, {"mcp": _result(outcome), "sites-dns": _result(outcome)})
+        by_id = {row["service_id"]: row for row in rows}
+        mcp, dns = by_id["mcp"], by_id["sites-dns"]
+        sample, proof = mcp["evidence"][0], mcp["conditions"][0]
+        assert sample["slot_id"] == "check" and sample["required_grant"] == "platform" and sample["required"], "project evidence lost its required platform obligation"
+        assert proof["rule"] == "service_check" and proof["outcome"] == outcome, "project callback outcome did not produce the framework condition"
+        assert mcp["availability"] == {"pass": "up", "fail": "down", "unknown": "unknown"}[outcome], "proved positive/negative availability was lost or invented"
+        assert dns["availability"] == "unknown" and dns["status"] == {"pass": "healthy", "fail": "degraded", "unknown": "unknown"}[outcome], "operational-only check fabricated availability or lost degradation"
+        if outcome == "unknown":
+            assert sample["observed_at"] is None and sample["sample_id"] is None and not proof["basis"], "Unknown callback fabricated causal observation proof"
+        else:
+            assert sample["value"] is (outcome == "pass") and sample["last_success_at"] == observed.isoformat(), "a successfully observed target failure became a collector failure"
+            assert sample["fresh_until"] == (observed + timedelta(seconds=420)).isoformat(), "project direct observation changed the existing 420-second lifetime"
+            assert proof["basis"][0]["sample_id"] == sample["sample_id"], "callback supplied evidence outside the framework-owned causal slot"
+    missing = _components(project, {"mcp": _result()})
+    absent = next(row for row in missing if row["service_id"] == "sites-dns")
+    assert absent["status"] == "unknown" and not absent["coverage"]["complete"], "an omitted callback result silently removed or passed its obligation"
+
+
+@th.django_unit_test()
+def test_project_failure_retains_prior_only_for_matching_actual_configuration(opts):
+    from test_account.health_project_services import _components, _project, _result
+    first = _project(values={"mcp": {"origin": "https://one.example"}})
+    previous = {"components": _components(first, {"mcp": _result()})}
+    original = previous["components"][0]["evidence"][0]
+    same = _components(first, {"mcp": _result("unknown", "provider_unavailable")}, previous=previous)[0]["evidence"][0]
+    assert same["observed_at"] is None and same["value"] is None and same["prior"]["sample_id"] == original["sample_id"], "failed project collection renewed or discarded matching prior facts"
+    assert same["last_success_at"] == original["last_success_at"] and same["fresh_until"] == original["fresh_until"], "unknown project collection renewed prior success/expiry"
+    changed = _project(values={"mcp": {"origin": "https://two.example"}})
+    other = _components(changed, previous=previous)[0]["evidence"][0]
+    assert "prior" not in other and other["sample_id"] is None and other["last_success_at"] is None, "changed project configuration borrowed prior health from a different route"

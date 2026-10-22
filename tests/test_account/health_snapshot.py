@@ -449,3 +449,96 @@ def test_real_user_revocation_rereads_primary_before_cache_or_history(opts):
         assert user.has_permission("manage_aws"), "fixture did not retain a stale privileged User copy"
     finally:
         User.objects.filter(pk=user.pk).delete()
+
+
+@th.django_unit_test()
+def test_project_cached_reads_keep_samples_deadlines_digest_and_current_grants(opts):
+    from mojo.apps.account.services import health_snapshot as hs
+    from test_account.health_project_services import _project, _publication, _result, NOW as observed
+    project = _project()
+    value, calls = _publication(project, {"mcp": _result()}), []
+    original = copy.deepcopy(value)
+    class Actor:
+        is_active = is_authenticated = is_request_user = True
+        def has_permission(self, permissions):
+            return "view_platform" in permissions
+    class Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def eval(self, *args):
+            calls.append("cache")
+            return [json.dumps(value), "ok", "1"]
+    def configuration(end):
+        calls.append("offline_configuration")
+        return project
+    for seconds in (0, 60, 300, 419, 420):
+        report = hs.read_snapshot(Actor(), connect=lambda **kwargs: Client(), identity_reader=lambda: {
+            key: value[key] for key in ("source_id", "source_identity")}, actor_loader=lambda actor, end: actor,
+            project_configuration_reader=configuration, now=observed + timedelta(seconds=seconds))
+        sample = report["components"][0]["evidence"][0]
+        for key in ("sample_id", "observed_at", "collected_at", "last_success_at", "fresh_until"):
+            assert sample[key] == original["components"][0]["evidence"][0][key], f"cached project poll renewed {key}"
+        assert report["publication_digest"] == original["publication_digest"] and report["publication_generation"] == 1, "cached projection rewrote immutable same-generation facts"
+        assert report["components"][0]["availability"] == ("up" if seconds < 420 else "unknown"), "project availability outlived its actual causal deadline"
+    assert calls == ["cache", "offline_configuration"] * 5, "cached read collected project checks or skipped offline fencing"
+    denied = hs.project_publication(value, {"platform": False, "aws": True, "jobs": True}, now=observed)
+    assert "service:mcp" not in json.dumps(denied) and "test_project.health" not in json.dumps(denied), "platform grant removal leaked project identity"
+    assert value == original, "cached project reads mutated the publication storage object"
+
+
+@th.django_unit_test()
+def test_project_configuration_changes_refuse_whole_old_publication(opts):
+    from mojo.apps.account.services import health_snapshot as hs, project_health as ph
+    from test_account.health_project_services import _project, _publication, _result
+    first = _project(values={"mcp": {"origin": "https://one.example"}})
+    value = _publication(first, {"mcp": _result()})
+    changed = _project(values={"mcp": {"origin": "https://two.example"}})
+    unavailable = _project(values={})
+    for current in (changed, unavailable, None):
+        assert not ph.cached_matches(value, 10, configuration_reader=lambda end: current, clock=lambda: 0), "changed/removed/unavailable offline project config accepted old green"
+    assert not ph.cached_matches(_publication(None), 10, configuration_reader=lambda end: first, clock=lambda: 0), "new project declarations accepted a publication that omitted every new obligation"
+    assert not ph.cached_matches(value, 10, configuration_reader=lambda end: first, clock=lambda: 10), "offline fingerprint returning at the read deadline accepted old green"
+    class Actor:
+        is_active = is_authenticated = is_request_user = True
+        def has_permission(self, permissions):
+            return "view_platform" in permissions
+    class Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def eval(self, *args):
+            return [json.dumps(value), "ok", "1"]
+    report = hs.read_snapshot(Actor(), connect=lambda **kwargs: Client(), identity_reader=lambda: {
+        key: value[key] for key in ("source_id", "source_identity")}, actor_loader=lambda actor, end: actor,
+        project_configuration_reader=lambda end: changed)
+    assert report["collection_status"] == "unknown" and report["components"] == [] and report["publication_generation"] is None, "read fingerprint mismatch rewrote one generation instead of refusing its whole publication"
+    assert "project_configuration_changed" in report["coverage"]["reasons"], "read fingerprint refusal lost its fixed reason code"
+    identity = {key: value[key] for key in ("source_id", "source_identity")}
+    cache = hs.PublicationCache(value["source_id"], connect=lambda **kwargs: Client())
+    with th.assert_raises(hs.SnapshotError):
+        cache.publish(value, "unused", "unused", time.monotonic() + 3, current_identity=identity,
+            current_config_revision=_publication(changed)["config_revision"])
+
+
+@th.django_unit_test()
+def test_project_wire_allowlist_rejects_forged_shape_and_ninth_service(opts):
+    from mojo.apps.account.services import health_snapshot as hs
+    from test_account.health_project_services import _declaration, _project, _publication, _result
+    project = _project(_declaration(*[{"id": "check-%d" % index, "impact": "availability"} for index in range(8)]))
+    value = _publication(project, {row["id"]: _result() for row in project["checks"]})
+    identity = {key: value[key] for key in ("source_id", "source_identity")}
+    assert hs.validate_publication(value, identity) is value and len(value["components"]) == 8, "bounded eight-service publication was refused"
+    for mutate in (lambda row: row.update(kind="plugin"), lambda row: row.update(service_id="other"),
+                   lambda row: row["evidence"][0].update(required_grant="jobs"),
+                   lambda row: row["evidence"][0]["source_identity"].update(module="https://untrusted.example")):
+        invalid = copy.deepcopy(value)
+        mutate(invalid["components"][0])
+        with th.assert_raises(hs.SnapshotError):
+            hs.validate_publication(_seal(invalid), identity)
+    extra = _publication(_project(_declaration({"id": "ninth", "impact": "availability"})), {"ninth": _result()})["components"][0]
+    value["components"].append(extra)
+    with th.assert_raises(hs.SnapshotError):
+        hs.validate_publication(_seal(value), identity)

@@ -30,7 +30,7 @@ read the existing frozen `MOJO_INSTALLATION_UUID`/slug pair and file-only
 SHA-256 of canonical JSON `[installation_id,environment_id]`.
 
 Components have source-scoped `kind:resource_id` identities. Kinds are `api`,
-`database`, `redis`, `jobman`, `fleet`, and `monitoring`. Primary and declared
+`database`, `redis`, `jobman`, `fleet`, `monitoring`, and `service`. Primary and declared
 WebApp origins have separate API service IDs (at most 24); shared DB, Redis,
 fleet and jobman appear once. Each component carries `resource_scope`,
 `resource_id`, `resource_owner_source_id` and nullable `service_id`. Consumers
@@ -114,6 +114,75 @@ exclusion is not applicable and it adds no availability pass. The slot's
 and polling cannot renew it. Jobs grant removal removes the slot and its causal
 condition. The on-demand fleet `report()` retains provider/runner presence scope
 and never gathers request proofs or caches health in the identity roster.
+
+## Trusted project service checks
+
+The default-off, file-only `HEALTH_SNAPSHOT_PROJECT_SERVICES` setting extends
+this same scheduled producer. It accepts exactly `module` and `checks`:
+
+```python
+HEALTH_SNAPSHOT_PROJECT_SERVICES = {
+    "module": "myproject.services.health_checks",
+    "checks": [
+        {"id": "mcp", "impact": "availability"},
+        {"id": "sites-dns", "impact": "operational"},
+    ],
+}
+```
+
+There are at most eight unique lowercase slug IDs, each at most 64 characters;
+`project-checks` is reserved for the invalid-declaration Unknown sentinel.
+Each declaration has exactly `id` and `impact`. No HTTP parameter, database
+Setting or callback result selects executable code. An absent setting preserves
+the original configuration hash and publication behavior.
+
+The trusted synchronous module exports these two functions:
+
+- `configuration(checks, deadline, budget)` returns a dict with exactly every
+  declared ID, mapping each to its actual non-secret JSON configuration. This
+  function is strictly offline: no network, credential resolution or node calls.
+  It participates in producer acquisition, publication fencing and cached reads.
+  Values must be finite JSON, at most 4 KiB per check and 32 KiB total. The module,
+  roster, impacts and actual configuration determine the frozen fingerprint and
+  existing publication `config_revision`.
+- `collect(check, deadline, budget)` returns exactly
+  `{outcome, observed_at, reason}`. Outcome is `pass|fail|unknown`. Pass/fail need
+  an actual timezone-aware ISO observation; Unknown requires null observation.
+  `check` is frozen `{id, impact, config}`; configuration receives frozen
+  `{id, impact}` declarations. Nested mappings are read-only and lists become
+  tuples. Both functions receive the actual absolute monotonic deadline and
+  shared `CycleBudget`.
+
+Callback `reason` is null or one fixed code: `configuration_unavailable`,
+`credential_unavailable`, `authentication_failed`, `protocol_invalid`,
+`deadline_exceeded`, `provider_unavailable`, `unsupported`, `cleanup_failed`,
+`dns_mismatch`, `dns_no_answer`. Raw provider bodies, exception messages,
+credentials and callback-supplied provenance never enter evidence. Callbacks own
+their service predicate and bounded I/O, and must include cleanup in their
+deadline. Collection runs in the existing four-worker pool, charges one of eight
+`project_services` allowances and receives at most five seconds or the remaining
+acquisition time. Late results are Unknown. Trusted Python must cooperate with
+the bound; there is no detached timeout thread or forced cancellation claim.
+
+The framework constructs `service:<id>`, with service scope, matching
+`resource_id`/`service_id`, platform identity grant, one required platform `check`
+slot (`source:project_service`) and one `service_check` condition. Slot identity
+contains `module`, `check_id`, `impact` and `project_fingerprint`; actual config
+is not returned. A pass/fail is a boolean true/false observation with the existing
+sample ID, last-success and 420-second freshness rules. Operational-only checks
+can degrade health but never establish availability. Missing/import/invalid/late
+checks retain Unknown obligations. Prior facts survive failed collection only
+when their project fingerprint and declared identity still match.
+
+When current declarations or cached service components exist, the three-second
+read path compares the current offline fingerprint and exact identities with
+the cached slots. Changed, removed, unavailable or late configuration refuses
+the whole publication as Unknown. It never calls `collect`, updates observation
+times, or rewrites the facts/digest of one generation. The publication-time
+configuration race fence still applies. Schema/profile remain 2; the closed
+component ceiling is 37 (29 built-in plus eight service checks), with the same
+512 KiB, 2,048-slot and 1,024-condition limits. Consumers lacking service-kind
+support must reject unsupported snapshots safely.
 
 ## Bounded sources
 

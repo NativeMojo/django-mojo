@@ -20,7 +20,7 @@ SCHEMA_VERSION = 2
 PROFILE_VERSION = 2
 STATE_KEY = "MOJO_HEALTH_PUBLICATION_STATE"
 MAX_BYTES = 512 * 1024
-MAX_COMPONENTS = 29
+MAX_COMPONENTS = 37
 MAX_SLOTS = 2048
 MAX_GENERATION = 2 ** 53 - 1
 CACHE_TTL = 48 * 3600
@@ -29,7 +29,7 @@ READ_SECONDS = 3
 RESPONSE_FIELDS = ("contract", "schema_version", "source_id", "source_identity", "publication_generation",
                    "publication_digest", "config_revision", "generated_at", "published_at", "served_at",
                    "roster_revision", "profile_version", "collection_status", "components", "coverage", "failure_evidence")
-KINDS = ("api", "database", "redis", "jobman", "fleet", "monitoring")
+KINDS = ("api", "database", "redis", "jobman", "fleet", "monitoring", "service")
 HEX = re.compile(r"^[a-f0-9]{64}$")
 ENVIRONMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
@@ -220,7 +220,7 @@ def validate_publication(value, identity):
     require(isinstance(value.get("failure_evidence"), dict))
     components = value.get("components")
     require(isinstance(components, list) and len(components) <= MAX_COMPONENTS)
-    seen, total_slots, total_conditions = set(), 0, 0
+    seen, total_slots, total_conditions, project_count = set(), 0, 0, 0
     for component in components:
         require(isinstance(component, dict))
         component_id = component.get("component_id")
@@ -242,6 +242,33 @@ def validate_publication(value, identity):
                     (HEX.fullmatch(component[name]) if name == "sample_id" else evidence.parse_time(component[name]) is not None)))
         slots, conditions = component.get("evidence"), component.get("conditions")
         require(isinstance(slots, list) and isinstance(conditions, list))
+        if component["kind"] == "service":
+            from mojo.apps.account.services import project_health
+            project_count += 1
+            require(project_count <= project_health.MAX_CHECKS
+                    and len(component["resource_id"]) <= 64 and project_health.ID.fullmatch(component["resource_id"])
+                    and component["resource_scope"] == "service" and component["service_id"] == component["resource_id"]
+                    and component["resource_owner_source_id"] == value["source_id"]
+                    and component["identity_grant"] == "platform" and component["required"] is True
+                    and len(slots) == len(conditions) == 1)
+            project_slot = slots[0]
+            require(isinstance(project_slot, dict) and project_slot.get("slot_id") == "check"
+                    and project_slot.get("source") == "project_service" and project_slot.get("required_grant") == "platform"
+                    and project_slot.get("required") is True)
+            project_identity = project_slot.get("source_identity")
+            require(isinstance(project_identity, dict)
+                    and set(project_identity) == {"module", "check_id", "impact", "project_fingerprint"}
+                    and project_identity["check_id"] == component["resource_id"]
+                    and project_identity["impact"] in ("availability", "operational")
+                    and isinstance(project_identity["project_fingerprint"], str)
+                    and HEX.fullmatch(project_identity["project_fingerprint"])
+                    and (project_identity["module"] is None or isinstance(project_identity["module"], str)
+                         and len(project_identity["module"]) <= 256 and project_health.MODULE.fullmatch(project_identity["module"])))
+            require(type(project_slot.get("value")) in (bool, type(None))
+                    and isinstance(conditions[0], dict) and conditions[0].get("rule") == "service_check"
+                    and conditions[0].get("impact") == project_identity["impact"]
+                    and conditions[0].get("condition_key") == evidence.digest([
+                        component_id, PROFILE_VERSION, "service_check", component["resource_id"]]))
         total_slots += len(slots)
         total_conditions += len(conditions)
         require(total_slots <= MAX_SLOTS and total_conditions <= evidence.MAX_CONDITIONS)
@@ -513,7 +540,7 @@ def _current_actor(actor, deadline):
 
 
 def read_snapshot(actor, evidence_cursor=None, *, connect=None, identity_reader=None,
-                  actor_loader=None, failure_reader=None, now=None, deadline=None):
+                  actor_loader=None, failure_reader=None, project_configuration_reader=None, now=None, deadline=None):
     """Only cached bytes and one failure page; never collection/refresh on miss."""
     from mojo.apps.aws.services.fleet_health import source_grants, FleetHealthError
     if evidence_cursor is not None and (not isinstance(evidence_cursor, str) or not 0 < len(evidence_cursor) <= 4096):
@@ -535,6 +562,9 @@ def read_snapshot(actor, evidence_cursor=None, *, connect=None, identity_reader=
     try:
         identity = (identity_reader or (lambda: resolve_identity(deadline=deadline)))()
         cached = PublicationCache(identity["source_id"], connect=connect).read(identity, deadline)
+        from mojo.apps.account.services import project_health
+        if not project_health.cached_matches(cached, deadline, configuration_reader=project_configuration_reader):
+            raise SnapshotError("project_configuration_changed")
         result = project_publication(cached, grants, now=now)
     except Exception as exc:
         reason = exc.error_code if isinstance(exc, SnapshotError) else (
@@ -688,6 +718,7 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from functools import partial
     from mojo.apps.aws.services import fleet_health, capacity
+    from mojo.apps.account.services import project_health
     from mojo.helpers.aws.provider_call import DeadlineProviderClient
     from mojo.helpers.redis import get_bounded_connection
     from mojo.apps.jobs.manager import get_manager
@@ -782,7 +813,7 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
             except Exception as exc:
                 queues = {channel: failed(exc) for channel in configuration["channels"]}
             return {"native": native_redis, "queues": queues}
-        values, probes = {}, {}
+        values, probes, project_results = {}, {}, {}
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures = {pool.submit(readers.get("native", lambda: evidence.database_and_job_facts(configuration["channels"], collection_deadline, budget=budget))): "native",
                        pool.submit(readers.get("redis", redis_source)): "redis",
@@ -790,6 +821,11 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
             for service in configuration["services"]:
                 budget.take("api_services")
                 futures[pool.submit(readers.get("probe", evidence.probe_service), service, collection_deadline)] = service["resource_id"]
+            project = configuration.get("project_services")
+            if project is not None:
+                for check in project["checks"]:
+                    futures[pool.submit(project_health.collect, project, check, collection_deadline, budget,
+                        loader=readers.get("project_loader"), clock=monotonic)] = ("project", check["id"])
             for future in as_completed(futures):
                 key = futures[future]
                 try:
@@ -800,7 +836,9 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
                         value = {**value, "database": value}
                     elif key == "redis":
                         value = {"native": value, "queues": {channel: value for channel in configuration["channels"]}}
-                if key in ("native", "redis", "fleet"):
+                if isinstance(key, tuple):
+                    project_results[key[1]] = value
+                elif key in ("native", "redis", "fleet"):
                     values[key] = value
                 else:
                     probes[key] = value
@@ -811,7 +849,7 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
             managed = {"series": []}
         else:
             acquired, managed = fleet_value
-        components = evidence.build_components(configuration, values.get("native", {}), values.get("redis", {}).get("native", {}), acquired, probes, managed=managed, previous=previous, queues=values.get("redis", {}).get("queues", {}), now=evidence.utcnow())
+        components = evidence.build_components(configuration, values.get("native", {}), values.get("redis", {}).get("native", {}), acquired, probes, managed=managed, previous=previous, queues=values.get("redis", {}).get("queues", {}), project_results=project_results, now=evidence.utcnow())
         result = _fit_publication(identity, generation, configuration["config_revision"], components,
             generated_at=evidence.timestamp(now), published_at=evidence.timestamp(evidence.utcnow()),
             roster_revision=acquired.get("roster_revision"), configuration=configuration)

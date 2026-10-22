@@ -38,7 +38,7 @@ The envelope carries:
   `collection_status`, `components`, `coverage`, and `failure_evidence`.
 
 Components have `component_id:kind:resource_id`, kind `api|database|redis|jobman|
-fleet|monitoring`, `resource_scope`, `resource_id`, `resource_owner_source_id`,
+fleet|monitoring|service`, `resource_scope`, `resource_id`, `resource_owner_source_id`,
 nullable `service_id`, `required`, `status`, `availability`, actual observation/
 success/deadline fields, sample ID, reasons, evidence, conditions and coverage.
 Primary and declared WebApps have independent API rows (up to24); shared DB,
@@ -95,6 +95,27 @@ pass. Request evidence expires 420 seconds after actual proof completion;
 collection/publication/polling times cannot renew it. Removing jobs permission
 removes the slot and its causal condition. `get_fleet_health` still reports only
 provider/runner presence, without request-proof fan-out or cached service health.
+
+Projects may opt into at most eight trusted service checks in the existing
+producer. Their components are `service:<id>`, with `resource_scope:service`,
+matching `resource_id`/`service_id`, and platform permission for both identity
+and detail. Each has exactly one required `check` slot from `project_service`
+and one `service_check` condition. Slot identity contains `module`, `check_id`,
+`impact` and an opaque `project_fingerprint`; actual project configuration and
+credentials are withheld. Slot values are boolean true (pass), false (proved
+failure), or null (Unknown). Availability-impact checks can establish up/down;
+operational checks can degrade status but never establish availability.
+
+Only the server's static configuration selects the callback module and roster.
+Missing, malformed, failed or late callbacks retain Unknown obligations; invalid
+declarations produce the reserved `service:project-checks` Unknown component.
+The same actual sample/last-success/420-second expiry rules apply. Cached polls
+never run checks or renew observations. Current offline configuration is checked
+within the read's existing three seconds: a changed/removed/unavailable project
+configuration returns whole-publication Unknown with no generation or components,
+instead of rewriting the old generation. Grant/expiry projections retain the
+immutable digest. Schema/profile remain 2 with a closed 37-component ceiling;
+older clients must reject unsupported `service` kinds safely.
 
 ## Failure cursor and limits
 
