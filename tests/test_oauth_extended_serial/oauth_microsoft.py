@@ -260,7 +260,9 @@ def test_ms_token_tenant_policy(opts):
 @th.django_unit_test("microsoft id token: get_profile keys identity on tid:oid and reads xms_edov")
 def test_ms_profile_shape(opts):
     p = _default()
-    p.svc._validate_id_token = lambda token, nonce: p.validate(token, nonce=nonce)
+    original = p.svc._validate_id_token
+    p.svc._validate_id_token = lambda token, nonce: original(
+        token, nonce, client_id=CLIENT_ID, tenant="common")
     profile = p.svc.get_profile({"id_token": _token(_claims())}, {"nonce": NONCE})
     assert profile["uid"] == f"{WORK_TID}:00000000-0000-0000-66f3-3332eca7ea81", \
         f"uid must be tid:oid, got {profile['uid']}"
