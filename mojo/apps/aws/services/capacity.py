@@ -1462,6 +1462,11 @@ def node_user_data(base_name, root=None):
        unauthenticated metadata read would simply fail) for this instance's own
        id, and a hostname derived from it. Unique by construction, and derived
        from something only this box knows.
+       Then, before any of 2-4, a clone whose disk carries no ``var/profile`` stops
+       the app and the job engine and exits non-zero (#9315). The image is a copy
+       of the source's disk, so a source that booted ``settings.local`` would
+       otherwise multiply; with no engine the join leg never sees the runner and
+       the clone is never put behind the load balancer.
     2. config-sync, so the node pulls ITS OWN ``django.conf`` from S3 rather
        than running on whatever the AMI happened to bake. The baked config is
        deliberately NOT deleted: config-sync failing on a node with no config
@@ -1489,6 +1494,13 @@ def node_user_data(base_name, root=None):
         '"http://169.254.169.254/latest/meta-data/instance-id" || true)',
         'if [ -n "$IID" ]; then',
         f'  hostnamectl set-hostname "{safe_base}-${{IID##*-}}"',
+        "fi",
+        f'if [ ! -s "{safe_root}/var/profile" ]; then',
+        f'  echo "mojo clone: {safe_root}/var/profile is missing; the app would '
+        'boot settings.local, so it is stopped and this node will not join" >&2',
+        "  systemctl stop mojo-asgi.service || true",
+        f'  "{safe_root}/bin/jobman" stop || true',
+        "  exit 1",
         "fi",
         "systemctl start config-sync.service || true",
         f'python3 -m mojo.deploy.node_setup --root "{safe_root}" || true',
