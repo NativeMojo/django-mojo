@@ -12,9 +12,20 @@ PROVIDER = "microsoft"
 TEST_CLIENT_ID = "00000000-0000-0000-0000-000000000001"
 
 
+def _methods_header(methods):
+    """The test-only system-config override (honored on loopback in test mode)."""
+    import json
+    return {"X-Mojo-Test-Auth-Config": json.dumps({"login": {"methods": methods}})}
+
+
+# Microsoft is off by default, so these begin calls switch it on in the
+# system config the way a site would.
+MS_ON = ["password", "google", "microsoft"]
+
+
 def _begin(opts):
     from urllib.parse import urlsplit, parse_qs
-    resp = opts.client.get(f"/api/auth/oauth/{PROVIDER}/begin")
+    resp = opts.client.get(f"/api/auth/oauth/{PROVIDER}/begin", headers=_methods_header(MS_ON))
     assert resp.status_code == 200, f"begin must succeed, got {resp.status_code}: {resp.response}"
     data = resp.response.data
     assert data.auth_url and data.state, f"begin must return auth_url and state, got {data}"
@@ -89,3 +100,31 @@ def test_ms_callback_bounce_clean(opts):
     assert extra["nonce"] not in location, "the nonce must not reach the frontend"
     assert "code_verifier" not in location and "nonce" not in location, \
         f"no PKCE or nonce parameter may appear in the bounce, got {location}"
+
+
+@th.django_unit_test("microsoft oauth: begin with no group is refused while the system config leaves microsoft off")
+def test_ms_begin_no_group_off(opts):
+    resp = opts.client.get(f"/api/auth/oauth/{PROVIDER}/begin")
+    assert resp.status_code == 403, \
+        f"begin must 403 when microsoft is off by default, got {resp.status_code}: {resp.response}"
+    resp = opts.client.get(f"/api/auth/oauth/{PROVIDER}/begin",
+                           headers=_methods_header(["password", "google"]))
+    assert resp.status_code == 403, \
+        f"begin must 403 when the system list omits microsoft, got {resp.status_code}: {resp.response}"
+
+
+@th.django_unit_test("microsoft oauth: begin with no group works once the system config switches microsoft on")
+def test_ms_begin_no_group_on(opts):
+    resp = opts.client.get(f"/api/auth/oauth/{PROVIDER}/begin", headers=_methods_header(MS_ON))
+    assert resp.status_code == 200, \
+        f"begin must succeed when microsoft is switched on, got {resp.status_code}: {resp.response}"
+    assert resp.response.data.auth_url, "begin must return auth_url"
+
+
+@th.django_unit_test("oauth begin: a default-on provider with no group stays ungated when the system list omits it")
+def test_default_on_begin_no_group_ungated(opts):
+    resp = opts.client.get("/api/auth/oauth/google/begin",
+                           headers=_methods_header(["password", "microsoft"]))
+    assert resp.status_code == 200, \
+        f"google begin without a group must stay ungated, got {resp.status_code}: {resp.response}"
+    assert resp.response.data.auth_url, "begin must return auth_url"
