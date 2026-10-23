@@ -82,6 +82,7 @@ class Scheduler:
         self.stop_event = threading.Event()
         self.has_lock = False
         self._fleet_state = None
+        self._last_liveness = 0
 
         # Stats
         self.jobs_scheduled = 0
@@ -341,6 +342,7 @@ class Scheduler:
 
                 # Process scheduled jobs
                 self._process_scheduled_jobs()
+                self._publish_loop_progress()
 
                 # Sleep with jitter
                 sleep_ms = random.randint(self.base_sleep_ms, self.max_sleep_ms)
@@ -349,6 +351,19 @@ class Scheduler:
             except Exception as e:
                 logger.error(f"Error in scheduler main loop: {e}")
                 self.stop_event.wait(1)
+
+    def _publish_loop_progress(self):
+        # A successful loop, even with no jobs due, is distinct from lease
+        # presence. Only the current leader emits this bounded-lived sample.
+        if not self.has_lock or time.monotonic() - self._last_liveness < 5:
+            return
+        from .services.liveness import progress_key, progress_sample, PROGRESS_TTL
+        try:
+            self.redis.set(progress_key(), json.dumps(progress_sample(
+                self.lock_value, self.scheduler_id)), ex=PROGRESS_TTL)
+            self._last_liveness = time.monotonic()
+        except Exception as exc:
+            logger.warning(f"Scheduler progress evidence unavailable: {exc}")
 
     def _process_scheduled_jobs(self):
         """Process scheduled jobs for all channels."""

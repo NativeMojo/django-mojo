@@ -1,5 +1,12 @@
 # Reading protected health snapshots
 
+Jobman's `scheduler_detector` source is sampled directly by OS cron every
+three minutes. Its observation time and identity survive snapshot cache reads;
+`scheduler_available` and `expected_runners_available` reference this actual
+independent evidence. Missing or stale evidence is Unknown. The optional
+`scheduler_lock` slot is installation metadata. Enrolling snapshots does not
+enable incident notifications or tickets.
+
 Use `GET /api/account/admin/health/snapshot`, optionally with the opaque
 `evidence_cursor` from the previous response. Assistant/MCP exposes the same
 service as read-only `get_health_snapshot(evidence_cursor=None)`. Source

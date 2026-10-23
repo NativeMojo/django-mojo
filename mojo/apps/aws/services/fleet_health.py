@@ -160,18 +160,20 @@ def _read_heartbeats(deadline):
                                                 timeout=min(1, remaining), client=client)
 
 
-def _read_scheduler(deadline):
+def _read_scheduler(deadline, *, connect=None, now=None):
     from mojo.apps.jobs.keys import JobKeys
     from mojo.helpers.redis import get_bounded_connection
+    from mojo.apps.incident.services.health_liveness import read_cached
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("deadline_exceeded")
-    with get_bounded_connection(timeout=min(1, remaining), max_connections=1,
+    with (connect or get_bounded_connection)(timeout=min(1, remaining), max_connections=1,
                                 read_from_replicas=False, deadline=deadline) as client:
         active = bool(client.get(JobKeys().scheduler_lock()))
+        detector = read_cached(client=client, now=now)
     # This is the existing installation summary, never a per-node detector.
     return _state("ok", scope="installation", scheduler_active=active,
-                  observed_at=_now(), source="scheduler_lock", node_health="unknown")
+                  observed_at=None, source="scheduler_lock", node_health="unknown", detector=detector)
 
 
 def _read_diagnostics(row, runners, deadline, revision=None):
@@ -1038,9 +1040,7 @@ def _snapshot_readers(deadline, budget, readers, *, connect_factory=None, provid
         with connect(timeout=0.5, max_connections=2, read_from_replicas=False, deadline=end) as client:
             return get_manager().get_runners_bounded(settings.get_static("ADMIN_FLEET_CONFIG_CHANNEL", "edge"), limit=128, timeout=min(1, end-time.monotonic()), client=client)
     def scheduler(end):
-        with connect(timeout=0.5, max_connections=1, read_from_replicas=False, deadline=end) as client:
-            active = bool(client.get(JobKeys().scheduler_lock()))
-        return _state("ok", scope="installation", scheduler_active=active, observed_at=None)
+        return _read_scheduler(end, connect=connect)
     def expected(grants, end):
         from mojo.apps.account.models import Setting
         def topology(key):
@@ -1228,9 +1228,15 @@ def project_monitoring_coverage(acquired, node_id, *, now=None):
     measurements.append({"key": "runner", "node_id": node_id, "required": True, "role_provenance": row["membership_sources"], "mount": None,
         "sources": {"platform": _coverage_slot(heartbeat if acquired["grants"]["platform"] else _state("permission_denied"), source="heartbeat", now=now,
             freshness=max(1, int(settings.get_static("JOBS_RUNNER_HEARTBEAT_SEC", 5))) * 3)}})
+    scheduler = acquired["sources"].get("scheduler", {})
+    detector = scheduler.get("detector") or {"status": scheduler.get("status", "unknown"), "reason": "detector_evidence_unavailable"}
+    measured = {**(detector.get("scheduler") or {}), "observed_at": detector.get("observed_at")}
+    if detector.get("status") != "ok":
+        measured.update(status=detector.get("status", "unknown"), reason=detector.get("reason"))
     measurements.append({"key": "scheduler", "node_id": node_id, "required": True, "mount": None,
-        "sources": {"platform": _coverage_slot({**acquired["sources"].get("scheduler", {}), "observed_at": None}, source="scheduler_lock", now=now)},
-        "scope": "installation", "reason": "detector_evidence_unavailable"})
+        "sources": {"platform": _coverage_slot(measured, source="independent_detector", now=now,
+            configuration="declared" if detector.get("detector_id") else "unknown", freshness=420)},
+        "scope": "installation", "reason": measured.get("reason")})
     required = row.get("request_service_required")
     measurements.append({"key": "request_service", "node_id": node_id, "required": required,
         "sources": {"runtime": _coverage_slot(detail["services"]["request_service"], source="runtime", required=required is not False, now=now)}})

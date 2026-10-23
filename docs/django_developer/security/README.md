@@ -1141,14 +1141,38 @@ OSSEC → POST /api/incident/ossec/alert
 
 ## 10. Health Monitoring
 
-The health monitoring system runs every 3 minutes (when enabled) and reports infrastructure events.
+OS cron directly checks runner and scheduler liveness every three minutes,
+independently of Jobman. Enrolled health snapshot sources collect this evidence
+quietly even when `HEALTH_MONITORING_ENABLED` is false. The flag enables the
+existing incident reports, default notification/ticket rules and queued resource
+metrics collection; enrollment alone enables none of those actions.
+
+The detector reads at most 128 hosts and 32 declared channels through a private
+primary Redis connection with a four-second deadline and 256-command cap.
+`ADMIN_FLEET_CONFIG_EXPECTED_NODES` (or the existing edge topology's `nodes`)
+declares stable expected hosts on `ADMIN_FLEET_CONFIG_CHANNEL` (default `edge`);
+`JOBS_CHANNELS` declares channels requiring a live consumer. A bounded 24-hour
+last-seen baseline preserves established host/channel expectations after
+heartbeat expiry. Current host and channel declarations retire removed hosts
+and roles; a process restart preserves the host identity. Explicit host declarations
+are needed for durable expectations beyond baseline retention. Read errors and
+malformed rosters remain unavailable rather than healthy empty lists. Unchanged
+detector results do not repeat incident fanout; recovery rearms the next failure.
+
+After each successful scheduler loop, including idle loops, the leader writes
+an expiring progress sample at most once per five seconds. Cron checks that the
+sample belongs to the current lease and is younger than 30 seconds. Lease
+presence alone is metadata. Detector records expire after 15 minutes and become
+stale after 420 seconds; cached reads never refresh either clock. Deployment
+needs the existing OS crond installation and a scheduler restart to load the
+progress writer. No new daemon, credentials or notification channel is installed.
 
 ### What It Checks
 
 | Check | Category | Level | Threshold |
 |-------|----------|-------|-----------|
 | Dead job runners | `system:health:runner` | 10 | Runner not responding |
-| Missing scheduler | `system:health:scheduler` | 10 | No scheduler lock in Redis |
+| Missing scheduler | `system:health:scheduler` | 10 | Missing lease or missing/stale current loop progress |
 | TCP connections | `system:health:tcp` | 8 | > `HEALTH_TCP_MAX` (default 2000) |
 | CPU usage | `system:health:cpu` | 8 | > `HEALTH_CPU_CRIT` (default 90%) |
 | Memory usage | `system:health:memory` | 8 | > `HEALTH_MEM_CRIT` (default 90%) |
