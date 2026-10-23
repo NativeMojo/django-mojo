@@ -177,9 +177,9 @@ This means a user who signed up via password but never clicked their verificatio
 
 ### Email Verification
 
-OAuth confirmation is treated as equivalent to clicking an email verification link. The provider vouches for ownership of the address, so no separate verification step is needed.
+A Google, Apple or GitHub login is treated as equivalent to clicking an email verification link. The provider vouches for ownership of the address, so no separate verification step is needed. A Microsoft login counts as verification only when Microsoft has verified the address; otherwise the email stays unverified (see [Email Verification on Auto-Link](#email-verification-on-auto-link)).
 
-If your project has `REQUIRE_VERIFIED_EMAIL` enabled, users who log in via OAuth are unaffected by the gate — their email is marked verified by the OAuth flow itself.
+If your project has `REQUIRE_VERIFIED_EMAIL` enabled, users who log in via OAuth are not blocked by it: the gate applies only to email-based password login. Skipping the gate is not verification: a Microsoft user whose email Microsoft has not verified keeps an unverified email, and the gate still applies to them if they later log in by email and password.
 
 ### MFA Bypass
 
