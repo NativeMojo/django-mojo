@@ -3,6 +3,7 @@ import json
 import re
 import socket
 import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 
 from mojo.helpers.settings import settings
@@ -57,11 +58,9 @@ def _state(status="unavailable", reason="source_unavailable", healthy=None, **kw
 
 
 def _expected(deadline):
-    explicit = settings.get_static("ADMIN_FLEET_CONFIG_EXPECTED_NODES", None)
-    if explicit is not None:
-        return explicit
     from mojo.apps.account.models import Setting
     from mojo.apps.account.services import health_evidence as he, system_settings
+    from mojo.apps.aws.services import fleet_health
     # Same existing fleet topology, read through the bounded primary transport.
     with he.primary_cursor(deadline, max_queries=1, transactional=False) as cursor:
         cursor.execute('SELECT value FROM "%s" WHERE group_id IS NULL AND key=%%s' % Setting._meta.db_table,
@@ -69,18 +68,81 @@ def _expected(deadline):
         row = cursor.fetchone()
     raw = row[0] if row else None
     topology = json.loads(raw) if isinstance(raw, str) else raw
-    if topology is None:
-        return None
-    from mojo.apps.edge.settings_validators import expected_topology
-    return expected_topology(system_settings.EXPECTED_EDGE_TOPOLOGY, topology)["nodes"]
+    return fleet_health._read_expected({"platform": True, "aws": True, "jobs": True}, deadline,
+                                      topology_reader=lambda key: topology)
+
+
+def _expected_hosts(expected, runners, client, now, deadline):
+    """Use the shared checked alias cache, retaining established intent only."""
+    from mojo.apps.aws.services import fleet_health as fh
+    if not expected.get("complete"):
+        raise ValueError("expected_roster_unavailable")
+    declarations = expected["declarations"]
+    if not expected.get("configured"):
+        return None, []
+    physical = {row["hostname"] for row in declarations if row.get("hostname")}
+    logical = {row["node_id"] for row in declarations if not row.get("hostname")}
+    if not logical:
+        return physical, []
+    grants, scope = {"platform": True, "aws": True, "jobs": True}, fh.roster_scope(expected)
+    prior = _json(client.get(_key("expected_aliases")), {})
+    mappings = prior.get("mappings", {}) if prior.get("scope") == scope else {}
+    if not isinstance(mappings, dict) or len(mappings) > MAX_HOSTS:
+        raise ValueError("expected_alias_invalid")
+    cache = fh.IdentityRoster(connect=lambda **kwargs: nullcontext(client), clock=lambda: now.timestamp())
+    record = cache.read(grants, deadline, scope=scope)
+    if record is None:
+        raw = _json(client.get(cache._key(grants, scope)), {})
+        # Real Redis drops expired keys. Also recognize an old retained record
+        # as expired, without treating malformed current data as a cache miss.
+        expiry = raw.get("expires_at")
+        if raw and (type(expiry) not in (int, float) or not expiry <= now.timestamp()):
+            raise ValueError("expected_alias_invalid")
+    identities = {row["node_id"]: row for row in (record or {}).get("rows", [])}
+    proofs = [{"host": row["hostname"], "started": row["proof_started"],
+               "proof": {"node_id": row["node_id"], "observed_at": row["proof_observed_at"]}}
+              for row in identities.values() if row.get("hostname") and row.get("proof_started") and row.get("proof_observed_at")]
+    reconciled = {row["node_id"]: row for row in fh.reconcile(declarations, runners=runners,
+        proofs=proofs, now=now, heartbeat_ttl=max(1, int(settings.get_static("JOBS_RUNNER_HEARTBEAT_SEC", 5))) * 3)}
+    retained, unresolved = {}, []
+    for node in sorted(logical):
+        identity, joined = identities.get(node, {}), reconciled.get(node, {})
+        candidate = mappings.get(node, {})
+        seen = _time(candidate.get("last_seen")) if isinstance(candidate, dict) else None
+        if (seen is None or not 0 <= (now-seen).total_seconds() < BASELINE_TTL
+                or candidate.get("status") not in ("resolved", "ambiguous")
+                or candidate.get("hostname") is not None and not HOST.fullmatch(candidate["hostname"])
+                or candidate.get("status") == "resolved" and not isinstance(candidate.get("started"), str)):
+            candidate = {}
+        current = fh._fresh(identity.get("proof_observed_at"), now)
+        if current and identity.get("identity_status") == "ambiguous":
+            candidate = {"status": "ambiguous", "hostname": None, "last_seen": identity["proof_observed_at"]}
+        elif (current and identity.get("identity_status") == "resolved" and identity.get("hostname")
+                and identity.get("proof_started") and (
+                    joined.get("identity_status") == "resolved" and joined.get("proof_started")
+                    or not any(row.get("hostname", "").lower() == identity["hostname"] for row in runners))):
+            candidate = {"status": "resolved", "hostname": identity["hostname"],
+                         "started": identity["proof_started"], "last_seen": identity["proof_observed_at"]}
+        if candidate:
+            retained[node] = candidate
+        if candidate.get("status") == "resolved" and candidate.get("hostname"):
+            physical.add(candidate["hostname"])
+            current_host = [row for row in runners if row.get("hostname", "").lower() == candidate["hostname"]]
+            if current_host and not any(row.get("started") == candidate["started"] for row in current_host):
+                unresolved.append(node)
+        else:
+            unresolved.append(node)
+    _store(client, _key("expected_aliases"), {"scope": scope, "mappings": retained}, BASELINE_TTL)
+    return physical, unresolved
 
 
 def _runners(client, roster, expected, channels, now, deadline):
-    if expected is not None and (not isinstance(expected, (list, tuple))
+    declaration = expected if isinstance(expected, dict) else None
+    if declaration is None and expected is not None and (not isinstance(expected, (list, tuple))
             or len(expected) > MAX_HOSTS or len(set(expected)) != len(expected)
             or any(not isinstance(host, str) or not HOST.fullmatch(host.lower()) for host in expected)):
         raise ValueError("expected_roster_invalid")
-    if expected is not None:
+    if declaration is None and expected is not None:
         clean = {host.lower() for host in expected}
         if len(clean) != len(expected):
             raise ValueError("expected_roster_invalid")
@@ -88,15 +150,19 @@ def _runners(client, roster, expected, channels, now, deadline):
     baseline = _json(client.get(_key("expected")), {})
     if len(baseline) > MAX_HOSTS:
         raise ValueError("expected_roster_overflow")
-    live = {}
+    live, observed = {}, {}
     for channel in channels:
         for row in roster(channel, limit=MAX_HOSTS, timeout=max(.05, deadline-time.monotonic()), client=client):
             host = row.get("hostname")
             if not isinstance(host, str) or not HOST.fullmatch(host.lower()):
                 raise ValueError("runner_roster_invalid")
             live.setdefault(host.lower(), set()).add(channel)
+            observed[row["runner_id"]] = row
             if len(live) > MAX_HOSTS:
                 raise ValueError("runner_roster_overflow")
+    unresolved = []
+    if declaration is not None:
+        expected, unresolved = _expected_hosts(declaration, list(observed.values()), client, now, deadline)
     retained = {}
     for host, prior in baseline.items():
         if not HOST.fullmatch(host) or not isinstance(prior, dict):
@@ -125,8 +191,10 @@ def _runners(client, roster, expected, channels, now, deadline):
                for host, roles in sorted(required.items()) if roles-live.get(host, set())]
     absent_channels = [channel for channel in channels if not any(channel in roles for roles in live.values())]
     _store(client, _key("expected"), retained, BASELINE_TTL)
-    return _state("ok", None, not missing and not absent_channels,
-                  missing=missing, missing_channels=absent_channels, live_count=len(live))
+    healthy = False if missing or absent_channels and not unresolved else None if unresolved else True
+    return _state("unknown" if healthy is None else "ok", "expected_alias_unresolved" if unresolved else None, healthy,
+                  missing=missing, missing_channels=absent_channels, live_count=len(live),
+                  **({"unresolved_nodes": unresolved} if unresolved else {}))
 
 
 def _scheduler(client, now):

@@ -788,9 +788,7 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
             with counted_connect(timeout=0.5, max_connections=2, read_from_replicas=False, deadline=end) as client:
                 return get_manager().get_runners_bounded(settings.get_static("ADMIN_FLEET_CONFIG_CHANNEL", "edge"), limit=128, timeout=min(1, end - monotonic()), client=client)
         def scheduler(end):
-            with counted_connect(timeout=0.5, max_connections=1, read_from_replicas=False, deadline=end) as client:
-                active = bool(client.get(JobKeys().scheduler_lock()))
-            return {"status": "ok", "scope": "installation", "scheduler_active": active, "observed_at": None}
+            return fleet_health._read_scheduler(end, connect=counted_connect)
         def fleet_source():
             managed = readers.get("managed", lambda: evidence.managed_series(configuration, collection_deadline, budget=budget))()
             raw_readers = {"expected": lambda grants, end: configuration["expected"], "inventory": inventory,

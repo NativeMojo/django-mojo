@@ -1149,8 +1149,14 @@ metrics collection; enrollment alone enables none of those actions.
 
 The detector reads at most 128 hosts and 32 declared channels through a private
 primary Redis connection with a four-second deadline and 256-command cap.
-`ADMIN_FLEET_CONFIG_EXPECTED_NODES` (or the existing edge topology's `nodes`)
-declares stable expected hosts on `ADMIN_FLEET_CONFIG_CHANNEL` (default `edge`);
+`ADMIN_FLEET_CONFIG_EXPECTED_NODES` declares physical expected hosts on
+`ADMIN_FLEET_CONFIG_CHANNEL` (default `edge`). Logical `EDGE_EXPECTED_TOPOLOGY`
+node IDs use the existing scoped, checked fleet identity cache and shared
+reconciliation; unresolved or ambiguous logical aliases stay Unknown. Established
+node-to-host mappings are retained for at most 24 hours within the same current
+declaration scope, preserving missing-host detection after short alias expiry.
+A replacement process needs a checked mapping for its own incarnation; a
+predecessor's alias leaves its logical identity Unknown.
 `JOBS_CHANNELS` declares channels requiring a live consumer. A bounded 24-hour
 last-seen baseline preserves established host/channel expectations after
 heartbeat expiry. Current host and channel declarations retire removed hosts
