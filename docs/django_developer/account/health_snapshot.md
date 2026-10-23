@@ -90,6 +90,15 @@ survives unrelated missing evidence; missing/denied/stale required evidence
 prevents complete health. Output omissions are counted and remain incomplete.
 Unknown denominators are null, including truncated roster/service enumeration.
 
+Jobman's `scheduler_detector` slot consumes only the independently cached
+three-minute OS-cron result, including its actual observation time and detector
+identity. `scheduler_available` and `expected_runners_available` use that source
+as their causal basis. Missing, failed or expired detector evidence stays
+Unknown; snapshot generation and cache reads never create another detector
+sample. `scheduler_lock` remains optional, noncausal installation metadata.
+An enrolled snapshot source collects quietly with the existing health-incident
+flag off; enrollment does not enable notifications.
+
 Profile 2 records CPU/memory/filesystem/inode or proved capacity use >=90%,
 direct DB/PING and RDS read/write latency >=1 second, positive comparable
 deadlock/eviction/rejected-connection deltas, proved runtime overruns, and due

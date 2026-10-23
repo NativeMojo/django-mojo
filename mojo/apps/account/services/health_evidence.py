@@ -921,8 +921,20 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
     for channel in configuration["channels"]:
         queue_raw = (queues or {}).get(channel) or {"status": "unknown", "reason": "queue_transport_unavailable"}
         job_slots.append(make("jobman", "installation", "redis_queue:" + digest(channel)[:32], queue_raw, grant="jobs", source="redis_queue", identity={"channel": channel}))
-    job_slots.append(make("jobman", "installation", "scheduler_lock", {**fleet.get("sources", {}).get("scheduler", {}), "observed_at": None}, grant="jobs", source="scheduler_lock"))
-    job_slots.append(make("jobman", "installation", "scheduler_detector", {"status": "unknown", "reason": "detector_evidence_unavailable"}, grant="jobs", source="independent_detector"))
+    scheduler = fleet.get("sources", {}).get("scheduler", {})
+    job_slots.append(make("jobman", "installation", "scheduler_lock",
+        {**{key: scheduler[key] for key in ("status", "reason", "scheduler_active") if key in scheduler}, "observed_at": None},
+        grant="jobs", source="scheduler_lock", required=False))
+    detector = scheduler.get("detector") or {"status": "unknown", "reason": "detector_evidence_unavailable"}
+    detector_slot = make("jobman", "installation", "scheduler_detector", detector,
+                         grant="jobs", source="independent_detector",
+                         identity={"detector_id": detector.get("detector_id"), "node": detector.get("node")})
+    job_slots.append(detector_slot)
+    for name, rule in (("scheduler", "scheduler_available"), ("runners", "expected_runners_available")):
+        state = detector.get(name) or {}
+        healthy = state.get("healthy")
+        job_checks.append(predicate("jobman", "installation", rule, detector_slot,
+            not healthy if detector.get("status") == "ok" and state.get("status") == "ok" and type(healthy) is bool else None))
     components.append(component(source_id, "jobman", "installation", job_slots, job_checks,
                                 coverage_complete=configuration["channels_complete"], now=now, identity_grant="platform"))
     producer = make("monitoring", "producer", "attempt", {"observed_at": timestamp(now), "status": "ok"}, source="snapshot_producer",
