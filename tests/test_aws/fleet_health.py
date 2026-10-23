@@ -398,3 +398,27 @@ def test_incomplete_serving_never_preserves_outer_complete(opts):
     result = capacity.health_inventory(spec, time.monotonic() - 1,
                                        inventory_reader=ec2.fleet_inventory_bounded)
     assert not result["complete"] and result["instances"] == facts, "elapsed serving budget must not manufacture complete cloud coverage"
+
+
+@th.django_unit_test()
+def test_health_sources_reuse_platform_visibility_without_inventory_authority(opts):
+    from mojo.apps.aws.services import fleet_health as fh
+    actor = Actor("view_platform", "view_jobs")
+    assert fh.source_grants(actor, health=True) == {"platform": True, "aws": True, "jobs": True}, "platform reader lost bounded dashboard-visible health evidence"
+    assert fh.source_grants(actor)["aws"] is False, "health visibility granted general AWS inventory authority"
+    actor.is_active = False
+    with th.assert_raises(fh.FleetHealthError):
+        fh.source_grants(actor, health=True)
+    actor.is_active = True
+    machine = SimpleNamespace(is_active=True, is_authenticated=True, has_permission=lambda permissions: True)
+    with th.assert_raises(fh.FleetHealthError):
+        fh.source_grants(machine, health=True)
+
+
+@th.django_unit_test()
+def test_health_provision_absence_differs_from_invalid_real_intent(opts):
+    from mojo.apps.aws.services import fleet_health as fh
+    assert fh._health_spec(resolver=lambda: (None, {"details": {"environment_count": 0, "selected": "production"}})) is None, "source environment identity alone was treated as a malformed provision declaration"
+    for details in ({"environment_count": 2}, {"environment": "production", "problem_count": 1}, {"environment_count": 1, "selected": "missing"}):
+        with th.assert_raises(fh.FleetHealthError):
+            fh._health_spec(resolver=lambda: (None, {"details": details}))

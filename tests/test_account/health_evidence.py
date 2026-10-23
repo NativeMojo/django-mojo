@@ -355,3 +355,139 @@ def test_project_failure_retains_prior_only_for_matching_actual_configuration(op
     changed = _project(values={"mcp": {"origin": "https://two.example"}})
     other = _components(changed, previous=previous)[0]["evidence"][0]
     assert "prior" not in other and other["sample_id"] is None and other["last_success_at"] is None, "changed project configuration borrowed prior health from a different route"
+
+
+def _legacy_managed(*, duplicate=False, denied=False, capped=False, standalone=False, bindings=None, region="us-west-2"):
+    import time
+    from mojo.apps.account.services import health_evidence as he
+    from mojo.helpers.aws.provider_call import ProviderCallError
+    calls = []
+    class Provider:
+        def __getattr__(self, operation):
+            def call(**params):
+                calls.append((operation, params))
+                if denied:
+                    raise ProviderCallError(operation, "AccessDenied", denied=True)
+                instance = {"DBInstanceIdentifier": "current-writer", "DBClusterIdentifier": "legacy-db", "Engine": "aurora-postgresql",
+                    "Endpoint": {"Address": "writer.db.example", "Port": 5432}}
+                cluster = {"DBClusterIdentifier": "legacy-db", "Endpoint": "primary.db.example", "Port": 5432,
+                    "DBClusterMembers": [{"DBInstanceIdentifier": "current-writer", "IsClusterWriter": True}]}
+                group = {"ReplicationGroupId": "legacy-cache", "MemberClusters": ["cache-a", "cache-b"], "NodeGroups": [{
+                    "PrimaryEndpoint": {"Address": "primary.cache.example", "Port": 6379}, "NodeGroupMembers": [
+                        {"CacheClusterId": "cache-a", "CacheNodeId": "0001", "CurrentRole": "primary"},
+                        {"CacheClusterId": "cache-b", "CacheNodeId": "0001", "CurrentRole": "replica"}]}]}
+                caches = [{"CacheClusterId": name, "Engine": "redis", "CacheNodes": [{"CacheNodeId": "0001", "Endpoint": {
+                    "Address": "primary.cache.example" if standalone else name + ".cache.example", "Port": 6379}}],
+                    **({} if standalone else {"ReplicationGroupId": "legacy-cache"})} for name in (["cache-a"] if standalone else ["cache-a", "cache-b"])]
+                values = {"describe_db_instances": ("DBInstances", [instance] * (2 if duplicate else 1)),
+                    "describe_db_clusters": ("DBClusters", [cluster]), "describe_replication_groups": ("ReplicationGroups", [] if standalone else [group]),
+                    "describe_cache_clusters": ("CacheClusters", [row for row in caches if not params.get("CacheClusterId") or row["CacheClusterId"] == params["CacheClusterId"]])}
+                key, rows = values[operation]
+                return {key: rows, **({"Marker": "unread"} if capped else {})}
+            return call
+    deadline = time.monotonic() + 5
+    configuration = {"expected": {"spec": None}, "region": region, "bindings": {
+        "database_host": "PRIMARY.DB.EXAMPLE.", "database_port": 5432,
+        "redis_host": "PRIMARY.CACHE.EXAMPLE.", "redis_port": 6379, **(bindings or {})}}
+    result = he.managed_series(configuration, deadline, budget=he.CycleBudget(deadline), provider_factory=lambda service: Provider())
+    return result, calls
+
+
+@th.django_unit_test()
+def test_legacy_endpoint_binding_uses_current_writer_and_applicable_cache_metrics(opts):
+    result, calls = _legacy_managed()
+    assert result["database"].get("resource") == "current-writer", "non-provisioned primary endpoint did not resolve the provider's current writer"
+    assert result["redis"]["status"] == "ok", "normalized replication-group primary endpoint did not bind legacy cache observations"
+    database = [row for row in result["series"] if row["kind"] == "database"]
+    assert "FreeLocalStorage" in {row["metric"] for row in database} and "FreeStorageSpace" not in {row["metric"] for row in database}, "Aurora was required to publish the inapplicable RDS free-storage metric"
+    lag = [row for row in result["series"] if row["metric"] == "ReplicationLag"]
+    assert [row["resource"] for row in lag] == ["cache-b:0001"], "cache primary was required to publish replica-only ReplicationLag"
+    standalone, _ = _legacy_managed(standalone=True)
+    assert standalone["redis"]["status"] == "ok" and not any(row["metric"] == "ReplicationLag" for row in standalone["series"]), "exact standalone Redis endpoint failed binding or acquired a replica obligation"
+
+
+@th.django_unit_test()
+def test_legacy_binding_ambiguity_denial_and_budget_remain_named_unknown(opts):
+    for options, reason in (({"duplicate": True}, "managed_endpoint_ambiguous"), ({"denied": True}, "provider_denied"), ({"capped": True}, "not_collected_budget")):
+        result, calls = _legacy_managed(**options)
+        assert result["database"]["status"] == "unknown" and result["database"]["reason"] == reason, "unproved legacy binding lost its ambiguity/denial/budget reason"
+        assert not any(row["kind"] == "database" for row in result["series"]), "incomplete endpoint discovery selected a candidate anyway"
+        assert len(calls) <= 7 and sum("MaxRecords" in params for _, params in calls) <= 4, "legacy endpoint discovery exceeded its shared page/call bounds including exact current-writer revalidation"
+    for binding in ({"database_host": "unproved-cname.example"}, {"database_port": 5433}):
+        result, _ = _legacy_managed(bindings=binding)
+        assert result["database"]["reason"] == "managed_endpoint_unresolved", "a CNAME guess or different port crossed the actual primary endpoint boundary"
+    result, calls = _legacy_managed(region=None)
+    assert not calls and result["database"]["reason"] == result["redis"]["reason"] == "provider_region_unresolved", "undeclared region guessed us-east-1 or queried provider resources"
+
+
+def _authoritative_host(cloud=None):
+    from mojo.apps.account.services import health_evidence as he
+    at = he.timestamp(NOW - timedelta(seconds=2))
+    sample = {"status": "ok", "observed_at": at, "percent": 2, "total": 100, "free": 98}
+    current = {"cpu": sample, "memory": sample, "filesystems": {"status": "ok", "observed_at": at,
+        "mounts": [{**sample, "path": "/", "inodes": {**sample, "total": 100, "free": 98}}]}}
+    fleet = {**_assembly_fleet(), "inventory": {"observed_at": at}, "rows": [{"node_id": "host", "expected": True,
+        "request_service_required": False, "identity_status": "resolved", "proof_observed_at": at}],
+        "evidence": {"host": {"current": current, "trends": cloud or {}, "services": {"request_service": {"status": "not_applicable"}}}}}
+    rows = he.build_components(_assembly_configuration(), {}, {}, fleet, {}, now=NOW)
+    return next(row for row in rows if row["kind"] == "fleet")
+
+
+@th.django_unit_test()
+def test_host_metrics_complete_without_optional_cloud_and_real_cloud_failure_survives(opts):
+    good = _authoritative_host()
+    assert good["coverage"]["complete"] and good["status"] == "healthy", "fresh authoritative host metrics still required absent CWAgent or an EC2 mapping"
+    presence = next(row for row in good["evidence"] if row["source"] == "ec2")
+    assert presence["reason"] == "provider_identity_unresolved" and presence["observed_at"] is None and not presence["required"], "missing EC2 identity became a timestamp error or fabricated presence"
+    failed = _authoritative_host({"cpu": {"status": "ok", "observed_at": NOW.isoformat(), "value": 95, "period_seconds": 300}})
+    assert failed["status"] == "degraded" and any(row["outcome"] == "fail" for row in failed["conditions"]), "optional cloud policy erased a real fresh observed pressure condition"
+    required = _authoritative_host({"cpu": {"status": "unknown", "reason": "no_datapoints", "required": True}})
+    assert not required["coverage"]["complete"], "an explicitly required CloudWatch obligation became optional"
+
+
+@th.django_unit_test()
+def test_frozen_source_configuration_includes_actual_primary_binding_region_and_policy(opts):
+    from contextlib import contextmanager
+    import time
+    from mojo.apps.account.services import health_evidence as he, system_settings
+    @contextmanager
+    def cursor(end):
+        class Cursor:
+            def execute(self, *args):
+                pass
+            def fetchone(self):
+                return {system_settings.INSTALLATION_UUID: "d496818a-06c7-45f5-b165-8993d93b3a47",
+                    system_settings.INSTALLATION_SLUG: "testit-health"}, []
+        yield Cursor()
+    def configuration(region="us-west-2", host="PRIMARY.CACHE.EXAMPLE.", port=6380):
+        values = {"HEALTH_SNAPSHOT_ENVIRONMENT_ID": "testit", "JOBS_CHANNELS": ["testit_health"], "AWS_REGION": region,
+            "REDIS_URL": "rediss://private-user:private-password@%s:%s/1" % (host, port), "REDIS_READER_URL": "rediss://reader.example:6379/1"}
+        return he.source_configuration(time.monotonic()+5, get_static=lambda key, default=None: values.get(key, default),
+            cursor_context=cursor, project_reader=lambda end: None)
+    first = configuration()
+    assert first["bindings"]["redis_host"] == "primary.cache.example" and first["bindings"]["redis_port"] == 6380, "snapshot fingerprint did not use normalized primary Redis URL parts"
+    assert first["region"] == "us-west-2" and first["source_policy"]["cloudwatch_host_metrics"] == "optional", "source region or authoritative host policy was not frozen"
+    assert "private-password" not in he.canonical(first) and "reader.example" not in he.canonical(first), "source configuration retained credentials or bound the reader endpoint"
+    for changed in (configuration(region="us-east-1"), configuration(host="other.cache.example"), configuration(port=6379)):
+        assert changed["config_revision"] != first["config_revision"], "actual region/endpoint/port change reused a publication fingerprint"
+
+
+@th.django_unit_test()
+def test_declared_resource_fences_never_fall_back_to_legacy_account_search(opts):
+    import time
+    from mojo.apps.account.services import health_evidence as he
+    from mojo.deploy.provision.spec import Spec, names
+    spec = Spec("testit-fenced", "production", "us-east-1")
+    resolved, calls = names(spec), []
+    class Provider:
+        def describe_db_instances(self, **params):
+            calls.append(params)
+            return {"DBInstances": [{"DBInstanceIdentifier": "outside-declaration", "Endpoint": {"Address": "actual.db.example", "Port": 5432}}]}
+        def describe_replication_groups(self, **params):
+            calls.append(params)
+            return {"ReplicationGroups": [{"ReplicationGroupId": "outside-declaration", "NodeGroups": [{"PrimaryEndpoint": {"Address": "actual.cache.example", "Port": 6379}}]}]}
+    deadline = time.monotonic()+5
+    result = he.managed_series({"expected": {"spec": spec}, "bindings": {"database_host": "actual.db.example", "redis_host": "actual.cache.example"}},
+        deadline, budget=he.CycleBudget(deadline), provider_factory=lambda service: Provider())
+    assert not result["series"] and result["database"]["status"] == result["redis"]["status"] == "unknown", "an exact endpoint outside declared resource identities crossed the provision fence"
+    assert calls == [{"DBInstanceIdentifier": resolved["db_writer"]}, {"ReplicationGroupId": resolved["cache_group"]}], "failed declared binding widened into account discovery"

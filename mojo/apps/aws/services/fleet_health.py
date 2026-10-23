@@ -40,18 +40,30 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def source_grants(actor):
+def source_grants(actor, *, health=False):
     # has_permission is the global User helper; group membership and ApiKey
     # identities must never open installation-wide sources.
     if (not actor or not getattr(actor, "is_active", False)
             or not is_signed_in_user(actor)):
         raise FleetHealthError("permission_denied")
-    grants = {"platform": bool(actor.has_permission(PLATFORM_PERMS)),
-              "aws": bool(actor.has_permission(AWS_PERMS)),
+    platform = bool(actor.has_permission(PLATFORM_PERMS))
+    grants = {"platform": platform,
+              "aws": bool(actor.has_permission(AWS_PERMS) or health and platform),
               "jobs": bool(actor.has_permission(JOBS_PERMS))}
     if not any(grants.values()):
         raise FleetHealthError("permission_denied")
     return grants
+
+
+def _health_spec(*, resolver=None):
+    """Source environment identity alone does not declare provision intent."""
+    from mojo.apps.aws.services import infra_setup
+    spec, problem = (resolver or infra_setup._resolve_spec)()
+    if problem is None:
+        return spec
+    if (problem.get("details") or {}).get("environment_count") == 0:
+        return None
+    raise FleetHealthError("identity_unavailable")
 
 
 def _state(status, reason=None, **data):
@@ -126,7 +138,8 @@ def _read_expected(grants, deadline, *, get_static=None, topology_reader=None, s
         complete = False
         sources["roster"] = _state("unknown", "expected_roster_overflow")
     return {"declarations": declarations[:MAX_NODES * 3], "sources": sources,
-            "configured": configured, "complete": complete, "spec": selected}
+            "configured": configured, "complete": complete, "spec": selected,
+            "region": selected.region if selected is not None else get_static("AWS_REGION", None)}
 
 
 def _read_inventory(spec, deadline):
@@ -401,7 +414,7 @@ def roster_scope(expected):
                  "fleet": getattr(spec, "fleet", None)} if spec is not None else None)
     declarations = sorted(expected.get("declarations", []),
                           key=lambda row: (row.get("node_id", ""), row.get("source", "")))
-    return hashlib.sha256(json.dumps({"identity": identity, "declarations": declarations},
+    return hashlib.sha256(json.dumps({"identity": identity, "declarations": declarations, "region": expected.get("region")},
                                      sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -525,8 +538,8 @@ def _parse_cursor(cursor):
         raise FleetHealthError("invalid_cursor") from None
 
 
-def _collect(actor, deadline, readers):
-    grants = source_grants(actor)
+def _collect(actor, deadline, readers, *, health=False):
+    grants = source_grants(actor, health=health)
     expected = readers.get("expected", _read_expected)(grants, deadline)
     sources = {"expected": {"status": "ok" if expected["complete"] else "unknown",
                             "details": expected["sources"]}}
@@ -1036,7 +1049,7 @@ def _snapshot_readers(deadline, budget, readers, *, connect_factory=None, provid
                 row = cursor.fetchone()
             raw = row[0] if row else None
             return json.loads(raw) if isinstance(raw, str) else raw
-        return _read_expected(grants, end, topology_reader=topology)
+        return _read_expected(grants, end, topology_reader=topology, spec_reader=_health_spec)
     readers.setdefault("expected", expected)
     readers.setdefault("inventory", inventory)
     readers.setdefault("heartbeats", heartbeats)
@@ -1056,9 +1069,12 @@ def acquire_snapshot(actor, *, deadline, readers=None, budget=None, now=None, no
     phase_now = lambda: now if now is not None else (wall_clock or (lambda: datetime.now(timezone.utc)))()
     budget = budget or CycleBudget(deadline)
     readers = readers or {}
-    revision = readers.get("revision", settings.get_static("MOJO_FLEET_CONFIG_REVISION", None)) if source_grants(actor)["platform"] else None
+    if not readers.get("collected"):
+        from mojo.apps.account.services.health_snapshot import _current_actor
+        actor = _current_actor(actor, deadline, budget=budget)
+    revision = readers.get("revision", settings.get_static("MOJO_FLEET_CONFIG_REVISION", None)) if source_grants(actor, health=True)["platform"] else None
     readers = _snapshot_readers(deadline, budget, readers, revision=revision)
-    grants, expected, rows, sources, runners, overflow, inventory = readers.get("collected") or _collect(actor, deadline, readers)
+    grants, expected, rows, sources, runners, overflow, inventory = readers.get("collected") or _collect(actor, deadline, readers, health=True)
     checked = _state("unavailable", "diagnostic_channel_membership_missing", results=[])
     if grants["jobs"]:
         try:
@@ -1126,16 +1142,24 @@ def acquire_snapshot(actor, *, deadline, readers=None, budget=None, now=None, no
             namespace = names(spec)["metrics_namespace"] if spec is not None else "CWAgent"
             mounts = {node_id: [row["path"] for row in (detail["current"].get("filesystems") or {}).get("mounts", []) + (detail["current"].get("filesystems") or {}).get("missing", [])] for node_id, detail in evidence.items()}
             cloud_rows = [row for row in selected if row["identity_status"] != "ambiguous"]
-            cloud = readers.get("recent", lambda rows, namespace, mounts, deadline: CloudWatchHelper(
-                region=spec.region if spec else None, static_configuration=True).get_recent_evidence(rows, namespace, mounts,
-                    deadline=deadline, budget=budget, now=phase_now(), extra_series=extra_series, maximum_operations=readers.get("metric_operations", 32)))(cloud_rows, namespace, mounts, deadline)
+            region = spec.region if spec else expected.get("region")
+            if "recent" not in readers and (not isinstance(region, str) or not region.strip()):
+                cloud = {"nodes": {row["node_id"]: _state("unknown", "provider_region_unresolved") for row in cloud_rows}, "extra": {}, "complete": False}
+            else:
+                cloud = readers.get("recent", lambda rows, namespace, mounts, deadline: CloudWatchHelper(
+                    region=region, static_configuration=True).get_recent_evidence(rows, namespace, mounts,
+                        deadline=deadline, budget=budget, now=phase_now(), extra_series=extra_series, maximum_operations=readers.get("metric_operations", 32)))(cloud_rows, namespace, mounts, deadline)
             for row in selected:
                 evidence[row["node_id"]]["trends"] = (_state("unknown", "identity_ambiguous") if row["identity_status"] == "ambiguous" else
                     (cloud.get("nodes") or {}).get(row["node_id"]) or _state("unavailable", "not_collected_budget"))
         except Exception:
             for detail in evidence.values():
                 detail["trends"] = _state("unavailable", "cloudwatch_unavailable")
-    roster_complete = _envelope(expected, rows, sources, overflow)["coverage"]["complete"]
+    # Host membership/proof is authoritative for this health profile. Optional
+    # EC2 inventory remains visible without becoming a second host denominator.
+    roster_complete = bool(expected["complete"] and expected["configured"] and not overflow
+        and any(row["expected"] for row in rows) and all(row["identity_status"] == "resolved"
+        and _fresh(row.get("proof_observed_at"), phase_now()) for row in rows if row["expected"]))
     return {"grants": grants, "expected": expected, "rows": rows, "sources": sources,
             "runners": runners, "overflow": overflow, "inventory": inventory, "evidence": evidence,
             "cloud": cloud, "roster_complete": roster_complete, "roster_revision": roster_revision, "roster_scope": roster_scope(expected)}
@@ -1183,7 +1207,7 @@ def project_monitoring_coverage(acquired, node_id, *, now=None):
             configuration="declared" if runtime and runtime.get("status") == "ok" else "unknown", now=now)}
         if cloud is not None:
             cloud_config = cloud_config or ("declared" if declared else "unknown")
-            slots["cloudwatch"] = _coverage_slot(cloud, source="cloudwatch", required=required,
+            slots["cloudwatch"] = _coverage_slot(cloud, source="cloudwatch", required=cloud.get("required") is True,
                 configuration=cloud_config, provenance="selected_provision_recipe" if declared else "fallback_candidate",
                 now=now, freshness=3 * (cloud.get("period_seconds") or (60 if key == "memory" else 300)))
         measurements.append({"key": key, "node_id": node_id, "required": required,
@@ -1214,11 +1238,12 @@ def project_monitoring_coverage(acquired, node_id, *, now=None):
              "configured_total": 0, "observed_total": 0, "fresh_total": 0, "gap_total": 0,
              "unknown_total": 0, "omitted_total": 0, "complete": False, "status_counts": {}}
     for item in measurements:
-        values = list(item["sources"].values())
+        all_values = list(item["sources"].values())
+        values = [slot for slot in all_values if slot["required"]]
         stats["configured_total"] += int(any(slot["configuration_status"] == "declared" for slot in values))
         stats["observed_total"] += int(any(slot["last_real_sample_at"] for slot in values))
         stats["fresh_total"] += int(all(slot["coverage_status"] in ("covered", "not_applicable") for slot in values))
-        for slot in values:
+        for slot in all_values:
             status = slot["coverage_status"]
             stats["status_counts"][status] = stats["status_counts"].get(status, 0) + 1
         stats["gap_total"] += int(any(slot["coverage_status"] not in ("covered", "not_applicable") for slot in values))
@@ -1247,12 +1272,14 @@ def coverage(actor, node_id=None, cursor=None, *, readers=None, deadline=None, n
     deadline = min(deadline or time.monotonic() + 20, time.monotonic() + 20)
     from mojo.apps.account.services.health_evidence import CycleBudget
     budget = CycleBudget(deadline, limits={"provider_operations": 32, "cloudwatch_series": 10})
+    from mojo.apps.account.services.health_snapshot import _current_actor
+    actor = _current_actor(actor, deadline, budget=budget)
     readers = {**(readers or {}), "metric_operations": 12}
-    selected_revision = readers.get("revision", settings.get_static("MOJO_FLEET_CONFIG_REVISION", None)) if source_grants(actor)["platform"] else None
+    selected_revision = readers.get("revision", settings.get_static("MOJO_FLEET_CONFIG_REVISION", None)) if source_grants(actor, health=True)["platform"] else None
     readers = _snapshot_readers(deadline, budget, readers, revision=selected_revision)
     # Resolve the roster once, then pass this exact acquisition into the raw
     # detail phase. No public node/report call and no second inventory sweep.
-    collected = _collect(actor, deadline, readers)
+    collected = _collect(actor, deadline, readers, health=True)
     grants, expected, rows, sources, runners, overflow, inventory = collected
     revision = _revision(rows)
     expected_ids = [row["node_id"] for row in rows if row["expected"]]
@@ -1283,7 +1310,7 @@ def coverage(actor, node_id=None, cursor=None, *, readers=None, deadline=None, n
     more = position + 1 < len(expected_ids)
     result["coverage"].update(returned=1, has_more=more,
         next_cursor=signing.dumps({"revision": revision, "scope": roster_scope(expected), "profile": 2, "last": selected_id}, salt="mojo.monitoring.coverage.v2", compress=True) if more else None,
-        complete=len(expected_ids) == 1 and projected["measurement_coverage"]["complete"] and result["coverage"]["complete"])
+        complete=len(expected_ids) == 1 and projected["measurement_coverage"]["complete"] and acquired["roster_complete"])
     while len(json.dumps(result, separators=(",", ":")).encode()) > MAX_BYTES and result["measurements"]:
         result["measurements"].pop()
         result["measurement_coverage"]["omitted_total"] += 1
@@ -1292,4 +1319,6 @@ def coverage(actor, node_id=None, cursor=None, *, readers=None, deadline=None, n
         result.update(node_incomplete=True, truncated=True)
     if not result["coverage"]["complete"]:
         result["collection_status"] = "partial"
+    else:
+        result["collection_status"] = "complete"
     return result

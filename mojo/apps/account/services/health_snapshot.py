@@ -521,13 +521,13 @@ def project_publication(value, grants, *, now=None):
     return result
 
 
-def _current_actor(actor, deadline):
+def _current_actor(actor, deadline, *, budget=None):
     from mojo.apps.account.models import User
     if not isinstance(actor, User):
         return actor
     # Direct service calls receive the same revocation protection as a newly
     # authenticated REST/MCP request, without trusting a long-lived User copy.
-    with evidence.primary_cursor(deadline, max_queries=4) as cursor:
+    with evidence.primary_cursor(deadline, max_queries=4, budget=budget) as cursor:
         cursor.execute('SELECT is_active, is_superuser, permissions FROM "%s" WHERE id=%%s' % User._meta.db_table, [actor.pk])
         row = cursor.fetchone()
     if row is None:
@@ -549,7 +549,7 @@ def read_snapshot(actor, evidence_cursor=None, *, connect=None, identity_reader=
     deadline = min(deadline or time.monotonic() + READ_SECONDS, time.monotonic() + READ_SECONDS)
     try:
         actor = (actor_loader or _current_actor)(actor, deadline)
-        grants = source_grants(actor)
+        grants = source_grants(actor, health=True)
         if not grants["platform"]:
             raise SnapshotError("permission_denied")
     except FleetHealthError:
@@ -776,7 +776,7 @@ def produce_snapshot(job, *, readers=None, connect=None, configuration_reader=No
                     budget.take("provider_operations")
                     if operation == "describe_instances":
                         budget.take("inventory_pages")
-                    return getattr(DeadlineProviderClient(self.service, collection_deadline, region=configuration["expected"].get("spec").region), operation)(**params)
+                    return getattr(DeadlineProviderClient(self.service, collection_deadline, region=configuration["region"]), operation)(**params)
                 return call
         def inventory(spec, end):
             if spec is None:

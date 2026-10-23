@@ -75,7 +75,7 @@ def test_runtime_failure_keeps_cloud_and_grants_prevent_source_calls(opts):
     assert cpu["sources"]["runtime"]["coverage_status"] != "covered", "failed runtime became current evidence"
     readers, calls = _readers()
     denied = fh.coverage(Actor("view_platform"), node_id="a", readers=readers)
-    assert "inventory" not in calls and "diagnostics" not in calls and "recent" not in calls, "source denial made privileged control/provider calls"
+    assert "inventory" in calls and "recent" in calls and "diagnostics" not in calls, "bounded platform health facts gained host diagnostics or lost dashboard-visible AWS observations"
     assert not denied["measurement_coverage"]["complete"], "source denials established complete coverage"
 
 
@@ -237,3 +237,19 @@ def test_late_valid_checked_proof_uses_phase_time_instead_of_producer_start(opts
     acquired = fh.acquire_snapshot(Actor("view_platform", "manage_aws", "view_jobs"), deadline=time.monotonic()+5,
         readers=readers, wall_clock=lambda: phase[0])
     assert acquired["rows"][0]["hostname"] == "host-late" and acquired["evidence"]["logical"]["current"]["cpu"]["percent"] == 1, "valid later phase proof was rejected as future relative to collector start"
+
+
+@th.django_unit_test()
+def test_host_measurements_do_not_require_optional_cloudwatch_samples(opts):
+    from mojo.apps.aws.services import fleet_health as fh
+    readers, _ = _readers()
+    readers["recent"] = lambda *args: {"nodes": {}}
+    acquired = fh.acquire_snapshot(Actor("view_platform", "view_jobs"), deadline=time.monotonic()+5, readers=readers)
+    projected = fh.project_monitoring_coverage(acquired, "a")
+    cpu = next(row for row in projected["measurements"] if row["key"] == "cpu")
+    assert cpu["sources"]["runtime"]["required"] and not cpu["sources"]["cloudwatch"]["required"], "duplicate CloudWatch host stream remained a required source"
+    assert cpu["sources"]["runtime"]["coverage_status"] == "covered" and cpu["sources"]["cloudwatch"]["last_real_sample_at"] is None, "optional absence fabricated a sample or hid authoritative runtime coverage"
+    acquired["evidence"]["a"]["trends"] = {"cpu": {"status": "unknown", "reason": "no_datapoints", "required": True}}
+    required = fh.project_monitoring_coverage(acquired, "a")
+    required_cpu = next(row for row in required["measurements"] if row["key"] == "cpu")
+    assert required_cpu["sources"]["cloudwatch"]["required"] and required["measurement_coverage"]["gap_total"] == projected["measurement_coverage"]["gap_total"] + 1, "explicit continuous-source obligation was silently relaxed"

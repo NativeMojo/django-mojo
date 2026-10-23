@@ -542,3 +542,53 @@ def test_project_wire_allowlist_rejects_forged_shape_and_ninth_service(opts):
     value["components"].append(extra)
     with th.assert_raises(hs.SnapshotError):
         hs.validate_publication(_seal(value), identity)
+
+
+@th.django_unit_test()
+def test_authoritative_host_poll_keeps_times_and_expires_optional_conditions(opts):
+    from mojo.apps.account.services import health_evidence as he, health_snapshot as hs
+    from test_account.health_evidence import _authoritative_host, SOURCE
+    component = _authoritative_host({"cpu": {"status": "ok", "observed_at": NOW.isoformat(), "value": 95, "period_seconds": 60}})
+    identity = {"source_id": SOURCE, "source_identity": _identity()["source_identity"]}
+    value = hs.publication(identity, 1, CONFIG, [component], generated_at=NOW.isoformat(), published_at=NOW.isoformat(), roster_revision=None)
+    original = copy.deepcopy(value)
+    for seconds, status in ((0, "degraded"), (181, "healthy"), (417, "healthy"), (418, "stale")):
+        result = hs.project_publication(value, {"platform": True, "jobs": True, "aws": True}, now=NOW + timedelta(seconds=seconds))
+        assert result["components"][0]["status"] == status, "optional cloud pressure survived its sample expiry or blocked still-fresh authoritative host evidence"
+        by_id = {slot["slot_id"]: slot for slot in component["evidence"]}
+        for slot in result["components"][0]["evidence"]:
+            for key in ("observed_at", "collected_at", "sample_id", "fresh_until", "last_success_at"):
+                assert slot[key] == by_id[slot["slot_id"]][key], "cached host/cloud poll renewed original source " + key
+    assert value == original, "optional-source expiry mutated immutable publication bytes"
+
+
+@th.django_unit_test()
+def test_current_platform_user_can_read_bounded_aws_facts_and_revocation_closes_them(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import health_snapshot as hs
+    name = "testit-health-view-" + uuid.uuid4().hex
+    user = User.objects.create_user(username=name, email=name + "@example.test", password=None)
+    user.is_active, user.permissions = True, {"view_platform": True}
+    user.save()
+    calls = []
+    class Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def eval(self, *args):
+            calls.append("cache")
+            return [json.dumps(_publication(with_cloud=True)), "ok", "1"]
+    try:
+        result = hs.read_snapshot(user, connect=lambda **kwargs: Client(), identity_reader=_identity, now=NOW)
+        assert result["components"][0]["status"] == "degraded" and "private-cache-node" in json.dumps(result), "view_platform lost bounded AWS health facts already available in Platform"
+        User.objects.filter(pk=user.pk).update(permissions={"view_jobs": True})
+        with th.assert_raises(hs.SnapshotError):
+            hs.read_snapshot(user, connect=lambda **kwargs: Client(), identity_reader=_identity, now=NOW)
+        assert calls == ["cache"], "a stale platform grant opened cached AWS health evidence after primary revocation"
+        User.objects.filter(pk=user.pk).update(permissions={"view_platform": True}, is_active=False)
+        with th.assert_raises(hs.SnapshotError):
+            hs.read_snapshot(user, connect=lambda **kwargs: Client(), identity_reader=_identity, now=NOW)
+        assert calls == ["cache"], "an inactive global User opened cached source evidence"
+    finally:
+        User.objects.filter(pk=user.pk).delete()
