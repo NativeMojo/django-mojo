@@ -253,6 +253,21 @@ mgr.cancel_job(job_id)
 new_id = mgr.retry_job(job_id, delay=60)
 ```
 
+### Temporary worker database failures
+
+Job execution and each reaped job use the existing database connection boundary,
+returning expired connections before an executor thread or the reaper waits. If
+loading a job or reaping its receipt raises a database `OperationalError` or
+`InterfaceError`, the worker keeps its processing-ZSET receipt for the next
+reaper pass. A failed initial load does not claim the job or consume an attempt.
+The existing expiry, retry policy and durable execution fence still apply.
+Confirmed missing jobs and permanent non-transport errors retain their cleanup
+behavior. Terminal writes and recovered queue delivery precede receipt removal.
+Reaper cleanup atomically removes only a receipt still older than that pass's
+frozen cutoff, so a newly claiming worker keeps its own receipt. An ambiguous
+Redis connection/timeout during requeue leaves recovery evidence intact for the
+next normal pass; duplicate deliveries still use the durable execution fence.
+
 ### Orphaned running rows
 
 A row can sit at `status='running'` in the database with **no member in that
