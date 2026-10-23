@@ -263,6 +263,10 @@ reaper pass. A failed initial load does not claim the job or consume an attempt.
 The existing expiry, retry policy and durable execution fence still apply.
 Confirmed missing jobs and permanent non-transport errors retain their cleanup
 behavior. Terminal writes and recovered queue delivery precede receipt removal.
+Reaper cleanup atomically removes only a receipt still older than that pass's
+frozen cutoff, so a newly claiming worker keeps its own receipt. An ambiguous
+Redis connection/timeout during requeue leaves recovery evidence intact for the
+next normal pass; duplicate deliveries still use the durable execution fence.
 
 ### Orphaned running rows
 

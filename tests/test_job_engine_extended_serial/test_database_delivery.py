@@ -212,3 +212,87 @@ def test_reaper_retry_event_failure_keeps_recoverable_delivery(opts):
         job.refresh_from_db()
         assert job.status == 'completed' and job.attempt == 1, 'recovery and duplicate deliveries must preserve the durable execution fence'
         assert fixture.receipt(job) is None, 'the terminal durable job must clear its surviving receipt on a successful pass'
+
+
+@th.django_unit_test()
+def test_reaper_cannot_remove_a_worker_claimed_after_requeue(opts):
+    from django.db import OperationalError
+    from mojo.apps.jobs.models import Job, JobEvent
+
+    for audit_error in (None, OperationalError('audit database unavailable'), ValueError('invalid audit data')):
+        with EngineFixture() as fixture:
+            job = fixture.job()
+            original_create = JobEvent.objects.create
+            fresh = int(time.time() * 1000)
+
+            def claim_before_reaper_cleanup(**values):
+                queued = fixture.engine.redis.brpop([fixture.engine.keys.queue(fixture.channel)], timeout=1)
+                assert queued and queued[1] == job.pk, 'the interleaving must claim the actual reaper publication'
+                fixture.engine.redis.zadd(fixture.engine.keys.processing(fixture.channel), {job.pk: fresh})
+                with mock.patch.object(Job.objects, 'get', side_effect=OperationalError('worker pool unavailable')):
+                    fixture.engine.execute_job(fixture.channel, job.pk)
+                if audit_error:
+                    raise audit_error
+                return original_create(**values)
+
+            with mock.patch.object(JobEvent.objects, 'create', side_effect=claim_before_reaper_cleanup):
+                fixture.reap()
+            job.refresh_from_db()
+            assert job.status == 'pending' and job.attempt == 0, 'the replacement worker DB failure must remain unclaimed'
+            assert fixture.receipt(job) == fresh, 'reaper cleanup must not erase the new worker receipt after its DB load timed out'
+            assert fixture.engine.redis.llen(fixture.engine.keys.queue(fixture.channel)) == 0, \
+                'the surviving receipt must protect a delivery already consumed from the queue'
+
+
+@th.django_unit_test()
+def test_reaper_ambiguous_queue_write_preserves_bounded_existing_recovery(opts):
+    from redis.exceptions import ConnectionError, TimeoutError
+
+    class UncertainQueue:
+        def __init__(self, real, write, error):
+            self.real = real
+            self.write = write
+            self.error = error
+            self.calls = 0
+
+        def __getattr__(self, name):
+            return getattr(self.real, name)
+
+        def rpush(self, key, value):
+            self.calls += 1
+            if self.write:
+                self.real.rpush(key, value)
+            raise self.error('queue acknowledgment unavailable')
+
+    with EngineFixture() as fixture:
+        real = fixture.engine.redis
+        for write, error in ((False, ConnectionError), (True, ConnectionError),
+                             (False, TimeoutError), (True, TimeoutError)):
+            job = fixture.job()
+            uncertain = UncertainQueue(real, write, error)
+            fixture.engine.redis = uncertain
+            fixture.reap()
+            assert uncertain.calls == 1, 'one reaper pass must make only one queue handoff attempt'
+            assert fixture.receipt(job) is not None, 'uncertain queue publication must retain recoverable evidence'
+            fixture.engine.redis = real
+            fixture.reap()
+            while real.llen(fixture.engine.keys.queue(fixture.channel)):
+                queued = real.brpop([fixture.engine.keys.queue(fixture.channel)], timeout=1)
+                fixture.engine.execute_job(fixture.channel, queued[1])
+            job.refresh_from_db()
+            assert job.status == 'completed' and job.attempt == 1, \
+                'the existing reaper and execution fence must recover ambiguous writes without duplicate handler execution'
+
+
+@th.django_unit_test()
+def test_stale_receipt_cleanup_failure_uses_existing_bounded_retries(opts):
+    from redis.exceptions import ConnectionError
+
+    with EngineFixture() as fixture:
+        job = fixture.job()
+        original = fixture.receipt(job)
+        client = fixture.engine.redis.get_client()
+        with mock.patch.object(client, 'eval', side_effect=ConnectionError('cleanup acknowledgment unavailable')) as cleanup:
+            result = fixture.engine._remove_from_processing(fixture.channel, job.pk, stale_before=int(time.time() * 1000))
+        assert result is False and cleanup.call_count == 3, 'conditional receipt cleanup must keep the existing three-attempt retry bound'
+        assert fixture.receipt(job) == original, 'unconfirmed cleanup must leave its receipt available for later recovery'
