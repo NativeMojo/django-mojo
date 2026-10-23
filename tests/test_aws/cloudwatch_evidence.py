@@ -157,3 +157,34 @@ def test_supplied_refreshable_session_refuses_before_threshold_race(opts):
     else:
         raise AssertionError("refreshable supplied session must refuse before its threshold can race")
     assert not calls, "bounded caller must neither invoke an advisory refresh check nor construct the unbounded client"
+
+
+@th.django_unit_test()
+def test_managed_series_keeps_provider_time_without_optional_host_agent_samples(opts):
+    import time
+    from mojo.helpers.aws.cloudwatch import CloudWatchHelper
+    from mojo.apps.account.services.health_evidence import CycleBudget
+    now = datetime.now(timezone.utc)
+    observed = now - timedelta(seconds=300)
+    calls = []
+    class Provider:
+        def list_metrics(self, **params):
+            calls.append("discovery")
+            return {"Metrics": []}
+        def get_metric_data(self, **params):
+            calls.append("data")
+            assert len(params["MetricDataQueries"]) == 1, "unresolved EC2 identity generated an unbound host metric query"
+            query = params["MetricDataQueries"][0]
+            assert query["MetricStat"]["Metric"]["Dimensions"] == [{"Name": "DBInstanceIdentifier", "Value": "current-writer"}], "managed data lost its exact current-writer dimensions"
+            return {"MetricDataResults": [{"Id": query["Id"], "StatusCode": "Complete", "Timestamps": [observed], "Values": [0]}]}
+    extra = [{"key": "database:writer:storage", "metric": "FreeLocalStorage", "namespace": "AWS/RDS", "unit": "Bytes", "period_seconds": 300,
+        "dimensions": [{"Name": "DBInstanceIdentifier", "Value": "current-writer"}]}]
+    for at in (now, now + timedelta(seconds=60)):
+        deadline = time.monotonic()+5
+        result = CloudWatchHelper(access_key="fake", secret_key="fake").get_recent_evidence(
+            [{"node_id": "legacy-host", "instance_id": None}], deadline=deadline, now=at,
+            budget=CycleBudget(deadline), client=Provider(), extra_series=extra)
+        metric = result["extra"][extra[0]["key"]]
+        assert metric["value"] == 0 and metric["observed_at"] == observed.isoformat(), "managed recollection replaced the real zero or provider timestamp with poll time"
+        assert result["nodes"]["legacy-host"]["memory"]["observed_at"] is None, "missing optional host agent evidence fabricated a sample"
+    assert calls == ["discovery", "discovery", "data"] * 2, "managed evidence bypassed the shared batched provider acquisition"

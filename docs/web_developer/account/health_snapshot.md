@@ -1,5 +1,12 @@
 # Reading protected health snapshots
 
+Jobman's `scheduler_detector` source is sampled directly by OS cron every
+three minutes. Its observation time and identity survive snapshot cache reads;
+`scheduler_available` and `expected_runners_available` reference this actual
+independent evidence. Missing or stale evidence is Unknown. The optional
+`scheduler_lock` slot is installation metadata. Enrolling snapshots does not
+enable incident notifications or tickets.
+
 Use `GET /api/account/admin/health/snapshot`, optionally with the opaque
 `evidence_cursor` from the previous response. Assistant/MCP exposes the same
 service as read-only `get_health_snapshot(evidence_cursor=None)`. Source
@@ -8,7 +15,8 @@ This endpoint reads the cache and never starts a collector. The existing
 `get_platform_health` tool retains its current behavior.
 
 Entry needs current global `view_platform`, `manage_platform` or `admin`.
-AWS facts additionally need `manage_aws`; checked host, queue and durable job
+Bounded AWS health facts use the same Platform visibility, or `manage_aws`;
+general cloud inventory and mutation permissions are unchanged. Checked host, queue and durable job
 facts need `manage_jobs`, `view_jobs` or `jobs`. Group-only grants and group
 `ApiKey` identities do not authorize this installation-wide report. Validated
 per-user `UserAPIKey` credentials retain their User's global grants. Permissions
@@ -82,6 +90,25 @@ or drained queues pass the stall predicate. Counter reset is unknown; unknown
 capacity remains raw facts rather than invented percentages. Scheduler lock
 presence has installation scope and no independent heartbeat. Missing detector
 evidence is explicit unknown.
+
+Checked host CPU/memory/filesystem/inode measurements are authoritative. CloudWatch
+host metrics and EC2 presence are optional supporting slots (`required:false`):
+missing CWAgent/series/provider identity stays explicit without blocking fresh
+host coverage. A real fresh cloud pressure or stopped-instance failure retains
+its impact until the original sample expires. Explicit `required:true` evidence
+and applicable managed database/cache metrics still block coverage when missing.
+Provider identity without an exact mapping reports `provider_identity_unresolved`,
+without inventing presence or an observation timestamp.
+
+Legacy installations can bind managed evidence by one exact normalized primary
+database/cache host and port in the selected region, without declaring ownership
+of a provisioned estate. Aurora follows its current writer and uses local-storage
+metrics; cache replication lag applies only to proved replicas. Standalone Redis
+and one replication-group primary endpoint are supported. Ambiguity, denial,
+discovery caps and unproved CNAMEs remain named Unknown. Existing provision
+resource fences still apply. Missing configured region is `provider_region_unresolved`
+without provider reads. Region, bindings and source policy participate in
+the frozen configuration hash; no endpoint read changes provider resources.
 
 The fleet component's existing `source:request_service` slot carries current
 signed request readiness for each required node, with the same interpretation
@@ -177,8 +204,9 @@ CloudWatch uses actual samples in a fixed previous30-minute window: CPU300s,
 memory60s and disk300s, exact namespace/full dimensions, four discovery pages,
 twelve operations and eight collected mount series. Runtime has20-second
 freshness. Recipe declaration does not prove installation;
-`agent_installation.status` stays unknown. Fresh runtime cannot hide a missing
-continuous stream. Every multi-node page remains incomplete, including the last;
+`agent_installation.status` stays unknown. Optional missing continuous streams
+retain their missing status with no real sample and do not add required gaps.
+Every multi-node page remains incomplete, including the last;
 full traversal of one unchanged revision is required for fleet coverage.
 
 No read installs an agent, changes a detector or runs remediation. No anonymous

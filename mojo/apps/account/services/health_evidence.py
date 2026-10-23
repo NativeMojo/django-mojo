@@ -23,6 +23,7 @@ MAX_CONDITIONS = 1024
 MAX_BASIS = 8
 GRANTS = ("platform", "aws", "jobs")
 GOOD_SOURCE_STATUSES = ("ok", "stale")
+HOST_SOURCE_POLICY = {"host_metrics": "runtime", "cloudwatch_host_metrics": "optional", "provider_presence": "optional"}
 
 
 class EvidenceError(Exception):
@@ -177,10 +178,13 @@ def component(source_id, kind, resource_id, evidence, conditions, *, service_id=
     fresh = [row for row in required_slots if slot_is_fresh(row, now)]
     complete = bool(coverage_complete and required_slots and len(fresh) == len(required_slots))
     failures = [row for row in conditions if row["outcome"] == "fail"]
+    required_ids = {row["slot_id"] for row in required_slots}
+    deciding = [row for row in conditions if row["outcome"] != "unknown" or not row.get("basis")
+                or any(fact["slot_id"] in required_ids for fact in row["basis"])]
     availability = ("down" if any(row["impact"] == "availability" for row in failures) else
                     "up" if any(row["outcome"] == "pass" and row["impact"] == "availability" for row in conditions) else "unknown")
     status = ("unhealthy" if availability == "down" else "degraded" if failures else
-              "healthy" if complete and all(row["outcome"] in ("pass", "not_applicable") for row in conditions)
+              "healthy" if complete and all(row["outcome"] in ("pass", "not_applicable") for row in deciding)
               else "stale" if any(row.get("status") == "stale" for row in required_slots) else "unknown")
     observations = [parse_time(row.get("observed_at")) for row in required_slots]
     deadlines = [parse_time(row.get("fresh_until")) for row in required_slots]
@@ -483,6 +487,16 @@ def bounded_redis_connection(*, budget, connect=None, **kwargs):
     return BudgetRedis((connect or get_bounded_connection)(**kwargs), budget)
 
 
+def endpoint_binding(host, port=None):
+    """Normalize an endpoint, without DNS guesses or retaining credentials."""
+    from urllib.parse import urlsplit
+    try:
+        parsed = urlsplit(str(host) if "://" in str(host) else "//" + str(host or ""))
+        return {"host": (parsed.hostname or "").rstrip(".").lower(), "port": int(parsed.port or port) if parsed.port or port else None}
+    except (ValueError, TypeError):
+        return {"host": "", "port": None}
+
+
 def source_configuration(deadline, *, get_static=None, cursor_context=None, budget=None, project_reader=None):
     """One bounded primary query for frozen settings and the declared API roster."""
     from mojo.apps.account.models import Setting
@@ -490,7 +504,6 @@ def source_configuration(deadline, *, get_static=None, cursor_context=None, budg
     from mojo.apps.aws.services import fleet_health
     from django.apps import apps as django_apps
     from mojo.helpers.settings import settings
-    from urllib.parse import urlsplit
     get_static = get_static or settings.get_static
     keys = [system_settings.INSTALLATION_UUID, system_settings.INSTALLATION_SLUG,
             system_settings.BASE_URL, system_settings.EXPECTED_EDGE_TOPOLOGY]
@@ -513,7 +526,7 @@ def source_configuration(deadline, *, get_static=None, cursor_context=None, budg
     if isinstance(topology, str):
         topology = json.loads(topology)
     expected = fleet_health._read_expected({"platform": True, "aws": True, "jobs": True}, deadline,
-        get_static=get_static, topology_reader=lambda key: topology)
+        get_static=get_static, topology_reader=lambda key: topology, spec_reader=fleet_health._health_spec)
     services = [{"resource_id": "primary", "service_id": "primary", "origin": stored.get(system_settings.BASE_URL), "path": "/api/version"}]
     for app in apps[:23]:
         name = server_name_for(app["domain_name"], app.get("label") or "") if app.get("domain_name") is not None else None
@@ -525,19 +538,26 @@ def source_configuration(deadline, *, get_static=None, cursor_context=None, budg
     channels_valid = isinstance(channels, (list, tuple)) and all(isinstance(channel, str) and 0 < len(channel) <= 100 for channel in channels)
     channels = sorted(set(channels)) if channels_valid else []
     from django.db import connections
-    redis_origin = str(get_static("REDIS_URL", "") or "")
-    binding = {"database_host": connections["default"].settings_dict.get("HOST"),
-               "redis_host": urlsplit(redis_origin).hostname if redis_origin else get_static("REDIS_SERVER", "localhost")}
+    from mojo.helpers.redis.client import _build_url
+    primary = connections["default"].get_connection_params()
+    database = endpoint_binding(primary.get("host"), primary.get("port") or 5432)
+    redis = endpoint_binding(_build_url(get=get_static), 6379)
+    binding = {"database_host": database["host"], "database_port": database["port"],
+               "redis_host": redis["host"], "redis_port": redis["port"]}
+    spec = expected.get("spec")
+    region = spec.region if spec is not None else get_static("AWS_REGION", None)
     from mojo.apps.account.services import project_health
     project = (project_reader or (lambda end: project_health.freeze(end, get_static=get_static, budget=budget)))(deadline)
     revision_config = {"roster_scope": fleet_health.roster_scope(expected),
-        "services": services, "channels": channels, "bindings": binding}
+        "services": services, "channels": channels, "bindings": binding,
+        "region": region, "source_policy": HOST_SOURCE_POLICY}
     if project is not None:
         revision_config["project_services"] = project
     revision = health_snapshot.configuration_revision(identity, revision_config)
     result = {**identity, "config_revision": revision, "expected": expected, "services": services,
             "services_omitted": max(0, len(apps) - 23), "services_complete": len(apps) < 25, "channels": channels[:32],
-            "channels_complete": bool(channels_valid and channels and len(channels) <= 32), "bindings": binding}
+            "channels_complete": bool(channels_valid and channels and len(channels) <= 32), "bindings": binding,
+            "region": region, "source_policy": copy.deepcopy(HOST_SOURCE_POLICY)}
     if project is not None:
         result["project_services"] = project
     return result
@@ -660,73 +680,152 @@ def probe_service(service, deadline, *, resolver=None, connector=None, ssl_conte
 
 
 def managed_series(configuration, deadline, *, budget, provider_factory=None):
-    """Exact declared RDS/cache resources bound to the actual connection host."""
+    """Bounded exact endpoint observations, fenced by provision intent when present."""
     from mojo.deploy.provision.spec import names
     from mojo.helpers.aws.provider_call import DeadlineProviderClient
     spec = configuration["expected"].get("spec")
-    result = {"series": [], "database": {"status": "unknown", "reason": "managed_resource_unresolved"},
-              "redis": {"status": "unknown", "reason": "managed_resource_unresolved"}}
-    if spec is None:
+    region = spec.region if spec is not None else configuration.get("region")
+    result = {"series": [], "database": {"status": "unknown", "reason": "managed_endpoint_unresolved"},
+              "redis": {"status": "unknown", "reason": "managed_endpoint_unresolved"}}
+    if not isinstance(region, str) or not region.strip():
+        result.update(database={"status": "unknown", "reason": "provider_region_unresolved"},
+                      redis={"status": "unknown", "reason": "provider_region_unresolved"})
         return result
-    resolved = names(spec)
-    factory = provider_factory or (lambda service: DeadlineProviderClient(service, deadline, region=spec.region))
+    # Invalid provision intent never enables account-wide endpoint discovery.
+    if configuration["expected"].get("sources", {}).get("provision", {}).get("status") == "unknown":
+        return result
+    resolved = names(spec) if spec is not None else None
+    factory = provider_factory or (lambda service: DeadlineProviderClient(service, deadline, region=region))
     def call(service, operation, **params):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("not_collected_budget")
         budget.take("provider_operations")
         return getattr(factory(service), operation)(**params)
+    def scan(service, operation, key):
+        rows, marker = [], None
+        while True:
+            budget.take("inventory_pages")
+            page = call(service, operation, MaxRecords=100, **({"ShowCacheNodeInfo": True} if operation == "describe_cache_clusters" else {}),
+                        **({"Marker": marker} if marker else {}))
+            current = page.get(key) or []
+            if not isinstance(current, list) or len(current) > 100:
+                raise TimeoutError("not_collected_budget")
+            rows.extend(current)
+            next_marker = page.get("Marker")
+            if not next_marker:
+                return rows
+            if next_marker == marker:
+                raise TimeoutError("not_collected_budget")
+            marker = next_marker
+    def exact(rows, key, identifier):
+        selected = [row for row in rows if row.get(key) == identifier]
+        if len(selected) != 1:
+            raise EvidenceError("managed_endpoint_ambiguous" if selected else "managed_endpoint_unresolved")
+        return selected[0]
+    def matches(kind, endpoint, default_port, port=None):
+        endpoint = endpoint if isinstance(endpoint, dict) else {"Address": endpoint, "Port": port}
+        actual = endpoint_binding(endpoint.get("Address"), endpoint.get("Port") or default_port)
+        bound = endpoint_binding(configuration["bindings"].get(kind + "_host"), configuration["bindings"].get(kind + "_port") or default_port)
+        return bool(bound["host"] and bound == actual)
     def add(kind, resource, metric, unit, dimensions, namespace):
         result["series"].append({"key": kind + ":" + resource + ":" + metric, "kind": kind, "resource": resource,
             "metric": metric, "unit": unit, "namespace": namespace, "dimensions": dimensions, "period_seconds": 300})
+    def unknown(kind, exc):
+        reason = ("provider_denied" if getattr(exc, "denied", False) else
+                  "not_collected_budget" if isinstance(exc, TimeoutError) or getattr(exc, "provider_code", None) == "deadline_exceeded" else
+                  exc.code if isinstance(exc, EvidenceError) else "managed_" + ("database" if kind == "database" else "cache") + "_unavailable")
+        result[kind] = {"status": "unknown", "reason": reason}
+        result["series"] = [row for row in result["series"] if row["kind"] != kind]
     try:
-        rows = call("rds", "describe_db_instances", DBInstanceIdentifier=resolved["db_writer"]).get("DBInstances") or []
-        if len(rows) == 1 and rows[0].get("DBInstanceIdentifier") == resolved["db_writer"]:
-            row = rows[0]
-            host = str((row.get("Endpoint") or {}).get("Address") or "").rstrip(".").lower()
-            bound = str(configuration["bindings"].get("database_host") or "").rstrip(".").lower()
-            matched = bool(bound and bound == host)
-            if bound and not matched and row.get("DBClusterIdentifier") == resolved["db_cluster"]:
+        if resolved:
+            instances = call("rds", "describe_db_instances", DBInstanceIdentifier=resolved["db_writer"]).get("DBInstances") or []
+            row = exact(instances, "DBInstanceIdentifier", resolved["db_writer"])
+            clusters = []
+            if not matches("database", row.get("Endpoint"), 5432) and row.get("DBClusterIdentifier") == resolved["db_cluster"]:
                 clusters = call("rds", "describe_db_clusters", DBClusterIdentifier=resolved["db_cluster"]).get("DBClusters") or []
-                cluster = clusters[0] if len(clusters) == 1 and clusters[0].get("DBClusterIdentifier") == resolved["db_cluster"] else {}
-                writers = [member.get("DBInstanceIdentifier") for member in cluster.get("DBClusterMembers", []) if member.get("IsClusterWriter") is True]
-                if bound == str(cluster.get("Endpoint") or "").rstrip(".").lower() and len(writers) == 1 and writers[0]:
-                    if writers[0] != row["DBInstanceIdentifier"]:
-                        current = call("rds", "describe_db_instances", DBInstanceIdentifier=writers[0]).get("DBInstances") or []
-                        row = current[0] if len(current) == 1 else {}
-                    matched = row.get("DBInstanceIdentifier") == writers[0] and row.get("DBClusterIdentifier") == resolved["db_cluster"]
-            if matched:
-                result["database"] = {"status": "ok", "resource": row["DBInstanceIdentifier"], "binding": "validated_current_endpoint"}
-                for metric, unit in (("CPUUtilization", "Percent"), ("DatabaseConnections", "Count"), ("FreeableMemory", "Bytes"),
-                                     ("FreeStorageSpace", "Bytes"), ("ReadLatency", "Seconds"), ("WriteLatency", "Seconds")):
-                    add("database", row["DBInstanceIdentifier"], metric, unit, [{"Name": "DBInstanceIdentifier", "Value": row["DBInstanceIdentifier"]}], "AWS/RDS")
-    except Exception:
-        result["database"] = {"status": "unknown", "reason": "managed_database_unavailable"}
+        else:
+            instances = scan("rds", "describe_db_instances", "DBInstances")
+            clusters = scan("rds", "describe_db_clusters", "DBClusters")
+        candidates = [("instance", row) for row in instances if matches("database", row.get("Endpoint"), 5432)]
+        candidates += [("cluster", row) for row in clusters if matches("database", row.get("Endpoint"), 5432, row.get("Port"))]
+        if len(candidates) != 1:
+            raise EvidenceError("managed_endpoint_ambiguous" if candidates else "managed_endpoint_unresolved")
+        shape, row = candidates[0]
+        if shape == "cluster":
+            if resolved and row.get("DBClusterIdentifier") != resolved["db_cluster"]:
+                raise EvidenceError("managed_endpoint_unresolved")
+            cluster_id = row.get("DBClusterIdentifier")
+            writers = [member.get("DBInstanceIdentifier") for member in row.get("DBClusterMembers", []) if member.get("IsClusterWriter") is True]
+            if len(writers) != 1 or not writers[0]:
+                raise EvidenceError("managed_endpoint_ambiguous")
+            # Follow the current writer, never the provision recipe's old member.
+            current = call("rds", "describe_db_instances", DBInstanceIdentifier=writers[0]).get("DBInstances") or []
+            row = exact(current, "DBInstanceIdentifier", writers[0])
+            if row.get("DBClusterIdentifier") != cluster_id:
+                raise EvidenceError("managed_endpoint_unresolved")
+        resource = row.get("DBInstanceIdentifier")
+        if not resource:
+            raise EvidenceError("managed_endpoint_unresolved")
+        result["database"] = {"status": "ok", "resource": resource, "binding": "validated_current_endpoint"}
+        storage = "FreeLocalStorage" if str(row.get("Engine") or "").startswith("aurora") else "FreeStorageSpace"
+        for metric, unit in (("CPUUtilization", "Percent"), ("DatabaseConnections", "Count"), ("FreeableMemory", "Bytes"),
+                             (storage, "Bytes"), ("ReadLatency", "Seconds"), ("WriteLatency", "Seconds")):
+            add("database", resource, metric, unit, [{"Name": "DBInstanceIdentifier", "Value": resource}], "AWS/RDS")
+    except Exception as exc:
+        unknown("database", exc)
     try:
-        rows = call("elasticache", "describe_replication_groups", ReplicationGroupId=resolved["cache_group"]).get("ReplicationGroups") or []
-        row = rows[0] if len(rows) == 1 and rows[0].get("ReplicationGroupId") == resolved["cache_group"] else {}
-        nodes = row.get("NodeGroups") or []
-        endpoint = (nodes[0].get("PrimaryEndpoint") or {}).get("Address") if len(nodes) == 1 else None
-        bound = str(configuration["bindings"].get("redis_host") or "").rstrip(".").lower()
-        if endpoint and bound == endpoint:
-            result["redis"] = {"status": "ok", "resource": resolved["cache_group"], "binding": "validated_endpoint"}
-            members = row.get("MemberClusters") or []
-            if len(members) > 4:
-                result["redis"].update(status="unknown", reason="not_collected_budget", omitted_count=len(members)-4)
-            for member in members[:4]:
-                clusters = call("elasticache", "describe_cache_clusters", CacheClusterId=member, ShowCacheNodeInfo=True).get("CacheClusters") or []
-                cluster = clusters[0] if len(clusters) == 1 and clusters[0].get("CacheClusterId") == member else {}
-                cache_nodes = cluster.get("CacheNodes") or []
-                if len(cache_nodes) > 4:
-                    result["redis"].update(status="unknown", reason="not_collected_budget", omitted_count=result["redis"].get("omitted_count", 0)+len(cache_nodes)-4)
-                for node in cache_nodes[:4]:
-                    node_id = node.get("CacheNodeId")
-                    if not node_id:
-                        continue
-                    for metric, unit in (("CPUUtilization", "Percent"), ("EngineCPUUtilization", "Percent"),
-                                         ("DatabaseMemoryUsagePercentage", "Percent"), ("CurrConnections", "Count"),
-                                         ("Evictions", "Count"), ("ReplicationLag", "Seconds")):
-                        add("redis", member + ":" + node_id, metric, unit,
-                            [{"Name": "CacheClusterId", "Value": member}, {"Name": "CacheNodeId", "Value": node_id}], "AWS/ElastiCache")
-    except Exception:
-        result["redis"] = {"status": "unknown", "reason": "managed_cache_unavailable"}
+        if resolved:
+            groups = call("elasticache", "describe_replication_groups", ReplicationGroupId=resolved["cache_group"]).get("ReplicationGroups") or []
+            groups = [exact(groups, "ReplicationGroupId", resolved["cache_group"])]
+            cache_rows = []
+        else:
+            groups = scan("elasticache", "describe_replication_groups", "ReplicationGroups")
+            cache_rows = scan("elasticache", "describe_cache_clusters", "CacheClusters")
+        candidates = [("group", group) for group in groups if len(group.get("NodeGroups") or []) == 1
+            and matches("redis", group["NodeGroups"][0].get("PrimaryEndpoint"), 6379)]
+        candidates += [("standalone", row) for row in cache_rows if not row.get("ReplicationGroupId") and row.get("Engine") in ("redis", "valkey")
+            and len(row.get("CacheNodes") or []) == 1 and matches("redis", row["CacheNodes"][0].get("Endpoint"), 6379)]
+        if len(candidates) != 1:
+            raise EvidenceError("managed_endpoint_ambiguous" if candidates else "managed_endpoint_unresolved")
+        shape, selected = candidates[0]
+        roles = {}
+        if shape == "group":
+            members = selected.get("MemberClusters") or []
+            if not members or len(members) > 4 or len(set(members)) != len(members):
+                raise TimeoutError("not_collected_budget")
+            for member in selected["NodeGroups"][0].get("NodeGroupMembers") or []:
+                roles[(member.get("CacheClusterId"), member.get("CacheNodeId"))] = member.get("CurrentRole")
+            clusters = []
+            for member in members:
+                rows = call("elasticache", "describe_cache_clusters", CacheClusterId=member, ShowCacheNodeInfo=True).get("CacheClusters") or []
+                cluster = exact(rows, "CacheClusterId", member)
+                if cluster.get("ReplicationGroupId") != selected["ReplicationGroupId"]:
+                    raise EvidenceError("managed_endpoint_unresolved")
+                clusters.append(cluster)
+            resource = selected["ReplicationGroupId"]
+        else:
+            clusters, resource = [selected], selected["CacheClusterId"]
+        for cluster in clusters:
+            nodes = cluster.get("CacheNodes") or []
+            if not nodes or len(nodes) > 4:
+                raise TimeoutError("not_collected_budget")
+            for node in nodes:
+                node_id, member = node.get("CacheNodeId"), cluster["CacheClusterId"]
+                if not node_id:
+                    raise EvidenceError("managed_endpoint_unresolved")
+                role = roles.get((member, node_id))
+                if shape == "group" and role not in ("primary", "replica"):
+                    raise EvidenceError("managed_cache_role_unresolved")
+                metrics = [("CPUUtilization", "Percent"), ("EngineCPUUtilization", "Percent"),
+                           ("DatabaseMemoryUsagePercentage", "Percent"), ("CurrConnections", "Count"), ("Evictions", "Count")]
+                if role == "replica":
+                    metrics.append(("ReplicationLag", "Seconds"))
+                for metric, unit in metrics:
+                    add("redis", member + ":" + node_id, metric, unit,
+                        [{"Name": "CacheClusterId", "Value": member}, {"Name": "CacheNodeId", "Value": node_id}], "AWS/ElastiCache")
+        result["redis"] = {"status": "ok", "resource": resource, "binding": "validated_endpoint"}
+    except Exception as exc:
+        unknown("redis", exc)
     return result
 
 
@@ -866,12 +965,20 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
         trends = detail.get("trends") or {}
         for key, raw in [("cpu", trends.get("cpu")), ("memory", trends.get("memory"))] + [("filesystem:" + item.get("path", "/"), item) for item in trends.get("filesystems", [])]:
             raw = raw or {"status": "unknown", "reason": "cloudwatch_unavailable"}
-            sample = make("fleet", "installation", "cloud:" + digest([node_id, key])[:32], raw, grant="aws", source="cloudwatch", value=raw.get("value"), identity={"node_id": node_id, "measurement": key})
+            required = raw.get("required") is True
+            sample = make("fleet", "installation", "cloud:" + digest([node_id, key])[:32], raw, grant="aws", source="cloudwatch", value=raw.get("value"), identity={"node_id": node_id, "measurement": key}, required=required)
             slots.append(sample)
-            checks.append(predicate("fleet", "installation", "cloud_" + key.split(":")[0] + "_ge_90_percent", sample, pressured(raw.get("value")), resource_key=digest([node_id, key])))
-        presence = make("fleet", "installation", "presence:" + digest(node_id)[:32], {"status": "unknown" if ambiguous else "ok", "reason": "identity_ambiguous" if ambiguous else None, "observed_at": None if ambiguous else fleet.get("inventory", {}).get("observed_at"), "value": None if ambiguous else row.get("provider_state")}, grant="aws", source="ec2", identity={"node_id": node_id, "instance_id": row.get("instance_id")})
+            if required or slot_is_fresh(sample, now):
+                checks.append(predicate("fleet", "installation", "cloud_" + key.split(":")[0] + "_ge_90_percent", sample, pressured(raw.get("value")), resource_key=digest([node_id, key])))
+        mapped = bool(row.get("instance_id") and row.get("provider_state") and not ambiguous)
+        presence = make("fleet", "installation", "presence:" + digest(node_id)[:32], {
+            "status": "ok" if mapped else "unknown", "reason": "identity_ambiguous" if ambiguous else None if mapped else "provider_identity_unresolved",
+            "observed_at": fleet.get("inventory", {}).get("observed_at") if mapped else None,
+            "value": row.get("provider_state") if mapped else None}, grant="aws", source="ec2",
+            identity={"node_id": node_id, "instance_id": row.get("instance_id")}, required=False)
         slots.append(presence)
-        checks.append(predicate("fleet", "installation", "provider_stopped", presence, row.get("provider_state") in ("stopped", "stopping", "terminated", "shutting-down") if row.get("provider_state") and not ambiguous else None, impact="availability", resource_key=digest(node_id)))
+        if slot_is_fresh(presence, now):
+            checks.append(predicate("fleet", "installation", "provider_stopped", presence, row.get("provider_state") in ("stopped", "stopping", "terminated", "shutting-down"), impact="availability", resource_key=digest(node_id)))
     if not slots:
         slots.append(make("fleet", "installation", "roster", {"status": "unknown", "reason": "expected_roster_unresolved"}))
     fleet_component = component(source_id, "fleet", "installation", slots, checks,
@@ -921,8 +1028,20 @@ def build_components(configuration, native, redis, fleet, probes, *, managed=Non
     for channel in configuration["channels"]:
         queue_raw = (queues or {}).get(channel) or {"status": "unknown", "reason": "queue_transport_unavailable"}
         job_slots.append(make("jobman", "installation", "redis_queue:" + digest(channel)[:32], queue_raw, grant="jobs", source="redis_queue", identity={"channel": channel}))
-    job_slots.append(make("jobman", "installation", "scheduler_lock", {**fleet.get("sources", {}).get("scheduler", {}), "observed_at": None}, grant="jobs", source="scheduler_lock"))
-    job_slots.append(make("jobman", "installation", "scheduler_detector", {"status": "unknown", "reason": "detector_evidence_unavailable"}, grant="jobs", source="independent_detector"))
+    scheduler = fleet.get("sources", {}).get("scheduler", {})
+    job_slots.append(make("jobman", "installation", "scheduler_lock",
+        {**{key: scheduler[key] for key in ("status", "reason", "scheduler_active") if key in scheduler}, "observed_at": None},
+        grant="jobs", source="scheduler_lock", required=False))
+    detector = scheduler.get("detector") or {"status": "unknown", "reason": "detector_evidence_unavailable"}
+    detector_slot = make("jobman", "installation", "scheduler_detector", detector,
+                         grant="jobs", source="independent_detector",
+                         identity={"detector_id": detector.get("detector_id"), "node": detector.get("node")})
+    job_slots.append(detector_slot)
+    for name, rule in (("scheduler", "scheduler_available"), ("runners", "expected_runners_available")):
+        state = detector.get(name) or {}
+        healthy = state.get("healthy")
+        job_checks.append(predicate("jobman", "installation", rule, detector_slot,
+            not healthy if detector.get("status") == "ok" and state.get("status") == "ok" and type(healthy) is bool else None))
     components.append(component(source_id, "jobman", "installation", job_slots, job_checks,
                                 coverage_complete=configuration["channels_complete"], now=now, identity_grant="platform"))
     producer = make("monitoring", "producer", "attempt", {"observed_at": timestamp(now), "status": "ok"}, source="snapshot_producer",

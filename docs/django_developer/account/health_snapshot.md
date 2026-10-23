@@ -58,6 +58,9 @@ cached publication and is validated before projection. Permission/expiry
 projection keeps that digest and configuration hash, rather than hashing a new
 body or renewing source times. A consumer can compare one generation across
 different grants. Restricted roster details are withheld.
+The configuration fence includes the selected AWS region, normalized actual
+primary database/Redis hosts and ports, and the authoritative-host/optional-cloud
+source policy. Redis reader configuration never supplies the primary binding.
 
 ## Actual observations and conditions
 
@@ -90,6 +93,15 @@ survives unrelated missing evidence; missing/denied/stale required evidence
 prevents complete health. Output omissions are counted and remain incomplete.
 Unknown denominators are null, including truncated roster/service enumeration.
 
+Jobman's `scheduler_detector` slot consumes only the independently cached
+three-minute OS-cron result, including its actual observation time and detector
+identity. `scheduler_available` and `expected_runners_available` use that source
+as their causal basis. Missing, failed or expired detector evidence stays
+Unknown; snapshot generation and cache reads never create another detector
+sample. `scheduler_lock` remains optional, noncausal installation metadata.
+An enrolled snapshot source collects quietly with the existing health-incident
+flag off; enrollment does not enable notifications.
+
 Profile 2 records CPU/memory/filesystem/inode or proved capacity use >=90%,
 direct DB/PING and RDS read/write latency >=1 second, positive comparable
 deadlock/eviction/rejected-connection deltas, proved runtime overruns, and due
@@ -100,6 +112,16 @@ Redis deltas require the same run ID. Thresholds, actual units and capacity
 provenance remain in the evidence. Values without capacity (for example
 FreeableMemory/FreeStorageSpace) remain raw facts with unknown utilization.
 Pressure degrades status; only proved availability failures establish down.
+
+Fresh checked host CPU, memory, filesystems and inode observations are the
+authoritative fleet measurements. CloudWatch host metrics and EC2 presence are
+optional supporting evidence: missing agents, provider identity, series or
+permissions do not add duplicate host requirements. Their missing/ambiguous
+identity remains explicit; no presence or sample is manufactured. A fresh
+observed cloud pressure or stopped-instance condition retains its impact.
+Expired optional conditions cease to decide current health at their original
+source deadline. Explicit source `required:true` obligations remain required;
+managed database/cache pressure evidence remains required.
 
 The existing per-node `source:request_service` slot in `fleet:installation`
 uses the same checked service projection as node diagnostics and monitoring
@@ -218,10 +240,21 @@ There is no detached timeout worker or unchecked collection fallback.
 Raw DB facts include SELECT1 latency/reachability, transaction/deadlock counters,
 active/idle-in-transaction counts and oldest transaction. Redis PING/INFO includes
 memory/capacity, eviction/rejection/client/blocking facts and run identity, with
-`scope:default_node`. Managed RDS/cache metrics require the selected declarations
-and exact actual connection endpoint binding. An Aurora cluster endpoint also
-requires its current `IsClusterWriter` member before instance dimensions are
-chosen. Missing binding or member truncation remains unknown. Bounded
+`scope:default_node`. With a provision declaration, managed RDS/cache metrics
+retain its exact resource fences. Without provision files, bounded provider
+discovery accepts only one exact normalized match to the actual primary host
+and port in the configured region. A source environment name alone does not
+declare provisioning; malformed, ambiguous or missing selected real declarations
+remain unresolved. No account inventory is returned and no mutation authority
+is inferred. Legacy reads require file-only `AWS_REGION`; an absent region is
+`provider_region_unresolved` and makes no provider call. An Aurora cluster endpoint requires its current `IsClusterWriter`
+member before instance dimensions are chosen, including after failover. Aurora
+uses `FreeLocalStorage`; other RDS engines use `FreeStorageSpace`. Cache primary
+endpoints support one replication group or one standalone Redis/Valkey node;
+only proved replicas require `ReplicationLag`. Unproved CNAMEs, multiple matches,
+denials, incomplete discovery and missing member roles retain named Unknown
+reasons. Discovery shares the existing four inventory pages and provider cap.
+Bounded
 RedisCluster startup is explicitly unsupported; no singleton fallback or cluster
 management is added. Default-node INFO is never claimed as complete cluster data.
 
@@ -238,7 +271,9 @@ detector evidence stays `detector_evidence_unavailable`.
 
 Entry requires current global `view_platform|manage_platform|admin`. The service
 re-reads the actual primary User permissions for every request, so an old loaded
-User cannot retain revoked grants. AWS slots require `manage_aws`; checked
+User cannot retain revoked grants. Bounded health AWS slots use the existing
+Platform dashboard's `view_platform|manage_platform|admin` visibility, or
+`manage_aws`. General cloud inventory and mutation gates remain unchanged. Checked
 runtime, queue and durable job pages require `manage_jobs|view_jobs|jobs`.
 Group-only grants and group `ApiKey` identities do not authorize this report.
 Validated per-user `UserAPIKey` credentials retain their User's global grants.
@@ -282,7 +317,9 @@ alias/roster requires refreshing the page.
 
 CPU, memory, root/known data filesystems, inodes, filesystem enumeration,
 runner/scheduler and role-bound services retain independent runtime and
-CloudWatch slots. Runtime freshness is 20 seconds; CloudWatch uses actual samples
+CloudWatch slots, each declaring `required`. Host runtime is authoritative;
+optional CloudWatch gaps remain visible without counting as required measurement
+gaps. Runtime freshness is 20 seconds; CloudWatch uses actual samples
 from the previous 30 minutes at CPU300/memory60/disk300-second periods and three
 period freshness. Exact namespaces/full dimensions and partial-series flags are
 preserved. PartialData remains incomplete even when a retained value is usable.
@@ -293,7 +330,7 @@ requires every page of one unchanged revision with no gap/denial/omission.
 
 Recipe configuration is declaration, never installation proof.
 `agent_installation` remains unknown; missing samples cannot establish an absent
-agent. Fresh runtime evidence does not fill a missing continuous stream.
+agent. Optional missing streams retain their actual missing status and no sample.
 Unknown roles preserve unknown obligations. A scheduler lock never becomes a
 per-node detector heartbeat. Nothing installs agents or changes production
 monitoring. There is no anonymous endpoint or public projection; any public
