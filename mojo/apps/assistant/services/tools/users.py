@@ -87,7 +87,7 @@ def _tool_query_users(params, user):
 )
 def _tool_get_user_detail(params, user):
     from mojo.apps.account.models import User
-    from mojo.apps.account.models.group import GroupMember
+    from mojo.apps.account.models import GroupMember
 
     user_id = params["user_id"]
     target = User.objects.get(pk=user_id)
@@ -287,7 +287,7 @@ def _collect_rate_limits(redis_connection):
 )
 def _tool_get_permission_summary(params, user):
     from mojo.apps.account.models import User
-    from mojo.apps.account.models.group import GroupMember
+    from mojo.apps.account.models import GroupMember
 
     user_id = params["user_id"]
     target = User.objects.get(pk=user_id)
