@@ -69,7 +69,7 @@ def _expected(deadline):
     raw = row[0] if row else None
     topology = json.loads(raw) if isinstance(raw, str) else raw
     return fleet_health._read_expected({"platform": True, "aws": True, "jobs": True}, deadline,
-                                      topology_reader=lambda key: topology)
+        topology_reader=lambda key: topology, spec_reader=fleet_health._health_spec)
 
 
 def _expected_hosts(expected, runners, client, now, deadline):

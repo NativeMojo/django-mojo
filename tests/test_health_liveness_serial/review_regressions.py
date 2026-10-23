@@ -1,6 +1,7 @@
 """Real producer wiring and checked logical-node identity regressions."""
 import json
 import time
+from tempfile import TemporaryDirectory
 from contextlib import nullcontext
 from datetime import timedelta
 from types import SimpleNamespace
@@ -77,7 +78,7 @@ def _logical_setup(hosts):
     from mojo.apps.aws.services import fleet_health as fh
     from mojo.apps.incident.services import health_liveness as hl
     topology = {"nodes": ["logical-edge"], "pools": ["app"]}
-    get_static = lambda key, default=None: {"JOBS_CHANNELS": ["edge"]}.get(key, default)
+    get_static = lambda key, default=None: {"JOBS_CHANNELS": ["edge"], "MOJO_ENVIRONMENT": "production"}.get(key, default)
     expected = fh._read_expected({"platform": True, "aws": True, "jobs": True}, time.monotonic()+2,
         get_static=get_static, topology_reader=lambda key: topology, spec_reader=lambda: None)
     client = Client()
@@ -90,11 +91,12 @@ def _logical_setup(hosts):
         time.monotonic()+2, scope=fh.roster_scope(expected)), "logical fixture could not write the actual validated shared identity cache"
     def collect(rows, now=NOW):
         from mojo.apps.account.services import health_evidence as he
-        from mojo.apps.aws.services import capacity
+        from mojo.apps.aws.services import infra_setup
         cursor = SimpleNamespace(execute=lambda *args: None, fetchone=lambda: (json.dumps(topology),))
-        with mock.patch.object(hl.settings, "get_static", side_effect=get_static), \
+        with TemporaryDirectory() as root, \
+                mock.patch.object(hl.settings, "get_static", side_effect=get_static), \
                 mock.patch.object(he, "primary_cursor", return_value=nullcontext(cursor)), \
-                mock.patch.object(capacity, "_configured_spec", return_value=None):
+                mock.patch.object(infra_setup, "_project_root", return_value=root):
             return hl.collect(client=client, roster=lambda *args, **kwargs: rows, now=now)
     return client, runners, collect
 
