@@ -13,7 +13,7 @@ pages render a button for each enabled provider. See
 [Auth Config](auth_config.md). Google, Apple and GitHub are on by default;
 **Microsoft is off until an admin switches it on** on the Sign-in page.
 
-> **Trusted second factor.** OAuth is treated as a strong, trusted authentication event. Completing an OAuth login automatically confirms the user's email address and bypasses any local MFA requirement — see [Security Behaviour](#security-behaviour) below.
+> **Trusted second factor.** OAuth is treated as a strong, trusted authentication event. Completing an OAuth login bypasses any local MFA requirement. Google, Apple and GitHub logins also confirm the user's email address. A Microsoft login confirms it only when Microsoft has verified that email; a missing or unverified Microsoft email stays unconfirmed. See [Security Behaviour](#security-behaviour) below.
 
 ---
 

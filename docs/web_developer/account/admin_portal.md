@@ -13,8 +13,11 @@ origin. Django ships the exact compiled artifact and needs no frontend build.
 For the pinned manifest hash, ownership, offline recovery and archive proof,
 see [the backend packaging guide](../../django_developer/account/admin.md).
 
-The bundled release is **portal-mojo 0.2.20**. A group's **Sub-Groups** section
-has an **Administrators can create sub-groups** switch for system admins
+The bundled release is **portal-mojo 0.2.21**. The **Sign-in** page lists
+**Microsoft** with its icon and shows any `notices` the server sends for a
+provider card (see [OAuth](oauth.md)). It also includes the operations pages:
+GeoLocation, Fleet, Serving, Domains, Deployments and Maintenance. A group's
+**Sub-Groups** section has an **Administrators can create sub-groups** switch for system admins
 (global `groups`/`manage_groups`), backed by the Group action
 `allow_member_subgroups` (see [Groups](group.md)). **Users → Security** and a
 user’s action menu include **Set temporary password**, with a one-time copyable
