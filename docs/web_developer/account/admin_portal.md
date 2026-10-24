@@ -13,7 +13,14 @@ origin. Django ships the exact compiled artifact and needs no frontend build.
 For the pinned manifest hash, ownership, offline recovery and archive proof,
 see [the backend packaging guide](../../django_developer/account/admin.md).
 
-The bundled release is **portal-mojo 0.2.21**. The **Sign-in** page lists
+The bundled release is **portal-mojo 0.2.22**. Admin navigation and Domains flows
+are simplified. **Assistant → Setup** separates **AI Assistant** configuration
+from **MCP connections**; MCP does not require an AI provider key or model.
+Conversations, Skills and Memory use focused dialogs, contextual help and clear
+ownership or audience controls. Group memory can be readable without a write
+grant. The Admin Dashboard is unchanged.
+
+The **Sign-in** page lists
 **Microsoft** with its icon and shows any `notices` the server sends for a
 provider card (see [OAuth](oauth.md)). It also includes the operations pages:
 GeoLocation, Fleet, Serving, Domains, Deployments and Maintenance. A group's

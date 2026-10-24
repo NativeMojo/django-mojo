@@ -1,15 +1,24 @@
 # Packaged Admin Security client
 
-The packaged Portal is **portal-mojo 0.2.18**, source revision
-`ea414d196f1e727be310681a9d36c97513784908`, the clean canonical artifact
-from Portal CI run 39516512697. It includes changes after the `v0.2.18` tag;
-the source revision and manifest digest identify this exact bundle.
+The packaged Portal is **portal-mojo 0.2.22**, source revision
+`a758fdf3d45877df629405377778179fa6cbb0bc` (tag `v0.2.22`). It is a clean canonical
+macOS arm64 build with Node **24.21.0** and npm **11.19.0**.
 
-- Manifest SHA-256: `03f4d7cb0d0ba718531c7254e928970affd736c052b1a783683325648da6cd6a`
-- Lockfile SHA-256: `291fc4f7bd7f55a38e264847650d38c08cb229b18e685e792c606b1c4118351a`
-- Inventory: 128 files
+- Manifest SHA-256: `1a26ef9695ed4094de0af267aeec35b50f1f33e8d2c90a0640ca8b17910e7c4a`
+- Lockfile SHA-256: `426f33cc5f5527b7b33a2a268c33892ebe53116ab8346a61f97277e716b70d60`
+- Inventory: 160 files
 
-New in this build:
+See [the packaging guide](../../django_developer/account/admin.md) for the
+platform-bound reproducibility proof and offline replacement procedure.
+
+This build simplifies navigation and Domains flows, separates **AI Assistant**
+setup from **MCP connections**, and uses focused dialogs for Conversations,
+Skills and Memory. Memory distinguishes personal, global and selected group
+audiences; group read access does not imply permission to edit. The Admin
+Dashboard is unchanged. Existing REST permissions and source-session protection
+remain authoritative.
+
+Included from earlier builds:
 
 - **Passkeys** (user detail and My account) no longer crashes for users who
   hold a passkey. `transports` on `/api/account/passkeys` rows is a JSON list
