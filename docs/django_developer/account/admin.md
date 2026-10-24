@@ -16,19 +16,19 @@ Compiled assets use a relative base; Portal API requests always use same-origin
 
 ## Pinned identity and offline replacement
 
-The current artifact is portal-mojo **0.2.21**, source revision
-`1176451d662b1bb80e16f520fe92e12dfe2c0dbb` (tag `v0.2.21`),
+The current artifact is portal-mojo **0.2.22**, source revision
+`a758fdf3d45877df629405377778179fa6cbb0bc` (tag `v0.2.22`),
 built clean with Node **24.21.0** / npm **11.19.0** and lockfile SHA-256
-`ffa3d5c7bca028c3fe178e96d98f3bd22ae599317cc3e2ec7bbe52220e78a8d9`.
-Its 155-file inventory includes the Vite manifest and lazy chunks.
+`426f33cc5f5527b7b33a2a268c33892ebe53116ab8346a61f97277e716b70d60`.
+Its 160-file inventory includes the Vite manifest and lazy chunks.
 The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 
-`0c363743922e69499239fcd34688a0e448d73596733a6d57352b2da733a3ed84`
+`1a26ef9695ed4094de0af267aeec35b50f1f33e8d2c90a0640ca8b17910e7c4a`
 
 This is the canonical `npm run build:admin -- --canonical` output of tag
-`v0.2.21` on Linux, the platform of portal-mojo's publish workflow. Two fresh
-clean clones of the tag produced byte-identical trees with this manifest
-digest, and the vendor tool checked the copy against it. The runtime pin is
+`v0.2.22`, built locally on macOS arm64. Two fresh clean builds produced
+byte-identical manifest identities and inventories, and the vendor tool checked
+the copy against that digest. The runtime pin is
 `services/admin_artifact.PINNED_MANIFEST_SHA256`.
 portal-mojo promises identical bytes on one platform only, so another platform's
 build of the same revision may carry a different hash.
@@ -40,7 +40,7 @@ Stop processes serving/importing the checkout before replacing the artifact:
 ```bash
 uv run python scripts/vendor_admin_portal.py \
   --source /absolute/path/to/verified/dist/admin \
-  --expected-manifest-sha256 0c363743922e69499239fcd34688a0e448d73596733a6d57352b2da733a3ed84
+  --expected-manifest-sha256 1a26ef9695ed4094de0af267aeec35b50f1f33e8d2c90a0640ca8b17910e7c4a
 uv run python scripts/vendor_admin_portal.py --check
 ```
 
@@ -67,7 +67,15 @@ startup and delivers only its validated allowlist. Provenance and
 
 ## Included Portal behavior
 
-This canonical build (portal-mojo 0.2.21) shows **Microsoft** with its icon
+Portal 0.2.22 simplifies the Admin navigation and Domains flows. **Assistant →
+Setup** separates the built-in AI Assistant from **MCP connections**, which do
+not require an AI model or provider key. Configuration tasks open focused
+dialogs. Conversations distinguish owned chat from read-only history; Skills
+show readable steps and activation controls; Memory separates personal, global
+and explicitly selected group audiences, with writes gated by their own grants.
+The Admin Dashboard is unchanged.
+
+The earlier canonical build (portal-mojo 0.2.21) shows **Microsoft** with its icon
 wherever sign-in methods are listed. The **Sign-in** page's provider cards also
 show any `notices` the server sends for a provider, for example a warning that
 Microsoft's client secret is about to expire (#9104; see
