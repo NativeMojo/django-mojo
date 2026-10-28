@@ -20,6 +20,11 @@ FileManagers are storage backend configurations. Admins create and manage them; 
 - `use`, when set or changed, must be 1-64 letters, digits, `_` or `-`,
   starting with a letter or digit (400 otherwise). Existing rows are not
   re-checked.
+- One active manager per group (or user) and `use`: a create, a switch to
+  active, or a change of `use` into a purpose that already has an active
+  manager is a 400 (`An active file manager already exists for this purpose`).
+  Purpose-less managers (`use` empty) are not limited. `is_default` is per
+  `use`.
 
 ### Where a manager may point
 

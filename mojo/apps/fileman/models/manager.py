@@ -20,6 +20,15 @@ _CDN_UNRESOLVED = object()
 USE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 # Purposes server code owns; a request may not select them.
 FILEMAN_RESERVED_USES = ("filevault",)
+# How a lookup picks among managers for one scope and purpose: the default
+# first, then the oldest (#8662).
+SELECTION_ORDER = ("-is_default", "id")
+DUPLICATE_USE_MESSAGE = "An active file manager already exists for this purpose"
+
+
+class DuplicateUseError(me.ValueException):
+    """A save would make a second active manager for one scope and purpose."""
+
 
 class FileManager(MojoSecrets, MojoModel):
     """
@@ -234,7 +243,58 @@ class FileManager(MojoSecrets, MojoModel):
                 self._backend = None
         if getattr(self, "_secrets_changed", False):
             self._backend = None
+        if self._enters_use_key():
+            from django.db import transaction
+            # Lock the owning Group (or User) so two saves with different
+            # names cannot both pass the check (pattern of aws_setup.py).
+            with transaction.atomic():
+                self._lock_use_owner()
+                self._require_unique_use()
+                super().save(*args, **kwargs)
+            return
         super().save(*args, **kwargs)
+
+    def _use_key(self, use, is_active, group_id, user_id):
+        """The (group, user, use) an active purpose manager claims, else None.
+
+        Purpose-less managers and the system scope (no user, no group) claim
+        nothing: several purpose-less managers per group are normal, and the
+        system default is checked by aws_check/aws_setup.
+        """
+        if not is_active or not use or (group_id is None and user_id is None):
+            return None
+        return (group_id, user_id, use)
+
+    def _enters_use_key(self):
+        """Whether this save moves the row into a claimed key: a create, or a
+        change of use, is_active, group or user. Editing an existing duplicate
+        in place stays allowed."""
+        key = self._use_key(self.use, self.is_active, self.group_id, self.user_id)
+        if key is None:
+            return False
+        if self.pk is None:
+            return True
+        persisted = type(self).objects.filter(pk=self.pk).values_list(
+            "use", "is_active", "group_id", "user_id").first()
+        if persisted is None:
+            return True
+        return self._use_key(*persisted) != key
+
+    def _lock_use_owner(self):
+        if self.group_id is not None:
+            from mojo.apps.account.models import Group
+            Group.objects.select_for_update().filter(pk=self.group_id).values_list("pk", flat=True).first()
+        elif self.user_id is not None:
+            from mojo.apps.account.models import User
+            User.objects.select_for_update().filter(pk=self.user_id).values_list("pk", flat=True).first()
+
+    def _require_unique_use(self):
+        others = type(self).objects.filter(
+            group_id=self.group_id, user_id=self.user_id, use=self.use, is_active=True)
+        if self.pk is not None:
+            others = others.exclude(pk=self.pk)
+        if others.exists():
+            raise DuplicateUseError(DUPLICATE_USE_MESSAGE)
 
     def set_secret(self, key, value):
         self._backend = None
@@ -442,17 +502,21 @@ class FileManager(MojoSecrets, MojoModel):
         self.backend_type = self.backend_url.split(':')[0]
 
     def _update_default(self):
+        # A default is per purpose: making an `invoices` manager the default
+        # leaves the group's purpose-less default alone (#8662).
         if self.is_default:
             if self.pk is None:
                 FileManager.objects.filter(
                     group=self.group,
                     user=self.user,
+                    use=self.use,
                     is_default=True
                 ).update(is_default=False)
             else:
                 FileManager.objects.filter(
                     group=self.group,
                     user=self.user,
+                    use=self.use,
                     is_default=True
                 ).exclude(pk=self.pk).update(is_default=False)
 
@@ -1156,6 +1220,8 @@ class FileManager(MojoSecrets, MojoModel):
         # key of its own is on platform credentials either way.
         if "use" in changed_fields or (created and self.use):
             self.use = self.clean_use(self.use)
+        if self._enters_use_key():
+            self._require_unique_use()
         self._require_superuser_for_platform_role(created)
         self._require_contained_storage(created)
         self._require_cdn_admin_for_settings(created)
@@ -1748,49 +1814,62 @@ class FileManager(MojoSecrets, MojoModel):
             raise me.PermissionDeniedException("Active group membership is required")
 
     @classmethod
+    def _system_default(cls):
+        return cls.objects.filter(
+            user=None, group=None, is_default=True, is_active=True
+        ).order_by("id").first()
+
+    @classmethod
+    def _existing_for_user(cls, user):
+        return cls.objects.filter(
+            user=user, group=None, is_default=True, is_active=True
+        ).order_by(*SELECTION_ORDER).first()
+
+    @classmethod
     def get_for_user(cls, user):
         """Get the file manager for a specific user (without group)"""
-        from django.db import transaction, IntegrityError
-
-        file_manager = cls.objects.filter(
-            user=user, group=None, is_default=True, is_active=True
-        ).first()
+        file_manager = cls._existing_for_user(user)
         if file_manager is None:
-            # Get the system default manager
-            sys_manager = cls.objects.filter(user=None, group=None, is_default=True, is_active=True).first()
+            sys_manager = cls._system_default()
             if sys_manager is not None:
-                # Generate name before creating to avoid race conditions
-                temp_manager = cls(user=user, is_default=True, group=None, parent=sys_manager)
-                temp_manager.set_backend_url(sys_manager.backend_url, user.uuid.hex)
-                name = temp_manager.generate_name()
-
-                try:
-                    with transaction.atomic():
-                        # Use get_or_create to handle race conditions
-                        file_manager, created = cls.objects.get_or_create(
-                            user=user,
-                            group=None,
-                            name=name,
-                            defaults={
-                                'is_default': True,
-                                'parent': sys_manager,
-                                'backend_type': sys_manager.backend_type,
-                                'backend_url': temp_manager.backend_url,
-                                'is_active': True,
-                                'is_public': sys_manager.is_public,
-                            }
-                        )
-                        if created:
-                            # Copy secrets from parent
-                            file_manager.set_secrets(sys_manager.secrets)
-                            file_manager.save()
-                except IntegrityError:
-                    # If still a race condition, fetch the existing one
-                    file_manager = cls.objects.filter(
-                        user=user, group=None, is_default=True, is_active=True
-                    ).first()
+                file_manager = cls._create_for_user(user, sys_manager)
         if file_manager is not None:
             file_manager.ensure_public_access_audited()
+        return file_manager
+
+    @classmethod
+    def _create_for_user(cls, user, sys_manager):
+        """Derive the user's manager from the system default. A lost race
+        returns the manager that won it; this never raises to an uploader."""
+        from django.db import transaction, IntegrityError
+
+        # Generate name before creating to avoid race conditions
+        temp_manager = cls(user=user, is_default=True, group=None, parent=sys_manager)
+        temp_manager.set_backend_url(sys_manager.backend_url, user.uuid.hex)
+        name = temp_manager.generate_name()
+
+        try:
+            with transaction.atomic():
+                # Use get_or_create to handle race conditions
+                file_manager, created = cls.objects.get_or_create(
+                    user=user,
+                    group=None,
+                    name=name,
+                    defaults={
+                        'is_default': True,
+                        'parent': sys_manager,
+                        'backend_type': sys_manager.backend_type,
+                        'backend_url': temp_manager.backend_url,
+                        'is_active': True,
+                        'is_public': sys_manager.is_public,
+                    }
+                )
+                if created:
+                    # Copy secrets from parent
+                    file_manager.set_secrets(sys_manager.secrets)
+                    file_manager.save()
+        except (IntegrityError, DuplicateUseError):
+            file_manager = cls._existing_for_user(user)
         return file_manager
 
     @classmethod
@@ -1799,66 +1878,64 @@ class FileManager(MojoSecrets, MojoModel):
         if use != "":
             return cls.objects.filter(
                 user=None, group=group, use=use, is_active=True
-            ).first()
+            ).order_by(*SELECTION_ORDER).first()
         return cls.objects.filter(
             user=None, group=group, use=use, is_default=True, is_active=True
-        ).first()
+        ).order_by(*SELECTION_ORDER).first()
 
     @classmethod
     def get_for_group(cls, group=None, use=""):
-        from django.db import transaction, IntegrityError
-
         use = cls.clean_use(use)
         file_manager = cls._existing_for_group(group, use)
 
         if file_manager is None:
-            sys_manager = cls.objects.filter(
-                user=None, group=None, is_default=True, is_active=True
-            ).first()
+            sys_manager = cls._system_default()
             if sys_manager is not None:
-                # Generate name before creating to avoid race conditions
-                temp_manager = cls(group=group, is_default=True, user=None, parent=sys_manager)
-                if use:
-                    temp_manager.use = use
-                    temp_manager.set_backend_url(sys_manager.backend_url, group.get_uuid(), use)
-                else:
-                    temp_manager.set_backend_url(sys_manager.backend_url, group.get_uuid())
-                name = temp_manager.generate_name()
+                file_manager = cls._create_for_group(group, use, sys_manager)
+        return file_manager
 
-                try:
-                    with transaction.atomic():
-                        # Use get_or_create to handle race conditions
-                        defaults = {
-                            'is_default': True,
-                            'parent': sys_manager,
-                            'backend_type': sys_manager.backend_type,
-                            'backend_url': temp_manager.backend_url,
-                            'is_active': True,
-                            'is_public': sys_manager.is_public,
-                        }
-                        if use:
-                            defaults['use'] = use
-                        file_manager, created = cls.objects.get_or_create(
-                            user=None,
-                            group=group,
-                            name=name,
-                            defaults=defaults
-                        )
-                        if created:
-                            # Copy secrets from parent
-                            file_manager.set_secrets(sys_manager.secrets)
-                            file_manager.save()
-                            file_manager.audit_is_public()
-                except IntegrityError:
-                    # If still a race condition, fetch the existing one
-                    if use:
-                        file_manager = cls.objects.filter(
-                            user=None, group=group, use=use, is_default=True, is_active=True
-                        ).first()
-                    else:
-                        file_manager = cls.objects.filter(
-                            user=None, group=group, is_default=True, is_active=True
-                        ).first()
+    @classmethod
+    def _create_for_group(cls, group, use, sys_manager):
+        """Derive the group's manager for `use` from the system default. When
+        another manager already holds the purpose (a race, or one saved under
+        another name), that one is returned; this never raises to an uploader."""
+        from django.db import transaction, IntegrityError
+
+        # Generate name before creating to avoid race conditions
+        temp_manager = cls(group=group, is_default=True, user=None, parent=sys_manager)
+        if use:
+            temp_manager.use = use
+            temp_manager.set_backend_url(sys_manager.backend_url, group.get_uuid(), use)
+        else:
+            temp_manager.set_backend_url(sys_manager.backend_url, group.get_uuid())
+        name = temp_manager.generate_name()
+
+        try:
+            with transaction.atomic():
+                # Use get_or_create to handle race conditions
+                defaults = {
+                    'is_default': True,
+                    'parent': sys_manager,
+                    'backend_type': sys_manager.backend_type,
+                    'backend_url': temp_manager.backend_url,
+                    'is_active': True,
+                    'is_public': sys_manager.is_public,
+                }
+                if use:
+                    defaults['use'] = use
+                file_manager, created = cls.objects.get_or_create(
+                    user=None,
+                    group=group,
+                    name=name,
+                    defaults=defaults
+                )
+                if created:
+                    # Copy secrets from parent
+                    file_manager.set_secrets(sys_manager.secrets)
+                    file_manager.save()
+                    file_manager.audit_is_public()
+        except (IntegrityError, DuplicateUseError):
+            file_manager = cls._existing_for_group(group, use)
         return file_manager
 
     @classmethod
