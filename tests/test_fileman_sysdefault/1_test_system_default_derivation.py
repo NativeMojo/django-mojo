@@ -2,10 +2,10 @@
 
 These two tests read or replace the first system default (user=None,
 group=None, is_default=True), which get_for_user/get_for_group derive from.
-That row is shared by every fileman test that provisions a store, so they
-live in test_fileman, whose files run one after another, and not in the
-parallel test_fileman_role / test_fileman_scope packages they came from
-(maestro #7538, Brenda 155355).
+That row is shared by every test that provisions a store, in any package,
+so they run in this serial package, after and apart from all the parallel
+ones, and not in the parallel test_fileman_role / test_fileman_scope packages
+they came from (maestro #7538, Brenda 155355; test_filevault, Owen 155465).
 """
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
