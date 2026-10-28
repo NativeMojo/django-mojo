@@ -12,13 +12,17 @@ PERMISSION = "dnsman_acme_federation"
 
 def _recipient(value, lock=False):
     from mojo.apps.account.models import Group
+    from mojo.apps.account.services import group_hierarchy
     try:
         project_uuid(value)
     except ValueError:
         raise me.ValueException("A valid exact recipient project UUID is required") from None
-    rows = Group.objects.select_for_update() if lock else Group.objects
     # UUIDs are supplied explicitly, never inferred from a downstream tenant.
-    rows = list(rows.filter(uuid=value)[:2])
+    rows = Group.objects.filter(uuid=value)
+    if lock:
+        # NO KEY: excludes other writers of the row, not the tenant's inserts.
+        rows = group_hierarchy.lock_rows(rows)
+    rows = list(rows[:2])
     if len(rows) != 1 or not rows[0].is_effectively_active():
         raise me.ValueException("Recipient project is unavailable", code=404, status=404)
     return rows[0]

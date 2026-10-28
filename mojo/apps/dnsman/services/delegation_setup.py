@@ -487,6 +487,7 @@ def _settle_cleanup(domain, certificates, old, cleanup=None):
 
 def _prepare(target, allocation_ref, consumer, actor, restart, cleanup=None, identity_check=None, revoked_ref=None):
     from mojo.apps.account.models import Group
+    from mojo.apps.account.services import group_hierarchy
     from mojo.apps.dnsman.models import AcmeDelegation, Certificate, Domain
     from mojo.apps.dnsman.services import certs
     with transaction.atomic():
@@ -507,7 +508,7 @@ def _prepare(target, allocation_ref, consumer, actor, restart, cleanup=None, ide
             for pk in ids:
                 if not stack.enter_context(certs._issue_lock(pk)):
                     raise SetupError("certificate_busy")
-            group = Group.objects.select_for_update().filter(pk=target.group.pk).first()
+            group = group_hierarchy.lock_rows(Group.objects.filter(pk=target.group.pk)).first()
             if group is None or not group.is_effectively_active() or (domain and domain.group_id != group.pk):
                 raise SetupError("stale_connection")
             _require(actor, group, True)

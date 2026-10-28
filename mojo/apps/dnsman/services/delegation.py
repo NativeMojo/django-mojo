@@ -85,6 +85,7 @@ def initiate(group, user, domain=None, name=None, *, available=None):
     availability probe (None means ``is_available()``).
     """
     from mojo.apps.account.models import Group
+    from mojo.apps.account.services import group_hierarchy
     from mojo.apps.dnsman.models import AcmeDelegation, Domain
 
     if available is None:
@@ -102,11 +103,13 @@ def initiate(group, user, domain=None, name=None, *, available=None):
     with transaction.atomic():
         # The FK insert needs a Domain KEY SHARE lock too. Take the same
         # Domain -> Group order as shared Connect before holding either FK.
+        # The Group lock is NO KEY (#9740): it excludes other writers of the
+        # group row, not the inserts of the tenant's other rows.
         if domain is not None:
             domain = Domain.objects.select_for_update().filter(pk=domain.pk).first()
             if domain is None or domain.group_id != group.pk or domain.name != domain_name:
                 raise me.ValueException("The domain does not belong to this group")
-        locked_group = Group.objects.select_for_update().filter(pk=group.pk).first()
+        locked_group = group_hierarchy.lock_rows(Group.objects.filter(pk=group.pk)).first()
         if not _group_active(locked_group) or locked_group.uuid != tenant_uuid:
             raise me.ValueException("An active group is required")
         row = AcmeDelegation.objects.select_for_update().filter(
@@ -187,6 +190,7 @@ def _lifecycle_locks(row):
     outer transaction; a normal continue would retain them until its commit.
     """
     from mojo.apps.account.models import Group
+    from mojo.apps.account.services import group_hierarchy
     from mojo.apps.dnsman.models import AcmeDelegation, Domain
     for unused in range(3):
         try:
@@ -195,7 +199,7 @@ def _lifecycle_locks(row):
                     "domain_id", "domain_name", "group_id").get(pk=row.pk)
                 domains = Domain.objects.select_for_update()
                 domain = domains.filter(pk=snapshot["domain_id"]).first() if snapshot["domain_id"] else domains.filter(name=snapshot["domain_name"]).first()
-                group = Group.objects.select_for_update().filter(pk=snapshot["group_id"]).first()
+                group = group_hierarchy.lock_rows(Group.objects.filter(pk=snapshot["group_id"])).first()
                 stored = AcmeDelegation.objects.select_for_update().get(pk=row.pk)
                 if stored.domain_id != snapshot["domain_id"]:
                     raise _BindingChanged()
