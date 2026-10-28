@@ -539,7 +539,7 @@ POST /api/assistant/memory/<tier>
 
 Create or update a memory entry.
 
-**Permission**: `assistant`
+**Permission**: `assistant`; the `global` tier also requires `view_admin` (or superuser)
 
 **Request body**:
 
@@ -577,7 +577,7 @@ Create or update a memory entry.
 DELETE /api/assistant/memory/<tier>/<key>
 ```
 
-**Permission**: `assistant`
+**Permission**: `assistant`; the `global` tier also requires `view_admin` (or superuser)
 
 **Response**:
 
@@ -597,7 +597,7 @@ DELETE /api/assistant/memory/<tier>/<key>
 
 | Tier | Read | Write/Delete |
 |---|---|---|
-| `global` | `assistant` permission or superuser | `assistant` permission or superuser |
+| `global` | `assistant` permission or superuser | `view_admin` permission or superuser |
 | `user` | Own entries; superuser can read any | Own entries; superuser can write any |
 | `group` | Any member of the group | Members with `assistant` permission on their Member record |
 

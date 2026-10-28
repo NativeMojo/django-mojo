@@ -714,12 +714,12 @@ def _get_system_prompt(user=None, group=None):
         return base
 
     try:
-        from mojo.apps.assistant.services.memory import build_memory_prompt, is_global_empty
+        from mojo.apps.assistant.services.memory import build_memory_prompt, is_global_empty, _can_write_tier
         memory_section = build_memory_prompt(user, group=group) if user else ""
         if memory_section:
             return base + "\n\n" + memory_section
-        # If global memory is empty, inject onboarding
-        if user and is_global_empty():
+        # If global memory is empty, inject onboarding — only for users who can write it
+        if user and is_global_empty() and _can_write_tier("global", user):
             return base + ONBOARDING_PROMPT
     except Exception:
         logger.exception("Failed to build memory prompt")

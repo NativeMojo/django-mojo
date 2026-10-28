@@ -54,7 +54,8 @@ def _tool_read_memory(params, user):
         "Store or update a memory entry. Memories persist across conversations.\n\n"
         "Tiers:\n"
         "- global: Platform-wide facts (tech stack, infra rules, safety constraints). "
-        "Visible to all assistant users.\n"
+        "Visible to all assistant users. Writing requires a platform administrator "
+        "(view_admin).\n"
         "- user: Your personal notes (preferences, focus areas, shorthand).\n"
         "- group: Group/tenant-specific rules (deploy windows, SLAs, team conventions).\n\n"
         "Guidelines:\n"
@@ -108,7 +109,8 @@ def _tool_write_memory(params, user):
     owner_state=_user_tier,
     description=(
         "Delete a memory entry. Use this to remove outdated, incorrect, or "
-        "duplicate memories. Check existing entries with read_memory first.\n\n"
+        "duplicate memories. Check existing entries with read_memory first. "
+        "Deleting a global entry requires a platform administrator (view_admin).\n\n"
         "Entries in your user tier are deleted immediately; global and group "
         "entries require operator approval."
     ),

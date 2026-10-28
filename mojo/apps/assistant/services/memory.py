@@ -164,7 +164,8 @@ def _can_write_tier(tier, user, group=None):
     if getattr(user, "is_superuser", False):
         return True
     if tier == "global":
-        return user.has_permission("assistant")
+        # Global memory reaches every assistant user's prompt — require view_admin, as global skills do
+        return user.has_permission("view_admin")
     if tier == "user":
         # Users can write their own tier; superuser check above handles cross-user writes
         return user.has_permission("assistant")
