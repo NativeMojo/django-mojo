@@ -33,7 +33,8 @@ Use this for all uploads. It works for any file size, keeps the API server free,
 
 Optional selectors are `file_manager` (id), `group` (id), and `use` (string).
 `use` must be 1-64 letters, digits, `_` or `-`, starting with a letter or digit
-(anything else is a 400), and `filevault` is reserved (403).
+(anything else is a 400), and `filevault` is reserved (403). A `use` always
+resolves to the same manager: the default for it, else the oldest.
 Do not send `user` or `metadata`. The filename is reduced to a basename, size
 must be a nonnegative integer (booleans are invalid), and the manager's size,
 extension, and MIME policies are checked before a capability is created.

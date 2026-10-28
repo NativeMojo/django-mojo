@@ -164,6 +164,11 @@ purposes that no longer match, run
 `FileManager.objects.exclude(use="").exclude(use__regex=USE_RE.pattern)`.
 They stay usable by id.
 
+A group (or user) has at most one active manager per purpose. A save that
+would add a second one is refused with `DuplicateUseError` (400, "An active
+file manager already exists for this purpose"): see
+[Multiple FileManagers per Group](#multiple-filemanagers-per-group).
+
 Upload initiation must use `FileManager.resolve_for_upload(request)`, not a
 bare primary-key lookup. The resolver applies the upload authorization truth
 table before any `File` or upload capability is created:
@@ -808,10 +813,39 @@ REST clients pass `?use=avatars` to select a specific manager. The name must
 match the purpose pattern above. An active member may create a new purpose
 for their own group; non-members cannot.
 
+**One active manager per purpose.** Saving an active manager for a group (or
+user) and purpose that already has one is refused with `DuplicateUseError`
+(400, "An active file manager already exists for this purpose"). Only a move
+into a taken purpose is refused: a create, switching a manager on, or changing
+its `use`, group or user. Editing, renaming or deactivating a manager that is
+already a duplicate keeps working. The check locks the owning Group (or User)
+row, so two concurrent saves cannot both pass. Purpose-less managers (`use=""`)
+are not limited: a group may hold several, and only one is its default.
+
+**Selection order.** When more than one manager matches, every lookup
+(`get_for_group`, `get_for_user`, `get_from_request` and the auto-create race
+fallback) picks the purpose's default first, then the oldest id
+(`SELECTION_ORDER`). `is_default` is per purpose: making an `invoices` manager
+the default does not demote the group's purpose-less default.
+
+**Duplicates from before this rule** are left alone. List them, with the id
+each scope now selects, with the read-only command:
+
+```bash
+python manage.py fileman_duplicate_uses          # text
+python manage.py fileman_duplicate_uses --json   # one row per scope
+```
+
+After an upgrade, a scope with duplicates may get a different, now stable,
+manager than before; no files move. Deactivate the extra rows once you have
+decided which one to keep.
+
 ## Auto-Provisioning
 
 If no `FileManager` exists for a group or user, the system-wide default is used
-automatically. Set `is_default=True` on one FileManager to designate it. A new
+automatically. When another manager already holds the purpose (a concurrent
+save, or one saved under another name), auto-create returns that manager
+instead of raising, so an upload never fails on the one-per-purpose rule. Set `is_default=True` on one FileManager to designate it. A new
 user manager inherits the system manager's public/private value and reconciles
 its derived S3 prefix before it is returned.
 
