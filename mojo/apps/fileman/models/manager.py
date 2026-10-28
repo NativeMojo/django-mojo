@@ -243,17 +243,27 @@ class FileManager(MojoSecrets, MojoModel):
                 self._backend = None
         if getattr(self, "_secrets_changed", False):
             self._backend = None
-        key = self._entered_use_key(kwargs.get("update_fields"))
-        if key is not None:
+        update_fields = kwargs.get("update_fields")
+        if self._needs_use_lock(update_fields):
             from django.db import transaction
             # Lock the owning Group (or User) so two saves with different
             # names cannot both pass the check (pattern of aws_setup.py).
             with transaction.atomic():
-                self._lock_use_owner(key)
-                self._require_unique_use(key)
+                self._lock_and_check_use(update_fields)
                 super().save(*args, **kwargs)
             return
         super().save(*args, **kwargs)
+
+    def atomic_save(self):
+        """The REST save: the duplicate check, the default switch and the row
+        are one transaction, in the order owner lock, check, defaults, row.
+        A refused save rolls the default switch back with it (#8662)."""
+        from django.db import transaction
+        with transaction.atomic():
+            if self._needs_use_lock(None):
+                self._lock_and_check_use(None)
+            self._update_default()
+            self.save()
 
     USE_KEY_FIELDS = ("use", "is_active", "group_id", "user_id")
 
@@ -269,41 +279,84 @@ class FileManager(MojoSecrets, MojoModel):
             return None
         return (group_id, user_id, use)
 
-    def _entered_use_key(self, update_fields=None):
+    def _written_use_fields(self, update_fields):
+        """The key fields this save writes: all of them on a create or a full
+        save, else only those `update_fields` names or a deferred-field row
+        loaded, as Django persists them."""
+        if self.pk is None:
+            return set(self.USE_KEY_FIELDS)
+        if update_fields is not None:
+            written = {self._meta.get_field(name).attname for name in update_fields}
+        elif self.get_deferred_fields():
+            written = {f.attname for f in self._meta.concrete_fields} - self.get_deferred_fields()
+        else:
+            return set(self.USE_KEY_FIELDS)
+        return written.intersection(self.USE_KEY_FIELDS)
+
+    def _stored_use_values(self, lock=False):
+        if self.pk is None:
+            return None
+        rows = type(self).objects.filter(pk=self.pk)
+        if lock:
+            rows = rows.select_for_update()
+        row = rows.values_list(*self.USE_KEY_FIELDS).first()
+        return dict(zip(self.USE_KEY_FIELDS, row)) if row is not None else None
+
+    def _saved_use_values(self, stored, update_fields):
+        """The key fields as this save leaves them in the database: the
+        in-memory value of each written field, the stored value of the rest."""
+        values = {name: getattr(self, name) for name in self.USE_KEY_FIELDS}
+        if stored is not None:
+            written = self._written_use_fields(update_fields)
+            for name in self.USE_KEY_FIELDS:
+                if name not in written:
+                    values[name] = stored[name]
+        return values
+
+    def _entered_use_key(self, stored, update_fields=None):
         """The key this save moves the row into, else None: a create, or a
         change of use, is_active, group or user. Editing an existing duplicate
-        in place stays allowed.
-
-        Only what the save writes counts. With `update_fields`, or a row
-        loaded with deferred fields, every other value comes from the stored
-        row, as Django persists it.
-        """
-        values = {name: getattr(self, name) for name in self.USE_KEY_FIELDS}
-        stored = None
-        if self.pk is not None:
-            row = type(self).objects.filter(pk=self.pk).values_list(*self.USE_KEY_FIELDS).first()
-            if row is not None:
-                stored = dict(zip(self.USE_KEY_FIELDS, row))
-        if stored is not None:
-            written = None
-            if update_fields is not None:
-                written = {self._meta.get_field(name).attname for name in update_fields}
-            elif self.get_deferred_fields():
-                written = {f.attname for f in self._meta.concrete_fields} - self.get_deferred_fields()
-            if written is not None:
-                for name in self.USE_KEY_FIELDS:
-                    if name not in written:
-                        values[name] = stored[name]
-        key = self._use_key(**values)
+        in place stays allowed."""
+        key = self._use_key(**self._saved_use_values(stored, update_fields))
         if key is None:
             return None
         if stored is not None and self._use_key(**stored) == key:
             return None
         return key
 
+    def _needs_use_lock(self, update_fields):
+        """Whether this save must take the locked decision: it enters a key,
+        or it writes a key field whose stored value it changes (the stored
+        row read here is unlocked, so the locked read decides)."""
+        if not self._written_use_fields(update_fields):
+            return False
+        stored = self._stored_use_values()
+        if self._entered_use_key(stored, update_fields) is not None:
+            return True
+        return stored is not None and self._saved_use_values(stored, update_fields) != stored
+
+    def _lock_and_check_use(self, update_fields):
+        """Inside a transaction: lock the owner the row ends up under, re-read
+        the stored row under that lock, and refuse when the key this save
+        enters is held by another active row. Group (or User) before
+        FileManager, the order every purpose lookup takes."""
+        stored = self._stored_use_values()
+        locked = []
+        while True:
+            values = self._saved_use_values(stored, update_fields)
+            owner = (values["group_id"], values["user_id"])
+            if owner in locked:
+                break
+            self._lock_use_owner(owner)
+            locked.append(owner)
+            stored = self._stored_use_values(lock=True)
+        key = self._entered_use_key(stored, update_fields)
+        if key is not None:
+            self._require_unique_use(key)
+
     @staticmethod
-    def _lock_use_owner(key):
-        group_id, user_id, _ = key
+    def _lock_use_owner(owner):
+        group_id, user_id = owner
         if group_id is not None:
             from mojo.apps.account.models import Group
             Group.objects.select_for_update().filter(pk=group_id).values_list("pk", flat=True).first()
@@ -1239,12 +1292,14 @@ class FileManager(MojoSecrets, MojoModel):
                     event_type="user_permission_denied",
                     branch="fileman_system_scope_create",
                 )
-        # Before _update_default: a refused save must write nothing. The key
-        # defaults below cannot change the answer — a created store with no
-        # key of its own is on platform credentials either way.
+        # Nothing here writes another row: the default switch runs inside
+        # atomic_save, after the locked check. The key defaults below cannot
+        # change the answer — a created store with no key of its own is on
+        # platform credentials either way.
         if "use" in changed_fields or (created and self.use):
             self.use = self.clean_use(self.use)
-        use_key = self._entered_use_key()
+        # Advisory, for the clear 400: atomic_save makes the locked decision.
+        use_key = self._entered_use_key(self._stored_use_values())
         if use_key is not None:
             self._require_unique_use(use_key)
         self._require_superuser_for_platform_role(created)
@@ -1252,7 +1307,6 @@ class FileManager(MojoSecrets, MojoModel):
         self._require_cdn_admin_for_settings(created)
         self._validate_cdn_settings()
         self._tighten_cdn_before_save(created)
-        self._update_default()
         if not self.name:
             self.name = self.generate_name()
         if created:
@@ -1262,8 +1316,6 @@ class FileManager(MojoSecrets, MojoModel):
                 self.set_aws_key(settings.get("AWS_KEY", None))
             if not self.aws_secret:
                 self.set_aws_secret(settings.get("AWS_SECRET", None))
-        if created or "is_default" in changed_fields:
-            self._update_default()
 
     def on_rest_saved(self, changed_fields, created):
         self._update_default()

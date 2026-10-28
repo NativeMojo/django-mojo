@@ -7,8 +7,9 @@ order the steps and `pg_blocking_pids` proves the second one waited, so no
 result rests on a sleep. The pattern is #8201's
 `test_account_admin_extended_serial/test_setting_global_unique_serial.py`.
 
-Limit: two connections only. A save racing a save, and a save racing the
-uploader's auto-create.
+Limit: two connections only. A save racing a save, a save racing the
+uploader's auto-create, and a save committed inside a REST save's window
+between its precheck and its locked save.
 """
 import tempfile
 import threading
@@ -214,3 +215,58 @@ def test_auto_create_race(opts):
         FileManager.objects.filter(group_id=opts.group_id, use=use).delete()
         FileManager.objects.filter(parent_id=SYSTEM_DEFAULT_PK).update(parent=None)
         FileManager.objects.filter(pk=SYSTEM_DEFAULT_PK).delete()
+
+
+@th.django_unit_test("#8662: a REST save refused after a racing commit leaves that manager's default")
+def test_rest_save_race_keeps_default(opts):
+    from django.db import connection
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.fileman.models.manager import DuplicateUseError
+
+    use = "fm_dupuse_race_rest"
+    FileManager.objects.filter(name__startswith=PREFIX).delete()
+    a = _manager(opts, "rest_a", use)
+    a.is_default = True
+    b = _manager(opts, "rest_b", use)
+    b.is_default = True
+    in_window = threading.Event()
+    b_committed = threading.Event()
+    outcome = {}
+    precheck = a._require_superuser_for_platform_role
+
+    def window(created):
+        # Runs after A's duplicate precheck, before anything else A does.
+        in_window.set()
+        b_committed.wait(LOCK_WAIT_TIMEOUT)
+        return precheck(created)
+
+    a._require_superuser_for_platform_role = window
+
+    def rest_save():
+        try:
+            a.on_rest_pre_save({"use": "", "is_default": False, "is_active": False}, True)
+            a.atomic_save()
+            outcome["a"] = a.pk
+        except Exception as exc:
+            outcome["a"] = exc
+        finally:
+            in_window.set()
+            connection.close()
+
+    thread = threading.Thread(target=rest_save)
+    try:
+        thread.start()
+        assert in_window.wait(LOCK_WAIT_TIMEOUT), "A never reached the window after its precheck"
+        b.save()
+        b_committed.set()
+        thread.join(JOIN_TIMEOUT)
+        assert not thread.is_alive(), "A's REST save never finished"
+        assert isinstance(outcome.get("a"), DuplicateUseError), (
+            f"A must be refused with DuplicateUseError, got {outcome.get('a')!r}")
+        stored = FileManager.objects.get(name=f"{PREFIX}rest_b")
+        assert stored.is_default, "the refused REST save must leave B the purpose's default"
+        assert not FileManager.objects.filter(name=f"{PREFIX}rest_a").exists(), "no row for A may exist"
+    finally:
+        b_committed.set()
+        thread.join(JOIN_TIMEOUT)
+        FileManager.objects.filter(name__startswith=PREFIX).delete()

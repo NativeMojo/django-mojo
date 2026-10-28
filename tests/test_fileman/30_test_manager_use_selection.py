@@ -311,6 +311,30 @@ def test_rest_duplicate_create_refused(opts):
     assert_true(existing.is_default, "the refused create must not demote the existing default")
 
 
+@th.django_unit_test("refusal: a refused REST-path save leaves the other default flag alone")
+def test_rest_path_refusal_keeps_defaults(opts):
+    from mojo.apps.fileman.models import FileManager
+
+    _clean_use(opts, "fm_dupuse_restpath")
+    FileManager.objects.filter(name=f"{PREFIX}restpath_a").delete()
+    # B is the purpose's default, switched off when A's precheck runs.
+    b = _make(opts, "restpath_b", use="fm_dupuse_restpath", is_default=True, is_active=False)
+    a = FileManager(name=f"{PREFIX}restpath_a", backend_type="file",
+                    backend_url=f"file:///{PREFIX}restpath_a", use="fm_dupuse_restpath",
+                    is_default=True, is_active=True, group_id=opts.group_id)
+    a.set_secrets({"base_path": opts.tmpdir, "use_shortlinks": False})
+    a.on_rest_pre_save({"use": "", "is_default": False, "is_active": False}, True)
+    # B is switched on between A's precheck and A's save.
+    FileManager.objects.filter(pk=b.pk).update(is_active=True)
+
+    assert_true(_refused(a.atomic_save) is not None,
+                "the REST-path save into a purpose B now holds must be refused")
+    b.refresh_from_db()
+    assert_true(b.is_default, "the refused REST-path save must not demote B's default")
+    assert_true(not FileManager.objects.filter(name=f"{PREFIX}restpath_a").exists(),
+                "the refused REST-path save must not leave a row")
+
+
 # ---------------------------------------------------------------------------
 # Controls: what keeps working.
 # ---------------------------------------------------------------------------
