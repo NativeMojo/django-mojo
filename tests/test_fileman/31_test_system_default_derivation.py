@@ -108,6 +108,9 @@ def test_automatic_group_store_still_derived(opts):
     assert_eq(stored.get("aws_key"), PLATFORM_KEY, "the derived store must copy the system store's key")
 
 
+# Core, as in 25_test_manager_storage_scope (file-level TESTIT_TIER = "core");
+# the derived-store test above stays framework, as in 21.
+@th.tier("core")
 @th.django_unit_test("control: get_for_group still provisions for a fresh group")
 def test_get_for_group_provisions(opts):
     from mojo.apps.account.models import Group
