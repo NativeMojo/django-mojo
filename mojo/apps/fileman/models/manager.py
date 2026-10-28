@@ -244,6 +244,10 @@ class FileManager(MojoSecrets, MojoModel):
         if getattr(self, "_secrets_changed", False):
             self._backend = None
         update_fields = kwargs.get("update_fields")
+        if update_fields is not None and not isinstance(update_fields, (list, tuple, set, frozenset)):
+            # Read once: a generator would be spent by the check below and
+            # reach Django empty.
+            update_fields = kwargs["update_fields"] = list(update_fields)
         if self._needs_use_lock(update_fields):
             from django.db import transaction
             # Lock the owning Group (or User) so two saves with different

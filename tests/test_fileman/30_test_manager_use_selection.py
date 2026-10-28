@@ -281,6 +281,13 @@ def test_partial_save_judged_by_written_fields(opts):
     assert_eq((stored.name, stored.use), (f"{PREFIX}part_a_renamed", "fm_dupuse_part_a"),
               "a name-only save must be written and leave the purpose alone")
 
+    # update_fields given as a generator is read once and still written.
+    a = FileManager.objects.get(pk=a.pk)
+    a.name = f"{PREFIX}part_a_generator"
+    a.save(update_fields=(name for name in ["name"]))
+    assert_eq(FileManager.objects.get(pk=a.pk).name, f"{PREFIX}part_a_generator",
+              "a save with update_fields as a generator must write the named field")
+
     # A row loaded without `use` saves only its loaded fields.
     a = FileManager.objects.defer("use").get(pk=a.pk)
     a.is_public = False
