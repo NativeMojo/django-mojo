@@ -56,35 +56,18 @@ def setup_rotation(opts):
     VaultFile.objects.filter(group=group).delete()
     VaultData.objects.filter(group=group).delete()
 
-    # ensure a system default filesystem FileManager (same fixture the
-    # service tests use) so the module also passes when run alone
+    # the group's own filevault manager, so uploads never derive from the
+    # system default: fileman packages running in parallel create and delete
+    # system defaults of their own (#7538)
     from mojo.helpers import paths
-    base_path = str(paths.VAR_ROOT / "filevault-tests")
-    sys_manager = FileManager.objects.filter(
-        user=None, group=None, is_default=True, is_active=True
-    ).first()
-    if sys_manager is None or sys_manager.backend_type != FileManager.FILE_SYSTEM:
-        sys_manager, _ = FileManager.objects.get_or_create(
-            user=None,
-            group=None,
-            name="Test FileManager (file)",
-            defaults={
-                "backend_type": FileManager.FILE_SYSTEM,
-                "backend_url": "file:///",
-                "is_default": True,
-                "is_active": True,
-            },
-        )
-        if sys_manager.backend_type != FileManager.FILE_SYSTEM:
-            sys_manager.backend_type = FileManager.FILE_SYSTEM
-        sys_manager.backend_url = "file:///"
-        sys_manager.is_default = True
-        sys_manager.is_active = True
-    sys_manager.set_settings({"base_path": base_path})
-    sys_manager.save()
-    FileManager.objects.filter(
-        user=None, group=None, is_default=True
-    ).exclude(pk=sys_manager.pk).update(is_default=False)
+    FileManager.objects.filter(group=group).delete()
+    manager = FileManager(user=None, group=group, use="filevault",
+                          name="test_vault_rotation_fm",
+                          is_default=True, is_active=True)
+    manager.set_backend_url("file:///", group.get_uuid(), "filevault")
+    manager.save()
+    manager.set_settings({"base_path": str(paths.VAR_ROOT / "filevault-tests")})
+    manager.save()
 
 
 # ---------------------------------------------------------------------------

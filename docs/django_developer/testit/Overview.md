@@ -168,6 +168,7 @@ Every run writes `testproject/var/test_failures.json` — a structured JSON repo
 - **`modules`**: per-module breakdown — `tests`, `passed`, `failed`, `skipped`, `duration` for each test module, plus `skipped_reason` when the whole module was skipped
 - **`slowest`**: the 25 slowest individual tests, sorted descending by `duration` — `test_name`, `module`, `test_file`, `status`, `duration`. Module-level `duration` alone can't say which test inside a slow module is the cost; every executed test records its own `duration` (seconds) and this is ranked from it.
 - **`reasons`**: why the run failed, as a list of `{code, message}`; empty on a passing run. See *What makes a run fail* below.
+- **`budget`**: the tier-budget outcome — `enforced`, `failed`, `time_only` and the `scale` used. `budget_violations` lists the over and stale entries themselves.
 - **`failures`**: per-failure entries with `test_name`, `function`, `status`, `kind` (`setup_error` for a raising setup function, else null), `assertion`, `test_source`, `file_path`, `line`, `traceback` (errors only), and `server_log_tail`
 - **`started_at`**: epoch seconds when the run began (the maestro reporter sends this as the run's start time)
 - **`conf_drift`**: names of any `var/django.conf` keys that changed across the run — normally empty. A non-empty list means a `th.server_settings()` context did not restore cleanly and the key is now stranded. Key **names only**; values are never reported, since an override may be a credential.
@@ -183,7 +184,7 @@ One verdict sets the report `status`, the exit code and whether the `--continue`
 - **`nothing_selected`**: the selection matched no tests, for example a `-t` or `--tier` naming nothing that exists.
 - **`nothing_executed`**: tests were selected but every one was skipped.
 
-The two empty-run codes apply only when there is no setup error. The checkpoint is kept only for `aborted` or `setup_error`. The tier-budget exit is separate and unchanged: a blown `core` budget exits non-zero with its own message, but does not change `status` or `reasons`.
+The two empty-run codes apply only when there is no setup error. The checkpoint is kept only for `aborted` or `setup_error`. The tier-budget exit is separate: a blown `core` budget exits non-zero with its own message and adds nothing to `reasons`, but it sets `status: "failed"` and the report's `budget` block says `failed: true`. When every test passed, `budget.time_only` is `true`, which is how a time-only failure is told apart from a failing test (see *Budgets* in `Tiers.md`).
 
 LLM agents should always use `--agent` and read the JSON report instead of parsing terminal output. Never use `--plain` — it disables the rich UI but doesn't improve agent output.
 
@@ -291,8 +292,8 @@ of buckets. **[Tiers.md](Tiers.md) is the canonical reference** — buckets,
 presets, the legacy mapping, the per-bucket isolation contract, and budgets.
 
 ```bash
-./bin/run_tests                        # the core preset (the default) — ≤30s baseline (~9s)
-./bin/run_tests --tier framework       # django-mojo's own critical tier (~45s)
+./bin/run_tests                        # the core preset (the default) — 30s baseline (~34s)
+./bin/run_tests --tier framework       # django-mojo's own critical tier (~190-200s)
 ./bin/run_tests --all                  # everything (== --tier all), ~6min
 ./bin/run_tests --extra extended       # core preset + ad-hoc extended tag
 ```

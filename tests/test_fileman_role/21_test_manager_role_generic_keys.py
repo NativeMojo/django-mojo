@@ -42,7 +42,6 @@ ROLE_VALUES = {
     "role_session_name": "rolegen-session",
     "assume_role_duration": 1800,
 }
-SYSTEM_DEFAULT_PK = -7586
 
 
 def _forms(values):
@@ -57,7 +56,6 @@ def setup_role_generic_keys(opts):
     from mojo.apps.account.models import Group, GroupMember, User
     from mojo.apps.fileman.models import FileManager
 
-    FileManager.objects.filter(pk=SYSTEM_DEFAULT_PK).delete()
     FileManager.objects.filter(name__startswith="fm_rolegen_").delete()
     FileManager.objects.filter(name__startswith="Clone of fm_rolegen_").delete()
     FileManager.objects.filter(group__name=GROUP).delete()
@@ -450,46 +448,6 @@ def test_clone_platform_role_store(opts):
     assert_true(clone is not None, "clone must create a store")
     assert_eq(clone.get_secret("assume_role_arn"), FIXTURE_ARN, "the clone must carry the source's role")
     assert_eq(clone.get_secret("aws_key"), PLATFORM_KEY, "the clone must carry the source's key")
-
-
-@th.django_unit_test("file admin: a group's automatic store is still derived, role and key included")
-def test_automatic_group_store_still_derived(opts):
-    from mojo.apps.account.models import Group, User
-    from mojo.apps.fileman.models import FileManager
-    from mojo.models.rest import ACTIVE_REQUEST
-
-    # get_for_group() takes the first system default. A negative fixture id
-    # keeps this row the one it finds without touching another test's row
-    # (same device as 12_test_public_access_reconciliation.py).
-    FileManager.objects.filter(pk=SYSTEM_DEFAULT_PK).delete()
-    system = FileManager(
-        pk=SYSTEM_DEFAULT_PK,
-        name="fm_rolegen_system_default",
-        backend_type="file",
-        backend_url="file://",
-        is_active=True,
-        is_default=True,
-    )
-    system.save()
-    system.set_secrets({"aws_key": PLATFORM_KEY, "aws_secret": PLATFORM_SECRET,
-                        "assume_role_arn": FIXTURE_ARN})
-    system.save()
-
-    class _Request:
-        user = User.objects.get(pk=opts.member_user_id)
-
-    token = ACTIVE_REQUEST.set(_Request())
-    try:
-        derived = FileManager.get_for_group(group=Group.objects.get(pk=opts.group_id), use="rolegen")
-    finally:
-        ACTIVE_REQUEST.reset(token)
-        FileManager.objects.filter(parent_id=SYSTEM_DEFAULT_PK).update(parent=None)
-        system.delete()
-
-    assert_true(derived is not None, "a group's automatic store must still be created for a non-superuser")
-    stored = _stored(derived)
-    assert_eq(stored.get("assume_role_arn"), FIXTURE_ARN, "the derived store must copy the system store's role")
-    assert_eq(stored.get("aws_key"), PLATFORM_KEY, "the derived store must copy the system store's key")
 
 
 @th.django_unit_test("the encrypted column is not a writable field")

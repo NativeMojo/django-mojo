@@ -423,23 +423,6 @@ def test_staff_and_superuser(opts):
         assert_eq(resp.status_code, 200, f"{who} holds the platform grant: {resp.response}")
 
 
-@th.django_unit_test("control: get_for_group still provisions for a fresh group")
-def test_get_for_group_provisions(opts):
-    from mojo.apps.account.models import Group
-    from mojo.apps.fileman.models import FileManager
-
-    fresh = Group(name=f"{PREFIX}fresh")
-    fresh.save()
-    default = FileManager.objects.filter(user=None, group=None, is_default=True,
-                                         is_active=True).first()
-    got = FileManager.get_for_group(group=fresh)
-    if default is None:
-        assert_true(got is None, "with no system default nothing is provisioned, as before")
-    else:
-        assert_true(got is not None and got.parent_id == default.id,
-                    f"a fresh group gets a manager under the system default: {got}")
-
-
 @th.django_unit_test("control: A's key creates a File on A's anchor")
 def test_key_file_create_on_anchor(opts):
     opts.client.logout()

@@ -612,7 +612,7 @@ narrowed needs the CloudFront actions added, plus `kms:GetKeyPolicy` and
 `kms:PutKeyPolicy` on the media bucket's key; `check_cdn` names each missing
 one as a denied IAM action.
 
-Tests: `tests/test_fileman/26_test_cdn_links.py` and
+Tests: `tests/test_fileman_cdn/26_test_cdn_links.py` and
 `27_test_cdn_provision.py` (no AWS); the opt-in
 `tests/test_fileman_cdn_live_slow_serial/` proves it on a real SSE-KMS bucket.
 

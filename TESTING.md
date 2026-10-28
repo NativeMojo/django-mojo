@@ -23,8 +23,8 @@ This generates `testproject/`, creates a `mojo_test` PostgreSQL database, and ru
 Use `bin/run_tests` — it starts the server, runs the suite, and stops the server automatically:
 
 ```bash
-./bin/run_tests                        # the core preset — the ≤30s baseline (~9s)
-./bin/run_tests --tier framework       # django-mojo's own critical tier (~45s)
+./bin/run_tests                        # the core preset — the 30s baseline (~34s on the team host)
+./bin/run_tests --tier framework       # django-mojo's own critical tier (~190-200s)
 ./bin/run_tests --all                  # everything, incl. extended/admin/edge/slow (~6min)
 ./bin/run_tests --agent                # write structured report to testproject/var/test_failures.json
 ./bin/run_tests -t test_accounts       # run one module (regardless of tier)
@@ -77,8 +77,8 @@ isolation contract, and budgets. In brief:
 
 | Preset | Command | Runs | Wall |
 |---|---|---|---|
-| `core` | `bin/run_tests` | the ≤30s baseline | ~9s |
-| `framework` | `bin/run_tests --tier framework` | `core`+`framework`+`bug` — django-mojo's own critical tier | ~45s |
+| `core` | `bin/run_tests` | the 30s baseline | ~34s |
+| `framework` | `bin/run_tests --tier framework` | `core`+`framework`+`bug` — django-mojo's own critical tier | ~190-200s |
 | `all` | `bin/run_tests --all` | everything, incl. `extended`/`admin`/`edge`/`slow` | ~6min |
 
 Buckets: `core` (the small, clean, parallel-safe security/contract baseline), `framework`
@@ -99,8 +99,8 @@ the reusable `.github/workflows/testit.yml`). The trigger decides the preset:
 
 | Trigger | Preset | Status |
 |---|---|---|
-| every push | `core` (~9s) | **non-advisory** — failures make the GitHub check red |
-| pull request | `framework` (~45s) | **advisory** (`advisory: true`) until #2813 removes the shared-state flakes; set `advisory: false` to make failures fail the check |
+| every push | `core` (~34s) | **non-advisory** — failures make the GitHub check red |
+| pull request | `framework` (~190-200s) | **advisory** (`advisory: true`) until #2813 removes the shared-state flakes; set `advisory: false` to make failures fail the check |
 
 The repository does not currently require either status through branch
 protection, so a red check reports after a push or pull request but does not

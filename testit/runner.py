@@ -582,6 +582,24 @@ def _budget_fails_run(opts, violations):
     return False
 
 
+def _record_budget_outcome(opts, report, budget_failed):
+    """Say in the report whether the tier budget failed the run (#7538).
+
+    The verdict's `reasons` and the checkpoint stay as #4761 left them; a run
+    whose only failure is time reads `status: "failed"` with empty `reasons`
+    and `budget.time_only: true`, so it cannot pass for green while it exits 1.
+    """
+    report["budget"] = {
+        "enforced": getattr(opts, "selected_preset", None) == "core",
+        "failed": bool(budget_failed),
+        "time_only": bool(budget_failed) and not report.get("reasons"),
+        "scale": _budget_scale(),
+    }
+    if budget_failed:
+        report["status"] = "failed"
+    return report
+
+
 def _record_has_selected_tag(record, selected_tags):
     """True when a package that does not match at the package level still holds
     per-file (TESTIT_TIER) or per-function (@th.tier) tests tagged into a
@@ -2896,6 +2914,7 @@ def main(opts):
               "dump — see the agent report's slow_stacks / testit.log")
     _print_budget_violations(opts, report["budget_violations"])
     budget_failed = _budget_fails_run(opts, report["budget_violations"])
+    _record_budget_outcome(opts, report, budget_failed)
 
     runlock.write_report(claim, report)
     if opts.agent:
