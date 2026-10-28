@@ -144,7 +144,8 @@ simply not written.
 
 On create, the storage is chosen from `file_manager` (aliases `fileman`,
 `filemanager`, `manager`), else `use`, else the default for the request's group
-or user, and then checked:
+or user, and then checked. When several managers match, the default wins, then
+the oldest:
 
 - **User sessions** follow the same rule as [`upload/initiate`](upload.md#selecting-a-filemanager):
   your own user storage, group storage of a group you are an active member of
