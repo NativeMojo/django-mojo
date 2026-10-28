@@ -91,10 +91,18 @@ class S3StorageBackend(StorageBackend):
         self._process_id = os.getpid()
 
     def _new_session(self):
-        """Construct the session on a cache miss, retaining refreshable credentials."""
+        """Construct the session on a cache miss, retaining refreshable credentials.
+
+        `session_factory=` and `assumed_session_factory=` (constructor keywords,
+        like `cdn_signer=`) replace the two module factories for this backend
+        only, so a test can record the call without patching the module for
+        every thread. Unused, behaviour is unchanged.
+        """
         if self._session is None:
+            config = getattr(self, "config", None) or {}
             if self.assume_role_arn:
-                self._session = get_assumed_session(
+                factory = config.get("assumed_session_factory") or get_assumed_session
+                self._session = factory(
                     self.assume_role_arn,
                     region=self.region_name,
                     external_id=self.external_id,
@@ -104,7 +112,8 @@ class S3StorageBackend(StorageBackend):
                     secret_key=self.secret_access_key,
                 )
             else:
-                self._session = get_session(
+                factory = config.get("session_factory") or get_session
+                self._session = factory(
                     access_key=self.access_key_id,
                     secret_key=self.secret_access_key,
                     region=self.region_name,

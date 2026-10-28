@@ -57,10 +57,16 @@ def setup_s3_credential_modes(opts):
     })
 
 
-def _backend(fm_id):
-    """A fresh backend every time — FileManager memoizes the one it built."""
+def _backend(fm_id, **factories):
+    """A fresh backend every time — FileManager memoizes the one it built.
+
+    Session factories go in through the backend's own `session_factory=` /
+    `assumed_session_factory=` keywords, never a module patch: other fileman
+    packages build S3 sessions on other threads at the same time (#7538).
+    """
     from mojo.apps.fileman.models import FileManager
-    backend = FileManager.objects.get(pk=fm_id).backend
+    from mojo.apps.fileman.backends.s3 import S3StorageBackend
+    backend = S3StorageBackend(FileManager.objects.get(pk=fm_id), **factories)
     # Each mocked provider must own a distinct connection-cache entry.
     backend.endpoint_url = f"https://{uuid4().hex}.example.test"
     return backend
@@ -76,12 +82,11 @@ def _fake_session(s3_client=None):
 
 @th.django_unit_test("S3 creds: static keys still reach boto3 unchanged")
 def test_static_keys_are_passed_through(opts):
-    from mojo.apps.fileman.backends import s3 as s3mod
-
-    with mock.patch.object(s3mod, "get_session", return_value=_fake_session()) as get_session, \
-            mock.patch.object(s3mod, "get_assumed_session") as get_assumed:
-        backend = _backend(opts.static_fm_id)
-        assert_true(backend.client is not None, "the S3 client must be constructed")
+    get_session = mock.Mock(return_value=_fake_session())
+    get_assumed = mock.Mock()
+    backend = _backend(opts.static_fm_id, session_factory=get_session,
+                       assumed_session_factory=get_assumed)
+    assert_true(backend.client is not None, "the S3 client must be constructed")
 
     kwargs = get_session.call_args.kwargs
     assert_eq(kwargs["access_key"], "AKIACREDMODE",
@@ -96,12 +101,11 @@ def test_static_keys_are_passed_through(opts):
 
 @th.django_unit_test("S3 creds: a keyless manager falls through to the default chain")
 def test_keyless_manager_uses_default_chain(opts):
-    from mojo.apps.fileman.backends import s3 as s3mod
-
-    with mock.patch.object(s3mod, "get_session", return_value=_fake_session()) as get_session, \
-            mock.patch.object(s3mod, "get_assumed_session") as get_assumed:
-        backend = _backend(opts.keyless_fm_id)
-        assert_true(backend.client is not None, "the S3 client must be constructed")
+    get_session = mock.Mock(return_value=_fake_session())
+    get_assumed = mock.Mock()
+    backend = _backend(opts.keyless_fm_id, session_factory=get_session,
+                       assumed_session_factory=get_assumed)
+    assert_true(backend.client is not None, "the S3 client must be constructed")
 
     kwargs = get_session.call_args.kwargs
     assert_true(kwargs["access_key"] is None and kwargs["secret_key"] is None,
@@ -112,13 +116,11 @@ def test_keyless_manager_uses_default_chain(opts):
 
 @th.django_unit_test("S3 creds: assume_role_arn selects the STS path")
 def test_role_manager_uses_assume_role(opts):
-    from mojo.apps.fileman.backends import s3 as s3mod
-
-    with mock.patch.object(s3mod, "get_session") as get_session, \
-            mock.patch.object(s3mod, "get_assumed_session",
-                              return_value=_fake_session()) as get_assumed:
-        backend = _backend(opts.role_fm_id)
-        assert_true(backend.client is not None, "the S3 client must be constructed")
+    get_session = mock.Mock()
+    get_assumed = mock.Mock(return_value=_fake_session())
+    backend = _backend(opts.role_fm_id, session_factory=get_session,
+                       assumed_session_factory=get_assumed)
+    assert_true(backend.client is not None, "the S3 client must be constructed")
 
     assert_eq(get_session.call_count, 0,
               "With a role configured the backend must not build a plain session — "
@@ -135,13 +137,11 @@ def test_role_manager_uses_assume_role(opts):
 
 @th.django_unit_test("S3 creds: one session backs both the client and the resource")
 def test_session_is_built_once(opts):
-    from mojo.apps.fileman.backends import s3 as s3mod
-
-    with mock.patch.object(s3mod, "get_session", return_value=_fake_session()) as get_session:
-        backend = _backend(opts.static_fm_id)
-        backend.client
-        backend.resource
-        backend.client
+    get_session = mock.Mock(return_value=_fake_session())
+    backend = _backend(opts.static_fm_id, session_factory=get_session)
+    backend.client
+    backend.resource
+    backend.client
 
     assert_eq(get_session.call_count, 1,
               f"The client and the resource must share one session, "
@@ -166,9 +166,9 @@ def test_account_public_access_block_shares_session(opts):
         "sts": sts, "s3control": s3control
     }.get(service, mock.Mock(name=service))
 
-    with mock.patch.object(s3mod, "get_session", return_value=session) as get_session:
-        backend = _backend(opts.static_fm_id)
-        result = backend._get_account_public_access_block()
+    get_session = mock.Mock(return_value=session)
+    backend = _backend(opts.static_fm_id, session_factory=get_session)
+    result = backend._get_account_public_access_block()
 
     assert_eq(result, {"RestrictPublicBuckets": True},
               f"The account Public Access Block must be returned, got {result!r}")
@@ -196,8 +196,6 @@ def test_test_connection_reports_partial_credentials(opts):
 
 @th.django_unit_test("S3 creds: presigned URLs never outlive assumed-role credentials")
 def test_presigned_url_expiry_is_clamped_under_a_role(opts):
-    from mojo.apps.fileman.backends import s3 as s3mod
-
     credentials = mock.Mock(name="credentials")
     credentials._seconds_remaining.return_value = 600
     botocore_session = mock.Mock(name="botocore-session")
@@ -208,9 +206,9 @@ def test_presigned_url_expiry_is_clamped_under_a_role(opts):
     session = _fake_session(s3_client=s3_client)
     session._session = botocore_session
 
-    with mock.patch.object(s3mod, "get_assumed_session", return_value=session):
-        backend = _backend(opts.role_fm_id)
-        backend.get_url("fileman/prefix/object.txt", expires_in=3600)
+    backend = _backend(opts.role_fm_id,
+                       assumed_session_factory=mock.Mock(return_value=session))
+    backend.get_url("fileman/prefix/object.txt", expires_in=3600)
 
     kwargs = s3_client.generate_presigned_url.call_args.kwargs
     assert_eq(kwargs["ExpiresIn"], 600,
@@ -220,15 +218,12 @@ def test_presigned_url_expiry_is_clamped_under_a_role(opts):
 
 @th.django_unit_test("S3 creds: static-key presigned URLs keep the requested lifetime")
 def test_presigned_url_expiry_is_untouched_without_a_role(opts):
-    from mojo.apps.fileman.backends import s3 as s3mod
-
     s3_client = mock.Mock(name="s3-client")
     s3_client.generate_presigned_url.return_value = "https://signed.example/object"
 
-    with mock.patch.object(s3mod, "get_session",
-                           return_value=_fake_session(s3_client=s3_client)):
-        backend = _backend(opts.static_fm_id)
-        backend.get_url("fileman/prefix/object.txt", expires_in=3600)
+    backend = _backend(opts.static_fm_id,
+                       session_factory=mock.Mock(return_value=_fake_session(s3_client=s3_client)))
+    backend.get_url("fileman/prefix/object.txt", expires_in=3600)
 
     kwargs = s3_client.generate_presigned_url.call_args.kwargs
     assert_eq(kwargs["ExpiresIn"], 3600,

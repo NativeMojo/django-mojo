@@ -205,16 +205,18 @@ def test_s3_client_rejects_a_filesystem_manager(opts):
 
 @th.django_unit_test("Role settings: _s3_client uses the backend's own client")
 def test_s3_client_delegates_to_the_backend(opts):
-    from mojo.apps.fileman.backends import s3 as s3mod
+    from mojo.apps.fileman.backends.s3 import S3StorageBackend
 
     session = mock.Mock(name="session")
     session.client.return_value = mock.Mock(name="s3-client")
 
-    with mock.patch.object(s3mod, "get_assumed_session", return_value=session), \
-            mock.patch.object(s3mod, "get_session", return_value=session):
-        fm = _fm(opts.s3_fm_id)
-        client = fm._s3_client()
-        assert_true(client is fm.backend.client,
-                    "CORS calls must run through the same client as uploads — reading "
-                    "this manager's own aws_key ignored the parent's settings, so a "
-                    "child manager used a different identity than its uploads")
+    # The backend's own factory keywords, not a module patch: other fileman
+    # packages build S3 sessions on other threads at the same time (#7538).
+    fm = _fm(opts.s3_fm_id)
+    fm._backend = S3StorageBackend(fm, session_factory=mock.Mock(return_value=session),
+                                   assumed_session_factory=mock.Mock(return_value=session))
+    client = fm._s3_client()
+    assert_true(client is fm.backend.client,
+                "CORS calls must run through the same client as uploads — reading "
+                "this manager's own aws_key ignored the parent's settings, so a "
+                "child manager used a different identity than its uploads")
