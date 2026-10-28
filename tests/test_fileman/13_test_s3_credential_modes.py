@@ -229,3 +229,31 @@ def test_presigned_url_expiry_is_untouched_without_a_role(opts):
     assert_eq(kwargs["ExpiresIn"], 3600,
               f"Long-lived static credentials must not shorten a presigned URL, "
               f"got {kwargs!r}")
+
+
+@th.django_unit_test("S3 creds: an injected session factory never enters the shared client cache")
+def test_injected_factory_client_is_not_shared(opts):
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.fileman.backends.s3 import S3StorageBackend
+
+    # One manager and one endpoint for all three backends: the cache key is
+    # identical, so only the factory tells them apart.
+    for fm_id, keyword in ((opts.static_fm_id, "session_factory"),
+                           (opts.role_fm_id, "assumed_session_factory")):
+        fm = FileManager.objects.get(pk=fm_id)
+        factory_a = mock.Mock(return_value=_fake_session())
+        factory_b = mock.Mock(return_value=_fake_session())
+        first = S3StorageBackend(fm, **{keyword: factory_a}).client
+        second = S3StorageBackend(fm, **{keyword: factory_b}).client
+        assert_eq(factory_b.call_count, 1,
+                  f"{keyword}: a second backend must build with its own factory, "
+                  f"not reuse the first one's cached client")
+        assert_true(second is not first,
+                    f"{keyword}: a backend with a different factory got the first "
+                    f"backend's fake client")
+        if keyword == "session_factory":
+            # Static keys build a real client offline; a role would call STS.
+            plain = S3StorageBackend(fm).client
+            assert_true(plain is not first and plain is not second,
+                        "a backend with no factory got an injected fake client "
+                        "from the shared cache")

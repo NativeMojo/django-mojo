@@ -181,8 +181,13 @@ class S3StorageBackend(StorageBackend):
             # boto3 sessions are not thread safe; serialize construction, not
             # requests. Cache misses must build once even under concurrent load.
             with _S3_CLIENT_LOCK:
+                # An injected session factory builds a client the shared cache
+                # must never hold or hand out: the key does not name the factory.
+                seams = getattr(self, "config", None) or {}
+                shared = not (seams.get("session_factory")
+                              or seams.get("assumed_session_factory"))
                 key = self._client_cache_key()
-                pair = _S3_CLIENT_CACHE.get(key)
+                pair = _S3_CLIENT_CACHE.get(key) if shared else None
                 if pair is None:
                     session = self._new_session()
                     config = Config(
@@ -195,11 +200,13 @@ class S3StorageBackend(StorageBackend):
                     client = session.client(
                         's3', endpoint_url=self.endpoint_url, config=config)
                     pair = (session, client)
-                    _S3_CLIENT_CACHE[key] = pair
-                    if len(_S3_CLIENT_CACHE) > _S3_CLIENT_CACHE_SIZE:
-                        # A live backend may still own this client; don't close it.
-                        _S3_CLIENT_CACHE.popitem(last=False)
-                _S3_CLIENT_CACHE.move_to_end(key)
+                    if shared:
+                        _S3_CLIENT_CACHE[key] = pair
+                        if len(_S3_CLIENT_CACHE) > _S3_CLIENT_CACHE_SIZE:
+                            # A live backend may still own this client; don't close it.
+                            _S3_CLIENT_CACHE.popitem(last=False)
+                if shared:
+                    _S3_CLIENT_CACHE.move_to_end(key)
                 self._session, self._client = pair
         return self._client
 
