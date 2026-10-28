@@ -311,6 +311,32 @@ def test_rest_duplicate_create_refused(opts):
     assert_true(existing.is_default, "the refused create must not demote the existing default")
 
 
+@th.django_unit_test("refusal: a stale full save cannot switch a row back on into a taken purpose")
+def test_stale_full_save_refused(opts):
+    from mojo.apps.fileman.models import FileManager
+
+    _clean_use(opts, "fm_dupuse_stale")
+    FileManager.objects.filter(name=f"{PREFIX}stale_b").delete()
+    a = _make(opts, "stale_a", use="fm_dupuse_stale")
+    a.description = "edited"
+    check = a._needs_use_lock
+
+    def window(update_fields):
+        # Runs after A's save read its stored row, before anything is written:
+        # elsewhere A is switched off and B takes the purpose.
+        answer = check(update_fields)
+        FileManager.objects.filter(pk=a.pk).update(is_active=False)
+        _make(opts, "stale_b", use="fm_dupuse_stale")
+        return answer
+
+    a._needs_use_lock = window
+    assert_true(_refused(a.save) is not None,
+                "a full save that would switch A back on into B's purpose must be refused")
+    stored = FileManager.objects.get(pk=a.pk)
+    assert_true(not stored.is_active, "the refused save must leave A switched off")
+    assert_eq(_active_count(opts, "fm_dupuse_stale"), 1, "the purpose keeps one active manager")
+
+
 @th.django_unit_test("refusal: a refused REST-path save leaves the other default flag alone")
 def test_rest_path_refusal_keeps_defaults(opts):
     from mojo.apps.fileman.models import FileManager
