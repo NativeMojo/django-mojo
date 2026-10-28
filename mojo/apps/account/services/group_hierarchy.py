@@ -11,16 +11,17 @@ def lock_rows(queryset):
     has it (PostgreSQL), else the backend's plain row lock.
 
     Every INSERT of a row that references a group takes FOR KEY SHARE on the
-    group row — at the insert where the constraint is immediate, at commit
-    for Django's deferred foreign keys — and holds it until its transaction
-    ends. FOR UPDATE conflicts with that,
-    so a save of a busy tenant's row waits for a gap in child inserts and is
-    passed by newer ones; FOR NO KEY UPDATE does not conflict with it and
-    still excludes every other writer of the row (another save, a delete, a
-    select_for_update with or without no_key). A save never changes the key,
-    so nothing is given up. The alias is resolved the way select_for_update()
-    resolves it, so a backend without the NO KEY mode keeps its current lock
-    instead of raising NotSupportedError.
+    group row (at the insert where the constraint is immediate, at commit for
+    Django's deferred foreign keys) and holds it until its transaction ends.
+    FOR UPDATE conflicts with that, so a save of a busy tenant's row waits for
+    a gap in child inserts and is passed by newer ones; FOR NO KEY UPDATE does
+    not conflict with it and still excludes every other writer of the row
+    (another save, a delete, a select_for_update with or without no_key). A
+    save that leaves the unique columns (uuid, auth_domain) as they are never
+    needs the key lock; one that changes them is escalated to it by PostgreSQL
+    itself. The alias is resolved the way select_for_update() resolves it, so
+    a backend without the NO KEY mode keeps its current lock instead of
+    raising NotSupportedError.
     """
     from django.db import connections, router
     alias = queryset._db or router.db_for_write(queryset.model)
