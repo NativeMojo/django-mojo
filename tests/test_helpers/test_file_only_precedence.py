@@ -69,8 +69,14 @@ def test_file_only_keys_never_use_settings_get(opts):
             if not name.endswith(".py"):
                 continue
             path = os.path.join(root, name)
+            with open(path) as handle:
+                source = handle.read()
+            # A call can only pass a key it names: skip the parse of files
+            # that name none (most of mojo/; maestro #7538, core's wall clock).
+            if not any(key in source for key in FILE_ONLY_KEYS):
+                continue
             try:
-                tree = ast.parse(open(path).read())
+                tree = ast.parse(source)
             except SyntaxError:
                 offenders.append(f"{path}: unparsable")
                 continue

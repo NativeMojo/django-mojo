@@ -5,7 +5,7 @@
 an unchecked role would let any file admin point the platform's own credentials
 at a role of their choosing — a confused deputy. ``on_rest_pre_save`` therefore
 refuses a non-superuser who leaves a role on a store that runs on platform
-credentials (21_test_manager_role_generic_keys.py covers the REST routes), and
+credentials (test_fileman_role/21_test_manager_role_generic_keys.py covers the REST routes), and
 the external ID reads back only as a boolean.
 """
 import json
