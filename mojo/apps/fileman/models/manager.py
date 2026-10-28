@@ -329,19 +329,10 @@ class FileManager(MojoSecrets, MojoModel):
         return key
 
     def _needs_use_lock(self, update_fields):
-        """Whether this save must take the locked decision, judged only by
-        what it writes, never by an unlocked read of the stored row:
-        - no key field written: no lock;
-        - some key fields written (update_fields, deferred fields): always,
-          because the unwritten ones can change before the write;
-        - all of them written: when the row it writes claims a key. A full
-          save that claims none leaves no key, whatever is stored."""
-        written = self._written_use_fields(update_fields)
-        if not written:
-            return False
-        if len(written) < len(self.USE_KEY_FIELDS):
-            return True
-        return self._use_key(**{name: getattr(self, name) for name in self.USE_KEY_FIELDS}) is not None
+        """Whether this save must take the locked decision: whenever it writes
+        use, is_active, group or user. No unlocked read decides it; the
+        locked re-read in _lock_and_check_use does."""
+        return bool(self._written_use_fields(update_fields))
 
     def _lock_and_check_use(self, update_fields):
         """Inside a transaction: lock the owner the row ends up under, re-read
