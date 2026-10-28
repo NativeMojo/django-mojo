@@ -7,6 +7,9 @@ from testit.helpers import assert_true, assert_eq
 TEST_EMAIL_ADMIN = 'assistant-mem-admin@example.com'
 TEST_EMAIL_USER = 'assistant-mem-user@example.com'
 TEST_EMAIL_OTHER = 'assistant-mem-other@example.com'
+TEST_EMAIL_ASSIST_ONLY = 'assistant-mem-assist-only@example.com'
+TEST_EMAIL_MEMBER_ONLY = 'assistant-mem-member-only@example.com'
+TEST_EMAIL_REVOKED = 'assistant-mem-revoked@example.com'
 TEST_PASSWORD = 'TestPass1!'
 TEST_GROUP_NAME = 'assistant-mem-test-group'
 
@@ -51,7 +54,10 @@ def setup_memory(opts):
     from mojo.apps.account.models.member import GroupMember
 
     # Clean up prior test data
-    User.objects.filter(email__in=[TEST_EMAIL_ADMIN, TEST_EMAIL_USER, TEST_EMAIL_OTHER]).delete()
+    User.objects.filter(email__in=[
+        TEST_EMAIL_ADMIN, TEST_EMAIL_USER, TEST_EMAIL_OTHER,
+        TEST_EMAIL_ASSIST_ONLY, TEST_EMAIL_MEMBER_ONLY, TEST_EMAIL_REVOKED,
+    ]).delete()
     Group.objects.filter(name__startswith='assistant-mem-test-group').delete()
 
     # Admin user with assistant perm (superuser)
@@ -63,13 +69,28 @@ def setup_memory(opts):
     admin.save()
     admin.add_permission("assistant")
 
-    # Regular user with assistant perm
+    # Platform administrator (assistant + view_admin) — may write global memory
     user = User.objects.create_user(
         username=TEST_EMAIL_USER, email=TEST_EMAIL_USER, password=TEST_PASSWORD,
     )
     user.is_email_verified = True
     user.save()
-    user.add_permission("assistant")
+    user.add_permission(["assistant", "view_admin"])
+
+    # Global assistant only — may read global memory but never write it
+    assist_only = User.objects.create_user(
+        username=TEST_EMAIL_ASSIST_ONLY, email=TEST_EMAIL_ASSIST_ONLY, password=TEST_PASSWORD,
+    )
+    assist_only.is_email_verified = True
+    assist_only.save()
+    assist_only.add_permission("assistant")
+
+    # No global perms; assistant only through a group membership
+    member_only = User.objects.create_user(
+        username=TEST_EMAIL_MEMBER_ONLY, email=TEST_EMAIL_MEMBER_ONLY, password=TEST_PASSWORD,
+    )
+    member_only.is_email_verified = True
+    member_only.save()
 
     # Other user without assistant perm
     other = User.objects.create_user(
@@ -86,6 +107,10 @@ def setup_memory(opts):
     # Admin also a member but without assistant on member
     GroupMember.objects.create(group=group, user=admin)
 
+    # Member-only user holds assistant on the member record alone
+    member_only_member = GroupMember.objects.create(group=group, user=member_only)
+    member_only_member.add_permission("assistant")
+
     # Clean Redis memory keys
     _cleanup_redis()
 
@@ -96,7 +121,7 @@ def setup_memory(opts):
 
 @th.django_unit_test()
 def test_write_global_memory(opts):
-    """Users with assistant perm can write global memory."""
+    """Platform administrators (view_admin) can write global memory."""
     _cleanup_redis()
     from mojo.apps.assistant.services.memory import write_memory, read_memories
     _, user, _ = _load_users()
@@ -553,3 +578,222 @@ def test_group_memory_isolation(opts):
                 f"Group B should not see Group A's memory, got {group_entries}")
 
     group_b.delete()
+
+
+# ---------------------------------------------------------------------------
+# Global tier needs view_admin (#9720)
+# ---------------------------------------------------------------------------
+
+GATE_KEY = "testit-9720-gate"
+
+
+def _load_user(email):
+    from mojo.apps.account.models import User
+    return User.objects.get(email=email)
+
+
+def _global_entries():
+    from mojo.helpers.redis import get_adapter
+    from mojo.apps.assistant.services.memory import _get_entries, KEY_GLOBAL
+    return _get_entries(get_adapter(), KEY_GLOBAL)
+
+
+def _gate_conversation(user, title):
+    from mojo.apps.assistant.models import Conversation
+    Conversation.objects.filter(user=user, title=title).delete()
+    return Conversation.objects.create(user=user, title=title)
+
+
+def _propose_card(user, conversation, tool_name, args):
+    """Raise an approval card through the real agent dispatch path."""
+    import ujson
+    from mojo.apps.assistant import get_registry
+    from mojo.apps.assistant.services.agent import _execute_tool
+
+    result = _execute_tool(
+        {"type": "tool_use", "id": "gate-1", "name": tool_name, "input": args},
+        get_registry(), user, conversation, [], None, [],
+    )
+    payload = ujson.loads(result["content"])
+    assert_eq(payload.get("status"), "approval_required",
+              f"a global {tool_name} must raise an approval card, got {payload}")
+    return payload["action_id"]
+
+
+def _approve(user, action_id):
+    from mojo.apps.assistant.services import approvals
+    from mojo.apps.assistant.models import PendingAction
+    try:
+        approvals.resolve(user, action_id, "approve")
+    except approvals.ApprovalRefused:
+        pass
+    import uuid as uuid_module
+    return PendingAction.objects.get(uuid=uuid_module.UUID(action_id))
+
+
+def _fresh_revoked_user():
+    """A user holding assistant + view_admin, recreated for each test."""
+    from mojo.apps.account.models import User
+    User.objects.filter(email=TEST_EMAIL_REVOKED).delete()
+    user = User.objects.create_user(
+        username=TEST_EMAIL_REVOKED, email=TEST_EMAIL_REVOKED, password=TEST_PASSWORD,
+    )
+    user.is_email_verified = True
+    user.save()
+    user.add_permission(["assistant", "view_admin"])
+    return user
+
+
+@th.django_unit_test()
+def test_global_write_denied_for_assistant_only(opts):
+    """A global assistant holder without view_admin cannot create or overwrite global memory."""
+    _cleanup_redis()
+    from mojo.apps.assistant.services.memory import write_memory
+    admin, _, _ = _load_users()
+    assist_only = _load_user(TEST_EMAIL_ASSIST_ONLY)
+
+    result = write_memory(assist_only, "global", GATE_KEY + "-new", "planted text")
+    assert_true("error" in result and "ermission" in result["error"],
+                f"assistant-only create on global must be refused, got {result}")
+    assert_true(GATE_KEY + "-new" not in _global_entries(),
+                "a refused create must not store the entry")
+
+    seeded = write_memory(admin, "global", GATE_KEY, "original value")
+    assert_eq(seeded.get("status"), "created", f"superuser seed should succeed, got {seeded}")
+    result = write_memory(assist_only, "global", GATE_KEY, "planted text")
+    assert_true("error" in result and "ermission" in result["error"],
+                f"assistant-only overwrite on global must be refused, got {result}")
+    assert_true(_global_entries().get(GATE_KEY) != "planted text",
+                "a refused overwrite must leave the existing global entry unchanged")
+
+
+@th.django_unit_test()
+def test_global_delete_denied_for_assistant_only(opts):
+    """A global assistant holder without view_admin cannot delete global memory."""
+    _cleanup_redis()
+    from mojo.apps.assistant.services.memory import write_memory, delete_memory
+    admin, _, _ = _load_users()
+    assist_only = _load_user(TEST_EMAIL_ASSIST_ONLY)
+
+    write_memory(admin, "global", GATE_KEY, "keep me")
+    result = delete_memory(assist_only, "global", GATE_KEY)
+    assert_true("error" in result and "ermission" in result["error"],
+                f"assistant-only delete on global must be refused, got {result}")
+
+
+@th.django_unit_test()
+def test_global_write_allowed_for_view_admin_and_superuser(opts):
+    """view_admin holders and superusers keep global create, overwrite and delete."""
+    _cleanup_redis()
+    from mojo.apps.assistant.services.memory import write_memory, delete_memory
+    admin, user, _ = _load_users()
+
+    for actor in (user, admin):
+        key = f"{GATE_KEY}-ok-{actor.pk}"
+        result = write_memory(actor, "global", key, "first")
+        assert_eq(result.get("status"), "created", f"{actor.email} create should succeed, got {result}")
+        result = write_memory(actor, "global", key, "second")
+        assert_eq(result.get("status"), "updated", f"{actor.email} overwrite should succeed, got {result}")
+        result = delete_memory(actor, "global", key)
+        assert_eq(result.get("status"), "deleted", f"{actor.email} delete should succeed, got {result}")
+
+
+@th.django_unit_test()
+def test_global_write_denied_for_member_grant(opts):
+    """An assistant grant held only through a group membership never reaches global memory."""
+    _cleanup_redis()
+    from mojo.apps.assistant.services.memory import write_memory, delete_memory
+    admin, _, _ = _load_users()
+    member_only = _load_user(TEST_EMAIL_MEMBER_ONLY)
+    group = _load_group()
+
+    result = write_memory(member_only, "global", GATE_KEY, "planted", group=group)
+    assert_true("error" in result, f"member-grant global write must be refused, got {result}")
+
+    write_memory(admin, "global", GATE_KEY, "keep me")
+    result = delete_memory(member_only, "global", GATE_KEY, group=group)
+    assert_true("error" in result, f"member-grant global delete must be refused, got {result}")
+
+    # Same caller through REST, where requires_perms falls back to the ?group= member grant
+    assert_true(opts.client.login(TEST_EMAIL_MEMBER_ONLY, TEST_PASSWORD),
+                "member-only user should log in")
+    resp = opts.client.post(f"/api/assistant/memory/global?group={group.pk}",
+                            {"key": GATE_KEY, "value": "planted"})
+    assert_true(resp.status_code in (400, 403),
+                f"REST member-grant global POST must be refused, got {resp.status_code} {resp.response}")
+    resp = opts.client.delete(f"/api/assistant/memory/global/{GATE_KEY}?group={group.pk}")
+    assert_true(resp.status_code in (400, 403),
+                f"REST member-grant global DELETE must be refused, got {resp.status_code} {resp.response}")
+    assert_true(_global_entries().get(GATE_KEY) != "planted",
+                "a refused REST write must not change global memory")
+    opts.client.logout()
+
+
+@th.django_unit_test()
+def test_global_write_card_fails_for_assistant_only(opts):
+    """An assistant-only user approving their own global write card does not write global memory."""
+    _cleanup_redis()
+    assist_only = _load_user(TEST_EMAIL_ASSIST_ONLY)
+    conv = _gate_conversation(assist_only, "memory-9720-assist-only")
+
+    action_id = _propose_card(assist_only, conv, "write_memory",
+                              {"tier": "global", "key": GATE_KEY + "-card", "value": "planted"})
+    row = _approve(assist_only, action_id)
+    assert_eq(row.state, "failed", f"the approved card must end failed, got {row.state} {row.result}")
+    assert_true(GATE_KEY + "-card" not in _global_entries(),
+                "a failed card must not store the global entry")
+
+
+@th.django_unit_test()
+def test_global_write_card_fails_after_view_admin_removed(opts):
+    """A card raised with view_admin fails if view_admin is removed before approval."""
+    _cleanup_redis()
+    revoked = _fresh_revoked_user()
+    conv = _gate_conversation(revoked, "memory-9720-revoked-write")
+
+    action_id = _propose_card(revoked, conv, "write_memory",
+                              {"tier": "global", "key": GATE_KEY + "-revoked", "value": "planted"})
+    revoked.remove_permission("view_admin")
+    row = _approve(revoked, action_id)
+    assert_eq(row.state, "failed", f"the approved card must end failed, got {row.state} {row.result}")
+    assert_true(GATE_KEY + "-revoked" not in _global_entries(),
+                "a failed card must not store the global entry")
+
+
+@th.django_unit_test()
+def test_global_delete_card_fails_for_assistant_only_and_revoked(opts):
+    """Global delete cards fail for assistant-only users and after view_admin is removed."""
+    _cleanup_redis()
+    from mojo.apps.assistant.services.memory import write_memory
+    admin, _, _ = _load_users()
+    assist_only = _load_user(TEST_EMAIL_ASSIST_ONLY)
+    revoked = _fresh_revoked_user()
+
+    write_memory(admin, "global", GATE_KEY, "keep me")
+
+    conv = _gate_conversation(assist_only, "memory-9720-assist-only-delete")
+    action_id = _propose_card(assist_only, conv, "delete_memory", {"tier": "global", "key": GATE_KEY})
+    row = _approve(assist_only, action_id)
+    assert_eq(row.state, "failed", f"assistant-only delete card must end failed, got {row.state} {row.result}")
+
+    conv = _gate_conversation(revoked, "memory-9720-revoked-delete")
+    action_id = _propose_card(revoked, conv, "delete_memory", {"tier": "global", "key": GATE_KEY})
+    revoked.remove_permission("view_admin")
+    row = _approve(revoked, action_id)
+    assert_eq(row.state, "failed", f"revoked delete card must end failed, got {row.state} {row.result}")
+
+
+@th.django_unit_test()
+def test_onboarding_prompt_only_for_global_writers(opts):
+    """With global memory empty, only users who can write global memory get the first-run prompt."""
+    _cleanup_redis()
+    from mojo.apps.assistant.services.agent import _get_system_prompt
+    _, user, _ = _load_users()
+    assist_only = _load_user(TEST_EMAIL_ASSIST_ONLY)
+
+    prompt = _get_system_prompt(user=assist_only)
+    assert_true("Getting Started" not in prompt,
+                f"assistant-only users must not be told to save global memory, got ...{prompt[-200:]}")
+    prompt = _get_system_prompt(user=user)
+    assert_true("Getting Started" in prompt,
+                f"view_admin users still get the first-run prompt, got ...{prompt[-200:]}")
