@@ -335,11 +335,13 @@ class Group(MojoSecrets, MojoModel):
         from mojo.apps.account.services import group_hierarchy
         # An existing row is locked from here to the write, so what is
         # compared is what is replaced: a save that began before another one
-        # finished waits for it, then sees its result.
+        # finished waits for it, then sees its result. The lock is NO KEY
+        # (group_hierarchy.lock_rows): it excludes other writers of this row,
+        # not the inserts of rows that reference it (#9734).
         with transaction.atomic():
             row, old_parent_id, stored_metadata = None, None, {}
             if self.pk is not None:
-                row = type(self).objects.select_for_update().filter(pk=self.pk).values_list(
+                row = group_hierarchy.lock_rows(type(self).objects.filter(pk=self.pk)).values_list(
                     "metadata", "parent_id").first()
             # A REST save: its permission was judged before this lock, on
             # rows that may have changed since. It is judged again below.
@@ -889,8 +891,9 @@ class Group(MojoSecrets, MojoModel):
                 "admin tier (groups / manage_groups) required to change sub-group creation")
         if not isinstance(value, bool):
             raise merrors.ValueException("allow_member_subgroups must be true or false")
+        from mojo.apps.account.services import group_hierarchy
         with transaction.atomic():
-            type(self).objects.select_for_update().filter(pk=self.pk).first()
+            group_hierarchy.lock_rows(type(self).objects.filter(pk=self.pk)).first()
             self.refresh_from_db()
             changed = self.allows_member_subgroups() != value
             if changed:

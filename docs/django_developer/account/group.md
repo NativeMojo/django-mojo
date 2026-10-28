@@ -182,6 +182,22 @@ is judged again on the locked row. This covers a full `save()` and any
 `save(update_fields=...)` that names `metadata` or `parent`. Other metadata
 keys are not merged: the last full save still wins for those.
 
+The lock `save()` takes is `FOR NO KEY UPDATE` on PostgreSQL
+(`select_for_update(no_key=True)`), and so is the lock on the parent chain
+during a move or a create under a parent. It excludes every other writer of
+the row — another save, a delete, any `select_for_update` — but not the
+`FOR KEY SHARE` that every insert of a row referencing the group (any model
+with a `group` FK) takes on the group row and holds until its transaction
+ends: at the insert where the constraint is immediate, at commit for the
+deferred foreign keys Django creates on PostgreSQL. Code that locks a
+`Group` row itself should take the same mode, through
+`mojo.apps.account.services.group_hierarchy.lock_rows(queryset)`: a plain
+`select_for_update()` (`FOR UPDATE`) waits behind every in-flight child insert,
+is passed by newer inserts while it waits, and holds up every child insert
+for that group while it is held. A save never changes the group's key, so
+`FOR UPDATE` buys nothing there. The helper passes `no_key` from the write
+connection's features, so a backend without the mode keeps its ordinary lock.
+
 What the instance remembers follows what it really read and wrote, the two
 keys and the parent separately:
 
