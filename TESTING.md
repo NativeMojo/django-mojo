@@ -23,7 +23,7 @@ This generates `testproject/`, creates a `mojo_test` PostgreSQL database, and ru
 Use `bin/run_tests` — it starts the server, runs the suite, and stops the server automatically:
 
 ```bash
-./bin/run_tests                        # the core preset — the 30s baseline (~34s on the team host)
+./bin/run_tests                        # the core preset — 36s budget (~33-44s on the team host)
 ./bin/run_tests --tier framework       # django-mojo's own critical tier (~190-200s)
 ./bin/run_tests --all                  # everything, incl. extended/admin/edge/slow (~6min)
 ./bin/run_tests --agent                # write structured report to testproject/var/test_failures.json
@@ -70,14 +70,14 @@ effect on a test run.
 ## Tiers — buckets and presets
 
 A test declares the **bucket** it belongs to; a runner selects a **preset**, a named set
-of buckets. A bare `bin/run_tests` runs the **`core`** preset — the ≤30s baseline every
+of buckets. A bare `bin/run_tests` runs the **`core`** preset — the core baseline every
 consumer runs (~9s today). **[docs/django_developer/testit/Tiers.md](docs/django_developer/testit/Tiers.md)
 is the canonical reference** — buckets, presets, the legacy mapping, the per-bucket
 isolation contract, and budgets. In brief:
 
 | Preset | Command | Runs | Wall |
 |---|---|---|---|
-| `core` | `bin/run_tests` | the 30s baseline | ~34s |
+| `core` | `bin/run_tests` | the core baseline (36s budget) | ~33-44s |
 | `framework` | `bin/run_tests --tier framework` | `core`+`framework`+`bug` — django-mojo's own critical tier | ~190-200s |
 | `all` | `bin/run_tests --all` | everything, incl. `extended`/`admin`/`edge`/`slow` | ~6min |
 
@@ -109,7 +109,7 @@ ruleset decision.
 
 The reusable workflow stands up Postgres (with pgvector) and Redis service
 containers, installs deps with `uv`, runs `bin/create_testproject`, then
-`bin/run_tests --agent --tier <preset>`. The `core` preset's 30s budget is a
+`bin/run_tests --agent --tier <preset>`. The `core` preset's 36s budget is a
 hard exit-code gate; `TESTIT_BUDGET_SCALE` (set to `2` in the workflow) gives a
 cold CI host headroom — calibrate it down after one real run. The `all` preset
 is not scheduled by GitHub Actions and `publish.py` does not run it; invoke

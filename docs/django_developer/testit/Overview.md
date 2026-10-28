@@ -69,7 +69,7 @@ Use `bin/run_tests` — it handles starting and stopping the test server automat
 > the framework suite they inherit. Targeted application modules may still use
 > `bin/run_tests -t <module>`.
 
-- Run the core baseline (≤30s, the default preset):
+- Run the core baseline (36s budget, the default preset):
   `./bin/run_tests`
 - Run django-mojo's whole critical tier, or everything:
   `./bin/run_tests --tier framework` · `./bin/run_tests --all`
@@ -292,7 +292,7 @@ of buckets. **[Tiers.md](Tiers.md) is the canonical reference** — buckets,
 presets, the legacy mapping, the per-bucket isolation contract, and budgets.
 
 ```bash
-./bin/run_tests                        # the core preset (the default) — 30s baseline (~34s)
+./bin/run_tests                        # the core preset (the default) — 36s budget (~33-44s)
 ./bin/run_tests --tier framework       # django-mojo's own critical tier (~190-200s)
 ./bin/run_tests --all                  # everything (== --tier all), ~6min
 ./bin/run_tests --extra extended       # core preset + ad-hoc extended tag
@@ -305,7 +305,7 @@ for `--tier all`, and the retired `--full` spelling remains a hidden no-op that
 runs the default (core) preset.
 
 > **Live (maestro #2790–#2792).** The suite is curated into buckets and a bare
-> `bin/run_tests` runs the **`core`** preset — the ≤30s baseline. Legacy
+> `bin/run_tests` runs the **`core`** preset — the core baseline (36s budget). Legacy
 > `default_core` / `requires_extra` keys still map onto buckets automatically
 > (`default_core → framework`, `requires_extra → its opt-in tags`), so a package
 > that predates the `tier` key keeps working. See [Tiers.md](Tiers.md).
@@ -322,7 +322,7 @@ Pick the **lowest-cost bucket that still catches the failure it must catch**;
 - **`core`** — a security boundary (permissions, auth, tenant isolation,
   secrets) or a framework contract whose failure means django-mojo is broken for
   *every* consumer, **and** the test is parallel-safe and fast. This is the
-  ≤30s baseline; keep it small and clean.
+  core baseline; keep it small and clean.
 - **`framework`** — django-mojo's own critical contracts (model
   save/serialize, REST dispatch, graphs, `request.DATA`) that are not part of
   the universal baseline. Cost alone never demotes a security-relevant test out
