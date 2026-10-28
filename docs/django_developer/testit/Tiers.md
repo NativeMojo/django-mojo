@@ -130,9 +130,15 @@ Wall-clock budgets are declared in `tests/testit.json`:
   `cold_budget`; an over-budget module is flagged whatever preset ran it.
 - Budgets are skipped for partial runs (`-t` / `--ignore`) — those are not the
   preset's wall clock.
-- The budget exit is separate from the run's verdict and unchanged: it never
-  sets the report `status` or `reasons` (see *What makes a run fail* in
-  `Overview.md`).
+- The budget exit is separate from the run's verdict: it never adds to
+  `reasons` and never keeps the `--continue` checkpoint (see *What makes a run
+  fail* in `Overview.md`). A blown `core` budget does set `status: "failed"`,
+  so a run that exits 1 never reads as passed.
+- Every report carries a `budget` block: `enforced` (true for `core`, the only
+  preset whose budget fails the exit), `failed`, `time_only` (failed on time
+  with no verdict reasons, so every test passed) and the `scale` used. A
+  time-only failure is therefore `status: "failed"`, `reasons: []`,
+  `budget.time_only: true`.
 
 ## Diagnostics
 
