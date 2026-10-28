@@ -6,7 +6,7 @@ model, which had no middle ground between "everything critical" and "everything
 at all" and let the default tier grow to thousands of tests.
 
 > **Status.** Live (maestro #2790–#2793). The suite is curated into buckets,
-> a **bare `bin/run_tests` is the ≤30s `core` baseline** (~9s today); `--tier
+> a **bare `bin/run_tests` is the ≤30s `core` baseline** (~34s on the team host in 10-2026); `--tier
 > framework` runs django-mojo's own critical tier and `--all` runs everything.
 > Consumers configure their own tiers via `apps/tests/testit.json` (see *For
 > consumers* below). Legacy `default_core` / `requires_extra` keys still map onto
@@ -37,7 +37,7 @@ any other name is a literal single bucket.
 | Preset | Selects | Budget |
 |---|---|---|
 | `core` | `core` | 30s (hard-fail; non-advisory GitHub status on every push) |
-| `framework` | `core` + `framework` + `bug` | 90s (warn locally; advisory in GitHub CI until #2813) |
+| `framework` | `core` + `framework` + `bug` | 90s default; django-mojo sets 210s (warn locally; advisory in GitHub CI until #2813) |
 | `all` | every bucket | — |
 
 ```bash
@@ -118,8 +118,13 @@ isolation policy*) applies a contract keyed on the bucket:
 Wall-clock budgets are declared in `tests/testit.json`:
 
 ```json
-{ "budgets": { "core": 30, "framework": 90 } }
+{ "budgets": { "core": 30, "framework": 210 } }
 ```
+
+With no file the defaults are core 30 and framework 90. django-mojo's own
+framework budget is 210s, measured on quiet runs on the team host (190-202s,
+maestro #7538): about 68s of it is serial packages, so 90s is out of reach
+until that work is made faster. Raise or lower it only from measured quiet runs.
 
 - A run over `budget × 1.25` is a **violation**; under `0.6 × budget` is a
   **stale-warning** (lower the budget so it cannot silently regrow).

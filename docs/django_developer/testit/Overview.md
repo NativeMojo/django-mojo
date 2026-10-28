@@ -292,8 +292,8 @@ of buckets. **[Tiers.md](Tiers.md) is the canonical reference** — buckets,
 presets, the legacy mapping, the per-bucket isolation contract, and budgets.
 
 ```bash
-./bin/run_tests                        # the core preset (the default) — ≤30s baseline (~9s)
-./bin/run_tests --tier framework       # django-mojo's own critical tier (~45s)
+./bin/run_tests                        # the core preset (the default) — 30s baseline (~34s)
+./bin/run_tests --tier framework       # django-mojo's own critical tier (~190-200s)
 ./bin/run_tests --all                  # everything (== --tier all), ~6min
 ./bin/run_tests --extra extended       # core preset + ad-hoc extended tag
 ```

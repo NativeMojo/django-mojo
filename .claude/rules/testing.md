@@ -27,8 +27,8 @@ Before writing any test, read `docs/django_developer/testit/Overview.md`. This i
 - Use `--all` to include opt-in modules (`requires_extra` — `slow` and `extended`) — needed
   for pre-publish validation, or when you changed what `--all` selects
 - Tests declare a **tier bucket** and runners select a **preset** (`--tier core` ⊂
-  `framework` ⊂ `all`); a bare `bin/run_tests` runs the **`core`** preset — the ≤30s
-  baseline (~9s). `--tier framework` runs django-mojo's whole critical tier (~45s). See
+  `framework` ⊂ `all`); a bare `bin/run_tests` runs the **`core`** preset — the 30s
+  baseline (~34s on the team host, inside its 1.25x line). `--tier framework` runs django-mojo's whole critical tier (~190-200s). See
   `docs/django_developer/testit/Tiers.md`
 - Never use `--plain` — it disables the rich progress UI and parallel execution
 
