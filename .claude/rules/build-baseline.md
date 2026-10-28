@@ -17,7 +17,7 @@ Three different things used to all get called "the full suite". They are not the
 | Term | Command | What it runs |
 |---|---|---|
 | **scoped run** | `bin/run_tests --agent -t <module> [-t <module>]` | Only the named modules. |
-| **core run** | `bin/run_tests --agent` | The `core` preset — the core baseline, 36s budget (bare run since #2792). |
+| **core run** | `bin/run_tests --agent` | The `core` preset — the core baseline, 40s budget (bare run since #2792). |
 | **whole suite** | `bin/run_tests --agent --tier framework` | django-mojo's own critical tier (`core`+`framework`+`bug`). |
 | **all-tier run** | `bin/run_tests --agent --all` | Everything, including opt-in `extended`/`admin`/`edge`/`slow`. |
 
@@ -25,7 +25,7 @@ Never write "full suite" when you mean the whole-suite run — `--all` is a diff
 heavier thing. Say "whole suite" or "all-tier run".
 
 > **Tier presets (maestro #2790/#2792).** The suite is curated into buckets, and a bare
-> `bin/run_tests --agent` now runs the **`core`** preset — the core baseline (36s budget) every consumer
+> `bin/run_tests --agent` now runs the **`core`** preset — the core baseline (40s budget) every consumer
 > runs. **The `full` verification tier below therefore means `--tier framework`, not the
 > bare run.** `--tier core` (== the bare run), `--tier framework` (the whole critical tier),
 > and `--tier all` (== `--all`) are the presets; see `docs/django_developer/testit/Tiers.md`.
