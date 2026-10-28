@@ -936,8 +936,8 @@ Each step object:
 | Tool | Permission | Mutates | Description |
 |---|---|---|---|
 | `read_memory` | `assistant` | No | Read stored memory entries grouped by tier. The system prompt already injects memories, but this tool lets the LLM check raw keys before updating or deleting. |
-| `write_memory` | `assistant` | Yes | Store or update a memory entry. Requires `tier`, `key`, `value`. Enforces key format, size limits, and secret detection. **Owner-state:** a `user`-tier write runs immediately; `global` and `group` produce an approval card. |
-| `delete_memory` | `assistant` | Yes | Delete a memory entry by tier and key. **Owner-state:** a `user`-tier delete runs immediately; `global` and `group` produce an approval card. |
+| `write_memory` | `assistant` | Yes | Store or update a memory entry. Requires `tier`, `key`, `value`. Enforces key format, size limits, and secret detection. The `global` tier requires `view_admin` (or superuser). **Owner-state:** a `user`-tier write runs immediately; `global` and `group` produce an approval card. |
+| `delete_memory` | `assistant` | Yes | Delete a memory entry by tier and key. The `global` tier requires `view_admin` (or superuser). **Owner-state:** a `user`-tier delete runs immediately; `global` and `group` produce an approval card. |
 
 ### Skills Domain (`assistant`)
 
@@ -1073,7 +1073,7 @@ The assistant has persistent three-tier memory stored in Redis. Memories are inj
 
 | Tier | Redis Key | Who Reads | Who Writes | Injected When |
 |---|---|---|---|---|
-| **Global** | `assistant:memory:global` | `assistant` perm or superuser | `assistant` perm or superuser | Every conversation |
+| **Global** | `assistant:memory:global` | `assistant` perm or superuser | `view_admin` perm or superuser | Every conversation |
 | **User** | `assistant:memory:user:<user_id>` | The user themselves, or superuser | The user themselves, or superuser | Conversations by that user |
 | **Group** | `assistant:memory:group:<group_id>` | Any member of the group | Members with `assistant` perm on their Member record | Conversations in group context |
 
@@ -1097,7 +1097,7 @@ At conversation start, `_get_system_prompt(user, group)` calls `build_memory_pro
 - deploy_window: Deploys run Tuesdays 9-11 PM UTC only
 ```
 
-Empty tiers are omitted. When global memory is empty and the user has `assistant` permission, an onboarding prompt is injected instead — it instructs the LLM to ask the user about their platform and store answers as global memories.
+Empty tiers are omitted. When global memory is empty and the user can write global memory (`view_admin` or superuser), an onboarding prompt is injected instead — it instructs the LLM to ask the user about their platform and store answers as global memories.
 
 ### Memory Limits
 
