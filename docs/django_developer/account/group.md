@@ -194,10 +194,9 @@ deferred foreign keys Django creates on PostgreSQL. Code that locks a
 `mojo.apps.account.services.group_hierarchy.lock_rows(queryset)`: a plain
 `select_for_update()` (`FOR UPDATE`) waits behind every in-flight child insert,
 is passed by newer inserts while it waits, and holds up every child insert
-for that group while it is held. A save that leaves the unique columns
-(`uuid`, `auth_domain`) as they are never needs the key lock, and one that
-changes them is escalated to it by PostgreSQL itself, so `FOR UPDATE` buys
-nothing there. The helper passes `no_key` from the write
+for that group while it is held. A save that leaves the unique column
+(`auth_domain`) as it is never needs the key lock, and one that changes it
+is escalated to it by PostgreSQL itself, so `FOR UPDATE` buys nothing there. The helper passes `no_key` from the write
 connection's features, so a backend without the mode keeps its ordinary lock.
 
 What the instance remembers follows what it really read and wrote, the two
