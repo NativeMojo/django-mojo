@@ -255,6 +255,39 @@ def test_transition_into_taken_purpose_refused(opts):
     assert_eq(_active_count(opts, "fm_dupuse_taken"), 1, "the taken purpose keeps one active manager")
 
 
+@th.django_unit_test("refusal: a partial save is judged by what it writes, not by memory")
+def test_partial_save_judged_by_written_fields(opts):
+    from mojo.apps.fileman.models import FileManager
+
+    _clean_use(opts, "fm_dupuse_part_a", "fm_dupuse_part_b")
+    a = _make(opts, "part_a", use="fm_dupuse_part_a")
+    _make(opts, "part_b", use="fm_dupuse_part_b")
+
+    # Only `use` is written; A stays active in the database, so it would duplicate B.
+    a.is_active = False
+    a.use = "fm_dupuse_part_b"
+    assert_true(_refused(lambda: a.save(update_fields=["use"])) is not None,
+                "a partial save that moves an active row into a taken purpose must be refused")
+    stored = FileManager.objects.get(pk=a.pk)
+    assert_eq((stored.use, stored.is_active), ("fm_dupuse_part_a", True),
+              "the refused partial save must leave the row as stored")
+
+    # An unsaved in-memory purpose change must not block a name-only save.
+    a = FileManager.objects.get(pk=a.pk)
+    a.use = "fm_dupuse_part_b"
+    a.name = f"{PREFIX}part_a_renamed"
+    a.save(update_fields=["name"])
+    stored = FileManager.objects.get(pk=a.pk)
+    assert_eq((stored.name, stored.use), (f"{PREFIX}part_a_renamed", "fm_dupuse_part_a"),
+              "a name-only save must be written and leave the purpose alone")
+
+    # A row loaded without `use` saves only its loaded fields.
+    a = FileManager.objects.defer("use").get(pk=a.pk)
+    a.is_public = False
+    a.save()
+    assert_eq(_active_count(opts, "fm_dupuse_part_b"), 1, "the purpose keeps one active manager")
+
+
 @th.django_unit_test("refusal: a REST create of a duplicate is a 400 and changes no default")
 def test_rest_duplicate_create_refused(opts):
     from mojo.apps.fileman.models import FileManager

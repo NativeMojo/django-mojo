@@ -243,18 +243,22 @@ class FileManager(MojoSecrets, MojoModel):
                 self._backend = None
         if getattr(self, "_secrets_changed", False):
             self._backend = None
-        if self._enters_use_key():
+        key = self._entered_use_key(kwargs.get("update_fields"))
+        if key is not None:
             from django.db import transaction
             # Lock the owning Group (or User) so two saves with different
             # names cannot both pass the check (pattern of aws_setup.py).
             with transaction.atomic():
-                self._lock_use_owner()
-                self._require_unique_use()
+                self._lock_use_owner(key)
+                self._require_unique_use(key)
                 super().save(*args, **kwargs)
             return
         super().save(*args, **kwargs)
 
-    def _use_key(self, use, is_active, group_id, user_id):
+    USE_KEY_FIELDS = ("use", "is_active", "group_id", "user_id")
+
+    @staticmethod
+    def _use_key(use, is_active, group_id, user_id):
         """The (group, user, use) an active purpose manager claims, else None.
 
         Purpose-less managers and the system scope (no user, no group) claim
@@ -265,32 +269,52 @@ class FileManager(MojoSecrets, MojoModel):
             return None
         return (group_id, user_id, use)
 
-    def _enters_use_key(self):
-        """Whether this save moves the row into a claimed key: a create, or a
+    def _entered_use_key(self, update_fields=None):
+        """The key this save moves the row into, else None: a create, or a
         change of use, is_active, group or user. Editing an existing duplicate
-        in place stays allowed."""
-        key = self._use_key(self.use, self.is_active, self.group_id, self.user_id)
+        in place stays allowed.
+
+        Only what the save writes counts. With `update_fields`, or a row
+        loaded with deferred fields, every other value comes from the stored
+        row, as Django persists it.
+        """
+        values = {name: getattr(self, name) for name in self.USE_KEY_FIELDS}
+        stored = None
+        if self.pk is not None:
+            row = type(self).objects.filter(pk=self.pk).values_list(*self.USE_KEY_FIELDS).first()
+            if row is not None:
+                stored = dict(zip(self.USE_KEY_FIELDS, row))
+        if stored is not None:
+            written = None
+            if update_fields is not None:
+                written = {self._meta.get_field(name).attname for name in update_fields}
+            elif self.get_deferred_fields():
+                written = {f.attname for f in self._meta.concrete_fields} - self.get_deferred_fields()
+            if written is not None:
+                for name in self.USE_KEY_FIELDS:
+                    if name not in written:
+                        values[name] = stored[name]
+        key = self._use_key(**values)
         if key is None:
-            return False
-        if self.pk is None:
-            return True
-        persisted = type(self).objects.filter(pk=self.pk).values_list(
-            "use", "is_active", "group_id", "user_id").first()
-        if persisted is None:
-            return True
-        return self._use_key(*persisted) != key
+            return None
+        if stored is not None and self._use_key(**stored) == key:
+            return None
+        return key
 
-    def _lock_use_owner(self):
-        if self.group_id is not None:
+    @staticmethod
+    def _lock_use_owner(key):
+        group_id, user_id, _ = key
+        if group_id is not None:
             from mojo.apps.account.models import Group
-            Group.objects.select_for_update().filter(pk=self.group_id).values_list("pk", flat=True).first()
-        elif self.user_id is not None:
+            Group.objects.select_for_update().filter(pk=group_id).values_list("pk", flat=True).first()
+        elif user_id is not None:
             from mojo.apps.account.models import User
-            User.objects.select_for_update().filter(pk=self.user_id).values_list("pk", flat=True).first()
+            User.objects.select_for_update().filter(pk=user_id).values_list("pk", flat=True).first()
 
-    def _require_unique_use(self):
+    def _require_unique_use(self, key):
+        group_id, user_id, use = key
         others = type(self).objects.filter(
-            group_id=self.group_id, user_id=self.user_id, use=self.use, is_active=True)
+            group_id=group_id, user_id=user_id, use=use, is_active=True)
         if self.pk is not None:
             others = others.exclude(pk=self.pk)
         if others.exists():
@@ -1220,8 +1244,9 @@ class FileManager(MojoSecrets, MojoModel):
         # key of its own is on platform credentials either way.
         if "use" in changed_fields or (created and self.use):
             self.use = self.clean_use(self.use)
-        if self._enters_use_key():
-            self._require_unique_use()
+        use_key = self._entered_use_key()
+        if use_key is not None:
+            self._require_unique_use(use_key)
         self._require_superuser_for_platform_role(created)
         self._require_contained_storage(created)
         self._require_cdn_admin_for_settings(created)
