@@ -176,7 +176,6 @@ def test_oldest_non_default_wins(opts):
 @th.django_unit_test("selection: the shared lookups order by default, then id (SQL supplement)")
 def test_lookup_sql_is_ordered(opts):
     from django.db import connection
-    from django.test.utils import CaptureQueriesContext
     from mojo.apps.account.models import User
     from mojo.apps.fileman.models import FileManager
 
@@ -188,17 +187,27 @@ def test_lookup_sql_is_ordered(opts):
         ("_existing_for_group without a purpose", lambda: FileManager._existing_for_group(group, "")),
         ("_existing_for_user", lambda: FileManager._existing_for_user(owner)),
     ]
-    for label, call in cases:
-        with CaptureQueriesContext(connection) as ctx:
+    def last_sql(call):
+        # An execute wrapper, not CaptureQueriesContext: the debug query log is
+        # capped, and in a long run a full log slices to nothing.
+        seen = []
+
+        def record(execute, sql, params, many, context):
+            seen.append((sql, tuple(params or ())))
+            return execute(sql, params, many, context)
+
+        with connection.execute_wrapper(record):
             call()
-        sql = ctx.captured_queries[-1]["sql"]
+        assert_true(seen, "the lookup must run a query")
+        return seen[-1]
+
+    for label, call in cases:
+        sql, _ = last_sql(call)
         assert_true(order in sql, f"{label} must order by default then id, got: {sql}")
 
-    with CaptureQueriesContext(connection) as ctx:
-        FileManager._existing_for_group(group, "")
-    sql = ctx.captured_queries[-1]["sql"]
-    assert_true('"fileman_filemanager"."use" = \'\'' in sql,
-                f"the purpose-less lookup must filter use = '', got: {sql}")
+    sql, params = last_sql(lambda: FileManager._existing_for_group(group, ""))
+    assert_true('"fileman_filemanager"."use" = %s' in sql and "" in params,
+                f"the purpose-less lookup must filter use = '', got: {sql} {params}")
 
 
 # ---------------------------------------------------------------------------
