@@ -8,8 +8,9 @@ result rests on a sleep. The pattern is #8201's
 `test_account_admin_extended_serial/test_setting_global_unique_serial.py`.
 
 Limit: two connections only. A save racing a save, a save racing the
-uploader's auto-create, and a save committed inside a REST save's window
-between its precheck and its locked save.
+uploader's auto-create, a save committed inside a REST save's window
+between its precheck and its locked save, and a partial save whose unwritten
+purpose another connection changes before the write.
 """
 import tempfile
 import threading
@@ -268,5 +269,61 @@ def test_rest_save_race_keeps_default(opts):
         assert not FileManager.objects.filter(name=f"{PREFIX}rest_a").exists(), "no row for A may exist"
     finally:
         b_committed.set()
+        thread.join(JOIN_TIMEOUT)
+        FileManager.objects.filter(name__startswith=PREFIX).delete()
+
+
+@th.django_unit_test("#8662: a partial save cannot switch a row on into a purpose another connection gave it")
+def test_partial_save_race_refused(opts):
+    from django.db import connection
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.fileman.models.manager import DuplicateUseError
+
+    use = "fm_dupuse_race_partial"
+    FileManager.objects.filter(name__startswith=PREFIX).delete()
+    a = _manager(opts, "partial_a", "")
+    a.save()
+    decided = threading.Event()
+    moved = threading.Event()
+    outcome = {}
+    check = a._needs_use_lock
+
+    def window(update_fields):
+        # Runs after A's save decided whether to lock, before anything else.
+        answer = check(update_fields)
+        decided.set()
+        moved.wait(LOCK_WAIT_TIMEOUT)
+        return answer
+
+    a._needs_use_lock = window
+
+    def partial_save():
+        try:
+            a.save(update_fields=["is_active"])
+            outcome["a"] = a.pk
+        except Exception as exc:
+            outcome["a"] = exc
+        finally:
+            decided.set()
+            connection.close()
+
+    thread = threading.Thread(target=partial_save)
+    try:
+        thread.start()
+        assert decided.wait(LOCK_WAIT_TIMEOUT), "A's partial save never reached its lock decision"
+        other = FileManager.objects.get(pk=a.pk)
+        other.use = use
+        other.is_active = False
+        other.save()
+        _manager(opts, "partial_b", use).save()
+        moved.set()
+        thread.join(JOIN_TIMEOUT)
+        assert not thread.is_alive(), "A's partial save never finished"
+        assert isinstance(outcome.get("a"), DuplicateUseError), (
+            f"A's partial save must be refused with DuplicateUseError, got {outcome.get('a')!r}")
+        names = _active(opts, use)
+        assert names == [f"{PREFIX}partial_b"], f"exactly one active manager, B's, must remain, got {names}"
+    finally:
+        moved.set()
         thread.join(JOIN_TIMEOUT)
         FileManager.objects.filter(name__startswith=PREFIX).delete()
