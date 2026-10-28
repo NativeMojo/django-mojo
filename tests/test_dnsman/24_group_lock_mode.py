@@ -36,8 +36,13 @@ def _chain(node):
             return list(reversed(names))
 
 
+def _parse(path):
+    with open(path) as handle:
+        return ast.parse(handle.read(), filename=path)
+
+
 def _group_for_update_calls(path):
-    tree = ast.parse(open(path).read(), filename=path)
+    tree = _parse(path)
     hits = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -49,7 +54,7 @@ def _group_for_update_calls(path):
 
 
 def _lock_rows_calls(path):
-    tree = ast.parse(open(path).read(), filename=path)
+    tree = _parse(path)
     return sum(1 for node in ast.walk(tree)
                if isinstance(node, ast.Call) and _chain(node)[-2:] == ["group_hierarchy", "lock_rows"])
 
