@@ -263,6 +263,22 @@ Dynamic resolution (`resolve_file=True`, the default) calls `file.get_direct_dow
 
 Snapshot mode (`resolve_file=False`) captures the URL once at creation — useful when the URL is stable and presigning is not required.
 
+`shorten()` itself checks nothing: the caller decides who may share the file.
+
+### Quick create route
+
+`POST /api/shortlink/link/create` accepts a `file` id. It resolves it with
+`mojo.apps.shortlink.services.access.shareable_file(request, raw_id)`, which
+returns the active `File` only when
+`File.rest_check_permission(request, "SAVE_PERMS", file)` allows it — the
+permission fileman's own `share` action needs (owner, `manage_files`, `files`),
+checked against the file's group, with the API-key and group-token tenant
+bounds. It restores `request.group` afterwards, so the link is stored in the
+caller's group. Every failure (missing, malformed, inactive, refused) raises the
+same `PermissionDeniedException` (403, branch `shortlink.file_unavailable`).
+The link's `user` is `_resolve_stamp_actor(request)`: the key's linked member,
+or none for an unlinked API key.
+
 ---
 
 ## Click Tracking
