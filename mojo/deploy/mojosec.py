@@ -26,14 +26,7 @@ from mojo.mojosec.config import CANONICAL_CONFIG_PATH
 
 
 SERVICE = "mojosec.service"
-PROC_IDENTITY_SERVICE = "mojosec-proc-identity.service"
-PROC_IDENTITY_SOCKET = "mojosec-proc-identity.socket"
-PROVENANCE_CAPABILITY = 1
 SERVICE_PATH = "/etc/systemd/system/mojosec.service"
-PROC_IDENTITY_SERVICE_PATH = "/etc/systemd/system/mojosec-proc-identity.service"
-PROC_IDENTITY_SOCKET_PATH = "/etc/systemd/system/mojosec-proc-identity.socket"
-PTRACE_SCOPE_PATH = "/proc/sys/kernel/yama/ptrace_scope"
-PTRACE_SYSCTL_PATH = "/etc/sysctl.d/90-mojosec-ptrace.conf"
 CONFIG_PATH = CANONICAL_CONFIG_PATH
 DESIRED_CONFIG_PATH = "/opt/api/var/mojosec.json"
 ENROLLMENT_PATH = "/etc/mojosec/enrollment.json"
@@ -48,9 +41,6 @@ RECEIVER_SNIPPET_PATH = "/etc/nginx/snippets/mojosec_receiver.conf"
 LOGROTATE_PATH = "/etc/logrotate.d/mojosec"
 DEPLOY_STATE_PATH = "/etc/mojosec/deploy.json"
 DEGRADED_PATH = "/etc/mojosec/deploy-degraded.json"
-AUDIT_HEALTH_SERVICE_PATH = "/etc/systemd/system/mojosec-audit-health.service"
-AUDIT_HEALTH_TIMER_PATH = "/etc/systemd/system/mojosec-audit-health.timer"
-AUDIT_STABLE_HELPER_PATH = "/usr/local/lib/mojosec/mojosec_audit.py"
 DJANGO_INCLUDE_PATH = "/etc/nginx/django.inc"
 DJANGO_RECEIVER_INCLUDE = "include /etc/nginx/snippets/mojosec_receiver.conf;"
 DJANGO_RECEIVER_COMMENT = "# MojoSec exact receiver cap"
@@ -75,15 +65,27 @@ DEFAULT_FIM_ROOTS = (
     "/etc", "/usr", "/usr/local", "/boot", "/var/lib/cloud", "/var/spool",
 ) + HOME_BIND_PATHS
 EDGE_LOG_DIR = "/opt/api/var/edge/log"
-# Exact historical prerelease name only. Legacy OSSEC/Wazuh units are not on
-# this list and are intentionally left alone.
-RETIRED_UNITS = ("mojosec-agent.service",)
+# Exact names only: the historical prerelease agent, then the retired
+# process-identity resolver and Audit health timer. Legacy OSSEC/Wazuh units
+# are not on this list and are intentionally left alone.
+RETIRED_UNITS = (
+    "mojosec-agent.service",
+    "mojosec-proc-identity.socket", "mojosec-proc-identity.service",
+    "mojosec-audit-health.timer", "mojosec-audit-health.service",
+)
+# Files the retired Audit health publisher left. The managed ptrace sysctl
+# file is deliberately not here: it only ever raised Yama to >= 1, and
+# removing it would revert the kernel to the distro default at next boot.
+RETIRED_FILES = (
+    "/usr/local/lib/mojosec/mojosec_audit.py",
+    "/run/mojosec/audit-health.json",
+)
 
 UNIT_TEXT = """[Unit]
 Description=MojoSec host security sensor
 Documentation=https://django-mojo.readthedocs.io/
-After=network-online.target nginx.service mojosec-proc-identity.socket
-Wants=network-online.target mojosec-proc-identity.socket
+After=network-online.target nginx.service
+Wants=network-online.target
 ConditionPathExists=/etc/mojosec/config.json
 
 [Service]
@@ -130,66 +132,6 @@ StateDirectoryMode=0700
 WantedBy=multi-user.target
 """
 
-PROC_IDENTITY_SOCKET_TEXT = """[Unit]
-Description=MojoSec process identity socket
-
-[Socket]
-ListenStream=/run/mojosec-proc-identity.sock
-SocketMode=0600
-SocketUser=root
-SocketGroup=root
-RemoveOnStop=true
-Service=mojosec-proc-identity.service
-
-[Install]
-WantedBy=sockets.target
-"""
-
-PROC_IDENTITY_SERVICE_TEXT = """[Unit]
-Description=MojoSec unprivileged process identity resolver
-Requires=mojosec-proc-identity.socket
-After=mojosec-proc-identity.socket
-PartOf=mojosec.service
-
-[Service]
-Type=simple
-User=ec2-user
-Group=ec2-user
-UMask=0077
-Environment=PYTHONHOME=
-Environment=PYTHONPATH=
-Environment=PYTHONUSERBASE=
-Environment=PYTHONSTARTUP=
-Environment=PYTHONINSPECT=
-WorkingDirectory=/
-ExecCondition=/bin/sh -c 'v=$$(/bin/cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null) && [ "$$v" -ge 1 ]'
-ExecStart=/usr/bin/python3 -E -P -m mojo.mojosec.proc_identity
-Restart=on-failure
-RestartSec=5s
-NoNewPrivileges=true
-PrivateTmp=true
-PrivateDevices=true
-PrivateNetwork=true
-ProtectHome=true
-ProtectSystem=strict
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-ProtectClock=true
-ProtectHostname=true
-ProtectProc=invisible
-ProcSubset=all
-RestrictSUIDSGID=true
-LockPersonality=true
-RestrictRealtime=true
-RestrictNamespaces=true
-SystemCallArchitectures=native
-RestrictAddressFamilies=AF_UNIX
-CapabilityBoundingSet=
-AmbientCapabilities=
-"""
-
 LOGROTATE_TEXT = """/var/log/nginx/mojosec.json.log {
     daily
     maxsize 50M
@@ -210,39 +152,6 @@ from mojo.deploy.firewall_deploy import BROKER_WRAPPER_TEXT
 PUBLISH_BROKER_WRAPPER_TEXT = """#!/bin/sh
 exec /usr/bin/python3 -E -P -m mojo.deploy.publish_broker
 """
-
-AUDIT_HEALTH_SERVICE_TEXT = """[Unit]
-Description=Publish constrained MojoSec Linux Audit health
-After=auditd.service
-
-[Service]
-Type=oneshot
-User=root
-Group=root
-UMask=0077
-ExecStart=/usr/bin/python3 -E -P -m mojo.deploy.audit publish-health --generation {generation} --rules-sha256 {rules_sha256}
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-CapabilityBoundingSet=CAP_AUDIT_CONTROL
-AmbientCapabilities=CAP_AUDIT_CONTROL
-ReadWritePaths=/run/mojosec
-"""
-
-AUDIT_HEALTH_TIMER_TEXT = """[Unit]
-Description=Refresh MojoSec Linux Audit health
-
-[Timer]
-OnBootSec=5s
-OnUnitActiveSec=5s
-AccuracySec=1s
-Unit=mojosec-audit-health.service
-
-[Install]
-WantedBy=timers.target
-"""
-
 
 class DeployError(RuntimeError):
     pass
@@ -303,87 +212,6 @@ def _run(argv):
         detail = (done.stderr or done.stdout).strip()[:500]
         raise DeployError(f"{' '.join(argv)} failed ({done.returncode}): {detail}")
     return done.stdout.strip()
-
-
-def _read_ptrace_scope(path=PTRACE_SCOPE_PATH):
-    try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except OSError as err:
-        raise DeployError(f"cannot read kernel ptrace protection: {err}") from err
-    try:
-        info = os.fstat(descriptor)
-        payload = os.read(descriptor, 32)
-    finally:
-        os.close(descriptor)
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0:
-        raise DeployError("kernel ptrace protection is not root-owned regular state")
-    try:
-        value = int(payload.decode("ascii", errors="strict").strip())
-    except (UnicodeError, ValueError) as err:
-        raise DeployError("kernel ptrace protection is invalid") from err
-    if value not in (0, 1, 2, 3):
-        raise DeployError("kernel ptrace protection is outside the supported range")
-    return value
-
-
-def _ptrace_sysctl_text(value):
-    if value not in (1, 2, 3):
-        raise DeployError("managed ptrace protection must be between 1 and 3")
-    return f"# Managed by django-mojo; required by the MojoSec identity resolver.\n" \
-           f"kernel.yama.ptrace_scope = {value}\n"
-
-
-def _write_ptrace_scope(path, text, mode):
-    """Atomically replace content or metadata drift at the managed sysctl path."""
-    if path != PTRACE_SYSCTL_PATH or mode != 0o644:
-        raise DeployError("ptrace protection writer received an unsupported target")
-    payload = text.encode("utf-8")
-    try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except FileNotFoundError:
-        current = None
-        info = None
-    except OSError as err:
-        raise DeployError(f"cannot safely read {path}: {err}") from err
-    else:
-        try:
-            info = os.fstat(descriptor)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0:
-                raise DeployError(f"existing {path} is not a root-owned regular file")
-            current = os.read(descriptor, len(payload) + 1)
-        finally:
-            os.close(descriptor)
-    if (info is not None and info.st_gid == 0 and
-            stat.S_IMODE(info.st_mode) == mode and info.st_size == len(payload) and
-            current == payload):
-        return False
-    _atomic_write(path, payload, mode)
-    return True
-
-
-def _converge_ptrace_scope(prior=None, reader=None, writer=None, runner=None):
-    """Persist at least Yama restricted-ptrace without lowering stronger policy."""
-    reader = reader or _read_ptrace_scope
-    writer = writer or _write_ptrace_scope
-    runner = runner or _run
-    if prior is None:
-        prior = reader()
-    target = max(1, prior)
-    changed = writer(PTRACE_SYSCTL_PATH, _ptrace_sysctl_text(target), 0o644)
-    if prior < 1:
-        runner(["/usr/sbin/sysctl", "-w", f"kernel.yama.ptrace_scope={target}"])
-    current = reader()
-    if current < 1:
-        raise DeployError("kernel.yama.ptrace_scope did not reach the required value")
-    if current != target:
-        changed |= writer(PTRACE_SYSCTL_PATH, _ptrace_sysctl_text(current), 0o644)
-    return changed, prior, current
-
-
-def _restore_ptrace_scope(snapshot, prior):
-    _restore_snapshot(PTRACE_SYSCTL_PATH, snapshot)
-    if prior is not None and _read_ptrace_scope() != prior:
-        _run(["/usr/sbin/sysctl", "-w", f"kernel.yama.ptrace_scope={prior}"])
 
 
 def _lstat_regular(path, owner_uid=0, mode=None):
@@ -1101,41 +929,6 @@ def _restore_unit_set(service_path, unit_snapshot, service_state,
             _systemctl("stop", name)
 
 
-def _proc_identity_unit_snapshot():
-    return {
-        PROC_IDENTITY_SERVICE: {
-            "path": PROC_IDENTITY_SERVICE_PATH,
-            "file": _owned_snapshot(PROC_IDENTITY_SERVICE_PATH),
-            "enabled": _systemctl_is("is-enabled", PROC_IDENTITY_SERVICE),
-            "active": _systemctl_is("is-active", PROC_IDENTITY_SERVICE),
-        },
-        PROC_IDENTITY_SOCKET: {
-            "path": PROC_IDENTITY_SOCKET_PATH,
-            "file": _owned_snapshot(PROC_IDENTITY_SOCKET_PATH),
-            "enabled": _systemctl_is("is-enabled", PROC_IDENTITY_SOCKET),
-            "active": _systemctl_is("is-active", PROC_IDENTITY_SOCKET),
-        },
-    }
-
-
-def _restore_proc_identity_units(snapshot):
-    if snapshot is None:
-        return
-    _systemctl("disable", "--now", PROC_IDENTITY_SOCKET)
-    _systemctl("stop", PROC_IDENTITY_SERVICE)
-    for prior in snapshot.values():
-        _restore_snapshot(prior["path"], prior["file"])
-    _systemctl("daemon-reload")
-    socket_state = snapshot[PROC_IDENTITY_SOCKET]
-    if socket_state["enabled"]:
-        _systemctl("enable", PROC_IDENTITY_SOCKET)
-    if socket_state["active"]:
-        _systemctl("start", PROC_IDENTITY_SOCKET)
-    service_state = snapshot[PROC_IDENTITY_SERVICE]
-    if service_state["active"]:
-        _systemctl("start", PROC_IDENTITY_SERVICE)
-
-
 def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
              service_path=SERVICE_PATH, nginx_path=NGINX_FRAGMENT_PATH,
              receiver_snippet_path=RECEIVER_SNIPPET_PATH,
@@ -1149,20 +942,12 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         raise DeployError("trusted proxy CIDRs are protected by root enrollment")
     project_path = _normal_path(project_path, "MojoSec project path")
     unit_snapshot = service_state = retired_snapshot = None
-    proc_identity_snapshot = None
-    ptrace_scope_snapshot = None
-    ptrace_scope_prior = None
-    ptrace_scope_value = None
     nginx_snapshot = deploy_state_snapshot = config_snapshot = None
     broker_snapshots = {}
     audit_state_snapshot = None
     audit_converged = False
     audit_prior_restored = False
     unit_changed = nginx_changed = config_changed = retired_changed = False
-    proc_identity_service_changed = proc_identity_socket_changed = False
-    proc_identity_changed = False
-    ptrace_scope_changed = False
-    ptrace_scope_started = False
     mutation_started = False
     prepared = None
     try:
@@ -1188,8 +973,6 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         _require_root_install_dir(os.path.dirname(receiver_snippet_path), create=True)
         _require_root_install_dir(os.path.dirname(LOGROTATE_PATH))
         _require_root_install_dir(os.path.dirname(django_include_path))
-        if service_path == SERVICE_PATH:
-            _require_root_install_dir(os.path.dirname(PTRACE_SYSCTL_PATH))
         unit_snapshot = _owned_snapshot(service_path)
         deploy_state_snapshot = _owned_snapshot(DEPLOY_STATE_PATH)
         config_snapshot = _owned_snapshot(CONFIG_PATH)
@@ -1201,9 +984,8 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             unit_snapshot is not None or service_state["enabled"] or
             service_state["active"])
         retired_snapshot = _retired_unit_snapshot()
-        if service_path == SERVICE_PATH:
-            proc_identity_snapshot = _proc_identity_unit_snapshot()
-            ptrace_scope_snapshot = _owned_snapshot(PTRACE_SYSCTL_PATH)
+        for path in RETIRED_FILES:
+            broker_snapshots[path] = _owned_snapshot(path)
         nginx_paths = (nginx_path, receiver_snippet_path, LOGROTATE_PATH,
                        django_include_path)
         nginx_plane = prepared[2]["nginx_plane"] if prepared is not None else "standard"
@@ -1214,18 +996,14 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             nginx_paths, DEFAULT_LOG_PATH, inspect_log=mode == "observe")
         mutation_started = True
         if mode == "off":
-            # Quiesce the only writer before converting proof candidates. The
-            # outer unit rollback restores the exact prior lifecycle on any
-            # later refusal or failure.
+            # Quiesce the only writer first. The outer unit rollback restores
+            # the exact prior lifecycle on any later refusal or failure.
             _systemctl("stop", SERVICE)
             if _systemctl_is("is-active", SERVICE):
-                raise DeployError("cannot quiesce MojoSec before mode-off flush")
-            from mojo.deploy import audit as audit_deploy
-            try:
-                audit_deploy.flush_pending_firewall()
-            except (audit_deploy.AuditError, OSError, ValueError) as err:
-                raise DeployError(f"cannot preserve pending MojoSec evidence: {err}") from err
+                raise DeployError("cannot quiesce MojoSec before mode off")
         retired_changed = _retire_stale_units(retired_snapshot)
+        for path in RETIRED_FILES:
+            retired_changed |= _remove_owned(path)
         if prepared is not None:
             config_changed = _write_if_changed(
                 CONFIG_PATH, prepared[1].decode("utf-8"), 0o600)
@@ -1248,9 +1026,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                 raise DeployError("ec2-user identity differs from protected MojoSec config")
             app_uid = app_account.pw_uid
             audit_state_snapshot = _owned_snapshot(audit_deploy.STATE_PATH)
-            for path in (PUBLISH_BROKER_PATH,
-                         PUBLISH_SUDOERS_PATH, AUDIT_HEALTH_SERVICE_PATH,
-                         AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH):
+            for path in (PUBLISH_BROKER_PATH, PUBLISH_SUDOERS_PATH):
                 broker_snapshots[path] = _owned_snapshot(path)
             try:
                 audit_state = audit_deploy.converge(app_uid)
@@ -1276,26 +1052,6 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             else:
                 for path in (PUBLISH_BROKER_PATH, PUBLISH_SUDOERS_PATH):
                     broker_changed |= _remove_owned(path)
-            health_service = AUDIT_HEALTH_SERVICE_TEXT.format(**audit_state)
-            broker_changed |= _write_if_changed(
-                AUDIT_HEALTH_SERVICE_PATH, health_service, 0o644)
-            broker_changed |= _write_if_changed(
-                AUDIT_HEALTH_TIMER_PATH, AUDIT_HEALTH_TIMER_TEXT, 0o644)
-            _require_root_install_dir(os.path.dirname(AUDIT_STABLE_HELPER_PATH), create=True)
-            with open(audit_deploy.__file__, encoding="utf-8") as handle:
-                broker_changed |= _write_if_changed(
-                    AUDIT_STABLE_HELPER_PATH, handle.read(), 0o755)
-        if mode == "observe" and service_path == SERVICE_PATH:
-            ptrace_scope_prior = _read_ptrace_scope()
-            ptrace_scope_started = True
-            (ptrace_scope_changed, ptrace_scope_prior,
-             ptrace_scope_value) = _converge_ptrace_scope(prior=ptrace_scope_prior)
-            proc_identity_service_changed |= _write_if_changed(
-                PROC_IDENTITY_SERVICE_PATH, PROC_IDENTITY_SERVICE_TEXT, 0o644)
-            proc_identity_socket_changed |= _write_if_changed(
-                PROC_IDENTITY_SOCKET_PATH, PROC_IDENTITY_SOCKET_TEXT, 0o644)
-            proc_identity_changed = (
-                proc_identity_service_changed or proc_identity_socket_changed)
         unit_changed = _write_if_changed(service_path, UNIT_TEXT, 0o644)
         edge_log_changed = False
         if mode == "observe" and nginx_plane == "edge":
@@ -1308,7 +1064,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         nginx_changed |= edge_log_changed
         if mode == "observe":
             _audit_active_nginx(runtime_log_path, proxy_cidrs)
-        if unit_changed or retired_changed or broker_changed or proc_identity_changed:
+        if unit_changed or retired_changed or broker_changed:
             _systemctl("daemon-reload")
         if mode == "off":
             _systemctl("disable", SERVICE)
@@ -1320,12 +1076,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                 BROKER_PATH as PUBLISH_BROKER_PATH,
                 SUDOERS_PATH as PUBLISH_SUDOERS_PATH,
             )
-            feature_paths = (
-                PUBLISH_BROKER_PATH,
-                PUBLISH_SUDOERS_PATH, AUDIT_HEALTH_SERVICE_PATH,
-                AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH,
-                audit_deploy.HEALTH_PATH,
-            )
+            feature_paths = (PUBLISH_BROKER_PATH, PUBLISH_SUDOERS_PATH)
             audit_state_snapshot = _owned_snapshot(audit_deploy.STATE_PATH)
             managed_policy = _owned_snapshot(audit_deploy.MANAGED_PATH)
             if audit_state_snapshot is None and managed_policy is not None:
@@ -1336,37 +1087,10 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             if audit_state_snapshot is not None:
                 audit_deploy.restore_prior()
                 audit_prior_restored = True
-            _systemctl("disable", "--now", "mojosec-audit-health.timer")
-            if (_systemctl_is("is-enabled", "mojosec-audit-health.timer") or
-                    _systemctl_is("is-active", "mojosec-audit-health.timer")):
-                raise DeployError("MojoSec off convergence left Audit health timer active")
             for path in feature_paths:
                 broker_changed |= _remove_owned(path)
-            if service_path == SERVICE_PATH:
-                _systemctl("disable", "--now", PROC_IDENTITY_SOCKET)
-                _systemctl("stop", PROC_IDENTITY_SERVICE)
-                if (_systemctl_is("is-enabled", PROC_IDENTITY_SOCKET) or
-                        _systemctl_is("is-active", PROC_IDENTITY_SOCKET) or
-                        _systemctl_is("is-active", PROC_IDENTITY_SERVICE)):
-                    raise DeployError(
-                        "MojoSec off convergence left process identity resolver active")
-                for path in (PROC_IDENTITY_SERVICE_PATH, PROC_IDENTITY_SOCKET_PATH):
-                    proc_identity_changed |= _remove_owned(path)
-                ptrace_scope_started = True
-                ptrace_scope_changed |= _remove_owned(PTRACE_SYSCTL_PATH)
             _systemctl("daemon-reload")
         else:
-            _systemctl("enable", "--now", "mojosec-audit-health.timer")
-            if service_path == SERVICE_PATH:
-                _systemctl("enable", "--now", PROC_IDENTITY_SOCKET)
-                if proc_identity_changed:
-                    _systemctl("stop", PROC_IDENTITY_SERVICE)
-                if proc_identity_socket_changed:
-                    _systemctl("restart", PROC_IDENTITY_SOCKET)
-                if (not _systemctl_is("is-enabled", PROC_IDENTITY_SOCKET) or
-                        not _systemctl_is("is-active", PROC_IDENTITY_SOCKET)):
-                    raise DeployError(
-                        "MojoSec process identity socket did not enable and start")
             _systemctl("enable", "--now", SERVICE)
             if unit_changed or config_changed:
                 _systemctl("restart", SERVICE)
@@ -1402,8 +1126,6 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             state["audit_rules_sha256"] = audit_state["rules_sha256"]
             state["content_roots"] = list(prepared[2].get("fim_content_roots", []))
             state["publish_broker"] = bool(state["content_roots"])
-            if ptrace_scope_value is not None:
-                state["ptrace_scope"] = ptrace_scope_value
             if content_digest:
                 state["content_graph_digest"] = content_digest
         _write_if_changed(DEPLOY_STATE_PATH,
@@ -1411,7 +1133,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                           0o600)
         _clear_degraded()
         return {"changed": unit_changed or nginx_changed or config_changed or retired_changed or
-                           broker_changed or proc_identity_changed or ptrace_scope_changed,
+                           broker_changed,
                 **state}
     except (DeployError, OSError, ValueError) as err:
         rollback_errors = []
@@ -1430,15 +1152,6 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                     _systemctl("daemon-reload")
                 except (DeployError, OSError, ValueError, RuntimeError) as rollback_error:
                     rollback_errors.append(f"Audit/broker: {rollback_error}")
-            try:
-                _restore_proc_identity_units(proc_identity_snapshot)
-            except (DeployError, OSError, ValueError, RuntimeError) as rollback_error:
-                rollback_errors.append(f"process identity: {rollback_error}")
-            if ptrace_scope_started:
-                try:
-                    _restore_ptrace_scope(ptrace_scope_snapshot, ptrace_scope_prior)
-                except (DeployError, OSError, ValueError, RuntimeError) as rollback_error:
-                    rollback_errors.append(f"ptrace protection: {rollback_error}")
             try:
                 _restore_snapshot(CONFIG_PATH, config_snapshot)
             except (DeployError, OSError) as rollback_error:
@@ -1576,15 +1289,16 @@ def _journalable_converge_paths():
         SUDOERS_PATH as PUBLISH_SUDOERS_PATH,
     )
 
+    unit_dir = os.path.dirname(SERVICE_PATH)
     return [
-        SERVICE_PATH, PROC_IDENTITY_SERVICE_PATH, PROC_IDENTITY_SOCKET_PATH,
-        PTRACE_SYSCTL_PATH,
+        SERVICE_PATH,
         NGINX_FRAGMENT_PATH, RECEIVER_SNIPPET_PATH,
-        DJANGO_INCLUDE_PATH, LOGROTATE_PATH, AUDIT_HEALTH_SERVICE_PATH,
-        AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH,
+        DJANGO_INCLUDE_PATH, LOGROTATE_PATH,
         audit_deploy.MANAGED_PATH, audit_deploy.GENERATED_PATH,
         PUBLISH_BROKER_PATH, PUBLISH_SUDOERS_PATH,
-        "/etc/systemd/system/mojosec-agent.service",
+        *(os.path.join(unit_dir, name) for name in RETIRED_UNITS),
+        # /run/mojosec is converge-owned runtime state, not a FIM target.
+        *(path for path in RETIRED_FILES if not path.startswith(STATUS_DIR + "/")),
     ]
 
 

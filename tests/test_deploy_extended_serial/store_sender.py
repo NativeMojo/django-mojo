@@ -1,8 +1,8 @@
 """Moved from tests/test_mojosec/store_sender.py (maestro #2558).
 
 These tests mock production module attributes process-globally
-(`mojo.mojosec.store.diagnostic_override` / `select_health_fields` and
-`mojo.deploy.audit.read_health`) — unsafe under the parallel default tier.
+(`mojo.mojosec.store.diagnostic_override`) — unsafe under the parallel
+default tier.
 The store/sender spool, aggregation, FIM, and delivery contracts stay in the
 default-tier tests/test_mojosec/store_sender.py.
 """

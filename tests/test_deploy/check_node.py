@@ -74,38 +74,6 @@ def _mojosec_systemd_show(dropins=""):
     return "\n".join(f"{key}={value}" for key, value in values.items())
 
 
-def _proc_identity_systemd_show(dropins=""):
-    values = {
-        "User": "ec2-user", "Group": "ec2-user", "UMask": "0077",
-        "WorkingDirectory": "/",
-        "FragmentPath": "/etc/systemd/system/mojosec-proc-identity.service",
-        "DropInPaths": dropins, "PartOf": "mojosec.service",
-        "NoNewPrivileges": "yes", "PrivateTmp": "yes",
-        "PrivateDevices": "yes", "PrivateNetwork": "yes", "ProtectHome": "yes",
-        "ProtectSystem": "strict", "ProtectKernelTunables": "yes",
-        "ProtectKernelModules": "yes", "ProtectKernelLogs": "yes",
-        "ProtectControlGroups": "yes", "ProtectClock": "yes",
-        "ProtectHostname": "yes", "ProtectProc": "invisible", "ProcSubset": "all",
-        "RestrictSUIDSGID": "yes",
-        "LockPersonality": "yes", "RestrictRealtime": "yes",
-        "RestrictNamespaces": "yes", "RestrictAddressFamilies": "AF_UNIX",
-        "CapabilityBoundingSet": "", "AmbientCapabilities": "",
-    }
-    return "\n".join(f"{key}={value}" for key, value in values.items())
-
-
-def _proc_identity_socket_show(dropins=""):
-    values = {
-        "FragmentPath": "/etc/systemd/system/mojosec-proc-identity.socket",
-        "DropInPaths": dropins,
-        "Listen": "/run/mojosec-proc-identity.sock (Stream)",
-        "Triggers": "mojosec-proc-identity.service",
-        "SocketMode": "0600",
-        "SocketUser": "root", "SocketGroup": "root",
-    }
-    return "\n".join(f"{key}={value}" for key, value in values.items())
-
-
 # ---------------------------------------------------------------------------
 # compare-state grading
 # ---------------------------------------------------------------------------
@@ -235,18 +203,10 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
         ("/etc/mojosec/credential", (0, metadata, "")),
         ("/var/lib/mojosec", (0, "root root 700", "")),
         ("/etc/systemd/system/mojosec.service", (0, "root root 644", "")),
-        ("/etc/systemd/system/mojosec-proc-identity", (0, "root root 644", "")),
         ("/etc/mojosec/expected_changes.json", (1, "", "")),
         ("is-active mojosec", (0, "active", "")),
         ("is-enabled mojosec", (0, "enabled", "")),
         ("systemctl show mojosec.service", (0, _mojosec_systemd_show(), "")),
-        ("systemctl show mojosec-proc-identity.service",
-         (0, _proc_identity_systemd_show(), "")),
-        ("systemctl show mojosec-proc-identity.socket",
-         (0, _proc_identity_socket_show(), "")),
-        ("/run/mojosec-proc-identity.sock", (0, "root root 600", "")),
-        ("/proc/sys/kernel/yama/ptrace_scope", (0, "1", "")),
-        ("PTRACE_SYSCTL_PATH", (0, "1", "")),
         ("python3 -c", (0, status, "")),
         ("/run/mojosec/status.json", (0, "root root 640", "")),
         ("nginx -T", (0, "log_format mojosec_v1 escape=json\n"
@@ -267,18 +227,11 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
                  f"active+enabled observe service must pass: {statuses}")
     th.assert_eq(statuses.get("public status"), cn.PASS,
                  f"bounded public status must be inspectable: {statuses}")
-    th.assert_eq(statuses.get("process identity helper socket"), cn.PASS,
-                 f"the root-only helper socket must be enabled and active: {statuses}")
-    th.assert_eq(statuses.get("process identity socket permissions"), cn.PASS,
-                 f"the live helper socket must remain root-owned 0600: {statuses}")
-    th.assert_eq(statuses.get("process identity helper sandbox"), cn.PASS,
-                 f"the helper must run unprivileged without capabilities or IP: {statuses}")
-    th.assert_eq(statuses.get("process identity socket unit"), cn.PASS,
-                 f"the effective listener must reject drop-ins and target drift: {statuses}")
-    th.assert_eq(statuses.get("same-UID ptrace protection"), cn.PASS,
-                 f"the kernel must protect the helper before Python starts: {statuses}")
-    th.assert_eq(statuses.get("managed ptrace protection"), cn.PASS,
-                 f"the persistent policy must preserve the live protected value: {statuses}")
+    th.assert_eq(statuses.get("retired provenance assets absent"), cn.PASS,
+                 f"a converged node carries no resolver or Audit health asset: {statuses}")
+    th.assert_true(not any(name.startswith("process identity") or "ptrace" in name
+                           for name in statuses),
+                   f"the retired resolver and ptrace checks must be gone: {statuses}")
     th.assert_eq(statuses.get("security log archives"), cn.PASS,
                  f"root-only rotated evidence must pass: {statuses}")
     th.assert_true(any("mojosec.json.log.*" in command for command in run.commands),
@@ -368,9 +321,31 @@ def test_mojosec_local_only_status_shape_is_fail_closed(opts):
 
 
 @th.django_unit_test()
-def test_mojosec_node_checks_read_the_shared_deploy_state(opts):
+def test_mojosec_retired_provenance_assets_are_graded_absent(opts):
     from mojo.deploy import check_node as cn
 
+    report = cn.Report()
+    # Each probe is one shell command that exits 0 only when nothing remains.
+    run = FakeRunner([("is-active --quiet", (0, "", "")), ("test ! -e", (0, "", ""))])
+    cn.check_retired_provenance_assets(report, run, "")
+    th.assert_eq(_statuses(report, "mojosec").get("retired provenance assets absent"),
+                 cn.PASS, f"no retired unit, file or socket must pass: {report.findings}")
+    probed = " ".join(run.commands)
+    for name in ("mojosec-proc-identity.socket", "mojosec-proc-identity.service",
+                 "mojosec-audit-health.timer", "mojosec-audit-health.service",
+                 "/usr/local/lib/mojosec/mojosec_audit.py",
+                 "/run/mojosec/audit-health.json", "/run/mojosec-proc-identity.sock"):
+        th.assert_in(name, probed, f"the retired-assets check must probe {name}")
+    th.assert_true("90-mojosec-ptrace.conf" not in probed,
+                   "the unmanaged ptrace sysctl file is checked neither way")
+
+    for rules in ([("is-active --quiet", (1, "", "")), ("test ! -e", (0, "", ""))],
+                  [("is-active --quiet", (0, "", "")), ("test ! -e", (1, "", ""))]):
+        report = cn.Report()
+        cn.check_retired_provenance_assets(report, FakeRunner(rules), "")
+        finding = _find(report, "mojosec", "retired provenance assets remain")
+        th.assert_true(finding is not None and finding["status"] == cn.FAIL,
+                       f"a live retired unit or a leftover file must fail: {report.findings}")
     th.assert_eq(cn.MOJOSEC_DEPLOY_STATE_PATH, "/etc/mojosec/deploy.json",
                  "node checks must read the shared deployment-state path")
 
@@ -392,8 +367,8 @@ def test_mojosec_auto_mode_keeps_legacy_nodes_informational(opts):
                  f"an upgraded legacy node with no enabled sensor must not fail: {failures}")
     th.assert_true(_find(report, "mojosec", "auto-derived mode: off") is not None,
                    "auto mode must explain that it derived the legacy node as off")
-    th.assert_true(_find(report, "mojosec", "process identity helper retired") is not None,
-                   "off mode must prove the helper service, socket, and files are absent")
+    th.assert_true(_find(report, "mojosec", "retired provenance assets absent") is not None,
+                   "off mode must prove the retired resolver and Audit health assets are absent")
 
 
 @th.django_unit_test()
@@ -468,26 +443,26 @@ def test_mojosec_audit_hashes_raw_trailing_newline_and_normalizes_capabilities(o
     import hashlib
     from mojo.deploy import check_node as cn
 
-    raw = b"-a always,exit -k mojosec-root-exec\n-a always,exit -k mojosec-app-exec\n-a always,exit -k mojosec-sudo\n"
-    expected = json.dumps({"generation": "policy", "rules": hashlib.sha256(raw).hexdigest()})
-    common = [
-        ("/sbin/auditctl -s", (0, "enabled 1\nfailure 1\nrate_limit 0\nbacklog_limit 8192\nlost 0", "")),
-        ("/sbin/auditctl -l", (0, raw, "")),
-        ("audit_generation", (0, expected, "")),
-        ("sha256sum /etc/audit/rules.d/70-mojosec.rules", (0, "policy path", "")),
-        ("is-active mojosec-audit-health.timer", (0, "active", "")),
-    ]
-    for capability, grade in (("cap_audit_control\ncap_audit_control", cn.PASS),
-                              ("CAP_AUDIT_CONTROL", cn.PASS),
-                              ("cap_audit_control cap_sys_admin", cn.FAIL),
-                              ("cap_audit_control_fake", cn.FAIL)):
-        runner = FakeRunner(common + [("-p CapabilityBoundingSet -p AmbientCapabilities", (0, capability, ""))])
-        report = cn.Report()
-        cn.check_mojosec(report, runner, "observe", "")
-        assert _find(report, "mojosec", "active Audit provenance")["status"] == cn.PASS, "raw audit rules with trailing newline must match the authoritative digest"
-        assert _find(report, "mojosec", "Audit health publisher")["status"] == grade, "only exact case-insensitive capability tokens may pass"
+    def common(raw):
+        expected = json.dumps({"generation": "policy", "rules": hashlib.sha256(raw).hexdigest()})
+        return [
+            ("/sbin/auditctl -s", (0, "enabled 1\nfailure 1\nrate_limit 0\nbacklog_limit 8192\nlost 0", "")),
+            ("/sbin/auditctl -l", (0, raw, "")),
+            ("audit_generation", (0, expected, "")),
+            ("sha256sum /etc/audit/rules.d/70-mojosec.rules", (0, "policy path", "")),
+        ]
+
+    raw = b"-w /usr/bin/sudo -p x -k mojosec-sudo\n"
     report = cn.Report()
-    runner = FakeRunner([("/sbin/auditctl -l", (0, raw.rstrip(), ""))] + common)
+    cn.check_mojosec(report, FakeRunner(common(raw)), "observe", "")
+    assert _find(report, "mojosec", "active Audit provenance")["status"] == cn.PASS, "raw audit rules with trailing newline must match the authoritative digest"
+    assert _find(report, "mojosec", "Audit health publisher") is None, "the retired Audit health publisher must not be graded"
+    stale = b"-a always,exit -k mojosec-root-exec\n-a always,exit -k mojosec-app-exec\n" + raw
+    report = cn.Report()
+    cn.check_mojosec(report, FakeRunner(common(stale)), "observe", "")
+    assert _find(report, "mojosec", "active Audit provenance")["status"] == cn.FAIL, "a node still recording every exec has not converged"
+    report = cn.Report()
+    runner = FakeRunner([("/sbin/auditctl -l", (0, raw.rstrip(), ""))] + common(raw))
     cn.check_mojosec(report, runner, "observe", "")
     assert _find(report, "mojosec", "active Audit provenance")["status"] == cn.FAIL, "genuine byte drift must remain a failure"
 

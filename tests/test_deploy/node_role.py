@@ -387,12 +387,6 @@ def test_manifest_refuses_every_violation(opts):
             ("worker systemd/mojosec.service\n", "package-owned",
              "claiming the sensor for one role would disable and delete it "
              "on every other node, as a journaled trusted change"),
-            ("worker systemd/mojosec-audit-health.service\n", "package-owned",
-             "the audit-health service is the sensor's own unit, never a "
-             "role's to own"),
-            ("worker systemd/mojosec-audit-health.timer\n", "package-owned",
-             "the audit-health timer is the sensor's own unit, never a "
-             "role's to own"),
         )
         for text, fragment, why in cases:
             _write(path, text)
@@ -408,11 +402,7 @@ def test_refused_unit_names_track_the_units_mojosec_actually_installs(opts):
 
     from mojo.deploy import mojosec, node_role as nr
 
-    installed = {
-        os.path.basename(mojosec.SERVICE_PATH),
-        os.path.basename(mojosec.AUDIT_HEALTH_SERVICE_PATH),
-        os.path.basename(mojosec.AUDIT_HEALTH_TIMER_PATH),
-    }
+    installed = {os.path.basename(mojosec.SERVICE_PATH)}
     refused = set(nr.REFUSED_NAMES["systemd"])
     th.assert_true(
         installed <= refused,
