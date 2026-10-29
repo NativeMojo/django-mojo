@@ -205,6 +205,102 @@ def test_converge_lifecycle_is_an_exact_allowlist(opts):
 
 
 @th.django_unit_test()
+def test_retire_stale_units_retires_static_socket_activated_pairs(opts):
+    """Regression for the first 1.40.2 deploy (maestro #9769): a static unit
+    answers is-enabled with exit 0 while its file exists, and the still
+    listening socket re-activated its service, so the per-unit check raised
+    and converge rolled every retired unit back."""
+    from mojo.deploy import mojosec as deploy
+
+    units = {
+        "mojosec-agent.service": {"file": False, "state": "", "active": False},
+        "mojosec-proc-identity.socket": {"file": True, "state": "enabled", "active": True},
+        "mojosec-proc-identity.service": {"file": True, "state": "static", "active": True},
+        "mojosec-audit-health.timer": {"file": True, "state": "enabled", "active": True},
+        "mojosec-audit-health.service": {"file": True, "state": "static", "active": False},
+    }
+    events = []
+
+    def systemctl(*args):
+        events.append(("cmd",) + args)
+        if args[0] == "disable":
+            unit = units[args[-1]]
+            unit["active"] = False
+            if unit["state"] == "enabled":
+                unit["state"] = "disabled"
+            if args[-1].endswith(".service"):
+                socket = units.get(args[-1][:-len(".service")] + ".socket")
+                if socket and socket["active"]:
+                    # A listening socket re-activates the service it triggers.
+                    unit["active"] = True
+        elif args[0] == "daemon-reload":
+            for unit in units.values():
+                if not unit["file"]:
+                    unit["state"] = ""
+
+    def systemctl_is(verb, name):
+        events.append(("is", verb, name))
+        unit = units[name]
+        if verb == "is-enabled":
+            # The real exit code: static answers 0 for as long as the file exists.
+            return unit["state"] in ("enabled", "static")
+        return unit["active"]
+
+    def owned_snapshot(path):
+        return (b"[Unit]\n", 0o644) if units[os.path.basename(path)]["file"] else None
+
+    def unlink(path):
+        units[os.path.basename(path)]["file"] = False
+
+    th.assert_true(
+        deploy.RETIRED_UNITS.index("mojosec-proc-identity.socket") <
+        deploy.RETIRED_UNITS.index("mojosec-proc-identity.service"),
+        "the socket must be retired before the service it activates")
+    with mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
+            mock.patch.object(deploy, "_systemctl_is", side_effect=systemctl_is), \
+            mock.patch.object(deploy, "_unit_file_state",
+                              side_effect=lambda name: units[name]["state"]), \
+            mock.patch.object(deploy, "_owned_snapshot", side_effect=owned_snapshot), \
+            mock.patch.object(deploy.os, "unlink", side_effect=unlink):
+        snapshot = deploy._retired_unit_snapshot()
+        th.assert_true(snapshot["mojosec-proc-identity.service"]["enabled"],
+                       "the fixture must reproduce a static unit reading as enabled")
+        del events[:]
+        changed = deploy._retire_stale_units(snapshot)
+    th.assert_true(changed, "retiring installed units is a change")
+    for name, unit in units.items():
+        th.assert_true(not unit["file"] and not unit["active"] and unit["state"] == "",
+                       f"{name} must be stopped, unlinked and unknown to systemd: {unit}")
+    reload_at = events.index(("cmd", "daemon-reload"))
+    th.assert_true(all(event[0] == "cmd" for event in events[:reload_at]),
+                   f"no unit may be judged before the files are gone and systemd reloaded: {events}")
+    disables = [event[-1] for event in events if event[0] == "cmd" and event[1] == "disable"]
+    th.assert_eq(disables, [name for name in deploy.RETIRED_UNITS if units[name] is not None
+                            and name != "mojosec-agent.service"],
+                 "every present retired unit is disabled and stopped, in RETIRED_UNITS order")
+
+    # A unit that survives the sweep still fails the converge, after the sweep.
+    units["mojosec-audit-health.timer"].update(file=True, state="enabled", active=True)
+    stubborn = dict(units["mojosec-audit-health.timer"])
+
+    def stubborn_systemctl(*args):
+        systemctl(*args)
+        if args[0] == "disable" and args[-1] == "mojosec-audit-health.timer":
+            units["mojosec-audit-health.timer"].update(stubborn)
+
+    with mock.patch.object(deploy, "_systemctl", side_effect=stubborn_systemctl), \
+            mock.patch.object(deploy, "_systemctl_is", side_effect=systemctl_is), \
+            mock.patch.object(deploy, "_unit_file_state",
+                              side_effect=lambda name: units[name]["state"]), \
+            mock.patch.object(deploy, "_owned_snapshot", side_effect=owned_snapshot), \
+            mock.patch.object(deploy.os, "unlink", side_effect=lambda path: None):
+        with th.assert_raises(deploy.DeployError) as raised:
+            deploy._retire_stale_units(deploy._retired_unit_snapshot())
+    th.assert_in("mojosec-audit-health.timer", str(raised.exception),
+                 "a unit that will not stop must still fail the converge by name")
+
+
+@th.django_unit_test()
 def test_off_and_best_effort_preserve_evidence(opts):
     from mojo.deploy import mojosec as deploy
 

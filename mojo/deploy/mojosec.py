@@ -844,6 +844,23 @@ def _systemctl_is(verb, unit):
     return done.returncode == 0
 
 
+# `systemctl is-enabled` answers for a unit that is no longer installed. A unit
+# without an [Install] section (a socket-activated service, a oneshot behind a
+# timer) answers `static` with exit 0 for as long as its file exists, which is
+# why "is it enabled?" can only be asked after the file is gone and systemd
+# has reloaded. `masked` is an operator's choice and also counts as gone.
+RETIRED_UNIT_GONE_STATES = ("", "disabled", "not-found", "masked", "masked-runtime")
+
+
+def _unit_file_state(unit):
+    try:
+        done = subprocess.run(
+            ["systemctl", "is-enabled", unit], capture_output=True, text=True)
+    except OSError:
+        return ""
+    return done.stdout.strip().splitlines()[0].strip() if done.stdout.strip() else ""
+
+
 def _audit_active_nginx(log_path, proxy_cidrs):
     active = _run(["nginx", "-T"])
     required = (
@@ -886,17 +903,30 @@ def _retired_unit_snapshot():
 
 
 def _retire_stale_units(snapshot):
+    """Stop, disable and unlink every retired unit, then prove each is gone.
+
+    The proof runs once, after every file is unlinked and systemd has
+    reloaded: a static unit answers `is-enabled` with exit 0 while its file
+    exists, and a still-listening socket re-activates the service it
+    triggers, so checking each unit right after its own `disable --now` (as
+    the first 1.40.2 deploy did) failed on `mojosec-proc-identity.service`
+    and rolled the whole retirement back. RETIRED_UNITS lists each socket
+    before its service for the same reason.
+    """
     changed = False
     for name, prior in snapshot.items():
-        if prior["enabled"] or prior["active"]:
+        if prior["enabled"] or prior["active"] or prior["file"] is not None:
             _systemctl("disable", "--now", name)
             changed = True
-            if (_systemctl_is("is-enabled", name) or
-                    _systemctl_is("is-active", name)):
-                raise DeployError(f"retired unit did not stop and disable: {name}")
         if prior["file"] is not None:
             os.unlink(prior["path"])
             changed = True
+    if changed:
+        _systemctl("daemon-reload")
+    for name in snapshot:
+        if (_systemctl_is("is-active", name) or
+                _unit_file_state(name) not in RETIRED_UNIT_GONE_STATES):
+            raise DeployError(f"retired unit did not stop and disable: {name}")
     return changed
 
 
