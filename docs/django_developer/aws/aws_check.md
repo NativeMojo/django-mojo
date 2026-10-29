@@ -193,7 +193,13 @@ Two consequences for a cross-account manager:
 
 ## Cron deployment
 
-Run the dispatcher at least once per minute:
+On a deployed node the jobs scheduler process ticks the dispatcher
+(`cron.run_now()`) once a minute from a daemon thread — see
+[jobs/scheduled_tasks.md](../jobs/scheduled_tasks.md#who-ticks-the-scheduler-process-on-every-node).
+`cron.heartbeat_missing` therefore means the scheduler is not running (or
+`JOBS_SCHEDULER_CRON_TICK` is `False`): check `python3 -m mojo.deploy.jobman
+status`; the `3_mojo_jobs` cron entry starts it on the next minute. To run the
+dispatcher once by hand:
 
 ```bash
 python manage.py shell -c "from mojo.helpers import cron; cron.load_app_cron(); cron.run_now()"

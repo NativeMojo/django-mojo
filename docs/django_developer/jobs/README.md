@@ -265,6 +265,7 @@ looking at.
 | Mode | **foreground**, backgrounded by the caller | **daemon** |
 | Pidfiles | `<root>/var/pids/job_engine.pid` | `/tmp/job-engine-<runner_id>.pid` |
 | Started by | the every-minute `3_mojo_jobs` cron | an operator, by hand |
+| Ticks `@schedule` functions | yes — the scheduler calls `cron.run_now()` every minute | yes (same scheduler code; `JOBS_SCHEDULER_CRON_TICK`) |
 | Requires | nothing configured | Redis **and** Postgres, on every command including `status` |
 
 On a deployed node the cron runs the installed `mojo.deploy.jobman` module every

@@ -535,8 +535,11 @@ class AWSCheckRunner:
         latest = records[0] if records else None
         if not latest:
             self._add("cron", "fail", "cron.heartbeat_missing", "No django-mojo cron-dispatch heartbeat was found",
-                      remediation=("Run every minute: python manage.py shell -c \"from mojo.helpers import cron; "
-                                   "cron.load_app_cron(); cron.run_now()\""))
+                      remediation=("Start the jobs scheduler (python3 -m mojo.deploy.jobman status; the "
+                                   "3_mojo_jobs cron tick starts it) — it runs cron.run_now() every minute; "
+                                   "JOBS_SCHEDULER_CRON_TICK must not be False. One-off: python manage.py "
+                                   "shell -c \"from mojo.helpers import cron; cron.load_app_cron(); "
+                                   "cron.run_now()\""))
         else:
             observed = parse_datetime(latest.get("completed_at") or latest.get("started_at") or "")
             age = (self.now() - observed).total_seconds() if observed else max_age + 1

@@ -165,11 +165,47 @@ Notification failures are logged but do not affect the task result.
 
 ## Cron: dispatch_scheduled_tasks
 
+### Who ticks: the scheduler process, on every node
+
+Every node's jobs scheduler process (`bin/jobs.py scheduler`, started by the
+`3_mojo_jobs` cron entry through `jobman`) runs `cron.load_app_cron()` once at
+start and `cron.run_now()` from a daemon thread — **once immediately at
+start, then at every wall-clock minute boundary**. There is no per-minute
+cron.d entry any more: the old `2_mojo_cron` booted a full Django process on
+every node every minute (about 1.8 s of CPU and 117 MB on a small API node),
+and the deploy sweep removes it on the next deploy. The tick runs as the
+application account, where the cron.d entry ran as the web user.
+
+`JOBS_SCHEDULER_CRON_TICK = False` turns the tick off. With the cron.d entry
+retired that means **no `@schedule` function runs anywhere** unless the
+deployment runs its own external tick, so set it only for that pairing.
+
+Three things follow from hosting the tick in the scheduler:
+
+- **Every instance ticks, not just the leader.** The scheduler's leadership
+  lock decides who promotes delayed jobs; the cron tick ignores it, so the
+  fleet-once claims below and `per_node` keep exactly the meaning they had
+  under crond, and a node whose scheduler never wins the lock still ticks.
+- **A restart loses no minute.** A deploy stops the old scheduler after the
+  API probe passes; crond starts the replacement at the next minute, and its
+  start tick covers that minute a few seconds late. The claims make a tick
+  for a minute the previous scheduler already ran a no-op — except for a
+  `per_node=True` function, which runs twice in a restart minute (none of the
+  framework's functions are per-node). The one residual loss: a stop landing
+  inside the ~50 ms batch at the top of a minute skips the functions not yet
+  claimed that minute, the same exposure as config-sync's restart.
+- **A function still running when the scheduler is killed is lost for that
+  minute.** The ticker joins its thread for a bounded time at stop; `jobman`'s
+  recycle sends TERM, waits 2 s, then KILLs. The function's 120 s claim stands,
+  and the next minute is a new claim. A crond-spawned process had no such
+  window; a tick that overruns the next boundary skips that minute rather
+  than replaying it.
+
 ### Fleet-once: one node runs each function, not all of them
 
-Every node in a fleet installs the same per-minute cron entry, so without a
-guard each `@schedule` function would run once per node — concurrently, since
-the nodes tick within the same second.
+Every node's scheduler ticks the same minute, so without a guard each
+`@schedule` function would run once per node — concurrently, since the nodes
+tick within the same second.
 
 `run_now()` therefore **claims each matched function for its wall-clock
 minute** before running it:
@@ -211,10 +247,10 @@ Three properties worth knowing:
 
 Two consequences for anything that calls `run_now()` by hand:
 
-- Running it in the same minute as crond's tick **skips** the functions crond
-  already claimed. That is correct, and the heartbeat's `skipped` list shows
-  it. `aws-check`'s remediation command still works — if crond is dead, nobody
-  holds the claims.
+- Running it in the same minute as the scheduler's tick **skips** the
+  functions the scheduler already claimed. That is correct, and the
+  heartbeat's `skipped` list shows it. `aws-check`'s one-off command still
+  works — if no scheduler is running, nobody holds the claims.
 - A test or shell that calls `run_now()` repeatedly inside one minute against
   a real Redis will skip on the repeat. Pin it with the seams:
   `run_now(now=<a distinct minute>)` or `run_now(redis_client=<a stub>)`.
@@ -249,9 +285,10 @@ Audit the external dispatcher, jobs runners and scheduler together with:
 python manage.py aws-check --section cron --check
 ```
 
-The external scheduler should invoke
-`cron.load_app_cron(); cron.run_now()` at least once per minute; `aws-check`
-prints the exact shell command when no fresh heartbeat exists.
+The scheduler process ticks `cron.load_app_cron(); cron.run_now()` every
+minute; `cron.heartbeat_missing` means no scheduler is running (or
+`JOBS_SCHEDULER_CRON_TICK` is off), and `aws-check` prints the one-off shell
+command to run it by hand.
 
 ```python
 # mojo/apps/jobs/cronjobs.py

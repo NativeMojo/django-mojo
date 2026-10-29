@@ -99,13 +99,19 @@ The built-in `api` path:
    pid, mode and application, when another session has it. Every fixed
    advisory-lock namespace lives in `mojo/helpers/advisory_locks.py`; a new
    lock takes a new number there;
-3. renders and installs the project's nginx, cron, and systemd files;
+3. renders and installs the project's nginx, cron, and systemd files, then
+   removes stale project cron files (see "cron.d inventory" below);
 4. applies explicit removals from `aws/node_retired.conf`;
 5. runs the real `nginx -t`;
 6. restarts `mojo-asgi`, reloads nginx, and requires `PROBE_URL` to answer
-   exactly HTTP 200.
+   exactly HTTP 200;
+7. retires the running jobs scheduler (`jobman stop scheduler --grace 2`) so
+   the next `3_mojo_jobs` tick starts one from the new release — the scheduler
+   ticks `@schedule` functions, so the release is not live until it is
+   replaced. A scheduler that survives is a logged warning (`aws-check`
+   reports `cron.heartbeat_missing`), not a failed release.
 
-Those last two checks are the final acceptance gates. A failed required command
+The nginx and probe checks are the final acceptance gates. A failed required command
 earlier in the transaction, such as dependency installation, migration, static
 collection, rendering, or service restart, also rolls the candidate back.
 There is no TLS semantic parser, certificate-lineage preservation, node-role
@@ -113,6 +119,24 @@ authority, RPM verification, file-integrity gate, trusted-change journal,
 ownership policy, or request-service policy in the deployment path.
 Independent observability tools may report drift, but they cannot veto a
 release.
+
+### cron.d inventory
+
+The framework ships three cron.d templates — `1_certbot`, `3_mojo_jobs` and
+`4_certbot_sync` — rendered with the project's `aws/cron.d/` overlay into
+`var/deploy/cron.d`, which is the node's cron contract. `2_mojo_cron`, the
+per-minute `bin/cron.py --run` entry, was retired when the scheduler took over
+the tick; the sweep below removes it from existing nodes.
+
+**Any `/etc/cron.d` file that names the project path must be in that
+contract**, i.e. live in `aws/cron.d/`. Activation sweeps every regular file
+in `/etc/cron.d` that mentions `$PROJ_PATH` — the exact path followed by `/`,
+whitespace or end of line, so `/opt/api` never matches `/opt/api2` or
+`/opt/api-admin` — and is not in the rendered contract, snapshotting it first
+so `--rollback-candidate` and `--activate-previous` restore it. Symlinks are
+never swept. Files that do not mention the path are left alone;
+`aws/node_retired.conf` remains the way to remove those. `check_node
+--section cron` grades the same rule.
 
 ### Custom profiles
 
@@ -690,7 +714,9 @@ deployment itself does not call this tool.
 
 `python3 -m mojo.deploy.jobman` starts, stops, and reports the foreground job
 engine and scheduler. Cron is the normal start authority, not merely a
-backstop. Before an API deployment can commit, `jobman repair` runs as root,
+backstop. The scheduler it starts also ticks the project's `@schedule`
+functions every minute (`JOBS_SCHEDULER_CRON_TICK`), so every node needs its
+scheduler running even when the leadership lock is held elsewhere. Before an API deployment can commit, `jobman repair` runs as root,
 hands only Jobman's own files to the exact installed cron account, and runs a
 no-spawn `jobman preflight` through the same fixed system Python and installed
 module used by cron, as that account.

@@ -248,6 +248,7 @@ a per-checkout value. Leave it unset in production. See
 | `JOBS_XPENDING_IDLE_MS` | `60000` (1 min) | Reclaim jobs idle for this long |
 | `JOBS_RUNNER_HEARTBEAT_SEC` | `5` | Heartbeat interval for runner liveness detection |
 | `JOBS_SCHEDULER_LOCK_TTL_MS` | `5000` (5s) | Scheduler leadership lock TTL (single-leader pattern) |
+| `JOBS_SCHEDULER_CRON_TICK` | `True` | Every scheduler process ticks `cron.run_now()` once at start and then every wall-clock minute from a daemon thread (every node, not only the lock holder). `False` opts out — pair it with an external tick, or no `@schedule` function runs. See [scheduled_tasks.md](scheduled_tasks.md#who-ticks-the-scheduler-process-on-every-node) |
 
 ## Webhook Configuration
 
