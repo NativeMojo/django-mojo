@@ -1,21 +1,19 @@
 """Crash-safe MojoSec state, aggregation, FIM baseline, and delivery spool."""
 
 import datetime
-import hashlib
 import json
 import os
+import re
 import sqlite3
 import stat
 import time
 
-from mojo.deploy.audit import select_health_fields
-
 from .aggregation import merge, should_flush
 from .attribution import merge_session
 from .disposition import (
-    JOBMAN_FIREWALL_CLASSIFIER, LOCAL_ONLY_DIAGNOSTIC_PATH,
-    classify_local_only, diagnostic_override, is_local_only,
-    observed_timestamp,
+    APP_USER_FIREWALL_BROKER_CLASSIFIER, FIREWALL_BROKER_PATH,
+    LOCAL_ONLY_DIAGNOSTIC_PATH, classify_local_only, diagnostic_override,
+    is_local_only, observed_timestamp,
 )
 from .evidence import build_evidence
 from .expected_changes import MAX_TIER_CORRELATION_SECONDS
@@ -26,28 +24,6 @@ from .protocol import canonical_json, make_event
 SCHEMA_VERSION = 3
 SSH_SESSION_CAP = 4096
 SSH_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
-PROCESS_NODE_CAP = 131072
-PROCESS_NODE_TTL_SECONDS = 7 * 24 * 60 * 60
-PROCESS_PINNED_CAP = 64
-PROCESS_NODE_MAX_BYTES = 96 * 1024 * 1024
-AUDIT_FRAGMENT_CAP = 8192
-AUDIT_FRAGMENT_TTL_SECONDS = 10 * 60
-AUDIT_FRAGMENT_MAX_BYTES = 8 * 1024 * 1024
-HEALTH_EPOCH_CAP = 128
-PENDING_OPERATION_CAP = 4096
-FIREWALL_RECEIPT_CAP = 32768
-FIREWALL_PROOF_BATCH = 512
-FIREWALL_PROOF_RECEIPT_CAP = FIREWALL_PROOF_BATCH * 4
-FIREWALL_PROOF_PROCESS_NODE_CAP = FIREWALL_PROOF_BATCH * 8
-FIREWALL_PROOF_SQL_CHUNK = 400
-# Python startup and the read-only readiness check can take slightly over two
-# seconds before the broker emits its first receipt on a busy node.
-FIREWALL_PROCESS_FALLBACK_NS = 5_000_000_000
-FIREWALL_RECEIPT_TTL_SECONDS = 7 * 24 * 60 * 60
-PROVENANCE_MAX_BYTES = 256 * 1024 * 1024
-STATE_MAX_BYTES = PROVENANCE_MAX_BYTES
-PENDING_OPERATION_MAX_BYTES = 32 * 1024 * 1024
-FIREWALL_RECEIPT_MAX_BYTES = 32 * 1024 * 1024
 WAL_MAX_BYTES = 64 * 1024 * 1024
 ANNOTATION_GRACE_SECONDS = 120
 # The producer caps an active operation at 15 minutes (mojo.deploy
@@ -63,34 +39,21 @@ ANNOTATION_MAX_GRACE_SECONDS = 20 * 60
 ANNOTATION_MAX_CORRELATION_SECONDS = MAX_TIER_CORRELATION_SECONDS
 LOCAL_ONLY_RECONCILE_LIMIT = 256
 SATURATING_COUNTER_MAX = 2 ** 63 - 1
-_BROKER_FUNCTION_OPERATIONS = {
-    "mojo.apps.incident.services.firewall_readiness.probe": {"broker.status"},
-    "mojo.apps.incident.asyncjobs.broadcast_block_ip": {
-        "rules.contains", "rule.insert", "ip.status", "ip.normalize"},
-    "mojo.apps.incident.asyncjobs.broadcast_unblock_ip": {
-        "rules.contains", "rule.delete", "ip.status", "ip.normalize"},
-    "mojo.apps.incident.asyncjobs.broadcast_ipset_add_blocked": {
-        "permanent.add", "permanent.rule_ensure"},
-    "mojo.apps.incident.asyncjobs.broadcast_ipset_del_blocked": {
-        "permanent.delete"},
-    "mojo.apps.incident.asyncjobs.sync_firewall": {
-        "permanent.normalize", "set.normalize", "ip.normalize"},
-    "mojo.apps.incident.asyncjobs.broadcast_sync_ipset": {
-        "set.replace", "set.rule_ensure", "set.status", "set.normalize"},
-    "mojo.apps.incident.asyncjobs.broadcast_remove_ipset": {
-        "set.remove", "set.status", "set.normalize"},
-    "mojo.apps.incident.asyncjobs.broadcast_reconcile_firewall_ip": {
-        "ip.status", "ip.normalize"},
-    "mojo.apps.incident.asyncjobs.broadcast_reconcile_firewall_set": {
-        "set.status", "set.normalize"},
-    "mojo.apps.incident.asyncjobs.broadcast_reconcile_geolocated_ip": {
-        "geolocated.normalize"},
-}
-_BROKER_CHILD_EXECUTABLES = {
-    "/sbin/iptables": {"/sbin/iptables", "/usr/sbin/xtables-nft-multi"},
-    "/sbin/iptables-save": {"/sbin/iptables-save", "/usr/sbin/xtables-nft-multi"},
-    "/sbin/ipset": {"/sbin/ipset", "/usr/sbin/ipset"},
-}
+# Private tables the retired process-lineage proof kept beneath the shared v3
+# schema marker (maestro #9769). An upgraded node drops them on open; nothing
+# an older binary reads is removed, only tables it created with IF NOT EXISTS.
+RETIRED_PROVENANCE_TABLES = (
+    "audit_fragments", "process_nodes", "origin_sessions", "crond_launches",
+    "audit_health_epochs", "pending_firewall", "firewall_receipts",
+)
+_BOOT_ID = re.compile(r"^[a-f0-9]{32}$")
+# Rows still awaiting an expected-change annotation are a tiny, transient subset
+# of the spool; a partial index makes "is anything pending?" an O(1) probe and
+# the annotation pass itself an index walk instead of a table scan.
+_ANNOTATION_PREDICATE = "annotation_deadline > 0 AND attempts = 0 AND last_error = ''"
+_ANNOTATION_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS events_annotation_pending ON events(created) "
+    f"WHERE {_ANNOTATION_PREDICATE}")
 
 
 class StoreError(RuntimeError):
@@ -113,14 +76,20 @@ def _private_directory(path):
 
 class Store:
     def __init__(self, state_dir, sensor_id, aggregation_config, delivery_config,
-                 local_only_diagnostic_path=LOCAL_ONLY_DIAGNOSTIC_PATH):
+                 local_only_diagnostic_path=LOCAL_ONLY_DIAGNOSTIC_PATH,
+                 expected_app_uid=None):
         _private_directory(state_dir)
         self.sensor_id = sensor_id
         self.aggregation_config = aggregation_config
         self.delivery_config = delivery_config
         self.local_only_diagnostic_path = local_only_diagnostic_path
         self.local_only_diagnostic = {"active": False, "until": "", "error": ""}
-        self._repaired_v4 = False
+        # The one login UID whose tty-less, unattributed broker sudo is
+        # expected automation. None expects nothing: every broker sudo raises.
+        self.expected_app_uid = (
+            expected_app_uid
+            if isinstance(expected_app_uid, int) and not isinstance(expected_app_uid, bool)
+            else None)
         self.path = os.path.join(state_dir, "state.sqlite3")
         self.db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         self.db.row_factory = sqlite3.Row
@@ -133,9 +102,6 @@ class Store:
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=30000")
-        # The state database also owns the event/FIM spool, so a global SQLite
-        # page ceiling would let provenance starve unrelated durable evidence.
-        # Provenance tables are budgeted independently below.
         self.db.execute(f"PRAGMA journal_size_limit={WAL_MAX_BYTES}")
         self.db.execute("PRAGMA wal_autocheckpoint=1000")
         os.chmod(self.path, 0o600)
@@ -147,8 +113,7 @@ class Store:
             raise StoreError(
                 f"state belongs to sensor {stored_sensor_id!r}, not configured sensor {sensor_id!r}"
             )
-        if self._repaired_v4:
-            self._flush_repaired_v4_pending()
+        self._retire_provenance_tables()
 
     def _create_schema(self):
         tables = {row["name"] for row in self.db.execute(
@@ -158,7 +123,6 @@ class Store:
             try:
                 self._create_base_schema()
                 self._create_ssh_session_schema()
-                self._create_private_schema()
                 self.set_meta("schema_version", SCHEMA_VERSION)
                 self.db.execute("COMMIT")
             except Exception:
@@ -181,7 +145,15 @@ class Store:
             self._ensure_v3_schema()
             return
         if version == 4:
-            self._repair_development_v4_to_v3()
+            # A never-public development marker; its private tables are dropped
+            # by the retirement sweep once the shared v3 marker is restored.
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                self.set_meta("schema_version", SCHEMA_VERSION)
+                self.db.execute("COMMIT")
+            except Exception:
+                self.db.execute("ROLLBACK")
+                raise
             self._ensure_v3_schema()
             return
         if version not in (1, 2):
@@ -191,63 +163,6 @@ class Store:
         else:
             self._migrate_v2_to_v3()
         self._ensure_v3_schema()
-
-    def _repair_development_v4_to_v3(self):
-        """Retire the never-public shared v4 marker without losing private state."""
-        self.db.execute("BEGIN IMMEDIATE")
-        try:
-            row = self.db.execute(
-                "SELECT value FROM meta WHERE key='schema_version'").fetchone()
-            if row is None or json.loads(row["value"]) != 4:
-                raise StoreError("state schema changed during v4 compatibility repair")
-            columns = {row["name"] for row in self.db.execute(
-                "PRAGMA table_info(audit_fragments)").fetchall()}
-            if "audit_serial" in columns and "audit_id" not in columns:
-                statements = (
-                    "CREATE TABLE audit_fragments_v3 ("
-                    "boot_id TEXT NOT NULL,audit_id TEXT NOT NULL,"
-                    "payload TEXT NOT NULL CHECK(length(payload)<=32768),"
-                    "observed_at REAL NOT NULL,updated_at REAL NOT NULL,"
-                    "PRIMARY KEY(boot_id,audit_id))",
-                    "INSERT INTO audit_fragments_v3 SELECT boot_id,"
-                    "CAST(audit_serial AS TEXT),payload,observed_at,updated_at "
-                    "FROM audit_fragments",
-                    "DROP TABLE audit_fragments",
-                    "ALTER TABLE audit_fragments_v3 RENAME TO audit_fragments",
-                    "CREATE INDEX audit_fragments_updated ON audit_fragments(updated_at)",
-                )
-                for statement in statements:
-                    self.db.execute(statement)
-            self.set_meta("schema_version", SCHEMA_VERSION)
-            self.db.execute("COMMIT")
-            self._repaired_v4 = True
-        except Exception:
-            self.db.execute("ROLLBACK")
-            raise
-
-    def _flush_repaired_v4_pending(self):
-        """Make transitional v4 candidates ordinary before an older v3 downgrade."""
-        self.db.execute("BEGIN IMMEDIATE")
-        try:
-            rows = self.db.execute(
-                "SELECT observation_id,payload FROM pending_firewall "
-                "WHERE state='pending' ORDER BY created,rowid LIMIT ?",
-                (PENDING_OPERATION_CAP,)).fetchall()
-            now = time.time()
-            for row in rows:
-                observation = json.loads(row["payload"])
-                event = make_event(self.sensor_id, observation)
-                exists = self.db.execute(
-                    "SELECT 1 FROM events WHERE id=?", (event["id"],)).fetchone()
-                if exists is not None or self._enqueue(event, now=now):
-                    self.db.execute(
-                        "DELETE FROM pending_firewall WHERE observation_id=?",
-                        (row["observation_id"],))
-                    self._increment_saturating("provenance_pending_downgrade_flush")
-            self.db.execute("COMMIT")
-        except Exception:
-            self.db.execute("ROLLBACK")
-            raise
 
     def _create_base_schema(self):
         statements = (
@@ -270,6 +185,7 @@ class Store:
             "CREATE INDEX events_delivery_class ON events(delivery_class, next_attempt, created)",
             "CREATE INDEX events_delivery_class_created "
             "ON events(delivery_class, created, id)",
+            _ANNOTATION_INDEX_SQL,
             """CREATE TABLE aggregates (
                 fingerprint TEXT PRIMARY KEY,
                 payload TEXT NOT NULL,
@@ -321,70 +237,6 @@ class Store:
             "CREATE INDEX events_delivery_class_created "
             "ON events(delivery_class, created, id)")
 
-    def _create_private_schema(self):
-        statements = (
-            """CREATE TABLE IF NOT EXISTS audit_fragments (
-                boot_id TEXT NOT NULL, audit_id TEXT NOT NULL,
-                payload TEXT NOT NULL CHECK(length(payload) <= 32768),
-                observed_at REAL NOT NULL, updated_at REAL NOT NULL,
-                PRIMARY KEY(boot_id, audit_id)
-            )""",
-            "CREATE INDEX IF NOT EXISTS audit_fragments_updated ON audit_fragments(updated_at)",
-            """CREATE TABLE IF NOT EXISTS process_nodes (
-                boot_id TEXT NOT NULL, pid INTEGER NOT NULL, generation TEXT NOT NULL,
-                audit_session INTEGER, payload TEXT NOT NULL CHECK(length(payload) <= 8192),
-                observed_at REAL NOT NULL, updated_at REAL NOT NULL,
-                pinned INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(boot_id, pid, generation)
-            )""",
-            "CREATE INDEX IF NOT EXISTS process_nodes_session ON process_nodes(boot_id,audit_session,updated_at)",
-            "CREATE INDEX IF NOT EXISTS process_nodes_updated ON process_nodes(pinned,updated_at)",
-            "CREATE INDEX IF NOT EXISTS process_nodes_audit_identity ON process_nodes(boot_id,generation)",
-            "CREATE INDEX IF NOT EXISTS process_nodes_audit_serial ON process_nodes(boot_id,json_extract(payload,'$.audit_id'))",
-            """CREATE TABLE IF NOT EXISTS origin_sessions (
-                boot_id TEXT NOT NULL, audit_session INTEGER NOT NULL,
-                origin_kind TEXT NOT NULL, actor TEXT NOT NULL DEFAULT '',
-                tty TEXT NOT NULL DEFAULT '', source_ip TEXT NOT NULL DEFAULT '',
-                anchor_pid INTEGER, anchor_generation TEXT NOT NULL DEFAULT '',
-                observed_at REAL NOT NULL, updated_at REAL NOT NULL,
-                ambiguous INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(boot_id,audit_session)
-            )""",
-            "CREATE INDEX IF NOT EXISTS origin_sessions_updated ON origin_sessions(updated_at)",
-            """CREATE TABLE IF NOT EXISTS crond_launches (
-                boot_id TEXT NOT NULL, audit_session INTEGER NOT NULL,
-                payload TEXT NOT NULL CHECK(length(payload) <= 4096),
-                observed_at REAL NOT NULL, updated_at REAL NOT NULL,
-                ambiguous INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(boot_id,audit_session)
-            )""",
-            "CREATE INDEX IF NOT EXISTS crond_launches_updated ON crond_launches(updated_at)",
-            """CREATE TABLE IF NOT EXISTS audit_health_epochs (
-                boot_id TEXT NOT NULL, sequence INTEGER NOT NULL,
-                payload TEXT NOT NULL CHECK(length(payload) <= 4096),
-                observed_at REAL NOT NULL, healthy INTEGER NOT NULL,
-                PRIMARY KEY(boot_id, sequence)
-            )""",
-            "CREATE INDEX IF NOT EXISTS audit_health_observed ON audit_health_epochs(observed_at)",
-            """CREATE TABLE IF NOT EXISTS pending_firewall (
-                observation_id TEXT PRIMARY KEY,
-                payload TEXT NOT NULL CHECK(length(payload) <= 65536),
-                operation_id TEXT NOT NULL DEFAULT '', created REAL NOT NULL,
-                expires REAL NOT NULL, state TEXT NOT NULL DEFAULT 'pending'
-            )""",
-            "CREATE INDEX IF NOT EXISTS pending_firewall_due ON pending_firewall(state,expires)",
-            "CREATE INDEX IF NOT EXISTS pending_firewall_operation ON pending_firewall(operation_id)",
-            """CREATE TABLE IF NOT EXISTS firewall_receipts (
-                operation_id TEXT NOT NULL, kind TEXT NOT NULL,
-                payload TEXT NOT NULL CHECK(length(payload) <= 32768),
-                observed_at REAL NOT NULL,
-                PRIMARY KEY(operation_id, kind)
-            )""",
-            "CREATE INDEX IF NOT EXISTS firewall_receipts_observed ON firewall_receipts(observed_at)",
-        )
-        for statement in statements:
-            self.db.execute(statement)
-
     def _ensure_v3_schema(self):
         """Repair compatibility columns and indexes transactionally."""
         self.db.execute("BEGIN IMMEDIATE")
@@ -413,13 +265,63 @@ class Store:
                 self.db.execute(
                     "CREATE INDEX IF NOT EXISTS events_delivery_class_created "
                     "ON events(delivery_class, created, id)")
-            # Provenance is an additive private extension beneath the shared
-            # v3 compatibility marker. Older v3 code ignores these tables.
-            self._create_private_schema()
+            self.db.execute(_ANNOTATION_INDEX_SQL)
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
             raise
+
+    def _retire_provenance_tables(self):
+        """Drop the retired lineage tables once, draining held broker sudo first.
+
+        Runs after the sensor-id check so a foreign state file is refused
+        before anything is drained into it. A held ``pending_firewall``
+        observation goes through the same per-observation path as live input:
+        an expected broker sudo is counted local-only, anything else is spooled
+        as ordinary evidence. Nothing an older v3 binary reads is touched.
+        """
+        present = {row["name"] for row in self.db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        retired = [name for name in RETIRED_PROVENANCE_TABLES if name in present]
+        if not retired:
+            return
+        now = time.time()
+        diagnostic = diagnostic_override(self.local_only_diagnostic_path, now=now)
+        self.local_only_diagnostic = diagnostic
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            drained = dropped = 0
+            if "pending_firewall" in retired:
+                for row in self.db.execute(
+                        "SELECT payload FROM pending_firewall ORDER BY rowid").fetchall():
+                    try:
+                        observation = json.loads(row["payload"])
+                        if not isinstance(observation, dict):
+                            raise ValueError("held observation is not an object")
+                        self._ingest_observation(observation, now, diagnostic)
+                        drained += 1
+                    except (TypeError, ValueError, KeyError):
+                        dropped += 1
+            for name in retired:
+                self.db.execute(f"DROP TABLE IF EXISTS {name}")
+            self.db.execute(
+                "DELETE FROM meta WHERE key = 'audit_health' OR key LIKE 'provenance_%'")
+            self.set_meta("provenance_retired_at", now)
+            if drained:
+                self._increment_saturating("provenance_retired_drained", drained)
+            if dropped:
+                self._increment_saturating("provenance_retired_dropped", dropped)
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+        try:
+            # Outside any transaction: give the freed pages back to the
+            # filesystem once. The lineage tables were ~95 % of the file.
+            self.db.execute("VACUUM")
+        except sqlite3.DatabaseError as err:
+            from .output import emit_error
+            emit_error("state vacuum after provenance retirement failed", err)
 
     def _migrate_v1_to_v3(self):
         self.db.execute("BEGIN IMMEDIATE")
@@ -593,909 +495,47 @@ class Store:
                  session.get("tty", ""), session["source_ip"],
                  float(session["observed_at"]), now, int(bool(session.get("ambiguous")))),
             )
-            self.db.execute(
-                "INSERT INTO origin_sessions(boot_id,audit_session,origin_kind,actor,tty,"
-                "source_ip,observed_at,updated_at,ambiguous) VALUES(?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(boot_id,audit_session) DO UPDATE SET "
-                "origin_kind=excluded.origin_kind,actor=excluded.actor,tty=excluded.tty,"
-                "source_ip=excluded.source_ip,observed_at=excluded.observed_at,"
-                "updated_at=excluded.updated_at,ambiguous=excluded.ambiguous",
-                (session["boot_id"], session["audit_session"], "ssh", session["actor"],
-                 session.get("tty", ""), session["source_ip"],
-                 float(session["observed_at"]), now,
-                 int(bool(session.get("ambiguous")))))
         self.db.execute(
             "DELETE FROM ssh_sessions WHERE rowid IN ("
             "SELECT rowid FROM ssh_sessions ORDER BY observed_at DESC, rowid DESC "
             "LIMIT -1 OFFSET ?)", (SSH_SESSION_CAP,))
-        self.db.execute("DELETE FROM origin_sessions WHERE updated_at < ?",
-                        (now - SSH_SESSION_TTL_SECONDS,))
-        self.db.execute(
-            "DELETE FROM origin_sessions WHERE rowid IN (SELECT rowid FROM origin_sessions "
-            "ORDER BY updated_at DESC,rowid DESC LIMIT -1 OFFSET ?)", (SSH_SESSION_CAP,))
 
-    def load_audit_fragments(self, now=None):
-        cutoff = (time.time() if now is None else now) - AUDIT_FRAGMENT_TTL_SECONDS
-        rows = self.db.execute(
-            "SELECT boot_id,audit_id,payload FROM audit_fragments "
-            "WHERE updated_at >= ? ORDER BY updated_at DESC LIMIT ?",
-            (cutoff, AUDIT_FRAGMENT_CAP)).fetchall()
-        result = {}
-        for row in rows:
-            try:
-                result[(row["boot_id"], row["audit_id"])] = json.loads(row["payload"])
-            except json.JSONDecodeError:
-                continue
-        return result
+    def _expected_broker_sudo(self, observation):
+        """The one sudo this node's own automation is expected to run.
 
-    def _record_provenance(self, fragments, process_nodes, health, receipts,
-                           crond_launches, now, audit_uncertainty=None):
-        # Compact authority covers every touched compound, including keys
-        # evicted from the bounded snapshot. Apply it before retention or
-        # receipt resolution; never persist an enlarged fragment collection.
-        uncertain = {(item["boot_id"], item["audit_id"])
-                     for item in audit_uncertainty or ()}
-        uncertain.update((item["boot_id"], item["audit_id"])
-                         for item in fragments or () if not item.get("finalized") or
-                         item.get("ambiguous") or item.get("incomplete"))
-        for boot_id, audit_id in uncertain:
-            self._invalidate_fragment_identity({"boot_id": boot_id, "audit_id": audit_id})
-        if fragments is not None:
-            # The journal owns a full bounded snapshot, including finalized
-            # tombstones. An explicit empty snapshot retires old fragments.
-            self.db.execute("DELETE FROM audit_fragments")
-        self.db.execute("DELETE FROM audit_fragments WHERE updated_at < ?",
-                        (now - AUDIT_FRAGMENT_TTL_SECONDS,))
-        for item in fragments or ():
-            payload = canonical_json(item)
-            if len(payload.encode()) > 32768:
-                continue
-            self.db.execute(
-                "INSERT INTO audit_fragments(boot_id,audit_id,payload,observed_at,updated_at) "
-                "VALUES(?,?,?,?,?) ON CONFLICT(boot_id,audit_id) DO UPDATE SET "
-                "payload=excluded.payload,updated_at=excluded.updated_at",
-                (item["boot_id"], item["audit_id"], payload, now, now))
-        self.db.execute(
-            "DELETE FROM audit_fragments WHERE rowid IN (SELECT rowid FROM audit_fragments "
-            "ORDER BY updated_at DESC,rowid DESC LIMIT -1 OFFSET ?)",
-            (AUDIT_FRAGMENT_CAP,))
-        self._prune_payload_budget(
-            "audit_fragments", "updated_at", AUDIT_FRAGMENT_MAX_BYTES)
-
-        self.db.execute(
-            "DELETE FROM process_nodes WHERE pinned=0 AND updated_at < ?",
-            (now - PROCESS_NODE_TTL_SECONDS,))
-        self._refresh_process_pins(now)
-        for item in process_nodes or ():
-            item = dict(item)
-            # Audit can emit later non-exec syscall compounds (for example
-            # NETFILTER_CFG) under the PID that performed an earlier exec.
-            # Those records are not process generations and cannot compete in
-            # the provenance graph.
-            if self._confirmed_non_exec(item):
-                continue
-            # A failed execve does not replace the process image, so it is not
-            # a competing PID generation in the provenance graph.
-            if self._confirmed_failed_exec(item) and item.get("pid"):
-                continue
-            generation = f"audit-{item.get('audit_id', '')}"[:128]
-            # Preserve an existing canonical row (including pre-upgrade rows)
-            # when enrichment appears/disappears or the PID gets reused later.
-            prior_rows = self.db.execute(
-                "SELECT rowid,generation,payload FROM process_nodes WHERE boot_id=? "
-                "AND json_extract(payload,'$.audit_id')=?",
-                (item["boot_id"], item.get("audit_id"))).fetchall()
-            if not item.get("pid"):
-                if not prior_rows:
-                    continue
-                # After fragment eviction a late EXECVE-only record has no
-                # SYSCALL PID. The Audit identity still revokes its retained
-                # canonical row; keep that row's PID/session discoverable.
-                prior = json.loads(prior_rows[0]["payload"])
-                item = dict(prior, ambiguous=True, pinned=False,
-                            incomplete=bool(item.get("incomplete") or prior.get("incomplete")))
-            canonical_row = None
-            for prior_row in prior_rows:
-                prior = json.loads(prior_row["payload"])
-                if prior.get("audit_id") != item.get("audit_id"):
-                    continue
-                if canonical_row is None:
-                    canonical_row = prior_row
-                    generation = prior_row["generation"]
-                else:
-                    self.db.execute("DELETE FROM process_nodes WHERE rowid=?",
-                                    (prior_row["rowid"],))
-                immutable = ("pid", "ppid", "uid", "euid", "auid", "tty", "selinux",
-                             "exe", "argv", "argv_sha256", "audit_session", "success",
-                             "failure_confirmed", "monotonic")
-                conflict = (prior.get("ambiguous") or prior.get("incomplete") or
-                            any(prior.get(key) != item.get(key) for key in immutable) or
-                            (prior.get("start_ticks") and item.get("start_ticks") and
-                             prior["start_ticks"] != item["start_ticks"]))
-                if conflict:
-                    item["ambiguous"] = True
-                # The original identity remains addressable even if a late
-                # contradiction supplies a different PID after tombstone eviction.
-                item["pid"] = json.loads(canonical_row["payload"])["pid"]
-                if prior.get("start_ticks"):
-                    item["start_ticks"] = prior["start_ticks"]
-            from .lineage import enrich_process, live_engine_identity
-            item["pinned"] = bool(item.get("pinned") and live_engine_identity(
-                item, enrich_process(item["pid"])))
-            payload = canonical_json(item)
-            if len(payload.encode()) > 8192:
-                item.update(ambiguous=True, pinned=False, argv=[], live_ancestors=[])
-            self._invalidate_competing_process_nodes(item)
-            payload = canonical_json(item)
-            self.db.execute(
-                "INSERT INTO process_nodes(boot_id,pid,generation,audit_session,payload,"
-                "observed_at,updated_at,pinned) VALUES(?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(boot_id,pid,generation) DO UPDATE SET "
-                "payload=excluded.payload,audit_session=excluded.audit_session,"
-                "updated_at=excluded.updated_at,pinned=excluded.pinned",
-                (item["boot_id"], item["pid"], generation,
-                 item.get("audit_session"), payload, now, now,
-                 int(bool(item.get("pinned")))))
-        self._record_crond_launches(crond_launches, now)
-        self._record_jobman_origins(now)
-        self.db.execute(
-            "DELETE FROM process_nodes WHERE rowid IN (SELECT rowid FROM process_nodes "
-            "WHERE pinned=0 ORDER BY updated_at DESC,rowid DESC LIMIT -1 OFFSET ?)",
-            (PROCESS_NODE_CAP,))
-        excess = self.db.execute(
-            "SELECT rowid,payload FROM process_nodes WHERE pinned=1 "
-            "ORDER BY updated_at DESC,rowid DESC LIMIT -1 OFFSET ?",
-            (PROCESS_PINNED_CAP,)).fetchall()
-        for row in excess:
-            node = json.loads(row["payload"])
-            node["pinned"] = False
-            self.db.execute("UPDATE process_nodes SET pinned=0,payload=? WHERE rowid=?",
-                            (canonical_json(node), row["rowid"]))
-        self._prune_payload_budget(
-            "process_nodes", "updated_at", PROCESS_NODE_MAX_BYTES,
-            where="pinned=0")
-
-        if health is not None:
-            payload = canonical_json(health)
-            if len(payload.encode()) <= 4096:
-                self.db.execute(
-                    "INSERT OR REPLACE INTO audit_health_epochs(boot_id,sequence,payload,"
-                    "observed_at,healthy) VALUES(?,?,?,?,?)",
-                    (health["boot_id"], health["sequence"], payload, now,
-                     int(bool(health.get("healthy")))))
-            self.db.execute(
-                "DELETE FROM audit_health_epochs WHERE rowid IN (SELECT rowid FROM "
-                "audit_health_epochs ORDER BY observed_at DESC,rowid DESC LIMIT -1 OFFSET ?)",
-                (HEALTH_EPOCH_CAP,))
-            self.set_meta("audit_health", select_health_fields(health))
-
-        self.db.execute("DELETE FROM firewall_receipts WHERE observed_at < ?",
-                        (now - FIREWALL_RECEIPT_TTL_SECONDS,))
-        for item in receipts or ():
-            item = dict(item)
-            prior = self.db.execute(
-                "SELECT payload FROM firewall_receipts WHERE operation_id=? AND kind=?",
-                (item["operation_id"], item["kind"])).fetchone()
-            if prior is not None:
-                previous = json.loads(prior["payload"])
-                if previous == item:
-                    continue
-                # Keep the first attestation and a sticky private conflict bit.
-                item = dict(previous, _conflict=True)
-            payload = canonical_json(item)
-            if len(payload.encode()) > 32768:
-                continue
-            self.db.execute(
-                "INSERT OR REPLACE INTO firewall_receipts(operation_id,kind,payload,observed_at) "
-                "VALUES(?,?,?,?)", (item["operation_id"], item["kind"], payload, now))
-        self.db.execute(
-            "DELETE FROM firewall_receipts WHERE rowid IN (SELECT rowid FROM firewall_receipts "
-            "ORDER BY observed_at DESC,rowid DESC LIMIT -1 OFFSET ?)",
-            (FIREWALL_RECEIPT_CAP,))
-        self._prune_payload_budget(
-            "firewall_receipts", "observed_at", FIREWALL_RECEIPT_MAX_BYTES)
-
-    def _record_crond_launches(self, launches, now):
-        """Merge trusted CROND syslog and PAM halves with sticky conflict."""
-        self.db.execute("DELETE FROM crond_launches WHERE updated_at < ?",
-                        (now - SSH_SESSION_TTL_SECONDS,))
-        for launch in launches or ():
-            key = (launch.get("boot_id"), launch.get("audit_session"))
-            half = launch.get("half")
-            if half not in ("syslog", "pam"):
-                continue
-            row = self.db.execute(
-                "SELECT payload,ambiguous FROM crond_launches "
-                "WHERE boot_id=? AND audit_session=?", key).fetchone()
-            payload = {} if row is None else json.loads(row["payload"])
-            conflict = bool(row and row["ambiguous"])
-            prior = payload.get(half)
-            clean = {name: launch[name] for name in (
-                "boot_id", "audit_session", "half", "monotonic", "command_sha256")}
-            if half == "syslog":
-                clean["launch_pid"] = launch["launch_pid"]
-            if prior is not None and prior != clean:
-                conflict = True
-            payload[half] = clean
-            encoded = canonical_json(payload)
-            self.db.execute(
-                "INSERT INTO crond_launches(boot_id,audit_session,payload,observed_at,"
-                "updated_at,ambiguous) VALUES(?,?,?,?,?,?) ON CONFLICT(boot_id,audit_session) "
-                "DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at,"
-                "ambiguous=max(crond_launches.ambiguous,excluded.ambiguous)",
-                (key[0], key[1], encoded, now, now, int(conflict)))
-        self.db.execute(
-            "DELETE FROM crond_launches WHERE rowid IN (SELECT rowid FROM crond_launches "
-            "ORDER BY updated_at DESC,rowid DESC LIMIT -1 OFFSET ?)", (SSH_SESSION_CAP,))
-
-    def _prune_payload_budget(self, table, order_column, maximum, where="1=1"):
-        """Retain newest bounded payload bytes using one indexed window scan."""
-        allowed = {
-            ("audit_fragments", "updated_at", "1=1"),
-            ("process_nodes", "updated_at", "pinned=0"),
-            ("firewall_receipts", "observed_at", "1=1"),
-        }
-        if (table, order_column, where) not in allowed:
-            raise StoreError("invalid provenance prune target")
-        self.db.execute(
-            f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM ("
-            f"SELECT rowid,SUM(length(CAST(payload AS BLOB))) OVER ("
-            f"ORDER BY {order_column} DESC,rowid DESC) AS retained "
-            f"FROM {table} WHERE {where}) WHERE retained > ?)", (maximum,))
-
-    def _refresh_process_pins(self, now):
-        """Touch an anchor only while /proc proves the same PID generation."""
-        from .lineage import enrich_process, live_engine_identity
-
-        rows = self.db.execute(
-            "SELECT rowid,pid,generation,payload FROM process_nodes WHERE pinned=1 "
-            "ORDER BY updated_at DESC LIMIT ?", (PROCESS_PINNED_CAP,)).fetchall()
-        for row in rows:
-            live = enrich_process(row["pid"])
-            node = json.loads(row["payload"])
-            self._invalidate_competing_process_nodes(node)
-            if live_engine_identity(node, live):
-                node["pinned"] = True
-                self.db.execute(
-                    "UPDATE process_nodes SET updated_at=?,payload=? WHERE rowid=?",
-                    (now, canonical_json(node), row["rowid"]))
-            else:
-                node["pinned"] = False
-                self.db.execute(
-                    "UPDATE process_nodes SET pinned=0,payload=? WHERE rowid=?",
-                    (canonical_json(node), row["rowid"]))
-
-    @staticmethod
-    def _competing_process_generation(left, right):
-        """Only distinct known PID start ticks can exclude a competitor."""
-        return bool(left.get("pid") == right.get("pid") and
-                    (left.get("start_ticks") is None or right.get("start_ticks") is None or
-                     left["start_ticks"] == right["start_ticks"]))
-
-    def _invalidate_fragment_identity(self, fragment):
-        rows = self.db.execute(
-            "SELECT rowid,payload FROM process_nodes WHERE boot_id=? "
-            "AND json_extract(payload,'$.audit_id')=?",
-            (fragment.get("boot_id"), fragment.get("audit_id"))).fetchall()
-        for row in rows:
-            node = json.loads(row["payload"])
-            node.update(ambiguous=True, pinned=False)
-            self._invalidate_competing_process_nodes(node)
-            self.db.execute("UPDATE process_nodes SET payload=?,pinned=0 WHERE rowid=?",
-                            (canonical_json(node), row["rowid"]))
-
-    def _invalidate_competing_process_nodes(self, item):
-        if self._confirmed_failed_exec(item) or self._confirmed_non_exec(item):
-            return
-        rows = self.db.execute(
-            "SELECT rowid,payload FROM process_nodes WHERE boot_id=? AND pid=?",
-            (item["boot_id"], item["pid"])).fetchall()
-        peers = []
-        for row in rows:
-            peer = json.loads(row["payload"])
-            if (peer.get("audit_id") == item.get("audit_id") or
-                    self._confirmed_failed_exec(peer) or
-                    self._confirmed_non_exec(peer) or
-                    not self._competing_process_generation(item, peer)):
-                continue
-            peers.append((row["rowid"], peer))
-        if self._eligible_process_node(item) and all(
-                self._eligible_process_node(peer) for _, peer in peers):
-            return
-        # Re-exec can retain PID/start ticks. Negative evidence must veto all
-        # competitors regardless of row/arrival order and survive replay.
-        item.update(ambiguous=True, pinned=False)
-        for rowid, peer in peers:
-            peer.update(ambiguous=True, pinned=False)
-            self.db.execute("UPDATE process_nodes SET payload=?,pinned=0 WHERE rowid=?",
-                            (canonical_json(peer), rowid))
-
-    def _record_jobman_origins(self, now):
-        anchors = self.db.execute(
-            "SELECT boot_id,audit_session,pid,generation,payload FROM process_nodes "
-            "WHERE pinned=1 AND audit_session IS NOT NULL ORDER BY updated_at DESC LIMIT ?",
-            (PROCESS_PINNED_CAP,)).fetchall()
-        node_rows = self.db.execute(
-            "WITH anchors AS (SELECT boot_id,audit_session FROM process_nodes "
-            "WHERE pinned=1 AND audit_session IS NOT NULL ORDER BY updated_at DESC LIMIT ?) "
-            "SELECT p.boot_id,p.audit_session,p.payload FROM process_nodes p JOIN anchors a "
-            "ON a.boot_id=p.boot_id AND a.audit_session=p.audit_session "
-            "ORDER BY p.updated_at DESC LIMIT ?",
-            (PROCESS_PINNED_CAP, PROCESS_PINNED_CAP * 256)).fetchall()
-        session_nodes = {}
-        for row in node_rows:
-            session_nodes.setdefault(
-                (row["boot_id"], row["audit_session"]), []).append(
-                    json.loads(row["payload"]))
-        origins = {
-            (row["boot_id"], row["audit_session"]): row
-            for row in self.db.execute(
-                "SELECT boot_id,audit_session,origin_kind,anchor_pid,anchor_generation "
-                "FROM origin_sessions ORDER BY updated_at DESC LIMIT ?",
-                (SSH_SESSION_CAP,)).fetchall()
-        }
-        for anchor in anchors:
-            key = (anchor["boot_id"], anchor["audit_session"])
-            launch_row = self.db.execute(
-                "SELECT payload,ambiguous FROM crond_launches WHERE boot_id=? "
-                "AND audit_session=?", key).fetchone()
-            if launch_row is not None and launch_row["ambiguous"]:
-                self.db.execute(
-                    "UPDATE origin_sessions SET ambiguous=1,updated_at=? "
-                    "WHERE boot_id=? AND audit_session=?", (now, key[0], key[1]))
-                continue
-            if launch_row is None:
-                continue
-            launch = json.loads(launch_row["payload"])
-            syslog = launch.get("syslog")
-            pam = launch.get("pam")
-            if (not syslog or not pam or
-                    syslog.get("command_sha256") != pam.get("command_sha256") or
-                    pam.get("monotonic", 0) >= syslog.get("monotonic", 0)):
-                continue
-            nodes = session_nodes.get(key, [])
-            by_pid = {}
-            for node in nodes:
-                by_pid.setdefault(node.get("pid"), []).append(node)
-            anchor_node = json.loads(anchor["payload"])
-            if not self._eligible_process_node(anchor_node):
-                continue
-            launch_pid = syslog.get("launch_pid")
-            jobman = [node for node in nodes if self._eligible_process_node(node) and
-                      node.get("pid") == anchor_node.get("ppid") and
-                      "start" in [str(part) for part in node.get("argv", [])] and
-                      any(str(part).endswith("/bin/jobman") or
-                          part == "mojo.deploy.jobman" for part in node.get("argv", []))]
-            if len(jobman) != 1:
-                continue
-            jobman_node = jobman[0]
-            bash = [node for node in nodes if self._eligible_process_node(node) and
-                    node.get("exe") == "/usr/bin/bash" and
-                    (node.get("pid") == launch_pid == jobman_node.get("pid") or
-                     node.get("pid") == launch_pid == jobman_node.get("ppid"))]
-            if len(bash) != 1:
-                continue
-            bash_node = bash[0]
-            if not (jobman_node.get("pid") == bash_node.get("pid") or
-                    jobman_node.get("ppid") == bash_node.get("pid")):
-                continue
-            order = (pam["monotonic"], syslog["monotonic"],
-                     bash_node.get("monotonic"), jobman_node.get("monotonic"),
-                     anchor_node.get("monotonic"))
-            if (any(not isinstance(value, int) for value in order) or
-                    any(left >= right for left, right in zip(order, order[1:]))):
-                continue
-            existing = origins.get(key)
-            conflict = bool(existing and (
-                existing["origin_kind"] != "cron_jobman" or
-                existing["anchor_pid"] not in (None, anchor["pid"]) or
-                existing["anchor_generation"] not in ("", anchor["generation"])))
-            if existing is None:
-                self.db.execute(
-                    "INSERT INTO origin_sessions(boot_id,audit_session,origin_kind,actor,"
-                    "anchor_pid,anchor_generation,observed_at,updated_at,ambiguous) "
-                    "VALUES(?,?,?,?,?,?,?,?,0)",
-                    (anchor["boot_id"], anchor["audit_session"], "cron_jobman", "",
-                     anchor["pid"], anchor["generation"], now, now))
-            elif conflict:
-                self.db.execute(
-                    "UPDATE origin_sessions SET ambiguous=1,updated_at=? "
-                    "WHERE boot_id=? AND audit_session=?",
-                    (now, anchor["boot_id"], anchor["audit_session"]))
-            else:
-                self.db.execute(
-                    "UPDATE origin_sessions SET anchor_pid=?,anchor_generation=?,updated_at=? "
-                    "WHERE boot_id=? AND audit_session=?",
-                    (anchor["pid"], anchor["generation"], now,
-                     anchor["boot_id"], anchor["audit_session"]))
-
-    def _record_local_origin(self, observation, now):
-        attributes = observation.get("attributes", {})
-        if (observation.get("kind") != "auth.session_open" or
-                attributes.get("service") != "systemd-user" or
-                attributes.get("source_ip") or attributes.get("tty") or
-                attributes.get("attribution_provenance") != "none" or
-                not attributes.get("boot_id") or
-                not isinstance(attributes.get("audit_session"), int)):
-            return
-        key = (attributes["boot_id"], attributes["audit_session"])
-        current = self.db.execute(
-            "SELECT origin_kind,actor,ambiguous FROM origin_sessions "
-            "WHERE boot_id=? AND audit_session=?", key).fetchone()
-        actor = str(attributes.get("target_user") or "")[:128]
-        if current is None:
-            self.db.execute(
-                "INSERT INTO origin_sessions(boot_id,audit_session,origin_kind,actor,"
-                "observed_at,updated_at,ambiguous) VALUES(?,?,?,?,?,?,0)",
-                (key[0], key[1], "local_systemd_user", actor, now, now))
-        elif current["origin_kind"] != "local_systemd_user" or current["actor"] != actor:
-            self.db.execute(
-                "UPDATE origin_sessions SET ambiguous=1,updated_at=? "
-                "WHERE boot_id=? AND audit_session=?", (now, key[0], key[1]))
-        else:
-            self.db.execute(
-                "UPDATE origin_sessions SET updated_at=? WHERE boot_id=? AND audit_session=?",
-                (now, key[0], key[1]))
-
-    def _enrich_sudo(self, observation, now):
-        if observation.get("kind") != "auth.sudo_command":
-            return
-        attributes = observation.get("attributes", {})
-        boot = attributes.get("boot_id")
+        The incident app's JobEngine runs ``sudo /usr/local/sbin/mojo-firewall-broker``
+        from the cron-launched jobman about once a minute. The sudo journal line
+        is root-authored, so the invoking identity is the kernel-maintained
+        login UID (``_AUDIT_LOGINUID``), never ``_UID``. A TTY, an SSH-attributed
+        session, another login UID, another command or a truncated command is
+        not the automation and keeps the ordinary alert.
+        """
+        if self.expected_app_uid is None or observation.get("kind") != "auth.sudo_command":
+            return False
+        attributes = observation.get("attributes")
+        if not isinstance(attributes, dict):
+            return False
         session = attributes.get("audit_session")
-        producer = attributes.get("producer_pid")
-        if not boot or not isinstance(session, int):
-            attributes["proof_status"] = "ineligible"
-            return
-        rows = self.db.execute(
-            "SELECT payload FROM process_nodes WHERE boot_id=? AND audit_session=? "
-            "ORDER BY updated_at DESC LIMIT 256", (boot, session)).fetchall()
-        nodes = [json.loads(row["payload"]) for row in rows]
-        by_pid = {}
-        for node in nodes:
-            by_pid.setdefault(node.get("pid"), []).append(node)
-        lineage = []
-        current_pid = producer
-        seen = set()
-        conflict = False
-        for unused in range(8):
-            if not isinstance(current_pid, int) or current_pid <= 0 or current_pid in seen:
-                conflict = current_pid in seen
-                break
-            seen.add(current_pid)
-            found = by_pid.get(current_pid, [])
-            eligible = [node for node in found if self._eligible_process_node(node)]
-            if len(eligible) != 1:
-                conflict = len(found) > 1 or bool(found and not eligible)
-                break
-            node = eligible[0]
-            lineage.append(node)
-            conflict = conflict or bool(node.get("ambiguous") or node.get("incomplete"))
-            current_pid = node.get("ppid")
-        if lineage:
-            from .lineage import project_ancestors
-            attributes["lineage"] = project_ancestors(lineage)
-            attributes["lineage_sha256"] = hashlib.sha256(
-                canonical_json(lineage).encode()).hexdigest()
-        origin = self.db.execute(
-            "SELECT origin_kind,ambiguous FROM origin_sessions "
-            "WHERE boot_id=? AND audit_session=?", (boot, session)).fetchone()
-        if origin is not None:
-            attributes["origin_kind"] = origin["origin_kind"]
-            conflict = conflict or bool(origin["ambiguous"])
-        receipt_rows = self.db.execute(
-            "SELECT payload FROM firewall_receipts WHERE observed_at>=? "
-            "ORDER BY observed_at DESC LIMIT 64", (now - 30,)).fetchall()
-        semantics = []
-        for row in receipt_rows:
-            receipt = json.loads(row["payload"])
-            if (receipt.get("boot_id") == boot and receipt.get("audit_session") == session and
-                    receipt.get("semantic") not in semantics):
-                semantics.append(receipt["semantic"])
-        if semantics:
-            attributes["receipt_semantics"] = semantics[:8]
-        attributes["proof_status"] = (
-            "conflict" if conflict else "partial" if lineage or semantics else "missing")
-
-    def hold_firewall_observation(self, observation, operation_id="", now=None):
-        now = time.time() if now is None else now
-        payload = canonical_json(observation)
-        if len(payload.encode()) > 65536:
-            raise StoreError("pending firewall observation is too large")
-        self.db.execute(
-            "INSERT OR IGNORE INTO pending_firewall(observation_id,payload,operation_id,"
-            "created,expires,state) VALUES(?,?,?,?,?,'pending')",
-            (observation["fingerprint"], payload, str(operation_id)[:64], now, now + 30))
-        rows = self.db.execute(
-            "SELECT observation_id,payload FROM pending_firewall WHERE state='pending' "
-            "ORDER BY created,rowid LIMIT -1 OFFSET ?", (PENDING_OPERATION_CAP,)).fetchall()
-        for row in rows:
-            # Capacity pressure is fail-open: enqueue the untouched original.
-            self._ingest_one(json.loads(row["payload"]), now)
-            self._increment_saturating("provenance_pending_cap_flush")
-            self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
-                            (row["observation_id"],))
-        while True:
-            used = self.db.execute(
-                "SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) AS used "
-                "FROM pending_firewall WHERE state='pending'").fetchone()["used"]
-            if used <= PENDING_OPERATION_MAX_BYTES:
-                break
-            rows = self.db.execute(
-                "SELECT observation_id,payload FROM pending_firewall WHERE state='pending' "
-                "ORDER BY created,rowid LIMIT 128").fetchall()
-            if not rows:
-                break
-            for row in rows:
-                self._ingest_one(json.loads(row["payload"]), now)
-                self._increment_saturating("provenance_pending_cap_flush")
-                self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
-                                (row["observation_id"],))
-
-    def _flush_expired_firewall(self, now):
-        rows = self.db.execute(
-            "SELECT observation_id,payload FROM pending_firewall "
-            "WHERE state='pending' AND expires <= ? ORDER BY expires LIMIT 512",
-            (now,)).fetchall()
-        for row in rows:
-            self._ingest_one(json.loads(row["payload"]), now)
-            self._increment_saturating("provenance_pending_expired")
-            self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
-                            (row["observation_id"],))
-
-    @staticmethod
-    def _broker_candidate(observation):
-        attributes = observation.get("attributes", {})
         return bool(
-            observation.get("kind") == "auth.sudo_command" and
-            attributes.get("command") == "/usr/local/sbin/mojo-firewall-broker" and
+            attributes.get("command") == FIREWALL_BROKER_PATH and
+            attributes.get("command_path") == FIREWALL_BROKER_PATH and
+            attributes.get("target_user") == "root" and
             attributes.get("attribution_provenance") == "none" and
             not attributes.get("source_ip") and not attributes.get("tty") and
-            attributes.get("boot_id") and
-            isinstance(attributes.get("audit_session"), int) and
-            isinstance(attributes.get("producer_pid"), int) and
-            isinstance(attributes.get("monotonic"), int))
+            attributes.get("audit_loginuid") == self.expected_app_uid and
+            isinstance(attributes.get("boot_id"), str) and
+            _BOOT_ID.fullmatch(attributes["boot_id"]) and
+            isinstance(session, int) and not isinstance(session, bool) and
+            not any(key.endswith("_truncated") for key in attributes))
 
-    @staticmethod
-    def _receipt_pair_valid(begin, result):
-        exact = (
-            "operation_id", "execution_id", "job_id", "function", "operation",
-            "semantic", "argv_digest", "stdin_digest", "stdin_length", "count",
-            "broker_pid", "broker_start_ticks", "target_exe", "boot_id",
-            "audit_session", "producer_exe",
-        )
-        status = bool(
-            begin and begin.get("operation") == "broker.status" and
-            begin.get("target_exe") == "/usr/local/sbin/mojo-firewall-broker" and
-            begin.get("children") == [] and result and result.get("children") == [] and
-            result.get("target_pid") == begin.get("broker_pid") and
-            result.get("target_start_ticks") == begin.get("broker_start_ticks"))
-        mutation = bool(
-            begin and result and begin.get("operation") != "broker.status" and
-            begin.get("children") == [] and
-            isinstance(result.get("children"), list) and
-            1 <= len(result["children"]) <= 64 and
-            all(child.get("ok") is True for child in result["children"]))
-        return bool(
-            begin and result and result.get("ok") is True and
-            not begin.get("_conflict") and not result.get("_conflict") and
-            all(begin.get(key) == result.get(key) for key in exact) and
-            begin.get("operation") in _BROKER_FUNCTION_OPERATIONS.get(
-                begin.get("function"), set()) and
-            isinstance(begin.get("monotonic_ns"), int) and
-            isinstance(result.get("monotonic_ns"), int) and
-            result["monotonic_ns"] >= begin["monotonic_ns"] and
-            isinstance(result.get("target_pid"), int) and result["target_pid"] > 0 and
-            isinstance(result.get("target_start_ticks"), int) and
-            result["target_start_ticks"] > 0 and
-            (status or mutation))
-
-    @staticmethod
-    def _eligible_process_node(node):
-        from .lineage import eligible_process_node
-        return eligible_process_node(node)
-
-    @staticmethod
-    def _confirmed_failed_exec(node):
-        """Return true only for a complete, kernel-confirmed failed exec."""
-        return bool(isinstance(node, dict) and
-                    node.get("failure_confirmed") is True)
-
-    @staticmethod
-    def _confirmed_non_exec(node):
-        """Return true only when Audit explicitly identifies a non-exec syscall."""
-        return bool(isinstance(node, dict) and
-                    node.get("process_exec") is False)
-
-    @staticmethod
-    def _one_pid_generation(nodes, pid, start_ticks, earliest, latest, exe=None):
-        found = []
-        for node in nodes:
-            if node.get("pid") != pid:
-                continue
-            if (Store._confirmed_failed_exec(node) or
-                    Store._confirmed_non_exec(node)):
-                continue
-            node_ticks = node.get("start_ticks")
-            if node_ticks is not None and node_ticks != start_ticks:
-                continue
-            if not Store._eligible_process_node(node):
-                return None
-            monotonic = node.get("monotonic")
-            if node_ticks is None and not (
-                    isinstance(monotonic, int) and
-                    earliest - FIREWALL_PROCESS_FALLBACK_NS <= monotonic * 1000 <=
-                    latest + FIREWALL_PROCESS_FALLBACK_NS):
-                continue
-            found.append(node)
-        # More than one Audit exec generation for a PID in the proof window is
-        # a reuse/order ambiguity, never a reason to guess.
-        return (found[0] if len(found) == 1 and
-                (exe is None or found[0].get("exe") == exe) else None)
-
-    @staticmethod
-    def _parent_node(nodes, child):
-        candidates = [node for node in nodes if node.get("pid") == child.get("ppid") and
-                      not Store._confirmed_failed_exec(node) and
-                      not Store._confirmed_non_exec(node)]
-        found = [node for node in candidates if Store._eligible_process_node(node)]
-        if any(not Store._eligible_process_node(peer) and
-               Store._competing_process_generation(node, peer)
-               for node in found for peer in candidates):
-            return None
-        if len(found) == 1:
-            return found[0]
-        # Several exec generations of one parent PID are safe only when one is
-        # the still-live, pinned engine anchor.
-        pinned = [node for node in found if node.get("pinned")]
-        return pinned[0] if len(pinned) == 1 else None
-
-    def _resolve_pending_firewall(self, now, current_health=True):
-        candidates = self.db.execute(
-            "SELECT observation_id,payload FROM pending_firewall WHERE state='pending' "
-            "ORDER BY created LIMIT ?", (FIREWALL_PROOF_BATCH,)).fetchall()
-        if not candidates:
-            return
-        if current_health is None:
-            return
-        if current_health is False:
-            for row in candidates:
-                self._ingest_one(json.loads(row["payload"]), now)
-                self._increment_saturating("provenance_health_fail_open")
-                self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
-                                (row["observation_id"],))
-            return
-        health_by_boot = {}
-        origins = {}
-        proof_candidates = []
-        for row in candidates:
-            observation = json.loads(row["payload"])
-            attributes = observation["attributes"]
-            boot_id = attributes["boot_id"]
-            if boot_id not in health_by_boot:
-                health_by_boot[boot_id] = self.db.execute(
-                    "SELECT payload,healthy FROM audit_health_epochs WHERE boot_id=? "
-                    "ORDER BY observed_at DESC,rowid DESC LIMIT 1", (boot_id,)).fetchone()
-            health = health_by_boot[boot_id]
-            if health is None or not health["healthy"]:
-                self._ingest_one(observation, now)
-                self._increment_saturating("provenance_health_fail_open")
-                self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
-                                (row["observation_id"],))
-                continue
-            session_key = (boot_id, attributes["audit_session"])
-            if session_key not in origins:
-                origins[session_key] = self.db.execute(
-                    "SELECT origin_kind,anchor_pid,anchor_generation,ambiguous "
-                    "FROM origin_sessions WHERE boot_id=? AND audit_session=?",
-                    session_key).fetchone()
-            origin = origins[session_key]
-            if origin is not None and origin["ambiguous"]:
-                self._ingest_one(observation, now)
-                self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
-                                (row["observation_id"],))
-                continue
-            if origin is not None and origin["origin_kind"] == "cron_jobman":
-                proof_candidates.append((row, observation, attributes, session_key, origin))
-        if not proof_candidates:
-            return
-
-        producers = {}
-        for unused_row, unused_observation, attributes, session_key, unused_origin in (
-                proof_candidates):
-            producers.setdefault(session_key, set()).add(attributes["producer_pid"])
-        broker_pids = {}
-        for session_key, pids in producers.items():
-            values = sorted(pids)
-            found = broker_pids.setdefault(session_key, set())
-            for offset in range(0, len(values), FIREWALL_PROOF_SQL_CHUNK):
-                chunk = values[offset:offset + FIREWALL_PROOF_SQL_CHUNK]
-                placeholders = ",".join("?" for unused in chunk)
-                rows = self.db.execute(
-                    "SELECT DISTINCT pid FROM process_nodes WHERE boot_id=? "
-                    "AND audit_session=? AND updated_at>=? AND "
-                    f"json_extract(payload,'$.ppid') IN ({placeholders})",
-                    (session_key[0], session_key[1], now - 30, *chunk)).fetchall()
-                found.update(item["pid"] for item in rows)
-
-        pairs = {}
-        receipt_count = 0
-        for session_key, pids in broker_pids.items():
-            values = sorted(pids)
-            for offset in range(0, len(values), FIREWALL_PROOF_SQL_CHUNK):
-                remaining = FIREWALL_PROOF_RECEIPT_CAP - receipt_count
-                if remaining <= 0:
-                    break
-                chunk = values[offset:offset + FIREWALL_PROOF_SQL_CHUNK]
-                placeholders = ",".join("?" for unused in chunk)
-                receipts = self.db.execute(
-                    "SELECT operation_id,kind,payload FROM firewall_receipts "
-                    "WHERE observed_at>=? AND json_extract(payload,'$.boot_id')=? "
-                    "AND json_extract(payload,'$.audit_session')=? AND "
-                    f"json_extract(payload,'$.broker_pid') IN ({placeholders}) "
-                    "ORDER BY observed_at DESC,rowid DESC LIMIT ?",
-                    (now - 30, session_key[0], session_key[1], *chunk,
-                     remaining)).fetchall()
-                receipt_count += len(receipts)
-                for receipt in receipts:
-                    pairs.setdefault(receipt["operation_id"], {})[
-                        receipt["kind"]] = json.loads(receipt["payload"])
-        pairs_by_broker = {}
-        for operation_id, pair in pairs.items():
-            begin = pair.get("begin")
-            if begin is None:
-                continue
-            key = (begin.get("boot_id"), begin.get("audit_session"),
-                   begin.get("broker_pid"))
-            pairs_by_broker.setdefault(key, []).append((operation_id, pair))
-
-        proof_pids = {}
-        proof_pid_count = 0
-
-        def add_proof_pids(boot_id, values):
-            nonlocal proof_pid_count
-            bucket = proof_pids.setdefault(boot_id, set())
-            added = set(values) - bucket
-            if proof_pid_count + len(added) > FIREWALL_PROOF_PROCESS_NODE_CAP:
-                return False
-            bucket.update(added)
-            proof_pid_count += len(added)
-            return True
-
-        for session_key, pids in producers.items():
-            add_proof_pids(session_key[0], pids)
-            add_proof_pids(session_key[0], broker_pids.get(session_key, ()))
-            origin = origins.get(session_key)
-            if origin is not None and origin["anchor_pid"]:
-                add_proof_pids(session_key[0], (origin["anchor_pid"],))
-        for pair in pairs.values():
-            begin = pair.get("begin")
-            result = pair.get("result")
-            if begin is None or result is None:
-                continue
-            add_proof_pids(begin.get("boot_id"), (
-                child.get("pid") for child in result.get("children", ())
-                if isinstance(child.get("pid"), int)))
-
-        nodes_by_session = {}
-        for boot_id, pids in proof_pids.items():
-            values = sorted(pids)
-            for offset in range(0, len(values), FIREWALL_PROOF_SQL_CHUNK):
-                chunk = values[offset:offset + FIREWALL_PROOF_SQL_CHUNK]
-                placeholders = ",".join("?" for unused in chunk)
-                node_rows = self.db.execute(
-                    "SELECT payload,pinned,generation FROM process_nodes "
-                    f"WHERE boot_id=? AND pid IN ({placeholders}) "
-                    "AND (pinned=1 OR updated_at>=?)",
-                    (boot_id, *chunk, now - 30)).fetchall()
-                for node_row in node_rows:
-                    node = dict(json.loads(node_row["payload"]),
-                                pinned=bool(node_row["pinned"]),
-                                _generation=node_row["generation"])
-                    key = (node.get("boot_id"), node.get("audit_session"))
-                    session = nodes_by_session.setdefault(
-                        key, {"by_pid": {}, "by_parent": {}})
-                    session["by_pid"].setdefault(node.get("pid"), []).append(node)
-                    session["by_parent"].setdefault(node.get("ppid"), []).append(node)
-
-        for row, observation, attributes, session_key, origin in proof_candidates:
-            session_nodes = nodes_by_session.get(
-                session_key, {"by_pid": {}, "by_parent": {}})
-            by_pid = session_nodes["by_pid"]
-            by_parent = session_nodes["by_parent"]
-            conflicted = False
-            candidate_pairs = []
-            for child in by_parent.get(attributes["producer_pid"], ()):
-                candidate_pairs.extend(pairs_by_broker.get(
-                    (session_key[0], session_key[1], child.get("pid")), ()))
-            for operation_id, pair in candidate_pairs:
-                begin = pair.get("begin")
-                result = pair.get("result")
-                if begin and result and not self._receipt_pair_valid(begin, result):
-                    conflicted = True
-                    continue
-                if (not self._receipt_pair_valid(begin, result) or
-                        begin.get("boot_id") != attributes["boot_id"] or
-                        result.get("boot_id") != attributes["boot_id"] or
-                        begin.get("audit_session") != attributes["audit_session"] or
-                        result.get("audit_session") != attributes["audit_session"]):
-                    continue
-                broker = self._one_pid_generation(
-                    by_pid.get(begin["broker_pid"], ()),
-                    begin["broker_pid"], begin["broker_start_ticks"],
-                    begin["monotonic_ns"], result["monotonic_ns"])
-                if (broker is not None and begin.get("producer_exe") and
-                        broker.get("exe") != begin["producer_exe"]):
-                    conflicted = True
-                    continue
-                targets = []
-                for child in result["children"]:
-                    target = self._one_pid_generation(
-                        by_pid.get(child["pid"], ()), child["pid"], child["start_ticks"],
-                        begin["monotonic_ns"], result["monotonic_ns"])
-                    if target is None:
-                        targets = []
-                        break
-                    if (target.get("ppid") != begin["broker_pid"] or
-                            target.get("exe") not in
-                            _BROKER_CHILD_EXECUTABLES.get(child["exe"], set()) or
-                            not target.get("argv") or
-                            target["argv"][0] != child["exe"] or
-                            target.get("argv_sha256") != child["argv_digest"]):
-                        conflicted = True
-                        targets = []
-                        break
-                    targets.append(target)
-                if broker is None or len(targets) != len(result["children"]):
-                    relevant = (list(by_pid.get(begin["broker_pid"], ())) +
-                                list(by_pid.get(result["target_pid"], ())))
-                    if any(node.get("ambiguous") or node.get("incomplete")
-                           for node in relevant):
-                        conflicted = True
-                    continue
-                sudo = self._parent_node(by_pid.get(broker.get("ppid"), ()), broker)
-                observed_ns = attributes["monotonic"] * 1000
-                if (sudo is None or sudo.get("exe") != "/usr/bin/sudo" or
-                        sudo.get("pid") != attributes["producer_pid"] or
-                        not begin["monotonic_ns"] - FIREWALL_PROCESS_FALLBACK_NS <=
-                        observed_ns <=
-                        result["monotonic_ns"] + FIREWALL_PROCESS_FALLBACK_NS):
-                    continue
-                engine = self._parent_node(by_pid.get(sudo.get("ppid"), ()), sudo)
-                if (engine is None or not engine.get("pinned") or
-                        engine.get("pid") != origin["anchor_pid"] or
-                        engine.get("_generation") !=
-                        origin["anchor_generation"] or
-                        not any("bin/jobs.py" in str(part) for part in engine.get("argv", [])) or
-                        "engine" not in engine.get("argv", []) or
-                        "foreground" not in engine.get("argv", [])):
-                    continue
-                from .lineage import project_ancestors
-                attributes.update({
-                    "local_disposition": JOBMAN_FIREWALL_CLASSIFIER,
-                    "operation_id": operation_id,
-                    "execution_id": begin.get("execution_id"),
-                    "job_id": begin.get("job_id"),
-                    "job_function": begin.get("function"),
-                    "origin_kind": "cron_jobman",
-                    "proof_status": "proven",
-                    "lineage": project_ancestors(targets + [broker, sudo, engine]),
-                    "lineage_sha256": hashlib.sha256(canonical_json(
-                        targets + [broker, sudo, engine]).encode()).hexdigest(),
-                })
-                observation["attributes"] = build_evidence(
-                    observation["kind"], observation["attributes"])
-                self._record_local_only(observation, self.local_only_diagnostic, now)
-                self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
-                                (row["observation_id"],))
-                break
-            else:
-                if conflicted:
-                    observation["attributes"]["proof_status"] = "conflict"
-                    self._ingest_one(observation, now)
-                    self._increment_saturating("provenance_proof_conflict")
-                    self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
-                                    (row["observation_id"],))
+    def _ingest_observation(self, observation, now, diagnostic):
+        if observation.get("kind") == "auth.sudo_command":
+            observation["attributes"] = build_evidence(
+                observation["kind"], observation.get("attributes", {}))
+            if self._expected_broker_sudo(observation):
+                observation["attributes"]["local_disposition"] = (
+                    APP_USER_FIREWALL_BROKER_CLASSIFIER)
+        self._ingest_one(observation, now, diagnostic=diagnostic)
 
     def _enqueue(self, event, now=None, delivery_class="ordinary"):
         now = now if now is not None else time.time()
@@ -1613,9 +653,7 @@ class Store:
             if aggregate and should_flush(aggregate, self.aggregation_config["flush_count"], due=True):
                 self._flush_aggregate(aggregate, now)
 
-    def ingest(self, observations, cursor_key=None, cursor=None, ssh_sessions=None,
-               audit_fragments=None, process_nodes=None, audit_health=None,
-               firewall_receipts=None, crond_launches=None, audit_uncertainty=None):
+    def ingest(self, observations, cursor_key=None, cursor=None, ssh_sessions=None):
         """Durably queue observations and advance their collector cursor atomically."""
         now = time.time()
         diagnostic = diagnostic_override(self.local_only_diagnostic_path, now=now)
@@ -1624,34 +662,8 @@ class Store:
         try:
             if ssh_sessions is not None:
                 self._record_ssh_sessions(ssh_sessions, now)
-            self._record_provenance(
-                audit_fragments, process_nodes, audit_health, firewall_receipts,
-                crond_launches, now, audit_uncertainty=audit_uncertainty)
             for found in observations:
-                self._record_local_origin(found, now)
-                self._enrich_sudo(found, now)
-                if found.get("kind") == "auth.sudo_command":
-                    found["attributes"] = build_evidence(
-                        found["kind"], found.get("attributes", {}))
-                if self._broker_candidate(found):
-                    boot_id = found["attributes"]["boot_id"]
-                    healthy = self.db.execute(
-                        "SELECT healthy FROM audit_health_epochs WHERE boot_id=? "
-                        "ORDER BY observed_at DESC,rowid DESC LIMIT 1", (boot_id,)).fetchone()
-                    if healthy is not None and healthy["healthy"]:
-                        self.hold_firewall_observation(found, now=now)
-                    else:
-                        self._ingest_one(found, now, diagnostic=diagnostic)
-                else:
-                    self._ingest_one(found, now, diagnostic=diagnostic)
-            self.db.execute(
-                "DELETE FROM origin_sessions WHERE rowid IN (SELECT rowid FROM origin_sessions "
-                "ORDER BY updated_at DESC,rowid DESC LIMIT -1 OFFSET ?)",
-                (SSH_SESSION_CAP,))
-            self._resolve_pending_firewall(
-                now, current_health=(None if audit_health is None else
-                                     bool(audit_health.get("healthy"))))
-            self._flush_expired_firewall(now)
+                self._ingest_observation(found, now, diagnostic)
             self._flush_due(now)
             if cursor_key is not None:
                 self.set_meta(f"cursor:{cursor_key}", cursor)
@@ -1669,17 +681,6 @@ class Store:
             self.db.execute("ROLLBACK")
             raise
 
-    def reconcile_pending_firewall(self, now=None):
-        """Fail open expired proof candidates independently of journal health."""
-        now = time.time() if now is None else now
-        self.db.execute("BEGIN IMMEDIATE")
-        try:
-            self._flush_expired_firewall(now)
-            self.db.execute("COMMIT")
-        except Exception:
-            self.db.execute("ROLLBACK")
-            raise
-
     @staticmethod
     def _event_grace(attributes):
         """This event's bounded hold: producer TTL plus its own tier window."""
@@ -1688,6 +689,11 @@ class Store:
                 not 0 < found <= ANNOTATION_MAX_CORRELATION_SECONDS):
             return ANNOTATION_MAX_GRACE_SECONDS
         return ANNOTATION_MAX_OPERATION_SECONDS + found
+
+    def has_pending_annotations(self):
+        """True while any durable FIM change still awaits its expected-change pass."""
+        return self.db.execute(
+            f"SELECT 1 FROM events WHERE {_ANNOTATION_PREDICATE} LIMIT 1").fetchone() is not None
 
     def annotate_pending_fim(self, expected_changes_path, active_paths=None, now=None,
                              directory_metadata_roots=()):
@@ -1706,8 +712,7 @@ class Store:
         try:
             rows = self.db.execute(
                 "SELECT id, payload, created, next_attempt, annotation_deadline "
-                "FROM events WHERE annotation_deadline > 0 AND attempts = 0 "
-                "AND last_error = '' ORDER BY created LIMIT 4096",
+                f"FROM events WHERE {_ANNOTATION_PREDICATE} ORDER BY created LIMIT 4096",
             ).fetchall()
             for row in rows:
                 event = json.loads(row["payload"])
@@ -1840,19 +845,40 @@ class Store:
         ).fetchall()
         return {row["path"]: json.loads(row["entry"]) for row in rows}
 
-    def record_fim_scan(self, profile, snapshot, observations, complete):
-        """Commit FIM evidence and its new complete baseline as one unit."""
+    def record_fim_scan(self, profile, snapshot, observations, complete, baseline=None):
+        """Commit FIM evidence and its new complete baseline as one unit.
+
+        With ``baseline`` (the dict the scan was diffed against) only the paths
+        that differ are written; a scan that changed nothing touches no
+        baseline row. Without it the whole baseline is rewritten, which is what
+        activation, re-enrollment and a tier's first scan need.
+        """
         now = time.time()
         self.db.execute("BEGIN IMMEDIATE")
         try:
             for found in observations:
                 self._ingest_one(found, now)
             if complete:
-                self.db.execute("DELETE FROM fim_baseline WHERE profile = ?", (profile,))
-                self.db.executemany(
-                    "INSERT INTO fim_baseline(profile, path, entry) VALUES(?, ?, ?)",
-                    ((profile, path, canonical_json(entry)) for path, entry in snapshot.items()),
-                )
+                if baseline is None:
+                    self.db.execute("DELETE FROM fim_baseline WHERE profile = ?", (profile,))
+                    self.db.executemany(
+                        "INSERT INTO fim_baseline(profile, path, entry) VALUES(?, ?, ?)",
+                        ((profile, path, canonical_json(entry))
+                         for path, entry in snapshot.items()),
+                    )
+                else:
+                    changed = [(profile, path, canonical_json(entry))
+                               for path, entry in snapshot.items()
+                               if baseline.get(path) != entry]
+                    removed = [(profile, path) for path in baseline if path not in snapshot]
+                    if changed:
+                        self.db.executemany(
+                            "INSERT INTO fim_baseline(profile, path, entry) VALUES(?, ?, ?) "
+                            "ON CONFLICT(profile, path) DO UPDATE SET entry = excluded.entry",
+                            changed)
+                    if removed:
+                        self.db.executemany(
+                            "DELETE FROM fim_baseline WHERE profile = ? AND path = ?", removed)
                 self.set_meta(f"fim_initialized:{profile}", True)
                 self.set_meta(f"fim_scan:{profile}", {
                     "at": now, "complete": True, "entries": len(snapshot),
@@ -2053,14 +1079,6 @@ class Store:
     def stats(self):
         events = self.db.execute("SELECT COUNT(*) AS count FROM events").fetchone()["count"]
         aggregates = self.db.execute("SELECT COUNT(*) AS count FROM aggregates").fetchone()["count"]
-        process_nodes = self.db.execute(
-            "SELECT COUNT(*) AS count FROM process_nodes").fetchone()["count"]
-        engine_anchors = self.db.execute(
-            "SELECT COUNT(*) AS count FROM process_nodes WHERE pinned=1").fetchone()["count"]
-        pending_firewall = self.db.execute(
-            "SELECT COUNT(*) AS count FROM pending_firewall WHERE state='pending'").fetchone()["count"]
-        last_health = self.db.execute(
-            "SELECT payload FROM audit_health_epochs ORDER BY observed_at DESC LIMIT 1").fetchone()
         return {
             "spooled_events": events,
             "pending_aggregates": aggregates,
@@ -2076,24 +1094,6 @@ class Store:
             "local_only_diagnostic_delivered": int(self.get_meta(
                 "local_only_diagnostic_delivered", 0)),
             "local_only_suppressed": int(self.get_meta("local_only_suppressed", 0)),
-            "provenance": {
-                "process_nodes": process_nodes,
-                "engine_anchors": engine_anchors,
-                "pending_firewall": pending_firewall,
-                "audit_health": json.loads(last_health["payload"]) if last_health else None,
-                "payload_budget_bytes": STATE_MAX_BYTES,
-                "wal_checkpoint_target_bytes": WAL_MAX_BYTES,
-                "pending_cap_flush": int(self.get_meta(
-                    "provenance_pending_cap_flush", 0)),
-                "pending_expired": int(self.get_meta(
-                    "provenance_pending_expired", 0)),
-                "proof_conflict": int(self.get_meta(
-                    "provenance_proof_conflict", 0)),
-                "health_fail_open": int(self.get_meta(
-                    "provenance_health_fail_open", 0)),
-                "pending_downgrade_flush": int(self.get_meta(
-                    "provenance_pending_downgrade_flush", 0)),
-            },
             "local_only_last_seen": self.get_meta("local_only_last_seen"),
             "local_only_diagnostic": dict(self.local_only_diagnostic),
         }

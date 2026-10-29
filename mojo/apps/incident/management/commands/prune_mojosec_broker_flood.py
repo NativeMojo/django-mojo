@@ -1,4 +1,10 @@
-"""Narrow, audit-preserving repair for the September 2026 broker flood."""
+"""Narrow, audit-preserving repair for a firewall-broker sudo flood.
+
+A flood is one ordinary ``auth.sudo_command`` Event per minute from one sensor
+whose broker sudo was not the deployed automation's — typically a job engine
+an operator started from an SSH shell, so every broker sudo carried that
+shell's audit session until cron relaunched the engine (maestro #9769).
+"""
 
 import datetime
 import json
@@ -11,7 +17,6 @@ from django.utils import dateparse, timezone
 
 BROKER_CATEGORY = "mojosec.auth.sudo_command"
 BROKER_PATH = "/usr/local/sbin/mojo-firewall-broker"
-PROOF_STATUS = "missing"
 BATCH_SIZE = 5000
 
 
@@ -34,7 +39,6 @@ def _fingerprint_events(sensor, since, before):
         metadata__mojosec__sensor_id=sensor,
         metadata__mojosec__kind="auth.sudo_command",
         metadata__mojosec__evidence__command_path=BROKER_PATH,
-        metadata__mojosec__evidence__proof_status=PROOF_STATUS,
     )
 
 
@@ -89,7 +93,7 @@ def _delete_safe_batch(sensor, since, before, ids):
 
 
 class Command(BaseCommand):
-    help = "Dry-run or prune the exact missing-proof firewall-broker MojoSec flood"
+    help = "Dry-run or prune an exact firewall-broker sudo MojoSec flood"
 
     def add_arguments(self, parser):
         parser.add_argument("--sensor", required=True)

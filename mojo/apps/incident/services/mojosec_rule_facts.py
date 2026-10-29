@@ -140,7 +140,9 @@ def _expected_change(context):
 
 def routine_local_event(wire):
     """One exact local-only proof shared by ingestion and policy evaluation."""
-    from mojo.mojosec.disposition import classify_local_only, JOBMAN_FIREWALL_CLASSIFIER
+    from mojo.mojosec.disposition import (
+        APP_USER_FIREWALL_BROKER_CLASSIFIER, FIREWALL_BROKER_PATH, classify_local_only,
+    )
     from mojo.mojosec import protocol
 
     try:
@@ -149,16 +151,13 @@ def routine_local_event(wire):
         return False
     attributes = wire["attributes"]
     classifier = classify_local_only(wire, wire=True)
-    if classifier == JOBMAN_FIREWALL_CLASSIFIER:
-        # This classifier's envelope is shared with the sensor. The explicit
-        # provenance requirements prevent a marker or executable name alone
-        # from granting generic command suppression.
+    if classifier == APP_USER_FIREWALL_BROKER_CLASSIFIER:
+        # This classifier's envelope is shared with the sensor, which only
+        # stamps it on the app login UID's own tty-less broker sudo. The exact
+        # untruncated path requirement keeps a marker or an executable name
+        # alone from granting generic command suppression.
         return bool(
-            attributes.get("proof_status") == "proven" and
-            attributes.get("origin_kind") == "cron_jobman" and
-            isinstance(attributes.get("lineage_sha256"), str) and
-            _DIGEST.fullmatch(attributes["lineage_sha256"]) and
-            attributes.get("command_path") == "/usr/local/sbin/mojo-firewall-broker" and
+            attributes.get("command_path") == FIREWALL_BROKER_PATH and
             not any(name in attributes for name in (
                 "command_truncated", "command_path_truncated", "cwd_truncated")))
     return bool(classifier)

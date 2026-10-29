@@ -92,21 +92,6 @@ sys.exit(code)
                        item.get("producer_exe") == "/usr/bin/python3.12"
                        for item in receipts),
                    "the broker must carry identity fields journald can lose after fast exit")
-    from mojo.mojosec.lineage import firewall_receipt
-    parsed = [firewall_receipt({"SYSLOG_IDENTIFIER": "mojo-firewall-broker",
-                                "_UID": "0", "_PID": str(item["broker_pid"]),
-                                "_BOOT_ID": "a" * 32, "_TTY": "",
-                                "MESSAGE": json.dumps(item)})
-              for item in receipts]
-    th.assert_true(all(parsed),
-                   "the sensor must accept root-authored receipts after journald loses process metadata")
-    conflicted = dict(receipts[0], audit_session=10)
-    th.assert_eq(firewall_receipt({
-        "SYSLOG_IDENTIFIER": "mojo-firewall-broker", "_UID": "0",
-        "_PID": str(conflicted["broker_pid"]), "_BOOT_ID": "a" * 32,
-        "_AUDIT_SESSION": "9", "_EXE": "/usr/bin/python3.12",
-        "MESSAGE": json.dumps(conflicted),
-    }), None, "trusted journal metadata must still veto a conflicting broker identity")
 
 
 @th.django_unit_test()

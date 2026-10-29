@@ -17,11 +17,13 @@ class Runtime:
     def __init__(self, config, store=None, sender=None, identity=None):
         self.config = config
         self.identity = dict(identity if identity is not None else runtime_identity())
+        collectors = config["collectors"]
         self.store = store or Store(
             config["state_dir"], config["sensor_id"],
             config["aggregation"], config["delivery"],
+            expected_app_uid=(collectors["journal"].get("app_uid")
+                              if collectors["journal"]["enabled"] else None),
         )
-        collectors = config["collectors"]
         self.journal = JournalCollector(collectors["journal"]) if collectors["journal"]["enabled"] else None
         self.nginx = NginxCollector(collectors["nginx"]) if collectors["nginx"]["enabled"] else None
         self.profile = resolve_profile(config.get("profile"))
@@ -75,50 +77,13 @@ class Runtime:
         try:
             cursor = self.store.get_meta(f"cursor:{collector.name}")
             if collector.name == "journal":
-                from mojo.deploy.audit import read_health, validate_health
-                previous_health = self.store.get_meta("audit_health")
-                pre_health = read_health()
-                pre_result = (validate_health(
-                    pre_health, previous=previous_health)
-                    if pre_health is not None else
-                    {"healthy": False, "reason": "sidecar_unavailable"})
                 result = collector.poll(
-                    cursor, ssh_sessions=self.store.load_ssh_sessions(),
-                    audit_fragments=self.store.load_audit_fragments())
-                post_health = read_health()
-                post_result = (validate_health(post_health, previous=pre_health)
-                               if post_health is not None and pre_health is not None else
-                               {"healthy": False, "reason": "post_poll_sidecar_unavailable"})
-                bracket = bool(
-                    pre_result["healthy"] and post_result["healthy"] and
-                    not result.get("malformed") and
-                    pre_health["boot_id"] == post_health["boot_id"] and
-                    pre_health["generation"] == post_health["generation"] and
-                    pre_health["rules_sha256"] == post_health["rules_sha256"] and
-                    post_health["lost"] == pre_health["lost"])
-                health_source = post_health
-                if result.get("malformed") and health_source is None:
-                    # Parser loss is explicit negative authority even when
-                    # the current sidecar is unavailable; never preserve an
-                    # older healthy epoch for this observation's later proof.
-                    health_source = pre_health or previous_health
-                health_value = (dict(
-                    health_source, healthy=bracket,
-                    reason=("journal_parser_loss" if result.get("malformed") else
-                            "" if bracket else post_result.get("reason", "poll_health_changed")))
-                    if health_source is not None else None)
+                    cursor, ssh_sessions=self.store.load_ssh_sessions())
             else:
-                health_value = None
                 result = collector.poll(cursor)
             self.store.ingest(
                 result["observations"], cursor_key=collector.name, cursor=result["cursor"],
                 ssh_sessions=result.get("ssh_sessions"),
-                audit_fragments=result.get("audit_fragments"),
-                audit_uncertainty=result.get("audit_uncertainty"),
-                process_nodes=result.get("process_nodes"),
-                audit_health=health_value,
-                firewall_receipts=result.get("firewall_receipts"),
-                crond_launches=result.get("crond_launches"),
             )
             self._collector_ok(collector.name, result.get("malformed", 0))
         except Exception as err:
@@ -294,10 +259,6 @@ class Runtime:
                 directory_metadata_roots=self.content_roots)
         except Exception as err:
             self._collector_error("expected_changes", err)
-        try:
-            self.store.reconcile_pending_firewall()
-        except Exception as err:
-            self._collector_error("firewall_reconciliation", err)
         try:
             self.last_delivery = self.sender.send_once()
         except Exception as err:

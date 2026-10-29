@@ -212,15 +212,15 @@ def test_global_broker_preconditions_are_retryable(opts):
 @th.unit_test("broker function-operation matrix is closed")
 def test_function_matrix(opts):
     from mojo.deploy import firewall_broker as broker
-    from mojo.mojosec.store import _BROKER_FUNCTION_OPERATIONS
 
     with th.assert_raises(broker.BrokerError):
         broker.build_operation({"operation": "rule.insert", "chain": "INPUT",
                                 "source": "192.0.2.8"},
                                function="evil.module.call")
-    th.assert_eq(
-        _BROKER_FUNCTION_OPERATIONS, broker._FUNCTION_OPERATIONS,
-        "MojoSec governance drifted from the broker's closed authority matrix")
+    th.assert_true(all(
+        function.startswith("mojo.apps.incident.") and operations
+        for function, operations in broker._FUNCTION_OPERATIONS.items()),
+        "the broker's closed authority matrix must name only incident-app callers")
 
 
 @th.unit_test("broker refuses configured aggregate collision for operator sets")

@@ -237,25 +237,25 @@ def test_expected_fim_requires_bounded_annotation_and_live_central_registration(
 @th.django_unit_test()
 def test_only_complete_exact_routine_command_proof_can_suppress_sudo(opts):
     from mojo.apps.incident.services import mojosec_rule_facts as facts
-    from mojo.mojosec.disposition import JOBMAN_FIREWALL_CLASSIFIER
+    from mojo.mojosec.disposition import APP_USER_FIREWALL_BROKER_CLASSIFIER
 
     with _fixture("sudo") as (key, sensor):
         attributes = {
-            "actor": "www", "target_user": "root",
+            "actor": "ec2-user", "target_user": "root",
             "command": "/usr/local/sbin/mojo-firewall-broker",
             "command_path": "/usr/local/sbin/mojo-firewall-broker",
             "attribution_provenance": "none",
-            "local_disposition": JOBMAN_FIREWALL_CLASSIFIER,
-            "operation_id": "a" * 32, "origin_kind": "cron_jobman",
-            "proof_status": "proven", "lineage_sha256": "b" * 64,
+            "local_disposition": APP_USER_FIREWALL_BROKER_CLASSIFIER,
+            "audit_loginuid": 1000, "boot_id": "a" * 32, "audit_session": 9,
         }
-        unused_receipt, proven = _receipt(key, sensor, "auth.sudo_command", attributes)
-        th.assert_eq(facts.field_value(proven, "mojosec_routine"), True,
-                     "the exact proven jobman broker operation may stay quiet")
-        for changes in ({"proof_status": "partial"}, {"proof_status": "conflict"},
-                        {"origin_kind": "ssh"}, {"command_truncated": True},
+        unused_receipt, expected = _receipt(key, sensor, "auth.sudo_command", attributes)
+        th.assert_eq(facts.field_value(expected, "mojosec_routine"), True,
+                     "the exact expected app-user broker sudo may stay quiet")
+        for changes in ({"local_disposition": "jobman_firewall_operation_v1"},
+                        {"tty": "pts/1"}, {"command_truncated": True},
                         {"command": attributes["command"] + " --status"},
-                        {"operation_id": "not-an-operation"},
+                        {"target_user": "ec2-user"}, {"audit_loginuid": None},
+                        {"attribution_provenance": "audit_session", "source_ip": "192.0.2.91"},
                         {"source_ip": "192.0.2.91"},
                         {"command_path": "/usr/bin/systemctl", "command": "/usr/bin/systemctl restart api"}):
             unused_receipt, event = _receipt(
@@ -440,17 +440,16 @@ def test_ingestion_uses_the_same_strict_local_command_proof_as_policy(opts):
     from mojo.apps.incident.models import Incident, MojoSecReceipt
     from mojo.apps.incident.services import mojosec, mojosec_rule_facts as facts
     from mojo.mojosec import protocol
-    from mojo.mojosec.disposition import JOBMAN_FIREWALL_CLASSIFIER
+    from mojo.mojosec.disposition import APP_USER_FIREWALL_BROKER_CLASSIFIER
 
     with _fixture("ingest-local") as (key, sensor):
         attributes = {
-            "actor": "www", "target_user": "root",
+            "actor": "ec2-user", "target_user": "root",
             "command": "/usr/local/sbin/mojo-firewall-broker",
             "command_path": "/usr/local/sbin/mojo-firewall-broker",
             "attribution_provenance": "none",
-            "local_disposition": JOBMAN_FIREWALL_CLASSIFIER,
-            "operation_id": "a" * 32, "origin_kind": "cron_jobman",
-            "proof_status": "proven", "lineage_sha256": "b" * 64,
+            "local_disposition": APP_USER_FIREWALL_BROKER_CLASSIFIER,
+            "audit_loginuid": 1000, "boot_id": "a" * 32, "audit_session": 9,
         }
         observed = protocol.utc_now()
         template = {
@@ -460,13 +459,9 @@ def test_ingestion_uses_the_same_strict_local_command_proof_as_policy(opts):
             "count": 1, "recommendation": "review",
         }
         events = []
-        for proof in ("proven", "conflict", None):
+        for changes in ({}, {"tty": "pts/1"}, {"command_truncated": True}):
             wire = dict(template, id=uuid.uuid4().hex + uuid.uuid4().hex,
-                        attributes=dict(attributes))
-            if proof is None:
-                wire["attributes"].pop("proof_status")
-            else:
-                wire["attributes"]["proof_status"] = proof
+                        attributes=dict(attributes, **changes))
             events.append(wire)
         result = mojosec.ingest_batch(
             key, protocol.make_batch(sensor, events, policy_revision="facts-test"),
@@ -477,15 +472,15 @@ def test_ingestion_uses_the_same_strict_local_command_proof_as_policy(opts):
             receipt = MojoSecReceipt.objects.get(api_key=key, wire_event_id=wire["id"])
             if index == 0:
                 th.assert_true(receipt.event_id is None and receipt.incident_id is None,
-                               "an exact proven local broker operation may remain an eventless receipt")
+                               "an exact expected local broker sudo may remain an eventless receipt")
                 th.assert_eq(receipt.replay_features["feature_schema"], "local_only_receipt_v1",
-                             "only exact proven routine commands may use the local-only replay schema")
+                             "only the exact expected broker sudo may use the local-only replay schema")
             else:
                 th.assert_true(receipt.event_id is not None,
-                               "conflicting or missing broker proof must retain the central Event")
+                               "a broker sudo near match must retain the central Event")
                 th.assert_true(receipt.incident_id is not None and Incident.objects.filter(
                     pk=receipt.incident_id).exists(),
-                    "conflicting or missing broker proof must remain visible as a review Incident")
+                    "a broker sudo near match must remain visible as a review Incident")
                 th.assert_eq(facts.field_value(receipt.event, "mojosec_routine"), False,
                              "ingestion and policy must agree that broker near matches are not routine")
 
