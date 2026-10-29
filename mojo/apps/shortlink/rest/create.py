@@ -13,10 +13,12 @@ def on_link(request, pk=None):
 @md.requires_auth()
 def on_create_link(request):
     from mojo.apps import shortlink
-    from mojo.apps.shortlink.services.access import require_group_access, shareable_file
+    from mojo.apps.shortlink.services.access import (
+        require_create_perms, require_group_access, shareable_file)
     from mojo.models.rest import _resolve_stamp_actor
 
     require_group_access(request)
+    require_create_perms(request)
 
     data = request.DATA
     original_url = data.get("url", "")
