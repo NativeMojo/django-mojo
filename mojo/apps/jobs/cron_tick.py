@@ -101,7 +101,10 @@ class CronTicker:
         The start tick is what makes a scheduler restart lossless: a process
         that comes up at hh:mm:03 covers minute hh:mm instead of waiting for
         hh:mm+1. For a minute the previous scheduler already ran, the
-        fleet-once claims make it a no-op.
+        fleet-once claims make it a no-op — except for a per_node=True
+        function, which skips the claim, and when Redis is unreachable, where
+        claim_fleet_once fails open; a restart inside one minute then runs
+        that minute's functions twice (no framework function is per_node).
         """
         try:
             self.load()

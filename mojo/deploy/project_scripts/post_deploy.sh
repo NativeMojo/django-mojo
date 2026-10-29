@@ -63,24 +63,35 @@ PROBE_SECONDS="${PROBE_SECONDS:-30}"
 APP_USER="${APP_USER:-ec2-user}"
 WEB_USER="${WEB_USER:-www}"
 ASGI_WORKERS="${ASGI_WORKERS:-4}"
-NGINX_ETC="${NGINX_ETC:-/etc/nginx}"
-SYSTEMD_ETC="${SYSTEMD_ETC:-/etc/systemd/system}"
-CRON_ETC="${CRON_ETC:-/etc/cron.d}"
 if [ "$(id -u)" = "0" ]; then
     # Root never accepts an ambient interpreter path. `-E -P` below removes
     # application environment and project cwd from the import search path.
     JOBMAN_SYSTEM_PYTHON="/usr/bin/python3"
     JOBMAN_SUDO="/usr/bin/sudo"
+    # The /etc locations are test seams; root writes to and, since the
+    # stale-cron sweep, deletes from them, so root reads the fixed paths only.
+    NGINX_ETC="/etc/nginx"
+    SYSTEMD_ETC="/etc/systemd/system"
+    CRON_ETC="/etc/cron.d"
 else
     JOBMAN_SYSTEM_PYTHON="${JOBMAN_SYSTEM_PYTHON:-/usr/bin/python3}"
     JOBMAN_SUDO="${JOBMAN_SUDO:-/usr/bin/sudo}"
+    NGINX_ETC="${NGINX_ETC:-/etc/nginx}"
+    SYSTEMD_ETC="${SYSTEMD_ETC:-/etc/systemd/system}"
+    CRON_ETC="${CRON_ETC:-/etc/cron.d}"
 fi
-
-# $PROJ_PATH as an ERE literal, for the stale-cron sweep's exact-path match.
-PROJ_PATH_RE="$(printf '%s' "$PROJ_PATH" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() { echo "[$(date '+%H:%M:%S')] FATAL: $*" >&2; exit 1; }
+
+# The stale-cron sweep matches $PROJ_PATH as an exact ERE literal followed by a
+# boundary, so the path must be one that can be matched: no trailing slash
+# (render strips it too), never the root directory, no newline.
+PROJ_PATH="${PROJ_PATH%/}"
+case "$PROJ_PATH" in
+    ""|*[$'\n']*) die "invalid project path" ;;
+esac
+PROJ_PATH_RE="$(printf '%s' "$PROJ_PATH" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
 valid_node_type() { [[ "$1" =~ ^[a-z][a-z0-9_-]{0,31}$ ]]; }
 safe_name() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$ ]]; }
 
@@ -141,7 +152,11 @@ safe_destination() {
 record_file() {
     local destination="$1" key
     safe_destination "$destination" || die "unsupported deployment destination: $destination"
-    grep -Fq "$(printf '\t%s' "$destination")" "$FILES" 2>/dev/null && return 0
+    # Whole-field match: a substring match would let a recorded
+    # /etc/cron.d/5_reports_v2 hide /etc/cron.d/5_reports, which the sweep
+    # would then delete without a snapshot.
+    awk -F'\t' -v d="$destination" '$2 == d { found = 1 } END { exit !found }' \
+        "$FILES" 2>/dev/null && return 0
     key="$(printf '%s' "$destination" | cksum | awk '{print $1}')"
     printf '%s\t%s\n' "$key" "$destination" >> "$FILES"
     if [ -e "$destination" ] || [ -L "$destination" ]; then
@@ -257,19 +272,23 @@ remove_retired() {
 # /opt/api never sweeps /opt/api2 or /opt/api-admin. Only regular files are
 # swept (symlinks are skipped), and each one is snapshotted first so
 # --rollback-candidate / --activate-previous put it back. This is what
-# removes the retired per-minute 2_mojo_cron entry on an existing node.
+# removes the retired per-minute 2_mojo_cron entry on an existing node. It
+# runs after the API probe, right before the scheduler is retired, so on the
+# first adopting deploy the old crond tick keeps covering the minutes the
+# activation itself takes.
 sweep_stale_cron() {
-    local path name first
+    local path name
     for path in "$CRON_ETC"/*; do
         [ -f "$path" ] && [ ! -L "$path" ] || continue
         name="$(basename "$path")"
         safe_name "$name" || continue
         [ -f "$PROJ_PATH/var/deploy/cron.d/$name" ] && continue
         grep -qE -- "$PROJ_PATH_RE([/[:space:]]|$)" "$path" || continue
-        first="$(head -c 200 "$path" | head -1)"
         record_file "$path"
         rm -f -- "$path"
-        log "WARNING: retired stale project cron $name: $first"
+        # Name only: a cron line can carry an inline credential, and this log
+        # line lands in the deploy journal.
+        log "WARNING: retired stale project cron $name (snapshotted for rollback)"
     done
 }
 
@@ -387,7 +406,6 @@ activate_api() {
     install_directory "$PROJ_PATH/aws/nginx/sec.d" "$NGINX_ETC/sec.d"
     install_directory "$PROJ_PATH/var/deploy/systemd" "$SYSTEMD_ETC"
     install_directory "$PROJ_PATH/var/deploy/cron.d" "$CRON_ETC"
-    sweep_stale_cron
     remove_retired
 
     set_phase nginx_check
@@ -407,6 +425,7 @@ activate_api() {
     set_phase api_probe
     log "Probing API"
     probe_api || die "candidate API did not return HTTP 200"
+    sweep_stale_cron
     retire_scheduler
 }
 

@@ -99,17 +99,19 @@ The built-in `api` path:
    pid, mode and application, when another session has it. Every fixed
    advisory-lock namespace lives in `mojo/helpers/advisory_locks.py`; a new
    lock takes a new number there;
-3. renders and installs the project's nginx, cron, and systemd files, then
-   removes stale project cron files (see "cron.d inventory" below);
+3. renders and installs the project's nginx, cron, and systemd files;
 4. applies explicit removals from `aws/node_retired.conf`;
 5. runs the real `nginx -t`;
 6. restarts `mojo-asgi`, reloads nginx, and requires `PROBE_URL` to answer
    exactly HTTP 200;
-7. retires the running jobs scheduler (`jobman stop scheduler --grace 2`) so
+7. removes stale project cron files (see "cron.d inventory" below) and
+   retires the running jobs scheduler (`jobman stop scheduler --grace 2`) so
    the next `3_mojo_jobs` tick starts one from the new release — the scheduler
    ticks `@schedule` functions, so the release is not live until it is
-   replaced. A scheduler that survives is a logged warning (`aws-check`
-   reports `cron.heartbeat_missing`), not a failed release.
+   replaced. Both happen only after the probe, so a failed activation leaves
+   the old cron entry and the old scheduler in place. A scheduler that
+   survives is a logged warning (`aws-check` reports
+   `cron.heartbeat_missing`), not a failed release.
 
 The nginx and probe checks are the final acceptance gates. A failed required command
 earlier in the transaction, such as dependency installation, migration, static
@@ -133,10 +135,13 @@ contract**, i.e. live in `aws/cron.d/`. Activation sweeps every regular file
 in `/etc/cron.d` that mentions `$PROJ_PATH` — the exact path followed by `/`,
 whitespace or end of line, so `/opt/api` never matches `/opt/api2` or
 `/opt/api-admin` — and is not in the rendered contract, snapshotting it first
-so `--rollback-candidate` and `--activate-previous` restore it. Symlinks are
-never swept. Files that do not mention the path are left alone;
+so `--rollback-candidate` and `--activate-previous` restore it. The deploy
+log names the swept file but never prints its contents. Symlinks are never
+swept. Files that do not mention the path are left alone;
 `aws/node_retired.conf` remains the way to remove those. `check_node
---section cron` grades the same rule.
+--section cron` grades the same rule. An operator cron that must mention the
+project path and survive deploys belongs in `aws/cron.d/` — a hand-installed
+one is swept on the next deploy, and its snapshot is only used by a rollback.
 
 ### Custom profiles
 

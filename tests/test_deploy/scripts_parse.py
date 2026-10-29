@@ -52,15 +52,13 @@ def test_post_deploy_sweeps_stale_cron_and_retires_the_scheduler_in_order(opts):
     start = source.index("activate_api() {")
     body = source[start:source.index("\n}\n", start)]
     install = body.index('install_directory "$PROJ_PATH/var/deploy/cron.d" "$CRON_ETC"')
-    sweep = body.index("\n    sweep_stale_cron\n")
-    retired = body.index("\n    remove_retired\n")
-    th.assert_true(install < sweep < retired,
-                   "the sweep must run after the rendered cron.d is installed "
-                   "(so shipped names are exempt) and before remove_retired")
     probe = body.index('probe_api || die')
+    sweep = body.index("\n    sweep_stale_cron\n")
     retire = body.index("\n    retire_scheduler")
-    th.assert_true(probe < retire,
-                   "the running scheduler is retired only once the probe accepted "
-                   "the candidate — a failed activation keeps the old scheduler")
+    th.assert_true(install < probe < sweep < retire,
+                   "the sweep runs after the rendered cron.d is installed (so "
+                   "shipped names are exempt) and after the probe accepted the "
+                   "candidate, right before the scheduler is retired — a failed "
+                   "activation keeps both the old cron entry and the old scheduler")
     th.assert_eq(body.rstrip().splitlines()[-1].strip(), "retire_scheduler",
                  "retirement is the last activation step")

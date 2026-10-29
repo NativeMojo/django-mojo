@@ -349,6 +349,8 @@ def test_post_deploy_retires_stale_project_cron_and_restores_on_rollback(opts):
                        "the retired per-minute cron naming the project path must be swept")
         th.assert_in("retired stale project cron 2_mojo_cron", done.stdout,
                      "the sweep must say what it removed")
+        th.assert_true("bin/cron.py" not in done.stdout,
+                       "the sweep logs the file name only — a cron line may carry a credential")
         for name, body in survivors.items():
             path = os.path.join(h.cron_etc, name)
             th.assert_true(os.path.isfile(path), f"{name} must survive the sweep")
@@ -371,6 +373,8 @@ def test_post_deploy_retires_stale_project_cron_and_restores_on_rollback(opts):
                        "retiring the scheduler is the last activation command")
 
         h.clear_commands()
+        with open(stale, "w") as handle:
+            handle.write(stale_body)
         failed_env = h.environment.copy()
         failed_env["CURL_CODE"] = "500"
         failed = h.run(env=failed_env)
@@ -378,6 +382,9 @@ def test_post_deploy_retires_stale_project_cron_and_restores_on_rollback(opts):
                        "a candidate that fails the probe must not activate")
         th.assert_true(stop not in h.commands(),
                        "a failed activation must leave the old scheduler running")
+        th.assert_true(os.path.isfile(stale),
+                       "a failed activation must leave the old cron entry in place")
+        os.remove(stale)
 
         rolled_back = h.run("--rollback-candidate")
         th.assert_eq(rolled_back.returncode, 0, rolled_back.stderr)

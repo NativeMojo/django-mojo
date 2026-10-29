@@ -179,7 +179,7 @@ def test_absent_rendered_contract_is_info_never_fail(opts):
                      "the INFO must point at running post_deploy")
 
     th.assert_true(
-        not any("grep -lF" in c for c in run.commands),
+        not any("grep -lE" in c for c in run.commands),
         "the stale-cron sweep must be SKIPPED with no contract — grading "
         "every installed cron stale against an empty set is noise")
 
@@ -536,7 +536,7 @@ def test_rendered_contract_present_runs_the_stale_sweep(opts):
     run = FakeRunner([
         (f"ls -1 {PROJ}/var/deploy/cron.d", (0, "1_certbot", "")),
         ("if [ ! -f ", (0, "SAME", "")),
-        ("grep -lF", (0, "/etc/cron.d/1_certbot\n/etc/cron.d/1mojocron", "")),
+        ("grep -lE", (0, "/etc/cron.d/1_certbot\n/etc/cron.d/1mojocron", "")),
     ])
     report = cn.Report()
     cn.check_cron(report, run, PROJ)

@@ -174,7 +174,10 @@ start, then at every wall-clock minute boundary**. There is no per-minute
 cron.d entry any more: the old `2_mojo_cron` booted a full Django process on
 every node every minute (about 1.8 s of CPU and 117 MB on a small API node),
 and the deploy sweep removes it on the next deploy. The tick runs as the
-application account, where the cron.d entry ran as the web user.
+application account, where the cron.d entry ran as the web user: `@schedule`
+functions now share the job engine's account, including any sudoers grants
+that account holds (the broker entries on a managed node), so a project cron
+function that used to be confined to the web user is not any more.
 
 `JOBS_SCHEDULER_CRON_TICK = False` turns the tick off. With the cron.d entry
 retired that means **no `@schedule` function runs anywhere** unless the
@@ -191,9 +194,11 @@ Three things follow from hosting the tick in the scheduler:
   start tick covers that minute a few seconds late. The claims make a tick
   for a minute the previous scheduler already ran a no-op — except for a
   `per_node=True` function, which runs twice in a restart minute (none of the
-  framework's functions are per-node). The one residual loss: a stop landing
-  inside the ~50 ms batch at the top of a minute skips the functions not yet
-  claimed that minute, the same exposure as config-sync's restart.
+  framework's functions are per-node, and with Redis unreachable the claim
+  fails open, so a restart inside one minute runs that minute twice). The one
+  residual loss: a stop landing inside the ~50 ms batch at the top of a minute
+  skips the functions not yet claimed that minute, the same exposure as
+  config-sync's restart.
 - **A function still running when the scheduler is killed is lost for that
   minute.** The ticker joins its thread for a bounded time at stop; `jobman`'s
   recycle sends TERM, waits 2 s, then KILLs. The function's 120 s claim stands,

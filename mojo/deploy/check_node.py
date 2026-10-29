@@ -655,7 +655,10 @@ def check_cron(report, run, proj):
     # mentions the project path is ours; if the rendered set no longer ships
     # that name, one surviving means post_deploy has not run since it was
     # retired.
-    rc, out, _ = run(f"grep -lF -- {q(proj)} /etc/cron.d/* 2>/dev/null")
+    # Same boundary as the sweep: the exact path followed by `/`, whitespace
+    # or end of line, so /opt/api never grades /opt/api2's crons stale.
+    pattern = re.escape(proj) + "([/[:space:]]|$)"
+    rc, out, _ = run(f"grep -lE -- {q(pattern)} /etc/cron.d/* 2>/dev/null")
     if rc > 1 and not out:
         report.info("cron", "stale sweep skipped", "could not scan /etc/cron.d")
         return
