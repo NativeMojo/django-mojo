@@ -24,7 +24,11 @@ def shareable_file(request, raw_id):
     if isinstance(raw_id, int):
         pk = raw_id
     elif isinstance(raw_id, str) and raw_id.strip().isascii() and raw_id.strip().isdigit():
-        pk = int(raw_id.strip())
+        # int() refuses more than sys.get_int_max_str_digits() digits.
+        try:
+            pk = int(raw_id.strip())
+        except ValueError:
+            raise _denied()
     else:
         raise _denied()
     if pk <= 0:

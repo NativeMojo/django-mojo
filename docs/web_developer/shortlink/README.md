@@ -204,7 +204,7 @@ A missing, malformed, inactive or not-shareable `file` is refused with one
 answer, so it does not reveal whether the file exists:
 
 ```json
-{"status": false, "code": 403, "error": "Permission denied"}
+{"status": false, "code": 403, "error": "Permission denied", "error_status": 403}
 ```
 
 (HTTP 403. Before this check the route answered HTTP 200 with
