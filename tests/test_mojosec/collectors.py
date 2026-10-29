@@ -761,6 +761,92 @@ def test_standard_profile_is_immutable_bounded_and_covers_system_python(opts):
 
 
 @th.django_unit_test()
+def test_al2023_web_v3_moves_usr_local_lib_to_the_slow_tier(opts):
+    from mojo.mojosec.config import build_config, validate_effective_config
+    from mojo.mojosec.profiles import PROFILES, profile_identity, resolve_profile
+
+    v2 = resolve_profile("al2023-web-v2")
+    v3 = resolve_profile("al2023-web-v3")
+    fast = [item["path"] for item in v3["tiers"]["fast"]["targets"]]
+    slow = [item["path"] for item in v3["tiers"]["slow"]["targets"]]
+    th.assert_true("/usr/local/lib" not in fast,
+                   "the 28k-file root-pip site tree must leave the 60-second tier")
+    th.assert_eq(slow.count("/usr/local/lib"), 1,
+                 "the site tree must be walked by the six-hour tier exactly once")
+    th.assert_eq([item["path"] for item in v2["tiers"]["fast"]["targets"] if item["path"] != "/usr/local/lib"],
+                 fast, "no other fast target may move with it")
+    th.assert_eq(v3["tiers"]["slow"]["interval_seconds"], 21600,
+                 "the slow tier keeps its six-hour cadence")
+    th.assert_eq(v3["rpm"]["skip_host_tier_roots"], True,
+                 "v3 tells the rpm tier to leave covered site roots to the host tiers")
+    th.assert_true("skip_host_tier_roots" not in v2["rpm"] and
+                   "skip_host_tier_roots" not in PROFILES["al2023-web-v1"]["rpm"],
+                   "the flag is profile data: an un-migrated node's rpm baseline must not shift")
+    th.assert_true(v3["digest"] != v2["digest"] and v3["version"] == 3,
+                   "a changed graph is a new immutable identity")
+    content = resolve_profile("al2023-content-v2", ("/opt/content",))
+    th.assert_eq(content["version"], 2, "the content profile follows the v3 host graph")
+    th.assert_true("/usr/local/lib" not in [item["path"] for item in content["tiers"]["fast"]["targets"]]
+                   and content["rpm"]["skip_host_tier_roots"] is True,
+                   "the content profile must carry the same host-tier move and rpm flag")
+    th.assert_eq(set(content["tiers"]), {"fast", "slow", "content"},
+                 "the content profile keeps its enrollment-substituted tier")
+    th.assert_eq(profile_identity(resolve_profile("al2023-content-v1", ("/opt/content",))),
+                 profile_identity(resolve_profile("al2023-content-v1", ("/opt/other",))),
+                 "content-v1 keeps its root-blind identity beside the new profiles")
+
+    for name in ("al2023-web-v3", "al2023-content-v2"):
+        supplied = {"sensor_id": "v3-test", "profile": name,
+                    "endpoint": "https://example.invalid/api/incident/mojosec/batch"}
+        if name.startswith("al2023-content"):
+            supplied["content_roots"] = ["/opt/content"]
+        effective = build_config(supplied)
+        th.assert_eq(effective["collectors"]["rpm"]["skip_host_tier_roots"], True,
+                     f"the expanded {name} config must carry the profile's rpm flag")
+        th.assert_eq(validate_effective_config(json.loads(json.dumps(effective))), effective,
+                     f"the expanded {name} config must validate as its own effective artifact")
+
+
+@th.django_unit_test()
+def test_rpm_skips_roots_covered_by_host_tiers_only_when_the_profile_says_so(opts):
+    from mojo.mojosec.collectors.rpm import SystemPythonCollector
+    from mojo.mojosec.profiles import resolve_profile
+
+    discovered = [
+        "/usr/lib/python3.9/site-packages",
+        "/usr/lib64/python3.9/site-packages",
+        "/usr/local/lib/python3.9/site-packages",
+        "/usr/local/lib64/python3.9/site-packages",
+    ]
+    walked = []
+
+    class Walker:
+        def __init__(self, config, *unused_args):
+            walked.append([target["path"] for target in config["targets"]])
+
+        def scan(self, previous=None):
+            return {"snapshot": {}, "complete": True}
+
+    for name, expected in (
+            ("al2023-web-v3", discovered[:2] + discovered[3:]),
+            ("al2023-web-v2", discovered)):
+        profile = resolve_profile(name)
+        covered = tuple(target["path"] for tier in ("fast", "slow")
+                        for target in profile["tiers"][tier]["targets"])
+        collector = SystemPythonCollector(
+            profile["rpm"], {"name": name, "digest": "d" * 64},
+            roots_provider=lambda: list(discovered), fim_factory=Walker,
+            covered_roots=covered)
+        scan = collector.scan()
+        th.assert_eq(walked[-1], expected,
+                     f"{name} must walk exactly the roots no host tier covers")
+        th.assert_eq(scan["site_roots"], expected,
+                     f"{name} must report only the roots it walked")
+        th.assert_eq(collector.baseline_key, f"{name}:{'d' * 64}:rpm",
+                     "the compatibility tier keeps its baseline key shape")
+
+
+@th.django_unit_test()
 def test_al2023_v2_uses_canonical_cloud_instance_tree_without_following_alias(opts):
     from mojo.mojosec.collectors.fim import FimCollector
     from mojo.mojosec.profiles import resolve_profile

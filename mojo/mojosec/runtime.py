@@ -45,7 +45,11 @@ class Runtime:
                 self.integrity_collectors[tier] = FimCollector(
                     tier_config, config["expected_changes_path"], self.profile_identity, tier)
             self.integrity_collectors["rpm"] = SystemPythonCollector(
-                collectors["rpm"], self.profile_identity, config["expected_changes_path"])
+                collectors["rpm"], self.profile_identity, config["expected_changes_path"],
+                covered_roots=tuple(
+                    target["path"]
+                    for tier in ("fast", "slow") if tier in collectors["fim"]["tiers"]
+                    for target in collectors["fim"]["tiers"][tier]["targets"]))
             self.fim = None
         else:
             self.fim = (FimCollector(collectors["fim"], config["expected_changes_path"])

@@ -383,6 +383,16 @@ def test_effective_profile_requires_exact_packaged_fim_and_rpm_graph(opts):
         with th.assert_raises(ConfigError):
             build_config(desired)
 
+    # The v3 rpm flag is profile-owned: a v2 artifact carrying it does not match
+    # its profile, and a non-boolean value is refused outright.
+    flagged = copy.deepcopy(effective)
+    flagged["collectors"]["rpm"]["skip_host_tier_roots"] = True
+    with th.assert_raises(ConfigError):
+        validate_effective_config(flagged)
+    flagged["collectors"]["rpm"]["skip_host_tier_roots"] = "yes"
+    with th.assert_raises(ConfigError):
+        validate_effective_config(flagged)
+
 
 @th.django_unit_test()
 def test_effective_config_loader_is_root_required_and_descriptor_safe(opts):
