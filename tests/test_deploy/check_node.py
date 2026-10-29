@@ -895,9 +895,9 @@ def test_collision_reporting(opts):
     def runner():
         return FakeRunner([
             (f"cat {PROJ}/aws/node_overrides.conf",
-             (0, "# deliberate fork\n2_mojo_cron\n", "")),
+             (0, "# deliberate fork\n1_certbot\n", "")),
             (f"ls -1 {PROJ}/aws/cron.d",
-             (0, "2_mojo_cron\n3_mojo_jobs\n9_extra", "")),
+             (0, "1_certbot\n3_mojo_jobs\n9_extra", "")),
             (f"ls -1 {PROJ}/aws/nginx/systemd", (1, "", "")),
         ])
 
@@ -905,7 +905,7 @@ def test_collision_reporting(opts):
         report = cn.Report()
         cn.check_collisions(report, runner(), PROJ, require)
         statuses = _statuses(report, "shims")
-        th.assert_eq(statuses.get("declared override: aws/cron.d/2_mojo_cron"),
+        th.assert_eq(statuses.get("declared override: aws/cron.d/1_certbot"),
                      cn.PASS,
                      f"a declared override is a PASS: {statuses}")
         th.assert_eq(statuses.get("undeclared collision: aws/cron.d/3_mojo_jobs"),

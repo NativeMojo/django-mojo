@@ -76,6 +76,9 @@ else
     JOBMAN_SUDO="${JOBMAN_SUDO:-/usr/bin/sudo}"
 fi
 
+# $PROJ_PATH as an ERE literal, for the stale-cron sweep's exact-path match.
+PROJ_PATH_RE="$(printf '%s' "$PROJ_PATH" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
+
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() { echo "[$(date '+%H:%M:%S')] FATAL: $*" >&2; exit 1; }
 valid_node_type() { [[ "$1" =~ ^[a-z][a-z0-9_-]{0,31}$ ]]; }
@@ -248,6 +251,46 @@ remove_retired() {
     done < "$PROJ_PATH/aws/node_retired.conf"
 }
 
+# Retire every /etc/cron.d file that names this project but is not in the
+# rendered contract — the rule check_node's cron section grades against. The
+# match is the exact path followed by `/`, whitespace or end of line, so
+# /opt/api never sweeps /opt/api2 or /opt/api-admin. Only regular files are
+# swept (symlinks are skipped), and each one is snapshotted first so
+# --rollback-candidate / --activate-previous put it back. This is what
+# removes the retired per-minute 2_mojo_cron entry on an existing node.
+sweep_stale_cron() {
+    local path name first
+    for path in "$CRON_ETC"/*; do
+        [ -f "$path" ] && [ ! -L "$path" ] || continue
+        name="$(basename "$path")"
+        safe_name "$name" || continue
+        [ -f "$PROJ_PATH/var/deploy/cron.d/$name" ] && continue
+        grep -qE -- "$PROJ_PATH_RE([/[:space:]]|$)" "$path" || continue
+        first="$(head -c 200 "$path" | head -1)"
+        record_file "$path"
+        rm -f -- "$path"
+        log "WARNING: retired stale project cron $name: $first"
+    done
+}
+
+# The scheduler now ticks @schedule functions, so the release is not live
+# until the running (pre-upgrade) scheduler is replaced. jobman start never
+# replaces a live process, so stop it here — after the API probe accepted the
+# candidate — and let the next 3_mojo_jobs tick start the new one; its start
+# tick covers the minute it comes up in. The engine is left alone: on the
+# platform-deploy path it is the process running this deploy, and the
+# detached recycle retires both afterwards. A survivor is an alarm
+# (aws-check cron.heartbeat_missing), not a failed release.
+retire_scheduler() {
+    set_phase scheduler_retire
+    if (cd / && "$JOBMAN_SYSTEM_PYTHON" -E -P -m mojo.deploy.jobman \
+            --root "$PROJ_PATH" stop scheduler --grace 2); then
+        log "Retired the running scheduler; the jobs cron starts its replacement"
+    else
+        log "WARNING: scheduler did not stop; the cron tick resumes only after it is restarted (aws-check cron.heartbeat_missing will report it)"
+    fi
+}
+
 prepare_jobman_cron_restart() {
     local cron_path="$CRON_ETC/3_mojo_jobs"
     set_phase jobman_restart_preflight
@@ -344,6 +387,7 @@ activate_api() {
     install_directory "$PROJ_PATH/aws/nginx/sec.d" "$NGINX_ETC/sec.d"
     install_directory "$PROJ_PATH/var/deploy/systemd" "$SYSTEMD_ETC"
     install_directory "$PROJ_PATH/var/deploy/cron.d" "$CRON_ETC"
+    sweep_stale_cron
     remove_retired
 
     set_phase nginx_check
@@ -363,6 +407,7 @@ activate_api() {
     set_phase api_probe
     log "Probing API"
     probe_api || die "candidate API did not return HTTP 200"
+    retire_scheduler
 }
 
 activate_previous_api() {

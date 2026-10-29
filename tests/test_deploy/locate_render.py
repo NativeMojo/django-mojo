@@ -209,7 +209,7 @@ def test_every_shipped_file_resolves_from_the_package(opts):
     expected = {
         "project_scripts": {"update.sh", "post_deploy.sh"},
         os.path.join("templates", "cron.d"): {
-            "1_certbot", "2_mojo_cron", "3_mojo_jobs", "4_certbot_sync"},
+            "1_certbot", "3_mojo_jobs", "4_certbot_sync"},
         os.path.join("templates", "systemd"): {
             "mojo-asgi.service", "config-sync.service", "config-sync.timer"},
     }

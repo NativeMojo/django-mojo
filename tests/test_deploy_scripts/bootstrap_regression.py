@@ -69,14 +69,19 @@ def test_project_scripts_export_without_django_bootstrap(opts):
                                "the transaction must never need Django to report or roll back")
 
 
-@th.django_unit_test()
-def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
-    import mojo
+class ApiActivation:
+    """A stubbed API-node activation of the packaged post_deploy.sh.
 
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(mojo.__file__)))
-    source = os.path.join(
-        repo, "mojo", "deploy", "project_scripts", "post_deploy.sh")
-    with tempfile.TemporaryDirectory() as root:
+    Fake /etc trees, a command log written by every stubbed binary (python3,
+    systemctl, curl, sudo, ...), and the root transaction state. Tests seed
+    extra files under `cron_etc` etc. before calling `run()`."""
+
+    def __init__(self, root):
+        import mojo
+
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(mojo.__file__)))
+        source = os.path.join(
+            repo, "mojo", "deploy", "project_scripts", "post_deploy.sh")
         project = os.path.join(root, "project")
         stubs = os.path.join(root, "bin")
         nginx_etc = os.path.join(root, "nginx")
@@ -192,8 +197,47 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
                 ("started_at", "1")):
             with open(os.path.join(active, name), "w") as handle:
                 handle.write(value + "\n")
-        argv = ["bash", os.path.join(project, "aws", "post_deploy.sh"),
-                "--activate", "--node-type", "api", "--state", active]
+        self.root = root
+        self.project = project
+        self.stubs = stubs
+        self.nginx_etc = nginx_etc
+        self.systemd_etc = systemd_etc
+        self.cron_etc = cron_etc
+        self.command_log = command_log
+        self.environment = environment
+        self.active = active
+        self.sentinel = sentinel
+        self.jobman_wrapper = jobman_wrapper
+
+    def argv(self, action="--activate"):
+        return ["bash", os.path.join(self.project, "aws", "post_deploy.sh"),
+                action, "--node-type", "api", "--state", self.active]
+
+    def run(self, action="--activate", env=None):
+        return subprocess.run(
+            self.argv(action), env=env or self.environment,
+            capture_output=True, text=True, timeout=30)
+
+    def commands(self):
+        if not os.path.exists(self.command_log):
+            return ""
+        with open(self.command_log) as handle:
+            return handle.read()
+
+    def clear_commands(self):
+        with open(self.command_log, "w"):
+            pass
+
+
+@th.django_unit_test()
+def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
+    with tempfile.TemporaryDirectory() as root:
+        h = ApiActivation(root)
+        project, stubs, nginx_etc, cron_etc = (
+            h.project, h.stubs, h.nginx_etc, h.cron_etc)
+        command_log, environment, active, sentinel, jobman_wrapper = (
+            h.command_log, h.environment, h.active, h.sentinel, h.jobman_wrapper)
+        argv = h.argv()
         done = subprocess.run(
             argv, env=environment, capture_output=True, text=True, timeout=30)
         th.assert_eq(done.returncode, 0, done.stderr)
@@ -273,6 +317,74 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
             argv, env=redirect_env, capture_output=True, text=True, timeout=30)
         th.assert_true(redirect.returncode != 0,
                        "a redirect must not pass as a live candidate API")
+
+
+@th.django_unit_test()
+def test_post_deploy_retires_stale_project_cron_and_restores_on_rollback(opts):
+    """#9757: a /etc/cron.d file that names the project path but is not in
+    the rendered contract (the retired 2_mojo_cron) is swept on activation,
+    with rollback; unrelated, prefix-only and symlinked entries survive; and
+    the running scheduler is stopped only after the probe accepted the API."""
+    with tempfile.TemporaryDirectory() as root:
+        h = ApiActivation(root)
+        stale = os.path.join(h.cron_etc, "2_mojo_cron")
+        stale_body = ("SHELL=/bin/bash\n* * * * * www %s/bin/cron.py --run 2>/dev/null\n"
+                      % h.project)
+        survivors = {
+            "0hourly": "1 * * * * root run-parts /etc/cron.hourly\n",
+            "other_project": "* * * * * root %s-admin/bin/x\n" % h.project,
+            "other_tree": "* * * * * root %s2/bin/cron.py --run\n" % h.project,
+        }
+        with open(stale, "w") as handle:
+            handle.write(stale_body)
+        for name, body in survivors.items():
+            with open(os.path.join(h.cron_etc, name), "w") as handle:
+                handle.write(body)
+        linked = os.path.join(h.cron_etc, "linked")
+        os.symlink(stale, linked)
+
+        done = h.run()
+        th.assert_eq(done.returncode, 0, done.stderr)
+        th.assert_true(not os.path.exists(stale),
+                       "the retired per-minute cron naming the project path must be swept")
+        th.assert_in("retired stale project cron 2_mojo_cron", done.stdout,
+                     "the sweep must say what it removed")
+        for name, body in survivors.items():
+            path = os.path.join(h.cron_etc, name)
+            th.assert_true(os.path.isfile(path), f"{name} must survive the sweep")
+            with open(path) as handle:
+                th.assert_eq(handle.read(), body, f"{name} must be untouched")
+        th.assert_true(os.path.islink(linked),
+                       "symlinks are never swept — only regular files it can snapshot")
+        th.assert_true(os.path.isfile(os.path.join(h.cron_etc, "mojo")),
+                       "the rendered contract file is installed, not swept")
+
+        commands = h.commands()
+        stop = ("python3 -E -P -m mojo.deploy.jobman --root %s stop scheduler --grace 2"
+                % h.project)
+        th.assert_in(stop, commands,
+                     "activation must retire the running scheduler so the ticking "
+                     "replacement starts on the next jobs cron tick")
+        th.assert_true(commands.index("curl -ksS") < commands.index(stop),
+                       "the scheduler is retired only after the API probe passed")
+        th.assert_true(commands.rstrip().splitlines()[-1].startswith(stop),
+                       "retiring the scheduler is the last activation command")
+
+        h.clear_commands()
+        failed_env = h.environment.copy()
+        failed_env["CURL_CODE"] = "500"
+        failed = h.run(env=failed_env)
+        th.assert_true(failed.returncode != 0,
+                       "a candidate that fails the probe must not activate")
+        th.assert_true(stop not in h.commands(),
+                       "a failed activation must leave the old scheduler running")
+
+        rolled_back = h.run("--rollback-candidate")
+        th.assert_eq(rolled_back.returncode, 0, rolled_back.stderr)
+        th.assert_true(os.path.isfile(stale), "rollback must restore the swept cron file")
+        with open(stale) as handle:
+            th.assert_eq(handle.read(), stale_body,
+                         "the restored cron file must be byte-identical")
 
 
 @th.django_unit_test()
