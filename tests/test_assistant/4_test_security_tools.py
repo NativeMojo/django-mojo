@@ -436,6 +436,35 @@ def test_enable_user(opts):
 
 
 @th.django_unit_test()
+def test_enable_user_kills_token_minted_during_disable(opts):
+    """enable_user replaces the signing key and records the reactivation (maestro #9533)."""
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import disable as disable_service
+    from mojo.apps.account.utils.jwtoken import JWToken
+    from mojo.apps.assistant.services.tools.users import _tool_enable_user
+
+    User.objects.filter(pk=opts.target.pk).update(is_active=True)
+    disable_service.disable_entity(
+        User.objects.get(pk=opts.target.pk), reason="admin",
+        reporter=lambda *args, **kwargs: None)
+    during = User.objects.get(pk=opts.target.pk)
+    token = JWToken(during.get_auth_key()).create(uid=during.pk).access_token
+
+    result = _tool_enable_user({"user_id": opts.target.pk, "reason": "9533 check"}, opts.admin)
+    assert_true(result.get("ok"), f"Should succeed, got {result}")
+
+    fresh = User.objects.get(pk=opts.target.pk)
+    assert_true(fresh.is_active, "User should be active in DB")
+    assert_true(fresh.auth_key != during.auth_key, "enable_user must replace the signing key")
+    validated, error = User.validate_jwt(token)
+    assert_true(validated is None, "a token minted during the disable must stay dead after enable_user")
+    history = (((fresh.metadata or {}).get("protected") or {}).get("disable") or {}).get("history") or []
+    assert_true(history and history[-1].get("reactivated_by_user_id") == opts.admin.pk,
+                f"history should record the admin as reactivator, got {history[-1:]}")
+    opts.target.refresh_from_db()
+
+
+@th.django_unit_test()
 def test_force_logout(opts):
     """force_logout should rotate auth_key without disabling the account."""
     from mojo.apps.assistant.services.tools.users import _tool_force_logout
