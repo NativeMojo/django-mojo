@@ -575,6 +575,33 @@ def test_warn_overfiring_schedules_names_offenders_once(opts):
         "A repeat load in the same process must not repeat the warning"
 
 
+@th.django_unit_test()
+def test_warn_overfiring_schedules_never_raises(opts):
+    """A malformed minutes value fails on its own tick as before; the guard
+    logs it and must never be what stops load_app_cron."""
+    from mojo.helpers import cron
+
+    def divide_by_zero():
+        pass
+
+    def nightly():
+        pass
+
+    specs = [
+        dict(_all_star(minutes='*/0', hours='3'), func=divide_by_zero, per_node=False),
+        dict(_all_star(minutes='*', hours='3'), func=nightly, per_node=False),
+    ]
+    lines = []
+
+    offenders = cron.warn_overfiring_schedules(specs, warn=lines.append, warned=set())
+
+    assert offenders == [cron._qualified_name(nightly)], \
+        f"The schedule after the malformed one must still be checked, got {offenders}"
+    assert len(lines) == 2 and "could not evaluate" in lines[0] \
+        and cron._qualified_name(divide_by_zero) in lines[0], \
+        f"The malformed schedule must be logged by name, not raised, got {lines}"
+
+
 # ============================================================================
 # Real-module integration tests — catch import-time decorator bugs
 # ============================================================================

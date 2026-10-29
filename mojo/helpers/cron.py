@@ -340,12 +340,19 @@ def warn_overfiring_schedules(specs, warn=None, warned=None):
     warned = _overfire_warned if warned is None else warned
     offenders = []
     for spec in specs:
-        if not names_coarser_field(spec):
+        name = _qualified_name(spec['func'])
+        try:
+            if not names_coarser_field(spec):
+                continue
+            per_hour = minutes_per_hour(spec)
+        except Exception as exc:
+            # A malformed value ("*/0", a bare int) raises inside matches().
+            # That schedule fails on its own tick as it always did; the guard
+            # must never be what stops the load.
+            warn(f"cron: could not evaluate the schedule of {name}: {exc}")
             continue
-        per_hour = minutes_per_hour(spec)
         if per_hour <= 1:
             continue
-        name = _qualified_name(spec['func'])
         if name in warned:
             continue
         warned.add(name)
