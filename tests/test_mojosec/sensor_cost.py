@@ -266,7 +266,7 @@ def test_runtime_keeps_its_cached_baseline_until_the_store_commits(opts):
 
 
 @th.django_unit_test()
-def test_runtime_cache_drops_a_reseed_committed_right_after_its_own_scan(opts):
+def test_runtime_survives_a_reseed_on_either_side_of_its_scan_commit(opts):
     from mojo.mojosec.events import observation
     from mojo.mojosec.runtime import Runtime
     from mojo.mojosec.store import Store
@@ -296,23 +296,37 @@ def test_runtime_cache_drops_a_reseed_committed_right_after_its_own_scan(opts):
                 for path in scan["snapshot"] if baseline.get(path) != scan["snapshot"][path]]
 
     class RacedStore(Store):
-        """The baseline CLI's own connection commits right after the daemon's
-        scan COMMIT and before the daemon caches that scan."""
+        """The baseline CLI's own connection commits a re-seed either after the
+        daemon read its baseline but before its write ("before"), or after the
+        daemon's scan COMMIT but before it caches that scan ("after")."""
         other = None
+        seam = None
+
+        def _reseed(self):
+            other, self.other = self.other, None
+            time.sleep(0.01)
+            other.activate_fim_profile(identity, {"fast": {
+                "tier": "fast", "baseline_key": key, "complete": True,
+                "snapshot": dict(reseeded)}}, reason="re-initialize")
 
         def record_fim_scan(self, *args, **kwargs):
+            if self.other is not None and self.seam == "before":
+                self._reseed()
             stamp = super().record_fim_scan(*args, **kwargs)
-            if self.other is not None:
-                other, self.other = self.other, None
-                time.sleep(0.01)
-                other.activate_fim_profile(identity, {"fast": {
-                    "tier": "fast", "baseline_key": key, "complete": True,
-                    "snapshot": dict(reseeded)}}, reason="re-initialize")
+            if self.other is not None and self.seam == "after":
+                self._reseed()
             return stamp
 
+    for seam in ("before", "after"):
+        _raced_scan(opts, seam, identity, key, reseeded, FakeTier(), RacedStore)
+
+
+def _raced_scan(opts, seam, identity, key, reseeded, tier, RacedStore):
+    from mojo.mojosec.runtime import Runtime
+
     with tempfile.TemporaryDirectory() as root:
-        tier = FakeTier()
         store = _store(root, RacedStore)
+        store.seam = seam
         other = _store(root)
         store.activate_fim_profile(identity, {"fast": {
             "tier": "fast", "baseline_key": key, "complete": True,
@@ -330,18 +344,66 @@ def test_runtime_cache_drops_a_reseed_committed_right_after_its_own_scan(opts):
             time.sleep(0.01)
             store.other = other
             runtime._poll_integrity()
-            th.assert_eq(store.load_fim_baseline(key), reseeded,
-                         "the second connection's re-seed must be what SQLite holds")
-            th.assert_eq(store.pending_batch(10, 65536), [], "the raced scan itself raises nothing")
+            raced = store.pending_batch(10, 65536)
+            if seam == "before":
+                # The stale write is refused; the retry diffs the same files
+                # against the re-seed, raises the difference and commits it.
+                th.assert_eq([event["attributes"]["path"] for event in raced], ["/etc/a"],
+                             "before: the retried scan must raise its difference from the re-seed")
+                th.assert_eq(store.load_fim_baseline(key), tier.snapshot,
+                             "before: the retried delta must land on top of the re-seed")
+            else:
+                th.assert_eq(raced, [], "after: the committed scan raised nothing")
+                th.assert_eq(store.load_fim_baseline(key), reseeded,
+                             "after: the second connection's re-seed must be what SQLite holds")
 
-            # The file reverts to the content the re-seed replaced: against the
-            # re-seeded baseline that is a change; against a stale cache it is not.
+            # The files still hold the content the re-seed replaced: against
+            # the re-seeded baseline that is one change, raised once in total;
+            # against a stale cache it would never be raised.
             runtime.last_integrity.clear()
             runtime._poll_integrity()
             events = store.pending_batch(10, 65536)
             th.assert_eq([event["attributes"]["path"] for event in events], ["/etc/a"],
-                         "a re-seed committed between the scan COMMIT and the cache write "
-                         "must not leave the daemon diffing against its old snapshot")
+                         f"{seam}: the change is raised exactly once; the daemon must diff "
+                         "against SQLite, never against a snapshot the re-seed replaced")
+        finally:
+            other.close()
+            store.close()
+
+
+@th.django_unit_test()
+def test_fim_scan_write_refuses_a_baseline_that_moved(opts):
+    from mojo.mojosec.events import observation
+    from mojo.mojosec.store import FimBaselineMoved
+
+    changed = observation("fim.change", "high", "Targeted filesystem integrity change",
+                          attributes={"path": "/etc/a", "change": "modified", "kind": "file",
+                                      "expected_change": {"deployment_id": "d"}},
+                          fingerprint_values=("/etc/a", "modified", "5"),
+                          aggregate=False, recommendation="review")
+
+    with tempfile.TemporaryDirectory() as root:
+        store = _store(root)
+        other = _store(root)
+        try:
+            first = {"/etc/a": {"kind": "file", "sha256": "1" * 64}}
+            store.record_fim_scan("fast", first, [], True)
+            baseline, stamp = store.load_fim_baseline_generation("fast")
+            th.assert_eq(baseline, first, "the generation read returns the stored baseline")
+            th.assert_eq(stamp, store.get_meta("fim_scan:fast")["at"],
+                         "the generation read returns the stamp it was written under")
+
+            time.sleep(0.01)
+            reseeded = {"/etc/a": {"kind": "file", "sha256": "4" * 64}}
+            other.record_fim_scan("fast", reseeded, [], True)
+            stale = {"/etc/a": {"kind": "file", "sha256": "5" * 64}}
+            with th.assert_raises(FimBaselineMoved):
+                store.record_fim_scan("fast", stale, [changed], True,
+                                      baseline=baseline, expected_stamp=stamp)
+            th.assert_eq(store.load_fim_baseline("fast"), reseeded,
+                         "a refused write must leave the re-seed untouched")
+            th.assert_eq(store.pending_batch(10, 65536), [],
+                         "a refused write must not commit its observations")
         finally:
             other.close()
             store.close()

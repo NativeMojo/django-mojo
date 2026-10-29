@@ -10,7 +10,7 @@ from .collectors import (
 from .output import emit, emit_error, write_status, runtime_identity, publish_identity
 from .profiles import profile_identity, resolve_profile
 from .sender import Sender
-from .store import Store
+from .store import FimBaselineMoved, Store
 
 
 # The status file is for operators and check_node (which tolerates 600 s of
@@ -117,19 +117,32 @@ class Runtime:
         cacheable = interval <= BASELINE_CACHE_MAX_INTERVAL_SECONDS
         try:
             scan = self.fim.scan()
-            initialized = self.store.fim_initialized(scan["profile"])
-            baseline = self._cached_baseline(scan["profile"]) if cacheable else None
-            if baseline is None:
-                baseline = self.store.load_fim_baseline(scan["profile"]) if initialized else {}
-            if scan["complete"]:
-                observations = self.fim.diff(baseline, scan) if initialized else []
-            else:
-                observations = [item for item in self.fim.diff({}, scan)
-                                if item["kind"] == "fim.overflow"]
-            stamp = self.store.record_fim_scan(
-                scan["profile"], scan["snapshot"], observations, scan["complete"],
-                baseline=baseline if initialized else None,
-            )
+            for attempt in range(2):
+                cached = self._cached_baseline(scan["profile"]) if cacheable else None
+                if cached is None:
+                    cached = self.store.load_fim_baseline_generation(scan["profile"])
+                baseline, read_stamp = cached
+                initialized = self.store.fim_initialized(scan["profile"])
+                if not initialized:
+                    baseline = {}
+                if scan["complete"]:
+                    observations = self.fim.diff(baseline, scan) if initialized else []
+                else:
+                    observations = [item for item in self.fim.diff({}, scan)
+                                    if item["kind"] == "fim.overflow"]
+                try:
+                    stamp = self.store.record_fim_scan(
+                        scan["profile"], scan["snapshot"], observations, scan["complete"],
+                        baseline=baseline if initialized else None,
+                        expected_stamp=read_stamp,
+                    )
+                    break
+                except FimBaselineMoved:
+                    # Re-seeded between our read and our write: diff again
+                    # against what the other process committed.
+                    self.baselines.pop(scan["profile"], None)
+                    if attempt:
+                        raise
             if scan["complete"] and cacheable:
                 self._cache_baseline(scan["profile"], scan["snapshot"], stamp)
             self._collector_ok("fim")
@@ -152,7 +165,7 @@ class Runtime:
         if current.get("at") != stamp:
             del self.baselines[key]
             return None
-        return snapshot
+        return snapshot, stamp
 
     def _cache_baseline(self, key, snapshot, stamp):
         # ``stamp`` is the one our own commit wrote. Re-reading it here would
@@ -238,16 +251,26 @@ class Runtime:
             self.last_integrity[tier] = now
             cacheable = interval <= BASELINE_CACHE_MAX_INTERVAL_SECONDS
             try:
-                baseline = self._cached_baseline(collector.baseline_key) if cacheable else None
-                if baseline is None:
-                    baseline = self.store.load_fim_baseline(collector.baseline_key)
-                started = time.monotonic()
-                scan = collector.scan(baseline)
-                scan["duration"] = round(time.monotonic() - started, 6)
-                observations = collector.diff(baseline, scan)
-                stamp = self.store.record_fim_scan(
-                    collector.baseline_key, scan["snapshot"], observations, scan["complete"],
-                    baseline=baseline)
+                for attempt in range(2):
+                    cached = self._cached_baseline(collector.baseline_key) if cacheable else None
+                    if cached is None:
+                        cached = self.store.load_fim_baseline_generation(collector.baseline_key)
+                    baseline, read_stamp = cached
+                    started = time.monotonic()
+                    scan = collector.scan(baseline)
+                    scan["duration"] = round(time.monotonic() - started, 6)
+                    observations = collector.diff(baseline, scan)
+                    try:
+                        stamp = self.store.record_fim_scan(
+                            collector.baseline_key, scan["snapshot"], observations,
+                            scan["complete"], baseline=baseline, expected_stamp=read_stamp)
+                        break
+                    except FimBaselineMoved:
+                        # Re-seeded between our read and our write: scan and
+                        # diff again against what the other process committed.
+                        self.baselines.pop(collector.baseline_key, None)
+                        if attempt:
+                            raise
                 # Only after the commit: a rolled-back write must leave the
                 # cache equal to what SQLite still holds, or the next scan
                 # would diff against the new snapshot and never raise it.
