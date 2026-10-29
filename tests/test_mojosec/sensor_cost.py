@@ -266,6 +266,88 @@ def test_runtime_keeps_its_cached_baseline_until_the_store_commits(opts):
 
 
 @th.django_unit_test()
+def test_runtime_cache_drops_a_reseed_committed_right_after_its_own_scan(opts):
+    from mojo.mojosec.events import observation
+    from mojo.mojosec.runtime import Runtime
+    from mojo.mojosec.store import Store
+
+    identity = {"name": "al2023-web-v3", "version": 3, "digest": "d"}
+    key = "al2023-web-v3:d:fast"
+    reseeded = {"/etc/a": {"kind": "file", "sha256": "4" * 64}}
+
+    class FakeTier:
+        baseline_key = key
+        config = {"interval_seconds": 60}
+
+        def __init__(self):
+            self.snapshot = {"/etc/a": {"kind": "file", "sha256": "1" * 64}}
+
+        def scan(self, previous=None):
+            return {"complete": True, "snapshot": dict(self.snapshot), "tier": "fast",
+                    "baseline_key": key}
+
+        def diff(self, baseline, scan):
+            return [observation(
+                "fim.change", "high", "Targeted filesystem integrity change",
+                attributes={"path": path, "change": "modified", "kind": "file",
+                            "expected_change": {"deployment_id": "d"}},
+                fingerprint_values=(path, "modified", json.dumps(scan["snapshot"][path])),
+                aggregate=False, recommendation="review")
+                for path in scan["snapshot"] if baseline.get(path) != scan["snapshot"][path]]
+
+    class RacedStore(Store):
+        """The baseline CLI's own connection commits right after the daemon's
+        scan COMMIT and before the daemon caches that scan."""
+        other = None
+
+        def record_fim_scan(self, *args, **kwargs):
+            stamp = super().record_fim_scan(*args, **kwargs)
+            if self.other is not None:
+                other, self.other = self.other, None
+                time.sleep(0.01)
+                other.activate_fim_profile(identity, {"fast": {
+                    "tier": "fast", "baseline_key": key, "complete": True,
+                    "snapshot": dict(reseeded)}}, reason="re-initialize")
+            return stamp
+
+    with tempfile.TemporaryDirectory() as root:
+        tier = FakeTier()
+        store = _store(root, RacedStore)
+        other = _store(root)
+        store.activate_fim_profile(identity, {"fast": {
+            "tier": "fast", "baseline_key": key, "complete": True,
+            "snapshot": dict(tier.snapshot)}})
+        runtime = Runtime.__new__(Runtime)
+        runtime.store = store
+        runtime.profile = {"name": "al2023-web-v3"}
+        runtime.profile_identity = identity
+        runtime.integrity_collectors = {"fast": tier}
+        runtime.last_integrity = {}
+        runtime.integrity_scans = {}
+        runtime.collector_status = {}
+        runtime.baselines = {}
+        try:
+            time.sleep(0.01)
+            store.other = other
+            runtime._poll_integrity()
+            th.assert_eq(store.load_fim_baseline(key), reseeded,
+                         "the second connection's re-seed must be what SQLite holds")
+            th.assert_eq(store.pending_batch(10, 65536), [], "the raced scan itself raises nothing")
+
+            # The file reverts to the content the re-seed replaced: against the
+            # re-seeded baseline that is a change; against a stale cache it is not.
+            runtime.last_integrity.clear()
+            runtime._poll_integrity()
+            events = store.pending_batch(10, 65536)
+            th.assert_eq([event["attributes"]["path"] for event in events], ["/etc/a"],
+                         "a re-seed committed between the scan COMMIT and the cache write "
+                         "must not leave the daemon diffing against its old snapshot")
+        finally:
+            other.close()
+            store.close()
+
+
+@th.django_unit_test()
 def test_manifest_is_parsed_once_per_stat_generation(opts):
     from mojo.mojosec.expected_changes import ExpectedChangeError, load_manifest
 

@@ -855,6 +855,11 @@ class Store:
         that differ are written; a scan that changed nothing touches no
         baseline row. Without it the whole baseline is rewritten, which is what
         activation, re-enrollment and a tier's first scan need.
+
+        Returns the ``fim_scan`` stamp this transaction wrote (None for an
+        incomplete scan), so a caller can cache the snapshot under exactly
+        the stamp it committed rather than re-reading one another process may
+        already have replaced.
         """
         now = time.time()
         self.db.execute("BEGIN IMMEDIATE")
@@ -891,6 +896,7 @@ class Store:
         except Exception:
             self.db.execute("ROLLBACK")
             raise
+        return now if complete else None
 
     def activate_fim_profile(self, identity, scans, reason="initialize"):
         """Atomically commit every complete tier and select one immutable profile."""

@@ -126,12 +126,12 @@ class Runtime:
             else:
                 observations = [item for item in self.fim.diff({}, scan)
                                 if item["kind"] == "fim.overflow"]
-            self.store.record_fim_scan(
+            stamp = self.store.record_fim_scan(
                 scan["profile"], scan["snapshot"], observations, scan["complete"],
                 baseline=baseline if initialized else None,
             )
             if scan["complete"] and cacheable:
-                self._cache_baseline(scan["profile"], scan["snapshot"])
+                self._cache_baseline(scan["profile"], scan["snapshot"], stamp)
             self._collector_ok("fim")
         except Exception as err:
             self._collector_error("fim", err)
@@ -154,9 +154,10 @@ class Runtime:
             return None
         return snapshot
 
-    def _cache_baseline(self, key, snapshot):
-        current = self.store.get_meta(f"fim_scan:{key}", {}) or {}
-        self.baselines[key] = (snapshot, current.get("at"))
+    def _cache_baseline(self, key, snapshot, stamp):
+        # ``stamp`` is the one our own commit wrote. Re-reading it here would
+        # adopt a re-seed committed in between and keep our stale snapshot.
+        self.baselines[key] = (snapshot, stamp)
 
     def integrity_roster(self):
         """Every configured tier in stable scan order, preserving legacy order."""
@@ -244,14 +245,14 @@ class Runtime:
                 scan = collector.scan(baseline)
                 scan["duration"] = round(time.monotonic() - started, 6)
                 observations = collector.diff(baseline, scan)
-                self.store.record_fim_scan(
+                stamp = self.store.record_fim_scan(
                     collector.baseline_key, scan["snapshot"], observations, scan["complete"],
                     baseline=baseline)
                 # Only after the commit: a rolled-back write must leave the
                 # cache equal to what SQLite still holds, or the next scan
                 # would diff against the new snapshot and never raise it.
                 if scan["complete"] and cacheable:
-                    self._cache_baseline(collector.baseline_key, scan["snapshot"])
+                    self._cache_baseline(collector.baseline_key, scan["snapshot"], stamp)
                 self.integrity_scans[tier] = {
                     "ok": scan["complete"], "last_success": time.time(),
                     "complete": scan["complete"], "entries": len(scan["snapshot"]),
