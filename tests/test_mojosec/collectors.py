@@ -1215,3 +1215,89 @@ def test_incomplete_fim_scan_emits_only_overflow_until_reconciled(opts):
                      "the first complete scan must report the deletion deferred while incomplete")
         th.assert_true("created" not in changes.values(),
                        "a reconcile against the retained baseline must not invent created paths")
+
+
+@th.django_unit_test()
+def test_al2023_web_v3_moves_usr_local_lib_to_the_slow_tier(opts):
+    from mojo.mojosec.config import ConfigError, build_config, validate_effective_config
+    from mojo.mojosec.profiles import resolve_profile
+
+    v3 = resolve_profile("al2023-web-v3")
+    fast = [target["path"] for target in v3["tiers"]["fast"]["targets"]]
+    slow = [target["path"] for target in v3["tiers"]["slow"]["targets"]]
+    th.assert_true("/usr/local/lib" not in fast,
+                   "v3 must stop walking /usr/local/lib every 60 seconds")
+    th.assert_in("/usr/local/lib", slow, "v3 must walk /usr/local/lib every six hours")
+    th.assert_true(v3["rpm"].get("skip_host_tier_roots") is True,
+                   "v3 must let the rpm tier skip roots a host tier covers")
+    # Captured from main before #9769: rollback identity must not move.
+    for name, roots, digest in (
+            ("al2023-web-v1", (), "6a45b233ae8dd87e77456d88a037ea435e6e9240d07884814fae4a23d30f3e0e"),
+            ("al2023-web-v2", (), "1cb26a911e1a2c2418d5a6428c873bc4118a39c8731c4d8442d7c4f7f3cbd14f"),
+            ("al2023-content-v1", ("/opt/content",),
+             "5600396aa39c1d662f7f2f9f95f94e8f1ed8b56518230746e7e4778f5fab5816")):
+        resolved = resolve_profile(name, roots)
+        th.assert_eq(resolved["digest"], digest, f"{name} must keep its immutable digest")
+        th.assert_true("skip_host_tier_roots" not in resolved["rpm"],
+                       f"{name} must keep today's rpm baseline content")
+    content = resolve_profile("al2023-content-v2", ("/opt/content",))
+    th.assert_eq(content["tiers"]["content"]["targets"][0]["path"], "/opt/content",
+                 "content-v2 must resolve its enrolled roots")
+    th.assert_eq(content["tiers"]["slow"], v3["tiers"]["slow"],
+                 "content-v2 must share v3's host tiers")
+
+    base = {"sensor_id": "i-host", "endpoint": "https://incident.example/api/incident/mojosec/batch"}
+    v2 = build_config(dict(base, profile="al2023-web-v2"))
+    validate_effective_config(json.loads(json.dumps(v2)))
+    flagged = json.loads(json.dumps(v2))
+    flagged["collectors"]["rpm"]["skip_host_tier_roots"] = True
+    with th.assert_raises(ConfigError):
+        validate_effective_config(flagged)
+    migrated = build_config(dict(base, profile="al2023-web-v3"))
+    th.assert_true(migrated["collectors"]["rpm"]["skip_host_tier_roots"] is True,
+                   "a v3 effective config must carry the flag")
+    validate_effective_config(json.loads(json.dumps(migrated)))
+    malformed = json.loads(json.dumps(migrated))
+    malformed["collectors"]["rpm"]["skip_host_tier_roots"] = "yes"
+    with th.assert_raises(ConfigError):
+        validate_effective_config(malformed)
+
+
+@th.django_unit_test()
+def test_rpm_skips_roots_covered_by_host_tiers_only_when_the_profile_says_so(opts):
+    from mojo.mojosec.collectors.rpm import SystemPythonCollector
+    from mojo.mojosec.profiles import profile_identity, resolve_profile
+
+    roots = [
+        "/usr/lib/python3.9/site-packages",
+        "/usr/lib64/python3.9/site-packages",
+        "/usr/local/lib/python3.9/site-packages",
+        "/usr/local/lib64/python3.9/site-packages",
+    ]
+
+    class Walker:
+        def __init__(self, config, *unused):
+            self.targets = [target["path"] for target in config["targets"]]
+
+        def scan(self, previous):
+            return {"snapshot": {}, "complete": True, "targets": self.targets}
+
+    def walked(name):
+        profile = resolve_profile(name)
+        covered = tuple(target["path"] for tier in ("fast", "slow")
+                        for target in profile["tiers"][tier]["targets"])
+        collector = SystemPythonCollector(
+            dict(profile["rpm"], enabled=True), profile_identity(profile),
+            roots_provider=lambda: roots, fim_factory=Walker, covered_roots=covered)
+        scan = collector.scan()
+        th.assert_eq(scan["site_roots"], scan["targets"],
+                     "site_roots must list exactly the walked roots")
+        return scan["targets"]
+
+    th.assert_eq(walked("al2023-web-v3"), [
+        "/usr/lib/python3.9/site-packages",
+        "/usr/lib64/python3.9/site-packages",
+        "/usr/local/lib64/python3.9/site-packages",
+    ], "v3 must not re-walk the site-packages its slow tier already covers")
+    th.assert_eq(len(walked("al2023-web-v2")), 4,
+                 "an un-migrated v2 node must keep walking every approved root")

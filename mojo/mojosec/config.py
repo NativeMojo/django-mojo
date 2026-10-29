@@ -269,7 +269,12 @@ def validate_config(value):
     for name in _COLLECTOR_KEYS:
         if name not in collectors:
             raise ConfigError(f"collectors.{name} is required")
-        _reject_unknown(collectors[name], DEFAULTS["collectors"][name], f"collectors.{name}")
+        allowed = set(DEFAULTS["collectors"][name])
+        if name == "rpm":
+            # Profile data, never defaulted: a defaulted False would break the
+            # exact rpm match below on every un-migrated node.
+            allowed.add("skip_host_tier_roots")
+        _reject_unknown(collectors[name], allowed, f"collectors.{name}")
         if not isinstance(collectors[name]["enabled"], bool):
             raise ConfigError(f"collectors.{name}.enabled must be a boolean")
     _integer(collectors["journal"]["max_records"], "collectors.journal.max_records", 1, 20000)
@@ -342,6 +347,8 @@ def validate_config(value):
     _integer(rpm["max_file_bytes"], "collectors.rpm.max_file_bytes", 0,
              1024 * 1024 * 1024)
     _integer(rpm["max_depth"], "collectors.rpm.max_depth", 1, 256)
+    if "skip_host_tier_roots" in rpm and not isinstance(rpm["skip_host_tier_roots"], bool):
+        raise ConfigError("collectors.rpm.skip_host_tier_roots must be a boolean")
 
     aggregation = value["aggregation"]
     _reject_unknown(aggregation, DEFAULTS["aggregation"], "aggregation")

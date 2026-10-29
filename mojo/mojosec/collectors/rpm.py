@@ -71,8 +71,10 @@ class SystemPythonCollector:
     name = "rpm"
 
     def __init__(self, config, identity, expected_changes_path=None,
-                 roots_provider=None, fim_factory=None):
+                 roots_provider=None, fim_factory=None, covered_roots=()):
         self.config = config
+        # Host-tier target paths; skipped only when the profile says so.
+        self.covered_roots = tuple(covered_roots)
         self.identity = dict(identity)
         self.expected_changes_path = expected_changes_path
         self.roots_provider = roots_provider
@@ -85,8 +87,14 @@ class SystemPythonCollector:
             self.config, roots_provider=self.roots_provider)
         return list(self.site_roots)
 
+    def _covered(self, root):
+        return any(root == path or root.startswith(path.rstrip("/") + "/")
+                   for path in self.covered_roots)
+
     def scan(self, previous=None):
         roots = self.discover_site_roots()
+        if self.config.get("skip_host_tier_roots"):
+            roots = [root for root in roots if not self._covered(root)]
         walker = self.fim_factory(
             {
                 "targets": [
