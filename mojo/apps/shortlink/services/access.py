@@ -2,12 +2,35 @@
 from mojo import errors as merrors
 
 
-def _denied():
+def _denied(branch="shortlink.file_unavailable", model_name="File"):
     # One answer for every failure, so a caller cannot tell a missing file id
-    # from one they may not share.
+    # from one they may not share, or a group refusal from a file refusal.
     return merrors.PermissionDeniedException(
-        "Permission denied", 403, 403,
-        branch="shortlink.file_unavailable", model_name="File")
+        "Permission denied", 403, 403, branch=branch, model_name=model_name)
+
+
+def require_group_access(request):
+    """Refuse a link stored in a group the caller does not belong to.
+
+    The dispatcher binds any active ?group= to request.group, and checks only
+    confined credentials against it. A person must be a member (directly or
+    through a parent), or hold manage_shortlinks globally. No group: allowed.
+    """
+    from mojo.helpers.request import restricted_identity, identity_allows_group
+
+    group = getattr(request, "group", None)
+    if group is None:
+        return
+    if restricted_identity(request) is not None:
+        if identity_allows_group(request, group):
+            return
+        raise _denied("shortlink.group_not_member", None)
+    user = getattr(request, "user", None)
+    if group.get_member_for_user(user, check_parents=True, is_active=True) is not None:
+        return
+    if user is not None and user.has_permission("manage_shortlinks"):
+        return
+    raise _denied("shortlink.group_not_member", None)
 
 
 def shareable_file(request, raw_id):
