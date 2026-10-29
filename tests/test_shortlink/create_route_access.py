@@ -155,6 +155,8 @@ def test_uniform_denial(opts):
         "text": "abc",
         "bool": True,
         "zero": 0,
+        "too_many_digits": "9" * 5000,
+        "beyond_bigint": 10 ** 30,
         "inactive": opts.inactive_b,
         "unauthorized": opts.file_b,
     }
