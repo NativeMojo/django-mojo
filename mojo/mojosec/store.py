@@ -60,6 +60,13 @@ class StoreError(RuntimeError):
     pass
 
 
+class FimBaselineMoved(StoreError):
+    """Another writer replaced the FIM baseline after the caller read it."""
+
+
+_UNCHECKED = object()
+
+
 def _private_directory(path):
     try:
         os.makedirs(path, mode=0o700, exist_ok=True)
@@ -848,17 +855,44 @@ class Store:
         ).fetchall()
         return {row["path"]: json.loads(row["entry"]) for row in rows}
 
-    def record_fim_scan(self, profile, snapshot, observations, complete, baseline=None):
+    def load_fim_baseline_generation(self, profile):
+        """The stored baseline and the ``fim_scan`` stamp it was written under,
+        read in one transaction so the pair is always consistent."""
+        self.db.execute("BEGIN")
+        try:
+            baseline = self.load_fim_baseline(profile)
+            stamp = (self.get_meta(f"fim_scan:{profile}", {}) or {}).get("at")
+        finally:
+            self.db.execute("COMMIT")
+        return baseline, stamp
+
+    def record_fim_scan(self, profile, snapshot, observations, complete, baseline=None,
+                        expected_stamp=_UNCHECKED):
         """Commit FIM evidence and its new complete baseline as one unit.
 
         With ``baseline`` (the dict the scan was diffed against) only the paths
         that differ are written; a scan that changed nothing touches no
         baseline row. Without it the whole baseline is rewritten, which is what
         activation, re-enrollment and a tier's first scan need.
+
+        Returns the ``fim_scan`` stamp this transaction wrote (None for an
+        incomplete scan), so a caller can cache the snapshot under exactly
+        the stamp it committed rather than re-reading one another process may
+        already have replaced.
+
+        With ``expected_stamp`` (the stamp the diffed baseline was read under)
+        nothing is written and ``FimBaselineMoved`` is raised when another
+        process (the baseline CLI) re-seeded the baseline in between: the
+        observations and delta were computed against a baseline that no
+        longer exists and must be recomputed, not committed over the re-seed.
         """
         now = time.time()
         self.db.execute("BEGIN IMMEDIATE")
         try:
+            if expected_stamp is not _UNCHECKED:
+                current = (self.get_meta(f"fim_scan:{profile}", {}) or {}).get("at")
+                if current != expected_stamp:
+                    raise FimBaselineMoved(f"FIM baseline moved under the scan: {profile}")
             for found in observations:
                 self._ingest_one(found, now)
             if complete:
@@ -891,6 +925,7 @@ class Store:
         except Exception:
             self.db.execute("ROLLBACK")
             raise
+        return now if complete else None
 
     def activate_fim_profile(self, identity, scans, reason="initialize"):
         """Atomically commit every complete tier and select one immutable profile."""
