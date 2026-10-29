@@ -206,6 +206,29 @@ Three things follow from hosting the tick in the scheduler:
   window; a tick that overruns the next boundary skips that minute rather
   than replaying it.
 
+### Omitted fields mean "0", not "every"
+
+`@schedule` takes `minutes`, `hours`, `days`, `months` and `weekdays` as cron
+strings. When you name a coarser field (pass it a value other than `"*"`)
+and leave a finer one out, the finer one resolves to `"0"`, not `"*"`:
+`@schedule(hours="3")` runs **once at 03:00**, not at every minute from
+03:00 to 03:59, and `@schedule(days="1")` runs at 00:00 on the 1st. A bare
+`@schedule()` — or `hours="*"`, which names no hour — still runs every
+minute, and anything you write explicitly is kept exactly as written:
+`minutes="*/5"`, or an explicit `minutes="*"` beside `hours="3"` (explicit
+wins). Only `hours` and `minutes` collapse this way; an omitted `days`,
+`months` or `weekdays` stays `"*"` (`weekdays="0"` is every Monday). The one
+case to watch: explicit sub-hour minutes beside a named day still collapse
+the omitted hour, so `minutes="*/5", weekdays="5,6"` is 00:00–00:55 at
+weekends — write `hours="*"` for all day. The registry holds the resolved
+values, so `run_now()` and the heartbeat see what actually fires. When the
+cron modules load, any schedule that names an hour, day, month or weekday
+yet would still fire more than once an hour (`minutes="*"` or `"*/5"` beside
+`hours="3"`) gets one `logit` warning naming the function and its resolved
+schedule; it is still loaded. Before this rule (django-mojo 1.40.2 and
+earlier) an omitted field meant `"*"`, which is how a nightly fan-out ran
+sixty times a night.
+
 ### Fleet-once: one node runs each function, not all of them
 
 Every node's scheduler ticks the same minute, so without a guard each

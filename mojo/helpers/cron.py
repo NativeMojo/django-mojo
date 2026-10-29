@@ -308,6 +308,55 @@ def matches(cron_value: str, actual_value: int) -> bool:
 
     return False
 
+# Functions already warned about in this process, so the scheduler's start-up
+# load and a later by-hand load_app_cron() do not repeat the line.
+_overfire_warned = set()
+
+# Any of these resolved to something other than "*" means the schedule names
+# a coarser unit than the minute.
+COARSER_FIELDS = ('hours', 'days', 'months', 'weekdays')
+
+
+def minutes_per_hour(cron_spec):
+    """How many minutes of an hour the spec's minutes field matches."""
+    return sum(1 for minute in range(60) if matches(cron_spec['minutes'], minute))
+
+
+def names_coarser_field(cron_spec):
+    """True when the resolved spec names an hour, day, month or weekday."""
+    return any(cron_spec[field] != '*' for field in COARSER_FIELDS)
+
+
+def warn_overfiring_schedules(specs, warn=None, warned=None):
+    """
+    Warn once per function about a schedule that names an hour or day yet
+    would still fire more than once per hour — an explicit minutes="*" or
+    "*/5" beside hours="3". Nothing is refused; the line is the whole guard.
+
+    `warn` and `warned` are test seams: production uses logit.warning and the
+    module-level dedupe set. Returns the qualified names warned about.
+    """
+    warn = warn or logit.warning
+    warned = _overfire_warned if warned is None else warned
+    offenders = []
+    for spec in specs:
+        if not names_coarser_field(spec):
+            continue
+        per_hour = minutes_per_hour(spec)
+        if per_hour <= 1:
+            continue
+        name = _qualified_name(spec['func'])
+        if name in warned:
+            continue
+        warned.add(name)
+        offenders.append(name)
+        resolved = " ".join(f"{field}={spec[field]}" for field in
+                            ('minutes', 'hours', 'days', 'months', 'weekdays'))
+        warn(f"cron: {name} names an hour or day but fires {per_hour} times an "
+             f"hour — did you mean minutes=\"0\"? resolved schedule {resolved}")
+    return offenders
+
+
 def load_app_cron() -> None:
     """
     Load cronjob modules from all Django apps.
@@ -315,6 +364,9 @@ def load_app_cron() -> None:
     Iterates through each registered Django app and attempts to import
     the APP_NAME.cronjobs module if it exists. This ensures that any
     cron-decorated functions are properly registered with the scheduler.
+    Afterwards it warns about any registered schedule that names an hour
+    or day yet fires more than once per hour (see warn_overfiring_schedules);
+    no module is refused.
     """
     for app_config in apps.get_app_configs():
         app_name = app_config.name
@@ -324,3 +376,4 @@ def load_app_cron() -> None:
         except ImportError:
             # App doesn't have a cronjobs module, continue to next app
             continue
+    warn_overfiring_schedules(getattr(schedule, 'scheduled_functions', []))

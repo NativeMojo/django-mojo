@@ -430,6 +430,152 @@ def test_decorator_registration(opts):
 
 
 # ============================================================================
+# Omitted finer fields resolve to "0", not "*" (maestro item #9773)
+# ============================================================================
+# `resolve_fields` is pure, so the resolution matrix never touches the shared
+# registry; the one stored-spec test adds its own entry and removes only that
+# entry by identity. The warning test passes its own specs, `warn=` recorder
+# and `warned=` set — nothing under mojo.helpers is patched.
+
+
+def _all_star(**overrides):
+    spec = {'minutes': '*', 'hours': '*', 'days': '*', 'months': '*', 'weekdays': '*'}
+    spec.update(overrides)
+    return spec
+
+
+@th.django_unit_test()
+def test_schedule_resolves_omitted_minutes_to_zero(opts):
+    """@schedule(hours="3") means 03:00 once, not every minute of hour 3."""
+    from mojo.decorators.cron import schedule, resolve_fields
+    from mojo.helpers.cron import match_time
+
+    resolved = resolve_fields(hours="3")
+    assert resolved == _all_star(minutes='0', hours='3'), \
+        f"hours given and minutes omitted must resolve minutes to '0', got {resolved}"
+    assert match_time(datetime.datetime(2024, 1, 15, 3, 0), resolved), \
+        "The resolved schedule must still fire at 03:00"
+    assert not match_time(datetime.datetime(2024, 1, 15, 3, 1), resolved), \
+        "The resolved schedule must not fire at 03:01 — that was the production misfire"
+
+    # Decorating appends to the shared registry, which other modules in this
+    # process read concurrently: find our entry by identity and remove only
+    # it — never [-1], never a snapshot restore (that would drop a cronjobs
+    # module another thread registered meanwhile), never attribute reassignment
+    # (testit/isolation.py counts that as a cold site).
+    @schedule(hours="3")
+    def nightly():
+        return "nightly"
+
+    registry = schedule.scheduled_functions
+    try:
+        stored = [spec for spec in registry if spec['func'] is nightly]
+        assert len(stored) == 1, f"The decorator must register the function once, got {stored}"
+        assert stored[0]['minutes'] == '0' and stored[0]['hours'] == '3', \
+            f"The registry must hold the resolved spec so run_now sees it, got {stored[0]}"
+        assert stored[0]['per_node'] is False, "per_node must keep its default"
+    finally:
+        registry[:] = [spec for spec in registry if spec['func'] is not nightly]
+
+
+@th.django_unit_test()
+def test_schedule_resolves_omitted_hours_and_minutes_to_zero(opts):
+    """A day, month or weekday with no hour means 00:00 on that day."""
+    from mojo.decorators.cron import resolve_fields
+
+    assert resolve_fields(days="1") == _all_star(minutes='0', hours='0', days='1'), \
+        f"days given must resolve hours and minutes to '0', got {resolve_fields(days='1')}"
+    assert resolve_fields(months="6") == _all_star(minutes='0', hours='0', months='6'), \
+        f"months given must resolve hours and minutes to '0', got {resolve_fields(months='6')}"
+    assert resolve_fields(weekdays="0") == _all_star(minutes='0', hours='0', weekdays='0'), \
+        f"weekdays given must resolve hours and minutes to '0', got {resolve_fields(weekdays='0')}"
+    assert resolve_fields(weekdays="0", hours="3") == _all_star(minutes='0', hours='3', weekdays='0'), \
+        "An explicit hour beside a weekday is kept and only minutes collapses"
+
+
+@th.django_unit_test()
+def test_schedule_explicit_values_win(opts):
+    """Anything written explicitly stays exactly as written, including '*'."""
+    from mojo.decorators.cron import resolve_fields
+
+    assert resolve_fields(minutes="*/5", hours="3") == _all_star(minutes='*/5', hours='3'), \
+        "An explicit step pattern must never be rewritten"
+    assert resolve_fields(minutes="*", hours="3") == _all_star(minutes='*', hours='3'), \
+        "An explicit minutes='*' beside an hour must be honoured — explicit wins"
+    assert resolve_fields(minutes="0,30") == _all_star(minutes='0,30'), \
+        "A lone explicit minutes value stays as written"
+    assert resolve_fields(hours="*") == _all_star(), \
+        "hours='*' names no hour, so nothing collapses: still every minute"
+    assert resolve_fields(minutes="*/10", days="*") == _all_star(minutes='*/10'), \
+        "days='*' names no day, so the omitted hour stays '*'"
+    assert resolve_fields(days="1", hours="*") == _all_star(minutes='0', hours='*', days='1'), \
+        "An explicit hours='*' beside a named day is kept while omitted minutes still collapses"
+    assert resolve_fields(minutes="*/5", weekdays="5,6") == _all_star(minutes='*/5', hours='0', weekdays='5,6'), \
+        "A named weekday collapses the omitted hour even beside explicit minutes (the warning names it)"
+
+
+@th.django_unit_test()
+def test_schedule_bare_is_every_minute(opts):
+    """@schedule() with nothing given is unchanged: every minute."""
+    from mojo.decorators.cron import resolve_fields
+
+    assert resolve_fields() == _all_star(), \
+        f"Nothing given must stay every-minute, got {resolve_fields()}"
+
+
+@th.django_unit_test()
+def test_warn_overfiring_schedules_names_offenders_once(opts):
+    """Loading warns, once per function, about schedules that name an hour or
+    day yet still fire more than once per hour — and never refuses them."""
+    from mojo.helpers import cron
+
+    def every_minute_of_three():
+        pass
+
+    def every_five_in_nine():
+        pass
+
+    def nightly():
+        pass
+
+    def every_minute():
+        pass
+
+    def every_five():
+        pass
+
+    specs = [
+        dict(_all_star(minutes='*', hours='3'), func=every_minute_of_three, per_node=False),
+        dict(_all_star(minutes='*/5', hours='9'), func=every_five_in_nine, per_node=False),
+        dict(_all_star(minutes='0', hours='3'), func=nightly, per_node=False),
+        dict(_all_star(), func=every_minute, per_node=False),
+        dict(_all_star(minutes='*/5'), func=every_five, per_node=False),
+    ]
+    lines = []
+    warned = set()
+
+    offenders = cron.warn_overfiring_schedules(specs, warn=lines.append, warned=warned)
+
+    expected = [cron._qualified_name(every_minute_of_three),
+                cron._qualified_name(every_five_in_nine)]
+    assert offenders == expected, \
+        f"Only the two schedules naming an hour with many minutes offend, got {offenders}"
+    assert len(lines) == 2, f"One warning line per offender, got {lines}"
+    assert expected[0] in lines[0] and "60 times an hour" in lines[0] \
+        and "minutes=* hours=3" in lines[0], \
+        f"The line must name the function, the rate and the resolved spec, got {lines[0]!r}"
+    assert expected[1] in lines[1] and "12 times an hour" in lines[1], \
+        f"A */5 beside an hour fires 12 times an hour, got {lines[1]!r}"
+    assert not any(f"{cron._qualified_name(f)} names" in line
+                   for f in (nightly, every_minute, every_five) for line in lines), \
+        f"Clean schedules (one minute, or no coarser field) must not be named, got {lines}"
+
+    again = cron.warn_overfiring_schedules(specs, warn=lines.append, warned=warned)
+    assert again == [] and len(lines) == 2, \
+        "A repeat load in the same process must not repeat the warning"
+
+
+# ============================================================================
 # Real-module integration tests — catch import-time decorator bugs
 # ============================================================================
 # test_load_app_cron_real_modules_no_errors and test_incident_cronjobs_registered
