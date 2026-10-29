@@ -332,7 +332,8 @@ def _tool_get_permission_summary(params, user):
 )
 def _tool_disable_user(params, user):
     from mojo.apps.account.models import User
-    import uuid
+    from mojo.apps.account.services import disable as disable_service
+    from mojo import errors as merrors
 
     user_id = int(params["user_id"])
     if user_id == user.pk:
@@ -349,11 +350,14 @@ def _tool_disable_user(params, user):
     if not target.is_active:
         return {"error": f"User {user_id} is already disabled"}
 
-    target.is_active = False
-    target.auth_key = uuid.uuid4().hex
-    target.save(update_fields=["is_active", "auth_key", "modified"])
-
     reason = params.get("reason", "Disabled by admin assistant")
+    # Through the disable service, like the REST action: new key, history,
+    # cached invite cleared, sockets dropped (maestro #9533).
+    try:
+        disable_service.disable_entity(target, reason="admin", by_user=user, note=reason)
+    except merrors.ValueException as err:
+        return {"error": str(err)}
+
     User.class_logit(None, f"[Admin Assistant] Disabled user {target.username}: {reason}",
                      kind="security:user_disabled", model_id=target.pk, level="warn")
 
@@ -387,6 +391,8 @@ def _tool_disable_user(params, user):
 )
 def _tool_enable_user(params, user):
     from mojo.apps.account.models import User
+    from mojo.apps.account.services import disable as disable_service
+    from mojo import errors as merrors
 
     user_id = int(params["user_id"])
     try:
@@ -400,10 +406,14 @@ def _tool_enable_user(params, user):
     if target.is_active:
         return {"error": f"User {user_id} is already active"}
 
-    target.is_active = True
-    target.save(update_fields=["is_active", "modified"])
-
     reason = params.get("reason", "Enabled by admin assistant")
+    # Through the disable service, like the REST action: a new key, so nothing
+    # signed before or during the disable works again (maestro #9533).
+    try:
+        disable_service.reactivate_entity(target, by_user=user, note=reason)
+    except merrors.ValueException as err:
+        return {"error": str(err)}
+
     User.class_logit(None, f"[Admin Assistant] Enabled user {target.username}: {reason}",
                      kind="security:user_enabled", model_id=target.pk, level="info")
 

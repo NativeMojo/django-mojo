@@ -913,7 +913,7 @@ of the parent gets no token for a child group).
 | `auth_key` rotation | every token for one user | `POST /api/user/me {"revoke_sessions": true}`, a password reset or change, or `user.end_sessions(reason)` |
 | Membership removal | that user in that group | delete the `GroupMember` row |
 | Group (or ancestor) deactivation | every token for the subtree | `group.is_active = False` |
-| User deactivation | every token for that user | `user.is_active = False` |
+| User deactivation | every token for that user | the `disable` action or an admin `{"is_active": false}` save; turning the user off or back on replaces `auth_key` |
 
 The epoch lives in `group.metadata["protected"]["group_token_epoch"]` — no
 migration. The `protected` root key is REST-guarded by

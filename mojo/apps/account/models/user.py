@@ -1150,6 +1150,14 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     def on_rest_saved(self, changed_fields, created):
         if "is_active" in changed_fields:
             metrics.set_value("total_users", User.objects.filter(is_active=True).count(), account="global")
+        if getattr(self, "_switched_off_in_save", False):
+            # Match disable_entity: drop live websockets once committed.
+            # Best effort; the new key is the guarantee (maestro #9533).
+            self._switched_off_in_save = False
+            from django.db import transaction
+            from mojo.apps.account.services.disable import disconnect_realtime
+            request = self.active_request
+            transaction.on_commit(lambda: disconnect_realtime(self, request=request))
         removed_phone = getattr(self, "_removed_verified_phone", None)
         if removed_phone:
             self._removed_verified_phone = None
@@ -1161,17 +1169,67 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         new key, and the grants are revoked with it, or none of it is stored.
         A password that changed while a connected app's refresh token stayed
         good would be the half that matters missing (maestro #6226). The
-        websockets go once it is committed."""
-        if not getattr(self, "_password_changed_in_save", False):
+        websockets go once it is committed.
+
+        A REST save of an existing account also settles is_active and
+        auth_key against the stored row, under its lock, in the same
+        transaction (see _settle_active_under_lock, maestro #9533)."""
+        password_changed = getattr(self, "_password_changed_in_save", False)
+        settle_active = getattr(self, "_reconcile_active_in_save", False)
+        if not password_changed and not settle_active:
             return super().atomic_save()
         from django.db import transaction
         self._password_changed_in_save = False
+        self._reconcile_active_in_save = False
         with transaction.atomic():
+            if settle_active:
+                self._settle_active_under_lock(key_written=password_changed)
             self.save()
-            self.end_sessions(
-                "password_changed", request=self.active_request,
-                actor=self.active_user, key_rotated=True)
-        self._sessions_ended_in_save = True
+            if password_changed:
+                self.end_sessions(
+                    "password_changed", request=self.active_request,
+                    actor=self.active_user, key_rotated=True)
+        if password_changed:
+            self._sessions_ended_in_save = True
+
+    def _settle_active_under_lock(self, key_written=False):
+        """Decide is_active and auth_key against the row as stored, not as
+        loaded. A REST save is a full save of the copy it loaded; without this,
+        a disable that commits between the load and the save is overwritten:
+        the account comes back on with the key from before the disable.
+
+          - This save did not ask to switch the account: keep the stored
+            is_active and the stored key. A stale copy never writes either back.
+          - It asked, and the stored state differs: a real switch. New key and
+            cached invite cleared, the same as disable_entity /
+            reactivate_entity, so nothing signed before or during a disable
+            works afterwards.
+          - It asked, and the stored state already matches: no switch here;
+            keep the key the writer that switched it stored.
+
+        A key this save writes itself (a password change) is kept. The cached
+        invite is cleared whenever the stored key differs from the one loaded:
+        it was signed with a key that no longer verifies. Call inside the
+        save's transaction (maestro #9533)."""
+        stored = User.objects.select_for_update().only("is_active", "auth_key").get(pk=self.pk)
+        loaded_key = self.auth_key
+        switches = False
+        if getattr(self, "_active_change_requested", False):
+            switches = bool(stored.is_active) != bool(self.is_active)
+        else:
+            self.is_active = stored.is_active
+        self._active_change_requested = False
+        self._switched_off_in_save = switches and not self.is_active
+        if switches:
+            if not key_written:
+                self.auth_key = uuid.uuid4().hex
+            for key in INVITE_CACHE_SECRETS:
+                self.set_secret(key, None)
+        elif not key_written:
+            if stored.auth_key != loaded_key:
+                for key in INVITE_CACHE_SECRETS:
+                    self.set_secret(key, None)
+            self.auth_key = stored.auth_key
 
     def on_rest_pre_save(self, changed_fields, created):
         for _field in SUPERUSER_ONLY_FIELDS:
@@ -1278,6 +1336,11 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if "is_active" in changed_fields:
             if not self.is_active:
                 metrics.record("user_deactivated", category="user", min_granularity="hours")
+        # Whether this request asked to switch the account. The switch itself,
+        # and the new key it needs, are decided in atomic_save against the row
+        # as stored, under its lock (maestro #9533).
+        self._active_change_requested = "is_active" in changed_fields
+        self._reconcile_active_in_save = True
 
     def check_phone_number_change(self, old_phone, admin_caller, allow_change=None):
         """The rule for a phone number changed through a save. Raises when the
