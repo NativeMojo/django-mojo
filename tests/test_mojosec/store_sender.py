@@ -655,27 +655,21 @@ def test_runtime_publishes_secret_free_status_with_collectors_disabled(opts):
 
 
 @th.django_unit_test()
-def test_runtime_reconciles_pending_even_when_journal_fails(opts):
+def test_runtime_delivers_even_when_journal_fails(opts):
     from mojo.mojosec.runtime import Runtime
 
     class FakeStore:
-        def __init__(self):
-            self.reconciled = 0
-
         def get_meta(self, key):
             return None
 
         def load_ssh_sessions(self):
             return []
 
-        def load_audit_fragments(self):
-            return {}
+        def has_pending_annotations(self):
+            return False
 
         def annotate_pending_fim(self, *args, **kwargs):
             return 0
-
-        def reconcile_pending_firewall(self):
-            self.reconciled += 1
 
     class BrokenJournal:
         name = "journal"
@@ -694,8 +688,10 @@ def test_runtime_reconciles_pending_even_when_journal_fails(opts):
     runtime.sender = mock.Mock(send_once=mock.Mock(return_value={"accepted": 0}))
     runtime._publish_status = mock.Mock()
     runtime.run_once()
-    th.assert_eq(runtime.store.reconciled, 1,
-                 "pending deadlines must reconcile on every cycle despite collector failure")
+    th.assert_eq(runtime.sender.send_once.call_count, 1,
+                 "delivery must run on every cycle despite a collector failure")
+    th.assert_true(runtime.collector_status["journal"]["ok"] is False,
+                   "the journal failure must be reported in collector status")
 
 
 @th.django_unit_test()

@@ -201,6 +201,7 @@ def test_never_public_v4_marker_repairs_back_to_shared_v3(opts):
     with tempfile.TemporaryDirectory() as root:
         os.chmod(root, 0o700)
         store = Store(root, "sensor", AGGREGATION, DELIVERY)
+        store.close()
         candidate = observation(
             "auth.sudo_command", "high", "Privileged sudo command executed",
             attributes={"actor": "ec2-user", "target_user": "root",
@@ -208,17 +209,25 @@ def test_never_public_v4_marker_repairs_back_to_shared_v3(opts):
                         "command_path": "/usr/local/sbin/mojo-firewall-broker"},
             fingerprint_values=("v4-pending",), aggregate=False,
             observed_at="2026-08-13T20:00:00Z")
-        store.db.execute("BEGIN IMMEDIATE")
-        store.hold_firewall_observation(candidate, now=time.time())
-        store.db.execute("COMMIT")
-        store.close()
         path = os.path.join(root, "state.sqlite3")
         db = sqlite3.connect(path)
-        db.execute("ALTER TABLE audit_fragments RENAME COLUMN audit_id TO audit_serial")
+        # The private tables a v4 development sensor left behind.
+        db.execute(
+            "CREATE TABLE audit_fragments(boot_id TEXT NOT NULL,audit_serial INTEGER NOT NULL,"
+            "payload TEXT NOT NULL,observed_at REAL NOT NULL,updated_at REAL NOT NULL,"
+            "PRIMARY KEY(boot_id,audit_serial))")
         db.execute(
             "INSERT INTO audit_fragments VALUES(?,?,?,?,?)",
             ("a" * 32, 77, json.dumps({"boot_id": "a" * 32, "audit_id": "77"}),
              time.time(), time.time()))
+        db.execute(
+            "CREATE TABLE pending_firewall(observation_id TEXT PRIMARY KEY,"
+            "payload TEXT NOT NULL,operation_id TEXT NOT NULL DEFAULT '',"
+            "created REAL NOT NULL,expires REAL NOT NULL,state TEXT NOT NULL DEFAULT 'pending')")
+        db.execute(
+            "INSERT INTO pending_firewall(observation_id,payload,created,expires) "
+            "VALUES(?,?,?,?)", (candidate["fingerprint"], json.dumps(candidate),
+                                time.time(), time.time() + 30))
         db.execute("UPDATE meta SET value=? WHERE key='schema_version'", (json.dumps(4),))
         db.commit()
         db.close()
@@ -226,11 +235,10 @@ def test_never_public_v4_marker_repairs_back_to_shared_v3(opts):
         repaired = Store(root, "sensor", AGGREGATION, DELIVERY)
         th.assert_eq(repaired.get_meta("schema_version"), 3,
                      "the transitional v4 marker must be retired for older v3 reopen")
-        th.assert_true(("a" * 32, "77") in repaired.load_audit_fragments(),
-                       "compatibility repair must preserve private pending fragments")
-        th.assert_eq(repaired.db.execute(
-            "SELECT COUNT(*) FROM pending_firewall").fetchone()[0], 0,
-            "transitional pending candidates must not disappear into an older runtime")
+        tables = {row[0] for row in repaired.db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        th.assert_true(not {"pending_firewall", "audit_fragments"} & tables,
+                       "the retired provenance tables must be dropped after the repair")
         th.assert_eq(repaired.db.execute(
             "SELECT delivery_class FROM events").fetchone()[0], "ordinary",
             "v4 downgrade repair must fail open pending candidates before deletion")

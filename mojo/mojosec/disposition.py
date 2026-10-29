@@ -1,4 +1,4 @@
-"""Server-owned disposition for one exact, trusted local PAM lifecycle."""
+"""Server-owned disposition for exact, trusted local automation records."""
 
 import datetime
 import ipaddress
@@ -35,7 +35,8 @@ _BOOT_ID = re.compile(r"^[a-f0-9]{32}$")
 _TTY = re.compile(r"^[A-Za-z0-9_.\-/]{1,96}$")
 _DIGEST = re.compile(r"^[a-f0-9]{64}$")
 SYSTEMD_USER_PAM_CLASSIFIER = "systemd_user_pam_v1"
-JOBMAN_FIREWALL_CLASSIFIER = "jobman_firewall_operation_v1"
+APP_USER_FIREWALL_BROKER_CLASSIFIER = "app_user_firewall_broker_v1"
+FIREWALL_BROKER_COMMAND = "/usr/local/sbin/mojo-firewall-broker"
 
 
 def _timestamp(value):
@@ -88,14 +89,17 @@ def classify_local_only(value, wire=None):
         if (envelope and value.get("severity") == "high" and
                 value.get("recommendation") == "review" and
                 isinstance(attributes, dict) and
-                attributes.get("local_disposition") == JOBMAN_FIREWALL_CLASSIFIER and
+                attributes.get("local_disposition") ==
+                APP_USER_FIREWALL_BROKER_CLASSIFIER and
                 attributes.get("attribution_provenance") == "none" and
                 not attributes.get("source_ip") and not attributes.get("tty") and
-                attributes.get("command") ==
-                "/usr/local/sbin/mojo-firewall-broker" and
-                isinstance(attributes.get("operation_id"), str) and
-                re.fullmatch(r"[a-f0-9]{32}", attributes["operation_id"])):
-            return JOBMAN_FIREWALL_CLASSIFIER
+                attributes.get("command") == FIREWALL_BROKER_COMMAND and
+                attributes.get("target_user") == "root" and
+                _canonical_uid(attributes.get("audit_loginuid")) and
+                isinstance(attributes.get("boot_id"), str) and
+                _BOOT_ID.fullmatch(attributes["boot_id"]) and
+                _canonical_uid(attributes.get("audit_session"))):
+            return APP_USER_FIREWALL_BROKER_CLASSIFIER
         return ""
     if (value.get("kind") != "auth.session_open" or
             value.get("severity") != "info" or

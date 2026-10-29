@@ -11,7 +11,6 @@ from django.utils import dateparse, timezone
 
 BROKER_CATEGORY = "mojosec.auth.sudo_command"
 BROKER_PATH = "/usr/local/sbin/mojo-firewall-broker"
-PROOF_STATUS = "missing"
 BATCH_SIZE = 5000
 
 
@@ -34,7 +33,6 @@ def _fingerprint_events(sensor, since, before):
         metadata__mojosec__sensor_id=sensor,
         metadata__mojosec__kind="auth.sudo_command",
         metadata__mojosec__evidence__command_path=BROKER_PATH,
-        metadata__mojosec__evidence__proof_status=PROOF_STATUS,
     )
 
 

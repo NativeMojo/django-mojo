@@ -14,19 +14,20 @@ SAFE_SENSOR = "mojosec-cleanup-safe"
 
 
 def _event(sensor, command_path="/usr/local/sbin/mojo-firewall-broker",
-           proof_status="missing"):
+           proof_status=None):
     from mojo.apps.incident.models import Event
 
+    # New-shape broker alarms carry no proof_status; historical ones may.
+    evidence = {"command_path": command_path}
+    if proof_status is not None:
+        evidence["proof_status"] = proof_status
     return Event.objects.create(
         scope="mojosec", category="mojosec.auth.sudo_command", level=8,
         title="MojoSec detected auth.sudo_command",
         metadata={"mojosec": {
             "sensor_id": sensor,
             "kind": "auth.sudo_command",
-            "evidence": {
-                "command_path": command_path,
-                "proof_status": proof_status,
-            },
+            "evidence": evidence,
         }},
     )
 
@@ -63,7 +64,7 @@ def setup_mojosec_cleanup(opts):
         group, "mojosec_cleanup_key", permissions={"mojosec_ingest": True})
     opts.cleanup_key_id = key.pk
 
-    mixed_safe = _event(MIXED_SENSOR)
+    mixed_safe = _event(MIXED_SENSOR, proof_status="missing")
     _receipt(key, mixed_safe)
     linked_incident = Incident.objects.create(
         category="cleanup-test", scope="mojosec", title="linked")

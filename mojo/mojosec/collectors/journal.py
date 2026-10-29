@@ -9,12 +9,26 @@ import time
 
 from ..detectors import detect_journal
 from ..attribution import AttributionResolver
-from ..lineage import (
-    CompoundAssembler, crond_launch, firewall_receipt, live_engine_identity, walk_parents,
-)
 
 
 MAX_STDERR_BYTES = 4096
+# Filter at the source: journalctl ORs across "+" and ANDs within a group, so
+# only the sshd, sudo, PAM, PID 1, kernel and two Audit record kinds the
+# detectors read ever leave journald.
+JOURNAL_MATCHES = (
+    "_COMM=sshd", "+", "_COMM=sshd-session", "+", "_COMM=sudo", "+",
+    "_COMM=(systemd)", "+", "_PID=1", "+", "_TRANSPORT=kernel", "+",
+    "_TRANSPORT=audit", "_AUDIT_TYPE_NAME=USER_START", "+",
+    "_TRANSPORT=audit", "_AUDIT_TYPE_NAME=USER_LOGIN",
+)
+# Every field detect_journal, attribution.ssh_session, audit_context and
+# trusted_journal_source read. __CURSOR, __REALTIME_TIMESTAMP,
+# __MONOTONIC_TIMESTAMP and _BOOT_ID are always emitted.
+JOURNAL_FIELDS = (
+    "MESSAGE,MESSAGE_ID,PRIORITY,SYSLOG_IDENTIFIER,UNIT,_TRANSPORT,_AUDIT_TYPE,"
+    "_AUDIT_TYPE_NAME,_AUDIT_SESSION,_AUDIT_LOGINUID,_UID,_PID,_COMM,_EXE,"
+    "_SYSTEMD_UNIT,_SYSTEMD_CGROUP,_SELINUX_CONTEXT,_TTY"
+)
 _CURSOR_BYTES = re.compile(rb'"__CURSOR"\s*:\s*"([A-Za-z0-9=;:_+.-]{1,4096})"')
 
 
@@ -37,13 +51,14 @@ class JournalCollector:
     def __init__(self, config):
         self.config = config
 
-    def poll(self, cursor=None, ssh_sessions=None, who_sessions=None,
-             audit_fragments=None):
-        command = ["/usr/bin/journalctl", "--output=json", "--no-pager"]
+    def poll(self, cursor=None, ssh_sessions=None, who_sessions=None):
+        command = ["/usr/bin/journalctl", "--output=json", "--no-pager",
+                   f"--output-fields={JOURNAL_FIELDS}"]
         if cursor:
             command.append(f"--after-cursor={cursor}")
         else:
             command.append(f"--since=-{self.config['lookback_seconds']} seconds")
+        command.extend(JOURNAL_MATCHES)
         process = subprocess.Popen(
             command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL, bufsize=0,
@@ -157,30 +172,6 @@ class JournalCollector:
             raise RuntimeError(error or f"journalctl exited {returncode}")
         resolver = AttributionResolver(ssh_sessions, who_sessions=who_sessions)
         sessions = resolver.overlay(parsed_records)
-        lineage = CompoundAssembler(audit_fragments).ingest(parsed_records)
-        process_nodes = []
-        for node in lineage["complete"]:
-            if node.get("pid"):
-                parents = walk_parents(node["pid"])
-                node["live_ancestors"] = parents["nodes"]
-                node["ambiguous"] = bool(node.get("ambiguous") or parents["ambiguous"])
-                live = parents["nodes"][0] if parents["nodes"] else None
-                if live is not None:
-                    if (live.get("pid") != node.get("pid") or
-                            (node.get("exe") and live.get("exe") != node.get("exe"))):
-                        node["ambiguous"] = True
-                    node["start_ticks"] = live["start_ticks"]
-                    node["unit"] = live.get("unit", "")
-                    node["cgroup"] = live.get("cgroup", "")
-                    node["namespaces"] = live.get("namespaces", {})
-                    node["selinux"] = node.get("selinux") or live.get("selinux", "")
-                    node["pinned"] = live_engine_identity(node, live)
-            process_nodes.append(node)
-        receipts = [found for found in
-                    (firewall_receipt(record) for record in parsed_records) if found]
-        crond_launches = [found for found in (crond_launch(
-            record, self.config["project_path"], self.config["app_uid"],
-            self.config["app_gid"]) for record in parsed_records) if found]
         for record in parsed_records:
             try:
                 detected = detect_journal(record, resolver)
@@ -189,24 +180,7 @@ class JournalCollector:
                 continue
             if detected:
                 observations.append(detected)
-        if malformed:
-            # A skipped record can contain a contradiction or a lost edge.
-            for node in process_nodes:
-                node.update(ambiguous=True, pinned=False)
-            for fragment in lineage["fragments"]:
-                fragment["ambiguous"] = True
         return {
             "observations": observations, "cursor": next_cursor,
             "malformed": malformed, "ssh_sessions": sessions,
-            "audit_fragments": lineage["fragments"],
-            # Retention cannot discard this poll's negative authority. changed
-            # is unique by Audit identity and bounded by the journal record
-            # limit plus the existing compound cap; carry only compact keys.
-            "audit_uncertainty": [
-                {"boot_id": item["boot_id"], "audit_id": item["audit_id"]}
-                for item in lineage["changed"]
-                if malformed or not item.get("finalized") or item.get("ambiguous") or
-                item.get("incomplete")],
-            "process_nodes": process_nodes, "firewall_receipts": receipts,
-            "crond_launches": crond_launches,
         }
