@@ -5,151 +5,44 @@ import time
 from testit import helpers as th
 
 
-@th.unit_test("audit policy is selective and architecture complete")
+@th.unit_test("audit policy is the sudo watch alone")
 def test_render_policy_is_selective(opts):
-    from mojo.deploy.audit import render_policy
+    from mojo.deploy.audit import AuditError, render_policy
 
     text = render_policy(1000)
-    for arch in ("b64", "b32"):
-        th.assert_in(f"-a always,exit -F arch={arch} -S execve,execveat -F euid=0", text,
-                     f"root exec capture must include {arch}")
-        th.assert_in(f"-a always,exit -F arch={arch} -S execve,execveat -F auid=1000", text,
-                     f"application execution capture must include {arch}")
-        th.assert_in(f"-F euid=0 -F auid!=1000", text,
-                     "application-origin root exec must not overlap the root rule")
-        th.assert_in("-F exe!=/usr/bin/sudo -k mojosec-app-exec", text,
-                     "the exact sudo watch must not overlap the application rule")
     th.assert_in("-w /usr/bin/sudo -p x -k mojosec-sudo", text,
                  "sudo executable execution must have an exact path watch")
+    th.assert_true("-S execve" not in text and "execveat" not in text,
+                   "the retired exec capture must not come back: it was ~800 records a minute")
+    for retired in ("mojosec-root-exec", "mojosec-app-exec"):
+        th.assert_true(retired not in text,
+                       f"the retired rule key must not be rendered: {retired}")
     th.assert_true("fork" not in text and "clone" not in text,
                    "the policy must not record fork-only process activity")
     th.assert_true("task,never" not in text,
                    "the AL2023 task-never seed must not survive managed policy")
+    th.assert_true(text.startswith("# managed-by: django-mojo mojosec-audit-v1\n-D\n"),
+                   "the managed marker and the delete-all directive must lead the policy")
+    with th.assert_raises(AuditError):
+        render_policy(0)
 
 
-@th.unit_test("audit health sidecar is strict and gap detecting")
-def test_health_sidecar_validation(opts):
-    from mojo.deploy.audit import validate_health
-
-    health = {
-        "schema": "mojosec.audit-health", "version": 1,
-        "boot_id": "a" * 32, "generation": "b" * 64,
-        "rules_sha256": "c" * 64, "sequence": 7,
-        "enabled": 1, "failure": 1, "rate_limit": 0,
-        "backlog_limit": 8192, "backlog": 0, "lost": 0,
-        "updated_at": 1000.0,
-    }
-    result = validate_health(health, now=1001.0, previous=None)
-    th.assert_true(result["healthy"], "a fresh exact healthy epoch should enable proof")
-    result = validate_health(health, now=1001.5, previous=health)
-    th.assert_true(result["healthy"],
-                   "reading the same still-fresh sidecar twice is not a sequence gap")
-    gap = dict(health, sequence=9, updated_at=1002.0)
-    result = validate_health(gap, now=1002.0, previous=health)
-    th.assert_true(not result["healthy"], "a sequence gap must disable suppression")
-    lost = dict(health, sequence=8, lost=1, updated_at=1002.0)
-    result = validate_health(lost, now=1002.0, previous=health)
-    th.assert_true(not result["healthy"], "new audit loss must disable suppression")
-
-
-@th.unit_test("real AL2023 Audit status projects to the closed v1 sidecar")
-def test_health_publisher_projects_realistic_status(opts):
-    from mojo.deploy import audit
-
-    status = (
-        "enabled 1\n"
-        "failure 1\n"
-        "pid 847\n"
-        "rate_limit 0\n"
-        "backlog_limit 8192\n"
-        "lost 0\n"
-        "backlog 0\n"
-        "backlog_wait_time 60000\n"
-        "backlog_wait_time_actual 0\n"
-        "loginuid_immutable 0 unlocked\n"
-    )
-    active = (
-        "-a always,exit -k mojosec-root-exec\n"
-        "-a always,exit -k mojosec-app-exec\n"
-        "-w /usr/bin/sudo -p x -k mojosec-sudo\n"
-    )
-    with tempfile.TemporaryDirectory() as root:
-        path = os.path.join(root, "audit-health.json")
-        payload = audit.publish_health(
-            "b" * 64, audit._sha256(active.encode()), 12,
-            status_text=status, path=path, boot_id="a" * 32,
-            active_rules_text=active)
-
-    th.assert_eq(tuple(payload), audit.HEALTH_FIELDS,
-                 "the publisher must emit only the ordered closed v1 contract")
-    th.assert_true(audit.validate_health(
-        payload, now=payload["updated_at"] + 1)["healthy"],
-        "real AL2023 status telemetry must project to a valid healthy sidecar")
-    for ignored in ("pid", "backlog_wait_time", "backlog_wait_time_actual",
-                    "loginuid_immutable"):
-        th.assert_true(ignored not in payload,
-                       f"command telemetry {ignored} must never enlarge v1")
-
-
-@th.unit_test("Audit command status and external sidecars reject malformed numerics")
-def test_health_numeric_contract_is_bounded(opts):
+@th.unit_test("Audit command status rejects malformed numerics")
+def test_status_numeric_contract_is_bounded(opts):
     from mojo.deploy import audit
 
     healthy_status = (
         "enabled 1\nfailure 1\nrate_limit 0\nbacklog_limit 8192\n"
         "backlog 0\nlost 0\n")
     parsed = audit.parse_status(healthy_status + "pid 123\nfuture_counter 9\n")
-    th.assert_eq(tuple(parsed), audit.HEALTH_STATUS_FIELDS,
-                 "only recognized v1 status fields may cross the command boundary")
-    malformed_statuses = (
-        healthy_status + "enabled 1\n",
-        healthy_status.replace("lost 0\n", ""),
-        healthy_status.replace("lost 0", "lost nope"),
-        healthy_status.replace("lost 0", f"lost {2 ** 63}"),
-    )
-    for value in malformed_statuses:
+    th.assert_eq(tuple(parsed), audit.STATUS_FIELDS,
+                 "only the recognized status fields may cross the command boundary")
+    for value in (healthy_status + "enabled 1\n",
+                  healthy_status.replace("lost 0\n", ""),
+                  healthy_status.replace("lost 0", "lost nope"),
+                  healthy_status.replace("lost 0", f"lost {2 ** 63}")):
         with th.assert_raises(audit.AuditError):
             audit.parse_status(value)
-
-    health = {
-        "schema": audit.HEALTH_SCHEMA, "version": 1,
-        "boot_id": "a" * 32, "generation": "b" * 64,
-        "rules_sha256": "c" * 64, "sequence": 7,
-        "enabled": 1, "failure": 1, "rate_limit": 0,
-        "backlog_limit": 8192, "backlog": 0, "lost": 0,
-        "updated_at": 1000.0,
-    }
-    malformed_values = (
-        dict(health, sequence=True),
-        dict(health, lost=-1),
-        dict(health, backlog=2 ** 63),
-        dict(health, updated_at=float("inf")),
-        dict(health, updated_at=float("nan")),
-        dict(health, pid=123),
-    )
-    for value in malformed_values:
-        result = audit.validate_health(value, now=1001.0)
-        th.assert_eq(result["reason"], "malformed",
-                     f"malformed Audit health must fail closed: {value!r}")
-
-
-@th.unit_test("Audit health projection accepts runtime annotations but selects v1")
-def test_health_selector_projects_enriched_runtime_mapping(opts):
-    from mojo.deploy import audit
-
-    enriched = {
-        "schema": audit.HEALTH_SCHEMA, "version": 1,
-        "boot_id": "a" * 32, "generation": "b" * 64,
-        "rules_sha256": "c" * 64, "sequence": 7,
-        "enabled": 1, "failure": 1, "rate_limit": 0,
-        "backlog_limit": 8192, "backlog": 0, "lost": 0,
-        "updated_at": 1000.0, "healthy": True, "reason": "",
-    }
-    selected = audit.select_health_fields(enriched)
-    th.assert_eq(tuple(selected), audit.HEALTH_FIELDS,
-                 "one selector must retain every canonical publisher field in order")
-    th.assert_true("healthy" not in selected and "reason" not in selected,
-                   "runtime-only annotations must not enter the publisher contract")
 
 
 @th.unit_test("audit inventory rejects unknown rule sources")
@@ -216,43 +109,3 @@ def test_inventory_admits_commented_stock_seed(opts):
             handle.write("# watch passwd\n-w /etc/passwd -p wa\n")
         with th.assert_raises(AuditError):
             inventory_sources(rules, generated_path="", active_rules="-a never,task\n")
-
-
-@th.unit_test("package downgrade flushes every held broker event before old v3 starts")
-def test_downgrade_flush_pending(opts):
-    from mojo.deploy.audit import flush_pending_firewall
-    from mojo.mojosec.events import observation
-    from mojo.mojosec.store import Store
-
-    aggregation = {"window_seconds": 60, "flush_count": 10,
-                   "max_aggregates": 100, "critical_reserve_aggregates": 10}
-    delivery = {"max_spool_events": 100, "critical_reserve_events": 10,
-                "retry_min_seconds": 1, "retry_max_seconds": 60}
-    with tempfile.TemporaryDirectory() as root:
-        store = Store(root, "sensor", aggregation, delivery,
-                      local_only_diagnostic_path=os.path.join(root, "missing"))
-        candidate = observation(
-            "auth.sudo_command", "high", "Privileged sudo command executed",
-            attributes={"actor": "ec2-user", "target_user": "root",
-                        "command": "/usr/local/sbin/mojo-firewall-broker",
-                        "command_path": "/usr/local/sbin/mojo-firewall-broker"},
-            fingerprint_values=("downgrade",), aggregate=False,
-            observed_at="2026-08-13T20:00:00Z")
-        store.db.execute("BEGIN IMMEDIATE")
-        store.hold_firewall_observation(candidate, now=time.time())
-        store.db.execute("COMMIT")
-        store.close()
-
-        th.assert_eq(flush_pending_firewall(os.path.join(root, "state.sqlite3")), 1,
-                     "stable helper must convert held proof to ordinary evidence")
-        reopened = Store(root, "sensor", aggregation, delivery,
-                         local_only_diagnostic_path=os.path.join(root, "missing"))
-        th.assert_eq(reopened.stats()["provenance"]["pending_firewall"], 0,
-                     "an older v3 process must never inherit an invisible held candidate")
-        events = reopened.pending_batch(10, 65536)
-        th.assert_eq(len(events), 1,
-                     "the exact held command must survive restart as an ordinary Event")
-        th.assert_eq(events[0]["attributes"]["command_path"],
-                     "/usr/local/sbin/mojo-firewall-broker",
-                     "downgrade conversion must preserve admin evidence")
-        reopened.close()

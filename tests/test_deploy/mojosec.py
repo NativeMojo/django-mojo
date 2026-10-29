@@ -190,19 +190,14 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
                    "AL2023 root-pip packages disappear under -I/-s")
     th.assert_true("CAP_SYS_PTRACE" not in unit,
                    "the network-capable root sensor must never gain process tracing")
-    helper = deploy.PROC_IDENTITY_SERVICE_TEXT
-    for expected in (
-            "User=ec2-user", "PrivateNetwork=true", "ProtectProc=invisible",
-            "ProcSubset=all",
-            "PartOf=mojosec.service", "kernel/yama/ptrace_scope",
-            "RestrictAddressFamilies=AF_UNIX", "CapabilityBoundingSet=\n",
-            "ExecStart=/usr/bin/python3 -E -P -m mojo.mojosec.proc_identity"):
-        th.assert_in(expected, helper,
-                     f"the process resolver lost its unprivileged sandbox: {expected}")
-    th.assert_true("ProcSubset=pid" not in helper,
-                   "the live Yama startup condition requires read-only /proc/sys visibility")
-    th.assert_in("SocketMode=0600", deploy.PROC_IDENTITY_SOCKET_TEXT,
-                 "only the root sensor may query the process identity helper")
+    th.assert_true("proc-identity" not in unit,
+                   "the retired resolver socket must not be wanted by the sensor unit")
+    for name in ("mojosec-proc-identity.socket", "mojosec-proc-identity.service",
+                 "mojosec-audit-health.timer", "mojosec-audit-health.service"):
+        th.assert_in(name, deploy.RETIRED_UNITS,
+                     f"a converge must retire the lineage-proof unit {name}")
+    th.assert_true(not any("ptrace" in path for path in deploy.RETIRED_FILES),
+                   "the ptrace sysctl stays in place: removing it lowers Yama at reboot")
     rotation = deploy.LOGROTATE_TEXT
     for expected in ("daily", "maxsize 50M", "rotate 14", "copytruncate",
                      "su root root", "create 0600 root root"):
