@@ -69,7 +69,7 @@ def test_running_identity_published_after_handlers_before_first_health_poll(opts
             runtime.stop()
 
         runtime.run_once = first_poll
-        runtime._publish_status = lambda: None
+        runtime._publish_status = lambda force=False: None
         runtime.run(signal_installer=lambda *args: handlers.append(args))
 
 

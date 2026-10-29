@@ -13,6 +13,14 @@ from .sender import Sender
 from .store import Store
 
 
+# Status is a health surface, not a heartbeat: write it at most once a minute
+# unless a collector, delivery or integrity tier changes health.
+STATUS_INTERVAL_SECONDS = 60
+# Tiers this frequent keep their committed baseline in memory (a few thousand
+# entries); six-hour tiers reload it from SQLite rather than pin ~60 MB.
+CACHED_BASELINE_MAX_INTERVAL = 600
+
+
 class Runtime:
     def __init__(self, config, store=None, sender=None, identity=None):
         self.config = config
@@ -51,6 +59,9 @@ class Runtime:
         self.last_fim = 0
         self.last_integrity = {}
         self.integrity_scans = {}
+        self.baselines = {}
+        self.status_published_at = None
+        self.status_signature = None
         self.running = True
         self.stop_event = threading.Event()
         self.diagnostic_stream = None
@@ -98,16 +109,25 @@ class Runtime:
         self.last_fim = time.monotonic()
         try:
             scan = self.fim.scan()
-            initialized = self.store.fim_initialized(scan["profile"])
-            baseline = self.store.load_fim_baseline(scan["profile"]) if initialized else {}
+            key = scan["profile"]
+            initialized = self.store.fim_initialized(key)
+            cache = interval <= CACHED_BASELINE_MAX_INTERVAL
+            cached = self.baselines.get(key) if cache and initialized else None
+            baseline = (cached if cached is not None else
+                        self.store.load_fim_baseline(key) if initialized else {})
             if scan["complete"]:
                 observations = self.fim.diff(baseline, scan) if initialized else []
             else:
                 observations = [item for item in self.fim.diff({}, scan)
                                 if item["kind"] == "fim.overflow"]
             self.store.record_fim_scan(
-                scan["profile"], scan["snapshot"], observations, scan["complete"]
+                key, scan["snapshot"], observations, scan["complete"],
+                baseline=baseline if initialized else None,
             )
+            # Only after the commit: a rolled-back write keeps the old cache,
+            # so the next scan diffs against what SQLite still holds.
+            if cache and scan["complete"]:
+                self.baselines[key] = scan["snapshot"]
             self._collector_ok("fim")
         except Exception as err:
             self._collector_error("fim", err)
@@ -187,14 +207,23 @@ class Runtime:
             if self.last_integrity.get(tier) and now - self.last_integrity[tier] < interval:
                 continue
             self.last_integrity[tier] = now
+            key = collector.baseline_key
+            cache = interval <= CACHED_BASELINE_MAX_INTERVAL
             try:
-                baseline = self.store.load_fim_baseline(collector.baseline_key)
+                baseline = self.baselines.get(key) if cache else None
+                if baseline is None:
+                    baseline = self.store.load_fim_baseline(key)
                 started = time.monotonic()
                 scan = collector.scan(baseline)
                 scan["duration"] = round(time.monotonic() - started, 6)
                 observations = collector.diff(baseline, scan)
                 self.store.record_fim_scan(
-                    collector.baseline_key, scan["snapshot"], observations, scan["complete"])
+                    key, scan["snapshot"], observations, scan["complete"],
+                    baseline=baseline)
+                # Only after the commit: a rolled-back write keeps the old
+                # cache, so the next scan diffs against what SQLite holds.
+                if cache and scan["complete"]:
+                    self.baselines[key] = scan["snapshot"]
                 self.integrity_scans[tier] = {
                     "ok": scan["complete"], "last_success": time.time(),
                     "complete": scan["complete"], "entries": len(scan["snapshot"]),
@@ -218,7 +247,28 @@ class Runtime:
             "tiers": self.integrity_scans,
         }
 
-    def _publish_status(self):
+    def _status_signature(self):
+        """Health transitions only; timestamps change every poll."""
+        delivery = self.last_delivery or {}
+        return (
+            self.running,
+            tuple(sorted((name, value.get("ok"), value.get("error"))
+                         for name, value in self.collector_status.items()
+                         if isinstance(value, dict))),
+            bool(delivery.get("error")), bool(delivery.get("retry")),
+            tuple(sorted((tier, scan.get("ok"))
+                         for tier, scan in self.integrity_scans.items())),
+        )
+
+    def _publish_status(self, force=False):
+        signature = self._status_signature()
+        published = getattr(self, "status_published_at", None)
+        if (not force and published is not None and
+                time.monotonic() - published < STATUS_INTERVAL_SECONDS and
+                signature == getattr(self, "status_signature", None)):
+            return
+        self.status_published_at = time.monotonic()
+        self.status_signature = signature
         status = {
             "schema": "mojosec.status", "version": 1,
             "sensor_id": self.config["sensor_id"],
@@ -249,14 +299,17 @@ class Runtime:
         self._poll_fim()
         self._poll_integrity()
         try:
-            expected_path = self.config.get("expected_changes_path", "")
-            active_paths = ()
-            if expected_path == "/etc/mojosec/expected_changes.json":
-                from mojo.deploy.mojosec_changes import ChangeJournal
-                active_paths = ChangeJournal().active_paths()
-            self.store.annotate_pending_fim(
-                expected_path, active_paths=active_paths,
-                directory_metadata_roots=self.content_roots)
+            # Nothing awaiting annotation: neither the producer journal nor
+            # the manifest is opened on this poll.
+            if self.store.has_pending_annotations():
+                expected_path = self.config.get("expected_changes_path", "")
+                active_paths = ()
+                if expected_path == "/etc/mojosec/expected_changes.json":
+                    from mojo.deploy.mojosec_changes import ChangeJournal
+                    active_paths = ChangeJournal().active_paths()
+                self.store.annotate_pending_fim(
+                    expected_path, active_paths=active_paths,
+                    directory_metadata_roots=self.content_roots)
         except Exception as err:
             self._collector_error("expected_changes", err)
         try:
@@ -283,6 +336,6 @@ class Runtime:
             remaining = self.config["poll_seconds"] - (time.monotonic() - started)
             if remaining > 0 and self.running:
                 self.stop_event.wait(remaining)
-        self._publish_status()
+        self._publish_status(force=True)
         self.store.close()
         emit("info", "MojoSec sensor stopped", sensor_id=self.config["sensor_id"])

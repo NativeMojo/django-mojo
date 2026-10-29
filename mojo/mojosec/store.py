@@ -39,6 +39,9 @@ ANNOTATION_MAX_GRACE_SECONDS = 20 * 60
 # two literals agreeing.
 ANNOTATION_MAX_CORRELATION_SECONDS = MAX_TIER_CORRELATION_SECONDS
 LOCAL_ONLY_RECONCILE_LIMIT = 256
+# The exact predicate annotate_pending_fim selects on; the partial index below
+# covers it, so the per-poll "anything to annotate?" probe is one index seek.
+_ANNOTATION_PENDING = "annotation_deadline > 0 AND attempts = 0 AND last_error = ''"
 SATURATING_COUNTER_MAX = 2 ** 63 - 1
 # Tables the retired process-lineage proof created. A state file written by an
 # older sensor still carries them; they are drained and dropped on open.
@@ -231,6 +234,8 @@ class Store:
             "CREATE INDEX events_delivery_class ON events(delivery_class, next_attempt, created)",
             "CREATE INDEX events_delivery_class_created "
             "ON events(delivery_class, created, id)",
+            f"CREATE INDEX events_annotation_pending ON events(created) "
+            f"WHERE {_ANNOTATION_PENDING}",
             """CREATE TABLE aggregates (
                 fingerprint TEXT PRIMARY KEY,
                 payload TEXT NOT NULL,
@@ -310,6 +315,9 @@ class Store:
                 self.db.execute(
                     "CREATE INDEX IF NOT EXISTS events_delivery_class_created "
                     "ON events(delivery_class, created, id)")
+            self.db.execute(
+                f"CREATE INDEX IF NOT EXISTS events_annotation_pending ON events(created) "
+                f"WHERE {_ANNOTATION_PENDING}")
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
@@ -668,6 +676,10 @@ class Store:
             self.db.execute("ROLLBACK")
             raise
 
+    def has_pending_annotations(self):
+        return self.db.execute(
+            f"SELECT 1 FROM events WHERE {_ANNOTATION_PENDING} LIMIT 1").fetchone() is not None
+
     @staticmethod
     def _event_grace(attributes):
         """This event's bounded hold: producer TTL plus its own tier window."""
@@ -694,8 +706,7 @@ class Store:
         try:
             rows = self.db.execute(
                 "SELECT id, payload, created, next_attempt, annotation_deadline "
-                "FROM events WHERE annotation_deadline > 0 AND attempts = 0 "
-                "AND last_error = '' ORDER BY created LIMIT 4096",
+                f"FROM events WHERE {_ANNOTATION_PENDING} ORDER BY created LIMIT 4096",
             ).fetchall()
             for row in rows:
                 event = json.loads(row["payload"])
@@ -828,19 +839,37 @@ class Store:
         ).fetchall()
         return {row["path"]: json.loads(row["entry"]) for row in rows}
 
-    def record_fim_scan(self, profile, snapshot, observations, complete):
-        """Commit FIM evidence and its new complete baseline as one unit."""
+    def record_fim_scan(self, profile, snapshot, observations, complete, baseline=None):
+        """Commit FIM evidence and its new complete baseline as one unit.
+
+        With the committed baseline the scan diffed against, only the delta is
+        written; a scan that changed nothing touches no baseline row. None
+        keeps the full rewrite (activation, re-enrollment, first scan).
+        """
         now = time.time()
         self.db.execute("BEGIN IMMEDIATE")
         try:
             for found in observations:
                 self._ingest_one(found, now)
-            if complete:
+            if complete and baseline is None:
                 self.db.execute("DELETE FROM fim_baseline WHERE profile = ?", (profile,))
                 self.db.executemany(
                     "INSERT INTO fim_baseline(profile, path, entry) VALUES(?, ?, ?)",
                     ((profile, path, canonical_json(entry)) for path, entry in snapshot.items()),
                 )
+            elif complete:
+                changed = [(profile, path, canonical_json(entry))
+                           for path, entry in snapshot.items() if baseline.get(path) != entry]
+                removed = [(profile, path) for path in baseline if path not in snapshot]
+                if changed:
+                    self.db.executemany(
+                        "INSERT INTO fim_baseline(profile, path, entry) VALUES(?, ?, ?) "
+                        "ON CONFLICT(profile, path) DO UPDATE SET entry = excluded.entry",
+                        changed)
+                if removed:
+                    self.db.executemany(
+                        "DELETE FROM fim_baseline WHERE profile = ? AND path = ?", removed)
+            if complete:
                 self.set_meta(f"fim_initialized:{profile}", True)
                 self.set_meta(f"fim_scan:{profile}", {
                     "at": now, "complete": True, "entries": len(snapshot),

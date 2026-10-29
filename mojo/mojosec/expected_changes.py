@@ -103,6 +103,12 @@ def evidence_digest(value):
     return kind, hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+# One parsed manifest per path and stat generation. The sensor is single-
+# threaded and callers only read the entry list, so a hit returns the same
+# list; a malformed manifest is likewise parsed once and re-raised.
+_MANIFEST_CACHE = {}
+
+
 def load_manifest(path, require_root=None):
     """Read one no-follow descriptor; an absent manifest means no annotations."""
     if not path:
@@ -124,9 +130,26 @@ def load_manifest(path, require_root=None):
             raise ExpectedChangeError("expected-change manifest must be mode 0600 or stricter")
         if require_root and info.st_uid != 0:
             raise ExpectedChangeError("expected-change manifest must be owned by root")
+        key = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+               info.st_ctime_ns, info.st_uid, info.st_mode)
+        cached = _MANIFEST_CACHE.get(path)
+        if cached is not None and cached[0] == key:
+            if isinstance(cached[1], str):
+                raise ExpectedChangeError(cached[1])
+            return cached[1]
         payload = os.read(descriptor, MAX_BYTES + 1)
     finally:
         os.close(descriptor)
+    try:
+        entries = _parse_manifest(payload)
+    except ExpectedChangeError as err:
+        _MANIFEST_CACHE[path] = (key, str(err))
+        raise
+    _MANIFEST_CACHE[path] = (key, entries)
+    return entries
+
+
+def _parse_manifest(payload):
     if len(payload) > MAX_BYTES:
         raise ExpectedChangeError("expected-change manifest is too large")
     try:
