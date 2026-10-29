@@ -161,7 +161,8 @@ def on_sms_verify(request):
     else:
         user, _src = User.lookup_from_request_with_source(request, phone_as_username=True)
         login_source = "sms"  # standalone passwordless login
-    if not user:
+    # A disabled account is answered like an unknown one (#9463).
+    if not user or not user.is_active:
         raise merrors.PermissionDeniedException()
 
     # Five tries per account, whatever address they come from. Counted before

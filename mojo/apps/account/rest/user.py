@@ -222,6 +222,16 @@ def on_user_login(request):
             level=5)
         raise merrors.PermissionDeniedException("Invalid username or password", 401, 401)
 
+    # A disabled account gets the wrong-password answer, byte for byte, after
+    # the hash: the endpoint must confirm neither the password nor the
+    # account's state (#9463, the #5103 rule). Its counter is not cleared.
+    if not user.is_active:
+        user.report_incident(
+            f"{user.username} login refused: account disabled",
+            "login:inactive",
+            level=5)
+        raise merrors.PermissionDeniedException("Invalid username or password", 401, 401)
+
     # Successful password — clear the per-account counter so prior bad attempts
     # do not penalise this session. Done before MFA gate too, since the password
     # check passed and a stolen-password retry would not get this far.
@@ -1004,7 +1014,13 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
     last_login / UserLoginEvent / USER_LOGIN_HANDLER — so a blocked login
     records no success side effects. Evaluated with the verified `user`, so
     `bypass_geofence` holders pass and block evidence carries the user.
+
+    A disabled account is refused before anything else (#9463). Every sign-in
+    route refuses it earlier with its own answer; this is the fail-closed
+    backstop for a caller that forgets.
     """
+    if not user.is_active:
+        raise merrors.PermissionDeniedException("Invalid credentials", 401, 401)
     if source not in GEOFENCE_EXEMPT_JWT_SOURCES:
         from mojo.apps.account.services.geofence import enforcement
         blocked = enforcement.enforce(request, scope="auth", user=user)
@@ -1342,7 +1358,9 @@ def on_user_password_reset_code(request):
     new_password = request.DATA.get("new_password")
     code_ttl = settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int")
     user = User.lookup_from_request(request, phone_as_username=True)
-    if user is None:
+    # A disabled account is answered exactly like an unknown one: no password
+    # is set and nothing tells the two apart (#9463).
+    if user is None or not user.is_active:
         User.class_report_incident(
             f"invalid reset password code with details {request.DATA.username} - {request.DATA.email} - {request.DATA.phone_number}",
             event_type="reset:unknown",
@@ -1581,6 +1599,10 @@ def on_magic_login_complete(request):
     """Exchange a magic login token for a JWT — logs the user in."""
     token = request.DATA.get("token")
     user, channel = tokens.verify_magic_login_token(token)
+    # The link holder proved the mailbox, so the reason is given, as for
+    # invite, reset link and email verify (#9463). Nothing is written first.
+    if not user.is_active:
+        raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
     if channel == "sms" and not user.is_phone_verified:
         user.is_phone_verified = True
         user.save(update_fields=["is_phone_verified", "modified"])

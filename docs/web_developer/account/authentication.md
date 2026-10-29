@@ -46,6 +46,13 @@ Two-arg `MojoAuth.login(username, password)` callers omit the key entirely and b
 
 Store both tokens. Use `access_token` in subsequent requests.
 
+**Disabled accounts.** A disabled account never gets tokens. Password login
+for one answers exactly like a wrong password —
+`401 {"error": "Invalid username or password"}` — and so do TOTP, SMS and
+reset-code sign-ins, each with its own wrong-code answer. Sign-in by an emailed
+or texted link (magic link, email-change link, invite, reset link, email
+verify) answers `403 {"error": "Account is disabled"}`.
+
 ## Login Rate Limiting
 
 `POST /api/login` applies layered throttling. A 429 with `Retry-After` can arrive from several independent tiers:
