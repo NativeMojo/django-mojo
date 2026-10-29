@@ -170,7 +170,8 @@ The link is stored in the active group (`group` in the request, or an API
 key's own group). You must belong to that group, directly or through a parent
 group, or hold `manage_shortlinks` as a global permission; otherwise the
 request is refused with 403 `"Permission denied"` and no link is created. An
-API key can use only its own group. A request with no group is not affected.
+API key can use its own group or a group below it (a child, at any depth); any
+other group is refused. A request with no group is not affected.
 
 ```json
 {
@@ -203,7 +204,7 @@ A file-backed link is a public share of that file, so the caller needs the
 file's share permission, checked in the **file's own group**: the file's owner,
 or `manage_files` or `files` (as a member permission in that group, or as a
 global permission). `view_fileman` alone is not enough. An API key is held to
-its own group and its own permissions. The link itself is stored in the
+its own group (or a group below it) and its own permissions. The link itself is stored in the
 caller's group, not the file's.
 
 A missing, malformed, inactive or not-shareable `file` is refused with one
