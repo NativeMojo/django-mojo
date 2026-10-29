@@ -285,15 +285,14 @@ that the deployed foreground engine and scheduler are stopped.
 No jobs CLI daemon-mode processes running; check deployed foreground processes with: python3 -m mojo.deploy.jobman status
 ```
 
-MojoSec proves that deployed origin from the real CROND launch record plus its
-matching PAM/Audit `USER_START`, then follows the audited bash → jobman → engine
-chain. Cron calls the installed module directly and keeps its bash parent alive,
-so bash, Jobman, and the engine have distinct PIDs. Jobman then invokes
-`bin/jobs.py` with its own absolute Python executable. Both choices bypass the
-portable `/usr/bin/env` wrapper exec sequence that made several identities
-compete for one PID. The CROND row itself retains real crond process metadata;
-its launch PID is joined to the later distinct Jobman and engine processes.
-MojoSec does not invent a same-session long-lived crond exec.
+MojoSec no longer proves a process's origin. The engine's broker sudo is
+recognised as expected automation by the sudo record alone (see the
+[MojoSec sensor guide](../security/mojosec_sensor.md)), so the only thing that
+matters about how the engine starts is that cron starts it: an engine started
+from an SSH shell makes each broker sudo an ordinary `auth.sudo_command` Event
+until cron relaunches it. Cron calls the installed module directly and keeps
+its bash parent alive, and Jobman invokes `bin/jobs.py` with its own absolute
+Python executable, bypassing the portable `/usr/bin/env` wrapper chain.
 
 `jobman` lives in `mojo.deploy` rather than in this app because it has to work
 on a box with no settings at all — see

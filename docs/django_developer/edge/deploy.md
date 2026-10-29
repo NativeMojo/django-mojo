@@ -104,8 +104,9 @@ if any process survives. Because the handoff is detached after node evidence is
 recorded, that failure is an operational alarm rather than a rollback of the
 activated release. The installed every-minute cron entry starts both
 replacements in a fresh audit session; starting them from the retiring engine
-would inherit its session and prevent MojoSec from proving JobEngine-originated
-firewall work. `code` nodes receive no generic restart. A custom profile owns
+would inherit its session, so the sensor would raise each of the new engine's
+broker sudos as an ordinary `auth.sudo_command` instead of recording it as
+expected automation. `code` nodes receive no generic restart. A custom profile owns
 its service restart; if that restart kills the caller, the replacement engine
 consumes the transaction's bounded outcome and exact local identity to finalize
 the same deployment UUID.

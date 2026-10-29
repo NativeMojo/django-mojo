@@ -737,21 +737,20 @@ if any process survives. It selects stop targets from the expected Jobman
 command scan, never from the application-writable pidfile alone. Because this
 handoff runs after the node result is recorded, its failure is an operational
 alarm; it does not roll back the activated release. The next every-minute cron
-tick starts the replacements. That fresh cron session is part of the MojoSec
-proof for firewall work, so the deploy process must not start the replacements
-directly.
+tick starts the replacements. The deploy process must not start them directly:
+a process started from the deploy's shell would give every broker sudo that
+session's Audit session, and the sensor would raise each one as an
+`auth.sudo_command` instead of recording it as expected automation.
 
 The cron entry calls `/usr/bin/python3 -E -P -m mojo.deploy.jobman` directly
 and keeps its bash parent alive until Jobman returns. This avoids the project's
-portable `env → bash → Python` wrapper chain, whose repeated execs share one PID
-and cannot be used as unambiguous Audit lineage. The project `bin/jobman` shim
+portable `env → bash → Python` wrapper chain. The project `bin/jobman` shim
 remains available for interactive commands.
 
 `start` runs `bin/jobs.py` through jobman's absolute current Python executable,
-not through the project's `/usr/bin/env` shebang. Besides pinning the child to
-the already-selected environment, this gives Linux Audit one unambiguous Python
-exec generation for MojoSec lineage. Jobman refuses to spawn if its interpreter
-is not an absolute executable path.
+not through the project's `/usr/bin/env` shebang, which pins the child to the
+already-selected environment. Jobman refuses to spawn if its interpreter is
+not an absolute executable path.
 
 **A root `start` demotes itself.** Invoked as root, `jobman start` resolves
 the application account (same ladder as the update transaction: cron entry →
@@ -773,7 +772,7 @@ automatically. For operator recovery, run
 `/usr/bin/python3 -E -P -m mojo.deploy.jobman --root /opt/api preflight` as the
 installed cron account, then run the same safe-path module command with
 `stop --root /opt/api`. The following cron tick
-starts the MojoSec-proven replacements. Use
+starts the replacements. Use
 `journalctl -t mojo-deploy-recycle` to inspect automated deploy handoffs; manual
 recovery commands report directly and do not write that tag.
 
