@@ -2,7 +2,12 @@
 
 All writes to `metadata.protected.disable.*` and the paired `is_active` flip
 go through this module. Callers: REST POST_SAVE_ACTIONS, the inactive sweep,
-and `pii_anonymize`.
+the assistant's disable_user / enable_user tools, and `pii_anonymize`.
+
+Both directions replace a User's auth_key and clear its cached invite, in the
+same transaction as the flip: nothing signed before or during a disable works
+once the account is back on (maestro #9533). The admin REST save of
+`is_active` does the same in User._handle_existing_user_pre_save.
 
 Schema for `metadata.protected.disable`:
 
@@ -30,6 +35,8 @@ History is FIFO-capped at HISTORY_CAP. Long-term audit lives in incident events
 and `logit.Log`, not on the user record.
 """
 import uuid
+
+from django.db import transaction
 
 from mojo.helpers import dates, logit
 from mojo import errors as merrors
@@ -78,11 +85,33 @@ def _read_disable(entity):
     return _ensure_dict(protected.get("disable"))
 
 
+def _new_key_updates(entity):
+    """The column update that replaces a User's signing key, or None for an
+    entity without one (Group). Applied in the same UPDATE as the flip."""
+    if hasattr(entity, "auth_key"):
+        return {"auth_key": uuid.uuid4().hex}
+    return None
+
+
+def _forget_invite(entity):
+    """Clear a User's cached invite under a lock on its row. The cached token
+    was signed with the old key; the next invite must mint one that works.
+    Same pattern as User.end_sessions. Call inside the flip's transaction."""
+    if not hasattr(entity, "auth_key"):
+        return
+    from mojo.apps.account.models.user import INVITE_CACHE_SECRETS
+    locked = type(entity).objects.select_for_update().get(pk=entity.pk)
+    for key in INVITE_CACHE_SECRETS:
+        locked.set_secret(key, None)
+    locked.save(update_fields=["mojo_secrets", "modified"])
+
+
 def _write_metadata(entity, new_metadata, *, atomic_with_active=None, extra_updates=None):
     """Persist new_metadata. If atomic_with_active is True/False, also flip
     is_active atomically and return the row count touched. extra_updates are
     additional column values applied in the SAME atomic UPDATE (used by
-    disable_entity to rotate a User's auth_key with the is_active flip).
+    disable_entity and reactivate_entity to replace a User's auth_key with
+    the is_active flip).
 
     When atomic_with_active is None, the caller will save() entity.metadata
     themselves (used by record_anonymize, where pii_anonymize controls the save).
@@ -141,7 +170,8 @@ def disable_entity(entity, *, reason, by_user=None, note=None, request=None,
     """Disable a User or Group.
 
     Atomic. Raises ValueException if the entity is already disabled.
-    Clears any pending warning. Emits logit + incident event. `reporter`
+    For a User, replaces auth_key and clears the cached invite. Clears any
+    pending warning. Emits logit + incident event. `reporter`
     swaps the incident reporter for this call only (tests inject a local
     fake instead of patching the shared incident module).
     """
@@ -175,14 +205,15 @@ def disable_entity(entity, *, reason, by_user=None, note=None, request=None,
     # DM-042 kill switch: for Users, rotate auth_key in the SAME atomic UPDATE
     # as the is_active flip. Every outstanding JWT fails its signature check on
     # the next request, and a later reactivation does NOT resurrect tokens
-    # minted before the disable — the holder must re-authenticate.
-    extra_updates = None
-    if hasattr(entity, "auth_key"):
-        extra_updates = {"auth_key": uuid.uuid4().hex}
-
-    updated = _write_metadata(entity, meta, atomic_with_active=False, extra_updates=extra_updates)
-    if not updated:
-        raise merrors.ValueException(f"{Model.__name__} is already disabled")
+    # minted before the disable — the holder must re-authenticate. The cached
+    # invite goes with the old key (maestro #9533).
+    with transaction.atomic():
+        updated = _write_metadata(
+            entity, meta, atomic_with_active=False,
+            extra_updates=_new_key_updates(entity))
+        if not updated:
+            raise merrors.ValueException(f"{Model.__name__} is already disabled")
+        _forget_invite(entity)
 
     entity.refresh_from_db()
     disconnect_realtime(entity, request=request)
@@ -212,7 +243,8 @@ def reactivate_entity(entity, *, by_user=None, note=None, request=None,
     """Reactivate a disabled entity.
 
     Pushes the live disable block to `history` with `reactivated_*` fields.
-    Atomic. Raises ValueException if already active.
+    For a User, replaces auth_key and clears the cached invite in the same
+    transaction. Atomic. Raises ValueException if already active.
     """
     Model = type(entity)
     by_user_id, by_username = _by_fields(by_user)
@@ -250,9 +282,16 @@ def reactivate_entity(entity, *, by_user=None, note=None, request=None,
     protected["disable"] = new_block
     meta["protected"] = protected
 
-    updated = _write_metadata(entity, meta, atomic_with_active=True)
-    if not updated:
-        raise merrors.ValueException(f"{Model.__name__} is already active")
+    # Re-enabling replaces the key too: anything signed while the account was
+    # off (or before an off that skipped this service) stays dead, and the
+    # cached invite is cleared so a re-send works (maestro #9533).
+    with transaction.atomic():
+        updated = _write_metadata(
+            entity, meta, atomic_with_active=True,
+            extra_updates=_new_key_updates(entity))
+        if not updated:
+            raise merrors.ValueException(f"{Model.__name__} is already active")
+        _forget_invite(entity)
 
     entity.refresh_from_db()
 

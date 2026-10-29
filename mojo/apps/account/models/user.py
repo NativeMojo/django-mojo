@@ -1150,6 +1150,13 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     def on_rest_saved(self, changed_fields, created):
         if "is_active" in changed_fields:
             metrics.set_value("total_users", User.objects.filter(is_active=True).count(), account="global")
+            if not self.is_active:
+                # Match disable_entity: drop live websockets once committed.
+                # Best effort; the new key is the guarantee (maestro #9533).
+                from django.db import transaction
+                from mojo.apps.account.services.disable import disconnect_realtime
+                request = self.active_request
+                transaction.on_commit(lambda: disconnect_realtime(self, request=request))
         removed_phone = getattr(self, "_removed_verified_phone", None)
         if removed_phone:
             self._removed_verified_phone = None
@@ -1278,6 +1285,14 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if "is_active" in changed_fields:
             if not self.is_active:
                 metrics.record("user_deactivated", category="user", min_granularity="hours")
+            # Turning an account off or back on with a direct is_active write
+            # replaces the signing key and clears the cached invite, the same
+            # as disable_entity / reactivate_entity: nothing signed before or
+            # during a disable works afterwards. Both ride this save, as the
+            # password change above does (maestro #9533).
+            self.auth_key = uuid.uuid4().hex
+            for key in INVITE_CACHE_SECRETS:
+                self.set_secret(key, None)
 
     def check_phone_number_change(self, old_phone, admin_caller, allow_change=None):
         """The rule for a phone number changed through a save. Raises when the
