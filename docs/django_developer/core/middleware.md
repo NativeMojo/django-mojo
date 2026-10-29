@@ -203,7 +203,17 @@ request.DATA.get_typed("size", 10, int)  # with type coercion
 request.DATA.user.name  # → "Alice"
 ```
 
-**Array notation** (`tags[]` or `tags[0]`) is automatically converted to a list.
+**Bracket notation** nests the same way:
+
+```python
+# form or query keys "device[id]" = "7" and "device[name]" = "x"
+request.DATA.device  # → {"id": "7", "name": "x"}
+```
+
+**List markers** — a trailing `[]` is dropped, and repeated values become a
+list: `tags[]=a&tags[]=b` → `request.DATA.tags == ["a", "b"]`. An index is not a
+list marker: `items[0][name]=x` nests as a dict keyed by the index,
+`request.DATA.items == {"0": {"name": "x"}}`.
 
 **Duplicate keys / precedence** — sources are processed in order (query string,
 then form body, then JSON body) and a later source **replaces** an earlier
