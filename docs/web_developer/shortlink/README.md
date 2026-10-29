@@ -14,7 +14,7 @@ The shortlink app provides URL shortening with automatic rich previews for messa
 | GET | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Get short link details |
 | POST/PUT | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Update short link |
 | DELETE | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Delete short link |
-| POST | `/api/shortlink/link/create` | authenticated; a `file` also needs the file's share permission | Create a short URL string via helper endpoint |
+| POST | `/api/shortlink/link/create` | authenticated; member of the active `group` (or global `manage_shortlinks`); a `file` also needs the file's share permission | Create a short URL string via helper endpoint |
 | GET | `/api/shortlink/history` | `manage_shortlinks` | List click history |
 | GET | `/api/shortlink/history/<id>` | `manage_shortlinks` | Get click history record |
 
@@ -165,6 +165,12 @@ leaves the current expiry untouched.
 Requires authentication (`@md.requires_auth()`) and reads input from `request.DATA`.
 
 Use this endpoint when you want a ready-to-use short URL string in one call.
+
+The link is stored in the active group (`group` in the request, or an API
+key's own group). You must belong to that group, directly or through a parent
+group, or hold `manage_shortlinks` as a global permission; otherwise the
+request is refused with 403 `"Permission denied"` and no link is created. An
+API key can use only its own group. A request with no group is not affected.
 
 ```json
 {

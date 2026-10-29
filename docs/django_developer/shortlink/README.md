@@ -66,7 +66,7 @@ shorten(url="", file=None, rendition=None, source="", expire_days=3, expire_hour
 | `bot_passthrough` | `False` | Skip bot detection and OG preview — always redirect. Use for transactional links. |
 | `is_protected` | `False` | Protected links are not deleted by the automatic cleanup job. |
 | `user` | `None` | User who created the link. |
-| `group` | `None` | Group scope for permissions. |
+| `group` | `None` | Group scope for permissions. `shorten()` does not check that the creator belongs to it; the REST quick-create route does. |
 | `base_url` | `None` | Override base URL. Default: `SHORTLINK_BASE_URL` or `BASE_URL` from settings. |
 
 Both `expire_days` and `expire_hours` are bounded by `mojo.apps.shortlink.models.MAX_EXPIRE_TOTAL_HOURS` (876000 — roughly 100 years, a module constant, not a `ShortLink` attribute), checked **per component and on the sum**, so `expire_days=1, expire_hours=-24` is rejected rather than quietly collapsing to "never expires". Out-of-range and negative values raise `ValueException`, which the dispatcher turns into a `400`; previously they either overflowed `timedelta` into a `500` or were silently accepted.
@@ -267,7 +267,15 @@ Snapshot mode (`resolve_file=False`) captures the URL once at creation — usefu
 
 ### Quick create route
 
-`POST /api/shortlink/link/create` accepts a `file` id. It resolves it with
+`POST /api/shortlink/link/create` first calls
+`require_group_access(request)` from the same module. When a group is active,
+a person must be a member of it (directly or through a parent, active
+membership only) or hold `manage_shortlinks` globally; an API key or group
+token must be allowed that group (`identity_allows_group`). A link with no
+group is not checked. Refusal is the same 403 as below, branch
+`shortlink.group_not_member`.
+
+The route also accepts a `file` id. It resolves it with
 `mojo.apps.shortlink.services.access.shareable_file(request, raw_id)`, which
 returns the active `File` only when
 `File.rest_check_permission(request, "SAVE_PERMS", file)` allows it — the
