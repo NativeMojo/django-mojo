@@ -4,14 +4,16 @@ A single service owns all writes to `User.is_active` / `Group.is_active` plus th
 audit metadata that explains *why*, *when*, *by whom*, and *with what note*. The
 metadata lives under `metadata.protected.disable.*`.
 
-Three callers go through this service:
+Four callers go through this service:
 
 1. **REST POST_SAVE_ACTIONS** — `disable` and `reactivate` on User and Group
 2. **Inactive sweep** — auto-disables stale users / groups using `reason="inactive"`
-3. **`pii_anonymize()`** — terminal anonymization, records `reason="anonymized"`
+3. **Assistant tools** — `disable_user` (`reason="admin"`) and `enable_user`
+4. **`pii_anonymize()`** — terminal anonymization, records `reason="anonymized"`
 
 Direct writes to `is_active` via REST still work (`{"is_active": false}`) but do
-not write the namespace and are no longer the recommended path.
+not write the namespace and are no longer the recommended path. They do replace
+the signing key, the same as the service (see the kill switch below).
 
 ---
 
@@ -112,15 +114,28 @@ user's live websockets (`disconnect_realtime`, cross-process via the realtime
 pub/sub disconnect channel — a Redis/realtime failure never blocks the
 disable itself). Consequences:
 
-- Every outstanding JWT (including `user_api_key` tokens) fails its signature
-  check on the very next request — `User.validate_jwt` checks both the
-  rotated `auth_key` and `is_active` directly, and rejects with the same
-  generic `"Invalid token user"` error either way (no account-state oracle
-  for whoever holds a stale token).
-- **Reactivating does NOT resurrect pre-disable tokens** — the key was
-  rotated, so the user must re-authenticate after reactivation. This is
-  deliberate for the abuse case (see
+- Every outstanding JWT is refused on the very next request —
+  `User.validate_jwt` checks `is_active` before the signature and rejects
+  with the same generic `"Invalid token user"` error as a missing user (no
+  account-state oracle for whoever holds a stale token). `user_api_key`
+  tokens are signed with their own secret: they are refused while the
+  account is off and work again when it is back on, like group membership.
+- **Re-enabling replaces the key too** (maestro #9533). `reactivate_entity`
+  writes a new `auth_key` in the same UPDATE as the flip, so nothing signed
+  before or during the disable works afterwards — including tokens a sign-in
+  flow issued while the account was off. The user must re-authenticate.
+  This is deliberate for the abuse case (see
   [Authenticated-Abuse Hardening](../security/abuse_hardening.md#3-the-account-kill-switch)).
+- **The cached invite is cleared both ways**, under a lock on the user row
+  in the flip's transaction. A pending invite link dies with the old key;
+  the next `send_invite` mints one that works.
+- **A direct `is_active` write does the same.** An admin REST save that
+  changes `is_active` replaces `auth_key` and clears the cached invite in
+  that save (`User._handle_existing_user_pre_save`), and going off drops
+  live websockets once committed. It still writes no disable metadata.
+- Django's `UserAdmin` (`account/admin.py`) bypasses all of this.
+  django-mojo mounts no admin site; a project that mounts one should not
+  toggle `is_active` there.
 - `User.revoke_sessions` (rotate `auth_key` without disabling) also drops
   live websockets via the same `disconnect_realtime` call. So do a password
   reset and a password change: all three go through `User.end_sessions`,

@@ -474,8 +474,8 @@ Truncation can leave incomplete JSON, so treat `message` as display text.
 | `query_rate_limits` | `view_admin` | No | Fair, bounded sample of currently active fixed- and sliding-window rate limit entries from Redis |
 | `get_permission_summary` | `view_admin` | No | User permissions breakdown (user-level + group-level) |
 | `update_user_permission` | `manage_users` | Yes | Add or remove a permission from a user |
-| `disable_user` | `manage_users` | Yes | Disable account + rotate auth_key (invalidates all sessions). Cannot disable yourself. Does not write `metadata.protected.disable.*` — use the REST `disable` action for audited disables. |
-| `enable_user` | `manage_users` | Yes | Re-enable a disabled account. Does not update `metadata.protected.disable.*` history. |
+| `disable_user` | `manage_users` | Yes | Disable the account through the disable service (`reason="admin"`, the tool's reason as the note): new auth_key, `metadata.protected.disable.*` written, cached invite cleared, websockets dropped. Cannot disable yourself. |
+| `enable_user` | `manage_users` | Yes | Re-enable through the disable service: new auth_key (nothing signed before or during the disable works), history entry with the caller as reactivator, cached invite cleared. |
 | `force_logout` | `manage_users` | Yes | Rotate auth_key to invalidate all sessions (account stays active) |
 
 `query_rate_limits` returns at most 50 entries and shares its bounded Redis

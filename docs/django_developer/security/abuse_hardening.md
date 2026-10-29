@@ -183,8 +183,11 @@ atomic UPDATE**, then force-disconnects the user's live websockets
   tokens of a disabled user are rejected too).
 - The rejection error is generic (`Invalid token user`) — no account-state
   oracle for whoever holds the token.
-- **Reactivating does not resurrect old tokens** — the key was rotated; the
-  user must re-authenticate. This is deliberate for the abuse case.
+- **Reactivating does not resurrect old tokens** — reactivation replaces the
+  key again, so nothing signed before or during the disable works; the user
+  must re-authenticate. Every path that flips `is_active` (the actions, an
+  admin `is_active` save, the assistant tools) does this (maestro #9533).
+  This is deliberate for the abuse case.
 - `revoke_sessions` (rotate without disabling) also drops live websockets.
 
 ApiKey and group suspension were already instant (`ApiKey.is_active`,
