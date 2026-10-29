@@ -21,7 +21,7 @@ it can cause the next setup pass to recreate it.
 | Incoming evidence | Default result |
 |---|---|
 | Public-key SSH success with a validated user/source and no recent trusted SSH failure from that source | Ignore for incident policy |
-| Exact proven local PAM lifecycle or cron JobEngine firewall-broker operation | Local-only receipt where applicable; routine policy also recognizes the exact proof |
+| Exact local PAM lifecycle or the expected app-user firewall-broker sudo (see the sensor guide) | Local-only receipt where applicable; routine policy also recognizes the exact shape |
 | `fim.change` with a bounded expected-change annotation and a live central deployment registration for the same installation key | Ignore for incident policy |
 | `web.probe` with status 300–499 | Ignore unless the repeated-scanner rule matches first |
 | At least three trusted `web.probe` receipts from one source on at least three distinct sensitive paths in ten minutes | Request a one-hour fleet-wide block through the existing checked block handler |
@@ -36,9 +36,11 @@ Ignoring through a RuleSet retains the Event and receipt and avoids creating
 an Incident. The exact local-only compatibility path instead retains its
 eventless receipt as described in the [sensor guide](mojosec_sensor.md).
 Generic command names, host-supplied flags, and response-class claims do not
-prove routine activity. Broker compatibility requires the exact classifier,
-proven status, cron origin, lineage digest, broker path, and untruncated
-command evidence; incomplete or interactive near matches remain visible.
+prove routine activity. Broker compatibility requires the exact
+`app_user_firewall_broker_v1` classifier the sensor stamps only on the
+application account's tty-less, unattributed sudo of the exact broker path,
+plus the untruncated broker path in `command_path`; a sudo with a TTY, an SSH
+session, another command or truncated evidence remains visible.
 
 The ten-minute context is bounded to the newest 256 matching receipts. Scanner
 evidence requires separate validated receipts, not a sensor's aggregate

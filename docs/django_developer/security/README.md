@@ -963,10 +963,13 @@ lifecycle.
 
 ### MojoSec broker-flood cleanup
 
-Missing broker proof remains centrally visible by design; never suppress raw
-`auth.sudo_command` at the sensor. After a fixed release has been deployed and
-the matching count has stopped growing, preview the September-style flood on
-each affected database with an exact sensor and UTC half-open interval:
+A broker sudo that is not the deployed automation's — most often a job engine
+an operator started from an SSH shell, whose broker sudos then carry that
+shell's Audit session until cron relaunches the engine — is one ordinary
+`auth.sudo_command` per minute, centrally visible by design; the sensor never
+samples raw sudo. Once the engine is back under cron and the matching count
+has stopped growing, preview the flood on each affected database with an exact
+sensor and UTC half-open interval:
 
 ```bash
 uv run python manage.py prune_mojosec_broker_flood \
@@ -977,7 +980,7 @@ uv run python manage.py prune_mojosec_broker_flood \
 
 The JSON preview reports `matched`, `safe`, `unsafe`, and the ID/time range.
 `safe` requires the exact MojoSec scope/category/sensor, broker command path,
-missing-proof status, no Event-linked Incident, and only published terminal
+no Event-linked Incident, and only published terminal
 receipts with no receipt-linked Incident. Any exact match outside those gates is
 reported as `unsafe` and makes apply refuse. Review and record the preview, then
 obtain write approval for that exact database, sensor, interval, and ceiling:
