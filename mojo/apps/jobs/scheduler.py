@@ -26,6 +26,7 @@ from .adapters import get_adapter
 from .models import Job, JobEvent
 
 from . import DEFAULT_CHANNELS, get_sched_channels, register_sched_channel
+from .cron_tick import CronTicker
 
 # Module-level settings (readability)
 JOBS_CHANNELS = settings.get_static('JOBS_CHANNELS', DEFAULT_CHANNELS)
@@ -51,7 +52,8 @@ class Scheduler:
     """
 
     def __init__(self, channels: Optional[List[str]] = None,
-                 scheduler_id: Optional[str] = None):
+                 scheduler_id: Optional[str] = None, cron_tick=False,
+                 cron_ticker=None):
         """
         Initialize the scheduler.
 
@@ -63,6 +65,13 @@ class Scheduler:
                 jobs and retries for channels this box does not consume.
                 Passing a list pins it — no discovery.
             scheduler_id: Unique scheduler identifier (auto-generated if not provided)
+            cron_tick: Also tick `cron.run_now()` every minute from a daemon
+                thread (every instance, not only the lock holder). Off by
+                default so a Scheduler built in a test or a library never runs
+                real cron functions; the CLI turns it on from
+                JOBS_SCHEDULER_CRON_TICK.
+            cron_ticker: An explicit ticker object (start()/stop()) — a seam
+                for tests; implies cron_tick.
         """
         self.auto_channels = not channels
         self._last_channel_refresh = 0
@@ -83,6 +92,7 @@ class Scheduler:
         self.has_lock = False
         self._fleet_state = None
         self._last_liveness = 0
+        self.cron_ticker = cron_ticker or (CronTicker() if cron_tick else None)
 
         # Stats
         self.jobs_scheduled = 0
@@ -94,7 +104,8 @@ class Scheduler:
         self.max_sleep_ms = 500
 
         logger.info(f"Scheduler initialized: id={self.scheduler_id}, "
-                  f"channels={self.channels}")
+                  f"channels={self.channels}, "
+                  f"cron_tick={self.cron_ticker is not None}")
 
     def _get_all_channels(self) -> List[str]:
         """Configured channels (the auto-mode floor), as a copy we may extend."""
@@ -192,6 +203,8 @@ class Scheduler:
         from . import fleet_state
         self._fleet_state = fleet_state.begin("scheduler")
         fleet_state.publish(self._fleet_state)
+        if self.cron_ticker is not None:
+            self.cron_ticker.start()
 
         # Main loop with lock management
         try:
@@ -212,6 +225,8 @@ class Scheduler:
         logger.info(f"Stopping Scheduler {self.scheduler_id}...")
         self.running = False
         self.stop_event.set()
+        if self.cron_ticker is not None:
+            self.cron_ticker.stop()
 
         # Release lock if held
         if self.has_lock:
@@ -224,7 +239,17 @@ class Scheduler:
                   f"Scheduled: {self.jobs_scheduled}, Expired: {self.jobs_expired}")
 
     def _setup_signal_handlers(self):
-        """Register signal handlers for graceful shutdown."""
+        """Register signal handlers for graceful shutdown.
+
+        signal.signal() raises ValueError off the main thread, so an embedding
+        caller (or a test) that starts the scheduler in a worker thread gets a
+        scheduler without handlers instead of a crash; its stop_event is still
+        the way to stop it.
+        """
+        if threading.current_thread() is not threading.main_thread():
+            logger.info("Scheduler started off the main thread; no signal handlers installed")
+            return
+
         def handle_signal(signum, frame):
             logger.info(f"Scheduler received signal {signum}, shutting down")
             # Let a popped batch finish/reinsert its entries before the main

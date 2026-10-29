@@ -248,21 +248,35 @@ def start_engine_daemon(verbose=False, logfile_override: Optional[str] = None,
         return False
 
 
-def start_scheduler_daemon(verbose=False, channels=None):
+def build_scheduler(channels=None, scheduler_factory=None):
+    """
+    The one place the CLI constructs a Scheduler.
+
+    channels=None is load-bearing: it puts the scheduler in auto mode, where
+    it serves the whole cluster's scheduled channels rather than only the
+    ones this box happens to consume. cron_tick comes from
+    JOBS_SCHEDULER_CRON_TICK — the CLI is the deployed entry point, so this is
+    what makes every node's scheduler tick @schedule functions.
+    scheduler_factory is a test seam (defaults to Scheduler).
+    """
+    from mojo.apps.jobs.cron_tick import cron_tick_enabled
+    if scheduler_factory is None:
+        from mojo.apps.jobs.scheduler import Scheduler
+        scheduler_factory = Scheduler
+    return scheduler_factory(channels=channels, cron_tick=cron_tick_enabled())
+
+
+def start_scheduler_daemon(verbose=False, channels=None, *, scheduler_factory=None):
     """Start scheduler as daemon process."""
     if is_scheduler_running():
         if verbose:
             print("✓ Scheduler already running, skipping")
         return True
 
-    from mojo.apps.jobs.scheduler import Scheduler
     from mojo.apps.jobs.daemon import DaemonRunner
     from mojo.helpers import paths
 
-    # channels=None is load-bearing: it puts the scheduler in auto mode, where
-    # it serves the whole cluster's scheduled channels rather than only the
-    # ones this box happens to consume.
-    scheduler = Scheduler(channels=channels)
+    scheduler = build_scheduler(channels, scheduler_factory)
 
     # Auto-generate pidfile
     pidfile = f"/tmp/job-scheduler-{scheduler.scheduler_id}.pid"
@@ -329,17 +343,15 @@ def start_engine_foreground(verbose=False, channels=None, runner_id=None,
         return False
 
 
-def start_scheduler_foreground(verbose=False, channels=None):
+def start_scheduler_foreground(verbose=False, channels=None, *, scheduler_factory=None):
     """Start scheduler in foreground mode."""
-    from mojo.apps.jobs.scheduler import Scheduler
-
-    # channels=None → auto mode, see start_scheduler_daemon.
-    scheduler = Scheduler(channels=channels)
+    scheduler = build_scheduler(channels, scheduler_factory)
 
     if verbose:
         print(f"🚀 Starting scheduler in foreground mode")
         print(f"   Channels: {scheduler.channels}")
         print(f"   Scheduler ID: {scheduler.scheduler_id}")
+        print(f"   Cron tick: {'on' if scheduler.cron_ticker is not None else 'off'}")
         print(f"   Press Ctrl+C to stop")
         print()
         print("⚠️  Note: Only one scheduler should be active cluster-wide.")
