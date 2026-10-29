@@ -227,7 +227,7 @@ def test_runtime_keeps_its_cached_baseline_until_the_store_commits(opts):
         try:
             runtime._poll_integrity()
             th.assert_eq(store.pending_batch(10, 65536), [], "an unchanged scan raises nothing")
-            th.assert_eq(runtime.baselines[tier.baseline_key], tier.snapshot,
+            th.assert_eq(runtime.baselines[tier.baseline_key][0], tier.snapshot,
                          "a committed scan must populate the fast-tier cache")
 
             tier.snapshot["/etc/a"] = {"kind": "file", "sha256": "2" * 64}
@@ -235,7 +235,7 @@ def test_runtime_keeps_its_cached_baseline_until_the_store_commits(opts):
             runtime.last_integrity.clear()
             runtime._poll_integrity()
             th.assert_eq(errors, ["integrity_fast"], "the failed commit must be reported")
-            th.assert_eq(runtime.baselines[tier.baseline_key]["/etc/a"]["sha256"], "1" * 64,
+            th.assert_eq(runtime.baselines[tier.baseline_key][0]["/etc/a"]["sha256"], "1" * 64,
                          "a rolled-back write must leave the cache equal to SQLite")
 
             runtime.last_integrity.clear()
@@ -245,6 +245,22 @@ def test_runtime_keeps_its_cached_baseline_until_the_store_commits(opts):
                          "the change must be raised on the next scan, not lost to a stale cache")
             th.assert_eq(store.load_fim_baseline(tier.baseline_key)["/etc/a"]["sha256"],
                          "2" * 64, "the committed delta must reach SQLite")
+
+            # Another process (the baseline CLI) re-seeds the baseline underneath
+            # the daemon: the next scan must diff against what it seeded, not the
+            # daemon's memory of its own last scan.
+            time.sleep(0.01)
+            reseeded = {"/etc/a": {"kind": "file", "sha256": "3" * 64}}
+            store.activate_fim_profile(identity, {"fast": {
+                "tier": "fast", "baseline_key": tier.baseline_key, "complete": True,
+                "snapshot": dict(reseeded)}}, reason="re-initialize")
+            tier.snapshot = dict(reseeded)
+            runtime.last_integrity.clear()
+            runtime._poll_integrity()
+            th.assert_eq(len(store.pending_batch(10, 65536)), 1,
+                         "a scan equal to the re-seeded baseline must raise nothing new")
+            th.assert_eq(runtime.baselines[tier.baseline_key][0], reseeded,
+                         "the cache must have been rebuilt from the re-seeded baseline")
         finally:
             store.close()
 

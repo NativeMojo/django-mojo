@@ -980,7 +980,8 @@ uv run python manage.py prune_mojosec_broker_flood \
 
 The JSON preview reports `matched`, `safe`, `unsafe`, and the ID/time range.
 `safe` requires the exact MojoSec scope/category/sensor, broker command path,
-no Event-linked Incident, and only published terminal
+no TTY (an interactive broker run is never pruned), no Event-linked Incident,
+and only published terminal
 receipts with no receipt-linked Incident. Any exact match outside those gates is
 reported as `unsafe` and makes apply refuse. Review and record the preview, then
 obtain write approval for that exact database, sensor, interval, and ceiling:

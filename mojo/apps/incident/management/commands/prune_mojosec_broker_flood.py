@@ -3,7 +3,8 @@
 A flood is one ordinary ``auth.sudo_command`` Event per minute from one sensor
 whose broker sudo was not the deployed automation's — typically a job engine
 an operator started from an SSH shell, so every broker sudo carried that
-shell's audit session until cron relaunched the engine (maestro #9769).
+shell's audit session until cron relaunched the engine (maestro #9769). Only
+tty-less broker sudos match: an interactive run of the broker is kept.
 """
 
 import datetime
@@ -39,6 +40,9 @@ def _fingerprint_events(sensor, since, before):
         metadata__mojosec__sensor_id=sensor,
         metadata__mojosec__kind="auth.sudo_command",
         metadata__mojosec__evidence__command_path=BROKER_PATH,
+        # An engine's broker sudo has no TTY; a person running the broker by
+        # hand during the window does, and that evidence is never pruned.
+        metadata__mojosec__evidence__tty__isnull=True,
     )
 
 

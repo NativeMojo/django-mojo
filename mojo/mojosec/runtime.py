@@ -118,7 +118,7 @@ class Runtime:
         try:
             scan = self.fim.scan()
             initialized = self.store.fim_initialized(scan["profile"])
-            baseline = self.baselines.get(scan["profile"]) if cacheable else None
+            baseline = self._cached_baseline(scan["profile"]) if cacheable else None
             if baseline is None:
                 baseline = self.store.load_fim_baseline(scan["profile"]) if initialized else {}
             if scan["complete"]:
@@ -131,10 +131,32 @@ class Runtime:
                 baseline=baseline if initialized else None,
             )
             if scan["complete"] and cacheable:
-                self.baselines[scan["profile"]] = scan["snapshot"]
+                self._cache_baseline(scan["profile"], scan["snapshot"])
             self._collector_ok("fim")
         except Exception as err:
             self._collector_error("fim", err)
+
+    def _cached_baseline(self, key):
+        """The in-memory baseline for ``key``, unless another writer moved it.
+
+        The baseline CLI (``baseline-initialize``, ``baseline-rollback``, a
+        content re-enrollment) runs in its own process and re-seeds the
+        baseline under the daemon; every such write stamps ``fim_scan:<key>``,
+        so a cache built under an older stamp is simply dropped.
+        """
+        cached = self.baselines.get(key)
+        if cached is None:
+            return None
+        snapshot, stamp = cached
+        current = self.store.get_meta(f"fim_scan:{key}", {}) or {}
+        if current.get("at") != stamp:
+            del self.baselines[key]
+            return None
+        return snapshot
+
+    def _cache_baseline(self, key, snapshot):
+        current = self.store.get_meta(f"fim_scan:{key}", {}) or {}
+        self.baselines[key] = (snapshot, current.get("at"))
 
     def integrity_roster(self):
         """Every configured tier in stable scan order, preserving legacy order."""
@@ -215,7 +237,7 @@ class Runtime:
             self.last_integrity[tier] = now
             cacheable = interval <= BASELINE_CACHE_MAX_INTERVAL_SECONDS
             try:
-                baseline = self.baselines.get(collector.baseline_key) if cacheable else None
+                baseline = self._cached_baseline(collector.baseline_key) if cacheable else None
                 if baseline is None:
                     baseline = self.store.load_fim_baseline(collector.baseline_key)
                 started = time.monotonic()
@@ -229,7 +251,7 @@ class Runtime:
                 # cache equal to what SQLite still holds, or the next scan
                 # would diff against the new snapshot and never raise it.
                 if scan["complete"] and cacheable:
-                    self.baselines[collector.baseline_key] = scan["snapshot"]
+                    self._cache_baseline(collector.baseline_key, scan["snapshot"])
                 self.integrity_scans[tier] = {
                     "ok": scan["complete"], "last_success": time.time(),
                     "complete": scan["complete"], "entries": len(scan["snapshot"]),

@@ -300,7 +300,10 @@ class Store:
                             raise ValueError("held observation is not an object")
                         self._ingest_observation(observation, now, diagnostic)
                         drained += 1
-                    except (TypeError, ValueError, KeyError):
+                    except Exception:
+                        # Root-owned legacy state written by the old sensor;
+                        # one unreadable row is counted, never a startup
+                        # failure that would crash-loop the service.
                         dropped += 1
             for name in retired:
                 self.db.execute(f"DROP TABLE IF EXISTS {name}")
