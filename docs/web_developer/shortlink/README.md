@@ -14,7 +14,7 @@ The shortlink app provides URL shortening with automatic rich previews for messa
 | GET | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Get short link details |
 | POST/PUT | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Update short link |
 | DELETE | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Delete short link |
-| POST | `/api/shortlink/link/create` | authenticated | Create a short URL string via helper endpoint |
+| POST | `/api/shortlink/link/create` | authenticated; a `file` also needs the file's share permission | Create a short URL string via helper endpoint |
 | GET | `/api/shortlink/history` | `manage_shortlinks` | List click history |
 | GET | `/api/shortlink/history/<id>` | `manage_shortlinks` | Get click history record |
 
@@ -192,6 +192,24 @@ You can create file-based shortlinks by passing a `file` id:
   "resolve_file": true
 }
 ```
+
+A file-backed link is a public share of that file, so the caller needs the
+file's share permission, checked in the **file's own group**: the file's owner,
+or `manage_files` or `files` (as a member permission in that group, or as a
+global permission). `view_fileman` alone is not enough. An API key is held to
+its own group and its own permissions. The link itself is stored in the
+caller's group, not the file's.
+
+A missing, malformed, inactive or not-shareable `file` is refused with one
+answer, so it does not reveal whether the file exists:
+
+```json
+{"status": false, "code": 403, "error": "Permission denied"}
+```
+
+(HTTP 403. Before this check the route answered HTTP 200 with
+`{"status": false, "error": "Invalid file id"}` for a bad id.) URL-only links
+are unchanged: any signed-in caller can create one.
 
 **Response**
 
