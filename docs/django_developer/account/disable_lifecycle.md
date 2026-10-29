@@ -131,8 +131,12 @@ disable itself). Consequences:
   the next `send_invite` mints one that works.
 - **A direct `is_active` write does the same.** An admin REST save that
   changes `is_active` replaces `auth_key` and clears the cached invite in
-  that save (`User._handle_existing_user_pre_save`), and going off drops
-  live websockets once committed. It still writes no disable metadata.
+  that save, and going off drops live websockets once committed. It still
+  writes no disable metadata. The save settles `is_active` and `auth_key`
+  against the stored row under its lock (`User._settle_active_under_lock`):
+  a REST save that did not ask to switch the account keeps the stored state
+  and key, so a copy loaded before a disable can't turn the account back on
+  or restore the old key.
 - Django's `UserAdmin` (`account/admin.py`) bypasses all of this.
   django-mojo mounts no admin site; a project that mounts one should not
   toggle `is_active` there.
