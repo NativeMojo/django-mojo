@@ -457,7 +457,7 @@ def test_enable_user_kills_token_minted_during_disable(opts):
     assert_true(fresh.is_active, "User should be active in DB")
     assert_true(fresh.auth_key != during.auth_key, "enable_user must replace the signing key")
     validated, error = User.validate_jwt(token)
-    assert_true(validated is None, "a token minted during the disable must stay dead after enable_user")
+    assert_true(error is not None, f"a token minted during the disable must stay dead after enable_user, got {error!r}")
     history = (((fresh.metadata or {}).get("protected") or {}).get("disable") or {}).get("history") or []
     assert_true(history and history[-1].get("reactivated_by_user_id") == opts.admin.pk,
                 f"history should record the admin as reactivator, got {history[-1:]}")

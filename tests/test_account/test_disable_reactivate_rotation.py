@@ -40,7 +40,8 @@ def _make_user(email, password):
 
 
 def _mint(user_pk):
-    """A session token signed with the account's live key."""
+    """A session token signed with the account's live key. validate_jwt
+    returns (user, error) for a bad signature, so a refusal is `error`."""
     from mojo.apps.account.models import User
     from mojo.apps.account.utils.jwtoken import JWToken
     user = User.objects.get(pk=user_pk)
@@ -69,7 +70,7 @@ def test_admin_off_then_on_kills_token_from_before(opts):
     target = _make_user("rot9533_t1@rotation.test", TARGET_PASSWORD)
     token = _mint(target.pk)
     validated, error = User.validate_jwt(token)
-    assert validated is not None, f"sanity: token must validate while active, got {error!r}"
+    assert error is None, f"sanity: token must validate while active, got {error!r}"
 
     assert opts.client.login(ADMIN_EMAIL, ADMIN_PASSWORD), "admin login failed"
     _admin_save(opts, target.pk, {"is_active": False})
@@ -78,7 +79,7 @@ def test_admin_off_then_on_kills_token_from_before(opts):
 
     assert User.objects.get(pk=target.pk).is_active is True, "admin save should re-enable the account"
     validated, error = User.validate_jwt(token)
-    assert validated is None, (
+    assert error is not None, (
         "a token issued before an admin is_active=false write must stay dead after "
         "the account is re-enabled")
 
@@ -101,7 +102,7 @@ def test_reactivate_action_kills_token_minted_during_disable(opts):
     assert fresh.is_active is True, "reactivate action should re-enable the account"
     assert fresh.auth_key != key_during, "reactivate must replace the signing key"
     validated, error = User.validate_jwt(token)
-    assert validated is None, "a token minted during the disable must stay dead after reactivate"
+    assert error is not None, "a token minted during the disable must stay dead after reactivate"
 
 
 @th.django_unit_test()
@@ -119,7 +120,7 @@ def test_admin_on_kills_token_minted_during_disable(opts):
 
     assert User.objects.get(pk=target.pk).is_active is True, "admin save should re-enable the account"
     validated, error = User.validate_jwt(token)
-    assert validated is None, (
+    assert error is not None, (
         "a token minted during the disable must stay dead after an admin is_active=true write")
 
 
@@ -184,4 +185,4 @@ def test_active_account_key_survives_unrelated_saves(opts):
         "an unrelated save, a self save and is_active=true on an active account "
         "must keep the signing key")
     validated, error = User.validate_jwt(token)
-    assert validated is not None, f"an active account's token must survive those saves, got {error!r}"
+    assert error is None, f"an active account's token must survive those saves, got {error!r}"
