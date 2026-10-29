@@ -14,7 +14,7 @@ The shortlink app provides URL shortening with automatic rich previews for messa
 | GET | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Get short link details |
 | POST/PUT | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Update short link |
 | DELETE | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Delete short link |
-| POST | `/api/shortlink/link/create` | authenticated; member of the active `group` (or global `manage_shortlinks`); a `file` also needs the file's share permission | Create a short URL string via helper endpoint |
+| POST | `/api/shortlink/link/create` | authenticated; member of the active `group` (or global `manage_shortlinks`); a `file` also needs the file's share permission; plus one of `SHORTLINK_CREATE_PERMS` when the deployment sets it | Create a short URL string via helper endpoint |
 | GET | `/api/shortlink/history` | `manage_shortlinks` | List click history |
 | GET | `/api/shortlink/history/<id>` | `manage_shortlinks` | Get click history record |
 
@@ -172,6 +172,17 @@ group, or hold `manage_shortlinks` as a global permission; otherwise the
 request is refused with 403 `"Permission denied"` and no link is created. An
 API key can use its own group or a group below it (a child, at any depth); any
 other group is refused. A request with no group is not affected.
+
+A deployment may also require a permission to use this route, with the
+server setting `SHORTLINK_CREATE_PERMS` (for example `["manage_shortlinks"]`).
+It is opt-in and read from the server's settings file only, never the
+database. Unset (the default), nothing changes: any signed-in caller may
+create a link. When set, the caller needs one of the listed permissions: as a
+global permission, as a member permission in the request's group or a parent
+group, or, for an API key, in the key's own permissions. Otherwise the request
+gets the same 403 `"Permission denied"` and no link is created. `admin` does
+not imply `manage_shortlinks`; the deployment lists every permission it
+accepts.
 
 ```json
 {
