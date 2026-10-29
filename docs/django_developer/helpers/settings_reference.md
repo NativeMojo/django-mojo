@@ -1285,6 +1285,7 @@ registered resource is enabled; until then every endpoint answers 404.
 ### SHORTLINK
 
 - `SHORTLINK_BASE_URL`
+- `SHORTLINK_CREATE_PERMS` — list, default `[]`. **Settings file only** (read with `get_static`, never the database). When set, the quick-create route `POST /api/shortlink/link/create` needs one of these permissions (global, member in the request's group or a parent, or the API key's own). Empty = any signed-in caller.
 - `SHORTLINK_HOME_URL`
 - `SHORTLINK_SITE_NAME`
 

@@ -268,7 +268,9 @@ Snapshot mode (`resolve_file=False`) captures the URL once at creation — usefu
 ### Quick create route
 
 `POST /api/shortlink/link/create` first calls
-`require_group_access(request)` from the same module. When a group is active,
+`require_group_access(request)` from the same module, then
+`require_create_perms(request)` (the opt-in `SHORTLINK_CREATE_PERMS` gate,
+see Settings). When a group is active,
 a person must be a member of it (directly or through a parent, active
 membership only) or hold `manage_shortlinks` globally; an API key or group
 token must be allowed that group (`identity_allows_group`). A link with no
@@ -378,6 +380,19 @@ The cleanup job is defined in `mojo/apps/shortlink/cronjobs.py` and the worker l
 | `SHORTLINK_SITE_NAME` | `None` | Product name shown on the "link unavailable" page. Unset = no brand line. |
 | `SHORTLINK_HOME_URL` | `None` | Target of the "back to site" button on that page. Unset = no button. |
 | `BASE_URL` | `"/"` | Fallback if no shortlink-specific base setting is configured. |
+| `SHORTLINK_CREATE_PERMS` | `[]` | Opt-in. A list of permissions; when set, `POST /api/shortlink/link/create` needs one of them. Read from the settings file only (`get_static`), never the database. See below. |
+
+`SHORTLINK_CREATE_PERMS` is checked by `require_create_perms(request)` in
+`mojo.apps.shortlink.services.access`, after the group check and before the
+file check. Empty (the default) means any signed-in caller, as before. When
+set, for example `["manage_shortlinks"]`, the caller passes with the
+permission as a global grant, as a member grant in the request's group or a
+parent group, or (for an API key) in the key's own permissions. A refusal is
+the route's one 403, branch `shortlink.create_perms`. `admin` does not imply
+`manage_shortlinks`: list every permission you want to accept. It is
+file-only because group-scoped Setting rows of an unprotected key can be
+written by a group member, who could otherwise clear the gate for their own
+group.
 
 `SHORTLINK_FALLBACK_URL` was removed in 1.2.51 — see below.
 

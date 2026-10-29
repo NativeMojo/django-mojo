@@ -72,3 +72,28 @@ def shareable_file(request, raw_id):
     if not allowed:
         raise _denied()
     return file
+
+
+_UNSET = object()
+
+
+def require_create_perms(request, perms=_UNSET):
+    """Refuse a caller without one of SHORTLINK_CREATE_PERMS, when it is set.
+
+    Opt-in: the setting is empty by default and then nothing changes. It is
+    read from the settings file only (get_static): a database value could be
+    cleared for one group by a member of that group. The check is the model
+    permission predicate on a plain list: a global grant, a member grant in
+    request.group (already checked by require_group_access) or a parent, or an
+    API key's own permissions inside its group.
+    """
+    from mojo.helpers.settings import settings
+    from mojo.apps.shortlink.models import ShortLink
+
+    if perms is _UNSET:
+        perms = settings.get_static("SHORTLINK_CREATE_PERMS", [], kind="list")
+    if not perms:
+        return
+    allowed, _ = ShortLink._evaluate_perms(request, list(perms), "SHORTLINK_CREATE_PERMS")
+    if not allowed:
+        raise _denied("shortlink.create_perms", None)
