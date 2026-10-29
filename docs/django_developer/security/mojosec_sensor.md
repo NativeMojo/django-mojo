@@ -18,9 +18,9 @@ package from a root-owned working directory with safe-path mode:
 
 | Collector | Retained | Intentionally omitted |
 |---|---|---|
-| journald | accepted SSH logins, failed SSH authentication, sudo commands/failures, non-SSH PAM session opens, systemd unit-failure declarations (PID 1), and kernel out-of-memory kills; the exact trusted `systemd-user` lifecycle tuple is local-status-only unless its root diagnostic override is active | routine PAM close chatter, ordinary and err-level daemon log lines, kernel non-OOM errors, and userspace text echoing failure/OOM phrases |
+| journald | accepted SSH logins, failed SSH authentication, sudo commands/failures, non-SSH PAM session opens, systemd unit-failure declarations (PID 1), and kernel out-of-memory kills; the exact trusted `systemd-user` lifecycle tuple and the [expected app-user firewall-broker sudo](#expected-local-automation) are local-status-only unless the root diagnostic override is active | routine PAM close chatter, ordinary and err-level daemon log lines, kernel non-OOM errors, and userspace text echoing failure/OOM phrases |
 | structured nginx log | known exploit-path probes, 401/403 denials, and 5xx responses; bounded raw request target, referrer, and user agent in root-only sensor state and the protected central receipt | ordinary 2xx/3xx/404/499 traffic, User-Agent-only suspicion, bodies, cookies, authorization, arbitrary headers, and raw log lines |
-| immutable tiered integrity | 60-second host/config FIM, six-hour boot/system-binary FIM, and command-free system-Python site-root FIM under the compatibility tier name `rpm` in the packaged `al2023-web-v2` profile; on `al2023-content-v1`, a fourth five-minute tier over the enrolled tenant content roots | package-manager state, the two application release trees (`/opt/api`, `/opt/www`), MojoSec private state, symlink traversal, file contents, or an implicit whole-disk watch |
+| immutable tiered integrity | in the packaged `al2023-web-v3` profile: 60-second FIM of host config and persistence paths; six-hour FIM of `/boot`, `/usr/bin`, `/usr/sbin` and `/usr/local/lib`; and, under the compatibility tier name `rpm`, six-hour command-free FIM of the remaining system-Python site roots. On `al2023-content-v2` (and `-v1`), a fourth five-minute tier covers the enrolled tenant content roots | package-manager state, the two application release trees (`/opt/api`, `/opt/www`), MojoSec private state, symlink traversal, file contents, or an implicit whole-disk watch |
 
 Sudo evidence retains bounded command context in the root-owned sensor spool,
 the protected central receipt, and the existing security-admin Event surface:
@@ -147,12 +147,18 @@ The app/fleet desired-policy source contains no endpoint, identity, or secret:
 }
 ```
 
-The recommended AL2023 policy selects the immutable `al2023-web-v2` profile by
-name. Its fast tier covers `/etc` (excluding `/etc/mojosec`), exact root and
-`ec2-user` persistence locations, cron/at/cloud-init scripts, local executables,
-and `/usr/local/lib` including system Python site-packages. Its slow tier covers
-`/boot`, `/usr/bin`, and `/usr/sbin`; the compatibility-named `rpm` tier performs
-an independent system-Python FIM walk. Profile paths and bounds cannot be
+The recommended AL2023 policy selects the immutable `al2023-web-v3` profile by
+name (content nodes: `al2023-content-v2`). Its fast tier covers `/etc`
+(excluding `/etc/mojosec`), exact root and `ec2-user` persistence locations,
+cron/at/cloud-init scripts, and `/usr/local/bin` and `/usr/local/sbin`. Its
+slow tier covers `/boot`, `/usr/bin`, `/usr/sbin` and `/usr/local/lib`
+(including the system Python site-packages below it). The compatibility-named
+`rpm` tier walks the remaining system-Python site roots: on v3 it skips any
+root a fast or slow target already covers, so `/usr/local/lib/python*/site-packages`
+is walked once, by the slow tier. `al2023-web-v2` walked `/usr/local/lib`
+(about 28k files) every 60 seconds in the fast tier and again in `rpm`; it and
+`al2023-content-v1` stay packaged, unchanged, for rollback identity. See
+[Migrating to al2023-web-v3](#migrating-to-al2023-web-v3). Profile paths and bounds cannot be
 overridden by desired policy: changing the graph requires a new packaged profile
 name and digest. Legacy custom FIM targets remain supported only when no profile
 is selected.
@@ -499,6 +505,19 @@ forward from the committed `--after-cursor`, stopping at both a record and byte
 ceiling, and commits only the last cursor it processed. Per-record parse or
 detector failures increment the malformed count and do not abort the burst.
 
+The journal is filtered at the source. `journalctl` receives match groups for
+`_COMM=sshd`, `_COMM=sshd-session`, `_COMM=sudo`, `_COMM=(systemd)`, `_PID=1`,
+`_TRANSPORT=kernel`, and the Audit transport's `USER_START` and `USER_LOGIN`
+records, so other units' log lines never leave journald. `--output-fields`
+limits each record to the fields the detectors read: `MESSAGE`, `MESSAGE_ID`,
+`PRIORITY`, `SYSLOG_IDENTIFIER`, `UNIT`, `_TRANSPORT`, `_AUDIT_TYPE`,
+`_AUDIT_TYPE_NAME`, `_AUDIT_SESSION`, `_AUDIT_LOGINUID`, `_UID`, `_PID`, `_COMM`,
+`_EXE`, `_SYSTEMD_UNIT`, `_SYSTEMD_CGROUP`, `_SELINUX_CONTEXT` and `_TTY`
+(journald always adds the cursor, timestamps and `_BOOT_ID`). The
+non-underscored `BOOT_ID`/`AUDIT_SESSION`/`TTY` fallbacks are caller-supplied
+text and are deliberately no longer delivered. `--output-fields` needs systemd
+236 or later; AL2023 ships 252.
+
 System events use kernel-owned anchors. `system.service_error` fires only for
 PID 1-authored unit-failure declarations — the record must carry `_PID=1` and
 `_UID=0`, and the message must match systemd's failure grammar (`<unit>: Failed
@@ -629,6 +648,12 @@ queued. There is no pathname-based fallback. An incomplete fast scan is also
 independent of the compatibility-named `rpm` tier: the system-Python collector
 performs its own descriptor-safe walk of every approved site-package root.
 
+A complete scan that changed nothing writes no baseline rows. A scan with
+changes writes only the changed and removed paths. Tiers polled every ten
+minutes or faster (`fast`, `content`) keep their committed baseline in memory,
+replaced only after the write commits, so a failed write is diffed again on the
+next scan. The six-hour tiers reload their baseline from SQLite at scan time.
+
 ## Commands and health
 
 ```bash
@@ -719,15 +744,15 @@ without nginx reopen or a stalled cursor. Copy/truncate has a narrow inherent
 writer race, so compare generated probe IDs/counts across the forced rotation
 and investigate any unexplained gap. `maxsize 50M` is evaluated by logrotate's
 timer/command, not continuously.
-For `al2023-web-v2`, perform this on a disposable AL2023 node after its
+For `al2023-web-v3`, perform this on a disposable AL2023 node after its
 producer-first rollout. Confirm the initialized `fast`, `slow`, and `rpm`
 tiers, their 60-second/six-hour schedules, the system-Python site-root
 coverage, and the `ProtectHome=tmpfs` exact-bind mount probe. Also create,
 delete, and recreate one monitored home path across a service restart while
 confirming unrelated home content remains unavailable to the sensor.
 Gate on zero capacity drops, no sustained error, explainable noise, bounded
-disk/FD/task growth, under 150 MiB memory/32 tasks, and under 5% of one CPU over
-five idle minutes. Roll back persistently by reinstalling enrollment with mode
+disk/FD/task growth, under 150 MiB memory/32 tasks, and the
+[steady-state cost](#steady-state-cost) over five idle minutes. Roll back persistently by reinstalling enrollment with mode
 off, then run:
 
 ```bash
@@ -735,7 +760,9 @@ off, then run:
   --mode enrolled --criticality enrolled)
 ```
 
-`/run/mojosec/status.json` is atomically written as root:root mode `0640`. Its
+`/run/mojosec/status.json` is atomically written as root:root mode `0640`,
+every 60 seconds or sooner when a collector, delivery or integrity tier
+changes health, and once more at shutdown. Its
 exhaustive top-level field set is `schema`, `version`, `sensor_id`, `state`,
 `updated_at`, `running`, `framework_version`, `pid`, `boot_id`,
 `process_start_ticks`, `process_started_at`, `config`, `collectors`, `delivery`, optional `integrity`,
@@ -775,22 +802,70 @@ candidate activation body starts. Interruption before that point cannot be
 covered retroactively. The activation bridge preserves and wraps the previous
 body for later rollback. Use `check_node --section mojosec` to compare installed
 and loaded versions, current kernel generation/process age, and refresh evidence.
-It hashes original `auditctl -l` bytes and accepts case-insensitive systemd
-capability tokens without ignoring extra capabilities or real Audit drift.
+It hashes original `auditctl -l` bytes, requires the `mojosec-sudo` watch and
+no retired `mojosec-root-exec`/`mojosec-app-exec` exec rule, and in both modes
+reports "retired provenance assets absent" once the deploy has removed the old
+resolver and Audit health units, the stable Audit helper and the health
+sidecar.
 Repair pre-adoption drift with a rolling restart or the next successful deploy.
 Daily restarts are not a security control or a substitute for generation proof.
 
 After candidate or previous-version activation, an enrolled host also runs the full
 MojoSec convergence from the installed framework before firewall convergence.
 The refresh bridge preserves runtime continuity; this second step reconciles
-package-owned units, kernel policy, and other host assets according to the
+package-owned units, the Audit sudo watch, and other host assets according to the
 enrollment's `observe`/`off` mode. Unenrolled hosts and the intermediate
 rollback-candidate path remain unchanged.
 
 After release, follow normal canary/fleet ordering and require both MojoVerify
-nodes to report the released version from active, fresh generations with no new
-false broker missing-proof occurrences. Do not restart both as an out-of-band
+nodes to report the released version from active, fresh generations. Do not
+restart both as an out-of-band
 batch; local code verification does not satisfy this rollout criterion.
+
+## Steady-state cost
+
+On a node with normal audit traffic the sensor should cost at most about 3% of
+one vCPU at rest, read under 50 MB/min (`rchar` in `/proc/<pid>/io`), and keep
+a state file of a few MB plus the FIM baselines. Per 5-second poll it runs one
+source-filtered `journalctl`, the nginx tail, and one indexed probe for spooled
+FIM evidence awaiting annotation; the expected-change manifest and producer
+journal are opened only when something awaits. Per 60 seconds it runs the fast
+FIM walk (a few thousand entries on `al2023-web-v3`, with no baseline write
+unless something changed) and one status write. The slow and `rpm` walks run
+every six hours.
+
+Measured before this design (2026-10-28, `al2023-web-v2` with the
+process-lineage proof): 12–15% of a vCPU on staging with a 50% burst at each
+60-second FIM scan, 20% on wmx1, and 28–33% on mv1 with bursts to 61%; `rchar`
+grew by 2.8 GB/min, and `state.sqlite3` was 193–228 MB. Measure with
+`top -bn13 -d 5 -p <pid>` and two `/proc/<pid>/io` reads a minute apart.
+
+The 60-second status cadence means the producer's `ChangeJournal` reaping, which
+status publication drives, can lag by up to a minute. That is well inside the
+15-minute operation TTL.
+
+## Migrating to al2023-web-v3
+
+Profile digests are immutable, so moving `/usr/local/lib` to the slow tier is a
+new profile name. Until a node migrates it keeps `al2023-web-v2` and its
+current cost.
+
+1. Set `"profile": "al2023-web-v3"` (content nodes: `"al2023-content-v2"`) in
+   the fleet desired policy `/opt/api/var/mojosec.json`, then deploy.
+2. On each node, preview and initialize the new digest:
+
+   ```bash
+   (cd / && sudo /usr/bin/python3 -E -P -m mojo.mojosec \
+     --config /etc/mojosec/config.json baseline-preview)
+   (cd / && sudo /usr/bin/python3 -E -P -m mojo.mojosec \
+     --config /etc/mojosec/config.json baseline-initialize \
+     --confirm-digest <printed digest> --reason al2023-web-v3)
+   ```
+
+Between the deploy and the initialize, the integrity collector reports "profile
+baseline is not explicitly initialized or digest drifted"; journald and nginx
+collection keep running. To go back, `baseline-rollback --confirm-digest <v2
+digest>` returns the node to its retained v2 baseline.
 
 ## Durability and batching
 
@@ -1161,230 +1236,64 @@ the entire sent batch for retry.
 
 ## Trust boundary
 
-### Privileged-process provenance and firewall noise
+### Expected local automation
 
-MojoSec records selective Linux Audit execution breadcrumbs rather than every
-process. The managed AL2023 policy captures root-EUID execution, execution by
-the deployed application AUID, and the exact sudo executable path. Audit
-`SYSCALL`, `EXECVE`, `PROCTITLE`, `CWD`, and `EOE` rows are assembled by boot
-ID plus Audit serial across polls. A trusted same-event EOE or PROCTITLE
-closes the compound after the entire collected batch has been checked. AL2023
-journald drops the empty EOE payload; the kernel's preceding PROCTITLE is the
-supported alternate boundary. The internal `eoe` flag remains false when EOE
-was not observed. PROCTITLE content never supplies missing EXECVE arguments.
-A two-second timeout retires a compound as incomplete; serial advancement,
-interleaved events, boot changes, and capacity eviction never prove completion.
-Linux Audit can emit a later `NETFILTER_CFG` syscall compound with the same PID
-as the firewall exec. A compound with no `EXECVE` row and the explicit
-`key=(null)` marker is excluded from the process-generation graph. Compounds
-tagged by the managed exec/sudo rules remain process authority even when a
-failed exec has no `EXECVE` row, and a missing or unknown key stays
-conservative.
+django-mojo's own JobEngine runs `sudo -n -- /usr/local/sbin/mojo-firewall-broker`
+about once a minute from the cron-launched jobman. That one sudo is a fixed local
+expectation: the sensor counts it instead of raising it, and proves nothing about
+the process tree behind it. A lineage proof buys nothing against an attacker who
+already holds the app user, so it is not attempted. A sudo observation is recorded
+local-only, under the classifier `app_user_firewall_broker_v1`, only when all of
+these hold:
 
-Only the Audit transport's trusted underscored type/identity fields and its
-MESSAGE payload contribute evidence. Non-underscored `AUDIT_FIELD_*` and
-`AUDIT_TYPE_NAME` values cannot supply process identity, argv, or completion.
-Quoted Audit arguments lose their surrounding quotes; unquoted hex tokens
-decode as strict UTF-8. A quoted hex-looking argument stays literal text.
-Malformed strings, incomplete argc/argv, and disagreement between structured
-fields and MESSAGE leave the compound ambiguous. Duplicate terminals are
-idempotent, and late contradictions invalidate the canonical retained node.
-Finalized compounds retain bounded private tombstones across polls and restart;
-they cannot be repaired by replaying an earlier valid fragment.
+- `command` and `command_path` are exactly `/usr/local/sbin/mojo-firewall-broker`
+  (no arguments) and no evidence field carries a `*_truncated` marker;
+- the target user is `root`;
+- the audit login UID equals `collectors.journal.app_uid`. sudo's journal line
+  is root-authored (`_UID=0`), so the app identity is the kernel-maintained
+  `_AUDIT_LOGINUID` set by `pam_loginuid` when cron opened the session;
+- there is no TTY, no source address, and `attribution_provenance` is `none`
+  (no SSH session); and
+- the record carries a 32-hex boot ID and an integer audit session.
 
-`/proc` is immediate optional enrichment for
-PID generation, parents, cgroup/unit, namespace, executable, command line, and
-SELinux context. The network-capable root sensor remains bounded to
-`CAP_DAC_READ_SEARCH` with no ambient capabilities; it never receives
-`CAP_SYS_PTRACE`. Linux otherwise refuses its cross-UID `/proc/<pid>/exe`
-identity check, so that one lookup goes through a root-only mode-`0600` Unix
-socket to a separate resolver running as `ec2-user`. The resolver accepts only
-a bounded numeric PID plus the already-read start ticks, double-reads that
-generation, and its success response echoes those bound identifiers and adds
-only the executable path. It disables core dumps, has no capabilities or IP
-network, and keeps the systemd filesystem, namespace, kernel, and device
-restrictions. Its private `/proc` view uses `ProtectProc=invisible` to hide
-other users' processes and `ProcSubset=all` — not `pid` — to retain read-only
-`/proc/sys` state for the startup condition. Its service starts only when
-`kernel.yama.ptrace_scope` is at least `1`, so another `ec2-user` process cannot
-attach during Python startup.
+Every near miss stays an ordinary `auth.sudo_command`: a TTY, an SSH-attributed
+session, another login UID or user, another command or any argument, a truncated
+command, or a journal collector that is disabled (nothing is expected then).
+Local-only records increment `local_only_observed` and
+`local_only:app_user_firewall_broker_v1:observed`, update `local_only_last_seen`,
+and are spooled only while the root
+[diagnostic override](#journald-and-fim-traversal) is active. The managed
+Audit policy keeps one `-w /usr/bin/sudo -p x -k mojosec-sudo` path watch, so
+auditd's own log holds a kernel record of every sudo exec for forensics. The
+broker's begin/result receipts stay in the journal for operators; the sensor no
+longer correlates them.
 
-Each accepted connection is an isolated request boundary. A client timeout,
-disconnect, malformed request, or failed response write fails closed for that
-lookup and leaves the systemd listener serving the next request. Listener or
-startup failures still terminate the resolver so systemd can restart it.
+An operator who starts jobman from an SSH shell gives every broker sudo that
+shell's audit session, so each one carries SSH attribution and raises one
+`auth.sudo_command` a minute until cron relaunches the engine. That is the rule
+working: the sudo is not the deployed automation's. Clean up such a flood with
+`prune_mojosec_broker_flood`.
 
-Observe convergence persists the current protected value in root-owned
-`/etc/sysctl.d/90-mojosec-ptrace.conf`, raising `0` to `1` immediately but never
-lowering an existing `2` or `3`. A failed convergence restores the prior file
-and live value. Mode-off removes the package-owned persistent policy after the
-resolver is stopped but does not weaken the live kernel value.
-Failure or disagreement returns no identity and keeps the event
-centrally visible. Observe convergence installs both process-identity units and
-enables `mojosec-proc-identity.socket`; a changed socket is restarted. The
-resolver declares `PartOf=mojosec.service`, so a sensor restart also refreshes
-an already-running resolver and later framework deployments load both
-generations together. Mode-off stops the resolver, disables the socket, and
-removes both unit files and the runtime socket. `check_node --section mojosec`
-fails on unit bytes, effective listener/drop-in settings, socket state or
-permissions, Yama protection, effective helper-sandbox drift, and residue in
-off mode, including persistent sysctl residue.
-Audit remains durable truth: a short-lived process or ancestor
-that has already left `/proc` does not poison a complete Audit edge. A live
-`/proc` identity that conflicts with Audit, PID reuse, cycles, ordering
-conflicts, gaps, loss, or stale health makes suppression ineligible. Only the
-long-lived JobEngine anchor must still have a live verified PID generation.
-Pin creation and refresh use the same predicate: complete eligible Audit proof,
-current boot, PID/start ticks, executable, and complete matching engine command
-line. Death, PID reuse, re-exec, or command-line mismatch clears both the SQL
-and JSON pin. Resolution reads the current SQL pin state.
+The firewall broker itself is owned by [firewall enrollment](../deploy/firewall.md),
+independently of this sensor.
 
-The cron origin is not inferred from a fabricated same-session `crond` exec.
-It requires both halves of the production AL2023 launch: the trusted root
-CROND CMD row (`_COMM=crond`, `_EXE=/usr/sbin/crond`, `_CMDLINE=/usr/sbin/CROND
--n`) carrying the exact project-specific jobman command, and an earlier Audit
-`USER_START` row whose bounded quoted PAM message exactly names the app account,
-the authorized `pam_loginuid,pam_keyinit,pam_limits,pam_systemd` grantors,
-crond executable, cron terminal and successful result. If journald also exposes
-`AUDIT_FIELD_GRANTORS` (or the legacy underscored spelling), every exposed
-spelling must agree exactly. They agree on boot,
-Audit session, app login UID, session scope and crond SELinux domain; the CMD
-row additionally proves the app GID and launch PID. Strict monotonic order then
-joins audited bash → jobman → engine generations. Bash and jobman may be
-successive execs of the same launch PID or a strict parent/child pair. The
-bounded launch record survives polling and restart; a conflicting duplicate is
-sticky and makes the session permanently ineligible for suppression.
-
-The root-owned Audit health oneshot has only `CAP_AUDIT_CONTROL` and publishes
-a root-only sidecar every five seconds. The main sensor's separate capability
-set remains limited to read/search; the unprivileged resolver has none. It
-validates boot, managed generation, rules digest, sequence,
-freshness, loss, backlog, failure mode, and rate limit. Deployment accepts only
-the exact AL2023 `task,never` seed or a complete prior Mojo generation after
-hashing every rules source, the generated rules and the active rules. It keeps
-an exact rollback record and restores it on convergence failure or downgrade.
-Mode-off and package downgrade first stop and verify the sensor inactive.
-Before an older package is allowed to start or Audit assets are consumed, the stable root helper
-transactionally converts every held broker candidate to an ordinary spool
-Event and verifies that no pending row remains. The writer stays stopped through
-handoff; failure restores the prior service/assets only after safe rollback.
-The capability probe also selects the command-line contract: a pre-feature
-module receives only its historical `--mode` and `--criticality` flags, never
-new provenance-generation arguments such as `--project-path`.
-Health units/timer, publish-broker sudoers/wrapper, stable helper and sidecar are
-retired by one shared finalizer only after the old-module converge or the
-module-absent fallback cleanup has fully succeeded. Every earlier failure keeps
-those recovery assets intact.
-
-The firewall broker is owned by [firewall enrollment](../deploy/firewall.md),
-independently of this sensor. MojoSec convergence no longer installs or removes
-its wrapper or sudoers. Candidate and retained rollback activation reconverge
-enrolled firewall authority after legacy mode-off cleanup. MojoSec can stay off.
-
-Audit-health v1 is closed after publication. Its exact fields are `schema`,
-`version`, `boot_id`, `generation`, `rules_sha256`, `sequence`, `enabled`,
-`failure`, `rate_limit`, `backlog_limit`, `backlog`, `lost`, and `updated_at`.
-The command boundary projects only the six recognized `auditctl -s` status
-fields; `pid`, backlog wait-time telemetry, `loginuid_immutable`, and future
-kernel fields are ignored there. They can never silently enlarge v1. By
-contrast, an unknown or duplicate key already present in the JSON sidecar is
-malformed. Missing fields, booleans, negative or oversized counters, and
-non-finite timestamps also fail closed. Runtime `healthy` and `reason`
-annotations remain internal; durable previous-health state selects the same
-canonical publisher fields before the next sequence comparison.
-Firewall proof gating uses the most recently ingested health epoch for the
-candidate's boot (`observed_at`, then row insertion order), not the numerically
-largest publisher sequence. Publisher sequences can restart after a deployment;
-a stale high-sequence unhealthy sample therefore cannot override a newer
-healthy observation.
-
-Unpinned process nodes live locally for seven days (131,072 rows); up to 64
-active engine anchors are retained separately, and node audit accepts the
-combined bound. Active compounds and
-finalized tombstones share an 8,192-row/8 MiB budget and ten-minute retention;
-the journal atomically replaces their complete snapshot with its cursor, so an
-empty snapshot retires previous state while another collector's absent snapshot
-does not clear it. Origin sessions live for 30 days (4,096), health epochs for
-128 samples, and root-owned firewall receipt payloads for seven days (32,768 and 32
-MiB). Pending broker observations are capped at 4,096/32 MiB and wait at most
-30 seconds. Payload pruning targets a 256 MiB provenance operating budget and
-SQLite checkpoints target a 64 MiB WAL; these are operational pressure budgets,
-not hard whole-database file ceilings. Capacity pressure fails open and is
-reported in sensor counters. A
-non-journal collector has no new Audit-health authority and therefore cannot
-flush a pending proof candidate; only an explicit unhealthy journal bracket or
-the ordinary expiry deadline does so.
-
-Firewall proof reconciliation handles the oldest 512 pending candidates per
-pass. It groups them by boot and Audit session, then queries recent process
-children only for those candidates' sudo producer PIDs to discover possible
-broker PIDs. Receipt loading is restricted to those broker PIDs and capped at
-2,048 rows. The resolver combines candidate producer PIDs and pinned-engine
-anchors with broker and target PIDs from the resulting receipt pairs, then
-loads process nodes only for that exact set, capped at 4,096 PIDs. Unrelated
-global receipt and process rows are never decoded into the proof work set. A
-candidate without complete proof remains pending until later input or the
-30-second fail-open deadline; the resolver never guesses from a partial pair or
-lineage. Any resulting central Event receives at most eight compact ancestors;
-the complete graph and raw Audit records remain on the sensor.
-
-AL2023 resolves `/sbin/iptables` and `/sbin/iptables-save` to
-`/usr/sbin/xtables-nft-multi`, and `/sbin/ipset` to `/usr/sbin/ipset`, before
-Audit records the child executable. The resolver recognizes only these fixed
-logical-to-kernel executable pairs and separately requires the exact logical
-path in argv plus the receipt's full argv digest. When a short-lived process
-exits before `/proc` enrichment can provide start ticks, its exact Audit PID
-record must fall within five seconds of the receipt pair. A terminal Audit
-compound with an explicit kernel `success=no` is not a new process image and
-is excluded from the lineage graph; missing, incomplete, or conflicting Audit
-outcomes still fail open.
-
-Application firewall work no longer invokes raw iptables/ipset sudo commands.
-The exact read-only `broker.status` request carries no caller-supplied JobEngine
-context and takes no mutation lock; it only proves enrollment and protected
-authority assets for runner readiness. The root broker assigns its operation
-identity and emits matching begin/result receipts for its own PID generation,
-with no firewall children in either receipt. Root-owned receipts also carry the
-broker's Audit session and executable because journald can lose those process
-fields after a short-lived broker exits. They fill only absent journal
-metadata: trusted journal values remain authoritative, and any disagreement
-invalidates the receipt pair. It sends one strict semantic JSON request to
-exactly `sudo -n -- /usr/local/sbin/mojo-firewall-broker`; sudoers authorizes
-that empty-argument command only. Mutation operations additionally validate
-the same-runner JobEngine context, construct all argv and restore input, and
-emit root-owned receipts for their firewall children. Requests are at most 16
-MiB/250,000 canonical networks; restore is at most 24 MiB. After imports the
-broker reads its current virtual address space from `/proc/self/statm` and adds
-256 MiB of growth headroom, with a 768 MiB absolute ceiling. A lower existing
-hard limit, an invalid baseline, or a failed `setrlimit` returns
-`broker_resource_limit_unavailable` before stdin or any firewall child is
-executed. A later `MemoryError` uses a prebuilt ASCII
-`broker_resource_exhausted` response through `os.write`, so callers never
-receive an empty response solely because normal JSON serialization needed more
-heap. Scalar work has 15 seconds and bulk work 120 seconds. Output overflow is
-failure (64 KiB, or an 8 MiB hard ceiling for semantic rules reads).
-
-`jobman_firewall_operation_v1` is local-only only after healthy post-cutover
-proof. Mutations require exact cron/jobman → sudo → broker → target lineage and
-receipt/PID-generation agreement. Read-only `broker.status` has no target
-child, so it instead requires exact cron JobEngine → sudo → broker lineage, the
-broker PID generation, its matching zero-child begin/result pair, and the
-pinned engine origin. A failed status result is never eligible. SSH, TTY, IP
-attribution, direct legacy sudo, missing context, timeouts, restarts, audit
-gaps, eviction, receipt disagreement, and every incomplete proof retain the
-original rich sudo Event. Identical durable broker receipts are idempotent;
-conflicting begin/result duplicates remain invalid across restart and later
-successful replay. Malformed journal records veto suppression for the entire
-health bracket and make every node from that batch ineligible, even when the
-Audit sidecars themselves are healthy. Legacy direct grants remain for one
-rollback generation but never qualify for suppression.
-The JobEngine context prevents accidental cross-job attribution through the
-normal API; it does not resist hostile Python already running in that process.
+Upgrading a node drops the retired process-lineage tables (`process_nodes`,
+`audit_fragments`, `crond_launches`, `origin_sessions`, `audit_health_epochs`,
+`pending_firewall`, `firewall_receipts`) on the first open of the state file. A
+broker sudo still held in `pending_firewall` is first counted local-only or
+raised, never lost; an unparsable held row is counted in meta
+`provenance_retired_dropped`. The file is vacuumed once and
+`provenance_retired_at` records when. The spool, cursors, SSH sessions and FIM
+baselines are kept. The next deploy retires the process-identity
+socket/service and the Audit health timer/service, removes the stable Audit
+helper and the health sidecar, and replaces the Audit exec rules with the sudo
+watch. It leaves `/etc/sysctl.d/90-mojosec-ptrace.conf` in place, unmanaged,
+where an older deploy wrote it: that file only ever raised
+`kernel.yama.ptrace_scope` to at least 1.
 
 Do not sample, rate-limit, or aggregate raw `auth.sudo_command` observations at the
-sensor. Missing, conflicting, or incomplete root proof is the security evidence
-that distinguishes an unexplained privileged command from an approved broker
-operation. The receiver instead counts each digest-matched durable receipt's
+sensor. Every sudo outside the exact expectation above is security evidence. The
+receiver instead counts each digest-matched durable receipt's
 wire occurrence count once in a fixed UTC-hour Redis bucket. Receipt markers and
 category counters share one cluster slot and expire after two hours. Crossing
 `MOJOSEC_CATEGORY_VOLUME_ALERT_THRESHOLD` (file-only, default 10,000; `<=0`

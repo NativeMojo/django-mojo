@@ -29,8 +29,7 @@ ownership/modes, and oversized files. `converge` repairs an enrolled host and
 does not enroll a new one. `off` removes the grant and wrapper and records
 disabled enrollment; permanent set identity and existing kernel rules remain.
 The wrapper is a direct `/usr/bin/python3 -EP` script rather than a shell
-trampoline. That preserves safe-path and environment isolation while producing
-one canonical broker exec generation for MojoSec receipt correlation.
+trampoline, which preserves safe-path and environment isolation.
 
 ## Declare the complete fleet
 
@@ -63,14 +62,12 @@ It validates the sudo caller and protected enrollment/assets, returns a bounded
 schema/version/permanent-name proof, and emits a root-authored begin/result
 receipt pair for its own exact PID generation. Both receipts have no firewall
 children; the operation invokes neither the mutation dispatcher nor its host
-lock. MojoSec suppresses the corresponding sudo observation only when the pair
-and PID generation agree with exact cron JobEngine → sudo → broker lineage and
-the pinned engine origin. A failed status result or any incomplete proof remains
-an ordinary sudo Event. Mutation operations still require JobEngine context and
-independently recheck readiness immediately before broker work.
-On AL2023, Audit reports the resolved `/usr/sbin/xtables-nft-multi` or
-`/usr/sbin/ipset` executable behind the broker's fixed `/sbin/*` command. Proof
-accepts only those fixed pairs and still requires the exact recorded argv digest.
+lock. The receipts are journal evidence for operators; MojoSec no longer
+correlates them. It counts the JobEngine's broker sudo as a fixed local
+expectation instead (see
+[Expected local automation](../security/mojosec_sensor.md#expected-local-automation)).
+Mutation operations still require JobEngine context and independently recheck
+readiness immediately before broker work.
 
 The incident provider verifies the process's effective UID, the exact sudo
 operation, timeout, response shape, and permanent-name agreement. A background

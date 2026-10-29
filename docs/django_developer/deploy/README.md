@@ -307,8 +307,8 @@ successful deployment. Intentional full-script overrides remain project-owned.
 
 Daily restarts do not prove version alignment and can conceal deployment drift.
 Release verification must use the normal canary/fleet order: verify the canary's
-active, fresh loaded version and kernel generation, then the next node, and check
-for new exact broker missing-proof occurrences. Local tests do not complete that
+active, fresh loaded version and kernel generation, then the next node. Local
+tests do not complete that
 production rollout evidence.
 
 The first deploy that adopts these files can still be started by the previous
