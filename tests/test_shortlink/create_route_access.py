@@ -1,4 +1,5 @@
-"""POST /api/shortlink/link/create access: #1831 (files) and #9536 (groups).
+"""POST /api/shortlink/link/create access: #1831 (files), #9536 (groups) and
+#8099 (the opt-in SHORTLINK_CREATE_PERMS gate).
 
 #1831: the route used to load any File by numeric id and shorten it. A
 file-backed link now needs the File's share permission (SAVE_PERMS:
@@ -7,6 +8,10 @@ manage_files, files or owner), checked against the file's own group.
 #9536: the route stored the link in any ?group= the caller named. The caller
 must now belong to that group (directly or through a parent) or hold
 manage_shortlinks globally. Every refusal looks the same.
+
+#8099: require_create_perms is tested here in process with explicit perms, so
+no setting is touched; the route with the real setting is tested in the
+serial package tests/test_shortlink_extended_serial.
 """
 import os
 import tempfile
@@ -129,6 +134,12 @@ def setup_create_route_access(opts):
     GroupMember.objects.filter(user=former, group=group_b).update(is_active=False)
     opts.parent_member, opts.link_manager = parent_member, link_manager
     opts.plain, opts.former = plain, former
+    holder_a = _make_user(tag, "holdera")
+    _join(holder_a, group_a, ["manage_shortlinks"])
+    holder_parent = _make_user(tag, "holderp")
+    _join(holder_parent, group_parent, ["manage_shortlinks"])
+    opts.holder_a, opts.holder_parent = holder_a, holder_parent
+    opts.group_a_obj = group_a
 
     opts.tmpdir = tempfile.mkdtemp(prefix="mojo_sl1831_")
     fm = FileManager(name=f"{PREFIX}_b_{tag}", backend_type="file", backend_url="file://",
@@ -148,6 +159,10 @@ def setup_create_route_access(opts):
         group=group_a, name=f"{PREFIX}_a_{tag}", permissions={"view_fileman": True})
     _, opts.key_b = ApiKey.create_for_group(
         group=group_b, name=f"{PREFIX}_b_{tag}", permissions={"manage_files": True})
+    opts.key_a_id = ApiKey.objects.get(name=f"{PREFIX}_a_{tag}").pk
+    key_a_sl, _ = ApiKey.create_for_group(
+        group=group_a, name=f"{PREFIX}_asl_{tag}", permissions={"manage_shortlinks": True})
+    opts.key_a_sl_id = key_a_sl.pk
 
 
 @th.django_unit_test("create: a member of another group cannot link a private file")
@@ -323,3 +338,67 @@ def test_group_api_key(opts):
     assert_eq(resp.status_code, 403,
               f"group-A key must be refused for group B, got {resp.status_code}: {resp.response}")
     opts.client.logout()
+
+
+# ---------------------------------------------------------------------------
+# #8099 — the opt-in permission gate, in process (no setting is touched)
+# ---------------------------------------------------------------------------
+
+GATE = ["manage_shortlinks"]
+
+
+def _person(user, group=None):
+    from objict import objict
+    return objict(user=user, group=group, api_key=None, group_token=None,
+                  user_api_key=None, acting_user=None)
+
+
+def _key_request(key_id):
+    from objict import objict
+    from mojo.apps.account.models import ApiKey
+    key = ApiKey.objects.select_related("group").get(pk=key_id)
+    key.is_authenticated = True
+    return objict(user=key, group=key.group, api_key=key, group_token=None,
+                  user_api_key=None, acting_user=None)
+
+
+def _gate(request, perms=GATE):
+    from mojo import errors as merrors
+    from mojo.apps.shortlink.services.access import require_create_perms
+    try:
+        require_create_perms(request, perms=perms)
+    except merrors.PermissionDeniedException as err:
+        return err
+    return None
+
+
+@th.django_unit_test("gate: a member without the permission is refused")
+def test_gate_member_without_perm(opts):
+    err = _gate(_person(opts.outsider, opts.group_a_obj))
+    assert_true(err is not None, "a member of A without manage_shortlinks must be refused")
+    assert_eq((err.status, err.reason), (403, "Permission denied"),
+              f"the gate refuses with the route's one 403, got {err.status} {err.reason!r}")
+
+
+@th.django_unit_test("gate: holders in the group or its parent, and global holders, pass")
+def test_gate_holders_pass(opts):
+    assert_true(_gate(_person(opts.holder_a, opts.group_a_obj)) is None,
+                "a manage_shortlinks member of A must pass")
+    assert_true(_gate(_person(opts.holder_parent, opts.group_a_obj)) is None,
+                "a manage_shortlinks member of A's parent must pass")
+    assert_true(_gate(_person(opts.link_manager)) is None,
+                "a global manage_shortlinks holder with no group must pass")
+
+
+@th.django_unit_test("gate: a group key needs the permission itself")
+def test_gate_keys(opts):
+    assert_true(_gate(_key_request(opts.key_a_id)) is not None,
+                "a group-A key without manage_shortlinks must be refused")
+    assert_true(_gate(_key_request(opts.key_a_sl_id)) is None,
+                "a group-A key holding manage_shortlinks must pass")
+
+
+@th.django_unit_test("gate: an empty permission list lets anyone through")
+def test_gate_empty_passes(opts):
+    assert_true(_gate(_person(opts.plain), perms=[]) is None, "perms=[] must pass a plain user")
+    assert_true(_gate(_key_request(opts.key_a_id), perms=[]) is None, "perms=[] must pass a key")
