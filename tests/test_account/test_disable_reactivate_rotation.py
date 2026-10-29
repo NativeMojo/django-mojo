@@ -186,3 +186,81 @@ def test_active_account_key_survives_unrelated_saves(opts):
         "must keep the signing key")
     validated, error = User.validate_jwt(token)
     assert error is None, f"an active account's token must survive those saves, got {error!r}"
+
+
+def _stale_save_racing_disable(opts, target_pk, data):
+    """A REST save of a copy loaded while the account was active, paused after
+    its pre-save hook while disable_entity commits on a second database
+    connection, then resumed. Returns (key_before, token_before)."""
+    import threading
+    from django.db import connection
+    from objict import objict
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import disable as disable_service
+    from mojo.models.rest import ACTIVE_REQUEST
+
+    key_before = User.objects.get(pk=target_pk).get_auth_key()
+    token_before = _mint(target_pk)
+    admin = User.objects.get(pk=opts.admin_id)
+    stale = User.objects.get(pk=target_pk)
+    request = objict(user=admin, group=None, DATA=objict(data), META={}, ip="127.0.0.1",
+                     method="POST", path=f"/api/user/{target_pk}")
+    errors = []
+
+    def disable_elsewhere():
+        try:
+            disable_service.disable_entity(
+                User.objects.get(pk=target_pk), reason="admin", reporter=_null_reporter)
+        except Exception as err:
+            errors.append(repr(err))
+        finally:
+            connection.close()
+
+    hook = stale.on_rest_pre_save
+
+    def pause_after_pre_save(changed_fields, created):
+        hook(changed_fields, created)
+        worker = threading.Thread(target=disable_elsewhere)
+        worker.start()
+        worker.join(15)
+        assert not worker.is_alive(), "disable on the second connection timed out"
+        assert not errors, f"disable on the second connection failed: {errors}"
+
+    stale.on_rest_pre_save = pause_after_pre_save
+    token = ACTIVE_REQUEST.set(request)
+    try:
+        stale.on_rest_save(request, request.DATA)
+    finally:
+        ACTIVE_REQUEST.reset(token)
+    return key_before, token_before
+
+
+@th.django_unit_test()
+def test_stale_is_active_true_save_cannot_undo_a_disable(opts):
+    from mojo.apps.account.models import User
+
+    target = _make_user("rot9533_t7@rotation.test", TARGET_PASSWORD)
+    key_before, token_before = _stale_save_racing_disable(opts, target.pk, {"is_active": True})
+
+    fresh = User.objects.get(pk=target.pk)
+    assert fresh.is_active is False, (
+        "a REST {is_active: true} save loaded before a disable must not turn the account back on")
+    assert fresh.auth_key != key_before, "a stale REST save must not write back the pre-disable key"
+    validated, error = User.validate_jwt(token_before)
+    assert error is not None, "a token from before the disable must stay dead after the stale save"
+
+
+@th.django_unit_test()
+def test_stale_unrelated_save_cannot_undo_a_disable(opts):
+    from mojo.apps.account.models import User
+
+    target = _make_user("rot9533_t8@rotation.test", TARGET_PASSWORD)
+    key_before, token_before = _stale_save_racing_disable(
+        opts, target.pk, {"display_name": "Rotation Eight"})
+
+    fresh = User.objects.get(pk=target.pk)
+    assert fresh.display_name == "Rotation Eight", "the stale save's own change should still land"
+    assert fresh.is_active is False, "a stale REST save of another field must not turn the account back on"
+    assert fresh.auth_key != key_before, "a stale REST save must not write back the pre-disable key"
+    validated, error = User.validate_jwt(token_before)
+    assert error is not None, "a token from before the disable must stay dead after the stale save"
