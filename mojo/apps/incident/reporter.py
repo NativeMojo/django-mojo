@@ -419,6 +419,9 @@ def _create_event_dict(details, title=None, category="api_error", level=1, reque
     event_metadata = {
         "server": socket.gethostname()
     }
+    # Key identity is server-set: applied after the caller's kwargs are merged,
+    # so an api_key_id= / api_key_name= kwarg can never rename the key (#9556).
+    key_metadata = {}
 
     if request:
         event_data["source_ip"] = request.ip if event_data["source_ip"] is None else event_data["source_ip"]
@@ -441,8 +444,7 @@ def _create_event_dict(details, title=None, category="api_error", level=1, reque
             event_data["uid"] = actor.pk if actor is not None else None
             api_key = getattr(request, "api_key", None)
             if api_key is not None:
-                event_metadata["api_key_id"] = api_key.pk
-                event_metadata["api_key_name"] = api_key.name
+                key_metadata = {"api_key_id": api_key.pk, "api_key_name": api_key.name}
             if request.bearer:
                 from mojo.helpers.logit import mask_token
                 event_metadata["bearer"] = mask_token(request.bearer)
@@ -479,6 +481,7 @@ def _create_event_dict(details, title=None, category="api_error", level=1, reque
                 processed_kwargs[k] = str(v)
 
     event_metadata.update(processed_kwargs)
+    event_metadata.update(key_metadata)
     event_data['metadata'] = event_metadata
     return event_data
 

@@ -108,7 +108,7 @@ actually does.
 | Authorization | the key's `permissions` dict | the member's, via `GroupMember` |
 | Attribution (`FK(User)` columns) | the linked member | the linked member |
 | Incident `Event.uid` / `Log.uid` | the linked member; unlinked: none (`None` / `0`) | the linked member |
-| Metrics `user-<id>` account | never (the key is not a person) | the linked member's own |
+| Metrics `user-<id>` account | no identity match (the key is not a person, whatever its id); only an explicit `metrics` / `view_metrics` / `write_metrics` grant in the key's `permissions` reaches it | the linked member's own, by identity (the member's global grants are not consulted for an override session) |
 | Tenant boundary | the key's group | the key's group |
 
 **Reference mode** (the default) exists because most consumers only need

@@ -130,3 +130,25 @@ def test_person_event_uid(opts):
             f"event uid {row['uid']}, expected the signed-in member {opts.member_id}"
         assert "api_key_id" not in row["metadata"], \
             f"a session request must not carry api_key_id: {row['metadata'].get('api_key_id')}"
+
+
+@th.django_unit_test("9556: a caller's api_key_id / api_key_name kwargs cannot rename the key")
+def test_key_metadata_is_server_set(opts):
+    from objict import objict
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.reporter import _create_event_dict
+
+    request = objict(META={"QUERY_STRING": "", "SERVER_PROTOCOL": "HTTP/1.1"},
+                     ip="127.0.0.1", path="/api/attr9556", method="GET", bearer="apikey")
+    user, error = ApiKey.validate_token(opts.token, request)
+    assert error is None and user is not None, f"setup: key token did not validate: {error}"
+    request.user = user
+
+    data = _create_event_dict("attr9556 collision", category=f"attr9556_{opts.tag}",
+                              request=request, api_key_id=-123, api_key_name="forged")
+    meta = data["metadata"]
+    assert meta.get("api_key_id") == opts.key_id, \
+        f"api_key_id must be the server-set key {opts.key_id}, got {meta.get('api_key_id')}"
+    assert meta.get("api_key_name") == opts.key_name, \
+        f"api_key_name must be the server-set {opts.key_name}, got {meta.get('api_key_name')}"
+    assert data["uid"] is None, f"unlinked key must file no uid, got {data['uid']}"
