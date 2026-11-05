@@ -8,9 +8,11 @@ from testit import helpers as th
 
 KEYS = ("APPLE_TEAM_ID", "APPLE_CLIENT_ID", "APPLE_KEY_ID", "APPLE_PRIVATE_KEY",
         "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
+        "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET",
         "MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET", "MICROSOFT_TENANT",
         "MICROSOFT_CLIENT_SECRET_EXPIRES")
 MS_GROUP_UUID = "msg1234567890abcdef01234567890ab"
+OVERRIDE_GROUP_UUID = "sig5547override0123456789abcdef0"
 MS_CLIENT_ID = "6731de76-14a6-49ae-97bc-6eba6914391e"
 PEM = "-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMGByqGSM49\nAgEGCCqGSM49AwEHBHkwdwIB\n-----END PRIVATE KEY-----"
 
@@ -241,4 +243,156 @@ def test_signin_microsoft_rest(opts):
     finally:
         opts.client.logout()
         group.delete()
+        _reset()
+
+
+@th.django_unit_test("a group's auth_config still wins over the system config saved on the Sign-in page")
+def test_signin_group_override_wins_over_system(opts):
+    from mojo.apps.account.models import Group
+    Group.objects.filter(uuid=OVERRIDE_GROUP_UUID).delete()
+    group = Group.objects.create(
+        name="test-signin-override", uuid=OVERRIDE_GROUP_UUID, is_active=True,
+        metadata={"auth_config": {
+            "theme": {"app_title": "Group Title"},
+            "login": {"methods": ["password", "passkey"]},
+        }})
+    try:
+        assert opts.client.login("signin-admin@test.com", "example"), "admin login failed"
+        resp = opts.client.post("/api/account/admin/signin", json={"auth": {
+            "theme.app_title": "System Title",
+            "login.heading": "System heading 5547",
+            "login.methods": ["password", "magic", "sms"]}})
+        assert resp.status_code == 200, f"saving the system config failed: {resp.response!r}"
+
+        cfg = opts.client.get("/api/auth/config").response.data
+        assert cfg["theme"]["app_title"] == "System Title", \
+            f"the system title did not reach the hosted config: {cfg['theme']!r}"
+
+        cfg = opts.client.get(f"/api/auth/config?group_uuid={OVERRIDE_GROUP_UUID}").response.data
+        assert cfg["theme"]["app_title"] == "Group Title", \
+            f"the group's title must win over the system title: {cfg['theme']!r}"
+        assert list(cfg["login"]["methods"]) == ["password", "passkey"], \
+            f"the group's login methods must replace the system's: {cfg['login']!r}"
+        assert cfg["login"]["heading"] == "System heading 5547", \
+            f"a key the group does not set must inherit the system value: {cfg['login']!r}"
+    finally:
+        opts.client.logout()
+        group.delete()
+        _reset()
+
+
+@th.django_unit_test("a secret saved on the Sign-in page is never returned by the generic settings endpoints")
+def test_signin_secret_not_readable_via_generic_settings(opts):
+    from mojo.apps.account.models import Setting
+    secret = "gsecret-5547-never-shown"
+    try:
+        assert opts.client.login("signin-admin@test.com", "example"), "admin login failed"
+        resp = opts.client.post("/api/account/admin/signin", json={
+            "provider": "google", "values": {"GOOGLE_CLIENT_SECRET": secret}})
+        assert resp.status_code == 200, f"saving the Google secret failed: {resp.response!r}"
+        row = Setting.objects.filter(key="GOOGLE_CLIENT_SECRET", group__isnull=True).first()
+        assert row is not None and row.is_secret, \
+            f"the Google secret must be stored as a secret Setting row: {row!r}"
+
+        resp = opts.client.get("/api/settings?search=GOOGLE_CLIENT_SECRET")
+        assert resp.status_code == 200, f"settings search failed: {resp.status_code} {resp.response!r}"
+        keys = [item.get("key") for item in (resp.response.data or [])]
+        assert "GOOGLE_CLIENT_SECRET" in keys, \
+            f"the search must find the row, or the leak check below proves nothing: {keys!r}"
+        assert secret not in str(resp.response), "the secret appeared in the settings search"
+
+        resp = opts.client.get(f"/api/settings/{row.pk}")
+        assert resp.status_code == 200, f"settings detail failed: {resp.status_code} {resp.response!r}"
+        assert resp.response.data.get("key") == "GOOGLE_CLIENT_SECRET", \
+            f"settings detail returned another row: {resp.response!r}"
+        assert secret not in str(resp.response), "the secret appeared in the settings detail"
+
+        resp = opts.client.get("/api/account/admin/settings")
+        assert resp.status_code == 200, \
+            f"admin settings catalog failed: {resp.status_code} {resp.response!r}"
+        assert secret not in str(resp.response), "the secret appeared in the admin settings catalog"
+
+        resp = opts.client.get("/api/account/admin/signin")
+        assert secret not in str(resp.response), "the secret appeared on the Sign-in page read"
+    finally:
+        opts.client.logout()
+        _reset()
+
+
+def _begin_client_id(opts, provider):
+    from urllib.parse import parse_qs, urlsplit
+    resp = opts.client.get(f"/api/auth/oauth/{provider}/begin")
+    assert resp.status_code == 200, \
+        f"{provider} begin failed once switched on: {resp.status_code} {resp.response!r}"
+    auth_url = resp.response.data["auth_url"]
+    return parse_qs(urlsplit(auth_url).query).get("client_id", [None])[0], auth_url
+
+
+@th.django_unit_test("Google credentials saved on the Sign-in page are what sign-in uses, with no restart")
+def test_signin_google_rest(opts):
+    client_id = "5547-admin.apps.googleusercontent.com"
+    secret = "gsecret-5547-begin"
+    try:
+        assert opts.client.login("signin-admin@test.com", "example"), "admin login failed"
+        google = _provider(opts.client.get("/api/account/admin/signin").response.data, "google")
+        assert google["callback_url"] and google["callback_url"].endswith(
+            "/api/auth/oauth/google/callback"), f"bad callback URL: {google!r}"
+
+        resp = opts.client.post("/api/account/admin/signin", json={
+            "provider": "google",
+            "values": {"GOOGLE_CLIENT_ID": client_id, "GOOGLE_CLIENT_SECRET": secret},
+            "enabled": True})
+        assert resp.status_code == 200, f"saving Google failed: {resp.response!r}"
+        google = _provider(resp.response.data, "google")
+        assert google["ready"] is True and google["enabled"] is True, \
+            f"Google not ready+enabled after save: {google!r}"
+        assert secret not in str(resp.response), "the Google secret appeared in the response"
+        cfg = opts.client.get("/api/auth/config").response.data
+        assert "google" in cfg["login"]["methods"], \
+            f"enabling Google did not reach the hosted login config: {cfg['login']!r}"
+
+        sent, auth_url = _begin_client_id(opts, "google")
+        assert sent == client_id, \
+            f"begin must use the client ID saved in Admin, got {sent!r} in {auth_url!r}"
+        assert secret not in auth_url, "the client secret must never reach the browser"
+    finally:
+        opts.client.logout()
+        _reset()
+
+
+@th.django_unit_test("GitHub credentials saved on the Sign-in page override server config, with no restart")
+def test_signin_github_rest(opts):
+    client_id = "gh-admin-5547"
+    secret = "ghsecret-5547-begin"
+    try:
+        assert opts.client.login("signin-admin@test.com", "example"), "admin login failed"
+        github = _provider(opts.client.get("/api/account/admin/signin").response.data, "github")
+        field = next(f for f in github["fields"] if f["key"] == "GITHUB_CLIENT_ID")
+        assert field["source"] == "deployment" and field["configured"] is True, \
+            f"the test project's GITHUB_CLIENT_ID must show as set in server config: {field!r}"
+        assert github["callback_url"] and github["callback_url"].endswith(
+            "/api/auth/oauth/github/callback"), f"bad callback URL: {github!r}"
+
+        resp = opts.client.post("/api/account/admin/signin", json={
+            "provider": "github",
+            "values": {"GITHUB_CLIENT_ID": client_id, "GITHUB_CLIENT_SECRET": secret},
+            "enabled": True})
+        assert resp.status_code == 200, f"saving GitHub failed: {resp.response!r}"
+        github = _provider(resp.response.data, "github")
+        assert github["ready"] is True and github["enabled"] is True, \
+            f"GitHub not ready+enabled after save: {github!r}"
+        field = next(f for f in github["fields"] if f["key"] == "GITHUB_CLIENT_ID")
+        assert field["source"] == "admin" and field["value"] == client_id, \
+            f"the Admin value must replace the server-config one: {field!r}"
+        assert secret not in str(resp.response), "the GitHub secret appeared in the response"
+        cfg = opts.client.get("/api/auth/config").response.data
+        assert "github" in cfg["login"]["methods"], \
+            f"enabling GitHub did not reach the hosted login config: {cfg['login']!r}"
+
+        sent, auth_url = _begin_client_id(opts, "github")
+        assert sent == client_id, \
+            f"begin must use the client ID saved in Admin, got {sent!r} in {auth_url!r}"
+        assert secret not in auth_url, "the client secret must never reach the browser"
+    finally:
+        opts.client.logout()
         _reset()
