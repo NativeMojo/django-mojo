@@ -432,7 +432,17 @@ def _create_event_dict(details, title=None, category="api_error", level=1, reque
             "http_host": request.META.get("HTTP_HOST", "")
         })
         if request.user.is_authenticated:
-            event_data["uid"] = request.user.id
+            # The attributed person, never request.user.id: for a reference-mode
+            # ApiKey request.user IS the key, and its pk would be filed as the
+            # user with the same id (#9556). A linked key resolves to its member;
+            # an unlinked key to nobody. The key itself is named below.
+            from mojo.models.rest import _resolve_stamp_actor
+            actor = _resolve_stamp_actor(request)
+            event_data["uid"] = actor.pk if actor is not None else None
+            api_key = getattr(request, "api_key", None)
+            if api_key is not None:
+                event_metadata["api_key_id"] = api_key.pk
+                event_metadata["api_key_name"] = api_key.name
             if request.bearer:
                 from mojo.helpers.logit import mask_token
                 event_metadata["bearer"] = mask_token(request.bearer)

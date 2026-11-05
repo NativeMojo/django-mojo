@@ -54,7 +54,7 @@ GET /api/logs?level=error&sort=-created&size=50
 | `level` | `?level=error` | Filter by log level |
 | `kind` | `?kind=order:payment:failed` | Exact kind match |
 | `kind__startswith` | Filter by kind prefix | Prefix match |
-| `uid` | `?uid=42` | Filter by user ID |
+| `uid` | `?uid=42` | Filter by user ID. Rows made with an API key carry its linked member's ID, or `0` for an unlinked key; a key's own rows always carry `username` `apikey:<id>` |
 | `gid` | `?gid=12` | Filter by group ID |
 | `model_name` | `?model_name=orders.Order` | Filter by model |
 | `model_id` | `?model_id=42` | Filter by record ID |
