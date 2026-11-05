@@ -338,6 +338,14 @@ def _auth_context(request, group=None, include_registration_extras=False):
     # straight back into another 440 response.
     context['skip_session_check'] = str(
         request_data.get('force_reauth', '')).lower() in ('1', 'true', 'yes')
+    # An app on its own host sends its signed-out visitor here with
+    # ?signed_out=1 (#9568). The page's stored tokens live on this host, so
+    # the app's own sign-out cannot clear them: auth_base.html clears them
+    # before the session check, which is skipped, and shows the form.
+    context['signed_out'] = str(
+        request_data.get('signed_out', '')).lower() in ('1', 'true', 'yes')
+    if context['signed_out']:
+        context['skip_session_check'] = True
     # Back from a sign-in provider (?code=&state=): auth_base.html renders the
     # "Signing you in" view and hides the form in the first byte of HTML, so
     # the form never flashes while the completion runs (#8579). The page
@@ -411,6 +419,8 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None, h
         fwd_params['redirect'] = redirect_val
     if str(request_data.get('force_reauth', '')).lower() in ('1', 'true', 'yes'):
         fwd_params['force_reauth'] = '1'
+    if str(request_data.get('signed_out', '')).lower() in ('1', 'true', 'yes'):
+        fwd_params['signed_out'] = '1'
     back_val = request_data.get('back') or ''
     if back_val:
         fwd_params['back'] = back_val

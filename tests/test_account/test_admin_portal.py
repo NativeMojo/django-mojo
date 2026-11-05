@@ -202,6 +202,87 @@ def test_force_reauth_context(opts):
     assert "force_reauth=1" in context["register_url"]
 
 
+@th.django_unit_test("a signed-out landing skips the silent session check")
+def test_signed_out_context(opts):
+    from django.test import RequestFactory
+    from mojo.apps.account.rest.bouncer.views import _auth_context
+
+    request = RequestFactory().get(
+        "/auth", {"redirect": "https://app.example.com/", "signed_out": "1"})
+    request.DATA = request.GET
+    context = _auth_context(request)
+    assert context.get("signed_out") is True, (
+        "?signed_out=1 must set the signed_out flag for the template")
+    assert context["skip_session_check"] is True, (
+        "?signed_out=1 must skip the session check, or the stored refresh "
+        "token signs the previous person straight back in")
+
+    request = RequestFactory().get("/auth", {"redirect": "https://app.example.com/"})
+    request.DATA = request.GET
+    context = _auth_context(request)
+    assert context.get("signed_out") is False, (
+        "without signed_out the flag must stay off")
+    assert context["skip_session_check"] is False, (
+        "without signed_out or force_reauth the session check must still run")
+
+
+@th.django_unit_test("a signed-out landing clears the stored session before the session check")
+def test_signed_out_page_clears_before_session_check(opts):
+    from django.shortcuts import render
+    from django.test import RequestFactory
+    from mojo.apps.account.rest.bouncer.views import _auth_context
+
+    def page(query):
+        request = RequestFactory().get("/auth", query)
+        request.DATA = request.GET
+        ctx = _auth_context(request)
+        ctx["page_mode"] = "login"
+        ctx["page_title"] = "Sign In"
+        return render(request, "account/login.html", ctx).content.decode("utf-8")
+
+    html = page({"redirect": "https://app.example.com/", "signed_out": "1"})
+    marker = "// Session check"
+    assert marker in html, "the rendered page must still carry its session check"
+    clear = html.find("MojoAuth.logout();")
+    assert -1 < clear < html.index(marker), (
+        "the signed-out page must call MojoAuth.logout() before the session check")
+    assert "You're signed out." in html, (
+        "the signed-out page must tell the visitor they are signed out")
+    assert "var SKIP_SESSION_CHECK = true;" in html, (
+        "the signed-out page must skip the silent session check")
+
+    html = page({"redirect": "https://app.example.com/"})
+    assert "You're signed out." not in html, (
+        "an ordinary visit must not show the signed-out message")
+    first_clear = html.find("MojoAuth.logout();")
+    assert first_clear == -1 or first_clear > html.index(marker), (
+        "an ordinary visit must not clear the stored session before the session check")
+
+
+@th.django_unit_test("the bot challenge carries signed_out back to the sign-in page")
+def test_signed_out_survives_challenge(opts):
+    import json
+    import re
+    from urllib.parse import parse_qs, urlsplit
+    from django.test import RequestFactory
+    from objict import objict
+    from mojo.apps.account.rest.bouncer.views import _serve_challenge
+
+    request = RequestFactory().get(
+        "/auth", {"redirect": "https://app.example.com/", "signed_out": "1",
+                  "force_reauth": "1"})
+    request.DATA = objict(request.GET.dict())
+    response = _serve_challenge(request)
+    found = re.search(rb'<script id="mbg-config"[^>]*>(.*?)</script>',
+                      response.content, re.S)
+    assert found, "the challenge page must carry its config"
+    forwarded = parse_qs(urlsplit(json.loads(found.group(1))["redirect_url"]).query)
+    assert forwarded.get("signed_out") == ["1"], (
+        "a visitor who passes the challenge must land on the signed-out page, "
+        "or the stored session is never cleared")
+    assert forwarded.get("force_reauth") == ["1"], "force_reauth must still survive"
+
+
 @th.django_unit_test("a malformed feature provider fails closed without hiding its siblings")
 def test_malformed_feature_provider_fails_closed(opts):
     from mojo.apps.account.services import admin_features
