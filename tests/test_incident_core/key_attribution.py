@@ -145,8 +145,11 @@ def test_key_metadata_is_server_set(opts):
     request.user = user
 
     data = _create_event_dict("attr9556 collision", category=f"attr9556_{opts.tag}",
-                              request=request, api_key_id=-123, api_key_name="forged")
+                              request=request, api_key_id=-123, api_key_name="forged",
+                              ticket="kept-9556")
     meta = data["metadata"]
+    assert meta.get("ticket") == "kept-9556", \
+        f"ordinary extra metadata must survive the merge, got {meta.get('ticket')}"
     assert meta.get("api_key_id") == opts.key_id, \
         f"api_key_id must be the server-set key {opts.key_id}, got {meta.get('api_key_id')}"
     assert meta.get("api_key_name") == opts.key_name, \
