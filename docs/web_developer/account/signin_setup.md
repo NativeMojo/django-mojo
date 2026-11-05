@@ -83,3 +83,26 @@ Errors are `400 {"status": false, "error": "..."}` — for example removing
 client ID that is not a GUID, a Microsoft tenant that is not `common`,
 `organizations`, `consumers` or a GUID, an expiry that is not `YYYY-MM-DD`, or
 a key that does not belong to the provider. Changes apply on the next page load.
+
+## Callback URLs and domains
+
+Each provider card carries `callback_urls`, one per origin the login page is
+likely served from, and `domains`, their host names. `callback_url` is the
+first of them. Register **every** URL in `callback_urls` with the provider:
+sign-in from an origin whose callback is not registered fails at the
+provider. The URL is always the backend callback,
+`https://<login host>/api/auth/oauth/<provider>/callback`, never your own page.
+Apple's Services ID also wants each entry of `domains`.
+
+Saved credentials apply to the next sign-in; there is no deploy or restart.
+
+## What the on/off switch does
+
+`enabled` shows or hides the provider's button on the hosted login page: it
+edits the system `login.methods` and `registration.methods`. It is not an API
+restriction. A direct `GET /api/auth/oauth/<provider>/begin` that names no
+group still starts sign-in for Google, Apple or GitHub while they are switched
+off. A request that names a group is checked against that group's resolved
+methods, which inherit the switch unless the group sets its own. Microsoft,
+which is off by default, is refused at `/begin` without a group until it is
+switched on.

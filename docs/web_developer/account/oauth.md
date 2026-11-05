@@ -19,12 +19,13 @@ pages render a button for each enabled provider. See
 
 ## Flow Overview
 
-**Google** — standard redirect flow:
+**Google, GitHub and Microsoft** — redirect flow through the backend:
 ```
 1. GET  /api/auth/oauth/google/begin        → get authorization URL
 2. Redirect user to authorization URL
-3. Google redirects back → your page ?code=...&state=...
-4. POST /api/auth/oauth/google/complete     → exchange code, get JWT
+3. Google redirects back to the backend     → /api/auth/oauth/google/callback
+4. Backend redirects browser                → your page ?code=...&state=...
+5. POST /api/auth/oauth/google/complete     → exchange code, get JWT
 ```
 
 **Apple** — backend relay required (Apple prohibits query-param redirects when email scope is requested):
@@ -44,7 +45,7 @@ Steps 3–4 are invisible to your JS — your page still receives `?code=` and `
 
 ## Step 1 — Get Authorization URL
 
-**GET** `/api/oauth/google/begin`
+**GET** `/api/auth/oauth/google/begin`
 
 **Optional query parameter:**
 
@@ -69,7 +70,7 @@ Redirect the user to `auth_url`. Store `state` if you need it client-side (the s
 If your app has a custom callback URL, pass it as `redirect_uri`:
 
 ```javascript
-const resp = await fetch('/api/oauth/google/begin?redirect_uri=' + encodeURIComponent('https://portal.example.com/auth/callback'));
+const resp = await fetch('/api/auth/oauth/google/begin?redirect_uri=' + encodeURIComponent('https://portal.example.com/auth/callback'));
 ```
 
 The server binds the `redirect_uri` to the state token — you do not need to re-send it in the complete step.
@@ -79,7 +80,7 @@ The server binds the `redirect_uri` to the state token — you do not need to re
 ## Step 2 — Redirect User
 
 ```javascript
-const { data } = await fetch('/api/oauth/google/begin').then(r => r.json());
+const { data } = await fetch('/api/auth/oauth/google/begin').then(r => r.json());
 window.location.href = data.auth_url;
 ```
 
@@ -358,12 +359,14 @@ Add to your Django settings:
 GOOGLE_CLIENT_ID = "your-client-id.apps.googleusercontent.com"
 GOOGLE_CLIENT_SECRET = "your-client-secret"
 
-# The URL Google redirects back to after login
-# Must match one of the authorised redirect URIs in Google Console
-OAUTH_REDIRECT_URI = "https://your-app.example.com/oauth/google/complete"
+# Optional: the page the browser lands on after sign-in.
+# This is NOT the URL you register with Google (see below).
+OAUTH_REDIRECT_URI = "https://your-app.example.com/auth/oauth/google/complete"
 ```
 
-If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origin` header as `<origin>/oauth/<provider>/complete`.
+If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origin` header as `<origin>/auth/oauth/<provider>/complete`.
+
+The URL to register in the provider's console is the backend callback, `https://<login host>/api/auth/oauth/<provider>/callback`, once for each host your login page is served from. See [Sign-in Setup](signin_setup.md#callback-urls-and-domains).
 
 ### Apple Settings
 
