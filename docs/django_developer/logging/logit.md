@@ -14,7 +14,7 @@ The `logit` app provides a database-backed structured logging model that complem
 | `payload` | JSONField | Arbitrary structured data |
 | `ip` | CharField(45), nullable | Client IP from active request — holds a full IPv6 address or `None` |
 | `duid` | CharField | Device unique ID |
-| `uid` | IntegerField | User ID |
+| `uid` | IntegerField | User ID of the attributed person — the signed-in user, or an API key's linked member; `0` for an unlinked reference-mode key (its `username` is `apikey:<id>`) |
 | `gid` | IntegerField | Group ID (auto-populated from model or request context) |
 | `username` | CharField | Username |
 | `user_agent` | TextField | User agent string |

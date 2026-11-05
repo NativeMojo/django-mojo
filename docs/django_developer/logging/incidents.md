@@ -1042,7 +1042,7 @@ No extra code required — the dispatcher handles this automatically for all fra
 | `category` | Dot-namespaced event type: `"auth:failed"`, `"permission_denied"` |
 | `source_ip` | IP address of the originating request. `CharField(max_length=45)`, nullable — holds a full IPv6 address or `None` |
 | `hostname` | Server hostname (auto-populated from `socket.gethostname()`) |
-| `uid` | User ID associated with this event |
+| `uid` | The attributed person: the signed-in user, or an API key's linked member; `None` for an unlinked reference-mode key. Never the key's own id. A key request also stores `metadata.api_key_id` and `metadata.api_key_name` |
 | `country_code` | ISO 3166-1 alpha-2 country code (auto-populated via GeoIP) |
 | `title` | Short human-readable summary |
 | `details` | Full description, stack trace, or structured message |

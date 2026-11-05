@@ -105,7 +105,13 @@ class Log(dm.Model, MojoModel):
         user_agent = "system"
         if request:
             username = request.user.username if request.user.is_authenticated else None
-            uid = request.user.pk if request.user.is_authenticated else 0
+            if request.user.is_authenticated:
+                # The attributed person, never request.user.pk: a reference-mode
+                # ApiKey's own pk is not a user id (#9556). `username` keeps
+                # "apikey:<id>" as the record of which key made the request.
+                from mojo.models.rest import _resolve_stamp_actor
+                actor = _resolve_stamp_actor(request)
+                uid = actor.pk if actor is not None else 0
             path = request.path
             duid = request.duid
             ip_address = request.ip

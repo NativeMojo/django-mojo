@@ -1,7 +1,7 @@
 from mojo.apps import metrics
 from mojo.apps.metrics import utils
 from mojo.helpers.settings import settings
-from mojo.helpers.request import identity_allows_group, is_override_user_session
+from mojo.helpers.request import identity_allows_group, is_override_user_session, is_request_user
 from objict import nobjict
 import mojo.errors
 
@@ -103,7 +103,10 @@ def _check_user_account_permission(request, account, permission):
     if _global_perm(request, permission):
         return True
     account_user_id = account.split("-", 1)[1]
-    if str(request.user.pk) != account_user_id:
+    # Only a real User owns user-<id>. A reference-mode ApiKey is request.user
+    # itself, and its pk is not a person's id (#9556); an override key's member
+    # and a group token's user are real Users and keep their own account.
+    if not is_request_user(request) or str(request.user.pk) != account_user_id:
         raise mojo.errors.PermissionDeniedException()
     return True
 
