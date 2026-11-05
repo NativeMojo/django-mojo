@@ -492,6 +492,14 @@
         MojoAuth.init({ baseURL: API_BASE, bouncerTokenProvider: bouncerConfig
             ? MojoHostedBouncer.tokenProvider(JSON.parse(bouncerConfig.textContent)) : null });
 
+        {% if signed_out %}
+        // Signed out of an app on another host (#9568): forget this page's
+        // stored session, so the next sign-in cannot silently restore the
+        // previous person. The session check below is skipped.
+        MojoAuth.logout();
+        window._mat.showMessage("You're signed out.", "info");
+        {% endif %}
+
         // Session check — skipped on the passkey enrollment page, where the
         // visitor is already authenticated and must not be auto-redirected.
         if (!SKIP_SESSION_CHECK && !params.get("token") && !(params.get("code") && params.get("state"))) {

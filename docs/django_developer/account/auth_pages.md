@@ -632,6 +632,28 @@ theme stylesheet `mojo-auth-theme.css` is versioned by the same rule.
 - OAuth callback handling (`?code=...&state=...`) — see the pending view below
 - Magic link token handling (`?token=ml:...`)
 
+### Signed-out landing (`?signed_out=1`)
+
+An app on its own host signs people in through the hosted `/auth` page, which
+stores its access and refresh tokens in the **auth host's** `localStorage`. The
+app's sign-out clears only the app's storage, so without help the next "Sign in"
+refreshes the hosted page's tokens and signs the same person back in, which on
+a shared machine is the previous person.
+
+`/auth?signed_out=1` handles this. `_auth_context` sets `signed_out = True` and
+forces `skip_session_check`, and `auth_base.html` calls `MojoAuth.logout()`
+**before** the session check, then shows "You're signed out." above the normal
+form with the same `redirect`. The page never navigates by itself. The bot
+challenge forwards `signed_out` with the other params, so the landing survives a
+cold challenge.
+
+Split-host apps should send signed-out visitors to
+`/auth?redirect=<app url>&signed_out=1&force_reauth=1`; `force_reauth=1` keeps an
+older django-mojo, which ignores `signed_out`, showing the form. Same-origin apps
+(the packaged Admin) do not need it: their sign-out already clears the same
+storage. The landing does not revoke tokens server-side; `POST /api/auth/sessions/revoke`
+ends every session of the account.
+
 ### OAuth callback pending view
 
 When a page built on `auth_base.html` loads with `?code=` **and** `?state=`

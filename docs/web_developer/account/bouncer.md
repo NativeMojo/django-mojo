@@ -653,10 +653,32 @@ original request are forwarded to the post-challenge login redirect:
 | `back` | Override for the "Back to website" hero link |
 | `group_uuid` | Group UUID for per-group branding |
 | `force_reauth` | Force the credential form instead of accepting an existing session |
+| `signed_out` | `1` after an app's sign-out: forget the page's stored session and show the form |
 | `auth_theme` | Valid hosted-auth layout override |
 | `auth_appearance` | Valid hosted-auth appearance override (also themes the challenge itself) |
 | `kind` | Valid contact/support kind on `/contact` only |
 | Declared `registration.extra_fields` name | Registration attribution on `/auth` and `/register` only |
+
+#### Signing out of an app on its own host
+
+The hosted page keeps its own access and refresh tokens in the auth host's
+`localStorage`. An app on a different host cannot clear them, so after the
+app's own sign-out a plain `/auth` visit silently refreshes them and signs the
+same person back in. Send a signed-out visitor to:
+
+```
+GET <auth origin>/auth?redirect=<app url>&signed_out=1&force_reauth=1
+```
+
+- `signed_out=1` clears the page's stored tokens before the session check,
+  skips that check, and shows "You're signed out." above the sign-in form.
+  It never navigates on its own.
+- `force_reauth=1` keeps older django-mojo versions, which ignore
+  `signed_out`, showing the form instead of signing the person back in.
+- `redirect` follows the usual rules.
+
+It clears only the hosted page's browser storage. Tokens already issued stay
+valid until they expire; `POST /api/auth/sessions/revoke` ends every session of the account.
 
 An attribution name is eligible only when the resolved auth config declares it;
 the legacy server capture setting alone is not enough. Both visible and
