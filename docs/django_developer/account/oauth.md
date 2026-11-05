@@ -56,10 +56,17 @@ Key files:
 GOOGLE_CLIENT_ID     = "your-client-id.apps.googleusercontent.com"
 GOOGLE_CLIENT_SECRET = "your-client-secret"
 
-# The URL Google redirects back to after login.
-# Must match an authorised redirect URI in Google Cloud Console.
-OAUTH_REDIRECT_URI = "https://your-app.example.com/api/oauth/google/complete"
+# Optional: the frontend page the browser lands on after sign-in.
+# This is NOT the URL you register with the provider (see below).
+OAUTH_REDIRECT_URI = "https://your-app.example.com/auth/oauth/google/complete"
 ```
+
+Every provider redirects back to the backend, never straight to your page.
+Register `https://<login host>/api/auth/oauth/<provider>/callback` in the
+provider's console, once for each host your login page is served from. The
+callback then sends the browser on to `OAUTH_REDIRECT_URI` (or the
+`redirect_uri` the page passed to `/begin`). The Admin Sign-in page lists the
+exact callback URLs to register: see [Sign-in Setup](signin_setup.md#provider-consoles).
 
 ### Apple Settings
 

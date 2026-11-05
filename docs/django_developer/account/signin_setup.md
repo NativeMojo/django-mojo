@@ -73,6 +73,55 @@ The provider callback is `<origin>/api/auth/oauth/<provider>/callback`, where
 `ALLOWED_REDIRECT_URLS` origins first, then `BASE_URL`, then the Admin's own
 origin — and the matching domains (Apple's Services ID wants both).
 
+## Provider consoles
+
+Open Admin → Sign-in. Each card shows the callback URLs and domains to
+register. Register **every** callback URL listed, not only the first: a
+sign-in that starts from an origin whose callback is missing fails at the
+provider. Paste the values into the card, switch it on and save. The next
+sign-in uses them, with no deploy or restart.
+
+**Google** (Google Cloud Console → Google Auth Platform → Clients):
+1. Register the app with Google Auth (its branding) if the project has not;
+   the console asks for this before it creates a client.
+2. Click **Create Client** and choose the **Web application** type.
+3. Add each callback URL under **Authorized redirect URIs**. Google requires
+   HTTPS (localhost is exempt) and refuses raw IP hosts; a change can take
+   from 5 minutes to a few hours to apply.
+4. Paste the client ID and client secret into the card. Google shows the full
+   secret only when the client is created.
+
+**Apple** (Apple Developer → Certificates, Identifiers & Profiles):
+1. Enable **Sign in with Apple** on your app's primary App ID.
+2. Under Identifiers, add a **Services ID** (a reverse-domain identifier),
+   select **Sign in with Apple**, click **Configure**, choose the primary App
+   ID, and under **Website URLs** enter each domain and each callback URL the
+   card lists, comma-separated.
+3. Under Keys, create a key with Sign in with Apple enabled and download the
+   `.p8`. Apple lets you download it only once.
+4. Paste your Team ID, the Services ID's identifier (as **Services ID**), the
+   key identifier (shown below the key's name, as **Key ID**) and the whole
+   `.p8` file into the card.
+
+**GitHub** (Settings → Developer settings → OAuth Apps → New OAuth App):
+1. Set **Authorization callback URL** to a callback URL from the card. An
+   OAuth app accepts up to 10 callback URLs, so add every one the card lists.
+2. Generate a client secret.
+3. Paste the **Client ID** and **Client secret** into the card.
+
+**Microsoft:** see [OAuth](oauth.md#microsoft-settings).
+
+## What the on/off switch does
+
+The switch shows or hides the provider's button on the hosted login page by
+editing the system `login.methods` and `registration.methods`. It is not an
+API restriction (Ian's direction, NativeMojo #9275): `/begin` for Google,
+Apple or GitHub with no group still starts sign-in while they are switched
+off. A request that names a group still goes through
+`auth_config.assert_login_method` against the group's resolved methods, which
+inherit the system switch unless the group sets its own. Microsoft, off by
+default, is refused at `/begin` with no group until it is switched on.
+
 ## Authority
 
 `set_auth_safe_fields` accepts a live User with `is_superuser`, global
