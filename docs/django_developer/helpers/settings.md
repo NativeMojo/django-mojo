@@ -53,7 +53,9 @@ The profile comes from `resolve_profile(VAR_ROOT)` in
 `mojo.helpers.settings.helper`: the stripped contents of `var/profile`, or
 `local` when that file does not exist. Every process imports settings this
 way: ASGI, the job engine, `manage.py` (and so `migrate`) and `bin/cron.py`.
-Both provisioning paths write `prod` before anything starts.
+Stage 1 and the skeleton's `ec2_deploy.sh` write `prod` before the app
+starts; a golden-image clone missing the marker gets it on first boot, after
+which `mojo-asgi` and the job engines are restarted onto it.
 
 ### Requiring a profile (opt-in)
 
