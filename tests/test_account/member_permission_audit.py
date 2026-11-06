@@ -376,3 +376,70 @@ def test_positional_update_fields(opts):
             f"expected one record adding review_grant, got {[r.log for r in recs]}"
     finally:
         _cleanup(group, actor, target)
+
+
+@th.django_unit_test("member audit: positional update_fields with keyword None follows Django's choice")
+def test_mixed_positional_and_keyword_none(opts):
+    import warnings
+    actor, target, group, member = _fixture(opts, actor_perms=None)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            # Django 5.2 takes the positional value when the keyword is left at
+            # its default, so these save what the positional slot names.
+            member.permissions["review_grant"] = True
+            member.save(False, False, None, [], update_fields=None)
+            assert _stored(member)["permissions"] == {}, \
+                f"mixed empty update_fields must save nothing, stored {_stored(member)!r}"
+            assert _records(member) == [], \
+                f"mixed empty update_fields must write no record, got {[r.log for r in _records(member)]}"
+
+            member.metadata = {"note": "mixed"}
+            member.save(False, False, None, ["metadata"], update_fields=None)
+            stored = _stored(member)
+            assert stored["permissions"] == {}, \
+                f"mixed metadata-only save must not store permissions, got {stored['permissions']!r}"
+            assert stored["metadata"] == {"note": "mixed"}, f"metadata must be stored, got {stored['metadata']!r}"
+            assert _records(member) == [], \
+                f"mixed metadata-only save must write no record, got {[r.log for r in _records(member)]}"
+
+            member.metadata = {"note": "mixed-gen"}
+            member.save(False, False, None, (f for f in ["metadata"]), update_fields=None)
+            stored = _stored(member)
+            assert stored["permissions"] == {}, \
+                f"mixed metadata-only generator must not store permissions, got {stored['permissions']!r}"
+            assert stored["metadata"] == {"note": "mixed-gen"}, \
+                f"metadata must be stored, got {stored['metadata']!r}"
+            assert _records(member) == [], \
+                f"mixed metadata-only generator must write no record, got {[r.log for r in _records(member)]}"
+
+            member.save(False, False, None, (f for f in ["permissions"]), update_fields=None)
+        assert _stored(member)["permissions"] == {"review_grant": True}, \
+            f"mixed generator naming permissions must save the grant, stored {_stored(member)!r}"
+        recs = _records(member)
+        assert len(recs) == 1 and _body(recs[0])["added"] == ["review_grant"], \
+            f"expected one record adding review_grant, got {[r.log for r in recs]}"
+    finally:
+        _cleanup(group, actor, target)
+
+
+@th.django_unit_test("member audit: update_fields given twice still raises and writes nothing")
+def test_duplicate_update_fields_raises(opts):
+    import warnings
+    actor, target, group, member = _fixture(opts, actor_perms=None)
+    try:
+        member.permissions["review_grant"] = True
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                member.save(False, False, None, [], update_fields=["permissions"])
+            except TypeError as err:
+                assert "multiple values" in str(err), f"expected Django's duplicate-argument error, got {err}"
+            else:
+                raise AssertionError("update_fields given positionally and by keyword must raise TypeError")
+        assert _stored(member)["permissions"] == {}, \
+            f"a refused save must store nothing, stored {_stored(member)!r}"
+        assert _records(member) == [], \
+            f"a refused save must write no record, got {[r.log for r in _records(member)]}"
+    finally:
+        _cleanup(group, actor, target)
