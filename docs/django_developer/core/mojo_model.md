@@ -615,11 +615,15 @@ def set_status(self, value):
 ### How it works
 
 1. Any key in `POST_SAVE_ACTIONS` found in `request.DATA` is held aside — it is **never written to the model**.
-2. The model is saved normally with all other fields.
-3. After save, the framework calls `self.on_action_<key>(value)` for each held-aside key.
+2. If the request carries other field data, or creates the row, the model is saved first with all of it. A request with **only** action keys on an existing row skips this save.
+3. After that, the framework calls `self.on_action_<key>(value)` for each held-aside key.
 4. If the handler returns a non-`None` dict, that dict is used as the API response instead of the normal serialized instance. Return a plain dict — the framework wraps it automatically (see [Return Values](decorators.md#return-values)).
 
 The default value is `["action"]`, meaning a field named `action` in any POST request is automatically treated as a post-save trigger.
+
+**Transport keys are not field data.** The request parser merges the query string into `request.DATA`, so `graph`, `group`, `group_uuid` and `_mtab` reach the save. On an existing row they do not count as fields when they would write nothing: the model has no field of that name, or `group` is the id the row already holds. So `POST /api/group/5?graph=basic&group=5` with `{"realtime_message": {...}}` runs the action without the generic pre-save. This is about `on_rest_save` only: the request dispatcher still calls `Group.touch()` on a group named by `group` or `group_uuid`, which saves that group when its last-activity time is due. A different `group` id still re-parents the row through its normal permission check, and a model's own `set_<key>` setter still runs.
+
+**The pre-save uses the row as it was loaded.** A body that mixes fields with an action saves the whole loaded row first, then runs the action, so it can write back values someone else changed in between. An action that needs a consistent row must lock and re-read it itself (`select_for_update()` inside `transaction.atomic()`) and save only the fields it changes.
 
 ### Setup
 

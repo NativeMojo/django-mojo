@@ -46,6 +46,13 @@ _GRAPH_UNSET = object()
 # including the encrypted secrets column (MojoSecrets.mojo_secrets). A model's
 # RestMeta.NO_SAVE_FIELDS adds to these (see get_no_save_fields).
 DEFAULT_NO_SAVE_FIELDS = ("id", "pk", "created", "uuid", "mojo_secrets")
+# Request-transport keys the parser merges into request.DATA from the query
+# string: `group` / `group_uuid` bind request.group (decorators/http.py),
+# `_mtab` is the middleware's tab id (middleware/mojo.py) and `graph` picks the
+# response graph (on_rest_get). On an existing row, one that would write
+# nothing is not field data, so it cannot turn an action-only request into a
+# full save of the loaded (possibly stale) row (#9250).
+REST_TRANSPORT_KEYS = frozenset({"graph", "group", "group_uuid", "_mtab"})
 # The only framework names RestMeta.ALLOW_SAVE_FIELDS can hand back.
 ALLOWABLE_SAVE_FIELDS = ("created", "uuid")
 
@@ -533,6 +540,30 @@ class MojoModel:
             if name not in allowed and name not in fields:
                 fields.append(name)
         return fields
+
+    def _rest_transport_noop(self, key, value):
+        """True when `key` is a transport key that would write nothing here.
+
+        Only on an existing row, only for REST_TRANSPORT_KEYS, and never when
+        the model has its own `set_<key>` setter. With no model field of that
+        name the key writes nothing. A many-to-one field (e.g. a `group` FK)
+        writes nothing only when the value is a plain id equal to the stored
+        one; a different id, a dict, a list or None takes the normal path, so
+        re-parenting and its permission check are unchanged (#9250).
+        """
+        if self.pk is None or key not in REST_TRANSPORT_KEYS:
+            return False
+        if callable(getattr(self, f"set_{key}", None)):
+            return False
+        field = self.get_model_field(key)
+        if field is None:
+            return True
+        if not (field.is_relation and field.many_to_one):
+            return False
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            return False
+        current = getattr(self, field.attname, None)
+        return current is not None and str(value).strip() == str(current)
 
     @classmethod
     def get_rest_meta_graph(cls, graph_name):
@@ -2270,6 +2301,8 @@ class MojoModel:
                 continue
             if key in post_save_actions:
                 post_save_data[key] = value
+                continue
+            if self._rest_transport_noop(key, value):
                 continue
             actions_only = False
             # Related-model permission evaluation may bind request.group to the
