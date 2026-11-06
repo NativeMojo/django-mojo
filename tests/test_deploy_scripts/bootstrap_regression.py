@@ -1039,8 +1039,9 @@ def test_update_replays_only_the_failed_transient_unit_tail(opts):
                      "journal replay may invoke an interactive pager")
         th.assert_in("--quiet", journal_command,
                      "journal replay may emit journalctl notices")
-        th.assert_in("--lines=2000", journal_command,
-                     "journal replay read was not bounded")
+        th.assert_true("--lines" not in journal_command,
+                       "journal replay truncated the unit's output before the "
+                       "excerpt was chosen")
 
         unavailable, _ = _replay_failed_unit(root, rows, JOURNAL_RC="1")
         th.assert_eq(unavailable.returncode, 23,
@@ -1135,24 +1136,41 @@ def test_update_replay_is_bounded_and_last_recovery_line_wins(opts):
     th.assert_eq(lines[0], _REPLAY_HEADER, "the fixed failure summary changed")
     th.assert_in("Deployment failed during framework_install; rollback completed", lines,
                  "the recovery outcome was lost")
-    th.assert_in("--lines=2000", journal_command, "journal replay read was not bounded")
-
-    # Inside the 2000-entry window the last marker anchors the excerpt.
-    rows = [("stdout", "Deployment failed during candidate_checkout; recovering")]
-    rows += [("stdout", "forged neighbour %d" % number) for number in range(30)]
-    rows += [("stdout", "real cause one"), ("stdout", "real cause two"),
-             ("stdout", "Deployment failed during framework_install; recovering")]
-    rows += [("stdout", "pip output %d" % number) for number in range(50)]
-    rows += [("stdout", "Deployment failed during framework_install; rollback completed")]
-    with tempfile.TemporaryDirectory() as root:
-        failed, _ = _replay_failed_unit(root, rows)
-    lines = failed.stderr.splitlines()
-    th.assert_true(len(lines) <= 10, "failure replay exceeded ten lines")
     th.assert_in("real cause one", lines, "a forged early marker displaced the cause")
     th.assert_in("real cause two", lines, "a forged early marker displaced the cause")
+    th.assert_in("Deployment failed during framework_install; recovering", lines,
+                 "the last recovery line was lost")
     th.assert_true(
         "Deployment failed during candidate_checkout; recovering" not in lines,
         "a forged early marker anchored the excerpt")
+    th.assert_true("--lines" not in journal_command,
+                   "journal replay truncated the unit's output before the "
+                   "excerpt was chosen")
+
+
+@th.django_unit_test()
+def test_update_replay_keeps_cause_however_much_recovery_prints(opts):
+    """#3428: no recovery volume pushes the cause out (Brenda's review 174763)."""
+    for recovery_rows in (1998, 2000, 4000, 20000):
+        rows = [("stdout", "Host key verification failed."),
+                ("stdout", "fatal: Could not read from remote repository."),
+                ("stdout", "Deployment failed during candidate_checkout; recovering")]
+        rows += [("stdout", "recovery output %d" % number)
+                 for number in range(recovery_rows)]
+        rows += [("stdout", "Deployment failed during candidate_checkout; rollback completed")]
+        with tempfile.TemporaryDirectory() as root:
+            failed, _ = _replay_failed_unit(root, rows)
+        th.assert_eq(failed.returncode, 23, failed.stderr)
+        lines = failed.stderr.splitlines()
+        th.assert_true(len(lines) <= 10, "failure replay exceeded ten lines")
+        th.assert_eq(lines[0], _REPLAY_HEADER, "the fixed failure summary changed")
+        for expected in (
+                "Host key verification failed.",
+                "fatal: Could not read from remote repository.",
+                "Deployment failed during candidate_checkout; recovering",
+                "Deployment failed during candidate_checkout; rollback completed"):
+            th.assert_in(expected, lines, "%d recovery lines pushed out: %s"
+                         % (recovery_rows, expected))
 
 
 @th.django_unit_test()
