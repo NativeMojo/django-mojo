@@ -356,6 +356,11 @@ rollback_and_exit() {
     ROLLING_BACK=1
     trap - ERR TERM INT HUP
     phase="$(failure_phase)"
+    # One fixed line marks where recovery starts. The launcher's bounded
+    # journal replay keeps the lines just before it, where the cause is,
+    # however much recovery prints afterwards (#3428). It must never stop
+    # rollback, so a failed write is ignored.
+    printf '%s\n' "Deployment failed during $phase; recovering" >&2 || :
     [ ! -f "$ACTIVE/activation_succeeded" ] || publication_recovery=1
     if rollback_transaction; then
         if [ "$publication_recovery" = "1" ]; then
@@ -439,8 +444,26 @@ if [ "$TRANSACTION" = "0" ] && [ "${MOJO_DEPLOY_NO_SYSTEMD:-0}" != "1" ]; then
         status=$?
     fi
     printf '%s\n' 'Deployment transaction failed; recent journal follows:' >&2
-    journalctl "_SYSTEMD_UNIT=${unit}.service" --boot=0 --output=cat \
-        --no-pager --quiet --lines=9 2>/dev/null | tail -n 9 >&2 || true
+    # Only the unit's own output (_TRANSPORT=stdout), never the sudo and PAM
+    # syslog records its cgroup also writes. Keep at most nine non-blank
+    # lines: five before the LAST recovery line, that line, and the last
+    # three after it; with no recovery line, the last nine (#3428).
+    journalctl "_SYSTEMD_UNIT=${unit}.service" _TRANSPORT=stdout --boot=0 \
+        --output=cat --no-pager --quiet --lines=2000 2>/dev/null | awk '
+        /^[[:space:]]*$/ { next }
+        { line[++n] = $0 }
+        /^Deployment failed during [a-z_]+; recovering$/ { mark = n }
+        END {
+            if (mark) {
+                first = mark - 5; if (first < 1) first = 1
+                for (i = first; i <= mark; i++) print line[i]
+                first = n - 2; if (first <= mark) first = mark + 1
+                for (i = first; i <= n; i++) print line[i]
+            } else {
+                first = n - 8; if (first < 1) first = 1
+                for (i = first; i <= n; i++) print line[i]
+            }
+        }' >&2 || true
     exit "$status"
 fi
 
