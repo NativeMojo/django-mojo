@@ -42,6 +42,34 @@ def test_client_rate_limit(opts):
     assert statuses[60] == 429, f"the 61st report must be 429, got {statuses[60]}"
 
 
+@th.django_unit_test("4125 T12b: malformed-group reports count against the limit and file nothing")
+def test_malformed_group_rate_limited(opts):
+    from mojo.apps.incident.models.event import Event
+    opts.client.logout()
+    _clear()
+    marker = f"cr4125t12b{opts.tag}"
+    url = f"{ROUTE}?m={marker}&group=not-an-integer"
+    body = {"category": f"frontend:testit_{opts.tag}_t12b", "message": "bad group"}
+    statuses = []
+    try:
+        opts.client.session.cookies.clear()
+        first = opts.client.post(url, body)
+        filed = Event.objects.filter(metadata__http_query_string__icontains=marker).count()
+        # Checked before the loop so a broken route files one event, not 61.
+        assert filed == 0, f"a malformed group filed {filed} event(s) on the first request"
+        statuses.append(first.status_code)
+        for _ in range(60):
+            opts.client.session.cookies.clear()
+            statuses.append(opts.client.post(url, body).status_code)
+    finally:
+        _clear()
+    assert all(code == 400 for code in statuses[:60]), \
+        f"the first 60 malformed reports must be refused with 400, got {sorted(set(statuses[:60]))}"
+    assert statuses[60] == 429, f"the 61st malformed report must hit the route limit (429), got {statuses[60]}"
+    filed = Event.objects.filter(metadata__http_query_string__icontains=marker).count()
+    assert filed == 0, f"malformed-group reports filed {filed} event(s)"
+
+
 @th.django_unit_test("4125 T13: the same report twice files one event and two identical receipts")
 def test_repeat_suppressed_same_receipt(opts):
     opts.client.logout()

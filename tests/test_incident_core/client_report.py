@@ -167,6 +167,52 @@ def test_invalid_category_refused_without_incident(opts):
     assert errors == 0, f"a refusal filed {errors} error event(s) of its own"
 
 
+@th.django_unit_test("4125 T4b: a malformed group is refused by the route and files nothing")
+def test_malformed_group_refused_without_incident(opts):
+    # Through the real dispatcher: a non-integer or non-scalar `group` must be
+    # answered by the route itself, not by the dispatcher's level-8 rest_error.
+    from mojo.apps.incident.models.event import Event
+    opts.client.logout()
+    category = _category(opts, "t4b")
+    cases = (
+        ("query string", f"cr4125t4bq{opts.tag}", "group=not-an-integer", {}),
+        ("JSON list", f"cr4125t4bl{opts.tag}", "", {"group": ["not-an-integer"]}),
+    )
+    for label, marker, extra, body in cases:
+        query = f"m={marker}" + (f"&{extra}" if extra else "")
+        resp = opts.client.post(f"{ROUTE}?{query}", dict(body, category=category, message="x"))
+        assert resp.status_code == 400, f"{label}: a malformed group must be refused with 400, got {resp.status_code}"
+        assert resp.response.get("status") is False, \
+            f"{label}: the route, not the dispatcher, must answer the malformed group: {resp.response}"
+        filed = Event.objects.filter(metadata__http_query_string__icontains=marker).count()
+        assert filed == 0, f"{label}: a malformed group filed {filed} event(s)"
+
+
+@th.django_unit_test("4125 T4c: a confined API key still cannot route to another group")
+def test_confined_key_group_check_kept(opts):
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.models.event import Event
+    name = f"cr4125_key_{opts.tag}"
+    ApiKey.objects.filter(name=name).delete()
+    _, token = ApiKey.create_for_group(group=opts.group, name=name, permissions={})
+    headers = {"Authorization": f"apikey {token}", "Content-Type": "application/json"}
+    category = _category(opts, "t4c")
+    marker = f"cr4125t4c{opts.tag}"
+    url = f"{opts.client.host}{ROUTE.lstrip('/')}"
+    foreign = opts.client.session.post(
+        url, params={"m": marker, "group": opts.foreign.pk},
+        json={"category": category, "message": "x"}, headers=headers)
+    assert foreign.status_code == 403, \
+        f"a key routing to another tenant's group must get the dispatcher's 403, got {foreign.status_code}"
+    malformed = opts.client.session.post(
+        url, params={"m": marker, "group": "not-an-integer"},
+        json={"category": category, "message": "x"}, headers=headers)
+    assert malformed.status_code == 400, f"a key's malformed group must be 400, got {malformed.status_code}"
+    filed = Event.objects.filter(metadata__http_query_string__icontains=marker).count()
+    assert filed == 0, f"refused key requests filed {filed} event(s)"
+    ApiKey.objects.filter(name=name).delete()
+
+
 @th.django_unit_test("4125 T5: bounds and the allowlist are enforced")
 def test_bounds_and_allowlist(opts):
     category = _category(opts, "t5")
