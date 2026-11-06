@@ -1026,8 +1026,30 @@ class _CountedAnthropicAdapter:
 
 
 @th.django_unit_test()
+def test_anthropic_reservation_fits_an_exact_budget(opts):
+    # Brenda's probe (175280): count 50 + margin is exactly 119, + max_tokens 8
+    # is 127. A minute limit of 127 must admit the call, not refuse it as
+    # request_exceeds_budget because of float rounding.
+    from mojo.apps.account.models import LLMRequest
+
+    policy = _guard_policy("anthropic")
+    policy["shared"]["tokens_minute"] = 127
+    policy["features"]["assistant"]["tokens_minute"] = 127
+    with _guard_case(policy) as case:
+        adapter = _CountedAnthropicAdapter(50, {
+            "input_tokens": 50, "output_tokens": 8, "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0})
+        _run_guard(case, lambda name, **kwargs: adapter,
+                   messages=[{"role": "user", "content": "hello " * 200}])
+        assert len(adapter.calls) == 1, \
+            f"a call whose exact reservation equals the limit must reach the provider once: {adapter.calls}"
+        row = LLMRequest.objects.get(operation=case["marker"])
+        assert row.reserved_tokens == 127, \
+            f"count 50 must reserve 119 + 8 = 127, got {row.reserved_tokens}"
+
+
+@th.django_unit_test()
 def test_anthropic_reservation_uses_count_and_ledger_records_estimate(opts):
-    import math
     from mojo.apps.account.models import LLMRequest
     from mojo.apps.account.services import llm_safety
 
@@ -1041,8 +1063,7 @@ def test_anthropic_reservation_uses_count_and_ledger_records_estimate(opts):
             and adapter.counted[0]["timeout"] == llm_safety.COUNT_TIMEOUT_SECONDS, \
             f"the guard must count the exact request on the route model: {adapter.counted}"
         row = LLMRequest.objects.get(operation=case["marker"])
-        expected = math.ceil(10 * llm_safety.ESTIMATE_MARGIN) \
-            + llm_safety.ESTIMATE_PAD_TOKENS + 8
+        expected = 11 + llm_safety.ESTIMATE_PAD_TOKENS + 8  # ceil(10 x 1.10) = 11
         assert row.reserved_tokens == expected, \
             f"Anthropic text must reserve count + margin + max_tokens ({expected}), got {row.reserved_tokens}"
         assert row.estimated_input_tokens == 10 and row.estimate_source == "count", \

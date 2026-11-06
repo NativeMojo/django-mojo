@@ -62,6 +62,19 @@ def test_count_used_with_margin(opts):
 
 
 @th.django_unit_test()
+def test_count_margin_is_exact_integer_ceiling(opts):
+    # 50 x 1.10 is 55.000000000000007 in binary floating point, so a float
+    # ceil reserved 120 input tokens where the approved formula says 119.
+    adapter = _CountingAdapter(50)
+    reserved, estimated, source = _estimate(adapter, size=4000)
+    assert (reserved, estimated, source) == (119, 50, "count"), \
+        f"count 50 must reserve ceil(50 x 1.10) + 64 = 119, got {(reserved, estimated, source)}"
+    wrong = [n for n in range(1, 5001)
+             if _estimate(_CountingAdapter(n), size=100000)[0] != (n * 11 + 9) // 10 + 64]
+    assert not wrong, f"the margin must be the exact ceiling of count x 1.10 + 64; off for counts {wrong[:10]}"
+
+
+@th.django_unit_test()
 def test_count_failure_falls_back_to_bytes(opts):
     from mojo.helpers.llm_providers.base import ProviderError
 
