@@ -447,21 +447,30 @@ if [ "$TRANSACTION" = "0" ] && [ "${MOJO_DEPLOY_NO_SYSTEMD:-0}" != "1" ]; then
     # Only the unit's own output (_TRANSPORT=stdout), never the sudo and PAM
     # syslog records its cgroup also writes. Keep at most nine non-blank
     # lines: five before the LAST recovery line, that line, and the last
-    # three after it; with no recovery line, the last nine (#3428).
+    # three after it; with no recovery line, the last nine (#3428). The
+    # output is read whole and streamed through fixed-size buffers, so no
+    # amount of recovery output can push the cause out; the unit's runtime
+    # and stop timeouts bound how much there is to read.
     journalctl "_SYSTEMD_UNIT=${unit}.service" _TRANSPORT=stdout --boot=0 \
-        --output=cat --no-pager --quiet --lines=2000 2>/dev/null | awk '
+        --output=cat --no-pager --quiet 2>/dev/null | awk '
         /^[[:space:]]*$/ { next }
-        { line[++n] = $0 }
-        /^Deployment failed during [a-z_]+; recovering$/ { mark = n }
+        {
+            if ($0 ~ /^Deployment failed during [a-z_]+; recovering$/) {
+                kept = (n < 5) ? n : 5
+                for (i = 0; i < kept; i++) before[i] = last5[(n - kept + i) % 5]
+                mark = $0; marked = 1; after = 0
+            } else if (marked) {
+                last3[after % 3] = $0; after++
+            }
+            last5[n % 5] = $0; last9[n % 9] = $0; n++
+        }
         END {
-            if (mark) {
-                first = mark - 5; if (first < 1) first = 1
-                for (i = first; i <= mark; i++) print line[i]
-                first = n - 2; if (first <= mark) first = mark + 1
-                for (i = first; i <= n; i++) print line[i]
+            if (marked) {
+                for (i = 0; i < kept; i++) print before[i]
+                print mark
+                for (i = (after < 3) ? 0 : after - 3; i < after; i++) print last3[i % 3]
             } else {
-                first = n - 8; if (first < 1) first = 1
-                for (i = first; i <= n; i++) print line[i]
+                for (i = (n < 9) ? 0 : n - 9; i < n; i++) print last9[i % 9]
             }
         }' >&2 || true
     exit "$status"
