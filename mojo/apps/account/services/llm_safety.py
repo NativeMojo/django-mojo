@@ -35,6 +35,9 @@ BREAKER_KEYS = frozenset({
     "auth_failures", "rate_failures", "server_failures", "open_seconds",
 })
 WINDOWS = (("minute", 60), ("hour", 3600), ("day", 86400))
+COUNT_TIMEOUT_SECONDS = 3
+ESTIMATE_MARGIN_PERCENT = 10  # integer math: a float 1.10 rounds 50 x 1.10 up to 56
+ESTIMATE_PAD_TOKENS = 64
 EXPECTED_POLICY_HASH_KEY = "LLM_SAFETY_POLICY_EXPECTED_HASH"
 AUTONOMOUS_TRIAGE_KEY = "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED"
 AUTONOMOUS_TRIAGE_WATERMARK_KEY = "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT"
@@ -50,7 +53,7 @@ SAFE_CODES = frozenset({
     "provider_unavailable", "provider_unsupported", "route_missing",
     "safety_unavailable", "triage_incomplete", "credential_mismatch",
     "catalogue_unavailable", "catalogue_incomplete", "no_compatible_model",
-    "refresh_in_progress", "refresh_throttled",
+    "refresh_in_progress", "refresh_throttled", "request_exceeds_budget",
 })
 
 
@@ -98,7 +101,8 @@ def _record_burn(provider, feature, reserved_tokens, shared, limits):
 def _signal(provider, feature, code):
     if code not in {
             "breaker_open", "breaker_half_open", "budget_exhausted",
-            "concurrency_exhausted", "policy_mixed", "permit_unavailable"}:
+            "concurrency_exhausted", "policy_mixed", "permit_unavailable",
+            "request_exceeds_budget"}:
         return
     try:
         from mojo.apps.incident import report_event_suppressed
@@ -447,7 +451,7 @@ for i=3,#KEYS do
   local current = tonumber(redis.call('GET', KEYS[i]) or '0')
   local offset = 6 + ((i - 3) * 3)
   if current + tonumber(ARGV[offset]) > tonumber(ARGV[offset + 1]) then
-    return {0, 'budget'}
+    return {0, 'budget', i}
   end
 end
 redis.call('ZADD', KEYS[1], tonumber(ARGV[3]), ARGV[1])
@@ -472,6 +476,14 @@ if excess > 0 then
     if string.find(KEYS[i], ':tokens:') then
       local current = tonumber(redis.call('GET', KEYS[i]) or '0')
       redis.call('SET', KEYS[i], math.max(0, current - excess), 'KEEPTTL')
+    end
+  end
+elseif excess < 0 then
+  -- Usage above the reservation is charged to the windows still live; an
+  -- expired window is never recreated without a TTL.
+  for i=3,#KEYS do
+    if string.find(KEYS[i], ':tokens:') and redis.call('EXISTS', KEYS[i]) == 1 then
+      redis.call('INCRBY', KEYS[i], -excess)
     end
   end
 end
@@ -500,6 +512,10 @@ def _permit_keys(provider, fingerprint, feature, now):
 def acquire_permit(redis, provider, fingerprint, feature, shared, limits,
                    reserved_tokens, owner=None, now=None):
     now = int(now or time.time())
+    if reserved_tokens > min(shared["tokens_minute"], limits["tokens_minute"]):
+        # It can never fit, whatever the windows hold: refuse permanently,
+        # before any lease or budget key is written.
+        _deny("request_exceeds_budget")
     owner = owner or secrets.token_hex(16)
     timeout = min(shared["timeout_seconds"], limits["timeout_seconds"])
     keys = _permit_keys(provider, fingerprint, feature, now)
@@ -517,8 +533,24 @@ def acquire_permit(redis, provider, fingerprint, feature, shared, limits,
         _deny("permit_unavailable")
     code = result[1].decode("utf-8") if isinstance(result[1], bytes) else result[1]
     if int(result[0]) != 1:
-        _deny("budget_exhausted" if code == "budget" else "concurrency_exhausted")
+        if code != "budget":
+            _deny("concurrency_exhausted")
+        _deny("budget_exhausted", retry_after=_retry_after(result, now))
     return {"keys": keys, "owner": owner, "reserved_tokens": reserved_tokens}
+
+
+def _retry_after(result, now):
+    """Seconds until the first refusing window rolls over, or None."""
+    try:
+        index = int(result[2])
+    except (IndexError, TypeError, ValueError):
+        return None
+    if index < 3:
+        return None
+    # Key order is _permit_keys': two leases, then per scope and kind the
+    # minute, hour and day windows.
+    ttl = WINDOWS[(index - 3) % len(WINDOWS)][1]
+    return ttl - (now % ttl)
 
 
 def release_permit(redis, permit, actual_tokens=0):
@@ -640,6 +672,29 @@ def _contains_image(value):
     return False
 
 
+def _input_estimate(adapter, provider_name, messages, system, tools,
+                    resolved_model, serialized):
+    """Return (reserved_input, estimated_input, source) for one call.
+
+    Anthropic text and tool calls reserve the provider's own count plus a
+    margin, never more than the byte length. Everything else, and any count
+    that fails, reserves the byte length exactly as before.
+    """
+    fallback = (len(serialized), 0, "bytes")
+    if provider_name != "anthropic" or _contains_image(messages):
+        return fallback
+    try:
+        count = adapter.count_input_tokens(
+            messages, resolved_model, system=system, tools=tools,
+            timeout=COUNT_TIMEOUT_SECONDS)
+    except Exception:
+        return fallback
+    if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+        return fallback
+    margin = -(-count * (100 + ESTIMATE_MARGIN_PERCENT) // 100) + ESTIMATE_PAD_TOKENS
+    return min(len(serialized), margin), count, "count"
+
+
 def _required_capabilities(messages, tools, cache_enabled):
     required = {"text"}
     if tools:
@@ -744,7 +799,10 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
             policy["shared"], limits)
         generation, breaker_owner = _breaker_lease(
             provider_name, fingerprint, policy)
-        reserved_tokens = len(serialized) + max_tokens
+        reserved_input, estimated_input, estimate_source = _input_estimate(
+            adapter, provider_name, messages, system, tools, resolved_model,
+            serialized)
+        reserved_tokens = reserved_input + max_tokens
         permit = acquire_permit(
             redis, provider_name, fingerprint, feature, policy["shared"],
             limits, reserved_tokens)
@@ -759,6 +817,7 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
             feature=feature, operation=str(operation)[:64], provider=provider_name,
             model=resolved_model, credential_fingerprint=fingerprint,
             policy_hash=policy["hash"], reserved_tokens=reserved_tokens,
+            estimated_input_tokens=estimated_input, estimate_source=estimate_source,
             **scalar_context)
     except Exception:
         release_permit(redis, permit)

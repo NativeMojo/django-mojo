@@ -43,11 +43,14 @@ def on_assistant_message(request):
 
     if "error" in result:
         status_code = result.get("status_code", 400)
-        return JsonResponse({
+        payload = {
             "status": False,
             "error": result["error"],
             "conversation_id": result.get("conversation_id"),
-        }, status=status_code)
+        }
+        if result.get("retry_after"):
+            payload["retry_after"] = result["retry_after"]
+        return JsonResponse(payload, status=status_code)
 
     data = {
         "response": result["response"],

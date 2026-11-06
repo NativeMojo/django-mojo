@@ -23,7 +23,7 @@ _LLM_LIMITS = {
     "tokens_hour": 2000000,
     "tokens_day": 10000000,
     "concurrency": 4,
-    "max_input_bytes": 200000,
+    "max_input_bytes": 150000,
     "max_output_tokens": 8192,
     "timeout_seconds": 60,
     "max_loop_calls": 25,
@@ -270,6 +270,62 @@ fingerprint or raw error.
 `LLMRequest`, `LLMCircuitBreaker`, and `IncidentLLMAttempt` have no generic
 per-row REST surface. Operators receive aggregates only.
 
+## How token budgets are charged
+
+Every `tokens_*` limit counts tokens: input, output, cache read and cache
+write, all at full weight. Each call reserves its input estimate plus the full
+`max_tokens` before it runs, and settles against the usage the provider
+reports when it finishes.
+
+- **Anthropic text and tool calls.** The guard asks Anthropic's free
+  token-count endpoint for the exact request (messages, system prompt and
+  tools) on the resolved model, with a 3-second timeout. It reserves
+  `min(bytes, ceil(count × 1.10) + 64)` for the input, computed in integers
+  (count 50 gives exactly 119), where `bytes` is the length of the
+  serialized request. The count never raises a reservation
+  above today's byte bound. It is not counted as a request in the budget
+  windows and never touches the circuit breaker.
+- **Byte fallback.** Bedrock routes (Nova 2 Lite has no count endpoint),
+  requests containing images, and any count that fails, times out or returns
+  something other than a positive integer reserve the serialized byte length,
+  exactly as before.
+- **Output headroom** is always the full `max_tokens`.
+- **Settling.** Usage below the reservation is refunded. Usage above it is
+  charged at once to every token window that is still live. The one corner:
+  a call that outlives its minute window charges the excess to the hour and
+  day windows only, because an expired window is never recreated.
+- **Windows** are per provider and credential fingerprint, for the shared
+  envelope and the feature, so two features on one key share the shared
+  windows.
+- **Two budget codes.** A reservation above the smaller `tokens_minute`
+  (shared or feature) can never fit: it is refused with
+  `request_exceeds_budget`, permanently, before anything is written. A
+  reservation that would overfill a current window is refused with
+  `budget_exhausted` and `retry_after`: the seconds until the first refusing
+  window rolls over. `concurrency_exhausted` carries no hint.
+
+Each ledger row records `estimated_input_tokens` (the provider count, 0 for
+the byte fallback) and `estimate_source` (`count` or `bytes`). To compare the
+estimate with billed input on real traffic:
+
+```python
+from django.db.models import Avg, Count, F, Max, Min
+from mojo.apps.account.models import LLMRequest
+
+(LLMRequest.objects
+    .filter(status="succeeded", estimate_source="count", input_tokens__gt=0)
+    .annotate(billed=F("input_tokens") + F("cache_read_input_tokens")
+              + F("cache_creation_input_tokens"))
+    .values("feature", "model")
+    .annotate(calls=Count("id"),
+              mean_ratio=Avg(F("estimated_input_tokens") * 1.0 / F("billed")),
+              low=Min(F("estimated_input_tokens") * 1.0 / F("billed")),
+              high=Max(F("estimated_input_tokens") * 1.0 / F("billed"))))
+```
+
+A ratio near 1.0 means the count matches billed input; the 10% + 64 margin
+sits on top of it.
+
 ## Autonomous and explicit incident work
 
 `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED` is only the catch-all gate for event
@@ -388,7 +444,8 @@ and the [additive schema-2 owner API](../../web_developer/account/admin_portal/a
 
 `llm.call()` and `ask()` raise `LLMExecutionError(code, retry_after=None)`.
 Provider text is discarded. `retry_after` may be populated for a bounded
-provider rate-limit response. Stable codes are:
+provider rate-limit response, and for `budget_exhausted` (the seconds until the
+first refusing budget window rolls over). Stable codes are:
 
 - Controls/policy: `policy_invalid`, `policy_mixed`, `route_missing`,
   `emergency_stopped`, `control_state_unknown`, `credential_missing`,
@@ -397,8 +454,12 @@ provider rate-limit response. Stable codes are:
   `catalogue_unavailable`, `catalogue_incomplete`, `no_compatible_model`,
   `refresh_in_progress`, `refresh_throttled`.
 - Limits/persistence: `input_too_large`, `output_too_large`, `loop_limit`,
-  `budget_exhausted`, `concurrency_exhausted`, `permit_unavailable`,
-  `ledger_unavailable`, `ledger_persistence_unknown`.
+  `request_exceeds_budget`, `budget_exhausted`, `concurrency_exhausted`,
+  `permit_unavailable`, `ledger_unavailable`, `ledger_persistence_unknown`.
+
+`request_exceeds_budget` is permanent: the call alone is larger than the
+smallest `tokens_minute` limit, so retrying it can never succeed and incident
+work does not retry it. `budget_exhausted` is retryable after `retry_after`.
 - Circuit/provider: `breaker_open`, `breaker_half_open`,
   `provider_authentication`, `provider_billing_exhausted`,
   `provider_rate_limited`, `provider_timeout`, `provider_unavailable`,

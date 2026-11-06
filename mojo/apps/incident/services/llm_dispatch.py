@@ -229,7 +229,7 @@ def renew_lease(attempt_id, owner):
 PERMANENT_CODES = frozenset({
     "capability_unsupported", "context_invalid", "input_too_large",
     "model_mismatch", "operation_invalid", "output_too_large",
-    "provider_unsupported", "route_missing",
+    "provider_unsupported", "request_exceeds_budget", "route_missing",
 })
 
 

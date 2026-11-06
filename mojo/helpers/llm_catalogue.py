@@ -18,7 +18,7 @@ SAFE_ERRORS = frozenset({
     'breaker_open', 'breaker_half_open', 'permit_unavailable', 'control_state_unknown',
     'ledger_unavailable', 'ledger_persistence_unknown', 'catalogue_incomplete',
     'catalogue_unavailable', 'refresh_in_progress', 'refresh_throttled',
-    'safety_unavailable', 'no_compatible_model',
+    'safety_unavailable', 'no_compatible_model', 'request_exceeds_budget',
 })
 RELEASE_LOCK = """
 if redis.call('GET', KEYS[1]) == ARGV[1] then

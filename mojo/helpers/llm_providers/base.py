@@ -37,5 +37,14 @@ class ProviderAdapter:
     def list_models(self, timeout=None):
         raise NotImplementedError
 
+    def count_input_tokens(self, messages, model, system=None, tools=None,
+                           timeout=None):
+        """Provider-counted input tokens for this exact request, or None.
+
+        None means the provider has no free count; the guard then reserves
+        the serialized byte length instead.
+        """
+        return None
+
     def verify(self):
         raise NotImplementedError
