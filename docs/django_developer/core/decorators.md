@@ -191,9 +191,11 @@ def on_status(request):
 ### `@md.handles_invalid_group`
 For a public route that must stay inside its own limiter. Normally the
 dispatcher answers a malformed `group` (`?group=abc`, a list) with its own 400
-and a level-8 `rest_error` Event, before the route's decorators run. With this
-marker, placed directly under the route decorator, the dispatcher instead sets
-`request.invalid_group = True` and calls the route, which must refuse it. A
+and a level-8 `rest_error` Event (a JSON `1e309`, which no integer can hold,
+escapes as a 500), before the route's decorators run. With this marker, placed
+directly under the route decorator, the dispatcher instead sets
+`request.invalid_group = True` for all three and calls the route, which must
+refuse it. A
 well-formed id is resolved and confined to a restricted credential exactly as
 before. Used by `POST /api/incident/event/client` (#4125).
 

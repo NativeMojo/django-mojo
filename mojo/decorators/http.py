@@ -162,14 +162,18 @@ def dispatcher(request, *args, **kwargs):
             # request must not write to another tenant's row.
             if group is not None:
                 group.touch()
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError) as err:
             # TypeError: int() on a non-scalar (client sent a list/dict/null).
+            # OverflowError: int() on a JSON float infinity (1e309).
             # This block runs BEFORE dispatch_error_handler wraps the view, so
             # anything uncaught here escapes as a bare Django 500.
             if getattr(view, "_mojo_handles_invalid_group", False):
                 # The route refuses it inside its own limiter, with no Event.
                 request.invalid_group = True
                 return dispatch_error_handler(view)(request, *args, **kwargs)
+            if isinstance(err, OverflowError):
+                # Unmarked routes keep their existing behaviour for now.
+                raise
             if _events_on_errors():
                 rest.MojoModel.class_report_incident(
                     details=f"Permission denied: Invalid group ID -> {repr(request.DATA.group)[:200]}",

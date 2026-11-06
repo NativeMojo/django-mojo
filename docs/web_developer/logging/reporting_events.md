@@ -49,8 +49,8 @@ the server's Redis is down, crash reports are dropped.
 
 There is no event id: an accepted and a suppressed report look the same.
 Refusals: `400 {"status": false, "error": "..."}`, `413`, or `429`. A
-malformed `group` (not an integer) is a `400` like any other refusal: it counts
-against the same limit and files no event.
+malformed `group` (not an integer, or too large for one) is a `400` like any
+other refusal: it counts against the same limit and files no event.
 
 See [Frontend starter §7](../frontend_starter.md#7-client-error--event-reporting-incidents)
 for copyable `error`, `unhandledrejection` and React examples.
