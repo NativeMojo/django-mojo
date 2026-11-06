@@ -2796,7 +2796,9 @@ def on_account_security_events(request):
             del params[key]
     request.GET = params
 
-    qs = Event.objects.filter(q, uid=request.user.pk)
+    # A submitted event (#4125, metadata.reporter) is something a caller
+    # reported, not something that happened to this account: never history.
+    qs = Event.objects.filter(q, uid=request.user.pk).exclude(metadata__has_key="reporter")
     if group is not None:
         # Triple-guarded so nothing sneaks into the account exception: the
         # category prefix keeps login/sessions rows out, the null FK keeps

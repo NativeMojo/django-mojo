@@ -61,7 +61,8 @@ delete the key to revoke it.
 
 ## Never report one telemetry event per failure
 
-Error/telemetry reporting endpoints (`/api/account/bouncer/event`, etc.) are
+Error/telemetry reporting endpoints (`/api/account/bouncer/event`,
+`/api/incident/event/client` — 60/min per IP, 20/min per session — etc.) are
 limited per session. If your app reports client-side errors:
 
 - **Sample and dedupe** — one report per distinct error per few minutes, not

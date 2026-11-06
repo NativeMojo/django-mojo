@@ -162,7 +162,8 @@ def on_incident_history(request, pk=None):
 @md.URL('event/<int:pk>')
 @md.strict_rate_limit('incident_event', ip_limit=240, muid_limit=120)
 def on_event(request, pk=None):
-    # CREATE_PERMS is ["all"] — any authenticated caller can ingest events, so
+    # CREATE_PERMS is ["all"] — any authenticated caller can submit events
+    # (#4125: Event.on_rest_handle_create stamps the sender server-side), so
     # this heavier path (Event INSERT + rule evaluation per call) gets its own
     # hard bound on top of the global identity throttle (DM-042), including
     # ApiKey callers. Limits are generous because the same route serves
@@ -171,6 +172,18 @@ def on_event(request, pk=None):
     # which must stay unlimited — its client parks batches after 3 failed
     # retries, so 429s there mean silently lost security alerts).
     return Event.on_rest_request(request, pk)
+
+
+@md.POST('event/client')
+@md.public_endpoint("frontend crash/debug reports: allowlisted, bounded, server-owned provenance")
+@md.strict_rate_limit('incident_client_report', ip_limit=60, muid_limit=20)
+def on_event_client_report(request):
+    # Browser crash and debug reports (#4125). Works before sign-in; the
+    # service allowlists and bounds the body, stamps the sender from the
+    # request and publishes each report once. It never raises, so a bad
+    # report cannot file an error Event about itself.
+    from mojo.apps.incident.services import client_report
+    return client_report.handle(request)
 
 
 @md.GET('health/summary')

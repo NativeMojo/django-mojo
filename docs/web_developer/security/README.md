@@ -752,26 +752,33 @@ automatically replayable.
 
 ### 8. Event Reporting (Client-Side)
 
-Report security events from your frontend:
+A signed-in client reports security events to `POST /api/incident/event`
+(anonymous callers get `401`). Browser crash reports have their own route,
+`POST /api/incident/event/client`, which works before sign-in.
 
 ```js
 fetch('/api/incident/event', {
   method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+  headers: {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+  },
   body: JSON.stringify({
     category: 'xss:attempt',
     level: 8,
     details: 'Script tag detected in comment field',
     metadata: {
       field: 'comment',
-      input: '<script>...',
       page: '/posts/new'
     }
   })
 });
 ```
 
-Events with `level >= 7` automatically create incidents. See [Reporting Events](../logging/reporting_events.md) for full field reference.
+The server records who sent it and from where; a `uid`, `source_ip` or group
+you send is kept only as a `claimed_*` value for RuleSets, and `level` is your
+claimed severity (it never starts automatic LLM triage). See
+[Reporting Events](../logging/reporting_events.md) for the full field reference.
 
 ## Event Sources
 

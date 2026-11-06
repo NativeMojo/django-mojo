@@ -411,7 +411,16 @@ manage their own file without `manage_files`/`files`.
 
 ### 1. Event CREATE_PERMS = `all` (intentional)
 
-The Event model allows anyone to create security events via `POST /api/incident/event`. This is the public reporting API used by frontend JavaScript to report security signals (XSS attempts, suspicious behavior, etc.). Viewing events requires `view_security`. This asymmetry is intentional and correct.
+Any signed-in caller (user, API key, group token) may submit a security event
+via `POST /api/incident/event`; anonymous callers are refused (`401`). The
+create does not use the generic field loop: `Event.on_rest_handle_create`
+(`mojo/apps/incident/services/event_intake.py`) stamps `uid`, `source_ip`,
+the group and the request provenance from the request, keeps the sender's
+claims as `claimed_*` metadata, records `metadata.reporter`, publishes the row
+once with `allow_default_llm=False`, and answers only
+`{"status": true, "data": {"id": n}}`. Viewing events requires
+`view_security`. Browser crash reports do not use this route: they go to the
+public, bounded `POST /api/incident/event/client` (maestro #4125).
 
 ## Design Guidelines
 

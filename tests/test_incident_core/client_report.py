@@ -80,7 +80,8 @@ def test_anonymous_report_creates_and_publishes(opts):
                      "lineno": 1, "colno": 2, "component_stack": "in App"},
     })
     assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.response}"
-    assert dict(resp.response) == {"status": True}, f"receipt must be exactly status true, got {resp.response}"
+    assert resp.response.get("status") is True and "data" not in resp.response, \
+        f"receipt must be status true with no data/event id, got {resp.response}"
     rows = _events(category)
     assert len(rows) == 1, f"expected one event, got {len(rows)}"
     event = rows[0]

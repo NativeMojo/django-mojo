@@ -29,6 +29,9 @@ def test_client_rate_limit(opts):
     statuses = []
     try:
         for index in range(61):
+            # A cross-origin browser sends no cookie, so the per-IP limit is
+            # the one that binds; drop the client's muid cookie each time.
+            opts.client.session.cookies.clear()
             resp = opts.client.post(ROUTE, {
                 "category": f"frontend:testit_{opts.tag}_t12", "message": f"limit {index}"})
             statuses.append(resp.status_code)
@@ -46,6 +49,7 @@ def test_repeat_suppressed_same_receipt(opts):
     category = f"frontend:testit_{opts.tag}_t13"
     body = {"category": category, "message": "same crash",
             "metadata": {"stack_trace": "Error: same\n  at f (a.js:1:1)"}}
+    opts.client.session.cookies.clear()
     try:
         first = opts.client.post(ROUTE, body)
         second = opts.client.post(ROUTE, body)
@@ -53,8 +57,9 @@ def test_repeat_suppressed_same_receipt(opts):
         _clear()
     assert first.status_code == 200 and second.status_code == 200, \
         f"both must be accepted, got {first.status_code} and {second.status_code}"
-    assert dict(first.response) == dict(second.response) == {"status": True}, \
-        f"receipts must be identical status true: {first.response} / {second.response}"
+    receipts = [{k: v for k, v in r.response.items() if k != "server"} for r in (first, second)]
+    assert receipts[0] == receipts[1] and receipts[0].get("status") is True and "data" not in receipts[0], \
+        f"receipts must be identical status true with no data: {first.response} / {second.response}"
     assert _events(category) == 1, f"a repeated report must file once, got {_events(category)}"
 
 
