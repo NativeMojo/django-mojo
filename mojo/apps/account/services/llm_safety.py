@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import math
 import re
 import secrets
 import time
@@ -37,7 +36,7 @@ BREAKER_KEYS = frozenset({
 })
 WINDOWS = (("minute", 60), ("hour", 3600), ("day", 86400))
 COUNT_TIMEOUT_SECONDS = 3
-ESTIMATE_MARGIN = 1.10
+ESTIMATE_MARGIN_PERCENT = 10  # integer math: a float 1.10 rounds 50 x 1.10 up to 56
 ESTIMATE_PAD_TOKENS = 64
 EXPECTED_POLICY_HASH_KEY = "LLM_SAFETY_POLICY_EXPECTED_HASH"
 AUTONOMOUS_TRIAGE_KEY = "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED"
@@ -692,7 +691,7 @@ def _input_estimate(adapter, provider_name, messages, system, tools,
         return fallback
     if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
         return fallback
-    margin = math.ceil(count * ESTIMATE_MARGIN) + ESTIMATE_PAD_TOKENS
+    margin = -(-count * (100 + ESTIMATE_MARGIN_PERCENT) // 100) + ESTIMATE_PAD_TOKENS
     return min(len(serialized), margin), count, "count"
 
 

@@ -280,8 +280,9 @@ reports when it finishes.
 - **Anthropic text and tool calls.** The guard asks Anthropic's free
   token-count endpoint for the exact request (messages, system prompt and
   tools) on the resolved model, with a 3-second timeout. It reserves
-  `min(bytes, ceil(count × 1.10) + 64)` for the input, where `bytes` is the
-  length of the serialized request. The count never raises a reservation
+  `min(bytes, ceil(count × 1.10) + 64)` for the input, computed in integers
+  (count 50 gives exactly 119), where `bytes` is the length of the
+  serialized request. The count never raises a reservation
   above today's byte bound. It is not counted as a request in the budget
   windows and never touches the circuit breaker.
 - **Byte fallback.** Bedrock routes (Nova 2 Lite has no count endpoint),
