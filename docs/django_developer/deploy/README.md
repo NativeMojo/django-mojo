@@ -458,6 +458,30 @@ nodes and `platform-deploy` on non-API nodes.
 executable, and pass `bash -n`. A `mojo.deploy locate` shim is the valid
 permanent endpoint. These findings are advisory and are not deployment gates.
 
+`--section profile` checks `var/profile`, the marker that selects the settings
+module (#9315). Missing, empty, or not the expected profile is FAIL; an owner
+other than `--app-user:--web-user` or a mode other than 640 is WARN. The
+expected profile is `--expect-profile` (default `prod`), unless
+`var/django.conf` sets `MOJO_REQUIRED_PROFILE`, which wins. That key is found
+with a one-key grep; the rest of the conf is never read, and a value that is
+not a plain profile name is reported as ignored, never printed.
+
+### Requiring the production profile
+
+Both provisioning paths (stage 1 and the skeleton's `ec2_deploy.sh` /
+golden-clone user data) write `var/profile` = `prod` before the app starts. To
+make a node refuse to run without it, add `MOJO_REQUIRED_PROFILE = prod` to
+the deployment's canonical `var/django.conf` (see
+[Settings Profile](../helpers/settings.md#requiring-a-profile-opt-in)).
+
+Check every node with `python3 -m mojo.deploy.check_node --section profile`
+and fix any marker **before** adding the key. config-sync applies a changed
+conf and restarts each node within about 60 seconds, and a node whose marker
+is missing then stops: ASGI exits on each restart, the job engine fails each
+cron minute, and `post_deploy` stops at `manage.py check`, before migrations.
+config-sync itself never imports Django, so a refused node can still pull a
+corrected conf.
+
 ## Other pre-Django node tools
 
 The shell deployment bodies and the remaining `python3 -m mojo.deploy.*`

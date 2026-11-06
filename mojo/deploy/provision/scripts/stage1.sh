@@ -110,6 +110,14 @@ rm -f "${PROJ_PATH}/var/app.tar.gz"
 [ -f "${PROJ_PATH}/aws/ec2_bootstrap.sh" ] || \
     die "the archive has no aws/ec2_bootstrap.sh — is this a django-mojo project?"
 
+# The profile goes down right after the untar (#9315): ec2_bootstrap.sh
+# enables crond with a per-minute bin/cron.py, and ec2_deploy.sh starts the
+# config-sync timer; any of them imports settings, which would load
+# settings.local without this file. Step 6 writes it again, with its final
+# owner and mode, after ec2_deploy.sh's var/ ownership sweep.
+mkdir -p "${PROJ_PATH}/var"
+echo prod > "${PROJ_PATH}/var/profile"
+
 # The commit that tarball came from. A tarball carries no history, so this is
 # the only record of which commit this node runs — `provision configure` reads
 # it to wire /opt/api to origin at exactly this sha, and the deploy plane is
@@ -171,12 +179,6 @@ python3 -m mojo.deploy render --dest "${PROJ_PATH}/var/deploy" \
     die "the rendered node contract has no mojo-asgi.service"
 
 # ── 5. the project ───────────────────────────────────────────────────────────
-
-# The profile goes down BEFORE ec2_deploy.sh as well (#9315): it starts the
-# config-sync timer and installs the jobs cron, and either can bring the app
-# up while it runs. Step 6 writes it again after its var/ ownership sweep.
-mkdir -p "${PROJ_PATH}/var"
-echo prod > "${PROJ_PATH}/var/profile"
 
 log "running ec2_deploy.sh (nginx vhosts, systemd units, var layout)"
 bash "${PROJ_PATH}/aws/ec2_deploy.sh"

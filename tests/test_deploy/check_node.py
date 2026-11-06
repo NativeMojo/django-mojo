@@ -1054,3 +1054,92 @@ def test_template_freshness_skips_declared_overrides_and_absent_var_deploy(opts)
                      "contract")
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# profile (#9315 Part A)
+
+PROFILE = f"{PROJ}/var/profile"
+CONF = f"{PROJ}/var/django.conf"
+
+
+def _profile_report(rules, **kwargs):
+    from mojo.deploy import check_node
+    run = FakeRunner(rules)
+    report = check_node.Report()
+    check_node.check_profile(report, run, PROJ, "ec2-user", "www", **kwargs)
+    return report, run
+
+
+def _profile_rules(marker=None, stat="ec2-user www 640", key_line=""):
+    rules = [("MOJO_REQUIRED_PROFILE", (0 if key_line else 1, key_line, ""))]
+    if marker is None:
+        rules.append((f"test -f {PROFILE}", (1, "", "")))
+    else:
+        rules.append((f"cat {PROFILE}", (0, marker, "")))
+        rules.append((f"stat -Lc '%U %G %a' {PROFILE}", (0, stat, "")))
+    return rules
+
+
+@th.django_unit_test()
+def test_profile_section_grades_the_marker(opts):
+    report, _ = _profile_report(_profile_rules(marker=None))
+    assert _statuses(report, "profile").get("var/profile missing") == "FAIL", \
+        f"a missing marker must FAIL: {_findings(report, 'profile')}"
+
+    report, _ = _profile_report(_profile_rules(marker="local"))
+    hit = _find(report, "profile", "var/profile reads")
+    assert hit and hit["status"] == "FAIL", f"a local marker must FAIL: {_findings(report, 'profile')}"
+
+    report, _ = _profile_report(_profile_rules(marker=""))
+    assert _statuses(report, "profile").get("var/profile empty") == "FAIL", \
+        f"an empty marker must FAIL: {_findings(report, 'profile')}"
+
+    report, _ = _profile_report(_profile_rules(marker="prod"))
+    statuses = _statuses(report, "profile")
+    assert statuses.get("var/profile") == "PASS", f"prod, 640, ec2-user:www must PASS: {statuses}"
+    assert "FAIL" not in statuses.values() and "WARN" not in statuses.values(), \
+        f"a converged marker must raise nothing: {statuses}"
+
+    report, _ = _profile_report(_profile_rules(marker="prod", stat="ec2-user www 600"))
+    hit = _find(report, "profile", "mode 600")
+    assert hit and hit["status"] == "WARN", f"mode 600 must WARN: {_findings(report, 'profile')}"
+
+    report, _ = _profile_report(_profile_rules(marker="prod", stat="root root 640"))
+    hit = _find(report, "profile", "owner root:root")
+    assert hit and hit["status"] == "WARN", f"a root-owned marker must WARN: {_findings(report, 'profile')}"
+
+
+@th.django_unit_test()
+def test_profile_section_honours_the_conf_key_and_never_reads_the_conf(opts):
+    report, run = _profile_report(_profile_rules(
+        marker="prod", key_line="MOJO_REQUIRED_PROFILE = staging"))
+    hit = _find(report, "profile", "var/profile reads")
+    assert hit and hit["status"] == "FAIL", \
+        f"key staging + marker prod must FAIL: {_findings(report, 'profile')}"
+    assert any(f["status"] == "INFO" and "staging" in f["name"]
+               for f in _findings(report, "profile")), \
+        f"the key's state must be reported: {_findings(report, 'profile')}"
+
+    report, _ = _profile_report(_profile_rules(marker="prod"), expect="staging")
+    hit = _find(report, "profile", "var/profile reads")
+    assert hit and hit["status"] == "FAIL", f"--expect-profile staging must FAIL on prod: {_findings(report, 'profile')}"
+
+    report, _ = _profile_report(_profile_rules(
+        marker="prod", key_line='MOJO_REQUIRED_PROFILE = f"{SECRET}"'))
+    assert _statuses(report, "profile").get("var/profile") == "PASS", \
+        f"a malformed key is dormant; the default expectation applies: {_findings(report, 'profile')}"
+    assert not any("SECRET" in (f["detail"] or "") + f["name"] for f in report.findings), \
+        f"a malformed key value must never be printed: {report.findings}"
+
+    conf_probes = [cmd for cmd in run.commands if CONF in cmd]
+    assert conf_probes, "the audit must look for the key in django.conf"
+    for cmd in conf_probes:
+        assert cmd.startswith("grep ") and "MOJO_REQUIRED_PROFILE" in cmd and "cat " not in cmd, \
+            f"the only django.conf probe is the one-key grep, never a read of the file: {cmd}"
+
+
+@th.django_unit_test()
+def test_profile_is_a_section(opts):
+    from mojo.deploy import check_node
+    assert "profile" in check_node.SECTIONS, f"profile must be a selectable section: {check_node.SECTIONS}"

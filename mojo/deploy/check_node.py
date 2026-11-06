@@ -43,6 +43,11 @@ it asks `python3 -m mojo.deploy.node_role resolve --json`, whose every output
 field is a validated role identifier or the empty string. No conf byte can
 reach this report through it. Do not widen that either.
 
+A second, equally narrow exception: the profile section greps var/django.conf
+for the one opt-in key MOJO_REQUIRED_PROFILE (#9315) and shows its value only
+when it is a plain profile name; any other value is reported as "ignored",
+never printed.
+
 A finding is one of:
 
     PASS   matches the contract
@@ -81,7 +86,7 @@ INFO = "INFO"
 # leftovers).
 SECTIONS = (
     "repo", "framework", "deployment", "roles", "cron", "systemd", "firewall", "mojosec", "nginx",
-    "certs", "config_plane", "shims", "legacy", "var_ownership", "jobs",
+    "certs", "config_plane", "shims", "legacy", "var_ownership", "profile", "jobs",
 )
 
 # The two deployment scripts are project-owned, so a broken installed
@@ -2097,6 +2102,73 @@ def check_var_ownership(report, run, proj, app_user, web_user):
 
 
 # ---------------------------------------------------------------------------
+# profile
+
+def check_profile(report, run, proj, app_user, web_user, expect="prod"):
+    """var/profile names the settings module every process loads (#9315).
+
+    The second bounded conf exception: the opt-in MOJO_REQUIRED_PROFILE key in
+    var/django.conf is found with a one-key grep, and only a plain profile
+    name from that line is ever shown. Nothing else in the conf is read.
+    """
+    from mojo.helpers.settings.helper import (
+        REQUIRED_PROFILE_KEY, required_profile_from_text,
+    )
+    marker = f"{proj}/var/profile"
+    conf = f"{proj}/var/django.conf"
+    _, line, _ = run(
+        f"grep -E '^[[:space:]]*{REQUIRED_PROFILE_KEY}[[:space:]]*=' {q(conf)} "
+        "2>/dev/null | tail -n 1")
+    state, required = required_profile_from_text(line)
+    if state == "set":
+        expect = required
+        report.info("profile", f"{REQUIRED_PROFILE_KEY} = {required}",
+                    "django.conf requires this profile: the app, jobs, cron and "
+                    "manage.py refuse to start without a matching marker")
+    elif state == "malformed":
+        report.info("profile", f"{REQUIRED_PROFILE_KEY} ignored",
+                    "django.conf has the key but its value is not a plain "
+                    "profile name, so the guard is dormant")
+    else:
+        report.info("profile", f"{REQUIRED_PROFILE_KEY} not set",
+                    "the guard is off (opt-in); a missing marker silently "
+                    "runs settings.local")
+
+    fix = (f"echo {expect} > {marker} && chown {app_user}:{web_user} {marker} "
+           f"&& chmod 640 {marker}, then restart mojo-asgi")
+    if not exists(run, marker):
+        report.fail("profile", "var/profile missing",
+                    "every process on this node loads settings.local",
+                    fix)
+        return
+    _, value, _ = run(f"cat {q(marker)} 2>/dev/null")
+    value = value.strip()
+    if not value:
+        report.fail("profile", "var/profile empty",
+                    "the settings import fails or falls back", fix)
+        return
+    if value != expect:
+        shown = value[:64] if re.match(r"^[A-Za-z0-9_-]+$", value) else "an unexpected value"
+        report.fail("profile", f"var/profile reads {shown}",
+                    f"expected {expect}", fix)
+        return
+    report.passed("profile", "var/profile", f"reads {expect}")
+    st = stat_of(run, marker)
+    if st is None:
+        report.info("profile", "var/profile metadata", "cannot stat")
+        return
+    user, group, mode = st
+    if user != app_user or group != web_user:
+        report.warn("profile", f"var/profile owner {user}:{group}",
+                    f"provisioning writes it {app_user}:{web_user}",
+                    f"chown {app_user}:{web_user} {marker}")
+    if mode != "640":
+        report.warn("profile", f"var/profile mode {mode}",
+                    "provisioning writes it 640",
+                    f"chmod 640 {marker}")
+
+
+# ---------------------------------------------------------------------------
 # jobs
 # ---------------------------------------------------------------------------
 
@@ -2239,6 +2311,10 @@ def main(argv):
     parser.add_argument("--require-shims", action="store_true",
                         help="grade a forked aws/ script or an undeclared "
                              "template collision FAIL instead of WARN")
+    parser.add_argument("--expect-profile", default="prod",
+                        help="the settings profile var/profile must name; a "
+                             "MOJO_REQUIRED_PROFILE key in var/django.conf "
+                             "overrides it (default: prod)")
     parser.add_argument("--section", default="all",
                         help=f"comma-separated subset of: {', '.join(SECTIONS)}")
     parser.add_argument("--json", action="store_true",
@@ -2323,6 +2399,9 @@ def main(argv):
         check_legacy(report, run, proj, repo, retired_cron)
     if "var_ownership" in wanted:
         check_var_ownership(report, run, proj, args.app_user, args.web_user)
+    if "profile" in wanted:
+        check_profile(report, run, proj, args.app_user, args.web_user,
+                      expect=args.expect_profile)
     if "jobs" in wanted:
         check_jobs(report, run, proj, node_type=node_type)
 
