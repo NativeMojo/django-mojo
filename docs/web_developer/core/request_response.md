@@ -19,8 +19,11 @@ On a save to an existing record, the transport keys `graph`, `group`,
 `group_uuid` and `_mtab` are not treated as field changes when they would
 change nothing. So a request that only runs an action (for example
 `POST /api/group/5?graph=basic&group=5` with `{"realtime_message": {...}}`)
-runs the action without re-saving the record. Sending a different `group` id
-still moves the record, as before.
+runs the action without the generic REST save re-saving the record. This
+covers only that REST save: naming a group (`group` or `group_uuid`) can still
+update that group's last-activity time, which writes the group row at most
+once per activity interval. Sending a different `group` id still moves the
+record, as before.
 
 ```bash
 # GET with query params
