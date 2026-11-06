@@ -148,6 +148,24 @@ class Event(models.Model, MojoModel):
             ]
         }
 
+    @classmethod
+    def on_rest_handle_create(cls, request):
+        """Submitted security events (#4125): the server owns the sender.
+
+        Any signed-in caller may submit (CREATE_PERMS stays ["all"]), but the
+        generic field loop is not used: event_intake stamps uid, source_ip,
+        group and provenance from the request, keeps the sender's claims as
+        flat ``claimed_*`` metadata, and publishes the row once. The receipt
+        carries only the id: the default graph nests the bundled incident,
+        which other people's events may share. Reads, the operator pk save and
+        delete keep the generic paths.
+        """
+        from mojo import JsonResponse
+        from mojo.apps.incident.services import event_intake
+        cls.rest_check_permission_or_raise(request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"])
+        event = event_intake.submit(request)
+        return JsonResponse({"status": True, "data": {"id": event.pk}})
+
     def admin_security_projection(self, detail=True):
         """Operational projection for an authorized Admin Security caller.
 

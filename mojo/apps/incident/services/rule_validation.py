@@ -165,6 +165,11 @@ FIELD_SCHEMAS = {
     "ip_recent_attack_events": "int",
     "ip_recent_distinct_targets": "int",
     "ip_recent_distinct_devices": "int",
+    # A submitted event's claims (#4125): what the sender said about another
+    # person, address or company, kept beside the server-stamped columns.
+    "claimed_uid": "int",
+    "claimed_source_ip": "str",
+    "claimed_group_id": "int",
 }
 FIELD_SCHEMAS.update(MOJOSEC_FIELD_SCHEMAS)
 

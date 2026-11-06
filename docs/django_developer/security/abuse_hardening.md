@@ -231,6 +231,11 @@ Endpoints where a client POST becomes a DB write are bounded per **session**
 - `account/bouncer/event`, `account/bouncer/assess`: strict `ip_limit=60, muid_limit=30`/min.
 - `incident/event`: strict `ip_limit=240, muid_limit=120`/min (generous — the same
   route serves security-dashboard reads; ingest volume is also bounded by §1).
+- `incident/event/client` (public browser crash reports, #4125): strict
+  `ip_limit=60, muid_limit=20`/min, a 64 KB body cap (`413`), and repeat
+  suppression (category, message, first stack line and sender, 5 minutes)
+  that fails **closed**: while Redis is down the limiter fails open, so
+  suppression is the only bound and crash reports are dropped.
 
 **Never rate-limit `incident/ossec/alert/batch`.** The mojo-ossec sender is
 already structurally capped (max 10 events/POST, one flush per 5s ≈ 12

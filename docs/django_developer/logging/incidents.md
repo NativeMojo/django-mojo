@@ -1031,6 +1031,69 @@ Every permission denial issued by `MojoModel`'s permission system is automatical
 
 No extra code required — the dispatcher handles this automatically for all framework 401/403 paths. The 401/403 rows the dispatcher files are written by a job a moment after the response — see [Deferred reporting](#deferred-reporting--defertrue-routine-4xx); `fk_attach_denied`, `batch_row_denied` and per-row `feature_disabled` are reported directly and stay inline.
 
+### Browser reports — `POST /api/incident/event/client`
+
+Public crash and debug reports from web apps (maestro #4125), handled by
+`mojo/apps/incident/services/client_report.py`. It never raises: every
+refusal is a returned `400` / `413`, so a bad report cannot file an error
+event about itself.
+
+- **Category** must be `frontend:` plus `[a-z0-9_.:-]`, at most 64.
+- **Scope** is forced to `web`.
+- **Level** is clamped to `1..min(6, INCIDENT_LEVEL_THRESHOLD - 1)`
+  (`client_report.normalize_level`); a differing sent value is kept as
+  `claimed_level`. A crash report therefore never opens an incident by level
+  and never reaches the default LLM triage.
+- **Metadata** is allowlisted and bounded (`stack_trace`, `component_stack`,
+  `app`, `environment`, `build`, `reference`, `page_path`, `filename`,
+  `lineno`, `colno`); paths lose their query string and fragment.
+- **Identity** (`uid`, `source_ip`, `http_*`, `user_*`, `metadata.reporter`)
+  comes from the request. The group is `event_intake.trusted_group(request)`;
+  an untrusted `?group=` is kept as `claimed_group_id`.
+- **Filing** is one `report_event_suppressed(..., scope="web", window=300,
+  fail_open=False)` call: suppression key sha256(category | message[:200] |
+  first stack line | uid-or-ip). Redis down means the report is dropped.
+- **Limits:** `strict_rate_limit("incident_client_report", ip_limit=60,
+  muid_limit=20)` and a 64 KB `CONTENT_LENGTH` cap.
+
+No shipped RuleSet with a handler matches `web` / `frontend:*`, so crash
+reports land on the catch-all, which has no handler. **To be paged on crash
+reports, write a RuleSet** for category `web` (all crash reports) or a
+specific `frontend:*` category, with the handler you want.
+
+### Submitted events — `POST /api/incident/event`
+
+Any signed-in user, API key or group token may submit an event
+(`CREATE_PERMS = ["all"]`; anonymous is `401`). `Event.on_rest_handle_create`
+replaces the generic field loop for creates only (reads, the operator `pk`
+save and delete are unchanged) and calls `event_intake.submit(request)`:
+
+- **Trusted columns** are the server's: `uid` is the signed-in person or the
+  API key's linked member (`_resolve_stamp_actor`; an unlinked key files no
+  uid), `source_ip` is `request.ip`, `group` is `trusted_group(request)` (a
+  confined credential's own group, or a group the person belongs to or
+  operates as `manage_security`/`security`).
+- **Claims** are flat metadata keys: a sent `uid`, `source_ip`,
+  `country_code` or `incident` becomes `claimed_uid`, `claimed_source_ip`,
+  `claimed_country_code`, `claimed_incident_id`; an untrusted `?group=`
+  becomes `claimed_group_id`; a client metadata key the server owns
+  (`event_intake.RESERVED_METADATA_KEYS`) becomes `claimed_<key>`.
+- **`metadata.reporter`** is `safe_actor_context(request)` — the credential
+  kind and user/key ids. Account security history
+  (`GET /api/account/security-events`) excludes every row that carries it.
+- **Publication** is `event.publish(allow_default_llm=False)`, inline. The
+  claimed `level` is kept and RuleSets judge it, but a claim never spends
+  autonomous LLM triage; write a RuleSet with an LLM handler for that.
+- **Receipt** is `{"status": true, "data": {"id": n}}` — never the row,
+  whose default graph nests the shared incident.
+- **Rules** may match the claims: `claimed_uid` (int), `claimed_source_ip`
+  (str) and `claimed_group_id` (int) are in the governed writer's
+  `FIELD_SCHEMAS`; legacy rules read any flat metadata key.
+
+Any signed-in member can still submit an event that a shipped RuleSet reacts
+to (a notification, a ticket, a block). It now names the real sender and a
+`block://` handler acts only on the sender's own address.
+
 ---
 
 ## Event Fields
