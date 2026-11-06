@@ -148,7 +148,11 @@ response = llm.call(
 ```
 
 Raises `LLMExecutionError(code, retry_after=None)` when policy, controls,
-budgets, the circuit, persistence, or provider denies the request. Raw
+budgets, the circuit, persistence, or provider denies the request. Two budget
+codes matter to callers: `request_exceeds_budget` is permanent (the call alone
+is larger than the smallest `tokens_minute` limit), and `budget_exhausted` is
+retryable, with `retry_after` set to the seconds until the refusing window
+rolls over. See [How token budgets are charged](../security/llm_safety.md#how-token-budgets-are-charged). Raw
 SDK/provider text does not cross the adapter. Multi-call loops must reuse one
 unguessable `operation_id`; the guard increments it atomically. Omitted
 `feature` temporarily becomes separately budgeted `unattributed`; unknown

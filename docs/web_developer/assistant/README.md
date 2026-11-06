@@ -193,6 +193,23 @@ REST and WebSocket clients receive route-neutral copy directing the operator
 to the safety-policy route and its selected credential; it never assumes the
 route uses the admin key.
 
+**Response** (LLM token budget used up — HTTP 500):
+
+```json
+{
+    "status": false,
+    "error": "The LLM token budget is used up for now. Try again in 42 seconds.",
+    "conversation_id": 17,
+    "retry_after": 42
+}
+```
+
+`retry_after` (seconds) is present only when the server knows when the budget
+window rolls over; it is also added to the WebSocket `error` event. If a single
+turn is too large for the configured budget to ever admit, the error says so
+and has no `retry_after`: start a new conversation or send a shorter message
+instead of retrying.
+
 **Response** (invalid `conversation_id` — HTTP 404):
 
 ```json

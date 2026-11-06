@@ -32,6 +32,23 @@ PROVIDER_AUTH_ERROR = (
     "policy route and its selected credential.")
 
 
+def _llm_error_message(code, retry_after=None):
+    """Plain message for a failed LLM call; never includes provider text."""
+    if code == "provider_authentication":
+        return PROVIDER_AUTH_ERROR
+    if code == "provider_rate_limited":
+        return "LLM API rate limit reached. Please wait a moment and try again."
+    if code == "request_exceeds_budget":
+        return ("This conversation is too large for the configured LLM token "
+                "budget. Start a new conversation or ask a shorter question.")
+    if code == "budget_exhausted":
+        if retry_after:
+            return ("The LLM token budget is used up for now. "
+                    f"Try again in {retry_after} seconds.")
+        return "The LLM token budget is used up for now. Try again later."
+    return f"Assistant request failed safely ({code})."
+
+
 def _build_request_meta(request):
     """Slim objict with the HTTP context tools may need.
 
@@ -1642,22 +1659,20 @@ def run_assistant(
     except Exception as e:
         logger.exception("Assistant agent failed for user %s", user.pk)
         code = getattr(e, "code", "assistant_internal_error")
-        if code == "provider_authentication":
-            error = PROVIDER_AUTH_ERROR
-        elif code == "provider_rate_limited":
-            error = "LLM API rate limit reached. Please wait a moment and try again."
-        else:
-            error = f"Assistant request failed safely ({code})."
+        retry_after = getattr(e, "retry_after", None)
         _report_event(
             "assistant:error:api", 7, "Assistant LLM request failed",
             f"code={code} user_id={user.pk} conversation_id={conversation.pk}",
             user=user)
-        return {
-            "error": error,
+        result = {
+            "error": _llm_error_message(code, retry_after),
             "conversation_id": conversation.pk,
             "pending_actions": pending_actions,
             "status_code": 500,
         }
+        if retry_after:
+            result["retry_after"] = retry_after
+        return result
 
 
 def run_assistant_ws(user, message, conversation_id, on_event=None,
@@ -1850,11 +1865,9 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
             "assistant:error:api", 7, "Assistant WS LLM request failed",
             f"code={code} user_id={user.pk} conversation_id={conversation.pk}",
             user=user)
-        if code == "provider_authentication":
-            return {"error": PROVIDER_AUTH_ERROR,
-                    "pending_actions": pending_actions}
-        if code == "provider_rate_limited":
-            return {"error": "LLM API rate limit reached. Please wait a moment and try again.",
-                    "pending_actions": pending_actions}
-        return {"error": f"Assistant request failed safely ({code}).",
-                "pending_actions": pending_actions}
+        retry_after = getattr(e, "retry_after", None)
+        result = {"error": _llm_error_message(code, retry_after),
+                  "pending_actions": pending_actions}
+        if retry_after:
+            result["retry_after"] = retry_after
+        return result

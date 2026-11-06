@@ -69,6 +69,22 @@ class AnthropicProvider(ProviderAdapter):
         except Exception as err:
             self._raise_safe(err)
 
+    def count_input_tokens(self, messages, model, system=None, tools=None,
+                           timeout=None):
+        """One free count request for the exact message request."""
+        kwargs = {"model": model, "messages": messages}
+        if system:
+            kwargs["system"] = system
+        if tools:
+            kwargs["tools"] = tools
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        try:
+            response = self._client().messages.count_tokens(**kwargs)
+            return int(response.input_tokens)
+        except Exception as err:
+            self._raise_safe(err)
+
     def list_models(self, timeout=None):
         """Compatibility helper returning one page's model list."""
         return self.list_models_page(timeout=timeout)["data"]

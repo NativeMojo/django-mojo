@@ -489,7 +489,10 @@ def _run_agent_thread(user_id, conversation_id, message, request_id=None,
         if "error" in result:
             logger.warning("assistant thread: agent returned error for user %s: %s",
                            user_id, result["error"])
-            on_event("error", {"error": result["error"]})
+            event = {"error": result["error"]}
+            if result.get("retry_after"):
+                event["retry_after"] = result["retry_after"]
+            on_event("error", event)
         else:
             response_data = {
                 "message_id": result.get("message_id"),

@@ -1000,3 +1000,92 @@ def test_auto_mismatched_discovery_credential_denies_without_models_transport(op
                 case, lambda name, **kwargs: adapter))
             assert not adapter.requests and not adapter.messages, \
                 'discovery must never run under a different identity from the runtime route'
+
+
+class _CountedAnthropicAdapter:
+    """Anthropic-shaped adapter whose count and usage the test fixes."""
+
+    def __init__(self, count, usage):
+        self.count = count
+        self.usage = usage
+        self.counted = []
+        self.calls = []
+
+    def supports(self, capability):
+        return True
+
+    def count_input_tokens(self, messages, model, system=None, tools=None,
+                           timeout=None):
+        self.counted.append({"model": model, "timeout": timeout})
+        return self.count
+
+    def call(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"id": "counted-response", "content": [{"type": "text", "text": "ok"}],
+                "usage": dict(self.usage)}
+
+
+@th.django_unit_test()
+def test_anthropic_reservation_uses_count_and_ledger_records_estimate(opts):
+    import math
+    from mojo.apps.account.models import LLMRequest
+    from mojo.apps.account.services import llm_safety
+
+    with _guard_case(_guard_policy("anthropic")) as case:
+        messages = [{"role": "user", "content": "hello " * 200}]
+        adapter = _CountedAnthropicAdapter(10, {
+            "input_tokens": 9, "output_tokens": 3, "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0})
+        _run_guard(case, lambda name, **kwargs: adapter, messages=messages)
+        assert adapter.counted and adapter.counted[0]["model"] == "claude-test" \
+            and adapter.counted[0]["timeout"] == llm_safety.COUNT_TIMEOUT_SECONDS, \
+            f"the guard must count the exact request on the route model: {adapter.counted}"
+        row = LLMRequest.objects.get(operation=case["marker"])
+        expected = math.ceil(10 * llm_safety.ESTIMATE_MARGIN) \
+            + llm_safety.ESTIMATE_PAD_TOKENS + 8
+        assert row.reserved_tokens == expected, \
+            f"Anthropic text must reserve count + margin + max_tokens ({expected}), got {row.reserved_tokens}"
+        assert row.estimated_input_tokens == 10 and row.estimate_source == "count", \
+            f"the ledger must record the estimate: {row.estimated_input_tokens}/{row.estimate_source}"
+        _assert_budget_total(case, 12)
+
+
+@th.django_unit_test()
+def test_anthropic_usage_above_estimate_is_charged(opts):
+    from mojo.apps.account.models import LLMRequest
+
+    with _guard_case(_guard_policy("anthropic")) as case:
+        messages = [{"role": "user", "content": "hello " * 200}]
+        adapter = _CountedAnthropicAdapter(10, {
+            "input_tokens": 300, "output_tokens": 8, "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0})
+        _run_guard(case, lambda name, **kwargs: adapter, messages=messages)
+        row = LLMRequest.objects.get(operation=case["marker"])
+        assert row.reserved_tokens < 308, \
+            f"the test must reserve below real usage to prove overage, got {row.reserved_tokens}"
+        _assert_budget_total(case, 308)
+
+
+@th.django_unit_test()
+def test_failed_count_reserves_bytes_and_records_source(opts):
+    from mojo.apps.account.models import LLMRequest
+    from mojo.helpers.llm_providers.base import ProviderError
+
+    with _guard_case(_guard_policy("anthropic")) as case:
+        adapter = _CountedAnthropicAdapter(ProviderError("provider_timeout"), {
+            "input_tokens": 4, "output_tokens": 2, "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0})
+
+        def failing(messages, model, system=None, tools=None, timeout=None):
+            raise ProviderError("provider_timeout")
+
+        adapter.count_input_tokens = failing
+        _run_guard(case, lambda name, **kwargs: adapter)
+        row = LLMRequest.objects.get(operation=case["marker"])
+        serialized = __import__("json").dumps(
+            {"messages": [{"role": "user", "content": "hello"}], "system": None,
+             "tools": None}, separators=(",", ":")).encode("utf-8")
+        assert row.reserved_tokens == len(serialized) + 8, \
+            f"a failed count must reserve exactly today's bytes + max_tokens, got {row.reserved_tokens}"
+        assert row.estimated_input_tokens == 0 and row.estimate_source == "bytes", \
+            f"the ledger must record the byte fallback: {row.estimated_input_tokens}/{row.estimate_source}"
