@@ -242,6 +242,14 @@ status. If activation already succeeded, recovery finishes publication and
 keeps the candidate live instead of rolling it back; that branch ends with the
 distinct fixed result `publication completed` or `publication recovery failed`.
 
+Recovery first writes one fixed line, `Deployment failed during <phase>;
+recovering`. When the transient unit fails, the launcher replays only the
+unit's own output (`_TRANSPORT=stdout`), never the sudo and PAM records its
+cgroup also writes, and keeps at most nine lines: the five before the last
+recovery line, that line, and the last three, which end with the fixed result.
+It reads the unit's whole output rather than a fixed number of entries, so the
+cause written just before recovery survives however much rollback prints. With no recovery line it keeps the last nine lines.
+
 Custom rollback uses the profile protocol above; `code` restores the checkout
 and packages and leaves activation to its external supervisor. The transaction
 is removed only after a healthy candidate or healthy rollback. If SIGKILL or a
