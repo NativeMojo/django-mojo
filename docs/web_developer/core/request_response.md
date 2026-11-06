@@ -15,6 +15,13 @@ in the query string (e.g. `POST /api/thread/1?group=5` with body
 `{"group": 7}` resolves `group` to `7`). Repeating a key *within* the query
 string (`?tag=a&tag=b`) still produces an array.
 
+On a save to an existing record, the transport keys `graph`, `group`,
+`group_uuid` and `_mtab` are not treated as field changes when they would
+change nothing. So a request that only runs an action (for example
+`POST /api/group/5?graph=basic&group=5` with `{"realtime_message": {...}}`)
+runs the action without re-saving the record. Sending a different `group` id
+still moves the record, as before.
+
 ```bash
 # GET with query params
 curl -H "Authorization: Bearer <token>" \

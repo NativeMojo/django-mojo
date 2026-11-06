@@ -167,8 +167,10 @@ def test_http_action_with_transport_query(opts):
 
     opts.client.logout()
     assert opts.client.login(_email("admin"), PASSWORD), "admin login failed"
+    # `?group=` names another group: the dispatcher stamps activity on the
+    # group it binds (Group.touch), which would move `modified` on its own.
     resp = opts.client.post(
-        f"/api/group/{group.pk}?graph=basic&group={group.pk}&_mtab=t",
+        f"/api/group/{group.pk}?graph=basic&group={opts.t9250_other.pk}&_mtab=t",
         {"realtime_message": {}})
     body = str(opts.client.last_response.body)
 
