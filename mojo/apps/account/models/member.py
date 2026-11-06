@@ -138,7 +138,17 @@ class GroupMember(models.Model, MojoModel):
             args = (*args[:2], using, *args[3:])
         else:
             kwargs["using"] = using
-        update_fields = kwargs.get("update_fields") or (args[3] if len(args) > 3 else None)
+        # Django accepts any iterable for update_fields and saves nothing for an
+        # empty one, so keep None apart from empty and read a one-shot iterable
+        # once, handing Django the same list in the same keyword/positional slot.
+        positional = "update_fields" not in kwargs and len(args) > 3
+        update_fields = args[3] if positional else kwargs.get("update_fields")
+        if update_fields is not None:
+            update_fields = list(update_fields)
+            if positional:
+                args = (*args[:3], update_fields, *args[4:])
+            else:
+                kwargs["update_fields"] = update_fields
         audit = update_fields is None or "permissions" in update_fields
         with transaction.atomic(using=using):
             before = self._stored_permissions(using) if audit else None
