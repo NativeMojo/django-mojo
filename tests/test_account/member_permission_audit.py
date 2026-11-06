@@ -294,3 +294,85 @@ def test_value_never_recorded(opts):
         assert body["after"] == {"custom_flag": True}, f"after must hold only true, got {body!r}"
     finally:
         _cleanup(group, actor, target)
+
+
+def _stored(member):
+    from mojo.apps.account.models import GroupMember
+    return GroupMember.objects.filter(pk=member.pk).values("permissions", "metadata").first()
+
+
+@th.django_unit_test("member audit: empty update_fields saves nothing and writes no record")
+def test_empty_update_fields_writes_nothing(opts):
+    actor, target, group, member = _fixture(opts, actor_perms=None)
+    try:
+        for empty in ([], (), set()):
+            member.permissions["review_grant"] = True
+            member.save(update_fields=empty)
+            stored = _stored(member)
+            assert stored["permissions"] == {}, \
+                f"update_fields={empty!r} must save nothing, stored {stored['permissions']!r}"
+            assert _records(member) == [], \
+                f"update_fields={empty!r} must write no record, got {[r.log for r in _records(member)]}"
+    finally:
+        _cleanup(group, actor, target)
+
+
+@th.django_unit_test("member audit: generator update_fields saves the grant and writes one record")
+def test_generator_update_fields(opts):
+    actor, target, group, member = _fixture(opts, actor_perms=None)
+    try:
+        member.permissions["review_grant"] = True
+        member.save(update_fields=(f for f in ["permissions"]))
+        assert _stored(member)["permissions"] == {"review_grant": True}, \
+            f"a generator naming permissions must save them, stored {_stored(member)!r}"
+        recs = _records(member)
+        assert len(recs) == 1 and _body(recs[0])["added"] == ["review_grant"], \
+            f"expected one record adding review_grant, got {[r.log for r in recs]}"
+
+        # Permissions with an unrelated field after it in the same generator.
+        member.permissions["second_grant"] = True
+        member.metadata = {"note": "tail"}
+        member.save(update_fields=(f for f in ["permissions", "metadata"]))
+        stored = _stored(member)
+        assert stored["permissions"] == {"review_grant": True, "second_grant": True}, \
+            f"both grants must be stored, got {stored['permissions']!r}"
+        assert stored["metadata"] == {"note": "tail"}, f"metadata must be stored, got {stored['metadata']!r}"
+        recs = _records(member)
+        assert len(recs) == 2 and _body(recs[1])["added"] == ["second_grant"], \
+            f"expected a second record adding second_grant, got {[r.log for r in recs]}"
+
+        # A generator without permissions saves only its fields and writes nothing.
+        member.permissions["unsaved_grant"] = True
+        member.metadata = {"note": "only"}
+        member.save(update_fields=(f for f in ["metadata"]))
+        stored = _stored(member)
+        assert "unsaved_grant" not in stored["permissions"], \
+            f"permissions outside update_fields must not be stored, got {stored['permissions']!r}"
+        assert stored["metadata"] == {"note": "only"}, f"metadata must be stored, got {stored['metadata']!r}"
+        assert len(_records(member)) == 2, \
+            f"a save without permissions must write no record, got {[r.log for r in _records(member)]}"
+    finally:
+        _cleanup(group, actor, target)
+
+
+@th.django_unit_test("member audit: legacy positional update_fields matches the keyword form")
+def test_positional_update_fields(opts):
+    import warnings
+    actor, target, group, member = _fixture(opts, actor_perms=None)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            member.permissions["review_grant"] = True
+            member.save(False, False, None, [])
+            assert _stored(member)["permissions"] == {}, \
+                f"positional empty update_fields must save nothing, stored {_stored(member)!r}"
+            assert _records(member) == [], "positional empty update_fields must write no record"
+
+            member.save(False, False, None, (f for f in ["permissions"]))
+        assert _stored(member)["permissions"] == {"review_grant": True}, \
+            f"positional generator must save the grant, stored {_stored(member)!r}"
+        recs = _records(member)
+        assert len(recs) == 1 and _body(recs[0])["added"] == ["review_grant"], \
+            f"expected one record adding review_grant, got {[r.log for r in recs]}"
+    finally:
+        _cleanup(group, actor, target)
