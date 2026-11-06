@@ -188,6 +188,25 @@ def test_malformed_group_refused_without_incident(opts):
         assert filed == 0, f"{label}: a malformed group filed {filed} event(s)"
 
 
+@th.django_unit_test("4125 T4d: a group number too large for an integer is refused by the route")
+def test_overflowing_group_refused_without_incident(opts):
+    # Raw JSON 1e309 parses to float infinity; int() of it is an OverflowError.
+    from mojo.apps.incident.models.event import Event
+    opts.client.logout()
+    category = _category(opts, "t4d")
+    url = f"{opts.client.host}{ROUTE.lstrip('/')}"
+    for label, value in (("1e309", "1e309"), ("-1e309", "-1e309")):
+        marker = f"cr4125t4d{label.strip('-').replace('.', '')}{'n' if label.startswith('-') else 'p'}{opts.tag}"
+        raw = '{"category": "%s", "message": "x", "group": %s}' % (category, value)
+        resp = opts.client.session.post(
+            url, params={"m": marker}, data=raw, headers={"Content-Type": "application/json"})
+        assert resp.status_code == 400, f"group {label}: must be refused with 400, got {resp.status_code}"
+        assert resp.json().get("status") is False, \
+            f"group {label}: the route, not the dispatcher, must answer it: {resp.text[:200]}"
+        filed = Event.objects.filter(metadata__http_query_string__icontains=marker).count()
+        assert filed == 0, f"group {label}: filed {filed} event(s)"
+
+
 @th.django_unit_test("4125 T4c: a confined API key still cannot route to another group")
 def test_confined_key_group_check_kept(opts):
     from mojo.apps.account.models import ApiKey

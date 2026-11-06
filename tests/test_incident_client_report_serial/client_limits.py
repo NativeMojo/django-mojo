@@ -70,6 +70,30 @@ def test_malformed_group_rate_limited(opts):
     assert filed == 0, f"malformed-group reports filed {filed} event(s)"
 
 
+@th.django_unit_test("4125 T12c: an overflowing group number counts against the limit and files nothing")
+def test_overflowing_group_rate_limited(opts):
+    from mojo.apps.incident.models.event import Event
+    opts.client.logout()
+    _clear()
+    marker = f"cr4125t12c{opts.tag}"
+    url = f"{opts.client.host}{ROUTE.lstrip('/')}"
+    raw = '{"category": "frontend:testit_%s_t12c", "message": "big group", "group": 1e309}' % opts.tag
+    headers = {"Content-Type": "application/json"}
+    statuses = []
+    try:
+        for _ in range(61):
+            opts.client.session.cookies.clear()
+            statuses.append(opts.client.session.post(
+                url, params={"m": marker}, data=raw, headers=headers).status_code)
+    finally:
+        _clear()
+    assert all(code == 400 for code in statuses[:60]), \
+        f"the first 60 overflowing reports must be refused with 400, got {sorted(set(statuses[:60]))}"
+    assert statuses[60] == 429, f"the 61st overflowing report must hit the route limit (429), got {statuses[60]}"
+    filed = Event.objects.filter(metadata__http_query_string__icontains=marker).count()
+    assert filed == 0, f"overflowing-group reports filed {filed} event(s)"
+
+
 @th.django_unit_test("4125 T13: the same report twice files one event and two identical receipts")
 def test_repeat_suppressed_same_receipt(opts):
     opts.client.logout()
