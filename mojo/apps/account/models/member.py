@@ -141,7 +141,9 @@ class GroupMember(models.Model, MojoModel):
         # Django accepts any iterable for update_fields and saves nothing for an
         # empty one, so keep None apart from empty and read a one-shot iterable
         # once, handing Django the same list in the same keyword/positional slot.
-        positional = "update_fields" not in kwargs and len(args) > 3
+        # Like Django's _parse_save_params, a positional value wins over a
+        # keyword left at its default; a non-default keyword with it raises there.
+        positional = len(args) > 3 and kwargs.get("update_fields") is None
         update_fields = args[3] if positional else kwargs.get("update_fields")
         if update_fields is not None:
             update_fields = list(update_fields)
