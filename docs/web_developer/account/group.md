@@ -212,10 +212,18 @@ Use [category permissions](admin_portal.md#category-permissions-use-these-in-you
 }
 ```
 
-If an application's required member-save cleanup fails, that individual save
-is rolled back and the request fails. Refresh the member before retrying:
-a request changing several permissions can contain multiple saves, and earlier
-successful saves may remain committed.
+A request's permission changes are saved together, in one save: if any one of
+them is refused (`403`) or an application's required member-save cleanup
+fails, none of them is saved and the request fails. Refresh the member before
+retrying.
+
+Every request that really changes the member's permissions writes one audit
+record (kind `member:permissions_changed`) holding who made the change, what
+was added and removed, and the permission names before and after. Resending
+the stored values unchanged writes nothing. Read it at
+`GET /api/logs?kind=member:permissions_changed&model_id=<member id>`, which
+needs the global `manage_logs`, `view_logs`, `security` or `admin`
+permission; group managers cannot read it.
 
 ### Guest Members (view-only)
 

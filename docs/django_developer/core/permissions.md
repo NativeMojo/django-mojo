@@ -87,6 +87,21 @@ holds one of the model's `VIEW_PERMS` globally (`all`, `authenticated`,
 until they pass `?group=`. See
 [REST → Permissions](../rest/permissions.md#requiring-a-group-on-lists-list_requires_group).
 
+## Audit of Permission Changes
+
+Both permission dicts leave a `Log` record when a grant changes:
+
+- `User.add_permission`/`remove_permission` write `permission:added` /
+  `permission:removed`.
+- Every `GroupMember.save()` that changes a grant writes one
+  `member:permissions_changed` record with the actor, member, group, what was
+  added and removed, and names before and after (never the stored values). A
+  REST or invite request writes one record for all its changes. See
+  [Group → Permission change audit](../account/group.md#permission-change-audit).
+
+Only global `manage_logs`, `view_logs`, `security` or `admin` holders can read
+`Log`.
+
 ## Instance-Level Permission Hooks
 
 A model may override two per-instance hooks that the generic permission layer

@@ -269,6 +269,12 @@ def test_record_readers(opts):
         assert resp.status_code == 200, \
             f"a global view_logs user must read the record, got {resp.status_code}: {opts.client.last_response.body}"
         assert resp.response.data.kind == KIND, f"wrong record returned: {opts.client.last_response.body}"
+        # The documented query finds it.
+        resp = opts.client.get(f"/api/logs?kind={KIND}&model_id={member.pk}")
+        assert resp.status_code == 200, \
+            f"the documented list query must succeed, got {resp.status_code}: {opts.client.last_response.body}"
+        ids = [d.get("id") for d in resp.response.get("data") or []]
+        assert ids == [rec.pk], f"the documented query must return exactly this record, got {ids}"
     finally:
         opts.client.logout()
         _cleanup(group, actor, target, reader, manager)

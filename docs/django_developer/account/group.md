@@ -387,10 +387,41 @@ Receivers must propagate cleanup failures and use the signal's `using` alias.
 Schedule external notifications with `transaction.on_commit(..., using=using)`.
 
 The boundary covers each save, including `add_permission` and
-`remove_permission`; a multi-permission REST payload can perform several saves
-and is not made request-atomic. Bulk updates bypass saves and signals. Use
-ordinary `save()` inside application-owned transactions; the legacy
+`remove_permission`. `set_permissions` (the REST and invite path) applies every
+toggle in memory and saves once, so a multi-permission payload is all or
+nothing: a refused toggle leaves the row unchanged. Server code can do the same
+with `add_permission(perm, commit=False)` / `remove_permission(perm,
+commit=False)` followed by one `save()`. Bulk updates bypass saves and signals.
+Use ordinary `save()` inside application-owned transactions; the legacy
 `atomic_save()` helper still explicitly commits after `save()` returns.
+
+### Permission change audit
+
+Every `GroupMember.save()` that changes which permissions are granted writes
+one `Log` record, kind `member:permissions_changed`, inside the save's
+transaction. The before value is read from the locked row, not the loaded
+instance, so in-place edits and every write path (REST, invite,
+`add_permission`/`remove_permission`, a direct assign plus `save()`, the Django
+admin form) are covered. A save that changes no grant writes nothing;
+`touch()` (`update_fields=['last_activity']`) skips the check, as does any
+`update_fields` without `"permissions"`.
+
+| Log field | Value |
+|---|---|
+| `uid` | the actor (the member an API key acts as, else the request user); `0` with no request |
+| `gid` | the member's group |
+| `model_name`, `model_id` | `account.GroupMember`, the member id |
+| `created` | the time |
+| `log` | JSON: `member_id`, `user_id`, `username`, `group_id`, `added`, `removed`, `before`, `after`, plus `"actor": "system"` with no request |
+
+`before`/`after` map each granted permission name to `true`; stored values are
+never recorded. Readers are the `Log` model's: global `manage_logs`,
+`view_logs`, `security` or `admin`. `Log` has no group scoping, so group
+managers cannot read these records.
+
+Queryset `.update()`, `bulk_update` and raw SQL bypass `save()` and write no
+record; write member permissions through `save()`. If a host routes `Log` to
+another database, the record and the member save are not in one transaction.
 
 ### Membership Tiers: `member` vs `full_member`
 

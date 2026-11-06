@@ -138,8 +138,54 @@ class GroupMember(models.Model, MojoModel):
             args = (*args[:2], using, *args[3:])
         else:
             kwargs["using"] = using
+        update_fields = kwargs.get("update_fields") or (args[3] if len(args) > 3 else None)
+        audit = update_fields is None or "permissions" in update_fields
         with transaction.atomic(using=using):
-            return super().save(*args, **kwargs)
+            before = self._stored_permissions(using) if audit else None
+            result = super().save(*args, **kwargs)
+            if audit:
+                self._log_permissions_change(before)
+            return result
+
+    def _stored_permissions(self, using):
+        """The permissions as committed, read from the row, not the instance.
+
+        set_permissions and server code edit self.permissions in place, so the
+        loaded value is no "before". Locking the row makes concurrent edits
+        record the true before. A new row starts from {}.
+        """
+        if self.pk is None:
+            return {}
+        stored = (GroupMember.objects.using(using).select_for_update()
+                  .filter(pk=self.pk).values_list("permissions", flat=True).first())
+        return stored if isinstance(stored, dict) else {}
+
+    def _log_permissions_change(self, before):
+        """Write one member:permissions_changed record when a grant changed.
+
+        Only names and true/false are recorded, never the stored values. The
+        body is encoded here: Log.logit turns nested booleans into strings.
+        """
+        after = self.permissions if isinstance(self.permissions, dict) else {}
+        before = {k: True for k, v in before.items() if v}
+        after = {k: True for k, v in after.items() if v}
+        added = sorted(set(after) - set(before))
+        removed = sorted(set(before) - set(after))
+        if not added and not removed:
+            return
+        body = {
+            "member_id": self.pk,
+            "user_id": self.user_id,
+            "username": self.user.username,
+            "group_id": self.group_id,
+            "added": added,
+            "removed": removed,
+            "before": dict(sorted(before.items())),
+            "after": dict(sorted(after.items())),
+        }
+        if self.active_request is None:
+            body["actor"] = "system"
+        self.log(json.dumps(body, indent=4), kind="member:permissions_changed")
 
     @property
     def username(self):
@@ -186,6 +232,7 @@ class GroupMember(models.Model, MojoModel):
             if not isinstance(value, dict):
                 return
             current = self.permissions if isinstance(self.permissions, dict) else {}
+            changed = False
             for perm, perm_value in value.items():
                 # A no-op needs no authority — same rule as ApiKey.set_permissions.
                 # The admin UI submits the ENTIRE permission switch catalog on
@@ -207,9 +254,14 @@ class GroupMember(models.Model, MojoModel):
                 if not self.can_change_permission(perm, perm_value, self.active_request):
                     raise merrors.PermissionDeniedException()
                 if bool(perm_value):
-                    self.add_permission(perm)
+                    self.add_permission(perm, commit=False)
                 else:
-                    self.remove_permission(perm)
+                    self.remove_permission(perm, commit=False)
+                changed = True
+            # One save per request: one audit record holding the whole diff,
+            # and a refusal above leaves nothing saved (#10293).
+            if changed:
+                self.save()
 
     def has_permission(self, perm_key):
         """
@@ -250,20 +302,22 @@ class GroupMember(models.Model, MojoModel):
         # one-directional; see mojo.helpers.perms.
         return any(bool(self.permissions.get(pk, False)) for pk in implied_perms(perm_key))
 
-    def add_permission(self, perm_key, value=True):
+    def add_permission(self, perm_key, value=True, commit=True):
         """Dynamically add a permission."""
         if isinstance(perm_key, (list, set)):
             for pk in perm_key:
-                self.add_permission(pk, value)
+                self.add_permission(pk, value, commit=False)
         else:
             self.permissions[perm_key] = value
-        self.save()
+        if commit:
+            self.save()
 
-    def remove_permission(self, perm_key):
+    def remove_permission(self, perm_key, commit=True):
         """Remove a permission."""
         if perm_key in self.permissions:
             del self.permissions[perm_key]
-            self.save()
+            if commit:
+                self.save()
 
     def touch(self):
         from mojo.apps import metrics
