@@ -1117,7 +1117,7 @@ def test_profile_section_honours_the_conf_key_and_never_reads_the_conf(opts):
     hit = _find(report, "profile", "var/profile reads")
     assert hit and hit["status"] == "FAIL", \
         f"key staging + marker prod must FAIL: {_findings(report, 'profile')}"
-    assert any(f["status"] == "INFO" and "staging" in f["detail"]
+    assert any(f["status"] == "INFO" and "staging" in f["name"]
                for f in _findings(report, "profile")), \
         f"the key's state must be reported: {_findings(report, 'profile')}"
 

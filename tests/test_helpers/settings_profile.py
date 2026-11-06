@@ -110,10 +110,12 @@ def test_key_spellings(opts):
         assert _refusal(_tree(conf=conf)) is not None, f"{conf!r} must arm the guard"
     assert _resolve(_tree(conf="# MOJO_REQUIRED_PROFILE = prod\n"))[0] == "local", \
         "a commented key must be ignored"
-    assert _refusal(_tree(conf="MOJO_REQUIRED_PROFILE = prod\nMOJO_REQUIRED_PROFILE = local\n")) is None, \
-        "the last occurrence must win (local, with no marker, resolves to local)"
-    assert _refusal(_tree(conf="MOJO_REQUIRED_PROFILE = local\nMOJO_REQUIRED_PROFILE = prod\n")) is not None, \
-        "the last occurrence must win (prod refuses with no marker)"
+    assert _refusal(_tree(conf="MOJO_REQUIRED_PROFILE = prod\nMOJO_REQUIRED_PROFILE = local\n",
+                          profile="local\n")) is None, \
+        "the last occurrence must win (local is required and the marker reads local)"
+    assert _refusal(_tree(conf="MOJO_REQUIRED_PROFILE = local\nMOJO_REQUIRED_PROFILE = prod\n",
+                          profile="local\n")) is not None, \
+        "the last occurrence must win (prod is required and the marker reads local)"
 
 
 @th.django_unit_test("profile guard: a malformed value warns once and stays dormant")

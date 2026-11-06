@@ -48,6 +48,39 @@ from mojo.helpers.settings import load_settings_profile
 load_settings_profile(context)
 ```
 
+`load_settings_profile` loads `settings.defaults`, then `settings.<profile>`.
+The profile comes from `resolve_profile(VAR_ROOT)` in
+`mojo.helpers.settings.helper`: the stripped contents of `var/profile`, or
+`local` when that file does not exist. Every process imports settings this
+way: ASGI, the job engine, `manage.py` (and so `migrate`) and `bin/cron.py`.
+Both provisioning paths write `prod` before anything starts.
+
+### Requiring a profile (opt-in)
+
+A deployment can make a missing or wrong marker fatal by adding one line to
+its own `var/django.conf`:
+
+```
+MOJO_REQUIRED_PROFILE = prod
+```
+
+- With the key, a `var/profile` that is missing, empty or different raises
+  `ImproperlyConfigured("django-mojo refused to start: ...")`, naming both
+  files, what was found and the fix (write the profile, `chown ec2-user:www`,
+  `chmod 640`, restart `mojo-asgi`).
+- Without the key (every install until its operator adds it), behaviour is
+  exactly as before: `local` when the marker is missing, with no output.
+- The key is read with one anchored regex, never through the conf parser
+  (which evaluates f-string values). The last matching line wins, one pair of
+  quotes is stripped, and a commented line is ignored. A value that is not a
+  plain profile name (`[A-Za-z0-9_-]+`) writes one warning line to stderr and
+  leaves the guard off.
+- An unreadable `django.conf` counts as no key. Admin config overrides cannot
+  set this key.
+
+Before adding it to a fleet, check every node first; see
+[Requiring the production profile](../deploy/README.md#requiring-the-production-profile).
+
 ## Defining Settings in Django settings.py
 
 ```python
