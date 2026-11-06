@@ -142,6 +142,8 @@ def _handle(request, connection):
 
     if _body_too_large(request):
         return _refuse("report is too large", 413)
+    if getattr(request, "invalid_group", False):
+        return _refuse("Invalid group ID")
     data = request.DATA
     category = data.get("category")
     if (not isinstance(category, str) or len(category) > CATEGORY_MAX

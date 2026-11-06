@@ -188,6 +188,24 @@ def on_status(request):
     return {"status": True, "version": "1.0"}
 ```
 
+### `@md.handles_invalid_group`
+For a public route that must stay inside its own limiter. Normally the
+dispatcher answers a malformed `group` (`?group=abc`, a list) with its own 400
+and a level-8 `rest_error` Event, before the route's decorators run. With this
+marker, placed directly under the route decorator, the dispatcher instead sets
+`request.invalid_group = True` and calls the route, which must refuse it. A
+well-formed id is resolved and confined to a restricted credential exactly as
+before. Used by `POST /api/incident/event/client` (#4125).
+
+```python
+@md.POST('event/client')
+@md.handles_invalid_group
+@md.public_endpoint("frontend crash/debug reports")
+@md.strict_rate_limit('incident_client_report', ip_limit=60, muid_limit=20)
+def on_event_client_report(request):
+    return client_report.handle(request)  # refuses request.invalid_group with 400
+```
+
 ## Validation Decorators
 
 ### `@md.requires_params(*params)`

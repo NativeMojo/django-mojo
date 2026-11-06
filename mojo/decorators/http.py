@@ -109,11 +109,31 @@ def _emit_permission_denied_event(err, request):
     )
 
 
+def handles_invalid_group(func):
+    """
+    The route answers a malformed ``group`` itself (#4125). The dispatcher then
+    sets ``request.invalid_group = True`` and calls the route, instead of
+    returning its own 400 and filing a rest_error Event before the route's
+    limiter runs. A well-formed id is still resolved and confined as usual.
+    Only for routes that check ``request.invalid_group`` and refuse it.
+    """
+    func._mojo_handles_invalid_group = True
+    return func
+
+
+def _route_view(key, method):
+    method_key = f"{key}__{method}"
+    if method_key not in URLPATTERN_METHODS:
+        method_key = f"{key}__ALL"
+    return URLPATTERN_METHODS.get(method_key)
+
+
 def dispatcher(request, *args, **kwargs):
     """
     Dispatches incoming requests to the appropriate registered URL method.
     """
     key = kwargs.pop('__mojo_rest_root_key__', None)
+    view = _route_view(key, request.method)
     # Global per-identity throttle + traffic accounting (DM-042). Runs BEFORE
     # group resolution so a rejected request never touches the DB beyond the
     # auth SELECT already spent in middleware. Anonymous requests are a no-op.
@@ -146,6 +166,10 @@ def dispatcher(request, *args, **kwargs):
             # TypeError: int() on a non-scalar (client sent a list/dict/null).
             # This block runs BEFORE dispatch_error_handler wraps the view, so
             # anything uncaught here escapes as a bare Django 500.
+            if getattr(view, "_mojo_handles_invalid_group", False):
+                # The route refuses it inside its own limiter, with no Event.
+                request.invalid_group = True
+                return dispatch_error_handler(view)(request, *args, **kwargs)
             if _events_on_errors():
                 rest.MojoModel.class_report_incident(
                     details=f"Permission denied: Invalid group ID -> {repr(request.DATA.group)[:200]}",
@@ -182,11 +206,8 @@ def dispatcher(request, *args, **kwargs):
                     return JsonResponse({"error": "Group not accessible with this API key", "code": 403}, status=403)
                 request.group = grp
                 grp.touch()
-    method_key = f"{key}__{request.method}"
-    if method_key not in URLPATTERN_METHODS:
-        method_key = f"{key}__ALL"
-    if method_key in URLPATTERN_METHODS:
-        return dispatch_error_handler(URLPATTERN_METHODS[method_key])(request, *args, **kwargs)
+    if view is not None:
+        return dispatch_error_handler(view)(request, *args, **kwargs)
     return error_pages.error_response(
         request, {"error": "Endpoint not found", "code": 404}, 404)
 

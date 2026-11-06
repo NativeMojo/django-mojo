@@ -175,13 +175,15 @@ def on_event(request, pk=None):
 
 
 @md.POST('event/client')
+@md.handles_invalid_group
 @md.public_endpoint("frontend crash/debug reports: allowlisted, bounded, server-owned provenance")
 @md.strict_rate_limit('incident_client_report', ip_limit=60, muid_limit=20)
 def on_event_client_report(request):
     # Browser crash and debug reports (#4125). Works before sign-in; the
     # service allowlists and bounds the body, stamps the sender from the
     # request and publishes each report once. It never raises, so a bad
-    # report cannot file an error Event about itself.
+    # report cannot file an error Event about itself. A malformed ?group= is
+    # refused there too, after the limiter (handles_invalid_group).
     from mojo.apps.incident.services import client_report
     return client_report.handle(request)
 
