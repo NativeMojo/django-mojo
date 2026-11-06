@@ -185,7 +185,7 @@ def test_governed_schema_accepts_claims(opts):
         f"claim fields not normalized as given: {fields}"
 
 
-@th.django_unit_test("4125 T11 guard: anonymous create stays refused; operator reads unchanged")
+@th.django_unit_test("4125 T11 guard: anonymous create stays refused; bad bodies are 400; operator reads unchanged")
 def test_anonymous_and_operator_unchanged(opts):
     category = f"testit:{opts.tag}:t11"
     opts.client.logout()
@@ -198,6 +198,14 @@ def test_anonymous_and_operator_unchanged(opts):
     from mojo.apps.incident import reporter
     from mojo.apps.incident.models.event import Event
     assert not Event.objects.filter(category=category).exists(), "an anonymous create stored a row"
+    assert opts.client.login(opts.member.email, PWORD), "member login failed"
+    try:
+        huge = _post(opts, {"category": category, "level": 2**40})
+        no_category = _post(opts, {"level": 1})
+    finally:
+        opts.client.logout()
+    assert huge.status_code == 400, f"an out-of-range level must be 400, not {huge.status_code}"
+    assert no_category.status_code == 400, f"a missing category must be 400, not {no_category.status_code}"
     row = reporter.record_event("ev4125 operator row", category=category)
     assert opts.client.login(opts.operator.email, PWORD), "operator login failed"
     try:

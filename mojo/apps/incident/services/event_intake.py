@@ -35,6 +35,7 @@ _CLAIMED_FIELDS = (
 )
 
 HOSTNAME_MAX = 16  # Event.hostname column width
+INT_MIN, INT_MAX = -2**31, 2**31 - 1  # IntegerField range: past it is a 500
 CATEGORY_MAX = 124  # Event.category column width
 SCOPE_MAX = 64  # Event.scope column width
 
@@ -97,14 +98,14 @@ def _level(data):
     value = data.get("level", 0)
     if value is None:
         return 0
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise merrors.ValueException("level must be an integer")
+    if isinstance(value, bool) or not isinstance(value, int) or not INT_MIN <= value <= INT_MAX:
+        raise merrors.ValueException("level must be a 32-bit integer")
     return value
 
 
 def _model_id(data):
     value = data.get("model_id", None)
-    if isinstance(value, bool) or not isinstance(value, int):
+    if isinstance(value, bool) or not isinstance(value, int) or not INT_MIN <= value <= INT_MAX:
         return None
     return value
 
