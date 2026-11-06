@@ -468,8 +468,12 @@ not a plain profile name is reported as ignored, never printed.
 
 ### Requiring the production profile
 
-Both provisioning paths (stage 1 and the skeleton's `ec2_deploy.sh` /
-golden-clone user data) write `var/profile` = `prod` before the app starts. To
+Stage 1 writes `var/profile` = `prod` before the project's bootstrap, and the
+skeleton's `ec2_deploy.sh` writes it on a box that has never served, before
+`mojo-asgi` is enabled. A golden-image clone whose image lacks the marker is
+repaired instead: its first-boot user data writes `prod` and then restarts
+`mojo-asgi` and the job engines, which may already have started on
+`settings.local`. An existing marker is never overwritten. To
 make a node refuse to run without it, add `MOJO_REQUIRED_PROFILE = prod` to
 the deployment's canonical `var/django.conf` (see
 [Settings Profile](../helpers/settings.md#requiring-a-profile-opt-in)).
