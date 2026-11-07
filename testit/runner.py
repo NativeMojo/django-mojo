@@ -986,13 +986,72 @@ def setup_parser(argv=None):
 # ---------------------------------------------------------------------------
 # Test execution (single module)
 # ---------------------------------------------------------------------------
+# Per-thread adjustments to the current file's static test count (item
+# #2774): setup steps taken out of it and extra outcomes added to it. The
+# file guard reads them to size what a cut-short file left unrecorded.
+_file_tally = threading.local()
+
+
+def _reset_file_tally():
+    _file_tally.uncounted = 0
+    _file_tally.extra = 0
+
+
+def _emit_uncount():
+    """A setup-decorated test_ is a step, not a test: take it out of the count."""
+    _file_tally.uncounted = getattr(_file_tally, "uncounted", 0) + 1
+    dfn = helpers._get_display_fn()
+    if dfn:
+        dfn("test_uncount")
+
+
+def _emit_extra(count):
+    """Outcomes beyond one per counted test: add them to the count."""
+    _file_tally.extra = getattr(_file_tally, "extra", 0) + count
+    dfn = helpers._get_display_fn()
+    if dfn:
+        dfn("test_extra", count=count)
+
+
+def _counted_here(module, func, func_name):
+    """True when the static count includes this function: a test_ defined in
+    this file and bound under its own def name, not one imported or aliased
+    (item #2774). testit's decorators keep `__name__` via functools.wraps."""
+    name = getattr(module, "__name__", None)
+    if name is not None and getattr(func, "__module__", None) != name:
+        return False
+    return getattr(func, "__name__", None) == func_name
+
+
+def _adjust_count(delta):
+    """Move the file's count by `delta`: -1 takes a setup step out, a
+    positive number adds outcomes the static count did not include."""
+    if delta < 0:
+        for _ in range(-delta):
+            _emit_uncount()
+    elif delta > 0:
+        _emit_extra(delta)
+
+
 def run_test(opts, module, func_name, module_name, test_name):
-    """Run a specific test function inside a module."""
+    """Run a specific test function inside a module.
+
+    Every counted test ends recorded, skipped, unrecorded or aborted (item
+    #2774): a call that records no outcome is entered as unrecorded with its
+    cause, and a setup-decorated test_ that returns is a step, not a test.
+    The file's count then moves so that it holds every outcome the call
+    recorded, plus one for the call itself when it is unrecorded; `base` is
+    what the static count already holds for it (0 for an imported test_).
+    """
     test_key = f"{module_name}.{test_name}.{func_name}"
     helpers.VERBOSE = opts.verbose or opts.errors
     helpers._set_active_test(test_key.replace(".", ":"))
+    func = getattr(module, func_name)
+    is_step = bool(getattr(func, "_is_setup", False))
+    base = 1 if _counted_here(module, func, func_name) else 0
+    helpers._reset_outcomes()
     try:
-        getattr(module, func_name)(opts)
+        func(opts)
     except helpers.TestitSkip as skip:
         # An outer requires_extra decorator can skip before the unit-test
         # wrapper starts accounting. Skips caught inside that wrapper never
@@ -1005,10 +1064,19 @@ def run_test(opts, module, func_name, module_name, test_name):
         dfn = helpers._get_display_fn()
         if dfn:
             dfn("test_result", name=name, status="skipped", detail=str(skip))
+        _adjust_count(helpers._outcomes() - base)
         return
     except helpers.TestitAbort:
         raise
     except Exception as err:
+        outcomes = helpers._outcomes()
+        if outcomes == 0 or is_step:
+            # The call itself has no outcome: one unrecorded entry, beside
+            # whatever its nested wrappers recorded.
+            helpers._add_unrecorded(module_name, test_name, func_name, type(err).__name__)
+            _adjust_count(outcomes + 1 - base)
+        else:
+            _adjust_count(outcomes - base)
         if opts.verbose:
             print(f"  Test Error: {err}")
             traceback.print_exc()
@@ -1016,6 +1084,14 @@ def run_test(opts, module, func_name, module_name, test_name):
             save_checkpoint(module_name, test_name)
             helpers.mark_aborted()
             raise helpers.TestitAbort()
+        return
+    outcomes = helpers._outcomes()
+    if outcomes == 0 and not is_step:
+        helpers._add_unrecorded(module_name, test_name, func_name, "returned")
+        _adjust_count(1 - base)
+    else:
+        # A returning step counts only what it recorded.
+        _adjust_count(outcomes - base)
 
 
 class _SetupFailed(Exception):
@@ -1205,19 +1281,96 @@ def _record_unrunnable_file(module_name, test_name, expected_root, reason):
 
 
 def run_module_tests_by_name(opts, module_name, test_name, expected_root=None):
-    """Run all test functions in a specific test module in the order they appear."""
+    """Run all test functions in a specific test module in the order they appear.
+
+    An unexpected exception stops only this file: its remaining counted tests
+    are entered as unrecorded and the caller's next file still runs (item
+    #2774). TestitAbort still propagates.
+    """
     # A stopped run starts no file: main's next phase (file specs after
     # packages, or packages after file specs) reaches here before any other
     # abort check, and setup must not run (item #4761).
     if _run_stopped():
         helpers.mark_aborted()
         raise helpers.TestitAbort()
+    _reset_file_tally()
+    try:
+        module = _run_module_file(opts, module_name, test_name, expected_root)
+    except helpers.TestitAbort:
+        raise
+    except Exception as err:
+        _record_file_stopped(module_name, test_name, expected_root, err)
+        return
+    if module is not None:
+        _record_not_collected(module, module_name, test_name, expected_root)
+
+
+def _static_file_count(expected_root, test_name):
+    """The file's static test count, or None when there is no resolved file."""
+    if not expected_root:
+        return None
+    file_path = os.path.join(expected_root, f"{test_name}.py")
+    if not os.path.exists(file_path):
+        return None
+    return _count_tests_in_file(file_path)
+
+
+def _record_not_collected(module, module_name, test_name, expected_root):
+    """Reconcile the static count with the test_ functions the run collects.
+
+    A counted def that is never offered (a shadowed duplicate, a name rebound
+    to a non-function) is unrecorded as `not_collected`; a test_ defined in
+    this file that the static count missed is added to it (item #2774).
+    """
+    static = _static_file_count(expected_root, test_name)
+    if static is None:
+        return
+    # Only test_ functions defined in this file and bound under their own def
+    # name: an imported or aliased one is not in the static count and
+    # run_test adds its outcomes on its own, so it must not cancel a shadowed
+    # local definition.
+    defined = sum(1 for func_name, func in inspect.getmembers(module, inspect.isfunction)
+                  if func_name.startswith("test_") and _counted_here(module, func, func_name))
+    missing = static - defined
+    if missing > 0:
+        helpers._add_unrecorded(module_name, test_name, "*", "not_collected", missing)
+    elif missing < 0:
+        _emit_extra(-missing)
+
+
+def _record_file_stopped(module_name, test_name, expected_root, err):
+    """Enter what an unexpected exception left of this file as unrecorded:
+    its static count, adjusted for steps and extra outcomes, less what it
+    already recorded or entered; at least 1 (item #2774)."""
+    static = _static_file_count(expected_root, test_name) or 0
+    with helpers._lock:
+        recorded = sum(1 for r in helpers.TEST_RUN.records
+                       if r.get("module") == module_name
+                       and r.get("test_module") == test_name
+                       and r.get("kind") != "setup_error")
+        entered = sum(u["count"] for u in (getattr(helpers.TEST_RUN, "unrecorded", None) or [])
+                      if u["module"] == module_name and u["test_module"] == test_name)
+    remaining = (static - getattr(_file_tally, "uncounted", 0)
+                 + getattr(_file_tally, "extra", 0) - recorded - entered)
+    if remaining < 1:
+        _emit_extra(1 - max(remaining, 0))
+        remaining = 1
+    helpers._add_unrecorded(module_name, test_name, "*", type(err).__name__, remaining)
+    if not helpers._get_display_fn():
+        logit.color_print(
+            f"{helpers.INDENT}File stopped: {module_name}.{test_name}: "
+            f"{type(err).__name__}: {err}", logit.ConsoleLogger.RED)
+
+
+def _run_module_file(opts, module_name, test_name, expected_root):
+    """The body of run_module_tests_by_name. Returns the imported module, or
+    None when the file could not be imported."""
     module = import_module_for_testing(module_name, test_name, expected_root)
     if not module:
         _record_unrunnable_file(
             module_name, test_name, expected_root,
             "import failed or resolved to a shadowing package (see output above)")
-        return
+        return None
     gate = _tier_gate(opts, module)
     tests = [func for func_name, func in inspect.getmembers(module, inspect.isfunction)
              if func_name.startswith("test_")]
@@ -1227,7 +1380,7 @@ def run_module_tests_by_name(opts, module_name, test_name, expected_root=None):
         # shared-setup file serving later files, so it always runs its setup
         # (item #8300).
         run_module_tests(opts, module, test_name, module_name)
-        return
+        return module
     try:
         skipped = run_module_setup(opts, module, test_name, module_name)
     except _SetupFailed as failure:
@@ -1239,22 +1392,29 @@ def run_module_tests_by_name(opts, module_name, test_name, expected_root=None):
             save_checkpoint(module_name, test_name)
             helpers.mark_aborted()
             raise helpers.TestitAbort()
-        return
+        return module
     if skipped:
         # Count all tests in this file as skipped so totals stay consistent
         prefix = "test_"
         functions = inspect.getmembers(module, inspect.isfunction)
         for func_name, func in functions:
             if func_name.startswith(prefix):
+                if getattr(func, "_is_setup", False):
+                    _adjust_count(0 - _counted_here(module, func, func_name))
+                    continue
                 display_name = func_name[len(prefix):]
+                # Name this file's test, not whatever ran last on the thread.
+                helpers._set_active_test(f"{module_name}:{test_name}:{func_name}")
                 helpers._increment("total")
                 helpers._increment("skipped")
                 helpers._record_result(display_name, status="skipped", detail="setup skipped")
                 dfn = helpers._get_display_fn()
                 if dfn:
                     dfn("test_result", name=display_name, status="skipped", detail="setup skipped")
-        return
+                _adjust_count(1 - _counted_here(module, func, func_name))
+        return module
     run_module_tests(opts, module, test_name, module_name)
+    return module
 
 
 def run_module_setup(opts, module, test_name, module_name):
@@ -1348,11 +1508,18 @@ def run_module_tests(opts, module, test_name, module_name, setup_failure=None):
             if _abort_event.is_set() and setup_failure is None:
                 helpers.mark_aborted()
                 raise helpers.TestitAbort()
+            if getattr(func, "_is_setup", False) and (
+                    setup_failure is not None
+                    or (gate is not None and gate(func) is not None)):
+                # A setup step that will not run is not a skipped test.
+                _adjust_count(0 - _counted_here(module, func, func_name))
+                continue
             if gate is not None:
                 bucket = gate(func)
                 if bucket is not None:
                     helpers.record_tier_skip(
                         module_name, test_name, func_name, bucket)
+                    _adjust_count(1 - _counted_here(module, func, func_name))
                     continue
             if setup_failure is not None:
                 # The file's setup raised: a counted skip of kind `not_run`
@@ -1369,6 +1536,7 @@ def run_module_tests(opts, module, test_name, module_name, setup_failure=None):
                 dfn = helpers._get_display_fn()
                 if dfn:
                     dfn("test_result", name=name, status="skipped", detail=detail)
+                _adjust_count(1 - _counted_here(module, func, func_name))
                 continue
             # Track current test for the running display
             dfn = helpers._get_display_fn()
@@ -1577,6 +1745,7 @@ class _ModuleTracker:
         self.passed = 0
         self.failed = 0
         self.skipped = 0
+        self.unrecorded = 0
         self.started_at = None
         self.finished_at = None
         self.finished = False
@@ -1602,6 +1771,19 @@ class _ModuleTracker:
                 self.failures.append({"name": name, "detail": detail})
             elif status == "skipped":
                 self.skipped += 1
+
+    def adjust(self, event, count=1):
+        """Apply an accounting event to the static total (item #2774):
+        test_uncount takes a setup step out, test_extra adds extra outcomes,
+        test_unrecorded counts tests that ended with no outcome."""
+        with self._lock:
+            if event == "test_uncount":
+                self.total -= 1
+            elif event == "test_extra":
+                self.total += count
+            elif event == "test_unrecorded":
+                self.completed += count
+                self.unrecorded += count
 
     @property
     def elapsed(self):
@@ -1914,6 +2096,8 @@ def _build_agent_report(opts, display=None, conf_drift=None):
                 "skipped": t.skipped,
                 "duration": round(t.elapsed, 2),
             }
+            if getattr(t, "unrecorded", 0):
+                entry["unrecorded"] = t.unrecorded
             if t.skip_reason:
                 entry["skipped_reason"] = t.skip_reason
             if module_tiers.get(name):
@@ -1949,6 +2133,21 @@ def _build_agent_report(opts, display=None, conf_drift=None):
         for status in ("passed", "failed", "skipped"):
             extra = max(0, counts[status] - entry[status])
             entry[status] += extra
+            entry["tests"] += extra
+
+    # Counted tests with no outcome (item #2774) are part of `tests`, so for
+    # every module tests == passed + failed + skipped + unrecorded. A tracker
+    # already counted the ones it saw; add only what it did not.
+    entered = {}
+    for item in getattr(helpers.TEST_RUN, "unrecorded", None) or []:
+        mod = item.get("module") or "unknown"
+        entered[mod] = entered.get(mod, 0) + item.get("count", 1)
+    for mod, count in entered.items():
+        entry = modules.setdefault(
+            mod, {"tests": 0, "passed": 0, "failed": 0, "skipped": 0})
+        extra = max(0, count - entry.get("unrecorded", 0))
+        if extra:
+            entry["unrecorded"] = entry.get("unrecorded", 0) + extra
             entry["tests"] += extra
 
     duration = (helpers.TEST_RUN.finished_at or time.time()) - (helpers.TEST_RUN.started_at or time.time())
@@ -2063,9 +2262,19 @@ def _run_verdict(run):
             "message": (f"  {setup_count} setup error(s): {', '.join(names)}{more}; "
                         f"{not_run} test(s) not run"),
         })
+    unrecorded = getattr(run, "unrecorded", None) or []
+    if unrecorded:
+        count = sum(u["count"] for u in unrecorded)
+        names = [f"{u['module']}.{u['test_module']}.{u['function']} ({u['cause']})"
+                 for u in unrecorded[:5]]
+        more = f" and {len(unrecorded) - 5} more" if len(unrecorded) > 5 else ""
+        reasons.append({
+            "code": "unrecorded",
+            "message": f"  {count} test(s) recorded no result: {', '.join(names)}{more}",
+        })
     if run.aborted or _abort_event.is_set():
         reasons.append({"code": "aborted", "message": "  Run stopped early."})
-    if not setup_count and executed == 0:
+    if not setup_count and not unrecorded and executed == 0:
         if run.total == 0:
             reasons.append({
                 "code": "nothing_selected",
@@ -2125,6 +2334,22 @@ def _run_stopped():
     return _abort_event.is_set() or bool(helpers.TEST_RUN.aborted)
 
 
+_ACCOUNTING_EVENTS = ("test_uncount", "test_extra", "test_unrecorded")
+
+
+def _record_package_stopped(record, tracker, err):
+    """Backstop for an exception that escaped a package's thread runner: enter
+    what its tracker had not accounted for as unrecorded, at least 1 (#2774)."""
+    with tracker._lock:
+        done = tracker.passed + tracker.failed + tracker.skipped + tracker.unrecorded
+        remaining = tracker.total - done
+        if remaining < 1:
+            tracker.total += 1 - max(remaining, 0)
+            remaining = 1
+    helpers._add_unrecorded(record.name, "*", "*", type(err).__name__, remaining)
+    tracker.adjust("test_unrecorded", remaining)
+
+
 def _run_module_in_thread(opts_template, record, tracker):
     """Run all test files for a module record. Called from a thread."""
     # Each thread gets its own opts copy with its own client
@@ -2139,6 +2364,10 @@ def _run_module_in_thread(opts_template, record, tracker):
                 display_ref.refresh()
         elif event == "test_result":
             tracker.record(kwargs.get("status"), kwargs.get("name"), kwargs.get("detail"))
+            if display_ref:
+                display_ref.refresh()
+        elif event in _ACCOUNTING_EVENTS:
+            tracker.adjust(event, kwargs.get("count", 1))
             if display_ref:
                 display_ref.refresh()
 
@@ -2756,13 +2985,13 @@ def main(opts):
                             _run_module_in_thread,
                             opts, record, tracker,
                         )
-                        futures[future] = record.name
+                        futures[future] = (record, tracker)
 
                     for future in as_completed(futures):
                         try:
                             future.result()
-                        except Exception:
-                            pass
+                        except Exception as err:
+                            _record_package_stopped(*futures[future], err)
 
             # Run serial modules sequentially
             for record in serial_modules:
@@ -2777,6 +3006,9 @@ def main(opts):
                             d.refresh()
                         elif event == "test_result":
                             t.record(kwargs.get("status"), kwargs.get("name"), kwargs.get("detail"))
+                            d.refresh()
+                        elif event in _ACCOUNTING_EVENTS:
+                            t.adjust(event, kwargs.get("count", 1))
                             d.refresh()
                     return _on_event
 
@@ -2828,12 +3060,12 @@ def main(opts):
                         _run_module_in_thread,
                         opts, record, tracker,
                     )
-                    futures[future] = record.name
+                    futures[future] = (record, tracker)
                 for future in as_completed(futures):
                     try:
                         future.result()
-                    except Exception:
-                        pass
+                    except Exception as err:
+                        _record_package_stopped(*futures[future], err)
 
         # Run serial modules sequentially
         for record in serial_modules:

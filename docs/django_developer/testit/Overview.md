@@ -165,7 +165,7 @@ Every run writes `testproject/var/test_failures.json` — a structured JSON repo
 
 - **Top-level**: `status` (`failed` when `reasons` is non-empty, `refused` for a run that did not complete — see *Run lock and refusals* — else `passed`), `total`, `passed`, `failed`, `skipped`, `duration` — summed across every module, **including modules skipped whole** (`requires_apps`/`requires_extra`). This is the baseline-comparison number.
 - **`ran`**: the same shape (`total`, `passed`, `failed`, `skipped`) but restricted to what this invocation actually *executed* — whole-skipped modules contribute to the top-level totals but not to `ran`. Use `ran` when you need "how much work did this run really do," e.g. distinguishing a default-tier run from one that also pulled in `--extra` modules.
-- **`modules`**: per-module breakdown — `tests`, `passed`, `failed`, `skipped`, `duration` for each test module, plus `skipped_reason` when the whole module was skipped
+- **`modules`**: per-module breakdown — `tests`, `passed`, `failed`, `skipped`, `duration` for each test module, plus `skipped_reason` when the whole module was skipped and `unrecorded` when counted tests ended with no result. For every module of a run that was not aborted, `tests == passed + failed + skipped + unrecorded` (see *What counts as a test* below)
 - **`slowest`**: the 25 slowest individual tests, sorted descending by `duration` — `test_name`, `module`, `test_file`, `status`, `duration`. Module-level `duration` alone can't say which test inside a slow module is the cost; every executed test records its own `duration` (seconds) and this is ranked from it.
 - **`reasons`**: why the run failed, as a list of `{code, message}`; empty on a passing run. See *What makes a run fail* below.
 - **`budget`**: the tier-budget outcome — `enforced`, `failed`, `time_only` and the `scale` used. `budget_violations` lists the over and stale entries themselves.
@@ -182,9 +182,10 @@ One verdict sets the report `status`, the exit code and whether the `--continue`
 - **`setup_error`**: a `setup_` function raised. The message names up to five `module.file.function` setups and counts the tests not run.
 - **`aborted`**: the run was stopped early, by `-s` or the abort key.
 - **`nothing_selected`**: the selection matched no tests, for example a `-t` or `--tier` naming nothing that exists.
+- **`unrecorded`**: a counted test ended with no recorded result. The message counts them and names up to five as `module.file.function (cause)`. An unrecorded test is never counted as failed.
 - **`nothing_executed`**: tests were selected but every one was skipped.
 
-The two empty-run codes apply only when there is no setup error. The checkpoint is kept only for `aborted` or `setup_error`. The tier-budget exit is separate: a blown `core` budget exits non-zero with its own message and adds nothing to `reasons`, but it sets `status: "failed"` and the report's `budget` block says `failed: true`. When every test passed, `budget.time_only` is `true`, which is how a time-only failure is told apart from a failing test (see *Budgets* in `Tiers.md`).
+The two empty-run codes apply only when there is no setup error and no unrecorded test. The checkpoint is kept only for `aborted` or `setup_error`. The tier-budget exit is separate: a blown `core` budget exits non-zero with its own message and adds nothing to `reasons`, but it sets `status: "failed"` and the report's `budget` block says `failed: true`. When every test passed, `budget.time_only` is `true`, which is how a time-only failure is told apart from a failing test (see *Budgets* in `Tiers.md`).
 
 LLM agents should always use `--agent` and read the JSON report instead of parsing terminal output. Never use `--plain` — it disables the rich UI but doesn't improve agent output.
 
@@ -679,6 +680,17 @@ def test_admin_can_login(opts):
 - A file whose tests are all outside the selected tier runs no setup; its tests are counted as tier skips.
 - A file with no tests of its own (a shared-setup file such as `1_setup.py`) runs its setup whenever its package runs, whatever the tier. A setup error there is reported as `setup_error`, and setup alone is never counted as an executed test.
 
+#### What counts as a test
+
+A counted test is a top-level `def test_*` in a test file. Each one ends in exactly one of these states:
+
+- **Recorded**: it ran and recorded one or more results through `@th.unit_test` or `@th.django_unit_test` (passed, failed, skipped or error). A test that records more than one result, for example by calling another wrapped function, adds each extra result to its module's `tests`. A `test_*` name that is not bound under its own `def` name (imported, or aliased in the same file, such as `test_b = test_a`) is not in the static count; each result it records is added.
+- **Skipped or not run**: a tier skip, a setup skip, or `not_run` after a setup error, as above.
+- **Unrecorded**: it ran and recorded nothing (an undecorated `test_*`), it raised outside the wrappers (for example `django.setup()` failing), it was never collected (a duplicate `def` that shadows an earlier one), or its file stopped on an unexpected exception. Each is entered by name with its cause (`returned`, `not_collected` or the exception type) and fails the run with the reason `unrecorded`.
+- **Aborted**: the run was stopped early.
+
+A `test_*` decorated with `@th.unit_setup()` or `@th.django_unit_setup()` (for example a `test_zz_teardown` that cleans up after the file) is a **step**, not a test. It runs in place in the test phase and is not counted. If it raises, it stays counted and is unrecorded with the exception type, so a failing teardown is never silent. A package skipped whole is never imported, so its static count, including such steps, is reported as skipped.
+
 > **Collection is by function-name PREFIX, not by decorator, and there is no
 > teardown phase.** The runner collects `setup_*` for the setup phase and
 > `test_*` for the test phase — nothing else. (The historical `quick_*` test
@@ -846,9 +858,9 @@ All other keys (e.g. `periods`, `slug`, `status`, `data`, `id`) are safe to acce
 - Agent report (written by every run; `--agent` prints its path): `testproject/var/test_failures.json`
   - `run` — the identity of the run that wrote it (`run_id`, `pid`, `started_at`, `token`); `status: "refused"` with a `reasons` code when the run did not complete (see *Run lock and refusals*)
   - Top-level `status`, `total`, `passed`, `failed`, `skipped`, `duration` — summed across all modules, including ones skipped whole
-  - `reasons` — why the run failed, as `{code, message}` entries (`tests_failed`, `setup_error`, `aborted`, `nothing_selected`, `nothing_executed`); empty on a passing run
+  - `reasons` — why the run failed, as `{code, message}` entries (`tests_failed`, `setup_error`, `unrecorded`, `aborted`, `nothing_selected`, `nothing_executed`); empty on a passing run
   - `ran` — the same counts restricted to what actually executed this run (excludes whole-skipped modules)
-  - Per-module stats in `modules` dict (tests, passed, failed, skipped, duration, plus `skipped_reason` when the module was skipped whole)
+  - Per-module stats in `modules` dict (tests, passed, failed, skipped, duration, plus `skipped_reason` when the module was skipped whole and `unrecorded` for counted tests with no result)
   - `slowest` — the 25 slowest individual tests, sorted descending by `duration`
   - Per-failure diagnostics in `failures` list (`kind`, test_source, file_path, line, traceback, server_log_tail)
   - `conf_drift` — names of `var/django.conf` keys stranded by a settings override (empty on a clean run)

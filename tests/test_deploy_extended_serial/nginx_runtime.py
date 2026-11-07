@@ -153,6 +153,7 @@ def test_inactive_fragment_failure_names_the_missing_include(opts):
         shutil.rmtree(root, ignore_errors=True)
 
 
+@th.django_unit_test()
 def test_selinux_policy_is_durable_and_labels_are_read_back(opts):
     from mojo.deploy import nginx_runtime as runtime
 
