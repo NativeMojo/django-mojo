@@ -132,8 +132,9 @@ def test_signin_auth_look_and_feel(opts):
             "auth": {"login.methods": ["password", "magic"]}})
         assert resp.status_code == 200, f"saving login methods failed: {resp.response!r}"
         cfg = opts.client.get("/api/auth/config").response.data
-        assert "magic" in cfg["login"]["methods"], \
-            f"a system login method did not reach the hosted config: {cfg['login']!r}"
+        # magic is in the defaults, so only the exact list proves the save took.
+        assert cfg["login"]["methods"] == ["password", "magic"], \
+            f"the saved system login methods did not reach the hosted config: {cfg['login']!r}"
 
         resp = opts.client.post("/api/account/admin/signin", json={
             "auth": {"login.methods": ["magic"]}})
