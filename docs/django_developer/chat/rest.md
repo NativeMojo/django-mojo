@@ -3,7 +3,7 @@
 All endpoints are under `/api/chat/`. Authentication is required on all endpoints.
 
 When a project sets `REALTIME_SUBSCRIBE_HANDLER`, `GET room/messages`,
-`GET room/online`, `GET room/members` and `POST room/read` also ask it after
+`GET room/online`, `GET room/members`, `GET room/flagged` and `POST room/read` also ask it after
 their own checks pass and answer 403 when it refuses, and `POST dm` asks it
 before handing back an existing DM. `POST room`, `room/leave`, `GET rooms` and
 `GET unread` do not ask it. See
@@ -213,7 +213,9 @@ hidden/deleted slots; see [Unread counts](#get-apichatunread--unread-counts).
 
 ### `GET /api/chat/room/flagged?room_id=5` — Flagged messages
 
-Moderator-only. Returns flagged messages for review.
+Moderator-only. Returns flagged messages for review. When a project's
+`REALTIME_SUBSCRIBE_HANDLER` refuses the moderator the room's topic, it answers
+403, the same as `GET room/messages`.
 
 ## Direct Messages
 
@@ -304,7 +306,9 @@ written. The framework publishes the committed cursor read frame and calls
 
 Returns unread message counts per room for the authenticated user, over
 memberships with `status in ("active", "muted")`. Rooms with a zero count are
-omitted.
+omitted. Under a confined credential (a group token or an override ApiKey) both
+backends count only rooms in the credential's own group, the same bound as
+`GET rooms`; groupless rooms (DMs) drop out.
 
 **Default legacy backend — same bound as history.** Each room's count narrows through
 `visible_messages(room, membership)` — unflagged, the join-time cutoff for every

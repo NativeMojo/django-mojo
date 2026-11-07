@@ -162,6 +162,8 @@ it. A foreign, pre-join, flagged or not-yet-existing ID may therefore resolve
 to a different row. Trust the echoed ID. `changed` means a target resolved.
 `/api/chat/unread` counts visible unread messages using the same join-date,
 flag and disappearing-message bounds as history, excluding your own sends.
+Under a group token or a company-limited API key it lists only rooms in that
+company, the same as `GET rooms`.
 
 #### Cursor backend
 
@@ -231,8 +233,8 @@ documented in [Cursor Read State](../../django_developer/chat/read_state.md).
 rooms an account takes part in (for example, support rooms only). In a room it
 refuses:
 
-- `GET room/messages`, `GET room/online`, `GET room/members` and
-  `POST room/read` answer 403.
+- `GET room/messages`, `GET room/online`, `GET room/members`,
+  `GET room/flagged` and `POST room/read` answer 403.
 - `POST dm` answers the usual 404 `"User not found"` for a DM you already
   have, and creates nothing.
 - Subscribing to `chat:{room_id}` is refused, and sends, edits, reactions,
