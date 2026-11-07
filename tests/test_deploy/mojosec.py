@@ -203,6 +203,13 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
                      "su root root", "create 0600 root root"):
         th.assert_in(expected, rotation,
                      f"nginx security-log rotation is missing {expected!r}")
+    # maestro #8881: a second size-triggered rotation on the same day must get
+    # its own name, so the archive suffix carries the hour.
+    lines = [line.strip() for line in rotation.splitlines()]
+    th.assert_in("dateext", lines,
+                 f"rotation must name archives by date, not the distro default: {rotation!r}")
+    th.assert_in("dateformat -%Y%m%d%H", lines,
+                 f"same-day rotations collide without an hour in the name: {rotation!r}")
     for forbidden in ("postrotate", "USR1"):
         th.assert_true(forbidden not in rotation,
                        f"rotation must preserve the root-owned active inode: {forbidden}")

@@ -234,13 +234,139 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
                    "check_node must not audit the retired resolver's sandbox any more")
     th.assert_eq(statuses.get("security log archives"), cn.PASS,
                  f"root-only rotated evidence must pass: {statuses}")
-    th.assert_true(any("mojosec.json.log.*" in command for command in run.commands),
+    th.assert_true(any("mojosec.json.log[-.]*" in command for command in run.commands),
                    "check_node must audit every bounded security-log archive")
     secret_commands = [command for command in run.commands
                        if ("cat /etc/mojosec/credential" in command or
                            "open('/etc/mojosec/credential" in command)]
     th.assert_eq(secret_commands, [],
                  f"check_node must never open or print the credential: {secret_commands}")
+
+
+def _run_archive_check(directory, names, mode=0o600):
+    """Execute the node's archive one-liner against a scratch directory,
+    owned by this test's user, so the real glob and bounds are what run."""
+    from mojo.deploy import check_node as cn
+    for name in names:
+        path = os.path.join(directory, name)
+        with open(path, "w") as handle:
+            handle.write("{}\n")
+        os.chmod(path, mode)
+    script = cn._mojosec_archive_check(directory, uid=os.getuid(), gid=os.getgid())
+    return subprocess.run([sys.executable, "-c", script], capture_output=True).returncode
+
+
+@th.django_unit_test()
+def test_mojosec_archive_check_counts_dateext_archives(opts):
+    """maestro #8881: dateext archives are mojosec.json.log-YYYYMMDDHH[.gz];
+    the old mojosec.json.log.* glob matched none of them, so the bound and the
+    owner/mode rule never applied and the check always passed."""
+    with tempfile.TemporaryDirectory() as scratch:
+        th.assert_eq(_run_archive_check(scratch, ["mojosec.json.log-2026102900.gz",
+                                                  "mojosec.json.log-2026102901"]), 0,
+                     "root-only dateext archives within the bound must pass")
+    with tempfile.TemporaryDirectory() as scratch:
+        th.assert_eq(_run_archive_check(scratch, ["mojosec.json.log-2026102900.gz"],
+                                        mode=0o644), 1,
+                     "a world-readable dateext archive must fail: it is evidence")
+    with tempfile.TemporaryDirectory() as scratch:
+        names = [f"mojosec.json.log-20261029{hour:02d}.gz" for hour in range(24)]
+        names += [f"mojosec.json.log-20261030{hour:02d}.gz" for hour in range(9)]
+        th.assert_eq(_run_archive_check(scratch, names), 1,
+                     "33 dateext archives exceed the 32-archive bound and must fail")
+    with tempfile.TemporaryDirectory() as scratch:
+        th.assert_eq(_run_archive_check(scratch, ["mojosec.json.log.1", "mojosec.json.log.2.gz"],
+                                        mode=0o640), 1,
+                     "numbered archives are still checked for owner and mode")
+
+
+def _df(percent):
+    return ("Filesystem     1024-blocks    Used Available Capacity Mounted on\n"
+            f"/dev/nvme0n1p1     8376300 6000000   2376300      {percent}% /")
+
+
+def _system_logs(rules):
+    from mojo.deploy import check_node as cn
+    report = cn.Report()
+    run = FakeRunner(rules)
+    cn.check_system_logs(report, run, "sudo -n ")
+    return report, run
+
+
+@th.django_unit_test()
+def test_system_logs_root_filesystem_thresholds(opts):
+    """maestro #8881: PASS below 75%, WARN from 75%, FAIL from 85% (the
+    health monitor's HEALTH_DISK_CRIT default)."""
+    from mojo.deploy import check_node as cn
+    th.assert_in("system_logs", cn.SECTIONS, "--section system_logs must be accepted")
+    for percent, expected in ((74, cn.PASS), (75, cn.WARN), (84, cn.WARN), (85, cn.FAIL)):
+        report, run = _system_logs([("df -P /", (0, _df(percent), ""))])
+        finding = _find(report, "system_logs", "root filesystem")
+        th.assert_true(finding is not None, f"no root filesystem finding: {report.findings}")
+        th.assert_eq(finding["status"], expected,
+                     f"root at {percent}% must grade {expected}: {finding}")
+        th.assert_in(f"{percent}%", finding["detail"],
+                     f"the finding must show the measured use: {finding}")
+        if expected != cn.PASS:
+            th.assert_true(finding["fix"], f"a disk warning must name its remedy: {finding}")
+
+
+@th.django_unit_test()
+def test_system_logs_logrotate_health(opts):
+    """maestro #8881: a duplicate log entry in the logrotate dry run, or a
+    failed logrotate.service, means rotation is broken: FAIL."""
+    from mojo.deploy import check_node as cn
+    duplicate = ("error: /etc/logrotate.d/mojosec:1 duplicate log entry for "
+                 "/var/log/nginx/mojosec.json.log")
+    report, run = _system_logs([("logrotate -d", (1, duplicate, ""))])
+    finding = _find(report, "system_logs", "logrotate")
+    th.assert_eq(finding and finding["status"], cn.FAIL,
+                 f"a duplicate log entry must fail: {report.findings}")
+    th.assert_in("/var/log/nginx/access.log /var/log/nginx/error.log", finding["fix"] or "",
+                 f"the finding must name the nginx stanza fix: {finding}")
+    th.assert_true(any("logrotate -d /etc/logrotate.conf" in c and c.startswith("sudo -n ")
+                       for c in run.commands),
+                   f"the dry run must read the whole config as root: {run.commands}")
+
+    report, _ = _system_logs([("is-failed", (0, "failed", ""))])
+    finding = _find(report, "system_logs", "logrotate")
+    th.assert_eq(finding and finding["status"], cn.FAIL,
+                 f"a failed logrotate.service must fail: {report.findings}")
+
+    report, _ = _system_logs([("is-failed", (1, "inactive", ""))])
+    finding = _find(report, "system_logs", "logrotate")
+    th.assert_eq(finding and finding["status"], cn.PASS,
+                 f"a clean dry run and an unfailed service must pass: {report.findings}")
+
+
+@th.django_unit_test()
+def test_system_logs_messages_archive_size(opts):
+    """maestro #8881: /var/log/messages* above 2 GiB is a WARN that names the
+    rsyslog audit drop; at or below it passes."""
+    from mojo.deploy import check_node as cn
+    gib = 1024 ** 3
+    report, _ = _system_logs([("du -cb", (0, f"{2 * gib + 1}\ttotal", ""))])
+    finding = _find(report, "system_logs", "messages")
+    th.assert_eq(finding and finding["status"], cn.WARN,
+                 f"more than 2 GiB of /var/log/messages* must warn: {report.findings}")
+    th.assert_in("rsyslog", finding["fix"] or "", f"the warning must name the remedy: {finding}")
+
+    report, _ = _system_logs([("du -cb", (0, f"{2 * gib}\ttotal", ""))])
+    finding = _find(report, "system_logs", "messages")
+    th.assert_eq(finding and finding["status"], cn.PASS,
+                 f"2 GiB or less must pass: {report.findings}")
+
+
+@th.django_unit_test()
+def test_system_logs_is_read_only(opts):
+    """maestro #8881: the section only reads; nothing it issues rotates,
+    deletes or restarts anything."""
+    _, run = _system_logs([("df -P /", (0, _df(50), ""))])
+    for command in run.commands:
+        for forbidden in ("logrotate -f", "logrotate /etc", " rm ", "truncate", "restart",
+                          "reset-failed", "vacuum"):
+            th.assert_true(forbidden not in command,
+                           f"system_logs must stay read-only, issued {command!r}")
 
 
 @th.django_unit_test()
