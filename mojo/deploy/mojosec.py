@@ -138,6 +138,8 @@ WantedBy=multi-user.target
 
 LOGROTATE_TEXT = """/var/log/nginx/mojosec.json.log {
     daily
+    dateext
+    dateformat -%Y%m%d%H
     maxsize 50M
     rotate 14
     missingok
