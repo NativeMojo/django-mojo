@@ -87,8 +87,8 @@ def test_signin_apple_rest(opts):
             "the Services ID was not readable by the provider"
 
         cfg = opts.client.get("/api/auth/config").response.data
-        assert "apple" in cfg["login"]["methods"], \
-            f"enabling Apple did not reach the hosted login config: {cfg['login']!r}"
+        assert "apple" in cfg["login"]["methods"] and "apple" in cfg["registration"]["methods"], \
+            f"enabling Apple did not reach the hosted config: {cfg!r}"
 
         # Blank keeps the stored value; disabling removes it from the methods.
         resp = opts.client.post("/api/account/admin/signin", json={
@@ -125,6 +125,15 @@ def test_signin_auth_look_and_feel(opts):
         cfg = opts.client.get("/api/auth/config").response.data
         assert cfg["login"]["heading"] == "Welcome back", \
             f"hosted login did not pick up the heading: {cfg['login']!r}"
+        assert cfg["theme"]["layout"] == "editorial", \
+            f"hosted login did not pick up the layout: {cfg['theme']!r}"
+
+        resp = opts.client.post("/api/account/admin/signin", json={
+            "auth": {"login.methods": ["password", "magic"]}})
+        assert resp.status_code == 200, f"saving login methods failed: {resp.response!r}"
+        cfg = opts.client.get("/api/auth/config").response.data
+        assert "magic" in cfg["login"]["methods"], \
+            f"a system login method did not reach the hosted config: {cfg['login']!r}"
 
         resp = opts.client.post("/api/account/admin/signin", json={
             "auth": {"login.methods": ["magic"]}})
@@ -348,13 +357,22 @@ def test_signin_google_rest(opts):
             f"Google not ready+enabled after save: {google!r}"
         assert secret not in str(resp.response), "the Google secret appeared in the response"
         cfg = opts.client.get("/api/auth/config").response.data
-        assert "google" in cfg["login"]["methods"], \
-            f"enabling Google did not reach the hosted login config: {cfg['login']!r}"
+        assert "google" in cfg["login"]["methods"] and "google" in cfg["registration"]["methods"], \
+            f"enabling Google did not reach the hosted config: {cfg!r}"
 
         sent, auth_url = _begin_client_id(opts, "google")
         assert sent == client_id, \
             f"begin must use the client ID saved in Admin, got {sent!r} in {auth_url!r}"
         assert secret not in auth_url, "the client secret must never reach the browser"
+
+        # Switching off hides the button only; /begin is not refused (Ian, #9275).
+        resp = opts.client.post("/api/account/admin/signin", json={
+            "provider": "google", "enabled": False})
+        google = _provider(resp.response.data, "google")
+        assert google["enabled"] is False and google["ready"] is True, f"disable did not behave: {google!r}"
+        cfg = opts.client.get("/api/auth/config").response.data
+        assert "google" not in cfg["login"]["methods"] and \
+            "google" not in cfg["registration"]["methods"], f"disabling left Google offered: {cfg!r}"
     finally:
         opts.client.logout()
         _reset()
@@ -386,13 +404,22 @@ def test_signin_github_rest(opts):
             f"the Admin value must replace the server-config one: {field!r}"
         assert secret not in str(resp.response), "the GitHub secret appeared in the response"
         cfg = opts.client.get("/api/auth/config").response.data
-        assert "github" in cfg["login"]["methods"], \
-            f"enabling GitHub did not reach the hosted login config: {cfg['login']!r}"
+        assert "github" in cfg["login"]["methods"] and "github" in cfg["registration"]["methods"], \
+            f"enabling GitHub did not reach the hosted config: {cfg!r}"
 
         sent, auth_url = _begin_client_id(opts, "github")
         assert sent == client_id, \
             f"begin must use the client ID saved in Admin, got {sent!r} in {auth_url!r}"
         assert secret not in auth_url, "the client secret must never reach the browser"
+
+        # Switching off hides the button only; /begin is not refused (Ian, #9275).
+        resp = opts.client.post("/api/account/admin/signin", json={
+            "provider": "github", "enabled": False})
+        github = _provider(resp.response.data, "github")
+        assert github["enabled"] is False and github["ready"] is True, f"disable did not behave: {github!r}"
+        cfg = opts.client.get("/api/auth/config").response.data
+        assert "github" not in cfg["login"]["methods"] and \
+            "github" not in cfg["registration"]["methods"], f"disabling left GitHub offered: {cfg!r}"
     finally:
         opts.client.logout()
         _reset()
