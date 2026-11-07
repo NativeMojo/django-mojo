@@ -113,6 +113,15 @@ attempted provider in attempt order. A direct Google failure therefore has
 only `errors.google`. If a provider raises or returns a non-mapping value, the
 router synthesizes the same `status`, `provider`, `error`, and `errors` fields.
 
+When a request to Google cannot connect or times out, every Google helper
+raises `GoogleAPIError("Google <service> request failed (<ErrorClass>)")`.
+The message never carries the request URL, so the `GOOGLE_MAPS_API_KEY` stays
+out of `error`, `errors` and every `/api/location/...` response. `error.log`
+gets one line with the error class, its underlying reason class and the
+endpoint host and path, with no traceback. Address Validation sends the key in
+the `X-Goog-Api-Key` header. The other Google endpoints take it only as a
+`key` URL parameter, so they rely on this scrub.
+
 ## Autocomplete and place details
 
 `get_address_suggestions()` and `get_place_details()` remain Google-only and

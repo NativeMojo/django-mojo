@@ -18,11 +18,28 @@ from datetime import datetime, timedelta
 import threading
 import uuid
 from typing import List, Dict, Optional
+from urllib.parse import urlsplit
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 
 from mojo.helpers import logit
 from mojo.helpers.settings import settings
+
+
+def _request_failure(label, url, err):
+    """Log a failed request to Google and return the error to raise.
+
+    The exception text of requests and urllib3 carries the request URL, and so
+    the `?key=` API key (maestro #9921). Log only class names and the static
+    endpoint host and path, never str() of the exception, and no traceback.
+    """
+    reason = getattr(err.args[0], "reason", None) if err.args else None
+    reason_name = type(reason).__name__ if reason is not None else "-"
+    parts = urlsplit(url)
+    logit.error(
+        f"Google {label} request failed: class={type(err).__name__} "
+        f"reason={reason_name} host={parts.hostname} path={parts.path}")
+    return GoogleAPIError(f"Google {label} request failed ({type(err).__name__})")
 
 
 class GoogleAddressService:
@@ -116,7 +133,8 @@ class GoogleAddressService:
             access_token = self.get_access_token()
             headers["Authorization"] = f"Bearer {access_token}"
         else:
-            params["key"] = self.api_key
+            # Header, not ?key=, so the key stays out of URLs and their logs.
+            headers["X-Goog-Api-Key"] = self.api_key
 
         return headers, params
 
@@ -189,10 +207,9 @@ class GoogleAddressService:
                 return self._parse_validation_response(response.json(), address_data)
 
             except requests.exceptions.Timeout:
-                raise GoogleAPIError("Request timed out")
+                raise GoogleAPIError("Request timed out") from None
             except requests.exceptions.RequestException as e:
-                logit.exception(f"Google Address Validation request failed: {e}")
-                raise GoogleAPIError(f"Request failed: {e}")
+                raise _request_failure("address validation", url, e) from None
 
         raise GoogleAPIError("Failed to validate address after retries")
 
@@ -387,10 +404,9 @@ class GoogleAddressService:
             }
 
         except requests.exceptions.Timeout:
-            raise GoogleAPIError("Autocomplete request timed out")
+            raise GoogleAPIError("Autocomplete request timed out") from None
         except requests.exceptions.RequestException as e:
-            logit.exception(f"Google Autocomplete request failed: {e}")
-            raise GoogleAPIError(f"Request failed: {e}")
+            raise _request_failure("autocomplete", self.autocomplete_url, e) from None
 
     def get_place_details(self, place_id: str, session_token: Optional[str] = None) -> Dict:
         """
@@ -459,8 +475,7 @@ class GoogleAddressService:
             }
 
         except requests.exceptions.RequestException as e:
-            logit.exception(f"Google Place Details request failed: {e}")
-            raise GoogleAPIError(f"Request failed: {e}")
+            raise _request_failure("place details", self.place_details_url, e) from None
 
     def _parse_address_components(self, components: List[Dict]) -> Dict:
         """Parse Google address components into standard format"""
@@ -589,8 +604,7 @@ class GoogleAddressService:
             }
 
         except requests.exceptions.RequestException as e:
-            logit.exception(f"Google Geocoding request failed: {e}")
-            raise GoogleAPIError(f"Request failed: {e}")
+            raise _request_failure("geocoding", self.geocoding_url, e) from None
 
     # ==========================================
     # Reverse Geocoding
@@ -662,8 +676,7 @@ class GoogleAddressService:
             }
 
         except requests.exceptions.RequestException as e:
-            logit.exception(f"Google Reverse Geocoding request failed: {e}")
-            raise GoogleAPIError(f"Request failed: {e}")
+            raise _request_failure("reverse geocoding", self.geocoding_url, e) from None
 
     # ==========================================
     # Time Zone
@@ -728,8 +741,7 @@ class GoogleAddressService:
             }
 
         except requests.exceptions.RequestException as e:
-            logit.exception(f"Google Timezone request failed: {e}")
-            raise GoogleAPIError(f"Request failed: {e}")
+            raise _request_failure("timezone", self.timezone_url, e) from None
 
     # ==========================================
     # Utility Methods
