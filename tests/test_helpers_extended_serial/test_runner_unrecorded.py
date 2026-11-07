@@ -515,3 +515,78 @@ def test_step_with_nested_outcome_then_raise(opts):
                 ("test_step", "RuntimeError")], (
                 f"[{result.mode}] the raising step is unrecorded, got {result.unrecorded}")
             assert result.codes == ["unrecorded"], f"[{result.mode}] got {result.codes}"
+
+
+@th.unit_test("a same-file alias under another name does not hide a shadowed test")
+def test_local_alias_does_not_mask_shadowed_test(opts):
+    source = """
+    from testit import helpers as th
+
+    @th.unit_test("helper")
+    def helper(opts):
+        pass
+
+    test_imported = helper
+
+    @th.unit_test("dup first")
+    def test_dup(opts):
+        raise AssertionError("the shadowed definition never runs")
+
+    @th.unit_test("dup second")
+    def test_dup(opts):
+        pass
+    """
+    for tracked in (True, False):
+        with _package({"1_alias": source}) as record:
+            result = _run(record, tracked)
+            # Two counted defs (one shadowed) plus the alias's own outcome.
+            _check(result, (3, 2, 0, 0, 1))
+            assert [(u["function"], u["cause"], u["count"]) for u in result.unrecorded] == [
+                ("*", "not_collected", 1)], (
+                f"[{result.mode}] the shadowed def stays not_collected, got {result.unrecorded}")
+            assert result.codes == ["unrecorded"], f"[{result.mode}] got {result.codes}"
+
+
+@th.unit_test("an alias that keeps a shadowed test_ alive is not that def's binding")
+def test_alias_of_shadowed_test_is_not_its_binding(opts):
+    source = """
+    from testit import helpers as th
+
+    @th.unit_test("dup first")
+    def test_dup(opts):
+        pass
+
+    test_keep = test_dup
+
+    @th.unit_test("dup second")
+    def test_dup(opts):
+        pass
+    """
+    for tracked in (True, False):
+        with _package({"1_keep": source}) as record:
+            result = _run(record, tracked)
+            _check(result, (3, 2, 0, 0, 1))
+            assert [(u["function"], u["cause"], u["count"]) for u in result.unrecorded] == [
+                ("*", "not_collected", 1)], (
+                f"[{result.mode}] the first def is not bound under its own name, got "
+                f"{result.unrecorded}")
+            assert result.codes == ["unrecorded"], f"[{result.mode}] got {result.codes}"
+
+
+@th.unit_test("a local alias of an unshadowed test balances as one extra outcome")
+def test_local_alias_of_unshadowed_test_balances(opts):
+    source = """
+    from testit import helpers as th
+
+    @th.unit_test("a")
+    def test_a(opts):
+        pass
+
+    test_alias = test_a
+    """
+    for tracked in (True, False):
+        with _package({"1_plain_alias": source}) as record:
+            result = _run(record, tracked)
+            _check(result, (2, 2, 0, 0, 0))
+            assert result.unrecorded == [], f"[{result.mode}] got {result.unrecorded}"
+            assert result.codes == [], f"[{result.mode}] got {result.codes}"
