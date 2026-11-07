@@ -1,7 +1,7 @@
 from mojo import decorators as md
 from mojo import errors as merrors
 from mojo.apps.realtime import policy
-from mojo.helpers.request import is_override_user_session
+from mojo.helpers.request import is_override_user_session, restricted_identity
 from .rooms import _deny_cross_tenant_room, _refuse_by_policy
 from ..models import ChatRoom, ChatMessage, ChatMembership
 from ..services import reachability
@@ -95,6 +95,7 @@ def on_chat_room_flagged(request):
     # Check moderator permission
     from .rooms import _check_room_moderator
     _check_room_moderator(request, room)
+    _refuse_by_policy(request, room)
 
     qs = ChatMessage.objects.filter(room=room, is_flagged=True).order_by("-flagged_at")
     return ChatMessage.on_rest_list(request, queryset=qs)
@@ -246,6 +247,11 @@ def on_chat_unread(request):
         user=request.user,
         status__in=["active", "muted"],
     ).select_related("room")
+    # Same tenant bound as GET rooms: a confined credential counts only rooms
+    # inside its own group; groupless rooms (DMs) drop out.
+    identity = restricted_identity(request)
+    if identity is not None:
+        memberships = memberships.filter(room__group__in=identity.get_groups())
 
     counts = []
     for ms in memberships:

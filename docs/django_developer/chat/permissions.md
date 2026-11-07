@@ -112,7 +112,7 @@ Where it is asked, for the room's `chat:<id>` topic:
 | `chat_typing` | Nothing is broadcast |
 | `chat_read` | `Not allowed in this room` |
 | `chat_flag` | `Permission denied` |
-| `GET room/messages`, `GET room/online`, `GET room/members`, `POST room/read` | 403 |
+| `GET room/messages`, `GET room/online`, `GET room/members`, `GET room/flagged`, `POST room/read` | 403 |
 | `POST dm` returning a DM the pair already shares | The uniform 404 `"User not found"`; nothing is created |
 
 Left open, and why:
@@ -121,7 +121,11 @@ Left open, and why:
   they cannot subscribe to it, send into it or read it, and others reach it
   only through `room/join` or `room/member/add`, which have their own rules.
 - `room/leave` always works.
-- `GET rooms` and `GET unread` list room names and counts, not content.
+- `GET rooms` and `GET unread` list room names and counts, not content. A
+  refused user still sees the names of rooms they are already in, and how many
+  unread messages each has, but cannot read, send or subscribe in them. Asking
+  the hook once per room on every list call was judged not worth its cost
+  (maestro #9544).
 - The own-topic subscribe a socket makes at connect, and topics a server hook
   subscribes a socket to, are server-chosen and never ask the hook.
 - Server writes are never gated: `send_message(client_authored=False)` and
@@ -249,7 +253,10 @@ A project's `REALTIME_SUBSCRIBE_HANDLER` reaches open sockets the same way: at
 the next re-check, or at once when the project calls
 `realtime.disconnect_user` after the restriction commits, since every later
 subscribe asks the hook again. The disconnect is best effort. Topics other than
-chat are checked only at subscribe, so they last until the socket drops.
+chat are checked only at subscribe, so they last until the socket drops: when a
+forced disconnect fails (a Redis error at that moment), a restricted user's open
+socket keeps receiving group and announcement updates until it reconnects. Chat
+topics still stop at the next re-check.
 Rotating the account's `auth_key` does not close open sockets.
 See [realtime architecture](../realtime/architecture.md#chat-topic-delivery-chatroom_id)
 for the mechanism.

@@ -282,6 +282,43 @@ def test_rest_room_reads_follow_the_hook(opts):
     _restrict(opts.player, False)
 
 
+def _flagged(opts, room):
+    """Make the player a room admin (so a moderator) and flag one staff message."""
+    from mojo.apps.chat.models import ChatMembership
+    from mojo.helpers import dates
+    ChatMembership.objects.filter(room=room, user=opts.player).update(role="admin")
+    msg = _message(room, opts.staff, "flagged body")
+    msg.is_flagged = True
+    msg.flagged_at = dates.utcnow()
+    msg.save(update_fields=["is_flagged", "flagged_at"])
+    return msg
+
+
+@th.django_unit_test()
+def test_room_flagged_follows_the_hook(opts):
+    """#9544: a restricted moderator may not read flagged message bodies in a
+    plain room (403, as room/messages); in a support room they still can."""
+    plain = _room(opts, "flagged")
+    support = _room(opts, "flagged", support=True)
+    for room in (plain, support):
+        _flagged(opts, room)
+    _restrict(opts.player, True)
+    try:
+        with th.server_settings(REALTIME_SUBSCRIBE_HANDLER=HOOK):
+            _token(opts, "player")
+            resp = opts.client.get("/api/chat/room/flagged", params={"room_id": plain.pk})
+            assert_eq(resp.status_code, 403,
+                      f"room/flagged in a plain room answers 403 to a restricted moderator, "
+                      f"got {resp.status_code}: {resp.json}")
+            resp = opts.client.get("/api/chat/room/flagged", params={"room_id": support.pk})
+            assert_eq(resp.status_code, 200,
+                      f"room/flagged in a support room still answers 200, got {resp.status_code}: {resp.json}")
+            bodies = [row["body"] for row in resp.json.data]
+            assert_true("flagged body" in bodies, f"the support room's flagged message is listed: {bodies}")
+    finally:
+        _restrict(opts.player, False)
+
+
 @th.django_unit_test()
 def test_existing_dm_reuse_follows_the_hook(opts):
     """T5: a restricted player asking for a DM they already share gets the
@@ -360,6 +397,9 @@ def test_unset_hook_changes_nothing(opts):
             _close(ws)
         resp = opts.client.get("/api/chat/room/messages", params={"room_id": plain.pk})
         assert_eq(resp.status_code, 200, f"with no hook history reads, got {resp.status_code}")
+        _flagged(opts, plain)
+        resp = opts.client.get("/api/chat/room/flagged", params={"room_id": plain.pk})
+        assert_eq(resp.status_code, 200, f"with no hook flagged messages read, got {resp.status_code}")
         resp = opts.client.post("/api/chat/dm", {"user_id": opts.staff.pk})
         assert_eq(resp.status_code, 200, f"with no hook the DM comes back, got {resp.status_code}: {resp.json}")
         assert_eq(resp.json.data.id, dm.pk, "with no hook the existing DM is reused")
