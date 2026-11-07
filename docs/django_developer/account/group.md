@@ -174,13 +174,15 @@ holds the global permission. `geofence_strict` has its own global gate
 **A save does not write back a link setting it did not change.** A `Group`
 instance remembers the two keys and the parent it was loaded with. `save()`
 locks the row, and for each of the three that this instance left as loaded it
-takes the stored value instead of the loaded one. So a request, a `touch()` or
+takes the stored value instead of the loaded one. So a request or
 a job holding a row loaded before an operator's change cannot put the old
 address or the old parent back; its other edits are still stored. A value the
 instance did change is written as before, and for a REST save the permission
 is judged again on the locked row. This covers a full `save()` and any
 `save(update_fields=...)` that names `metadata` or `parent`. Other metadata
-keys are not merged: the last full save still wins for those.
+keys are not merged: the last full save still wins for those. `touch()` is
+not a save: it writes only `last_activity` with a one-column update, so it
+never puts back any other field (#10297).
 
 The lock `save()` takes is `FOR NO KEY UPDATE` on PostgreSQL
 (`select_for_update(no_key=True)`), and so is the lock on the parent chain
@@ -496,7 +498,7 @@ Rules that follow from the design:
 
 ## request.group
 
-When a request includes `?group=<id>`, `MojoMiddleware` and auth decorators auto-populate `request.group` with the `Group` instance if the user is a member. Only **effectively active** groups resolve (`Group.get_active` — see [Effective activeness](#membership) above) — an inactive group's id, including an active child under a deactivated ancestor, behaves exactly like a nonexistent one (`request.group` stays `None`, no touch side effect), for both the `group=` and `group_uuid=` params. `GET /api/group/<pk>/member` follows the same contract: it resolves via `Group.get_active` and returns one indistinguishable `403` for every non-member outcome (nonexistent, inactive, or not a member), only `touch()`ing the group/member after membership in an effectively active group is confirmed. All permission checks and list queries are then scoped to that group — **except** endpoints gated with `@md.requires_global_perms`, which never consult `request.group` at all (global `User.permissions` or superuser only). See [Global vs Group-Scoped Permission Checks](../core/permissions.md#global-vs-group-scoped-permission-checks).
+When a request includes `?group=<id>`, `MojoMiddleware` and auth decorators auto-populate `request.group` with the `Group` instance if the user is a member. Only **effectively active** groups resolve (`Group.get_active` — see [Effective activeness](#membership) above) — an inactive group's id, including an active child under a deactivated ancestor, behaves exactly like a nonexistent one (`request.group` stays `None`, no touch side effect), for both the `group=` and `group_uuid=` params. `GET /api/group/<pk>/member` follows the same contract: it resolves via `Group.get_active` and returns one indistinguishable `403` for every non-member outcome (nonexistent, inactive, or not a member), only `touch()`ing the group/member (a one-column `last_activity` update) after membership in an effectively active group is confirmed. All permission checks and list queries are then scoped to that group — **except** endpoints gated with `@md.requires_global_perms`, which never consult `request.group` at all (global `User.permissions` or superuser only). See [Global vs Group-Scoped Permission Checks](../core/permissions.md#global-vs-group-scoped-permission-checks).
 
 ```python
 # In a REST handler
@@ -532,6 +534,11 @@ Each Group's active webhook delivery targets are managed through the `WebhookSub
 ```python
 group.touch()   # updates last_activity (rate-limited by GROUP_LAST_ACTIVITY_FREQ)
 ```
+
+`touch()` writes only the `last_activity` column, like `User.touch()`. It does
+not call `save()`: `modified` does not move, `post_save` receivers do not
+fire, and a disable, token-epoch bump or metadata change committed after the
+group was loaded is never written back.
 
 ## Moving a group between trees
 
