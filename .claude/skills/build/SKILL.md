@@ -30,9 +30,9 @@ Read `CLAUDE.md` for conventions. Read the item file in `planning/confirmed/`.
   if the plan is silent, pick one yourself from that rule and say which and why —
   never default to `full` because nothing told you otherwise.
   - **`none` / `targeted`** → **no baseline.** Build, then run what the tier names.
-    If a test goes red and the failure doesn't obviously name your change,
-    `git stash -u`, re-run that one test, `git stash pop` — seconds, and it settles
-    attribution where the doubt actually is.
+    Judge a red run as `.claude/rules/build-baseline.md` says ("Judging a red
+    run"): read the failure first, then the recorded `main` run, then the
+    known-flaky tests, then that one file rerun on a clean `main`.
   - **`full`** → **no baseline either.** Build, then ONE
     `bin/run_tests --agent --tier framework` run after the change (NOT `--all`
     unless the user asks), and read `testproject/var/test_failures.json`. Judge a
