@@ -1290,7 +1290,13 @@ sidecar, and leaves `/etc/sysctl.d/90-mojosec-ptrace.conf` in place unmanaged
 (it only ever raised `kernel.yama.ptrace_scope` to 1, and removing it would
 lower the value at the next reboot). `check_node --section mojosec` fails
 while any retired unit or file remains, or while the active Audit rules still
-carry the retired `mojosec-root-exec`/`mojosec-app-exec` keys.
+carry the retired `mojosec-root-exec`/`mojosec-app-exec` keys. A retired unit
+that failed before it was removed (the health timer can fire against the new
+package during the swap) stays listed by `systemctl --failed` until it is
+reset. Convergence runs `systemctl reset-failed` for the retired unit names
+only, and only those `is-failed` reports, including marks an earlier release
+left. `check_node --section mojosec` warns "retired units marked failed", with
+the exact `sudo systemctl reset-failed <unit>` command, while one remains.
 
 One consequence is expected and is not a sensor bug: an operator who starts
 jobman from an SSH shell gives every broker sudo that shell's Audit session, so

@@ -992,6 +992,17 @@ def _audit_retired_provenance_assets(report, run):
                     "the resolver units, Audit health timer, stable helper or sidecar "
                     "are still installed or active",
                     "sudo bash aws/post_deploy.sh")
+    # A retired unit that failed before removal stays listed as failed until
+    # reset-failed or a reboot (maestro #9813). Read-only; converge clears it.
+    rc, out, _ = run(
+        "for unit in " + " ".join(MOJOSEC_RETIRED_UNITS) +
+        "; do systemctl is-failed --quiet $unit && echo $unit; done; true")
+    failed = [name for name in out.split() if name in MOJOSEC_RETIRED_UNITS]
+    if failed:
+        report.warn("mojosec", "retired units marked failed",
+                    f"systemd still lists {', '.join(failed)} as failed although "
+                    "the units are gone",
+                    "sudo systemctl reset-failed " + " ".join(failed))
 
 
 def check_mojosec_runtime(report, run, sudo):
