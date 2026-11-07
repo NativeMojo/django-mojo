@@ -760,8 +760,8 @@ mojo.deploy.check_node --section system_logs`) so the dry run and the
 | Finding | PASS | WARN | FAIL |
 |---|---|---|---|
 | root filesystem (`df -P /`) | under 75% used | 75-84% | 85% or more (the health monitor's `HEALTH_DISK_CRIT` default) |
-| logrotate health | clean dry run, service not failed | | `logrotate -d /etc/logrotate.conf` prints `duplicate log entry`, or `logrotate.service` is failed |
-| messages archive size | `/var/log/messages*` totals 2 GiB or less | more than 2 GiB | |
+| logrotate health | clean dry run, service not failed | the dry run or the service state could not be read (timeout, ssh, sudo): unverified | `logrotate -d /etc/logrotate.conf` prints any `error:` line (`duplicate log entry`, a bad directive), or `logrotate.service` is failed |
+| messages archive size | `/var/log/messages*` totals 2 GiB or less (none at all is 0) | more than 2 GiB, or `du` failed (permission, timeout): unverified | |
 
 Every WARN and FAIL names its remedy. A duplicate entry usually means
 `/etc/logrotate.d/nginx` globs `/var/log/nginx/*.log` and so also claims

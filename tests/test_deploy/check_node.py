@@ -258,7 +258,7 @@ def _run_archive_check(directory, names, mode=0o600):
 
 @th.django_unit_test()
 def test_mojosec_archive_check_counts_dateext_archives(opts):
-    """maestro #8881: dateext archives are mojosec.json.log-YYYYMMDDHH[.gz];
+    """maestro #8881: dateext archives are mojosec.json.log-YYYYMMDDHHMMSS[.gz];
     the old mojosec.json.log.* glob matched none of them, so the bound and the
     owner/mode rule never applied and the check always passed."""
     with tempfile.TemporaryDirectory() as scratch:
@@ -340,6 +340,42 @@ def test_system_logs_logrotate_health(opts):
 
 
 @th.django_unit_test()
+def test_system_logs_logrotate_errors_and_unreadable_probes(opts):
+    """maestro #8881 review 176908: any logrotate error, not only a duplicate,
+    means a stanza is skipped: FAIL. A dry run or service probe that could not
+    run (timeout, ssh, sudo) is unverified, never a clean PASS."""
+    from mojo.deploy import check_node as cn
+    # Real logrotate 3.21.0 -d output for "rotate garbage" (Brenda's probe).
+    bad = ("warning: logrotate in debug mode does nothing except printing debug messages!\n"
+           "reading config file /etc/logrotate.d/mojosec\n"
+           "error: /etc/logrotate.d/mojosec:2 bad rotation count 'garbage'\n"
+           "error: found error in /var/log/nginx/mojosec.json.log , skipping\n"
+           "Handling 0 logs")
+    report, _ = _system_logs([("logrotate -d", (1, bad, "")),
+                              ("is-failed", (1, "inactive", ""))])
+    finding = _find(report, "system_logs", "logrotate")
+    th.assert_eq(finding and finding["status"], cn.FAIL,
+                 f"a logrotate configuration error must fail: {report.findings}")
+    th.assert_in("bad rotation count", finding["detail"],
+                 f"the finding must show logrotate's error: {finding}")
+
+    for label, response in (("timeout", (124, "", "timed out after 60s")),
+                            ("ssh failure", (255, "", "ssh: connect to host: refused")),
+                            ("sudo refusal", (1, "sudo: a password is required", ""))):
+        report, _ = _system_logs([("logrotate -d", response),
+                                  ("is-failed", (1, "inactive", ""))])
+        finding = _find(report, "system_logs", "logrotate")
+        th.assert_eq(finding and finding["status"], cn.WARN,
+                     f"a dry run lost to {label} is unverified, not clean: {report.findings}")
+        th.assert_in("unverified", finding["name"], f"{label}: {finding}")
+
+    report, _ = _system_logs([("is-failed", (124, "", "timed out after 30s"))])
+    finding = _find(report, "system_logs", "logrotate")
+    th.assert_eq(finding and finding["status"], cn.WARN,
+                 f"an unreadable logrotate.service state is unverified: {report.findings}")
+
+
+@th.django_unit_test()
 def test_system_logs_messages_archive_size(opts):
     """maestro #8881: /var/log/messages* above 2 GiB is a WARN that names the
     rsyslog audit drop; at or below it passes."""
@@ -355,6 +391,22 @@ def test_system_logs_messages_archive_size(opts):
     finding = _find(report, "system_logs", "messages")
     th.assert_eq(finding and finding["status"], cn.PASS,
                  f"2 GiB or less must pass: {report.findings}")
+
+    report, _ = _system_logs([("du -cb", (0, "0", ""))])
+    finding = _find(report, "system_logs", "messages")
+    th.assert_eq(finding and finding["status"], cn.PASS,
+                 f"no messages files at all is a measured zero: {report.findings}")
+
+    # maestro #8881 review 176908: a failed measurement is not a small total.
+    for label, response in (("timeout", (124, "", "timed out after 30s")),
+                            ("permission", (1, "", "du: cannot read directory "
+                                                   "'/var/log/messages.d': Permission denied")),
+                            ("no output", (0, "", ""))):
+        report, _ = _system_logs([("du -cb", response)])
+        finding = _find(report, "system_logs", "messages")
+        th.assert_eq(finding and finding["status"], cn.WARN,
+                     f"a {label} size probe must be unverified, not PASS: {report.findings}")
+        th.assert_in("unverified", finding["name"], f"{label}: {finding}")
 
 
 @th.django_unit_test()

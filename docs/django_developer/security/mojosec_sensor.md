@@ -515,10 +515,11 @@ root-precreated `/var/log/nginx/mojosec.json.log` at mode `0600`; nginx's root
 master opens the descriptor before workers drop privilege. The Edge staged
 unprivileged `nginx -t` copy disables access logs and the authoritative root
 check validates the real path. Copytruncate rotations remain root:root `0600`.
-Rotated archives are named by the hour, `mojosec.json.log-YYYYMMDDHH` (then
-`.gz`), because `/etc/logrotate.d/mojosec` sets `dateext` and
-`dateformat -%Y%m%d%H`: a second `maxsize 50M` rotation on the same day gets
-its own name instead of failing on the first one's. `check_node --section
+Rotated archives carry the hour and second they were made,
+`mojosec.json.log-YYYYMMDDHHMMSS` (then `.gz`), because
+`/etc/logrotate.d/mojosec` sets `dateext` and `dateformat -%Y%m%d%H%M%S`: a
+second `maxsize 50M` rotation on the same day, or in the same hour, gets its
+own name instead of failing on the first one's. `check_node --section
 mojosec` counts these archives (at most 32) and fails one that is not a
 regular root:root file without group or other bits. The sensor reads system
 events from the journal, never from `/var/log/messages`, so rsyslog and

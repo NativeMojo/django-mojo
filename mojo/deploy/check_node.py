@@ -769,7 +769,7 @@ def _mojosec_python(sudo, arguments, safe_path=True):
 def _mojosec_archive_check(directory="/var/log/nginx", uid=0, gid=0):
     """The node-side one-liner for rotated security-log archives: at most 32,
     each a regular file owned uid:gid with no group/other bits. The glob takes
-    dateext names (mojosec.json.log-YYYYMMDDHH[.gz]) and numbered ones."""
+    dateext names (mojosec.json.log-YYYYMMDDHHMMSS[.gz]) and numbered ones."""
     pattern = os.path.join(directory, "mojosec.json.log[-.]*")
     return (
         "import glob,os,stat;"
@@ -1540,26 +1540,52 @@ def check_system_logs(report, run, sudo):
     else:
         report.passed("system_logs", "root filesystem", f"/ is {used}% used")
 
-    _, dry_run, _ = run(f"{sudo}/usr/sbin/logrotate -d /etc/logrotate.conf 2>&1", timeout=60)
-    duplicates = [line.strip() for line in dry_run.splitlines() if "duplicate log entry" in line]
-    service = run("systemctl is-failed logrotate.service 2>/dev/null")[1].strip()
+    dry_rc, dry_run, dry_err = run(f"{sudo}/usr/sbin/logrotate -d /etc/logrotate.conf 2>&1",
+                                   timeout=60)
+    errors = [line.strip() for line in dry_run.splitlines()
+              if line.strip().startswith("error:")]
+    duplicates = [line for line in errors if "duplicate log entry" in line]
+    _, service, _ = run("systemctl is-failed logrotate.service 2>/dev/null")
+    service = service.strip()
     if duplicates:
         report.fail("system_logs", "logrotate duplicate log entry", duplicates[0][:200],
                     "two logrotate stanzas claim one file; make the first line of "
                     "/etc/logrotate.d/nginx name nginx's own logs, /var/log/nginx/access.log "
                     "/var/log/nginx/error.log, instead of a /var/log/nginx/*.log glob")
+    elif errors:
+        report.fail("system_logs", "logrotate configuration error", errors[0][:200],
+                    "logrotate skips the stanza it names; fix that file, then re-run "
+                    "sudo logrotate -d /etc/logrotate.conf until it prints no error")
     elif service == "failed":
         report.fail("system_logs", "logrotate.service failed",
                     "the last scheduled rotation failed, so logs are no longer rotated",
                     "read journalctl -u logrotate.service, fix the stanza it names, then "
                     "systemctl reset-failed logrotate.service")
+    elif dry_rc != 0:
+        # No logrotate diagnostic: the probe itself failed (timeout, ssh,
+        # sudo, missing binary), so rotation health is unknown, not clean.
+        report.warn("system_logs", "logrotate health unverified",
+                    f"dry run exited {dry_rc}: {(dry_err or dry_run or 'no output')[:200]}",
+                    "run sudo logrotate -d /etc/logrotate.conf on the node and read its errors")
+    elif service not in ("active", "inactive", "activating", "deactivating"):
+        report.warn("system_logs", "logrotate health unverified",
+                    f"logrotate.service state unreadable: {service or 'no answer'}",
+                    "run systemctl is-failed logrotate.service on the node")
     else:
         report.passed("system_logs", "logrotate health",
                       "dry run clean and logrotate.service not failed")
 
-    inner = "du -cb /var/log/messages* 2>/dev/null | tail -n 1"
-    total_line = run(f"{sudo}/bin/sh -c {q(inner)}")[1].split()
-    total = int(total_line[0]) if total_line and total_line[0].isdigit() else 0
+    # No match is a measured zero; a du failure (permission, timeout) is not.
+    inner = ('set -- /var/log/messages*; [ -e "$1" ] || { echo 0; exit 0; }; '
+             'out=$(du -cb -- "$@") || exit 1; printf "%s\\n" "$out" | tail -n 1')
+    du_rc, du_out, du_err = run(f"{sudo}/bin/sh -c {q(inner)}")
+    total_line = du_out.split()
+    if du_rc != 0 or not total_line or not total_line[0].isdigit():
+        report.warn("system_logs", "messages archive size unverified",
+                    f"du exited {du_rc}: {(du_err or du_out or 'no output')[:200]}",
+                    "run sudo du -cb /var/log/messages* on the node")
+        return
+    total = int(total_line[0])
     gib = total / 1024 ** 3
     if total > MESSAGES_WARN_BYTES:
         report.warn("system_logs", "messages archive size",
