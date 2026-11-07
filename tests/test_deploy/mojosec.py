@@ -209,6 +209,47 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
 
 
 @th.django_unit_test()
+def test_clear_retired_failed_marks_resets_only_failed_units_and_never_raises(opts):
+    """maestro #9813: a retired unit that failed before removal stays listed
+    as failed until reset-failed. Only units is-failed reports are reset; a
+    reset that fails is reported, not raised, and not listed as cleared."""
+    import contextlib
+    import io
+    from mojo.deploy import mojosec as deploy
+
+    failed = {"mojosec-audit-health.service", "mojosec-audit-health.timer"}
+    calls = []
+
+    def systemctl_is(verb, name):
+        calls.append((verb, name))
+        if verb == "is-failed":
+            return name in failed
+        if verb == "reset-failed":
+            return name != "mojosec-audit-health.timer"
+        raise AssertionError(f"unexpected systemctl verb {verb}")
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        cleared = deploy._clear_retired_failed_marks(systemctl_is=systemctl_is)
+    th.assert_eq(cleared, ["mojosec-audit-health.service"],
+                 "only a failed unit whose reset succeeded is reported as cleared")
+    resets = [name for verb, name in calls if verb == "reset-failed"]
+    th.assert_eq(sorted(resets), sorted(failed),
+                 f"reset-failed runs only for units is-failed reports: {calls}")
+    th.assert_eq([name for verb, name in calls if verb == "is-failed"], list(deploy.RETIRED_UNITS),
+                 "every retired unit name is checked, and nothing else")
+    th.assert_in("systemctl reset-failed mojosec-audit-health.timer", err.getvalue(),
+                 "a failed reset names the manual command")
+
+    calls.clear()
+    th.assert_eq(deploy._clear_retired_failed_marks(
+        systemctl_is=lambda verb, name: calls.append((verb, name)) or False), [],
+        "nothing failed means nothing cleared")
+    th.assert_true(all(verb == "is-failed" for verb, _ in calls),
+                   f"nothing failed means no reset-failed call: {calls}")
+
+
+@th.django_unit_test()
 def test_home_binds_create_aws_parent_and_reject_unsafe_parents(opts):
     from mojo.deploy import mojosec as deploy
 
