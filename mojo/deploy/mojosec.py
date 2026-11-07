@@ -861,6 +861,28 @@ def _unit_file_state(unit):
     return done.stdout.strip().splitlines()[0].strip() if done.stdout.strip() else ""
 
 
+def _clear_retired_failed_marks(names=RETIRED_UNITS, *, systemctl_is=None):
+    """Clear systemd's "failed" mark on retired units (maestro #9813).
+
+    A retired unit that failed before it was removed stays listed as
+    `not-found failed` until reset-failed or a reboot. Only units `is-failed`
+    reports are reset, through `_systemctl_is` so a refusal never raises
+    (reset-failed on a unit systemd has not loaded exits 1, and `_run` would
+    roll converge back). Returns the names cleared.
+    """
+    systemctl_is = systemctl_is or _systemctl_is
+    cleared = []
+    for name in names:
+        if not systemctl_is("is-failed", name):
+            continue
+        if systemctl_is("reset-failed", name):
+            cleared.append(name)
+        else:
+            print(f"mojosec deploy: could not clear the failed mark of {name}; "
+                  f"run: sudo systemctl reset-failed {name}", file=sys.stderr)
+    return cleared
+
+
 def _audit_active_nginx(log_path, proxy_cidrs):
     active = _run(["nginx", "-T"])
     required = (
@@ -927,6 +949,12 @@ def _retire_stale_units(snapshot):
         if (_systemctl_is("is-active", name) or
                 _unit_file_state(name) not in RETIRED_UNIT_GONE_STATES):
             raise DeployError(f"retired unit did not stop and disable: {name}")
+    # Every retired name, not just the ones retired now: a node an earlier
+    # release already swept can still carry the mark.
+    cleared = _clear_retired_failed_marks()
+    if cleared:
+        print(f"mojosec deploy: cleared failed mark: {', '.join(cleared)}",
+              file=sys.stderr)
     return changed
 
 

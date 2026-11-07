@@ -348,6 +348,33 @@ def test_mojosec_retired_provenance_assets_are_graded_in_every_mode(opts):
 
 
 @th.django_unit_test()
+def test_mojosec_retired_units_marked_failed_warn_with_the_command(opts):
+    """maestro #9813: a retired unit systemd still lists as failed is a warn
+    naming the exact reset command; a clean node adds nothing, and the
+    absent/remain grading is unchanged."""
+    from mojo.deploy import check_node as cn
+
+    report = cn.Report()
+    run = FakeRunner([("is-failed", (0, "mojosec-audit-health.service\n", ""))])
+    cn._audit_retired_provenance_assets(report, run)
+    found = _find(report, "mojosec", "retired units marked failed")
+    th.assert_true(found is not None and found["status"] == cn.WARN,
+                   f"a retired unit still marked failed must warn: {report.findings}")
+    th.assert_eq(found.get("fix"), "sudo systemctl reset-failed mojosec-audit-health.service",
+                 f"the warn must name the exact manual command: {found}")
+    th.assert_eq(_statuses(report, "mojosec").get("retired provenance assets absent"), cn.PASS,
+                 "the absent check still passes on a node whose units are gone")
+    probe = [command for command in run.commands if "is-failed" in command]
+    th.assert_true(len(probe) == 1 and all(name in probe[0] for name in cn.MOJOSEC_RETIRED_UNITS),
+                   f"one read-only probe covers every retired unit: {run.commands}")
+
+    report = cn.Report()
+    cn._audit_retired_provenance_assets(report, FakeRunner())
+    th.assert_true(_find(report, "mojosec", "marked failed") is None,
+                   f"a clean node adds no failed-mark finding: {report.findings}")
+
+
+@th.django_unit_test()
 def test_mojosec_auto_mode_keeps_legacy_nodes_informational(opts):
     from mojo.deploy import check_node as cn
 

@@ -300,6 +300,123 @@ def test_retire_stale_units_retires_static_socket_activated_pairs(opts):
                  "a unit that will not stop must still fail the converge by name")
 
 
+def _retire_fixture(units, events, failed):
+    """Fakes for _retire_stale_units over `units`; `failed` is systemd's set
+    of units listed as failed, which only reset-failed clears."""
+    import os as _os
+
+    def systemctl(*args):
+        events.append(("cmd",) + args)
+        if args[0] == "disable":
+            units[args[-1]].update(active=False, state="")
+        elif args[0] == "daemon-reload":
+            for unit in units.values():
+                if not unit["file"]:
+                    unit["state"] = ""
+
+    def systemctl_is(verb, name):
+        events.append(("is", verb, name))
+        if verb == "is-failed":
+            return name in failed
+        if verb == "reset-failed":
+            failed.discard(name)
+            return True
+        unit = units[name]
+        if verb == "is-enabled":
+            return unit["state"] in ("enabled", "static")
+        return unit["active"]
+
+    def owned_snapshot(path):
+        return (b"[Unit]\n", 0o644) if units[_os.path.basename(path)]["file"] else None
+
+    def unlink(path):
+        units[_os.path.basename(path)]["file"] = False
+
+    return systemctl, systemctl_is, owned_snapshot, unlink
+
+
+@th.django_unit_test()
+def test_retire_stale_units_clears_failed_marks_after_the_proof(opts):
+    """maestro #9813: the health service failed 4 times during the package
+    swap, so after the sweep systemd still listed it as failed. The sweep
+    clears the mark, after daemon-reload and the gone-proof."""
+    from mojo.deploy import mojosec as deploy
+
+    units = {name: {"file": False, "state": "", "active": False} for name in deploy.RETIRED_UNITS}
+    units["mojosec-audit-health.timer"].update(file=True, state="enabled", active=True)
+    units["mojosec-audit-health.service"].update(file=True, state="static")
+    failed = {"mojosec-audit-health.service"}
+    events = []
+    systemctl, systemctl_is, owned_snapshot, unlink = _retire_fixture(units, events, failed)
+    with mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
+            mock.patch.object(deploy, "_systemctl_is", side_effect=systemctl_is), \
+            mock.patch.object(deploy, "_unit_file_state",
+                              side_effect=lambda name: units[name]["state"]), \
+            mock.patch.object(deploy, "_owned_snapshot", side_effect=owned_snapshot), \
+            mock.patch.object(deploy.os, "unlink", side_effect=unlink), \
+            contextlib.redirect_stderr(io.StringIO()):
+        changed = deploy._retire_stale_units(deploy._retired_unit_snapshot())
+    th.assert_true(changed, "retiring installed units is a change")
+    th.assert_eq(failed, set(), "the retired service's failed mark is cleared")
+    reset_at = events.index(("is", "reset-failed", "mojosec-audit-health.service"))
+    reload_at = events.index(("cmd", "daemon-reload"))
+    last_proof = max(i for i, event in enumerate(events)
+                     if event[:2] == ("is", "is-active"))
+    th.assert_true(reload_at < reset_at and last_proof < reset_at,
+                   f"the mark is cleared only after the reload and the gone-proof: {events}")
+
+
+@th.django_unit_test()
+def test_retire_stale_units_clears_marks_left_by_an_earlier_release(opts):
+    """maestro #9813: a node 1.40.3 already swept has nothing left to retire,
+    but systemd still lists the health service as failed. The next converge
+    clears it without counting a change or touching any file."""
+    from mojo.deploy import mojosec as deploy
+
+    units = {name: {"file": False, "state": "", "active": False} for name in deploy.RETIRED_UNITS}
+    failed = {"mojosec-audit-health.service"}
+    events = []
+    systemctl, systemctl_is, owned_snapshot, unlink = _retire_fixture(units, events, failed)
+    with mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
+            mock.patch.object(deploy, "_systemctl_is", side_effect=systemctl_is), \
+            mock.patch.object(deploy, "_unit_file_state",
+                              side_effect=lambda name: units[name]["state"]), \
+            mock.patch.object(deploy, "_owned_snapshot", side_effect=owned_snapshot), \
+            mock.patch.object(deploy.os, "unlink", side_effect=unlink), \
+            contextlib.redirect_stderr(io.StringIO()):
+        changed = deploy._retire_stale_units(deploy._retired_unit_snapshot())
+    th.assert_true(not changed, "clearing a failed mark is not a change")
+    th.assert_eq([event for event in events if event[0] == "cmd"], [],
+                 "nothing is disabled, unlinked or reloaded on a clean node")
+    th.assert_eq(failed, set(), "the leftover failed mark is cleared")
+
+
+@th.django_unit_test()
+def test_retire_stale_units_resets_nothing_before_a_stubborn_unit_raises(opts):
+    """maestro #9813: when the gone-proof fails, no mark is cleared and the
+    converge still fails by name, so today's rollback runs unchanged."""
+    from mojo.deploy import mojosec as deploy
+
+    units = {name: {"file": False, "state": "", "active": False} for name in deploy.RETIRED_UNITS}
+    units["mojosec-audit-health.timer"].update(file=True, state="enabled", active=True)
+    failed = {"mojosec-audit-health.service"}
+    events = []
+    systemctl, systemctl_is, owned_snapshot, _ = _retire_fixture(units, events, failed)
+    with mock.patch.object(deploy, "_systemctl", side_effect=lambda *args: events.append(("cmd",) + args)), \
+            mock.patch.object(deploy, "_systemctl_is", side_effect=systemctl_is), \
+            mock.patch.object(deploy, "_unit_file_state",
+                              side_effect=lambda name: units[name]["state"]), \
+            mock.patch.object(deploy, "_owned_snapshot", side_effect=owned_snapshot), \
+            mock.patch.object(deploy.os, "unlink", side_effect=lambda path: None):
+        with th.assert_raises(deploy.DeployError) as raised:
+            deploy._retire_stale_units(deploy._retired_unit_snapshot())
+    th.assert_in("mojosec-audit-health.timer", str(raised.exception),
+                 "a unit that will not stop still fails the converge by name")
+    th.assert_true(not any(event[:2] == ("is", "reset-failed") for event in events),
+                   f"no failed mark is cleared before the raise: {events}")
+    th.assert_eq(failed, {"mojosec-audit-health.service"}, "the mark stays for the rollback")
+
+
 @th.django_unit_test()
 def test_off_and_best_effort_preserve_evidence(opts):
     from mojo.deploy import mojosec as deploy
@@ -457,7 +574,7 @@ def test_off_audit_restore_failure_restores_service_without_removing_assets(opts
                               side_effect=lambda *unused: systemctl("start", deploy.SERVICE)), \
             mock.patch.object(deploy, "_restore_snapshot"), \
             mock.patch.object(deploy, "_systemctl_is",
-                              side_effect=lambda verb, unit: states[verb[3:]]), \
+                              side_effect=lambda verb, unit: states.get(verb[3:], False)), \
             mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
             mock.patch.object(deploy, "_remove_owned") as remove, \
             mock.patch.object(audit, "restore_prior",
