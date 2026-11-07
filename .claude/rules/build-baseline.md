@@ -1,14 +1,14 @@
-# Build Verification — What to Run, and When a Baseline Is Worth It
+# Build Verification — What to Run, and How to Judge a Red Run
 
 **The work item's verification tier decides.** `/maestro-scope` sets it (`none` /
 `targeted` / `full`) and pushes it as the item's `quality_contract`; `/maestro-build`
 reads it and runs exactly that. This file is the django-mojo half of that contract:
 the commands, the module mapping, and which changes count as `full` **here**.
 
-A baseline is not free — the suite serializes on one port and one Postgres database
-(see `.claude/rules/git.md`), so it is minutes of the user's time, every build, twice.
-Buy it when attributing a failure after the fact would actually be hard. That is the
-`full` tier, and only that tier.
+**No tier takes a baseline** (Ian, 2026-09-25). Nothing runs before the first edit.
+A run is minutes of the user's time; one run after the change is the whole cost. The
+one question a baseline used to answer — *was this failure already there?* — is
+answered from the recorded `main` run instead (see "Judging a red run" below).
 
 ## Vocabulary — say what you mean
 
@@ -44,16 +44,11 @@ then:
 - **`targeted`** → **no baseline.** Build, then run the modules the plan named:
   `bin/run_tests --agent -t <module> ...`. Stop there. Running the whole suite to
   feel safe spends the user's minutes on your comfort.
-- **`full`** → **baseline before the first edit**, whole suite (`--tier framework`) after.
-  1. `bin/run_tests --agent --tier framework` before touching anything.
-  2. Read `testproject/var/test_failures.json` (NOT terminal output). Record on the
-     item: total / passed / failed / skipped, and the names of any pre-existing
-     failures.
-  3. **Red baseline → STOP** and tell the user the area is already failing before you
-     started. Don't build on red without their say-so; if they say go, that recorded
-     set is the ONLY thing you may attribute to "not mine."
-  4. After implementing, re-run and compare. The acceptable end state is: the accepted
-     baseline failures and nothing new.
+- **`full`** → **no baseline either.** Build, then ONE whole-suite run after the
+  change: `bin/run_tests --agent --tier framework`. Read
+  `testproject/var/test_failures.json` (NOT terminal output) and record on the item:
+  total / passed / failed / skipped, and the names of any failures. Judge each red
+  test as below.
 
 **A bug's regression test runs at every tier**, on its own, before and after the fix —
 a regression test nobody saw fail proves nothing. It costs seconds and is never the
@@ -97,20 +92,21 @@ Map what you changed to the modules that cover it:
 - **When in doubt, widen.** A module too many costs seconds; a module too few loses
   the coverage the tier was claiming.
 
-## Attributing a red test without a baseline
+## Judging a red run
 
-A baseline answers exactly one question: *was this failure already there?* Below
-`full`, buy that answer only when something actually fails:
+At every tier, judge a red test only when something actually fails, as the workspace
+rule `testit-running-tests` says:
 
 1. **Read the failure first.** Most name your change unambiguously — the file, the
    assertion, the symbol you just touched. That settles it at zero cost.
-2. If it doesn't: `git stash -u`, re-run **that same targeted test**, `git stash pop`.
-   Seconds, and it settles the question exactly where the doubt is.
-3. A failure that predates you gets **reported, not silently fixed** — it isn't yours
+2. **The recorded `main` run:** `test_status(12, branch="main")`. A test already red
+   there is not yours.
+3. **The workspace's `known-flaky-tests` fact.** A listed flake that passes alone is
+   not yours.
+4. **Still unsettled:** rerun **that one file** on a clean `main` worktree. Red there
+   too means it predates you.
+5. A failure that predates you gets **reported, not silently fixed** — it isn't yours
    and isn't part of this item. Say so in the summary.
-
-`full` keeps its up-front baseline because attributing a red *whole suite* after the
-fact is neither cheap nor unambiguous.
 
 ## When to run `--all`
 
