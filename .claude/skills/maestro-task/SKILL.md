@@ -6,7 +6,7 @@ description: >-
   workspec, stage=inbox) is the work record, not a local file.
 user-invocable: true
 argument-hint: <feature/bug description — one, or several separable pieces of work>
-maestro-skill-version: 20
+maestro-skill-version: 26
 ---
 
 # Maestro Task — File Work onto the Board
@@ -14,6 +14,40 @@ maestro-skill-version: 20
 The work record is a maestro board item, live to everyone on the workspace:
 **state** (stage, priority, owner, due) in its column values, **the spec** (the
 "workspec") in its markdown description, **progress** on its activity trail.
+
+## Task clarity
+
+Every task states **Problem** and **Desired outcome** in its human summary.
+Before implementation, record the **Proposed solution** in the separate
+`solution` field: what will change and how it addresses the problem. The
+Workspace Maestro is accountable; authorized builders may draft or repair it.
+Resolve missing details within authority; ask a person only for a genuinely
+missing decision. Before any human-facing approval ask, save all three so the
+approval UI can show them. Missing summary fields alone do not block routine
+stage changes or Done. Never invent an outcome or substitute technical working
+notes for the explanation a person needs.
+
+## Existing authority and routine decisions
+
+A clear request authorizes its ordinary implementation steps within the caller's
+actual permissions. Validate task identity, workspace, scope and current rules,
+then proceed without repeat confirmation. Ask only for material ambiguity or
+changes outside existing authority, an explicit wait, or a missing decision
+required by an enabled workspace rule. Silence is not new authority.
+
+Coordinate ownership and checkout conflicts with the holder, wait, or work on
+independent authorized tasks. Never seize an active checkout, pretend to hold a
+lease, or bypass an actual refusal. Resume parked/rejected work only with actual
+resumption authority; a clear user instruction can provide it. Read the prior
+reason and current scope first; an item ID alone does not cancel a hold.
+
+Choose routine sequencing and proportionate verification, documenting why.
+Reuse valid evidence bound to the source, commands, counts and covered behavior;
+rerun affected checks after a relevant change, failure or uncertainty. Preserve
+explicitly required checks and selected independent review. Never present a
+claim, stale output or self-review as independent proof. Routine handoffs are
+coordination, not extra human approval gates. Explicit waits, release holds,
+release authority and native-host boundaries remain binding.
 
 ## One Item or Many
 
@@ -24,9 +58,7 @@ back — not one item that quietly staples them together.
 - **Split on separable units of work**: two things that could be scoped, built
   and shipped independently are two items. Trivia that would each be a one-line
   diff rolls into one housekeeping item instead of six rows.
-- **Say the split before filing** — the titles, one line each — and get a yes. A
-  user who meant one item will say so, and a wrong split costs a sentence to fix
-  now and four workspecs later.
+- **Choose a sensible split within the request.** State the titles and why. Ask only if the split materially changes the requested outcome or scope.
 - **Explore once, write per item.** Step 4 covers the whole ask; each item then
   gets its own self-contained workspec. State a shared constraint in every item
   it binds — never "see the other item".
@@ -114,7 +146,10 @@ In every report and trail note, say which you used and why:
 
 1. Call `get_workspace_context(workspace)` — apply any `rule` docs to your work.
    Reference docs by slug in the workspec ("Apply rules: ...") instead of
-   pasting their content. Then read what the workspace already knows about
+   pasting their content. When the work plainly needs a workspace skill (a
+   `skill` doc — a page change and the web developer skill), you may seed an
+   ``Apply skills: `<slug>` `` line beside it; scoping confirms or drops the pin.
+   Then read what the workspace already knows about
    this area: `search_knowledge(<2-3 content words>, project=<workspace or
    project id>)` for prior decisions and facts, and `get_knowledge_map(<the
    workspace>)` when you need the lie of the land. Cite what applies in the
@@ -124,17 +159,12 @@ In every report and trail note, say which you used and why:
 2. Parse the task description from the arguments (or ask what they want). If it
    carries several separable pieces of work, name the split now — see "One Item
    or Many"; everything below then runs once per piece.
-3. **Size check — ask before filing.** Not every request belongs on the board.
-   If the description reads like a small, single-session change (a typo, a
-   one-file fix, a small bug, a config tweak — faster to do than to write a
-   workspec for), stop and ask the user: "This looks small enough to vibe-code
-   directly — want me to run `/maestro-vibe` on it now instead of filing a board
-   item?" File without asking only when the task is clearly
-   multi-session/cross-cutting, or the user has already indicated (in
-   conversation, or by invoking this skill with that intent) that they
-   specifically want it tracked. When in doubt, ask: a board cluttered with
-   silly small items is worse than one extra question. If the user opts to vibe
-   it, switch to the `maestro-vibe` skill and do not create a board item.
+3. **Honor the requested outcome.** An explicit request to file or track work
+   means file it, even when small. If the user asked for a small fix, choose
+   `maestro-vibe` when appropriate and record its outcome, without a separate
+   workflow-choice question. A request to file is not permission to implement.
+   Ask only when the intended outcome is materially ambiguous.
+
 4. Explore the codebase — what exists, what changes, constraints. Ask
    clarifying questions until scope is unambiguous: contract/shape of the
    change, permissions, edge cases, what's explicitly out of scope.
@@ -143,9 +173,9 @@ In every report and trail note, say which you used and why:
    instead of filing a twin. A `finished`-flagged match is a regression —
    file fresh and name the item it re-opens. A **`rejected`-flagged match
    was DECLINED**: report it as "declined on <date> because <kind>" with
-   the `duplicate_of` link when it carries one, and **ask before filing
-   anyway** — a deliberate re-proposal reopens the item or files with the
-   prior decision named, never silently fresh.
+   the `duplicate_of` link when it carries one. Re-propose only with actual
+   resumption authority; use authority already supplied by a clear request
+   without another yes. Name the prior decision, never silently file it fresh.
 6. Compose the workspec markdown (template below). Write the human block
    **first and for a person**: someone who knows the product but has never read
    the code must finish those few sentences knowing what is wrong, why it
@@ -153,6 +183,9 @@ In every report and trail note, say which you used and why:
    already has the codebase in their head, it is not the human block yet.
 7. Create the item:
    `create_board_item(board, title, values={<resolved slugs and values>}, description=<workspec>)`.
+   When the solution is already known, also pass `solution=<it, in plain
+   words>`: the task's own field for people, with no file names, code or
+   commands. Leave it out when it is not known yet; scoping writes it.
    Resolve the workflow column by its option roles and stamp the option whose
    role is `intake`; never assume either slug `stage` or value `inbox`.
    Resolve Category, Horizon and Impact by explicit purpose (with only the
@@ -169,18 +202,19 @@ In every report and trail note, say which you used and why:
    position**. On a purpose-marked column the vocabulary is horizon: default
    `next`; write `now` only when the user says the work should be picked up
    immediately; `later` only when they explicitly defer it. When urgency is
-   unclear, ask in the same breath as the milestone question ("now, next, or
+   unclear, ask in the same breath as the project question ("now, next, or
    later?"). Write only values the column defines — a column without `next`
    gets no stamp, never an invented value. On a moscow-resolved legacy
    column the default stays `should` (ask or infer as before). No column
    resolves → omit the key; never invent a column.
-   **Milestone stamp** (boards with a milestone column): filing under a
-   parent inherits the parent's milestone value in the same `values` — the
-   trajectory rail only works if the journey writes it. No parent signal →
-   ask in the same breath as priority ("which milestone — or none?"; "none"
-   is fine), listing `list_milestones` when the user needs the options.
-   Never block filing on it, and never create a milestone here — creation is
-   scoping's call (`maestro-scope`'s stamp rule) or the human's.
+   **Project stamp** (boards with a Project column, type `milestone`):
+   filing under a parent inherits the parent's Project value in the same
+   `values` — the trajectory rail only works if the journey writes it. No
+   parent signal → ask in the same breath as priority ("which project — or
+   none?"; "none" is fine), listing `list_projects(workspace)` when the user
+   needs the options. Never block filing on it, and never create a project
+   here — creation is scoping's call (`maestro-scope`'s stamp rule) or the
+   human's.
 8. **Record what exploring taught.** A premise that is false, a measured limit,
    a convention the code assumes — anything a stranger filing the next item
    here would want to know: `upsert_workspace_doc(workspace, kind, slug, title, content)` with kind `decision` / `convention` / `fact`, one entry per fact, a stable slug, and a body a stranger can act on. Read the reply's `similar` before the next write — a near match means update that slug, not add a twin. Not recorded: the workspec
@@ -217,10 +251,9 @@ human is expected to read. Below: everything the sessions that scope and build
 the work need, dense on purpose.
 
 ```markdown
-<Human block — 2-5 plain sentences, no heading: the problem or the want, why
-it matters, and what done looks like. Written for a reader who knows the
-product but has not read the code: product nouns are fine, file paths, code
-symbols and item ids are not.>
+**Problem.** <the problem or the want, and why it matters.>
+
+**Desired outcome.** <what done looks like.>
 
 ---
 
@@ -243,6 +276,14 @@ commit — incidental findings only>
 - **Out of scope**: <explicitly excluded>
 ```
 
+The human block is plain sentences, no heading, for a reader who knows the
+product but has not read the code: product nouns are fine; file paths, code
+symbols, commands and item ids are not. **Problem.** and **Desired outcome.**
+are always there. Scoping may add a third, optional **Concerns.** paragraph —
+two to four plain sentences on what could go wrong and what the work does not
+cover — only when there is something real to say; never invent one, and leave
+it out when filing.
+
 The meta line replaces the old title/date/requester header. Two optional pairs
 may follow on it when they apply:
 
@@ -264,6 +305,11 @@ both), and keeps the human block true as understanding changes.
 ## Rules
 
 - Do NOT implement anything. Exploration and documentation only.
+- **A bug is filed plain**: its product's board, no project, no goal — never
+  a goal or project to hold bugs. Its severity is your own call from impact:
+  Critical with `mark_board_item_critical(item, on, reason)`, high with
+  `impact: high` on the bug and a comment carrying the evidence links. Give it
+  a goal only when it blocks that goal's criterion or came out of its work.
 - No Status line in the workspec — stage lives on the board.
 - **The human block earns its place by being readable.** No file paths, code
   symbols, item ids or acronyms above the divider; if a technical fact is

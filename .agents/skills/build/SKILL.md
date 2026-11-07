@@ -35,10 +35,11 @@ Read `AGENTS.md` for conventions. Read the item file in `planning/confirmed/`.
     If a test goes red and the failure doesn't obviously name your change,
     `git stash -u`, re-run that one test, `git stash pop` — seconds, and it settles
     attribution where the doubt actually is.
-  - **`full`** → baseline BEFORE the first edit: `bin/run_tests --agent` (NOT
-    `--all` unless the user asks), read `testproject/var/test_failures.json`, and
-    record total/passed/failed + any pre-existing failures in the item's `## Notes`.
-    Not all-green → STOP and tell the user; do not build on red unless they say to.
+  - **`full`** → **no baseline either.** Build, then ONE
+    `bin/run_tests --agent --tier framework` run after the change (NOT `--all`
+    unless the user asks), and read `testproject/var/test_failures.json`. Judge a
+    red run as `.claude/rules/build-baseline.md` says: the recorded `main` run,
+    then the known-flaky tests, then that one file rerun on a clean `main`.
   **Ordering in a shared tree:** run the claim (`scripts/start.sh`, Workflow
   step 1) BEFORE any test run — the WIP lock doubles as the test-suite lock
   against concurrent builder sessions; a run outside the claim can collide with
@@ -67,15 +68,15 @@ and `git commit`.
   work in the task's isolated branch/worktree; it is the ONLY test runner; the
   commit trailer names **its own** model; commits go by explicit pathspec (see
   `.claude/rules/git.md`); push task commits to GitHub and merge/push `main`
-  after verification and review, before close-out; if the item is `full` and its baseline
-  comes back red, STOP and report back instead of building. While it runs, the orchestrator stays
+  after verification and review, before close-out; it takes no baseline at any
+  tier and judges a red run as `.claude/rules/build-baseline.md` says. While it runs, the orchestrator stays
   hands-off the working tree — no edits, no test runs. On completion, verify
   (item Resolution, `testproject/var/test_failures.json`, `git log -p` spot-check) and relay.
   If the sub-agent cannot spawn the post-build agents itself, it performs those
   three passes inline, sequentially.
 - **fanout** — L/XL items ONLY, and only when the plan defines **disjoint file
-  partitions** (refuse otherwise). Orchestrator: claim, and — only if the item is
-  `full` — record the baseline, BEFORE spawning; spawn one builder per partition (all share this one working
+  partitions** (refuse otherwise). Orchestrator: claim (no baseline at any tier),
+  then spawn one builder per partition (all share this one working
   isolated item checkout), each implements code + tests for its partition
   and **NEVER runs `bin/run_tests`** (state this in every builder prompt);
   integrate their reports, then run targeted tests and the default suite
