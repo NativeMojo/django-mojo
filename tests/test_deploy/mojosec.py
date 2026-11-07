@@ -427,7 +427,13 @@ def test_rotation_twice_in_one_hour_keeps_both_archives(opts):
     """maestro #8881: run the shipped rotation text through the real logrotate
     twice within one hour, each time past maxsize. An hour-only suffix makes
     the second run fail with "destination ... already exists"; both runs must
-    succeed and leave two distinct archives."""
+    succeed and leave two distinct archives.
+
+    The uniqueness contract (Rick, review 176914) is one name per second:
+    two logrotate runs in the same second still collide, because dateext has
+    no collision fallback. The node never does that: logrotate runs only from
+    the distro's daily oneshot logrotate.timer (the framework never invokes
+    it), so the runs here are a second apart, like any two real runs."""
     import shutil
     import time
     from testit.helpers import TestitSkip
@@ -456,7 +462,7 @@ def test_rotation_twice_in_one_hour_keeps_both_archives(opts):
             done = subprocess.run([binary, "-s", state, config], capture_output=True, text=True)
             th.assert_eq(done.returncode, 0,
                          f"rotation {attempt} in the same hour must succeed: {done.stderr}")
-            time.sleep(1.1)
+            time.sleep(1.1)  # the contract: distinct runs are at least a second apart
         archives = sorted(name for name in os.listdir(scratch)
                           if name.startswith("mojosec.json.log-"))
         th.assert_eq(len(archives), 2,

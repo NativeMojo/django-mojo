@@ -519,7 +519,11 @@ Rotated archives carry the hour and second they were made,
 `mojosec.json.log-YYYYMMDDHHMMSS` (then `.gz`), because
 `/etc/logrotate.d/mojosec` sets `dateext` and `dateformat -%Y%m%d%H%M%S`: a
 second `maxsize 50M` rotation on the same day, or in the same hour, gets its
-own name instead of failing on the first one's. `check_node --section
+own name instead of failing on the first one's. Names are unique to the
+second: two logrotate runs within one second would still collide (logrotate
+skips that rotation and exits 1), but the node runs logrotate only from the
+distro's daily `logrotate.timer` and the framework never invokes it, so only
+two hand-run `logrotate` commands in the same second could. `check_node --section
 mojosec` counts these archives (at most 32) and fails one that is not a
 regular root:root file without group or other bits. The sensor reads system
 events from the journal, never from `/var/log/messages`, so rsyslog and
