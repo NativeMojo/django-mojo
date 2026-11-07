@@ -189,8 +189,8 @@ def dispatcher(request, *args, **kwargs):
     #
     # SECURITY: filter is_active=True (and verify the ancestor chain — DM-048:
     # a child of a deactivated parent is effectively inactive) so inactive
-    # groups never become request.group via this public path — prevents
-    # touching the modified timestamp and avoids a slight existence-disclosure
+    # groups never become request.group via this public path — no activity
+    # stamp (touch() writes only last_activity) and no slight existence-disclosure
     # via side effect. Endpoints that need to surface inactive-group state
     # (e.g. /api/geo/check) do their own lookup against Group.objects directly.
     elif "group_uuid" in request.DATA and request.DATA.group_uuid and not getattr(request, "group", None):

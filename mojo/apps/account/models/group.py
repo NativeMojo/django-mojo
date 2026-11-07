@@ -409,8 +409,11 @@ class Group(MojoSecrets, MojoModel):
         if self.last_activity and not dates.is_today(self.last_activity, METRICS_TIMEZONE):
             metrics.record("group_activity_day", category="group", min_granularity="days")
         if self.last_activity is None or dates.has_time_elsapsed(self.last_activity, seconds=GROUP_LAST_ACTIVITY_FREQ):
-            self.last_activity = dates.utcnow()
-            self.atomic_save()
+            # One column only: a full save of this (possibly stale) copy would
+            # undo a concurrent disable or token-epoch bump (#10297).
+            now = dates.utcnow()
+            type(self).objects.filter(pk=self.pk).update(last_activity=now)
+            self.last_activity = now
 
     def get_metadata(self):
         # converts our local metadata into an objict
