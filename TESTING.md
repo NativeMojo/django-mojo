@@ -143,7 +143,7 @@ tests/
 └── ...
 ```
 
-Each test file contains functions prefixed `test_` (or `setup_` for setup steps). The runner discovers and executes them in source-file order.
+Each test file contains functions prefixed `test_` (or `setup_` for setup steps). The runner discovers and executes them in source-file order. Every top-level `test_*` counts as a test and must record a result through `@th.unit_test` / `@th.django_unit_test`; one that records nothing fails the run as `unrecorded`. A `test_*` with a setup decorator is a step and is not counted.
 
 ## Writing Tests
 
