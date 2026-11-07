@@ -1013,18 +1013,39 @@ def _emit_extra(count):
         dfn("test_extra", count=count)
 
 
+def _counted_here(module, func):
+    """True when the static count includes this function: a test_ defined in
+    this file, not one imported or aliased from elsewhere (item #2774)."""
+    name = getattr(module, "__name__", None)
+    return name is None or getattr(func, "__module__", None) == name
+
+
+def _adjust_count(delta):
+    """Move the file's count by `delta`: -1 takes a setup step out, a
+    positive number adds outcomes the static count did not include."""
+    if delta < 0:
+        for _ in range(-delta):
+            _emit_uncount()
+    elif delta > 0:
+        _emit_extra(delta)
+
+
 def run_test(opts, module, func_name, module_name, test_name):
     """Run a specific test function inside a module.
 
     Every counted test ends recorded, skipped, unrecorded or aborted (item
     #2774): a call that records no outcome is entered as unrecorded with its
     cause, and a setup-decorated test_ that returns is a step, not a test.
+    The file's count then moves so that it holds every outcome the call
+    recorded, plus one for the call itself when it is unrecorded; `base` is
+    what the static count already holds for it (0 for an imported test_).
     """
     test_key = f"{module_name}.{test_name}.{func_name}"
     helpers.VERBOSE = opts.verbose or opts.errors
     helpers._set_active_test(test_key.replace(".", ":"))
     func = getattr(module, func_name)
     is_step = bool(getattr(func, "_is_setup", False))
+    base = 1 if _counted_here(module, func) else 0
     helpers._reset_outcomes()
     try:
         func(opts)
@@ -1040,15 +1061,19 @@ def run_test(opts, module, func_name, module_name, test_name):
         dfn = helpers._get_display_fn()
         if dfn:
             dfn("test_result", name=name, status="skipped", detail=str(skip))
+        _adjust_count(helpers._outcomes() - base)
         return
     except helpers.TestitAbort:
         raise
     except Exception as err:
         outcomes = helpers._outcomes()
         if outcomes == 0 or is_step:
+            # The call itself has no outcome: one unrecorded entry, beside
+            # whatever its nested wrappers recorded.
             helpers._add_unrecorded(module_name, test_name, func_name, type(err).__name__)
-        elif outcomes > 1:
-            _emit_extra(outcomes - 1)
+            _adjust_count(outcomes + 1 - base)
+        else:
+            _adjust_count(outcomes - base)
         if opts.verbose:
             print(f"  Test Error: {err}")
             traceback.print_exc()
@@ -1058,12 +1083,12 @@ def run_test(opts, module, func_name, module_name, test_name):
             raise helpers.TestitAbort()
         return
     outcomes = helpers._outcomes()
-    if is_step and outcomes == 0:
-        _emit_uncount()
-    elif outcomes == 0:
+    if outcomes == 0 and not is_step:
         helpers._add_unrecorded(module_name, test_name, func_name, "returned")
-    elif outcomes > 1:
-        _emit_extra(outcomes - 1)
+        _adjust_count(1 - base)
+    else:
+        # A returning step counts only what it recorded.
+        _adjust_count(outcomes - base)
 
 
 class _SetupFailed(Exception):
@@ -1291,15 +1316,18 @@ def _record_not_collected(module, module_name, test_name, expected_root):
     """Reconcile the static count with the test_ functions the run collects.
 
     A counted def that is never offered (a shadowed duplicate, a name rebound
-    to a non-function) is unrecorded as `not_collected`; a collected test_
-    the static count missed is added to it (item #2774).
+    to a non-function) is unrecorded as `not_collected`; a test_ defined in
+    this file that the static count missed is added to it (item #2774).
     """
     static = _static_file_count(expected_root, test_name)
     if static is None:
         return
-    collected = sum(1 for func_name, _ in inspect.getmembers(module, inspect.isfunction)
-                    if func_name.startswith("test_"))
-    missing = static - collected
+    # Only test_ functions defined in this file: an imported or aliased one
+    # is not in the static count and run_test adds its outcomes on its own,
+    # so it must not cancel a shadowed local definition.
+    defined = sum(1 for func_name, func in inspect.getmembers(module, inspect.isfunction)
+                  if func_name.startswith("test_") and _counted_here(module, func))
+    missing = static - defined
     if missing > 0:
         helpers._add_unrecorded(module_name, test_name, "*", "not_collected", missing)
     elif missing < 0:
@@ -1368,7 +1396,7 @@ def _run_module_file(opts, module_name, test_name, expected_root):
         for func_name, func in functions:
             if func_name.startswith(prefix):
                 if getattr(func, "_is_setup", False):
-                    _emit_uncount()
+                    _adjust_count(0 - _counted_here(module, func))
                     continue
                 display_name = func_name[len(prefix):]
                 # Name this file's test, not whatever ran last on the thread.
@@ -1379,6 +1407,7 @@ def _run_module_file(opts, module_name, test_name, expected_root):
                 dfn = helpers._get_display_fn()
                 if dfn:
                     dfn("test_result", name=display_name, status="skipped", detail="setup skipped")
+                _adjust_count(1 - _counted_here(module, func))
         return module
     run_module_tests(opts, module, test_name, module_name)
     return module
@@ -1479,13 +1508,14 @@ def run_module_tests(opts, module, test_name, module_name, setup_failure=None):
                     setup_failure is not None
                     or (gate is not None and gate(func) is not None)):
                 # A setup step that will not run is not a skipped test.
-                _emit_uncount()
+                _adjust_count(0 - _counted_here(module, func))
                 continue
             if gate is not None:
                 bucket = gate(func)
                 if bucket is not None:
                     helpers.record_tier_skip(
                         module_name, test_name, func_name, bucket)
+                    _adjust_count(1 - _counted_here(module, func))
                     continue
             if setup_failure is not None:
                 # The file's setup raised: a counted skip of kind `not_run`
@@ -1502,6 +1532,7 @@ def run_module_tests(opts, module, test_name, module_name, setup_failure=None):
                 dfn = helpers._get_display_fn()
                 if dfn:
                     dfn("test_result", name=name, status="skipped", detail=detail)
+                _adjust_count(1 - _counted_here(module, func))
                 continue
             # Track current test for the running display
             dfn = helpers._get_display_fn()

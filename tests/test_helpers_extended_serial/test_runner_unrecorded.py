@@ -458,3 +458,60 @@ def test_verdict_without_unrecorded(opts):
         "a TEST_RUN built without the unrecorded field passes"
     assert runner._run_verdict(objict(unrecorded=[], **base)) == [], \
         "an empty unrecorded list passes"
+
+
+@th.unit_test("an imported test_ alias neither counts as nor hides a shadowed local test")
+def test_imported_alias_does_not_mask_shadowed_test(opts):
+    support = """
+    from testit import helpers as th
+
+    @th.unit_test("helper")
+    def helper(opts):
+        pass
+    """
+    case = """
+    from testit import helpers as th
+    from .support import helper as test_imported
+
+    @th.unit_test("dup first")
+    def test_dup(opts):
+        raise AssertionError("the shadowed definition never runs")
+
+    @th.unit_test("dup second")
+    def test_dup(opts):
+        pass
+    """
+    for tracked in (True, False):
+        with _package({"case": case, "support": support}) as record:
+            result = _run(record, tracked)
+            # Two local defs (one shadowed) plus the imported call's outcome.
+            _check(result, (3, 2, 0, 0, 1))
+            assert [(u["test_module"], u["function"], u["cause"], u["count"])
+                    for u in result.unrecorded] == [("case", "*", "not_collected", 1)], (
+                f"[{result.mode}] the shadowed local def stays not_collected, got "
+                f"{result.unrecorded}")
+            assert result.codes == ["unrecorded"], f"[{result.mode}] got {result.codes}"
+
+
+@th.unit_test("a setup step that records a nested outcome and then raises counts both")
+def test_step_with_nested_outcome_then_raise(opts):
+    source = """
+    from testit import helpers as th
+
+    @th.unit_test("helper")
+    def helper(opts):
+        pass
+
+    @th.unit_setup()
+    def test_step(opts):
+        helper(opts)
+        raise RuntimeError("teardown failed")
+    """
+    for tracked in (True, False):
+        with _package({"1_step": source}) as record:
+            result = _run(record, tracked)
+            _check(result, (2, 1, 0, 0, 1))
+            assert [(u["function"], u["cause"]) for u in result.unrecorded] == [
+                ("test_step", "RuntimeError")], (
+                f"[{result.mode}] the raising step is unrecorded, got {result.unrecorded}")
+            assert result.codes == ["unrecorded"], f"[{result.mode}] got {result.codes}"

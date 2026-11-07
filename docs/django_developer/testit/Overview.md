@@ -684,7 +684,7 @@ def test_admin_can_login(opts):
 
 A counted test is a top-level `def test_*` in a test file. Each one ends in exactly one of these states:
 
-- **Recorded**: it ran and recorded one or more results through `@th.unit_test` or `@th.django_unit_test` (passed, failed, skipped or error). A test that records more than one result, for example by calling another wrapped function, adds each extra result to its module's `tests`.
+- **Recorded**: it ran and recorded one or more results through `@th.unit_test` or `@th.django_unit_test` (passed, failed, skipped or error). A test that records more than one result, for example by calling another wrapped function, adds each extra result to its module's `tests`. A `test_*` imported or aliased from another module is not in the static count; each result it records is added.
 - **Skipped or not run**: a tier skip, a setup skip, or `not_run` after a setup error, as above.
 - **Unrecorded**: it ran and recorded nothing (an undecorated `test_*`), it raised outside the wrappers (for example `django.setup()` failing), it was never collected (a duplicate `def` that shadows an earlier one), or its file stopped on an unexpected exception. Each is entered by name with its cause (`returned`, `not_collected` or the exception type) and fails the run with the reason `unrecorded`.
 - **Aborted**: the run was stopped early.
