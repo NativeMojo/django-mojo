@@ -377,6 +377,10 @@ class RestMeta:
   registers it under the literal name `+`, which a caller can send as `%2B`,
   so any segment that resolves to one is refused, whatever its foreign key
   declares.
+- `not` / `not_in` are operators only as the last segment of a key. Anywhere
+  else (`?avatar__not__%2B__id__not=`) the key is refused, and the parser
+  strips only the trailing suffix, so the key that runs is the key that was
+  judged.
 - Lookup suffixes (`startswith`, `in`, `isnull`, `month`) can never produce a
   false positive: a suffix is not a field, so the walk has already stopped at
   the field before it, and the suffix is never compared with a field name.

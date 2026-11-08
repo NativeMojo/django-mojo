@@ -83,6 +83,22 @@ def test_reverse_paths(opts):
                     f"declared {declared!r}: User?{key} must be refused"
 
 
+@th.django_unit_test("an interior not cannot disguise a path through a sensitive FK")
+@th.requires_app("mojo.apps.filevault")
+def test_interior_not_disguise(opts):
+    from mojo.apps.filevault.models import VaultAccessLog
+
+    for declared in DECLARATIONS:
+        with _vault_declares(declared) as VaultData:
+            for model, key in ((VaultAccessLog, "vault_data__not__user_id__not"),
+                               (VaultAccessLog, "vault_data__not__user__id__not"),
+                               (VaultAccessLog, "user__not__vault_data__id__not")):
+                filters, excludes = model.build_rest_filters(None, {key: "1"})
+                combined = list(filters) + list(excludes)
+                assert not combined, \
+                    f"declared {declared!r}: {model.__name__}?{key} reached the queryset as {combined}"
+
+
 @th.django_unit_test("pk is refused when the primary key is declared")
 @th.requires_app("mojo.apps.filevault")
 def test_pk_alias(opts):
