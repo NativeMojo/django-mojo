@@ -66,6 +66,7 @@ class Book(models.Model, MojoModel):
 | `ALLOW_SAVE_FIELDS` | list | `[]` | Hands `created` and/or `uuid` back to the REST body. Any other name here is ignored |
 | `NO_SHOW_FIELDS` | list | `[]` | Fields never included in responses |
 | `SENSITIVE_FIELDS` | list | `[]` | Columns that may never be filtered, searched, sorted or aggregated on (see [Sensitive fields](#sensitive-fields)) |
+| `FILTER_RELATED` | list | `[]` | Relation paths every list caller may filter by, even one who cannot list the related model (see [Related-model walks](#related-model-walks)) |
 | `LOG_CHANGES` | bool | `False` | Auto-log field changes via logit |
 | `LOG_META_CHANGES` | bool | `False` | Auto-log key-level changes to all JSONFields via logit |
 | `PROTECTED_JSON_PERMS` | list | `[]` | Permissions required to modify the `"protected"` root key in any JSONField |
@@ -384,6 +385,58 @@ new model with a secret column is unprotected until it declares one. A
 name-substring heuristic was considered and rejected — it produces false
 positives on legitimate columns like `token_expires_at`, silently breaking
 working filters.
+
+#### Related-model walks
+
+A filter, `_mode=count`, `_stats`, `?search=`, `?sort=` or `_field=` path that
+walks **into** a related model is the same count oracle one hop further: the
+count answers questions about rows the caller cannot read. Since #8680 every
+such path goes through one rule, `mojo.models.rest.walk_verdict(model, key,
+request)` (`walk_denied` is its boolean form). It runs after the
+sensitive-field and private-lookup guards, on the key as sent.
+
+A segment **hops** into a related model when it is a reverse relation (with
+anything after it, `__id` and `__isnull` included), or a forward relation
+followed by a field that is not its own column. `user`, `user_id`,
+`user__id`, `user__pk`, `user__in` and `user__isnull` compare the local column
+and are not hops. A hidden relation (`related_name="+"`) is always refused,
+for every caller, and raises a security event.
+
+A key that hops passes only when one of these holds, else it is dropped
+(filters, count, `_stats`, search, sort) or answered 400 (`_field=`):
+
+1. **It is the model's own `RestMeta.GROUP_FIELD` path** (trailing lookups
+   removed), e.g. Certificate `domain__group`. The server already scopes by
+   it. `OWNER_FIELD` is **not** an exemption: it defaults to `user`, and on a
+   group-scoped model such as File it would let a tenant manager filter by
+   uploaders' email.
+2. **The model declares it** in `RestMeta.FILTER_RELATED` (for `?search=`,
+   declared `SEARCH_FIELDS` count too):
+
+   ```python
+   class RestMeta:
+       FILTER_RELATED = ["user__username", "user__email", "user__display_name", "group__name"]
+   ```
+
+   A declared walk shows that related field to **every** list caller of the
+   model, so declare only what the model's graphs already show them.
+3. **The caller could list every row of each model it hops into**:
+   `MojoModel.rest_viewer_can_list_all(request)`. It reads the related
+   model's `VIEW_PERMS` without `owner` and `member`; `all` and
+   `authenticated` count only on a model that is not group-scoped. An ApiKey
+   passes only with that model's `ALLOW_API_KEY_GLOBAL`; a group token never
+   does; a model with no `VIEW_PERMS` fails closed. User overrides it with its
+   account-view rule (#8648). A related model that is not a MojoModel passes
+   only for a signed-in superuser.
+
+Sorting by a relation orders by its own column (`<fk>_id`); a reverse or
+many-to-many sort is ignored. A path that does not resolve is left to the ORM,
+which refuses it as before. No request (a job or the shell building filters)
+leaves the key alone.
+
+**Consumers:** a scoped caller (a tenant manager, a group-level permission, an
+ApiKey) loses every undeclared walk into a model they cannot list in full.
+Declare the walks your screens need in `FILTER_RELATED`.
 
 Models can opt into a stricter allow-list by setting
 `AGGREGATION_FIELDS` on `RestMeta`:

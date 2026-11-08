@@ -127,6 +127,34 @@ Filtering on a sensitive field raises a server-side security event. There is no
 way to discover which fields are protected by probing — a sensitive field and a
 nonexistent one behave identically.
 
+### Filters Into Related Records
+
+A filter, `?search=`, `?sort=` or `_field=` that walks **into** a related
+record works only when you could list those records yourself, the model
+declares that walk, or it is the model's own group link
+(`?domain__group=5` on a certificate). Otherwise it is **silently ignored**,
+like a protected field, and you get the result as if you had not sent it.
+
+```
+# a plain member listing their groups
+GET /api/group?public_messages__email__startswith=a   → ignored (needs support access)
+# a tenant manager listing members: these walks are declared
+GET /api/group/member?group=5&user__email__icontains=bob      → applied
+GET /api/group/member?group=5&user__phone_number__startswith=1 → ignored
+```
+
+- Comparing the link itself is never a walk: `?user=5`, `?user_id=5`,
+  `?user__id=5`, `?user__in=5,6` and `?user__isnull=true` always work.
+- Global admins who can list the related model are unaffected.
+- A link Django hides (`+` in the path) is always ignored and is reported as a
+  security event.
+- `?sort=<relation>` sorts by the link's own id; sorting by a reverse or
+  many-to-many relation is ignored.
+- `_field=<reverse relation>__id` on the aggregation surface is a `400`
+  (`... is not available on <Model>`) when the walk is not allowed.
+- The Assistant's query, aggregate and export tools refuse the same walks with
+  an error.
+
 ## Default Filters
 
 Some endpoints filter their list by default, before your parameters are

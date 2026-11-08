@@ -1466,6 +1466,11 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             return False
         return bool(user.has_permission(perms))
 
+    @classmethod
+    def rest_viewer_can_list_all(cls, request):
+        """User's form of the list-walk check (#8680): the account view."""
+        return cls.rest_viewer_has_account_view(request)
+
     def on_action_send_invite(self, value):
         self.send_invite()
 

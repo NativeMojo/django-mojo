@@ -153,13 +153,32 @@ def _blocked_search_fields(model):
     ]
 
 
-def _validate_search(model, user, model_label):
-    """Refuse a search the shared search would run against a sensitive field.
+def _search_field_names(model):
+    """The fields ``on_rest_list_search`` compares against before its guards:
+    SEARCH_FIELDS, else every text column."""
+    fields = getattr(model.RestMeta, "SEARCH_FIELDS", None)
+    if fields is None:
+        fields = [
+            f.name for f in model._meta.get_fields()
+            if hasattr(f, "get_internal_type") and f.get_internal_type() in ("CharField", "TextField")
+        ]
+    return list(fields)
+
+
+def _validate_search(model, user, model_label, request=None):
+    """Refuse a search the shared search would run against a sensitive field,
+    or through a relation the list-walk rule refuses this viewer (#8680).
 
     The whole search is refused, targeted or not: the shared method takes no
     field list, so it cannot be told to leave one field out. Returns error
     dict or None.
     """
+    from mojo.models.rest import walk_denied
+
+    walked = [f for f in _search_field_names(model)
+              if walk_denied(model, f, request, search=True)]
+    if walked:
+        return {"error": f"Search on {model_label} is not available"}
     blocked = _blocked_search_fields(model)
     if not blocked:
         return None
@@ -427,7 +446,7 @@ def _resolve_group_by_field(model, name):
 
 def _validate_filter_keys(model, filters, valid_fields, user, model_label, request=None):
     """Validate filter keys against model fields. Returns error dict or None."""
-    from mojo.models.rest import is_viewer_restricted_path
+    from mojo.models.rest import is_viewer_restricted_path, walk_denied
     # ORM lookup suffixes that are not field names
     ORM_SUFFIXES = {"in", "not", "not_in", "isnull", "gte", "gt", "lte", "lt",
                     "exact", "iexact", "contains", "icontains", "startswith",
@@ -456,6 +475,11 @@ def _validate_filter_keys(model, filters, valid_fields, user, model_label, reque
         if is_viewer_restricted_path(model, key, request):
             named = next((s for s in reversed(parts) if s not in ORM_SUFFIXES), key)
             return {"error": f"Filtering on '{named}' is not available"}
+
+        # The REST list-walk rule (#8680): a path into a related model this
+        # viewer cannot list in full, and every hidden `+` link.
+        if walk_denied(model, key, request):
+            return {"error": f"Filtering on '{key}' is not available"}
 
     return None
 
@@ -782,7 +806,7 @@ def _tool_query_model(params, user):
     # Validate search
     search = params.get("search", "").strip()
     if search:
-        search_err = _validate_search(model, user, model_label)
+        search_err = _validate_search(model, user, model_label, request=request)
         if search_err:
             return search_err
 
@@ -1662,7 +1686,7 @@ def _tool_export_data(params, user):
     # Validate search
     search = params.get("search", "").strip()
     if search:
-        search_err = _validate_search(model, user, model_label)
+        search_err = _validate_search(model, user, model_label, request=request)
         if search_err:
             return search_err
 
