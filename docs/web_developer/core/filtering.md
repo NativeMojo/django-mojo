@@ -148,6 +148,9 @@ GET /api/group/member?group=5&user__phone_number__startswith=1 → ignored
 - Global admins who can list the related model are unaffected.
 - A link Django hides (`+` in the path) is always ignored and is reported as a
   security event.
+- `__not` and `__not_in` work only at the end of a key
+  (`?user__email__not=...`). A key with either in the middle
+  (`?user__not__email=...`) is ignored.
 - `?sort=<relation>` sorts by the link's own id; sorting by a reverse or
   many-to-many relation is ignored.
 - `_field=<reverse relation>__id` on the aggregation surface is a `400`

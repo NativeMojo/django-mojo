@@ -400,7 +400,10 @@ anything after it, `__id` and `__isnull` included), or a forward relation
 followed by a field that is not its own column. `user`, `user_id`,
 `user__id`, `user__pk`, `user__in` and `user__isnull` compare the local column
 and are not hops. A hidden relation (`related_name="+"`) is always refused,
-for every caller, and raises a security event.
+for every caller, and raises a security event. `not` / `not_in` are
+operators only as the last segment (`user__email__not`); anywhere else in a
+key (`user__not__email`) the key is dropped, and the parser strips only that
+trailing suffix.
 
 A key that hops passes only when one of these holds, else it is dropped
 (filters, count, `_stats`, search, sort) or answered 400 (`_field=`):
