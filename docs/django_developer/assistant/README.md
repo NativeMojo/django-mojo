@@ -592,7 +592,7 @@ bound to the originating browser Origin.
 | `model_name` | string | required | Model class name (e.g. `User`, `Incident`, `Job`) |
 | `filters` | object | `{}` | ORM filter dict (e.g. `{"status": "active", "created__gte": "2026-01-01"}`) |
 | `search` | string | — | Free-text search using the model's `SEARCH_FIELDS` |
-| `ordering` | string | `-pk` | Order by field, prefix with `-` for descending (e.g. `-created`) |
+| `ordering` | string | `-pk` | Order by field, prefix with `-` for descending (e.g. `-created`). A forward FK orders by its own column (`group` → `group_id`); a reverse or many-to-many relation is refused. |
 | `limit` | integer | `50` | Max results to return (max 200) |
 | `count_only` | boolean | `false` | If true, return only the total count with no row data |
 
@@ -602,7 +602,7 @@ bound to the originating browser Origin.
 |---|---|---|---|
 | `app_name` | string | required | Django app label |
 | `model_name` | string | required | Model class name |
-| `aggregations` | array | required | List of `{field, func, alias?}` objects. `func` is one of `count`, `sum`, `avg`, `min`, `max`, `count_distinct`. `alias` defaults to `{func}_{field}`. Use `id` as the field for row counts. |
+| `aggregations` | array | required | List of `{field, func, alias?}` objects. `func` is one of `count`, `sum`, `avg`, `min`, `max`, `count_distinct`. `alias` defaults to `{func}_{field}`. Use `id` as the field for row counts. A forward FK aggregates its own column; a reverse or many-to-many relation follows the REST list-walk rule (#8680) and is refused unless the caller could list that model in full. |
 | `filters` | object | `{}` | ORM filter dict |
 | `group_by` | array | — | Fields to group by (e.g. `["status"]` or `["status", "category"]`). Forward FK fields are accepted by either the relation name or the column name and resolve to the column attname (e.g. `"group"` → `"group_id"`); the resolved column is the key used in result rows. Reverse relations and many-to-many fields are rejected. |
 | `having` | object | — | Post-aggregation filter applied after `group_by` + `annotate` (SQL HAVING semantics). Keys must reference an aggregation alias and may use scalar lookup suffixes (`gte`, `gt`, `lte`, `lt`, `exact`, `in`, `isnull`, `range`). Requires `group_by`. Example: `{"total__gte": 2}`. |
@@ -617,7 +617,7 @@ bound to the originating browser Origin.
 | `model_name` | string | required | Model class name |
 | `filters` | object | `{}` | ORM filter dict |
 | `search` | string | — | Free-text search using the model's `SEARCH_FIELDS` |
-| `ordering` | string | `-pk` | Order by field |
+| `ordering` | string | `-pk` | Order by field; relations as in `query_model` |
 | `limit` | integer | `5000` | Max rows to export (max 50000) |
 | `fields` | array | — | Columns to keep, in this order. Each must be one of `describe_model`'s `serialization.fields`: it narrows the export and can never add a column. An empty list, a duplicate, or a name outside that set is refused before any file is created. |
 

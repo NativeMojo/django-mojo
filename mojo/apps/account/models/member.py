@@ -106,6 +106,9 @@ class GroupMember(models.Model, MojoModel):
         VIEW_PERMS = ["view_members", "view_groups", "manage_groups", "manage_group", "groups"]
         SAVE_PERMS = ["manage_groups", "manage_group", "groups"]
         SEARCH_FIELDS = ["user__username", "user__email", "user__display_name"]
+        # The walks a tenant manager's Members page filters by (#8680): what
+        # the member graphs already show. Phone is deliberately not one.
+        FILTER_RELATED = ["user__username", "user__email", "user__display_name", "group__name"]
         POST_SAVE_ACTIONS = ['resend_invite']
         CREATED_BY_OWNER_FIELD = 'created_by'  # we do this to protect user
         GRAPHS = {
