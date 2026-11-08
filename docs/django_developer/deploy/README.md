@@ -751,6 +751,27 @@ node's static setting, for example `--node-type sites`. Its project-script and
 profile checks are advisory diagnostics, including under `--require-shims`;
 deployment itself does not call this tool.
 
+**`--section system_logs`** checks the node's disk and log rotation, on every
+node type. It only reads: `logrotate -d` is a dry run, and nothing is rotated,
+deleted or restarted. Run it as root (`sudo python3 -E -P -m
+mojo.deploy.check_node --section system_logs`) so the dry run and the
+`/var/log/messages*` total can read root-only files.
+
+| Finding | PASS | WARN | FAIL |
+|---|---|---|---|
+| root filesystem (`df -P /`) | under 75% used | 75-84% | 85% or more (the health monitor's `HEALTH_DISK_CRIT` default) |
+| logrotate health | clean dry run, service not failed | the dry run or the service state could not be read (timeout, ssh, sudo): unverified | `logrotate -d /etc/logrotate.conf` prints any `error:` line (`duplicate log entry`, a bad directive), or `logrotate.service` is failed |
+| messages archive size | `/var/log/messages*` totals 2 GiB or less (none at all is 0) | more than 2 GiB, or `du` failed (permission, timeout): unverified | |
+
+Every WARN and FAIL names its remedy. A duplicate entry usually means
+`/etc/logrotate.d/nginx` globs `/var/log/nginx/*.log` and so also claims
+MojoSec's `mojosec.json.log`: make its first line name nginx's own logs,
+`/var/log/nginx/access.log /var/log/nginx/error.log`. A large messages total
+usually means audit records reach rsyslog: add the rsyslog drop
+(`if $programname == 'audit' then stop`) and compress rotated messages. The
+framework does not manage rsyslog, logrotate compression or journald size;
+those stay host configuration.
+
 ### `jobman`
 
 `python3 -m mojo.deploy.jobman` starts, stops, and reports the foreground job

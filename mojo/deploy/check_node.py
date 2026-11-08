@@ -85,8 +85,9 @@ INFO = "INFO"
 # schedules and serves it, then the trailing edges (certs, config, shims,
 # leftovers).
 SECTIONS = (
-    "repo", "framework", "deployment", "roles", "cron", "systemd", "firewall", "mojosec", "nginx",
-    "certs", "config_plane", "shims", "legacy", "var_ownership", "profile", "jobs",
+    "repo", "framework", "deployment", "roles", "cron", "systemd", "firewall", "mojosec",
+    "system_logs", "nginx", "certs", "config_plane", "shims", "legacy", "var_ownership",
+    "profile", "jobs",
 )
 
 # The two deployment scripts are project-owned, so a broken installed
@@ -763,6 +764,21 @@ def _mojosec_python(sudo, arguments, safe_path=True):
     flags = "-E -P" if safe_path else "-E"
     inner = f"cd / && exec /usr/bin/python3 {flags} {arguments}"
     return f"{sudo}/bin/sh -c {q(inner)}"
+
+
+def _mojosec_archive_check(directory="/var/log/nginx", uid=0, gid=0):
+    """The node-side one-liner for rotated security-log archives: at most 32,
+    each a regular file owned uid:gid with no group/other bits. The glob takes
+    dateext names (mojosec.json.log-YYYYMMDDHHMMSS[.gz]) and numbered ones."""
+    pattern = os.path.join(directory, "mojosec.json.log[-.]*")
+    return (
+        "import glob,os,stat;"
+        f"ps=glob.glob({pattern!r});"
+        "ok=len(ps)<=32 and all(stat.S_ISREG(os.lstat(p).st_mode) and "
+        f"os.lstat(p).st_uid=={int(uid)} and os.lstat(p).st_gid=={int(gid)} and "
+        "not(os.lstat(p).st_mode&0o077) for p in ps);"
+        "raise SystemExit(0 if ok else 1)"
+    )
 
 
 def _audit_mojosec_unit(report, run, sudo, mode="observe"):
@@ -1455,14 +1471,7 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                 else:
                     report.fail("mojosec", "security log metadata drift",
                                 "standard dedicated log must be root:root 0600")
-                archive_check = (
-                    "import glob,os,stat;"
-                    "ps=glob.glob('/var/log/nginx/mojosec.json.log.*');"
-                    "ok=len(ps)<=32 and all(stat.S_ISREG(os.lstat(p).st_mode) and "
-                    "os.lstat(p).st_uid==0 and os.lstat(p).st_gid==0 and "
-                    "not(os.lstat(p).st_mode&0o077) for p in ps);"
-                    "raise SystemExit(0 if ok else 1)"
-                )
+                archive_check = _mojosec_archive_check()
                 if run(_mojosec_python(
                         sudo, f"-c {q(archive_check)}"))[0] == 0:
                     report.passed("mojosec", "security log archives",
@@ -1496,6 +1505,96 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
     else:
         report.fail("mojosec", "public status metadata drift",
                     "/run/mojosec/status.json must be root:root 0640")
+
+
+# ---------------------------------------------------------------------------
+# system logs — root disk and log rotation, read-only
+# ---------------------------------------------------------------------------
+
+ROOT_DISK_WARN = 75
+ROOT_DISK_FAIL = 85  # the health monitor's HEALTH_DISK_CRIT default
+MESSAGES_WARN_BYTES = 2 * 1024 ** 3
+
+
+def check_system_logs(report, run, sudo):
+    """Root filesystem use, logrotate health and the /var/log/messages total.
+    Reads only: `logrotate -d` is a dry run, and nothing is rotated, removed
+    or restarted."""
+    rc, out, _ = run("df -P / 2>/dev/null")
+    used = None
+    if rc == 0 and out:
+        fields = out.splitlines()[-1].split()
+        if len(fields) >= 5 and fields[4].rstrip("%").isdigit():
+            used = int(fields[4].rstrip("%"))
+    if used is None:
+        report.info("system_logs", "root filesystem unreadable", "df -P / gave no usage line")
+    elif used >= ROOT_DISK_FAIL:
+        report.fail("system_logs", "root filesystem nearly full",
+                    f"/ is {used}% used (FAIL at {ROOT_DISK_FAIL}%)",
+                    "free space now: check /var/log (du -xh /var/log | sort -h) and the journal "
+                    "(journalctl --disk-usage)")
+    elif used >= ROOT_DISK_WARN:
+        report.warn("system_logs", "root filesystem filling",
+                    f"/ is {used}% used (WARN at {ROOT_DISK_WARN}%, FAIL at {ROOT_DISK_FAIL}%)",
+                    "find what is growing: du -xh /var/log | sort -h; journalctl --disk-usage")
+    else:
+        report.passed("system_logs", "root filesystem", f"/ is {used}% used")
+
+    dry_rc, dry_run, dry_err = run(f"{sudo}/usr/sbin/logrotate -d /etc/logrotate.conf 2>&1",
+                                   timeout=60)
+    errors = [line.strip() for line in dry_run.splitlines()
+              if line.strip().startswith("error:")]
+    duplicates = [line for line in errors if "duplicate log entry" in line]
+    _, service, _ = run("systemctl is-failed logrotate.service 2>/dev/null")
+    service = service.strip()
+    if duplicates:
+        report.fail("system_logs", "logrotate duplicate log entry", duplicates[0][:200],
+                    "two logrotate stanzas claim one file; make the first line of "
+                    "/etc/logrotate.d/nginx name nginx's own logs, /var/log/nginx/access.log "
+                    "/var/log/nginx/error.log, instead of a /var/log/nginx/*.log glob")
+    elif errors:
+        report.fail("system_logs", "logrotate configuration error", errors[0][:200],
+                    "logrotate skips the stanza it names; fix that file, then re-run "
+                    "sudo logrotate -d /etc/logrotate.conf until it prints no error")
+    elif service == "failed":
+        report.fail("system_logs", "logrotate.service failed",
+                    "the last scheduled rotation failed, so logs are no longer rotated",
+                    "read journalctl -u logrotate.service, fix the stanza it names, then "
+                    "systemctl reset-failed logrotate.service")
+    elif dry_rc != 0:
+        # No logrotate diagnostic: the probe itself failed (timeout, ssh,
+        # sudo, missing binary), so rotation health is unknown, not clean.
+        report.warn("system_logs", "logrotate health unverified",
+                    f"dry run exited {dry_rc}: {(dry_err or dry_run or 'no output')[:200]}",
+                    "run sudo logrotate -d /etc/logrotate.conf on the node and read its errors")
+    elif service not in ("active", "inactive", "activating", "deactivating"):
+        report.warn("system_logs", "logrotate health unverified",
+                    f"logrotate.service state unreadable: {service or 'no answer'}",
+                    "run systemctl is-failed logrotate.service on the node")
+    else:
+        report.passed("system_logs", "logrotate health",
+                      "dry run clean and logrotate.service not failed")
+
+    # No match is a measured zero; a du failure (permission, timeout) is not.
+    inner = ('set -- /var/log/messages*; [ -e "$1" ] || { echo 0; exit 0; }; '
+             'out=$(du -cb -- "$@") || exit 1; printf "%s\\n" "$out" | tail -n 1')
+    du_rc, du_out, du_err = run(f"{sudo}/bin/sh -c {q(inner)}")
+    total_line = du_out.split()
+    if du_rc != 0 or not total_line or not total_line[0].isdigit():
+        report.warn("system_logs", "messages archive size unverified",
+                    f"du exited {du_rc}: {(du_err or du_out or 'no output')[:200]}",
+                    "run sudo du -cb /var/log/messages* on the node")
+        return
+    total = int(total_line[0])
+    gib = total / 1024 ** 3
+    if total > MESSAGES_WARN_BYTES:
+        report.warn("system_logs", "messages archive size",
+                    f"/var/log/messages* totals {gib:.1f} GiB (WARN above 2 GiB)",
+                    "find the noisy source; for audit records add the rsyslog drop "
+                    "(if $programname == 'audit' then stop) and compress rotated messages")
+    else:
+        report.passed("system_logs", "messages archive size",
+                      f"/var/log/messages* totals {gib:.1f} GiB")
 
 
 # ---------------------------------------------------------------------------
@@ -2388,6 +2487,8 @@ def main(argv):
                       args.mojosec_sensor_id)
     if "firewall" in wanted:
         check_firewall(report, run, sudo)
+    if "system_logs" in wanted:
+        check_system_logs(report, run, sudo)
     if "nginx" in wanted and node_type == "api":
         check_nginx(report, run, repo, sudo, args.probe_url, retired_confd,
                     args.web_user, roles["foreign"]["conf.d"])
