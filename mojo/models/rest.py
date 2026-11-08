@@ -485,13 +485,19 @@ def walk_verdict(model, key, request, search=False):
     path, a path the root declares in RestMeta.FILTER_RELATED (or, for
     search, in SEARCH_FIELDS), or every model it hops into reports
     rest_viewer_can_list_all for this viewer. A hidden (`+`) relation is
-    always refused. Paths are compared with trailing lookups removed. Runs
-    after the sensitive and viewer-restricted guards, on the key as sent
-    (before the __not / __not_in rewrite). No request (a job or the shell
+    always refused, and so is `not` / `not_in` anywhere but the last
+    segment. Paths are compared with trailing lookups removed. Runs after the
+    sensitive and viewer-restricted guards, on the key as sent (before the
+    parser strips a trailing __not / __not_in). No request (a job or the shell
     building filters) leaves the key alone.
     """
     if request is None:
         return None
+    # `not` / `not_in` are operators only at the end of a key; the parser
+    # strips the suffix alone. Anywhere else the walk below would stop at it
+    # as a terminal lookup and judge a shorter path than the key names.
+    if any(part in _PSEUDO_LOOKUPS for part in key.split("__")[:-1]):
+        return "denied"
     walked = _walk_lookup_path(model, key)
     if walked is None:
         return None
@@ -1998,12 +2004,14 @@ class MojoModel:
                 if key.endswith("__in"):
                     value = _split_in_value(value)
                 elif key.endswith("__not_in"):
-                    # Convert __not_in to __in for exclude()
-                    key = key.replace("__not_in", "__in")
+                    # Convert the trailing __not_in to __in for exclude(). Only
+                    # the suffix: the guards judged the key as sent (#8680).
+                    key = key[:-len("__not_in")] + "__in"
                     value = _split_in_value(value)
                 elif key.endswith("__not"):
-                    # Remove __not suffix for exclude()
-                    key = key.replace("__not", "")
+                    # Remove the trailing __not for exclude(). Only the suffix:
+                    # the guards judged the key as sent (#8680).
+                    key = key[:-len("__not")]
                 elif key.endswith("__isnull"):
                     value = _parse_rest_bool(value, key)
                 elif value == "null":
@@ -2045,12 +2053,14 @@ class MojoModel:
                 if key.endswith("__in"):
                     value = _split_in_value(value)
                 elif key.endswith("__not_in"):
-                    # Convert __not_in to __in for exclude()
-                    key = key.replace("__not_in", "__in")
+                    # Convert the trailing __not_in to __in for exclude(). Only
+                    # the suffix: the guards judged the key as sent (#8680).
+                    key = key[:-len("__not_in")] + "__in"
                     value = _split_in_value(value)
                 elif key.endswith("__not"):
-                    # Remove __not suffix for exclude()
-                    key = key.replace("__not", "")
+                    # Remove the trailing __not for exclude(). Only the suffix:
+                    # the guards judged the key as sent (#8680).
+                    key = key[:-len("__not")]
                 elif key.endswith("__isnull"):
                     value = _parse_rest_bool(value, key)
                 elif value == "null":

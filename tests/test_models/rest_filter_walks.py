@@ -266,6 +266,86 @@ def test_assistant_walk_rule(opts):
         f"the declared user__email filter must still apply, got {result.get('results')}"
 
 
+@th.django_unit_test("T9 a not / not_in inside the key cannot disguise a walk")
+def test_disguised_exclusion_walk_dropped(opts):
+    _login(opts, BRAND)
+    params = {"group": opts.group_id, "filename__startswith": P}
+    base = _count(opts, "/api/fileman/file", params)
+    assert base == 1, f"fixture: the brand admin must see the one upload, got {base}"
+    probes = [
+        ("user__not__email__startswith__not", TARGET, "zzz"),
+        ("user__not__phone_number__startswith__not", PHONE[:8], "+1555099"),
+        ("user__not__email__startswith", TARGET, "zzz"),
+        ("user__not_in__email__startswith__not_in", TARGET, "zzz"),
+    ]
+    for key, match, miss in probes:
+        hit = _count(opts, "/api/fileman/file", dict(params, **{key: match}))
+        none = _count(opts, "/api/fileman/file", dict(params, **{key: miss}))
+        assert hit == base and none == base, (
+            f"{key} must not change the brand admin's count: base {base}, "
+            f"match {hit}, non-match {none}")
+    key = "user__not__email__startswith__not"
+    stats = json.dumps({"hit": {key: TARGET}, "miss": {key: "zzz"}})
+    resp = opts.client.get("/api/fileman/file", params=dict(params, _mode="count", _stats=stats))
+    assert resp.status_code == 200, f"_stats failed: {resp.response}"
+    got = resp.response.get("stats") or {}
+    assert got.get("hit") == got.get("miss") == base, (
+        f"_stats bundles must both equal the base count when {key} is dropped, got {got}")
+
+    # Ordinary exclusions keep working: a trailing __not / __not_in only.
+    assert _count(opts, "/api/fileman/file", dict(params, filename__not=P + "upload.pdf")) == 0, \
+        "filename__not must still exclude the one upload"
+    assert _count(opts, "/api/fileman/file", dict(params, filename__not=P + "other.pdf")) == 1, \
+        "filename__not must keep a non-matching upload"
+    target_id = _target_id()
+    assert _count(opts, "/api/fileman/file", dict(params, user__not=target_id)) == 0, \
+        "user__not (the local column) must still exclude the uploader's file"
+    assert _count(opts, "/api/fileman/file", dict(params, user__not_in=f"{target_id},0")) == 0, \
+        "user__not_in (the local column) must still exclude the uploader's file"
+
+    _login(opts, MEMBER)
+    group_base = _group_count(opts, {})
+    for key, match, miss in (
+            ("avatar__not__+__note__startswith__not", P + "CONFIDENTIAL: a", P + "CONFIDENTIAL: b"),
+            ("public_messages__not__email__startswith__not", P + "jane", P + "zzz")):
+        hit = _group_count(opts, {key: match})
+        none = _group_count(opts, {key: miss})
+        assert hit == group_base and none == group_base, (
+            f"{key} must be dropped: base {group_base}, match {hit}, non-match {none}")
+
+
+@th.django_unit_test("T9 the parser executes exactly the key the guards judged")
+def test_disguised_exclusion_parser(opts):
+    from mojo.apps.account.models import User, Group
+    from mojo.apps.fileman.models import File
+    from testit.helpers import get_mock_request
+
+    brand = get_mock_request(user=User.objects.get(username=BRAND))
+    root = User.objects.get(username=GLOBAL)
+    root.is_superuser = True  # in memory only: passes every hop the walk allows
+    superuser = get_mock_request(user=root)
+    for request, model, key in (
+            (brand, File, "user__not__email__startswith__not"),
+            (brand, File, "user__not_in__email__startswith__not_in"),
+            (superuser, File, "user__not__auth_key__startswith__not"),
+            (superuser, File, "user__not__password__startswith"),
+            (superuser, Group, "avatar__not__+__note__startswith__not")):
+        filters, excludes = model.build_rest_filters(request, {key: P})
+        assert not filters and not excludes, (
+            f"{key} must be dropped before the parser rewrites it, "
+            f"got filters {filters}, excludes {excludes}")
+    filters, excludes = File.build_rest_filters(
+        brand, {"filename__not": "a", "user__not": "1", "user__not_in": "1,2"})
+    assert filters == {} and excludes.get("filename") == "a" and excludes.get("user") == "1" \
+            and list(excludes.get("user__in") or []) == ["1", "2"], (
+        f"a trailing __not / __not_in must still become an exclusion, got {excludes}")
+
+
+def _target_id():
+    from mojo.apps.account.models import User
+    return User.objects.get(username=TARGET).pk
+
+
 @th.django_unit_test("T8 walk_verdict matrix")
 def test_walk_verdict_matrix(opts):
     from mojo.apps.account.models import User, Group, GroupMember
@@ -299,6 +379,15 @@ def test_walk_verdict_matrix(opts):
         (GroupMember, "group__name__icontains", plain, None),
         (GroupMember, "user__phone_number", plain, "denied"),
         (File, "user__email", None, None),
+        (File, "user__not", plain, None),
+        (File, "user__not_in", plain, None),
+        (File, "filename__not", plain, None),
+        (File, "user__email__startswith__not", plain, "denied"),
+        (File, "user__not__email__startswith__not", plain, "denied"),
+        (File, "user__not_in__email__startswith__not_in", plain, "denied"),
+        (File, "user__not__id", plain, "denied"),
+        (Group, "public_messages__not__email", support, "denied"),
+        (Group, "avatar__not__+__note", support, "denied"),
     ]
     for model, key, request, expected in rows:
         got = walk_verdict(model, key, request)
