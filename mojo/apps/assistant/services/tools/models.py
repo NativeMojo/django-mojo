@@ -58,35 +58,6 @@ def _is_sensitive_field(name):
     return any(s in name_lower for s in SENSITIVE_SUBSTRINGS)
 
 
-def _fk_spellings(model, path):
-    """``path`` spelled twice: each foreign-key segment by its relation name,
-    and by its column name.
-
-    ``user`` and ``user_id`` are one column, and a model's SENSITIVE_FIELDS
-    names only one of them. The shared helper compares a segment as written,
-    so it is asked about both spellings. This walk only respells; it decides
-    nothing about sensitivity.
-    """
-    by_name, by_column = [], []
-    current = model
-    for part in path.split("__"):
-        field = None
-        if current is not None:
-            try:
-                field = current._meta.get_field(part)
-            except Exception:
-                field = None
-        if field is None:
-            by_name.append(part)
-            by_column.append(part)
-            current = None
-            continue
-        by_name.append(field.name)
-        by_column.append(getattr(field, "attname", None) or field.name)
-        current = field.related_model if field.is_relation else None
-    return "__".join(by_name), "__".join(by_column)
-
-
 def _is_sensitive_input(model, path, lookup=True):
     """The one rule for what a caller may ask the model tools BY.
 
@@ -100,14 +71,21 @@ def _is_sensitive_input(model, path, lookup=True):
     lookups, so only a name the model declares counts and the JSON rule does
     not apply.
     """
-    from mojo.models.rest import is_sensitive_filter_path, _model_sensitive_fields
+    from mojo.models.rest import (
+        is_sensitive_filter_path, _model_sensitive_fields, _declared_sensitive,
+    )
 
     if any(_is_sensitive_field(segment) for segment in path.split("__")):
         return True
-    spellings = {path, *_fk_spellings(model, path)}
-    if not lookup:
-        return not _model_sensitive_fields(model).isdisjoint(spellings)
-    return any(is_sensitive_filter_path(model, spelling) for spelling in spellings)
+    if lookup:
+        return is_sensitive_filter_path(model, path)
+    if path in _model_sensitive_fields(model):
+        return True
+    try:
+        field = model._meta.get_field(path)
+    except Exception:
+        return False
+    return _declared_sensitive(model, field)
 
 
 def _deny_sensitive_input(model_label, path, surface, user, message):
@@ -135,9 +113,8 @@ def _blocked_search_fields(model):
     ``on_rest_list_search`` matches the search text against the model's
     SEARCH_FIELDS — every text column when none are declared — after dropping
     what the shared helper calls sensitive. It drops by that helper alone, so
-    a field only this module's rule refuses (a foreign key under its other
-    spelling, a name the heuristic catches) is still compared, and a search
-    then answers "which rows match this text" about it.
+    a field only this module's name heuristic refuses is still compared, and a
+    search then answers "which rows match this text" about it.
     """
     from mojo.models.rest import is_sensitive_filter_path
 

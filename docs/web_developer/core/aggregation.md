@@ -217,7 +217,7 @@ to leak data or break the database with HTTP 400:
 - `_field` referencing a relation FK without `__id` (use `incident__id`, not `incident`).
 - `_field` containing `__` for non-relation fields (blocks JSON-path drilling like `metadata__rule_id`).
 - `_field` of type `TextField`, `JSONField`, or `EmailField` (unbounded cardinality, PII risk).
-- `_field` listed in the model's `RestMeta.SENSITIVE_FIELDS`.
+- `_field` listed in the model's `RestMeta.SENSITIVE_FIELDS`, under either spelling of a foreign key (`user` or `user_id`); this also applies to `_mode=histogram`.
 - `_field` not in the model's `RestMeta.AGGREGATION_FIELDS` allow-list, when the model defines one.
 - `_agg=avg` (or `sum`/`min`/`max`) on a non-numeric `_agg_field`.
 - `_mode=histogram` on a non-datetime field.

@@ -365,9 +365,21 @@ class RestMeta:
 - `__` drilling into a `JSONField` terminates the walk as sensitive, matching
   the aggregation layer. A model storing secrets in a JSON column must name the
   column itself.
+- A foreign key is refused under both spellings, and as `pk` when it is the
+  primary key. Declaring `"user"` refuses `user_id` too, and declaring
+  `"user_id"` refuses `user` and `user__<field>`. Each segment is tested as
+  written, then by the field it resolves to.
+- A reverse relation through a sensitive foreign key is refused for every path
+  through it, `__isnull` included: from `User`, `?vault_data__id=` and
+  `?vault_data__isnull=false` both read the hidden column. It is judged by the
+  declaration on the model that holds the foreign key.
+- A hidden relation (`related_name="+"`) is never filterable. Django still
+  registers it under the literal name `+`, which a caller can send as `%2B`,
+  so any segment that resolves to one is refused, whatever its foreign key
+  declares.
 - Lookup suffixes (`startswith`, `in`, `isnull`, `month`) can never produce a
-  false positive: sensitivity is tested before the field is resolved, so a
-  suffix that happens to share a field's name is already past the walk.
+  false positive: a suffix is not a field, so the walk has already stopped at
+  the field before it, and the suffix is never compared with a field name.
 
 **`mojo_secrets` is always sensitive on every model**, with no declaration
 needed. It lives on an abstract base shared by ~16 concrete models, several of

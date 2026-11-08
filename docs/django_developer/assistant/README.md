@@ -727,8 +727,7 @@ class RestMeta:
 Details that matter when you declare one:
 
 - **A foreign key is refused under both spellings.** Declaring `"user"` also
-  refuses `user_id`, and the reverse. (REST list filters compare the spelling
-  as written; the assistant asks about both.)
+  refuses `user_id`, and the reverse.
 - **This rule does not edit a graph.** If you put a sensitive field in the
   model's `ai` graph, rows and exports carry it: the graph is yours.
   `serialization.fields` in `describe_model` is not filtered either. Keep
