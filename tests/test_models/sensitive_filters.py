@@ -203,6 +203,86 @@ def test_empty_search_fields_returns_none(opts):
         f"rows — returning the full list here would be worse than the oracle")
 
 
+@th.unit_test("declared_sensitive_fk_refused_under_column_name")
+@th.requires_app("mojo.apps.dnsman")
+def test_declared_sensitive_fk_refused_under_column_name(opts):
+    """#6446: a foreign key declared sensitive by its link name is refused by
+    its column name too, and from the linked record's side.
+
+    AcmeHubParticipant declares `group` sensitive. Before the fix `group_id`
+    and the Group list's `acme_hub_participants__...` filters passed.
+    """
+    from mojo.apps.account.models import Group
+    from mojo.apps.dnsman.models import AcmeHubParticipant
+    from testit.helpers import get_mock_request
+
+    request = get_mock_request()
+    filters, excludes = AcmeHubParticipant.build_rest_filters(request, {
+        "group_id": "1", "group_id__in": "1,2", "group_id__isnull": "false"})
+    combined = list(filters) + list(excludes)
+    assert not combined, f"the column name of a sensitive FK reached the queryset: {combined}"
+
+    filters, excludes = Group.build_rest_filters(request, {
+        "acme_hub_participants__id": "1", "acme_hub_participants__isnull": "false",
+        "acme_hub_participants__group_id": "1"})
+    combined = list(filters) + list(excludes)
+    assert not combined, f"the reverse of a sensitive FK reached the queryset: {combined}"
+
+
+@th.unit_test("hidden_relation_refused_at_any_segment")
+def test_hidden_relation_refused_at_any_segment(opts):
+    """#6446: Django registers a related_name="+" link under the literal name
+    "+", and a caller can send it as %2B. It is refused at the start of a path
+    and in the middle of one."""
+    from mojo.apps.account.models import User, Group
+    from mojo.models.rest import is_sensitive_filter_path
+    from testit.helpers import get_mock_request
+
+    for model, key in ((User, "+"), (User, "+__id"), (User, "+__isnull"),
+                       (Group, "+__id"), (Group, "avatar__+__isnull"),
+                       (User, "avatar__+__id")):
+        assert is_sensitive_filter_path(model, key), \
+            f"{model.__name__}?{key} must be refused: it walks a hidden relation"
+
+    request = get_mock_request()
+    filters, excludes = Group.build_rest_filters(request, {"avatar__+__isnull": "false"})
+    combined = list(filters) + list(excludes)
+    assert not combined, f"a mid-path hidden relation reached the queryset: {combined}"
+
+
+@th.unit_test("hidden_relation_filter_dropped_over_http")
+def test_hidden_relation_filter_dropped_over_http(opts):
+    """#6446: a mid-path %2B filter on the user list does not change the count.
+
+    The fixture users have no avatar, so a join through avatar into a hidden
+    relation matches none of them while it is applied."""
+    _login(opts)
+    base = _count(opts, {"username__startswith": "senfilt_t"})
+    assert base == 2, f"fixture is wrong: expected 2 target users, got {base}"
+    probed = _count(opts, {"username__startswith": "senfilt_t",
+                           "avatar__+__isnull": "false"})
+    assert probed == base, (
+        f"a hidden-relation filter changed the count ({base} -> {probed}): "
+        f"the %2B path reached the database")
+
+
+@th.unit_test("undeclared_fk_filters_unchanged")
+@th.requires_app("mojo.apps.filevault")
+def test_undeclared_fk_filters_unchanged(opts):
+    """An FK nobody declared sensitive still filters under both names and
+    through its named reverse relation."""
+    from mojo.apps.account.models import User
+    from mojo.apps.filevault.models import VaultData
+    from mojo.models.rest import is_sensitive_filter_path
+
+    for model, key in ((VaultData, "user"), (VaultData, "user_id"),
+                       (VaultData, "user__in"), (VaultData, "user_id__in"),
+                       (VaultData, "pk"), (User, "vault_data__id"),
+                       (User, "vault_data__isnull")):
+        assert not is_sensitive_filter_path(model, key), \
+            f"{model.__name__}?{key} is not sensitive and must stay filterable"
+
+
 @th.unit_test("sensitive_filters_cleanup")
 def test_sensitive_filters_cleanup(opts):
     """Remove the fixture users."""
