@@ -12,7 +12,7 @@ answered questions about related rows the caller cannot see:
     C  a plain member reaches staff-only ticket notes through a hidden link
        (/api/group?avatar__+__note__startswith=...)
 
-T1-T4, T6, T7 and the sort test fail on the pre-fix code. T5 and the allowed
+T1-T4, T6, T7, T10 and the sort test fail on the pre-fix code. T5 and the allowed
 rows of T8 pass before and after.
 """
 import json
@@ -288,6 +288,39 @@ def test_assistant_walk_rule(opts):
     assert "error" not in result, f"a declared walk must be accepted: {result.get('error')}"
     assert len(result.get("results") or []) == 1, \
         f"the declared user__email filter must still apply, got {result.get('results')}"
+
+
+@th.django_unit_test("T10 Assistant ordering and aggregate fields cannot join a reverse relation")
+@th.requires_app("mojo.apps.assistant")
+def test_assistant_relation_operands(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.assistant.services.tools.models import (
+        _tool_query_model, _tool_aggregate_model, _tool_export_data)
+
+    # A bare reverse name has no `__`, but ordering or aggregating on it
+    # joins PublicMessage, which view_groups cannot list (two rows here).
+    groups_only = User.objects.get(username=GROUPS)
+    base = {"app_name": "account", "model_name": "Group", "filters": {"id": opts.group_id}}
+    for tool in (_tool_query_model, _tool_export_data):
+        result = tool(dict(base, ordering="-public_messages"), groups_only)
+        assert "error" in result, (
+            f"{tool.__name__} must refuse ordering by a reverse relation, got {result}")
+    for func in ("count", "max"):
+        result = _tool_aggregate_model(dict(base, aggregations=[
+            {"field": "public_messages", "func": func, "alias": "linked"}]), groups_only)
+        assert "error" in result, (
+            f"aggregate {func} on a reverse relation must be refused, got {result}")
+
+    # A forward FK is its own column: ordering and counting it still work.
+    result = _tool_query_model(dict(base, ordering="-avatar"), groups_only)
+    assert "error" not in result, f"ordering by a forward FK must work: {result.get('error')}"
+    assert len(result.get("results") or []) == 1, \
+        f"ordering by a forward FK must not duplicate rows, got {result.get('results')}"
+    result = _tool_aggregate_model(dict(base, aggregations=[
+        {"field": "avatar", "func": "count", "alias": "with_avatar"}]), groups_only)
+    assert "error" not in result, f"count of a forward FK must work: {result.get('error')}"
+    assert result.get("results", {}).get("with_avatar") == 1, \
+        f"count of the avatar column must be 1, got {result}"
 
 
 @th.django_unit_test("T9 a not / not_in inside the key cannot disguise a walk")

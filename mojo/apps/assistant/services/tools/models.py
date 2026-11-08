@@ -444,6 +444,32 @@ def _resolve_group_by_field(model, name):
     return field.name
 
 
+def _resolve_ordering(model, ordering, valid_fields, user, model_label):
+    """Validate a query/export ordering; return (order_by value, error dict).
+
+    The REST sort rule (#8680): a relation orders by its own column. A
+    forward FK / OneToOne becomes its attname (``-group`` -> ``-group_id``),
+    not the related model's Meta.ordering. A reverse or many-to-many name has
+    no column here and would join rows the viewer may not see: refused.
+    """
+    order_field = ordering.lstrip("-")
+    if "__" in order_field:
+        return None, {"error": "Relational ordering is not supported"}
+    if _is_sensitive_input(model, order_field):
+        return None, _deny_sensitive_input(
+            model_label, order_field, "ordering", user,
+            f"Ordering on '{order_field}' is not allowed")
+    if order_field not in valid_fields:
+        return None, {"error": f"Unknown ordering field '{order_field}' on {model_label}"}
+    field = model._meta.get_field(order_field)
+    if not field.is_relation:
+        return ordering, None
+    column = getattr(field, "attname", None)
+    if not field.concrete or field.many_to_many or not column:
+        return None, {"error": "Relational ordering is not supported"}
+    return ("-" if ordering.startswith("-") else "") + column, None
+
+
 def _validate_filter_keys(model, filters, valid_fields, user, model_label, request=None):
     """Validate filter keys against model fields. Returns error dict or None."""
     from mojo.models.rest import is_viewer_restricted_path, walk_denied
@@ -790,18 +816,12 @@ def _tool_query_model(params, user):
     if filter_err:
         return filter_err
 
-    # Validate ordering field — must be a direct field, no relational traversals
+    # Validate ordering field — a direct field; a relation by its own column
     ordering = params.get("ordering", "").strip()
     if ordering:
-        order_field = ordering.lstrip("-")
-        if "__" in order_field:
-            return {"error": f"Relational ordering is not supported"}
-        if _is_sensitive_input(model, order_field):
-            return _deny_sensitive_input(
-                model_label, order_field, "ordering", user,
-                f"Ordering on '{order_field}' is not allowed")
-        if order_field not in valid_fields:
-            return {"error": f"Unknown ordering field '{order_field}' on {model_label}"}
+        ordering, order_err = _resolve_ordering(model, ordering, valid_fields, user, model_label)
+        if order_err:
+            return order_err
 
     # Validate search
     search = params.get("search", "").strip()
@@ -1301,6 +1321,7 @@ def _get_field_type(model, field_name):
 def _tool_aggregate_model(params, user):
     """Run aggregate queries on a model."""
     from django.db.models import Count, Sum, Avg, Min, Max
+    from mojo.models.rest import walk_denied
 
     err = _reject_caller_graph(params)
     if err:
@@ -1375,6 +1396,11 @@ def _tool_aggregate_model(params, user):
 
         if field not in valid_fields:
             return {"error": f"Unknown field '{field}' on {model_label}"}
+
+        # The REST list-walk rule (#8680): a reverse or many-to-many name
+        # joins the related table; a forward FK aggregates its own column.
+        if walk_denied(model, field, request):
+            return {"error": f"Aggregation on '{field}' is not available"}
 
         # Validate numeric requirement for sum/avg
         if func in ("sum", "avg"):
@@ -1673,15 +1699,9 @@ def _tool_export_data(params, user):
     # Validate ordering
     ordering = params.get("ordering", "").strip()
     if ordering:
-        order_field = ordering.lstrip("-")
-        if "__" in order_field:
-            return {"error": "Relational ordering is not supported"}
-        if _is_sensitive_input(model, order_field):
-            return _deny_sensitive_input(
-                model_label, order_field, "ordering", user,
-                f"Ordering on '{order_field}' is not allowed")
-        if order_field not in valid_fields:
-            return {"error": f"Unknown ordering field '{order_field}' on {model_label}"}
+        ordering, order_err = _resolve_ordering(model, ordering, valid_fields, user, model_label)
+        if order_err:
+            return order_err
 
     # Validate search
     search = params.get("search", "").strip()

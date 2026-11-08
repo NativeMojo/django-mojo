@@ -434,7 +434,8 @@ A key that hops passes only when one of these holds, else it is dropped
    only for a signed-in superuser.
 
 Sorting by a relation orders by its own column (`<fk>_id`); a reverse or
-many-to-many sort is ignored. A path that does not resolve is left to the ORM,
+many-to-many sort is ignored. The Assistant's model tools apply the same rule
+to `ordering` (refused rather than ignored) and to an aggregation's `field`. A path that does not resolve is left to the ORM,
 which refuses it as before. No request (a job or the shell building filters)
 leaves the key alone.
 
