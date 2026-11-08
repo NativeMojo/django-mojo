@@ -521,9 +521,10 @@ Rotated archives carry the hour and second they were made,
 second `maxsize 50M` rotation on the same day, or in the same hour, gets its
 own name instead of failing on the first one's. Names are unique to the
 second: two logrotate runs within one second would still collide (logrotate
-skips that rotation and exits 1), but the node runs logrotate only from the
-distro's daily `logrotate.timer` and the framework never invokes it, so only
-two hand-run `logrotate` commands in the same second could. `check_node --section
+skips that rotation and exits 1). The framework never invokes logrotate, and
+the distro's default daily `logrotate.timer` (a oneshot service) never runs it
+twice in one second; a custom schedule, other automation or hand-run
+`logrotate` commands could. `check_node --section
 mojosec` counts these archives (at most 32) and fails one that is not a
 regular root:root file without group or other bits. The sensor reads system
 events from the journal, never from `/var/log/messages`, so rsyslog and
