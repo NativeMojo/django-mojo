@@ -395,9 +395,10 @@ such path goes through one rule, `mojo.models.rest.walk_verdict(model, key,
 request)` (`walk_denied` is its boolean form). It runs after the
 sensitive-field and private-lookup guards, on the key as sent.
 
-A segment **hops** into a related model when it is a reverse relation (with
-anything after it, `__id` and `__isnull` included), or a forward relation
-followed by a field that is not its own column. `user`, `user_id`,
+A segment **hops** into a related model when it is a reverse or many-to-many
+relation (with anything after it, `__id`, `__in` and `__isnull` included, or
+nothing: a many-to-many has no column on the model), or a forward foreign key
+or one-to-one followed by a field that is not its own column. `user`, `user_id`,
 `user__id`, `user__pk`, `user__in` and `user__isnull` compare the local column
 and are not hops. A hidden relation (`related_name="+"`) is always refused,
 for every caller, and raises a security event. `not` / `not_in` are

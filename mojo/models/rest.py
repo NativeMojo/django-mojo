@@ -417,9 +417,9 @@ def _walk_lookup_path(model, key):
     """Walk an ORM lookup key; return (path, hops, hidden) or None (#8680).
 
     `path` is the field segments with trailing lookup tokens removed. `hops`
-    is every related model the key walks INTO: a reverse relation always,
-    whatever follows it, and a forward relation only when a further field
-    follows that is not its own column (`user__email` hops; `user`,
+    is every related model the key walks INTO: a reverse or many-to-many
+    relation always, whatever follows it, and a forward FK / O2O only when a
+    further field follows that is not its own column (`user__email` hops; `user`,
     `user_id`, `user__id`, `user__in` and `user__isnull` do not). `hidden` is
     True at the first hidden (`+`) relation, wherever it sits. None means a
     forward segment did not resolve: the ORM refuses that key itself.
@@ -445,7 +445,9 @@ def _walk_lookup_path(model, key):
         if nxt is not None and nxt.endswith("+"):
             return path, hops, True
         nxt_field = _path_field(related, nxt)
-        reverse = field.auto_created and not field.concrete
+        # A many-to-many has no column on this model: `tags`, `tags__id` and
+        # `tags__in` all join the through table, so it hops like a reverse.
+        reverse = (field.auto_created and not field.concrete) or field.many_to_many
         if not reverse:
             if nxt is None:
                 break
@@ -2329,7 +2331,8 @@ class MojoModel:
         # have no column here and are ignored.
         relation = _path_field(cls, bare)
         if relation is not None and relation.is_relation:
-            if not relation.concrete or not getattr(relation, "attname", None):
+            if (not relation.concrete or relation.many_to_many
+                    or not getattr(relation, "attname", None)):
                 return queryset
             column = relation.attname
             return queryset.order_by(f"-{column}" if descending else column)

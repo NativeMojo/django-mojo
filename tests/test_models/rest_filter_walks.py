@@ -205,6 +205,30 @@ def test_sort_by_relation(opts):
     assert resp.response.count == 1, f"sort=-user must keep the one upload, got {resp.response.count}"
 
 
+@th.django_unit_test("sort by a many-to-many relation is ignored")
+def test_sort_by_many_to_many_ignored(opts):
+    """`sort=<m2m>` would join the through table and the related rows. No
+    framework MojoModel declares a forward many-to-many, so the shared sort
+    runs on Django's auth Group (permissions) in-process. Forward FK sorts
+    are covered over HTTP by test_sort_by_relation."""
+    from django.contrib.auth.models import Group as AuthGroup
+    from objict import objict
+    from mojo.models.rest import MojoModel
+
+    sort = MojoModel.on_rest_list_sort.__func__
+    # A test-owned stand-in carrying auth Group's _meta, so the sort's field
+    # cache never lands on the shared Django class.
+    probe = type("AuthGroupProbe", (), {
+        "_meta": AuthGroup._meta,
+        "__rest_field_names__": [f.name for f in AuthGroup._meta.get_fields()],
+    })
+    for value in ("permissions", "-permissions"):
+        request = objict(DATA=objict(sort=value))
+        sorted_qs = sort(probe, request, AuthGroup.objects.all())
+        assert not sorted_qs.query.order_by, (
+            f"sort={value} must be ignored, got order_by {sorted_qs.query.order_by}")
+
+
 @th.django_unit_test("T5 allowed walks keep working")
 def test_allowed_walks_kept(opts):
     _login(opts, VIEWER)
@@ -395,6 +419,17 @@ def test_walk_verdict_matrix(opts):
             f"walk_verdict({model.__name__}, {key!r}, "
             f"{'no request' if request is None else request.user.username}) = {got!r}, "
             f"expected {expected!r}")
+
+    # A forward many-to-many has no column on the model: every form joins the
+    # through table. No framework MojoModel declares one, so Django's own
+    # auth Group (permissions) stands in for an application model.
+    from django.contrib.auth.models import Group as AuthGroup
+    for key in ("permissions", "permissions__id", "permissions__in",
+                "permissions__isnull", "permissions__codename__startswith"):
+        got = walk_verdict(AuthGroup, key, plain)
+        assert got == "denied", (
+            f"walk_verdict(auth.Group, {key!r}, plain member) = {got!r}: a many-to-many "
+            f"walk joins rows the viewer cannot list")
 
     keyed = get_mock_request(user=glob)
     keyed.api_key = _AllPermsKey()
