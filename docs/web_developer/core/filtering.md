@@ -132,8 +132,10 @@ nonexistent one behave identically.
 A filter, `?search=`, `?sort=` or `_field=` that walks **into** a related
 record works only when you could list those records yourself, the model
 declares that walk, or it is the model's own group link
-(`?domain__group=5` on a certificate). Otherwise it is **silently ignored**,
-like a protected field, and you get the result as if you had not sent it.
+(`?domain__group=5` on a certificate or vhost). Otherwise a filter, `?search=`
+or `?sort=` is **silently ignored**, like a protected field, and you get the
+result as if you had not sent it. A `_field=` on the aggregation surface is
+refused with a `400` instead (see below).
 
 ```
 # a plain member listing their groups
