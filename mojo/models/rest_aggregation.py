@@ -28,7 +28,7 @@ from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
 from mojo import errors as me
-from mojo.models.rest import is_sensitive_filter_path
+from mojo.models.rest import is_sensitive_filter_path, walk_denied
 
 
 VALID_MODES = ("list", "count", "top", "distinct", "summary", "histogram")
@@ -209,7 +209,7 @@ def _count_bundles(cls, request, queryset, bundles):
 
 def _agg_top(cls, request, queryset):
     field = _require_field(request, "_field")
-    group_field = _validate_field(cls, field)
+    group_field = _validate_field(cls, field, request)
 
     agg_name = _resolve_agg(request.DATA.get("_agg", "count"))
     agg_field = request.DATA.get("_agg_field")
@@ -218,7 +218,7 @@ def _agg_top(cls, request, queryset):
             raise me.ValueException(
                 f"_agg_field required when _agg={agg_name}",
             )
-        _validate_numeric_field(cls, agg_field)
+        _validate_numeric_field(cls, agg_field, request)
         agg_target = agg_field
     else:
         agg_target = "id"
@@ -274,7 +274,7 @@ def _agg_top(cls, request, queryset):
 
 def _agg_distinct(cls, request, queryset):
     field = _require_field(request, "_field")
-    group_field = _validate_field(cls, field)
+    group_field = _validate_field(cls, field, request)
     min_count = _resolve_int(request.DATA.get("_min_count"), default=1, cap=None)
 
     # DB-level slice to DISTINCT_CAP+1 — bounds the DB's group-by work
@@ -312,7 +312,7 @@ def _agg_summary(cls, request, queryset):
     if agg_name == "count":
         # Count is row-count; no field arithmetic.
         if field:
-            _validate_field(cls, field)
+            _validate_field(cls, field, request)
         target = "id"
         numeric_target = None
     else:
@@ -320,7 +320,7 @@ def _agg_summary(cls, request, queryset):
             raise me.ValueException(
                 f"_field or _agg_field required for _agg={agg_name}",
             )
-        _validate_numeric_field(cls, agg_field)
+        _validate_numeric_field(cls, agg_field, request)
         target = agg_field
         numeric_target = agg_field
 
@@ -439,7 +439,7 @@ def _require_field(request, param):
     return value
 
 
-def _validate_field(cls, name):
+def _validate_field(cls, name, request=None):
     """Validate `_field` / `_agg_field` and return the ORM field path.
 
     Raises 400 on relation without `__id`, JSON-path drilling,
@@ -483,6 +483,13 @@ def _validate_field(cls, name):
                 f"_field={name!r}: relation fields require '__id' suffix "
                 f"(use {base}__id)",
             )
+        # A forward `<fk>__id` is the local column; a reverse or many-to-many
+        # `<rel>__id` joins the related table, under the list-walk rule
+        # (#8680).
+        if walk_denied(cls, name, request):
+            raise me.ValueException(
+                f"_field={name!r} is not available on {cls.__name__}",
+            )
     else:
         # Non-relation fields cannot have any `__` drilling
         # (blocks JSON-path extraction like metadata__rule_id).
@@ -511,8 +518,8 @@ def _validate_field(cls, name):
     return name
 
 
-def _validate_numeric_field(cls, name):
-    _validate_field(cls, name)
+def _validate_numeric_field(cls, name, request=None):
+    _validate_field(cls, name, request)
     base = name.split("__")[0]
     try:
         field_obj = cls._meta.get_field(base)

@@ -415,6 +415,158 @@ def is_viewer_restricted_path(model, key, request):
     return False
 
 
+# Operator suffixes the REST filter parser rewrites itself (#8680).
+_PSEUDO_LOOKUPS = frozenset(("not", "not_in"))
+
+
+def _path_field(model, part):
+    """`part` resolved on `model`, `pk` included, or None."""
+    if model is None or part is None:
+        return None
+    try:
+        if part == "pk":
+            return model._meta.pk
+        return model._meta.get_field(part)
+    except Exception:
+        return None
+
+
+def _is_lookup_token(field, part):
+    if part in _PSEUDO_LOOKUPS:
+        return True
+    try:
+        return bool(field.get_lookup(part) or field.get_transform(part))
+    except Exception:
+        return False
+
+
+def _local_column_names(field):
+    """The names after a forward relation that still compare the local column:
+    `user__id`, `user__pk`, and the FK's to_field."""
+    names = {"id", "pk"}
+    names.update(name for name in (getattr(field, "to_fields", None) or []) if name)
+    target = getattr(field, "target_field", None)
+    if target is not None and getattr(target, "name", None):
+        names.add(target.name)
+    return names
+
+
+def _walk_lookup_path(model, key):
+    """Walk an ORM lookup key; return (path, hops, hidden) or None (#8680).
+
+    `path` is the field segments with trailing lookup tokens removed. `hops`
+    is every related model the key walks INTO: a reverse or many-to-many
+    relation always, whatever follows it, and a forward FK / O2O only when a
+    further field follows that is not its own column (`user__email` hops; `user`,
+    `user_id`, `user__id`, `user__in` and `user__isnull` do not). `hidden` is
+    True at the first hidden (`+`) relation, wherever it sits. None means a
+    forward segment did not resolve: the ORM refuses that key itself.
+    """
+    parts = key.split("__")
+    current, path, hops = model, [], []
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        if part.endswith("+"):
+            return path, hops, True
+        field = _path_field(current, part)
+        if field is None:
+            return None
+        if getattr(field, "hidden", False):
+            return path, hops, True
+        path.append(part)
+        index += 1
+        if not field.is_relation:
+            break
+        related = getattr(field, "related_model", None)
+        nxt = parts[index] if index < len(parts) else None
+        if nxt is not None and nxt.endswith("+"):
+            return path, hops, True
+        nxt_field = _path_field(related, nxt)
+        # A many-to-many has no column on this model: `tags`, `tags__id` and
+        # `tags__in` all join the through table, so it hops like a reverse.
+        reverse = (field.auto_created and not field.concrete) or field.many_to_many
+        if not reverse:
+            if nxt is None:
+                break
+            if nxt_field is None:
+                if _is_lookup_token(field, nxt):
+                    break
+                return None
+            if nxt in _local_column_names(field):
+                break
+        hops.append(related)
+        if related is None or nxt_field is None:
+            break
+        current = related
+    return path, hops, False
+
+
+def _viewer_can_list_all(model, request):
+    """Rule 3 of walk_denied: the viewer could list `model` in full."""
+    hook = getattr(model, "rest_viewer_can_list_all", None)
+    if hook is not None:
+        return bool(hook(request))
+    # Not a MojoModel (a through table, a Django model): only a signed-in
+    # superuser, never a key, a key-backed session or a group token.
+    user = getattr(request, "user", None)
+    return bool(getattr(user, "is_superuser", False)
+                and is_request_user(request)
+                and not is_key_backed_session(request)
+                and getattr(request, "api_key", None) is None
+                and getattr(request, "group_token", None) is None)
+
+
+def walk_verdict(model, key, request, search=False):
+    """None when `key` may walk where it goes, else "hidden" or "denied".
+
+    The list surfaces' relation rule (#8680). A key that hops into a related
+    model passes only when it is the root model's own RestMeta.GROUP_FIELD
+    path, a path the root declares in RestMeta.FILTER_RELATED (or, for
+    search, in SEARCH_FIELDS), or every model it hops into reports
+    rest_viewer_can_list_all for this viewer. A hidden (`+`) relation is
+    always refused, and so is `not` / `not_in` anywhere but the last
+    segment. Paths are compared with trailing lookups removed. Runs after the
+    sensitive and viewer-restricted guards, on the key as sent (before the
+    parser strips a trailing __not / __not_in). No request (a job or the shell
+    building filters) leaves the key alone.
+    """
+    if request is None:
+        return None
+    # `not` / `not_in` are operators only at the end of a key; the parser
+    # strips the suffix alone. Anywhere else the walk below would stop at it
+    # as a terminal lookup and judge a shorter path than the key names.
+    if any(part in _PSEUDO_LOOKUPS for part in key.split("__")[:-1]):
+        return "denied"
+    walked = _walk_lookup_path(model, key)
+    if walked is None:
+        return None
+    path, hops, hidden = walked
+    if hidden:
+        return "hidden"
+    if not hops:
+        return None
+    joined = "__".join(path)
+    rest_meta = getattr(model, "RestMeta", None)
+    group_field = getattr(rest_meta, "GROUP_FIELD", None)
+    if group_field and joined == group_field:
+        return None
+    declared = list(getattr(rest_meta, "FILTER_RELATED", None) or [])
+    if search:
+        declared.extend(getattr(rest_meta, "SEARCH_FIELDS", None) or [])
+    if joined in declared:
+        return None
+    for related in hops:
+        if related is None or not _viewer_can_list_all(related, request):
+            return "denied"
+    return None
+
+
+def walk_denied(model, key, request, search=False):
+    """True when walk_verdict refuses `key` for this viewer (#8680)."""
+    return walk_verdict(model, key, request, search=search) is not None
+
+
 def _warn_can_save_deprecated(cls_name):
     if cls_name in _DEPRECATED_CAN_SAVE_WARNED:
         return
@@ -470,6 +622,36 @@ class MojoModel:
         definition the permission check and the list group policy share, so
         they cannot drift."""
         return bool(cls.get_rest_meta_prop("GROUP_FIELD", None)) or hasattr(cls, "group")
+
+    @classmethod
+    def rest_viewer_can_list_all(cls, request):
+        """True when `request` could list every row of this model (#8680).
+
+        The instance-free check walk_verdict asks of a model a filter, search,
+        sort or `_agg` path walks into. VIEW_PERMS without `owner` and
+        `member`; `all` and `authenticated` count only on a model that is not
+        group-scoped. An ApiKey needs ALLOW_API_KEY_GLOBAL; a group token
+        never passes. No VIEW_PERMS fails closed. User overrides this with its
+        account-view rule (#8648).
+        """
+        if getattr(request, "group_token", None) is not None:
+            return False
+        perms = [p for p in (cls.get_rest_meta_prop("VIEW_PERMS", None) or [])
+                 if p not in ("owner", "member")]
+        if cls._is_group_scoped():
+            perms = [p for p in perms if p not in ("all", "authenticated")]
+        if not perms:
+            return False
+        api_key = getattr(request, "api_key", None)
+        if api_key is not None:
+            return bool(cls.get_rest_meta_prop("ALLOW_API_KEY_GLOBAL", False)
+                        and api_key.has_permission(perms))
+        if "all" in perms:
+            return True
+        user = getattr(request, "user", None)
+        if not getattr(user, "is_authenticated", False):
+            return False
+        return bool(user.has_permission(perms))
 
     @classmethod
     def rest_list_requires_group(cls):
@@ -1838,6 +2020,16 @@ class MojoModel:
             # incident: ordinary portal searches reach here.
             if is_viewer_restricted_path(cls, key, request):
                 continue
+            # A path into a related model the viewer cannot list in full is
+            # the same count oracle one hop further (#8680): dropped with a
+            # warning, like the guards above. A hidden `+` link has no
+            # legitimate caller, so that one also raises an incident.
+            verdict = walk_verdict(cls, key, request)
+            if verdict is not None:
+                logit.warn(f"dropped related filter on {cls.__name__}: {key}")
+                if verdict == "hidden":
+                    cls._report_sensitive_probe(request, key)
+                continue
 
             # Determine if this is an exclusion filter
             is_exclusion = key.endswith("__not") or key.endswith("__not_in")
@@ -2060,9 +2252,11 @@ class MojoModel:
         # icontains. An explicitly declared SEARCH_FIELDS naming a sensitive
         # column is filtered too: SENSITIVE_FIELDS wins, mirroring how
         # AGGREGATION_FIELDS cannot widen past the sensitive gate.
+        # Declared SEARCH_FIELDS are the author's consent to walk (#8680).
         search_fields = [
             f for f in search_fields if not is_sensitive_filter_path(cls, f)
             and not is_viewer_restricted_path(cls, f, request)
+            and not walk_denied(cls, f, request, search=True)
         ]
         if not search_fields:
             # Nothing left to match against. Returning `queryset` unchanged
@@ -2169,6 +2363,17 @@ class MojoModel:
         if is_sensitive_filter_path(cls, bare):
             return queryset
         descending = sort_field.startswith('-')
+        # A relation sorts by its own column (#8680). `sort=<fk>` would
+        # otherwise order by the related model's Meta.ordering, and a reverse
+        # or many-to-many relation joins rows the caller may not see; those
+        # have no column here and are ignored.
+        relation = _path_field(cls, bare)
+        if relation is not None and relation.is_relation:
+            if (not relation.concrete or relation.many_to_many
+                    or not getattr(relation, "attname", None)):
+                return queryset
+            column = relation.attname
+            return queryset.order_by(f"-{column}" if descending else column)
         field = cls.get_model_field(bare)
         if field is not None and getattr(field, "null", False) \
                 and field.get_internal_type() in _DATE_FIELD_TYPES:

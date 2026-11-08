@@ -215,6 +215,7 @@ The server rejects aggregation requests that point at fields likely
 to leak data or break the database with HTTP 400:
 
 - `_field` referencing a relation FK without `__id` (use `incident__id`, not `incident`).
+- `_field` naming a reverse relation (`public_messages__id`) when you cannot list that related model and the model does not declare the walk (see [Filters Into Related Records](filtering.md#filters-into-related-records)).
 - `_field` containing `__` for non-relation fields (blocks JSON-path drilling like `metadata__rule_id`).
 - `_field` of type `TextField`, `JSONField`, or `EmailField` (unbounded cardinality, PII risk).
 - `_field` listed in the model's `RestMeta.SENSITIVE_FIELDS`, under either spelling of a foreign key (`user` or `user_id`); this also applies to `_mode=histogram`.
