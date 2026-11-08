@@ -196,6 +196,11 @@ def _declared_sensitive(model, field):
     return bool(names & _model_sensitive_fields(model))
 
 
+# The parser's own operators. They are valid only as a key's last segment;
+# anywhere else the walk would stop at them and judge less than the key names.
+_INTERIOR_REFUSED = frozenset(("not", "not_in"))
+
+
 def is_sensitive_filter_path(model, key):
     """True when any segment of an ORM lookup path names a sensitive field.
 
@@ -220,7 +225,9 @@ def is_sensitive_filter_path(model, key):
     (startswith / in / isnull / month) is not a field, so the previous
     iteration leaves `current` None and the next one returns False before any
     sensitivity test — a lookup token can therefore never collide with a field
-    name to produce a false positive.
+    name to produce a false positive. The parser's own operators, `not` and
+    `not_in`, are refused anywhere but the last segment: the walk cannot see
+    past them, and the parser strips only the trailing one.
 
     JSON columns terminate the walk as SENSITIVE rather than as unknown:
     `?metadata__client_secret=x` is a JSON-path extraction the ORM applies
@@ -228,8 +235,11 @@ def is_sensitive_filter_path(model, key):
     shape on the aggregation surface. A model storing secrets in a JSON column
     must name the column itself in SENSITIVE_FIELDS.
     """
+    parts = key.split("__")
+    if any(part in _INTERIOR_REFUSED for part in parts[:-1]):
+        return True
     current = model
-    for part in key.split("__"):
+    for part in parts:
         if current is None:
             return False
         if part in _model_sensitive_fields(current):
@@ -1842,12 +1852,14 @@ class MojoModel:
                 if key.endswith("__in"):
                     value = _split_in_value(value)
                 elif key.endswith("__not_in"):
-                    # Convert __not_in to __in for exclude()
-                    key = key.replace("__not_in", "__in")
+                    # Convert the trailing __not_in to __in for exclude(). Only
+                    # the suffix: the guards judged the key as sent (#8680).
+                    key = key[:-len("__not_in")] + "__in"
                     value = _split_in_value(value)
                 elif key.endswith("__not"):
-                    # Remove __not suffix for exclude()
-                    key = key.replace("__not", "")
+                    # Remove the trailing __not for exclude(). Only the suffix:
+                    # the guards judged the key as sent (#8680).
+                    key = key[:-len("__not")]
                 elif key.endswith("__isnull"):
                     value = _parse_rest_bool(value, key)
                 elif value == "null":
@@ -1889,12 +1901,14 @@ class MojoModel:
                 if key.endswith("__in"):
                     value = _split_in_value(value)
                 elif key.endswith("__not_in"):
-                    # Convert __not_in to __in for exclude()
-                    key = key.replace("__not_in", "__in")
+                    # Convert the trailing __not_in to __in for exclude(). Only
+                    # the suffix: the guards judged the key as sent (#8680).
+                    key = key[:-len("__not_in")] + "__in"
                     value = _split_in_value(value)
                 elif key.endswith("__not"):
-                    # Remove __not suffix for exclude()
-                    key = key.replace("__not", "")
+                    # Remove the trailing __not for exclude(). Only the suffix:
+                    # the guards judged the key as sent (#8680).
+                    key = key[:-len("__not")]
                 elif key.endswith("__isnull"):
                     value = _parse_rest_bool(value, key)
                 elif value == "null":

@@ -283,6 +283,104 @@ def test_undeclared_fk_filters_unchanged(opts):
             f"{model.__name__}?{key} is not sensitive and must stay filterable"
 
 
+DISGUISE_NOTE = "senfilt_CONFIDENTIAL_NOTE"
+
+
+@th.unit_test("interior_not_cannot_disguise_a_refused_path")
+@th.requires_app("mojo.apps.dnsman")
+def test_interior_not_cannot_disguise_a_refused_path(opts):
+    """#6446: `not` / `not_in` are operators only as a key's last segment.
+
+    The walk stops at an interior `not` (it is not a field), and the parser
+    used to strip every `__not`, so `avatar__not__+__id__not` ran as an
+    exclusion on `avatar__+__id`, and `parent__not__acme_hub_participants...`
+    reached a sensitive reverse link (Brenda, verdict 177403)."""
+    from mojo.apps.account.models import User, Group
+    from mojo.models.rest import is_sensitive_filter_path
+    from testit.helpers import get_mock_request
+
+    for model, key in ((User, "avatar__not__+__id__not"), (User, "avatar__not__+__id"),
+                       (User, "avatar__not_in__+__id__not_in"),
+                       (Group, "parent__not__acme_hub_participants__id__not"),
+                       (Group, "not__acme_hub_participants__id"),
+                       (User, "groups__not__name")):
+        assert is_sensitive_filter_path(model, key), \
+            f"{model.__name__}?{key} must be refused: an interior not hides the rest of the path"
+
+    request = get_mock_request()
+    for model, key in ((User, "avatar__not__+__id__not"),
+                       (User, "avatar__not_in__+__id__not_in"),
+                       (Group, "parent__not__acme_hub_participants__id__not"),
+                       (Group, "parent__not_in__acme_hub_participants__id__not_in")):
+        filters, excludes = model.build_rest_filters(request, {key: "1"})
+        assert not filters and not excludes, (
+            f"{model.__name__}?{key} must be dropped before the parser rewrites it, "
+            f"got filters {filters}, excludes {excludes}")
+
+    for model, key in ((User, "username__not"), (User, "id__not_in"), (User, "is_active__not"),
+                       (Group, "parent__not"), (Group, "parent__not_in")):
+        assert not is_sensitive_filter_path(model, key), \
+            f"{model.__name__}?{key} is an ordinary exclusion and must stay filterable"
+    filters, excludes = User.build_rest_filters(
+        request, {"username__not": T1, "id__not_in": "1,2"})
+    excluded_ids = [str(value) for value in (excludes.get("id__in") or [])]
+    assert not filters and excludes.get("username") == T1 and excluded_ids == ["1", "2"], (
+        f"a trailing __not / __not_in must still become an exclusion, got {excludes}")
+
+
+@th.unit_test("interior_not_hidden_relation_dropped_over_http")
+@th.requires_app("mojo.apps.fileman")
+@th.requires_app("mojo.apps.incident")
+def test_interior_not_hidden_relation_dropped_over_http(opts):
+    """#6446: Brenda's probe. T1's avatar has a staff-only ticket note reached
+    only through File's hidden (`+`) relation. A disguised exclusion on it must
+    not change the list, the count or a _stats bundle; a plain username
+    exclusion still does."""
+    import json
+    from mojo.apps.account.models import User
+    from mojo.apps.fileman.models import FileManager, File
+    from mojo.apps.incident.models import Ticket, TicketNote
+
+    TicketNote.objects.filter(note=DISGUISE_NOTE).delete()
+    Ticket.objects.filter(title=DISGUISE_NOTE).delete()
+    File.objects.filter(filename="senfilt_avatar").delete()
+    FileManager.objects.filter(name="senfilt_manager").delete()
+    manager = FileManager.objects.create(name="senfilt_manager", backend_type="local")
+    avatar = File.objects.create(file_manager=manager, filename="senfilt_avatar",
+                                 storage_file_path="synthetic", file_size=1)
+    User.objects.filter(username=T1).update(avatar=avatar)
+    ticket = Ticket.objects.create(title=DISGUISE_NOTE)
+    note = TicketNote.objects.create(parent=ticket, media=avatar, note=DISGUISE_NOTE)
+    try:
+        _login(opts)
+        params = {"username": T1}
+        base = _count(opts, params)
+        assert base == 1, f"fixture is wrong: expected T1 alone, got {base}"
+        for key in ("avatar__not__+__id__not", "avatar__not_in__+__id__not_in"):
+            hit = _count(opts, dict(params, **{key: str(note.pk)}))
+            miss = _count(opts, dict(params, **{key: "0"}))
+            assert hit == base and miss == base, (
+                f"{key} must not change the count: base {base}, match {hit}, non-match {miss}")
+            resp = opts.client.get("/api/user", params=dict(params, _mode="count", **{key: str(note.pk)}))
+            assert resp.status_code == 200 and resp.response["count"] == base, (
+                f"_mode=count must ignore {key}: {resp.status_code} {resp.response}")
+        key = "avatar__not__+__id__not"
+        stats = json.dumps({"hit": {key: str(note.pk)}, "miss": {key: "0"}})
+        resp = opts.client.get("/api/user", params=dict(params, _mode="count", _stats=stats))
+        assert resp.status_code == 200, f"_stats failed: {resp.response}"
+        got = resp.response.get("stats") or {}
+        assert got.get("hit") == got.get("miss") == base, (
+            f"_stats bundles must both equal the base count when {key} is dropped, got {got}")
+        assert _count(opts, dict(params, username__not=T1)) == 0, \
+            "username__not must still exclude T1"
+    finally:
+        User.objects.filter(username=T1).update(avatar=None)
+        TicketNote.objects.filter(pk=note.pk).delete()
+        Ticket.objects.filter(pk=ticket.pk).delete()
+        File.objects.filter(pk=avatar.pk).delete()
+        FileManager.objects.filter(pk=manager.pk).delete()
+
+
 @th.unit_test("sensitive_filters_cleanup")
 def test_sensitive_filters_cleanup(opts):
     """Remove the fixture users."""
