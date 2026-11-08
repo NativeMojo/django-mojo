@@ -6,6 +6,7 @@ from mojo.helpers.settings import settings
 from mojo import errors as me
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction, models as dm
+from django.db.models import ForeignObjectRel
 import json
 import objict
 import datetime
@@ -184,6 +185,22 @@ def _model_sensitive_fields(model):
     return _ALWAYS_SENSITIVE_FIELDS.union(declared)
 
 
+def _declared_sensitive(model, field):
+    """True when `field`, resolved on `model`, is declared sensitive under its
+    name or its column name. A reverse relation has no column of its own: it is
+    judged by the foreign key it mirrors, on the model that holds that key."""
+    if isinstance(field, ForeignObjectRel):
+        names = {field.field.name, field.field.attname}
+        return bool(names & _model_sensitive_fields(field.related_model))
+    names = {field.name, getattr(field, "attname", None)}
+    return bool(names & _model_sensitive_fields(model))
+
+
+# The parser's own operators. They are valid only as a key's last segment;
+# anywhere else the walk would stop at them and judge less than the key names.
+_INTERIOR_REFUSED = frozenset(("not", "not_in"))
+
+
 def is_sensitive_filter_path(model, key):
     """True when any segment of an ORM lookup path names a sensitive field.
 
@@ -195,11 +212,22 @@ def is_sensitive_filter_path(model, key):
     so `?api_keys__token_hash__startswith=a` works from Group. Hopping to the
     related model at each segment is what makes the guard hold on both.
 
-    Sensitivity is tested BEFORE resolving the field, which is the fail-closed
-    order. A trailing lookup token (startswith / in / isnull / month) is not a
-    field, so the previous iteration leaves `current` None and the next one
-    returns False before any sensitivity test — a lookup token can therefore
-    never collide with a field name to produce a false positive.
+    Sensitivity is tested twice per segment. First AS WRITTEN, before
+    resolving, which is the fail-closed order for a declared name that does not
+    resolve. Then by the RESOLVED field (_declared_sensitive), because
+    get_field accepts the column name too: a foreign key declared as `user` is
+    refused as `user_id`, and one declared as `user_id` is refused as `user`.
+    `pk` resolves to the model's primary key. A reverse relation is judged by
+    its foreign key's declaration on the model that holds it, so every path
+    through it is refused, `__isnull` included. A hidden reverse relation
+    (`related_name="+"`, which Django still registers under the literal name
+    "+") is always refused, at any segment. A trailing lookup token
+    (startswith / in / isnull / month) is not a field, so the previous
+    iteration leaves `current` None and the next one returns False before any
+    sensitivity test — a lookup token can therefore never collide with a field
+    name to produce a false positive. The parser's own operators, `not` and
+    `not_in`, are refused anywhere but the last segment: the walk cannot see
+    past them, and the parser strips only the trailing one.
 
     JSON columns terminate the walk as SENSITIVE rather than as unknown:
     `?metadata__client_secret=x` is a JSON-path extraction the ORM applies
@@ -207,16 +235,26 @@ def is_sensitive_filter_path(model, key):
     shape on the aggregation surface. A model storing secrets in a JSON column
     must name the column itself in SENSITIVE_FIELDS.
     """
+    parts = key.split("__")
+    if any(part in _INTERIOR_REFUSED for part in parts[:-1]):
+        return True
     current = model
-    for part in key.split("__"):
+    for part in parts:
         if current is None:
             return False
         if part in _model_sensitive_fields(current):
             return True
         try:
-            field = current._meta.get_field(part)
+            if part == "pk":
+                field = current._meta.pk
+            else:
+                field = current._meta.get_field(part)
         except Exception:
             return False
+        if getattr(field, "hidden", False):
+            return True
+        if _declared_sensitive(current, field):
+            return True
         if field.is_relation:
             current = getattr(field, "related_model", None)
         elif field.get_internal_type() == "JSONField":

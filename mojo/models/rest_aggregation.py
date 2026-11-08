@@ -28,7 +28,7 @@ from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
 from mojo import errors as me
-from mojo.models.rest import walk_denied
+from mojo.models.rest import is_sensitive_filter_path, walk_denied
 
 
 VALID_MODES = ("list", "count", "top", "distinct", "summary", "histogram")
@@ -357,6 +357,10 @@ def _agg_histogram(cls, request, queryset):
         raise me.ValueException(
             f"_field={field!r} is not a DateTimeField/DateField on {cls.__name__}",
         )
+    if is_sensitive_filter_path(cls, field):
+        raise me.ValueException(
+            f"_field={field!r} is marked sensitive on {cls.__name__}",
+        )
 
     # Resolve bucketing window. dr_start/dr_end have already been
     # applied to the queryset by on_rest_list_date_range_filter; we
@@ -448,7 +452,7 @@ def _validate_field(cls, name, request=None):
       2. Relation fields require `__id` (else 400).
       3. Non-relation fields cannot use `__` (else 400).
       4. Type-based reject: TextField, JSONField, EmailField (else 400).
-      5. `RestMeta.SENSITIVE_FIELDS` reject (else 400).
+      5. Sensitive reject, by the shared list-filter rule (else 400).
       6. `RestMeta.AGGREGATION_FIELDS` allow-list (when defined; else 400).
 
     A model author cannot use `AGGREGATION_FIELDS` to *grant* access
@@ -500,8 +504,7 @@ def _validate_field(cls, name, request=None):
             )
 
     rest_meta = getattr(cls, "RestMeta", None)
-    sensitive = getattr(rest_meta, "SENSITIVE_FIELDS", None) if rest_meta else None
-    if sensitive and base in sensitive:
+    if is_sensitive_filter_path(cls, name):
         raise me.ValueException(
             f"_field={name!r} is marked sensitive on {cls.__name__}",
         )
