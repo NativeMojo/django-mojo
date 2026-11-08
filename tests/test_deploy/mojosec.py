@@ -431,9 +431,10 @@ def test_rotation_twice_in_one_hour_keeps_both_archives(opts):
 
     The uniqueness contract (Rick, review 176914) is one name per second:
     two logrotate runs in the same second still collide, because dateext has
-    no collision fallback. The node never does that: logrotate runs only from
-    the distro's daily oneshot logrotate.timer (the framework never invokes
-    it), so the runs here are a second apart, like any two real runs."""
+    no collision fallback. The framework never invokes logrotate, and the
+    distro's default daily oneshot logrotate.timer never does that; a custom
+    schedule, other automation or hand-run commands could. The runs here are
+    a second apart, inside that contract."""
     import shutil
     import time
     from testit.helpers import TestitSkip
