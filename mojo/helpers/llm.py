@@ -16,6 +16,11 @@ Usage:
     response = llm.call(
         messages, system="You are...", tools=[...], feature="assistant")
 
+    # Streamed answer (Bedrock routes): text deltas, tool requests, final record
+    with llm.stream(messages, feature="my_feature") as answer:
+        for event in answer:
+            ...  # {"type": "text_delta", "text"} ... then {"type": "final", "response"}
+
     # API key helpers
     key = llm.get_api_key()
     ok, error = llm.verify_api_key()
@@ -379,8 +384,22 @@ def get_model(use="general", *, loader=None, pin_loader=None):
 # LLM calls
 # ---------------------------------------------------------------------------
 
+def _check_arguments(feature, context, max_tool_rounds):
+    normalize_feature(feature)
+    if context is not None and not isinstance(context, dict):
+        raise ValueError("LLM context must be a dictionary of scalar identifiers")
+    if context and any(isinstance(value, (dict, list, tuple, set))
+                       for value in context.values()):
+        raise ValueError("LLM context identifiers must be scalar")
+    if max_tool_rounds is not None and (
+            isinstance(max_tool_rounds, bool) or not isinstance(max_tool_rounds, int)
+            or not 1 <= max_tool_rounds <= 32):
+        raise ValueError("max_tool_rounds must be an integer from 1 to 32")
+
+
 def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
-         feature=None, operation="call", context=None, reasoning_effort="off"):
+         feature=None, operation="call", context=None, reasoning_effort="off",
+         max_tool_rounds=None):
     """
     Call the installation's exact policy route.
 
@@ -392,15 +411,12 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
     ``LLM_ADMIN_PROMPT_CACHE_ENABLED=False``.
 
     Every provider request passes the installation safety policy and ledger.
+    ``max_tool_rounds`` refuses a transcript holding more answered tool
+    rounds; Bedrock defaults to 8, Anthropic to no limit.
     """
     global _zero_cache_warned
 
-    normalize_feature(feature)
-    if context is not None and not isinstance(context, dict):
-        raise ValueError("LLM context must be a dictionary of scalar identifiers")
-    if context and any(isinstance(value, (dict, list, tuple, set))
-                       for value in context.values()):
-        raise ValueError("LLM context identifiers must be scalar")
+    _check_arguments(feature, context, max_tool_rounds)
 
     cache_enabled = settings.get("LLM_ADMIN_PROMPT_CACHE_ENABLED", True, kind="bool")
     resolved_model = model or "policy-route-model"
@@ -409,7 +425,8 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
         result = llm_safety.invoke(
             messages, system=system, tools=tools, model=model,
             max_tokens=max_tokens, feature=normalize_feature(feature),
-            operation=operation, context=context, reasoning_effort=reasoning_effort)
+            operation=operation, context=context, reasoning_effort=reasoning_effort,
+            max_tool_rounds=max_tool_rounds)
     except llm_safety.LLMSafetyError as err:
         raise LLMExecutionError(err.code, retry_after=err.retry_after) from None
     except Exception:
@@ -422,6 +439,81 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
         _warn_zero_cache(result, result.get("model") or resolved_model, cache_enabled)
 
     return result
+
+
+class LLMStream:
+    """One guarded streamed answer. Iterate it, and close it when done.
+
+    Events, in order: ``{"type": "text_delta", "text"}`` as the answer is
+    generated, then one ``{"type": "final", "response"}`` whose response is
+    exactly what call() returns (tool requests included), sent after usage
+    is settled. Failures raise LLMExecutionError from iteration.
+
+    Iterate from synchronous code. ``close()`` cancels and is idempotent:
+    while another thread is reading it only interrupts that read (no
+    database work, safe from an event loop) and the reader settles;
+    otherwise it settles the cancel itself.
+    """
+
+    def __init__(self, guarded):
+        self._guarded = guarded
+
+    @property
+    def response(self):
+        return self._guarded.response
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        from mojo.apps.account.services import llm_safety
+        try:
+            return next(self._guarded)
+        except StopIteration:
+            raise
+        except llm_safety.LLMSafetyError as err:
+            raise LLMExecutionError(err.code, retry_after=err.retry_after) from None
+        except Exception:
+            raise LLMExecutionError("safety_unavailable") from None
+
+    def close(self):
+        try:
+            self._guarded.close()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
+        return False
+
+
+def stream(messages, system=None, tools=None, model=None, max_tokens=4096, *,
+           feature=None, operation="stream", context=None, reasoning_effort="off",
+           max_tool_rounds=None):
+    """
+    Stream the installation's exact policy route (Bedrock routes only).
+
+    Admission and dispatch both happen here: a refusal, or a provider error
+    before the first event, raises LLMExecutionError from this call, so
+    nothing has streamed. Returns an LLMStream. The same policy, budgets,
+    circuit and ledger as call() apply; usage settles from the final record.
+    """
+    _check_arguments(feature, context, max_tool_rounds)
+    from mojo.apps.account.services import llm_safety
+    try:
+        guarded = llm_safety.invoke_stream(
+            messages, system=system, tools=tools, model=model,
+            max_tokens=max_tokens, feature=normalize_feature(feature),
+            operation=operation, context=context, reasoning_effort=reasoning_effort,
+            max_tool_rounds=max_tool_rounds)
+    except llm_safety.LLMSafetyError as err:
+        raise LLMExecutionError(err.code, retry_after=err.retry_after) from None
+    except Exception:
+        raise LLMExecutionError("safety_unavailable") from None
+    return LLMStream(guarded)
 
 
 def _warn_zero_cache(result, resolved_model, cache_enabled):

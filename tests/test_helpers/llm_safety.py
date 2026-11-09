@@ -239,10 +239,18 @@ def test_public_call_has_no_adapter_bypass_parameters(opts):
         f"public call must not accept a provider client, got {tuple(call_parameters)}"
     assert "candidate" not in invoke_parameters and "allow_stopped" not in invoke_parameters, \
         f"production invoke must expose no stopped-state bypass, got {tuple(invoke_parameters)}"
-    for function in (llm.call, llm.ask, llm_safety.invoke):
+    for function in (llm.call, llm.ask, llm.stream, llm_safety.invoke,
+                     llm_safety.invoke_stream):
         effort = inspect.signature(function).parameters["reasoning_effort"]
         assert effort.default == "off" and effort.kind == inspect.Parameter.KEYWORD_ONLY, \
             f"{function.__name__} reasoning effort must be keyword-only with default off"
+    for function in (llm.call, llm.stream, llm_safety.invoke, llm_safety.invoke_stream):
+        parameters = inspect.signature(function).parameters
+        rounds = parameters["max_tool_rounds"]
+        assert rounds.default is None and rounds.kind == inspect.Parameter.KEYWORD_ONLY, \
+            f"{function.__name__} max_tool_rounds must be keyword-only with default None"
+        assert "client" not in parameters and "provider_factory" not in parameters, \
+            f"{function.__name__} must not accept a provider client or factory"
 
 
 @th.django_unit_test()
@@ -380,3 +388,68 @@ def test_auto_sonnet_delegation_is_exactly_anthropic_assistant(opts):
             assert False, f'unsupported delegation {value} must fail closed'
         except llm_safety.LLMSafetyError as error:
             assert error.code == 'policy_invalid', f'bad token used wrong safe code: {error.code}'
+
+
+@th.django_unit_test()
+def test_bedrock_routes_may_declare_tools_and_nothing_else(opts):
+    from mojo.apps.account.services import llm_safety
+
+    text_only = llm_safety.parse_policy(_bedrock_policy())
+    for capabilities in (["text", "tools"], ["tools", "text"]):
+        raw = _bedrock_policy()
+        raw["routes"]["unattributed"]["capabilities"] = capabilities
+        parsed = llm_safety.parse_policy(raw)
+        assert parsed["routes"]["unattributed"]["capabilities"] == capabilities, \
+            f"a Bedrock tool route must parse unchanged: {parsed['routes']}"
+        assert parsed["hash"] != text_only["hash"], \
+            "adding tools to a route must require fresh policy activation"
+    for capabilities in (["tools"], ["text", "tools", "images"], ["text", "tools", "tools"],
+                         ["text", "tools", "prompt_cache"], ["text", "stream"]):
+        raw = _bedrock_policy()
+        raw["routes"]["unattributed"]["capabilities"] = capabilities
+        try:
+            llm_safety.parse_policy(raw)
+            assert False, f"Bedrock capabilities {capabilities} must be refused"
+        except llm_safety.LLMSafetyError as err:
+            assert err.code == "policy_invalid", \
+                f"invalid Bedrock capabilities must be policy_invalid, got {err.code}"
+
+
+@th.django_unit_test()
+def test_tool_round_arguments_are_validated_before_the_guard(opts):
+    from mojo.helpers import llm
+
+    for value in (0, 33, True, 2.0, "4"):
+        for function in (llm.call, llm.stream):
+            try:
+                function([{"role": "user", "content": "hello"}], feature="unattributed",
+                         max_tool_rounds=value)
+                assert False, f"{function.__name__} accepted max_tool_rounds={value!r}"
+            except ValueError as err:
+                assert "max_tool_rounds" in str(err), \
+                    f"the error for max_tool_rounds={value!r} must name it, got {err}"
+
+
+@th.django_unit_test()
+def test_tool_rounds_count_answered_tool_turns_only(opts):
+    from mojo.apps.account.services import llm_safety
+
+    answer = {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}
+    ask = {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "t1", "name": "lookup", "input": {}}]}
+    transcript = [{"role": "user", "content": "hi"}, ask, answer, ask, answer,
+                  {"role": "assistant", "content": "plain"}]
+    assert llm_safety._tool_rounds(transcript) == 2, \
+        "each user turn answering a tool request is one completed round"
+    assert llm_safety._tool_rounds("not a list") == 0, "malformed input counts no rounds"
+    assert llm_safety._tool_round_limit("bedrock", None) == llm_safety.BEDROCK_MAX_TOOL_ROUNDS \
+        and llm_safety._tool_round_limit("anthropic", None) is None \
+        and llm_safety._tool_round_limit("anthropic", 3) == 3, \
+        "Bedrock always has a round limit; Anthropic only when the caller sets one"
+    for value in (0, 33, True):
+        try:
+            llm_safety._tool_round_limit("bedrock", value)
+            assert False, f"an invalid round limit {value!r} must be refused"
+        except llm_safety.LLMSafetyError as err:
+            assert err.code == "loop_limit", f"invalid round limit used {err.code}"

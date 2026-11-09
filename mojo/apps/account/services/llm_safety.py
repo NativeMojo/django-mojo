@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import secrets
+import threading
 import time
 
 from django.db import models, transaction
@@ -22,6 +23,11 @@ BEDROCK_MODELS = frozenset(
 AWS_REGION_PATTERN = re.compile(r"^[a-z]{2}(?:-[a-z]+)+-[1-9][0-9]*$")
 REASONING_EFFORTS = frozenset({"off", "low", "medium"})
 BEDROCK_CREDENTIAL_IDENTITY = "installation-aws-chain"
+BEDROCK_CAPABILITIES = ({"text"}, {"text", "tools"})
+# A Bedrock tool loop may answer this many tool rounds unless the caller
+# passes its own max_tool_rounds (1-32).
+BEDROCK_MAX_TOOL_ROUNDS = 8
+MAX_TOOL_ROUNDS = 32
 BEDROCK_HEALTH_FAILURES = frozenset({
     "provider_authentication", "provider_rate_limited", "provider_timeout",
     "provider_unavailable",
@@ -54,6 +60,7 @@ SAFE_CODES = frozenset({
     "safety_unavailable", "triage_incomplete", "credential_mismatch",
     "catalogue_unavailable", "catalogue_incomplete", "no_compatible_model",
     "refresh_in_progress", "refresh_throttled", "request_exceeds_budget",
+    "cancelled",
 })
 
 
@@ -194,7 +201,8 @@ def parse_policy(raw=None):
             _deny("policy_invalid")
         if provider == "bedrock":
             efforts = route["reasoning_efforts"]
-            if route["credential"] != "aws" or capabilities != ["text"] \
+            if route["credential"] != "aws" \
+                    or set(capabilities) not in BEDROCK_CAPABILITIES \
                     or route["model"] not in BEDROCK_MODELS \
                     or not isinstance(route["region"], str) \
                     or not AWS_REGION_PATTERN.fullmatch(route["region"]) \
@@ -695,6 +703,34 @@ def _input_estimate(adapter, provider_name, messages, system, tools,
     return min(len(serialized), margin), count, "count"
 
 
+def _tool_blocks(message):
+    """The tool_use/tool_result block types one message carries."""
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return set()
+    return {block.get("type") for block in content if isinstance(block, dict)
+            and block.get("type") in ("tool_use", "tool_result")}
+
+
+def _tool_rounds(messages):
+    """Completed tool rounds: user turns that answer a tool request."""
+    if not isinstance(messages, list):
+        return 0
+    return sum(1 for message in messages if isinstance(message, dict)
+               and message.get("role") == "user"
+               and "tool_result" in _tool_blocks(message))
+
+
+def _tool_round_limit(provider_name, max_tool_rounds):
+    """Bedrock always has a limit; Anthropic only when the caller sets one."""
+    if max_tool_rounds is None:
+        return BEDROCK_MAX_TOOL_ROUNDS if provider_name == "bedrock" else None
+    if isinstance(max_tool_rounds, bool) or not isinstance(max_tool_rounds, int) \
+            or not 1 <= max_tool_rounds <= MAX_TOOL_ROUNDS:
+        _deny("loop_limit")
+    return max_tool_rounds
+
+
 def _required_capabilities(messages, tools, cache_enabled):
     required = {"text"}
     if tools:
@@ -715,12 +751,16 @@ def _candidate_envelopes(policy):
     return shared, limits
 
 
-def _execute(messages, system, tools, model, max_tokens, feature, operation,
-             context, reasoning_effort="off", provider_factory=None, redis=None,
-             policy_raw=None):
+def _admit(messages, system, tools, model, max_tokens, feature, operation,
+           context, reasoning_effort="off", provider_factory=None, redis=None,
+           policy_raw=None, stream=False, max_tool_rounds=None):
+    """Every pre-dispatch guard, the permit and the started ledger, in order.
+
+    Returns the admission a dispatch settles. Nothing here touches an SDK
+    client or the network beyond Anthropic's free input count.
+    """
     from mojo.apps.account.models import LLMRequest
     from mojo.helpers.llm_providers import get_provider
-    from mojo.helpers.llm_providers.base import ProviderError, validated_usage
 
     policy = parse_policy(policy_raw)
     route = policy["routes"].get(feature)
@@ -772,6 +812,20 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         if not required.issubset(set(route["capabilities"])) \
                 or any(not adapter.supports(item) for item in required):
             _deny("capability_unsupported")
+        if stream and not adapter.supports("stream"):
+            _deny("capability_unsupported")
+        # Converse refuses tool turns without a tool configuration; refuse
+        # them here, before any reservation, instead of after dispatch.
+        if provider_name == "bedrock" and not tools and isinstance(messages, list) \
+                and any(_tool_blocks(message) for message in messages):
+            _deny("capability_unsupported")
+        round_limit = _tool_round_limit(provider_name, max_tool_rounds)
+        if round_limit is not None and _tool_rounds(messages) > round_limit:
+            _deny("loop_limit")
+        # A transcript can be trimmed; the operation counter cannot. A Bedrock
+        # tool loop must share one operation id so max_loop_calls binds it.
+        if provider_name == "bedrock" and tools and not context.get("operation_id"):
+            _deny("operation_invalid")
         redis = redis or get_connection()
         resolved_model = route["model"]
         if delegates_model(route):
@@ -822,91 +876,136 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
     except Exception:
         release_permit(redis, permit)
         _blocked(provider_name, feature, "ledger_unavailable")
+    call_kwargs = dict(
+        messages=messages, system=system, tools=tools, model=resolved_model,
+        max_tokens=max_tokens, cache_enabled=cache_enabled,
+        timeout=min(policy["shared"]["timeout_seconds"], limits["timeout_seconds"]))
+    if provider_name == "bedrock":
+        call_kwargs["reasoning_effort"] = reasoning_effort
+    return {
+        "policy": policy, "feature": feature, "provider": provider_name,
+        "fingerprint": fingerprint, "adapter": adapter, "redis": redis,
+        "resolved_model": resolved_model, "generation": generation,
+        "breaker_owner": breaker_owner, "reserved_tokens": reserved_tokens,
+        "permit": permit, "ledger": ledger, "started": started,
+        "call_kwargs": call_kwargs,
+    }
+
+
+def _elapsed_ms(admission):
+    return int((time.monotonic() - admission["started"]) * 1000)
+
+
+def _bedrock_failed(admission, code, request_id="", usage=None, retry_after=None):
+    """Settle a dispatched Bedrock failure, then raise its safe code.
+
+    Validated usage reconciles the reservation; unknown spend keeps all of it.
+    Only provider health failures count toward the circuit.
+    """
+    from mojo.apps.account.models import LLMRequest
+    from mojo.helpers.llm_providers.base import validated_usage
+
+    provider_name = admission["provider"]
+    if not isinstance(code, str) or code not in SAFE_CODES \
+            or not code.startswith("provider_"):
+        code = "provider_failed"
+    failed_usage = validated_usage(usage)
+    actual_tokens = sum(failed_usage.values()) if failed_usage is not None \
+        else admission["reserved_tokens"]
+    fields = dict(
+        status="failed", error_code=code,
+        provider_request_id=str(request_id or "")[:128],
+        duration_ms=_elapsed_ms(admission), finished_at=timezone.now())
+    if failed_usage is not None:
+        fields.update(failed_usage)
     try:
-        call_kwargs = dict(
-            messages=messages, system=system, tools=tools, model=resolved_model,
-            max_tokens=max_tokens, cache_enabled=cache_enabled,
-            timeout=min(policy["shared"]["timeout_seconds"], limits["timeout_seconds"]))
-        if provider_name == "bedrock":
-            call_kwargs["reasoning_effort"] = reasoning_effort
-        response = adapter.call(**call_kwargs)
-        if provider_name == "bedrock" and (
-                not isinstance(response, dict) or
-                validated_usage(response.get("usage")) is None):
-            raise ProviderError("provider_rejected")
-    except ProviderError as err:
-        elapsed = int((time.monotonic() - started) * 1000)
-        if provider_name == "bedrock":
-            code = err.code
-            if not isinstance(code, str) or code not in SAFE_CODES \
-                    or not code.startswith("provider_"):
-                code = "provider_failed"
-            failed_usage = validated_usage(getattr(err, "usage", None))
-            actual_tokens = sum(failed_usage.values()) if failed_usage is not None \
-                else reserved_tokens
-            fields = dict(
-                status="failed", error_code=code,
-                provider_request_id=str(err.request_id or "")[:128], duration_ms=elapsed,
-                finished_at=timezone.now())
-            if failed_usage is not None:
-                fields.update(failed_usage)
-            try:
-                if code in BEDROCK_HEALTH_FAILURES:
-                    _breaker_failure(
-                        provider_name, fingerprint, generation, breaker_owner, code, policy)
-                else:
-                    _breaker_success(provider_name, fingerprint, generation, breaker_owner)
-                LLMRequest.objects.filter(pk=ledger.pk).update(**fields)
-            except Exception:
-                _deny("provider_failed")
-            finally:
-                release_permit(redis, permit, actual_tokens=actual_tokens)
-            _record_metrics(provider_name, feature, "failed",
-                            sum(failed_usage.values()) if failed_usage is not None else 0)
-            _deny(code, retry_after=getattr(err, "retry_after", None))
-        _breaker_failure(
-            provider_name, fingerprint, generation, breaker_owner, err.code, policy)
-        LLMRequest.objects.filter(pk=ledger.pk).update(
-            status="failed", error_code=err.code,
-            provider_request_id=err.request_id[:128], duration_ms=elapsed,
-            finished_at=timezone.now())
-        release_permit(redis, permit)
-        _record_metrics(provider_name, feature, "failed")
-        _deny(err.code, retry_after=getattr(err, "retry_after", None))
-    except Exception:
-        if provider_name == "bedrock":
-            try:
-                LLMRequest.objects.filter(pk=ledger.pk).update(
-                    status="failed", error_code="provider_failed", finished_at=timezone.now())
-                _breaker_success(provider_name, fingerprint, generation, breaker_owner)
-            except Exception:
-                _deny("provider_failed")
-            finally:
-                release_permit(redis, permit, actual_tokens=reserved_tokens)
-        else:
-            LLMRequest.objects.filter(pk=ledger.pk).update(
-                status="failed", error_code="provider_failed", finished_at=timezone.now())
-            release_permit(redis, permit)
+        if code in BEDROCK_HEALTH_FAILURES:
             _breaker_failure(
-                provider_name, fingerprint, generation, breaker_owner,
-                "provider_failed", policy)
-        _record_metrics(provider_name, feature, "failed")
+                provider_name, admission["fingerprint"], admission["generation"],
+                admission["breaker_owner"], code, admission["policy"])
+        else:
+            _breaker_success(provider_name, admission["fingerprint"],
+                             admission["generation"], admission["breaker_owner"])
+        LLMRequest.objects.filter(pk=admission["ledger"].pk).update(**fields)
+    except Exception:
         _deny("provider_failed")
+    finally:
+        release_permit(admission["redis"], admission["permit"], actual_tokens=actual_tokens)
+    _record_metrics(provider_name, admission["feature"], "failed",
+                    sum(failed_usage.values()) if failed_usage is not None else 0)
+    _deny(code, retry_after=retry_after)
+
+
+def _bedrock_unexpected(admission):
+    """An unclassified post-dispatch failure: unknown spend, not a health signal."""
+    from mojo.apps.account.models import LLMRequest
+
+    try:
+        LLMRequest.objects.filter(pk=admission["ledger"].pk).update(
+            status="failed", error_code="provider_failed", finished_at=timezone.now())
+        _breaker_success(admission["provider"], admission["fingerprint"],
+                         admission["generation"], admission["breaker_owner"])
+    except Exception:
+        _deny("provider_failed")
+    finally:
+        release_permit(admission["redis"], admission["permit"],
+                       actual_tokens=admission["reserved_tokens"])
+    _record_metrics(admission["provider"], admission["feature"], "failed")
+    _deny("provider_failed")
+
+
+def _bedrock_cancelled(admission, usage=None, request_id=""):
+    """The caller stopped a dispatched stream. Never raises.
+
+    The stream was accepted, so the circuit sees a healthy provider. Spend
+    seen in the final metadata reconciles; otherwise the reservation stays.
+    """
+    from mojo.apps.account.models import LLMRequest
+    from mojo.helpers.llm_providers.base import validated_usage
+
+    seen = validated_usage(usage)
+    actual_tokens = sum(seen.values()) if seen is not None else admission["reserved_tokens"]
+    fields = dict(
+        status="failed", error_code="cancelled",
+        provider_request_id=str(request_id or "")[:128],
+        duration_ms=_elapsed_ms(admission), finished_at=timezone.now())
+    if seen is not None:
+        fields.update(seen)
+    try:
+        _breaker_success(admission["provider"], admission["fingerprint"],
+                         admission["generation"], admission["breaker_owner"])
+        LLMRequest.objects.filter(pk=admission["ledger"].pk, status="started").update(
+            **fields)
+    except Exception:
+        pass
+    finally:
+        release_permit(admission["redis"], admission["permit"], actual_tokens=actual_tokens)
+    _record_metrics(admission["provider"], admission["feature"], "cancelled",
+                    sum(seen.values()) if seen is not None else 0)
+
+
+def _settle_success(admission, response):
+    """Reconcile actual usage, close the circuit lease, finish the ledger."""
+    from mojo.apps.account.models import LLMRequest
+
+    provider_name = admission["provider"]
     usage = response.get("usage") or {}
     actual_tokens = sum(max(0, int(usage.get(key, 0) or 0)) for key in (
         "input_tokens", "output_tokens", "cache_read_input_tokens",
         "cache_creation_input_tokens"))
-    release_permit(redis, permit, actual_tokens=actual_tokens)
+    release_permit(admission["redis"], admission["permit"], actual_tokens=actual_tokens)
     try:
-        _breaker_success(provider_name, fingerprint, generation, breaker_owner)
+        _breaker_success(provider_name, admission["fingerprint"],
+                         admission["generation"], admission["breaker_owner"])
     except Exception:
         if provider_name == "bedrock":
             _deny("provider_failed")
         raise
-    elapsed = int((time.monotonic() - started) * 1000)
     try:
-        updated = LLMRequest.objects.filter(pk=ledger.pk, status="started").update(
-            status="succeeded", finished_at=timezone.now(), duration_ms=elapsed,
+        updated = LLMRequest.objects.filter(
+                pk=admission["ledger"].pk, status="started").update(
+            status="succeeded", finished_at=timezone.now(),
+            duration_ms=_elapsed_ms(admission),
             provider_request_id=str(response.get("id") or "")[:128],
             input_tokens=max(0, int(usage.get("input_tokens", 0) or 0)),
             output_tokens=max(0, int(usage.get("output_tokens", 0) or 0)),
@@ -918,30 +1017,230 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
             _deny("provider_failed")
         raise
     if updated != 1:
-        _blocked(provider_name, feature, "provider_failed" if provider_name == "bedrock"
+        _blocked(provider_name, admission["feature"],
+                 "provider_failed" if provider_name == "bedrock"
                  else "ledger_persistence_unknown")
-    _record_metrics(provider_name, feature, "succeeded", actual_tokens)
-    response["model"] = resolved_model
+    _record_metrics(provider_name, admission["feature"], "succeeded", actual_tokens)
+    response["model"] = admission["resolved_model"]
     return response
 
 
+def _execute(messages, system, tools, model, max_tokens, feature, operation,
+             context, reasoning_effort="off", provider_factory=None, redis=None,
+             policy_raw=None, max_tool_rounds=None):
+    from mojo.apps.account.models import LLMRequest
+    from mojo.helpers.llm_providers.base import ProviderError, validated_usage
+
+    admission = _admit(
+        messages, system, tools, model, max_tokens, feature, operation, context,
+        reasoning_effort=reasoning_effort, provider_factory=provider_factory,
+        redis=redis, policy_raw=policy_raw, max_tool_rounds=max_tool_rounds)
+    provider_name = admission["provider"]
+    try:
+        response = admission["adapter"].call(**admission["call_kwargs"])
+        if provider_name == "bedrock" and (
+                not isinstance(response, dict) or
+                validated_usage(response.get("usage")) is None):
+            raise ProviderError("provider_rejected")
+    except ProviderError as err:
+        if provider_name == "bedrock":
+            _bedrock_failed(admission, err.code, err.request_id,
+                            getattr(err, "usage", None),
+                            getattr(err, "retry_after", None))
+        _breaker_failure(
+            provider_name, admission["fingerprint"], admission["generation"],
+            admission["breaker_owner"], err.code, admission["policy"])
+        LLMRequest.objects.filter(pk=admission["ledger"].pk).update(
+            status="failed", error_code=err.code,
+            provider_request_id=err.request_id[:128],
+            duration_ms=_elapsed_ms(admission), finished_at=timezone.now())
+        release_permit(admission["redis"], admission["permit"])
+        _record_metrics(provider_name, feature, "failed")
+        _deny(err.code, retry_after=getattr(err, "retry_after", None))
+    except Exception:
+        if provider_name == "bedrock":
+            _bedrock_unexpected(admission)
+        LLMRequest.objects.filter(pk=admission["ledger"].pk).update(
+            status="failed", error_code="provider_failed", finished_at=timezone.now())
+        release_permit(admission["redis"], admission["permit"])
+        _breaker_failure(
+            provider_name, admission["fingerprint"], admission["generation"],
+            admission["breaker_owner"], "provider_failed", admission["policy"])
+        _record_metrics(provider_name, feature, "failed")
+        _deny("provider_failed")
+    return _settle_success(admission, response)
+
+
+class GuardedStream:
+    """A dispatched provider stream that settles its admission exactly once.
+
+    Settlement happens on the final event (actual usage), on a provider
+    failure, or on cancel. The reading thread does the settling. close()
+    from another thread only flags the cancel and interrupts the blocked
+    read, so it never waits on the socket and never touches the database;
+    close() with no read in progress settles the cancel itself.
+    """
+
+    def __init__(self, admission, provider_stream):
+        self._admission = admission
+        self._stream = provider_stream
+        self._lock = threading.Lock()
+        self._settled = False
+        self._cancelled = False
+        self._reading = False
+        self.response = None
+
+    def __iter__(self):
+        return self
+
+    def _claim(self):
+        with self._lock:
+            if self._settled:
+                return False
+            self._settled = True
+            return True
+
+    def _settle_cancel(self):
+        if not self._claim():
+            return
+        try:
+            self._stream.close()
+        except Exception:
+            pass
+        _bedrock_cancelled(self._admission, getattr(self._stream, "usage", None),
+                           getattr(self._stream, "request_id", ""))
+
+    def __next__(self):
+        from mojo.helpers.llm_providers.base import ProviderError, validated_usage
+
+        with self._lock:
+            if self._settled:
+                raise StopIteration
+            self._reading = not self._cancelled
+        if self._cancelled:
+            self._settle_cancel()
+            raise StopIteration
+        error = None
+        try:
+            event = next(self._stream)
+        except Exception as err:
+            event, error = None, err
+        with self._lock:
+            self._reading = False
+        if self._cancelled:
+            self._settle_cancel()
+            raise StopIteration
+        if error is None and (not isinstance(event, dict) or event.get("type") != "final"):
+            return event
+        if not self._claim():
+            raise StopIteration
+        request_id = getattr(self._stream, "request_id", "")
+        if isinstance(error, StopIteration):
+            # A provider stream ends only through its final event.
+            _bedrock_failed(self._admission, "provider_rejected", request_id,
+                            getattr(self._stream, "usage", None))
+        if isinstance(error, ProviderError):
+            _bedrock_failed(self._admission, error.code, error.request_id or request_id,
+                            getattr(error, "usage", None),
+                            getattr(error, "retry_after", None))
+        if error is not None:
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+            _bedrock_unexpected(self._admission)
+        response = event.get("response")
+        if not isinstance(response, dict) or \
+                validated_usage(response.get("usage")) is None:
+            _bedrock_failed(self._admission, "provider_rejected", request_id)
+        self.response = _settle_success(self._admission, response)
+        return {"type": "final", "response": self.response}
+
+    def close(self):
+        """Cancel. Idempotent and never raises.
+
+        With a read in progress on another thread this only interrupts it,
+        and that thread settles. Otherwise it settles here, so call it from
+        synchronous code (it writes the ledger).
+        """
+        with self._lock:
+            if self._settled or self._cancelled:
+                return
+            self._cancelled = True
+            reading = self._reading
+        if reading:
+            interrupt = getattr(self._stream, "interrupt", None)
+            if interrupt is not None:
+                try:
+                    interrupt()
+                except Exception:
+                    pass
+            return
+        try:
+            self._settle_cancel()
+        except Exception:
+            pass
+
+
+def _execute_stream(messages, system, tools, model, max_tokens, feature, operation,
+                    context, reasoning_effort="off", provider_factory=None, redis=None,
+                    policy_raw=None, max_tool_rounds=None):
+    """Admit, then dispatch; a refusal or pre-stream failure raises here."""
+    from mojo.helpers.llm_providers.base import ProviderError
+
+    admission = _admit(
+        messages, system, tools, model, max_tokens, feature, operation, context,
+        reasoning_effort=reasoning_effort, provider_factory=provider_factory,
+        redis=redis, policy_raw=policy_raw, stream=True,
+        max_tool_rounds=max_tool_rounds)
+    try:
+        provider_stream = admission["adapter"].stream(**admission["call_kwargs"])
+    except ProviderError as err:
+        _bedrock_failed(admission, err.code, err.request_id,
+                        getattr(err, "usage", None), getattr(err, "retry_after", None))
+    except Exception:
+        _bedrock_unexpected(admission)
+    return GuardedStream(admission, provider_stream)
+
+
 def invoke(messages, system=None, tools=None, model=None, max_tokens=4096, *,
-           feature, operation, context=None, reasoning_effort="off"):
+           feature, operation, context=None, reasoning_effort="off",
+           max_tool_rounds=None):
     """The only production message execution entry point."""
     return _execute(
         messages, system, tools, model, max_tokens, feature, operation, context,
-        reasoning_effort=reasoning_effort)
+        reasoning_effort=reasoning_effort, max_tool_rounds=max_tool_rounds)
+
+
+def invoke_stream(messages, system=None, tools=None, model=None, max_tokens=4096, *,
+                  feature, operation, context=None, reasoning_effort="off",
+                  max_tool_rounds=None):
+    """The only production streamed execution entry point."""
+    return _execute_stream(
+        messages, system, tools, model, max_tokens, feature, operation, context,
+        reasoning_effort=reasoning_effort, max_tool_rounds=max_tool_rounds)
 
 
 def execute_guarded_for_test(messages, *, feature, operation="test", context=None,
                              system=None, tools=None, model=None, max_tokens=4,
-                             reasoning_effort="off", provider_factory, redis,
-                             policy_raw):
+                             reasoning_effort="off", max_tool_rounds=None,
+                             provider_factory, redis, policy_raw):
     """Explicit test-only injection; every production guard still executes."""
     return _execute(
         messages, system, tools, model, max_tokens, feature, operation, context,
         reasoning_effort=reasoning_effort, provider_factory=provider_factory,
-        redis=redis, policy_raw=policy_raw)
+        redis=redis, policy_raw=policy_raw, max_tool_rounds=max_tool_rounds)
+
+
+def stream_guarded_for_test(messages, *, feature, operation="test", context=None,
+                            system=None, tools=None, model=None, max_tokens=4,
+                            reasoning_effort="off", max_tool_rounds=None,
+                            provider_factory, redis, policy_raw):
+    """Streamed twin of execute_guarded_for_test; every guard still executes."""
+    return _execute_stream(
+        messages, system, tools, model, max_tokens, feature, operation, context,
+        reasoning_effort=reasoning_effort, provider_factory=provider_factory,
+        redis=redis, policy_raw=policy_raw, max_tool_rounds=max_tool_rounds)
 
 
 def _fixed_configuration_probe_core(actor, credential, identity, operation):
