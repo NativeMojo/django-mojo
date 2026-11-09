@@ -77,6 +77,13 @@ class ASGIWebSocketWrapper:
         self.receive = receive
         self._send = send
         self._closed = False
+        # How the socket ended, for the handler's close line (#10231): the
+        # close code (from the disconnect event, or ours when we closed
+        # first) and what ended it first: "server" (our close), "event" (a
+        # websocket.disconnect, which ASGI sends for a client close, a
+        # transport loss or a server shutdown alike) or "send_error".
+        self.close_code = None
+        self.ended_by = None
         # Normalize headers to a simple case-insensitive dict (lower-cased keys)
         headers = {}
         try:
@@ -99,6 +106,9 @@ class ASGIWebSocketWrapper:
                 elif "bytes" in message:
                     yield message["bytes"].decode("utf-8")
             elif message["type"] == "websocket.disconnect":
+                if self.ended_by is None:
+                    self.ended_by = "event"
+                    self.close_code = _close_code(message.get("code"))
                 self._closed = True
                 break
 
@@ -113,12 +123,17 @@ class ASGIWebSocketWrapper:
                 "text": message
             })
         except Exception:
+            if self.ended_by is None:
+                self.ended_by = "send_error"
             self._closed = True
 
     async def close(self, code=1000):
         """Close the WebSocket connection"""
         if not self._closed:
             self._closed = True
+            if self.ended_by is None:
+                self.ended_by = "server"
+                self.close_code = _close_code(code)
             try:
                 await self._send({
                     "type": "websocket.close",
@@ -126,6 +141,14 @@ class ASGIWebSocketWrapper:
                 })
             except:
                 pass
+
+
+def _close_code(value):
+    """An integer close code, or None. Nothing else from the event is kept:
+    the client's close reason is free text it controls."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
 
 
 class _ASGITransport:
