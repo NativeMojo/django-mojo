@@ -39,7 +39,7 @@ from mojo.helpers import infrastructure, logit
 from mojo.helpers.settings import settings
 from mojo.apps.assistant.services import agent, approvals, mcp_execution
 
-from . import protocol
+from . import auth, protocol
 
 logger = logit.get_logger(__name__, "assistant.log")
 
@@ -220,15 +220,25 @@ def _mcp_tool(entry, execution=False):
     }
 
 
+def operator_registry(user, hide_infrastructure=None):
+    registry = projected_registry(hide_infrastructure)
+    if auth.has_assistant_access(user):
+        return registry
+    names = auth.member_tool_names()
+    return {name: entry for name, entry in registry.items()
+            if name in names and not entry["mutates"]}
+
+
 def list_tools(user, hide_infrastructure=None, grant=None):
     """Everything this user may call over MCP, in registry order."""
     from mojo.apps.assistant import user_can_use_tool
 
     tools = []
-    for entry in projected_registry(hide_infrastructure).values():
+    for entry in operator_registry(user, hide_infrastructure).values():
         if user_can_use_tool(user, entry):
             tools.append(_mcp_tool(entry, execution=mcp_execution.has_execution_scope(grant)))
-    tools.extend(dict(tool) for tool in MCP_ONLY_TOOLS)
+    if auth.has_assistant_access(user):
+        tools.extend(dict(tool) for tool in MCP_ONLY_TOOLS)
     return tools
 
 
@@ -410,7 +420,7 @@ def call_tool(name, arguments, user, grant, request_meta,
 
     reporter = suppressed_reporter(user, _reporter)
 
-    if name in MCP_ONLY_NAMES:
+    if name in MCP_ONLY_NAMES and auth.has_assistant_access(user):
         return _call_result(
             _pending_action_result(name, arguments, user, grant, _reporter=reporter))
 
@@ -421,7 +431,7 @@ def call_tool(name, arguments, user, grant, request_meta,
         "input": arguments,
     }
     outcome = agent._execute_tool(
-        block, projected_registry(hide_infrastructure), user,
+        block, operator_registry(user, hide_infrastructure), user,
         conversation_for_grant(user, grant), [], None, [],
         request_meta=request_meta, _reporter=reporter, pending_actions=[],
         execution_grant=grant if mcp_execution.has_execution_scope(grant) else None)
@@ -437,13 +447,16 @@ def _dispatch(msg, ctx):
         requested = params.get("protocolVersion")
         version = (requested if requested in protocol.SUPPORTED_PROTOCOL_VERSIONS
                    else protocol.PROTOCOL_VERSION)
+        instructions = "Tools read data within the connected operator's existing permissions."
+        if auth.has_assistant_access(ctx.user):
+            instructions = (EXECUTION_INSTRUCTIONS
+                            if mcp_execution.has_execution_scope(ctx.grant)
+                            else INSTRUCTIONS)
         return {
             "protocolVersion": version,
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": ctx.server_name, "version": mojo.__version__},
-            "instructions": (EXECUTION_INSTRUCTIONS
-                             if mcp_execution.has_execution_scope(ctx.grant)
-                             else INSTRUCTIONS),
+            "instructions": instructions,
         }
     if method == "ping":
         return {}

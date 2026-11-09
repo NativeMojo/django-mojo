@@ -314,7 +314,7 @@ and is not something you can satisfy.
 | `401` + `WWW-Authenticate: Bearer error="invalid_token", resource_metadata="…"` | No credential, an expired/revoked/invalid token, or a credential that is not an MCP token for this resource (a browser session, an API key, a group token). | Follow `resource_metadata` and run the OAuth flow, or refresh. |
 | `401` with **no** `WWW-Authenticate` | The resource is currently switched off, so it is not advertising itself. | Wait for the operator. Your grant is dormant, not destroyed — it works again when the feature comes back. |
 | `403` + `WWW-Authenticate: … error="insufficient_scope", scope="mcp"` | The grant does not carry the `mcp` scope — including an `api`-only grant, which reaches this path but may not use the tools. | Re-run consent requesting `mcp` (or `mcp api`). |
-| `403` `{"error":"permission_denied"}`, no challenge | The signed-in operator does not have Assistant access. | Nothing a client can fix; the operator needs the permission. |
+| `403` `{"error":"permission_denied"}`, no challenge | The installation requires global Assistant access and the signed-in operator lacks it. | Nothing a client can fix; the operator needs the permission. |
 | `400` `{"error":"unsupported_protocol_version", …}` | `MCP-Protocol-Version` named a revision this server does not implement. | Send a listed one, or omit the header. |
 | `400` + JSON-RPC `-32700` / `-32600` | The body was not a JSON-RPC message: unparsable, a scalar, an empty array, an array over 20 elements, or a malformed envelope. A `null` request id is refused. | Fix the envelope. |
 | `429` + `Retry-After` | 120 requests per minute per IP. | Back off. |
@@ -349,8 +349,10 @@ If you are the person being asked to turn this on:
    from disk for ACME, discovery returns the proxy's 404 and no client can
    connect. See the deployment note in
    [OAuth 2.1](../account/oauth_server.md).
-4. **Grant the operator `view_admin` or `assistant`.** The MCP door applies the
-   same permission check as the in-Admin chat.
+4. **Check what the operator can use.** By default, the endpoint requires
+   global `view_admin` or `assistant`. Installations can also allow valid MCP
+   grants to connect to a configured set of read-only tools. Discovery and
+   calls still apply the operator's permissions for each tool.
 5. **Check each connection's Access label.** **Tools** proposes shared changes;
    **Delegated tools** executes ordinary tools and keeps protected confirmations.
    Pending cards belong to the operator whose account authorized the connection,

@@ -12,12 +12,11 @@ decides:
   a spec client where to go;
 * the grant lacks the ``mcp`` scope — a 403 ``insufficient_scope``, still with a
   challenge, because a re-authorization with the right scope would fix it;
-* the operator holds neither ``view_admin`` nor ``assistant`` — a 403 with NO
-  challenge, because re-authenticating cannot fix a permission.
+* the installation requires Assistant access and the operator lacks it — a
+  403 with NO challenge, because re-authenticating cannot fix a permission.
 
-The permission predicate is deliberately the SAME one the chat endpoint applies
-(``requires_global_perms('view_admin', 'assistant')``, ANY-of): an operator who
-can use the chat can use the door, and nobody else can.
+Installations can opt in to member MCP tools through a deployment-file allowlist.
+Each tool still checks the operator's own permissions.
 """
 import ujson
 from django.http import HttpResponse
@@ -92,6 +91,21 @@ def raw_response(payload, status, www_authenticate=None):
     return response
 
 
+def has_assistant_access(user):
+    return user.has_permission(["view_admin", "assistant"])
+
+
+def member_tool_names():
+    names = settings.get_static("ASSISTANT_MCP_MEMBER_TOOLS", ())
+    if not isinstance(names, (list, tuple)):
+        return frozenset()
+    return frozenset(name for name in names if isinstance(name, str) and name)
+
+
+def may_connect(user):
+    return has_assistant_access(user) or bool(member_tool_names())
+
+
 def refusal(request):
     """``None`` when the request may proceed, else the response to return."""
     path = resource_path()
@@ -117,7 +131,7 @@ def refusal(request):
             oauth_server.www_authenticate(
                 path, error="insufficient_scope", scope="mcp"))
 
-    if not request.user.has_permission(["view_admin", "assistant"]):
+    if not may_connect(request.user):
         return raw_response({"error": "permission_denied"}, 403)
 
     return None

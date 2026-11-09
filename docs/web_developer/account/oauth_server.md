@@ -586,8 +586,9 @@ help them spot a request they did not start, the page shows where it came from:
   and how long ago it asked;
 - a **warning** when that machine is on a different network (a different `/24`
   for IPv4, `/64` for IPv6) from the one the person is using now;
-- a **warning** when the request includes `mcp` but their account holds neither
-  `view_admin` nor `assistant`, since the Assistant's tools would refuse them.
+- a **warning** when the request includes `mcp` and the account cannot connect
+  under the installation's MCP access rules. Installations may enable a set of
+  read-only member tools for operators without global Assistant access.
 
 The page makes three calls. They are listed because a custom front end can make
 them too, but a client application should only ever print the code and send the

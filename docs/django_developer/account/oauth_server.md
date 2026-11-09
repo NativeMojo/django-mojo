@@ -733,10 +733,9 @@ cannot choose:
 - a **network-mismatch warning** when the requester's address is not in the same
   `/24` (IPv4) or `/64` (IPv6) as the approver's current request, or either is
   unknown;
-- a **missing-permission warning** when the grant includes `mcp` and the approver
-  holds neither `view_admin` nor `assistant`. The tool door requires one of them at
-  request time, so approving a connection that cannot work is the thing being
-  prevented.
+- a **warning** when the request includes `mcp` and the account cannot connect
+  under the installation's MCP access rules. Installations may enable a set of
+  read-only member tools for operators without global Assistant access.
 
 A `user_code` in the page URL only pre-fills the box. It is **never approved
 without the person pressing Approve** on a screen that repeats the code. The page

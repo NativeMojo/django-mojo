@@ -358,6 +358,8 @@ def _different_network(requester_ip, approver_ip):
 
 
 def _consent_facts(request, row, normalized, cfg):
+    from mojo.apps.assistant.mcp.auth import may_connect
+
     granted = [token for token in (row.scope or "").split() if token]
     facts = consent.consent_context(row.client, granted, row.resource)
     who = request.user.email or request.user.username
@@ -374,11 +376,7 @@ def _consent_facts(request, row, normalized, cfg):
         },
         "network_mismatch": _different_network(row.requester_ip, _request_ip(request)),
         "started_in_browser": bool(row.requester_browser),
-        # The tool door also requires one of these at request time; saying so
-        # now saves the person approving a connection that cannot work.
-        "missing_permission": (
-            DEFAULT_SCOPE in granted
-            and not request.user.has_permission(["view_admin", "assistant"])),
+        "missing_permission": DEFAULT_SCOPE in granted and not may_connect(request.user),
         "lifetime_options": options,
         "lifetime_default": options[0],
         "expires_in": max(0, int((row.expires - now).total_seconds())),

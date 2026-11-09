@@ -84,6 +84,7 @@ Two orderings are load-bearing and must not be rearranged:
 | Setting | Default | Plane | Description |
 |---|---|---|---|
 | `ASSISTANT_MCP_ENABLED` | `False` | database or deployment file | Whether the door accepts anything at all. Read with `settings.get(..., kind="bool")` on **every** request — never cached, so the switch is immediate in both directions. |
+| `ASSISTANT_MCP_MEMBER_TOOLS` | Empty | deployment file only (`get_static`) | A list or tuple of reviewed read-only tool names available to users without global Assistant access. A non-empty list admits valid grants with the `mcp` scope. Each listed tool still needs to authorize the user and enforce its own data scope. |
 | `ASSISTANT_MCP_PATH` | `api/assistant/mcp` | deployment file only (`get_static`) | The request path. One value derives the route, the OAuth resource registration and the sensitive-body label, so they cannot disagree within a process. Changing it needs a restart. |
 
 All three consumers of the path — the `@md.URL` route, the OAuth resource
@@ -103,7 +104,7 @@ without touching the shared settings singleton.
 > it **only** through a database row would make the two disagree; set it in the
 > deployment file, as every other consumer of it assumes.
 
-Both appear in the Admin settings catalog (`assistant/apps.py ::
+The enabled switch and path appear in the Admin settings catalog (`assistant/apps.py ::
 register_settings_descriptors`).
 
 **`ASSISTANT_MCP_ENABLED` is catalog-protected.** It is in
@@ -156,9 +157,9 @@ the shape of it:
 4. **The agent receives the grant** and calls `/api/assistant/mcp` with it like any
    other MCP token.
 
-Approval does not bypass the door's own check: the approving user must still hold
-`view_admin` or `assistant` **at request time** (see "Who refuses what" below),
-and the verification page warns them when they do not. The resulting grant appears
+The verification page warns if the approving user lacks access to the MCP
+endpoint under the installation's current configuration. The endpoint checks
+admission again on every request. The resulting grant appears
 in the Admin like any other, with `flow = "device_code"`, and is revoked the same
 way.
 
@@ -173,7 +174,7 @@ way.
 | A session JWT, a `user_api_key`, an `ApiKey`, a group token | `mcp/auth.refusal` | 401 `invalid_token` | yes |
 | An MCP grant without the `mcp` scope | `mcp/auth.refusal` | 403 `insufficient_scope` | yes, with `scope="mcp"` |
 | An `api`-only grant at the API root — it *reaches* this path, but consented to REST access, not tools | `mcp/auth.refusal` | 403 `insufficient_scope` | yes, with `scope="mcp"` |
-| A grant user holding neither `view_admin` nor `assistant` | `mcp/auth.refusal` | 403 `permission_denied` | **no** |
+| A grant user without global Assistant access when the member allowlist is empty | `mcp/auth.refusal` | 403 `permission_denied` | **no** |
 
 The split is deliberate. A bad bearer never reaches a view, so only the
 middleware can attach a challenge to it; `mcp/auth.py` makes exactly the checks
@@ -196,11 +197,13 @@ which the shipped default does; move it outside and a root grant answers 401
 here (fail-closed), while both resources keep working separately. See
 [account/oauth_server.md](../account/oauth_server.md) for the scope rules.
 
-The permission predicate is exactly the chat endpoint's —
-`has_permission(["view_admin", "assistant"])`, ANY-of, the same rule
-`@md.requires_global_perms('view_admin', 'assistant')` applies to
-`POST /api/assistant`. An operator who can use the chat can use the door, and
-nobody else can.
+By default the MCP endpoint requires either global `view_admin` or global
+`assistant`. Set `ASSISTANT_MCP_MEMBER_TOOLS` in the deployment file to admit
+users with valid MCP OAuth grants without either global permission. Discovery
+and direct calls share the same read-only allowlist for those users. Existing
+tool authorization still runs. The deployment owner should list only tools
+that enforce their own user, group and record permissions. The approval tools
+and mutating tools remain restricted to the existing Assistant access rules.
 
 ### Explicit delegated execution
 
