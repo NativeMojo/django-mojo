@@ -284,7 +284,8 @@ Every socket writes one line to `realtime.log` when it is cleaned up:
   | reason | initiator | meaning |
   |---|---|---|
   | `client_closed` | `client` | a disconnect with an ordinary close-frame code: the peer (the client, or a proxy in between) sent a close frame |
-  | `connection_lost` | `unknown` | a disconnect with 1005, 1006 or 1015 (no close frame: the transport dropped), or receiving failed because the transport was closed |
+  | `connection_lost` | `unknown` | a disconnect with 1006 or 1015 (no close frame: the transport dropped), or receiving failed because the transport was closed |
+  | `no_status` | `unknown` | a disconnect with 1005: a close frame with no code, as a browser's plain `close()` sends, or, with uvicorn's wsproto backend, a dropped transport |
   | `service_restart` | `unknown` | a disconnect with 1012; uvicorn sends it when the worker shuts down, and a peer may send it too |
   | `stream_ended` | `unknown` | the receive stream ended with no disconnect event |
   | `idle_timeout` | `server` | no frame from the client for `WS_IDLE_TIMEOUT` |

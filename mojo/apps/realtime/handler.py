@@ -38,9 +38,13 @@ PRESENCE_REFRESH_MIN_INTERVAL = 30   # throttle presence refreshes
 
 # Returned by a guarded write that wrote nothing because the handler is closing.
 _WRITE_SKIPPED = object()
-# Close codes that mean no close frame was received (RFC 6455 7.4.1): no
-# status, abnormal closure, TLS failure. Logged as connection_lost (#10231).
-NO_CLOSE_FRAME_CODES = (1005, 1006, 1015)
+# Close codes that mean no close frame was received (RFC 6455 7.4.1):
+# abnormal closure, TLS failure. Logged as connection_lost (#10231).
+NO_CLOSE_FRAME_CODES = (1006, 1015)
+# 1005 is "no status": a close frame without a code (a browser's plain
+# close()), but uvicorn's wsproto backend also reports a dropped transport
+# as 1005. Logged as no_status with no initiator (#10231).
+NO_STATUS_CODE = 1005
 ACTIVITY_CHECK_SECONDS = 5           # longest gap between idle checks
 WS_CONNECT_WINDOW_SECONDS = 60       # fixed window for the pre-accept rate check
 
@@ -222,6 +226,8 @@ class WebSocketHandler:
         if code == 1012:
             # Uvicorn sends it when the worker shuts down; a peer may too.
             return "service_restart", None
+        if code == NO_STATUS_CODE:
+            return "no_status", None
         if not isinstance(code, int) or code in NO_CLOSE_FRAME_CODES:
             return "connection_lost", None
         return "client_closed", "client"

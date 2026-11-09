@@ -172,6 +172,15 @@ def test_transport_loss_line(opts):
         f"ASGI 1006 is a dropped transport, not a client close: {fields}"
 
 
+@th.django_unit_test("a 1005 disconnect is no_status with no initiator")
+def test_no_status_line(opts):
+    handler = _ended_by_event(opts.cr_token, 1005)
+    fields = _close_fields(handler, opts.cr_token)
+    assert (fields["reason"], fields["initiator"], fields["code"]) == \
+        ("no_status", "unknown", "1005"), \
+        f"1005 is a code-less close frame or a wsproto transport drop: {fields}"
+
+
 @th.django_unit_test("a 1012 disconnect is service_restart with no initiator")
 def test_service_restart_line(opts):
     handler = _ended_by_event(opts.cr_token, 1012)
