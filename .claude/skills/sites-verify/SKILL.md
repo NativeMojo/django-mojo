@@ -7,7 +7,7 @@ description: >-
   a blank cross-origin tile).
 user-invocable: true
 argument-hint: <site url or slug (omit to use the site you just deployed)>
-maestro-skill-version: 3
+maestro-skill-version: 4
 ---
 
 # Sites Verify — Look At It Before You Say It Works
@@ -33,13 +33,17 @@ the page in your context closes a visual claim.
 Real pixels, and it composites cross-origin media correctly:
 
 ```bash
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-  --headless=new --disable-gpu --hide-scrollbars \
+PROFILE="$(mktemp -d)"; "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --headless=new --disable-gpu --hide-scrollbars --user-data-dir="$PROFILE" \
   --virtual-time-budget=10000 --window-size=1440,1000 \
-  --screenshot=/tmp/site.png https://<slug>.sitesmojo.com/
+  --screenshot=/tmp/site.png https://<slug>.sitesmojo.com/; rm -rf "$PROFILE"
 ```
 
 (On Linux the binary is `google-chrome` or `chromium`.)
+
+If Playwright's Chromium is installed, use it instead of the installed Google
+Chrome: put its binary (`npx playwright install chromium` prints where it went)
+in place of the quoted path.
 
 Then **`Read` the PNG** — running the command is not verification until the
 image is in your context. Read it and say what you see.
@@ -48,6 +52,9 @@ image is in your context. Read it and say what you see.
   settle; without it you screenshot a half-built page.
 - One file per page — screenshot every page you changed, not just the home one.
 - `--hide-scrollbars` keeps a scrollbar gutter from reading as a layout seam.
+- `--user-data-dir="$PROFILE"` is a throwaway profile the same command deletes.
+  Without it every run leaves a browser profile on the disk. Run the command
+  whole, so the browser has quit and its profile is gone before you go on.
 
 ## Narrow Viewport — NOT Headless
 
