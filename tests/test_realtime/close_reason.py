@@ -4,9 +4,11 @@ cleanup_connection writes one `disconnected` line per socket with the cause,
 the close code, who closed it, seconds connected and seconds since the last
 inbound frame. It never carries frame contents or the token.
 
-These drive the real WebSocketHandler in-process over a fake socket, as
-keepalive.py does, and read the line back from the realtime log by the
-socket's connection id.
+These drive the real WebSocketHandler over the real ASGIWebSocketWrapper
+in-process, feeding ASGI events by hand, and read the line back from the
+realtime log by the socket's connection id. ASGI sends websocket.disconnect
+for a client close, a lost transport and a server shutdown alike, so only an
+ordinary close-frame code may be called the client's.
 """
 import asyncio
 import json
@@ -33,53 +35,63 @@ def setup_close_reason_user(opts):
     opts.cr_token = JWToken(user.get_auth_key()).create_access_token(uid=user.pk)
 
 
-class _ClientSocket:
-    """In-process stand-in for the ASGI socket wrapper, with its close code."""
+class _Peer:
+    """The ASGI server side of one socket: events in, messages out."""
 
-    def __init__(self):
-        self.inbound = asyncio.Queue()
+    def __init__(self, fail_sends_after_auth=False):
+        self.events = asyncio.Queue()
         self.sent = []
-        self.close_code = None
+        self.fail_sends_after_auth = fail_sends_after_auth
 
-    def client_send(self, frame):
-        self.inbound.put_nowait(json.dumps(frame))
+    def client_text(self, frame):
+        self.events.put_nowait({"type": "websocket.receive", "text": json.dumps(frame)})
 
-    def client_hang_up(self, code=None):
-        if self.close_code is None:
-            self.close_code = code
-        self.inbound.put_nowait(None)
+    def disconnect(self, code):
+        self.events.put_nowait({"type": "websocket.disconnect", "code": code,
+                                "reason": MARKER})
 
-    async def __aiter__(self):
-        while True:
-            message = await self.inbound.get()
-            if message is None:
-                return
-            yield message
+    async def receive(self):
+        return await self.events.get()
 
     async def send(self, message):
-        self.sent.append(json.loads(message))
+        if self.fail_sends_after_auth and self.frames("auth_success"):
+            raise OSError("broken pipe")
+        self.sent.append(message)
 
-    async def close(self, code=1000):
-        if self.close_code is None:
-            self.close_code = code
-        self.inbound.put_nowait(None)
+    def frames(self, kind):
+        out = []
+        for message in self.sent:
+            if message.get("type") == "websocket.send":
+                frame = json.loads(message["text"])
+                if frame.get("type") == kind:
+                    out.append(frame)
+        return out
+
+    async def wait_for(self, kind, seconds=5):
+        deadline = time.monotonic() + seconds
+        while not self.frames(kind) and time.monotonic() < deadline:
+            await asyncio.sleep(0.02)
+        assert self.frames(kind), f"no {kind} frame from the server: {self.sent}"
 
 
-def _session(token, client, **seams):
+def _session(token, finish, fail_sends_after_auth=False, **seams):
     """Authenticate one socket, send a frame carrying MARKER, then let
-    `client(socket)` decide how it ends. Returns the handler."""
+    `finish(peer)` end it. Returns the handler once it has cleaned up."""
+    from mojo.apps.realtime.asgi import ASGIWebSocketWrapper
     from mojo.apps.realtime.handler import WebSocketHandler
 
     async def scenario():
-        socket = _ClientSocket()
+        peer = _Peer(fail_sends_after_auth)
+        scope = {"type": "websocket", "path": "/ws/realtime/", "headers": [],
+                 "client": ("127.0.0.1", 50000)}
+        socket = ASGIWebSocketWrapper(scope, peer.receive, peer.send)
         handler = WebSocketHandler(socket, "/ws/realtime/", **seams)
-        socket.client_send({"type": "authenticate", "token": token, "prefix": "bearer"})
-        socket.client_send({"type": "rt10231", "note": MARKER})
+        peer.client_text({"type": "authenticate", "token": token, "prefix": "bearer"})
         task = asyncio.create_task(handler.handle_connection())
-        await client(socket)
+        await peer.wait_for("auth_success")
+        peer.client_text({"type": "rt10231", "note": MARKER})
+        await finish(peer)
         await asyncio.wait_for(task, timeout=15)
-        assert any(f.get("type") == "auth_success" for f in socket.sent), \
-            f"in-process auth failed: {socket.sent}"
         return handler
 
     return asyncio.run(scenario())
@@ -99,7 +111,7 @@ def _close_fields(handler, token):
         f"expected exactly one disconnected line for {handler.connection_id}, "
         f"got {len(closes)}: {closes}")
     for line in lines:
-        assert MARKER not in line, f"a frame's contents reached the realtime log: {line}"
+        assert MARKER not in line, f"frame or close-reason text reached the log: {line}"
         assert token not in line, f"the bearer token reached the realtime log: {line}"
     fields = dict(re.findall(r"(\w+)=(\S+)", closes[0].split("]: disconnected", 1)[1]))
     for name in ("reason", "code", "initiator", "connected", "idle", "auth"):
@@ -112,15 +124,23 @@ def _seconds(value):
     return float(value[:-1])
 
 
+def _ended_by_event(token, code):
+    async def finish(peer):
+        await asyncio.sleep(0.3)
+        peer.disconnect(code)
+
+    return _session(token, finish, idle_timeout=30, ping_seconds=0)
+
+
 @th.django_unit_test("an idle socket logs reason=idle_timeout, closed by the server")
 def test_idle_timeout_close_line(opts):
     idle = 1.0
 
-    async def wait_for_cull(socket):
+    async def wait_for_cull(peer):
         deadline = time.monotonic() + idle + 6
-        while socket.close_code is None and time.monotonic() < deadline:
+        while (not any(m.get("type") == "websocket.close" for m in peer.sent)
+               and time.monotonic() < deadline):
             await asyncio.sleep(0.05)
-        socket.client_hang_up()
 
     handler = _session(opts.cr_token, wait_for_cull, idle_timeout=idle, ping_seconds=0)
     fields = _close_fields(handler, opts.cr_token)
@@ -134,18 +154,45 @@ def test_idle_timeout_close_line(opts):
         f"a socket cannot be idle longer than it was connected: {fields}"
 
 
-@th.django_unit_test("a client hang-up logs reason=client_closed with the client's code")
+@th.django_unit_test("a client close frame logs reason=client_closed with its code")
 def test_client_close_line(opts):
-    async def hang_up(socket):
-        await asyncio.sleep(0.5)
-        socket.client_hang_up(code=1001)
-
-    handler = _session(opts.cr_token, hang_up, idle_timeout=30, ping_seconds=0)
+    handler = _ended_by_event(opts.cr_token, 1001)
     fields = _close_fields(handler, opts.cr_token)
-    assert fields["reason"] == "client_closed", f"wrong reason: {fields}"
-    assert fields["initiator"] == "client", f"the client closed it: {fields}"
-    assert fields["code"] == "1001", f"the client's close code must be logged: {fields}"
+    assert (fields["reason"], fields["initiator"], fields["code"]) == \
+        ("client_closed", "client", "1001"), f"wrong close line: {fields}"
     assert _seconds(fields["idle"]) < 30, f"idle is since the last frame: {fields}"
+
+
+@th.django_unit_test("a lost transport (1006) is connection_lost with no initiator")
+def test_transport_loss_line(opts):
+    handler = _ended_by_event(opts.cr_token, 1006)
+    fields = _close_fields(handler, opts.cr_token)
+    assert (fields["reason"], fields["initiator"], fields["code"]) == \
+        ("connection_lost", "unknown", "1006"), \
+        f"ASGI 1006 is a dropped transport, not a client close: {fields}"
+
+
+@th.django_unit_test("a 1012 disconnect is service_restart with no initiator")
+def test_service_restart_line(opts):
+    handler = _ended_by_event(opts.cr_token, 1012)
+    fields = _close_fields(handler, opts.cr_token)
+    assert (fields["reason"], fields["initiator"], fields["code"]) == \
+        ("service_restart", "unknown", "1012"), \
+        f"uvicorn sends 1012 on shutdown; it is not a client close: {fields}"
+
+
+@th.django_unit_test("a failed ASGI send is send_failed, not a client close")
+def test_send_failure_line(opts):
+    async def finish(peer):
+        # The pong to this ping is the send that fails.
+        peer.client_text({"type": "ping"})
+
+    handler = _session(opts.cr_token, finish, fail_sends_after_auth=True,
+                       idle_timeout=30, ping_seconds=0)
+    fields = _close_fields(handler, opts.cr_token)
+    assert (fields["reason"], fields["initiator"], fields["code"]) == \
+        ("send_failed", "unknown", "none"), \
+        f"no client close happened, only a failed send: {fields}"
 
 
 @th.django_unit_test("the ASGI wrapper keeps an integer close code and nothing else")
@@ -154,30 +201,28 @@ def test_asgi_wrapper_close_code(opts):
 
     async def drain(events):
         queue = list(events)
-        sent = []
 
         async def receive():
             return queue.pop(0)
 
         async def send(message):
-            sent.append(message)
+            pass
 
         wrapper = ASGIWebSocketWrapper({"headers": []}, receive, send)
         frames = [frame async for frame in wrapper]
-        return wrapper, frames, sent
+        return wrapper, frames
 
-    wrapper, frames, _ = asyncio.run(drain([
+    wrapper, frames = asyncio.run(drain([
         {"type": "websocket.receive", "text": "{}"},
         {"type": "websocket.disconnect", "code": 1006, "reason": MARKER},
     ]))
     assert frames == ["{}"], f"the frame before the disconnect was lost: {frames}"
-    assert wrapper.close_code == 1006, \
-        f"the client's disconnect code was not kept: {wrapper.close_code!r}"
+    assert (wrapper.ended_by, wrapper.close_code) == ("event", 1006), \
+        f"the disconnect event was not kept: {wrapper.ended_by!r} {wrapper.close_code!r}"
     assert MARKER not in repr(vars(wrapper)), \
         "the client's close reason text must not be kept"
 
-    wrapper, _, _ = asyncio.run(drain([
-        {"type": "websocket.disconnect", "code": "1006"}]))
+    wrapper, _ = asyncio.run(drain([{"type": "websocket.disconnect", "code": "1006"}]))
     assert wrapper.close_code is None, \
         f"a non-integer code must not be kept: {wrapper.close_code!r}"
 
@@ -195,6 +240,6 @@ def test_asgi_wrapper_close_code(opts):
         return wrapper, sent
 
     wrapper, sent = asyncio.run(server_close())
-    assert wrapper.close_code == 4001, \
-        f"the server's own close code was not kept: {wrapper.close_code!r}"
+    assert (wrapper.ended_by, wrapper.close_code) == ("server", 4001), \
+        f"the server's own close was not kept: {wrapper.ended_by!r} {wrapper.close_code!r}"
     assert sent == [{"type": "websocket.close", "code": 4001}], f"unexpected sends: {sent}"

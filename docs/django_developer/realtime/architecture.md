@@ -283,20 +283,23 @@ Every socket writes one line to `realtime.log` when it is cleaned up:
 
   | reason | initiator | meaning |
   |---|---|---|
-  | `client_closed` | `client` | the client ended the socket |
+  | `client_closed` | `client` | a disconnect with an ordinary close-frame code: the peer (the client, or a proxy in between) sent a close frame |
+  | `connection_lost` | `unknown` | a disconnect with 1005, 1006 or 1015 (no close frame: the transport dropped), or receiving failed because the transport was closed |
+  | `service_restart` | `unknown` | a disconnect with 1012; uvicorn sends it when the worker shuts down, and a peer may send it too |
+  | `stream_ended` | `unknown` | the receive stream ended with no disconnect event |
   | `idle_timeout` | `server` | no frame from the client for `WS_IDLE_TIMEOUT` |
   | `auth_timeout` | `server` | not authenticated within `WS_UNAUTH_TIMEOUT` |
   | `too_many_connections` | `server` | over `WS_MAX_CONNECTIONS`, at sign-in or a presence refresh |
   | `server_disconnect` | `server` | a `disconnect` message published to the connection |
   | `server_close` | `server` | `close_connection()` called without a named cause |
-  | `connection_lost` | `unknown` | receiving failed because the transport was closed |
   | `send_failed` | `unknown` | sending to the client failed |
   | `error` | `unknown` | the handler raised |
   | `handler_stopped` | `server` | the handler was cancelled, e.g. a worker shutting down |
 
-- `code` is the client's close code from its disconnect event, or the code the
-  server sent when it closed first; `none` when there was none. `1006` from
-  the client means the connection dropped without a close frame.
+- `code` is the code from the ASGI disconnect event, or the code the server
+  sent when it closed first; `none` when there was none. ASGI sends a
+  disconnect event for a client close, a lost transport and a server shutdown
+  alike, so the initiator is `client` only for an ordinary close-frame code.
 - `connected` is seconds since the socket was accepted. `idle` is seconds since
   the last frame received from the client, valid JSON or not.
 - The line never holds frame contents, the token or the client's close-reason

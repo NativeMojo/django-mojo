@@ -38,6 +38,9 @@ PRESENCE_REFRESH_MIN_INTERVAL = 30   # throttle presence refreshes
 
 # Returned by a guarded write that wrote nothing because the handler is closing.
 _WRITE_SKIPPED = object()
+# Close codes that mean no close frame was received (RFC 6455 7.4.1): no
+# status, abnormal closure, TLS failure. Logged as connection_lost (#10231).
+NO_CLOSE_FRAME_CODES = (1005, 1006, 1015)
 ACTIVITY_CHECK_SECONDS = 5           # longest gap between idle checks
 WS_CONNECT_WINDOW_SECONDS = 60       # fixed window for the pre-accept rate check
 
@@ -202,6 +205,26 @@ class WebSocketHandler:
         if getattr(self, "close_reason", None) is None:
             self.close_reason = reason
             self.close_initiator = initiator
+
+    def _stream_end_cause(self):
+        """(reason, initiator) for a receive stream that ended, from what the
+        socket recorded (#10231). ASGI sends websocket.disconnect for a client
+        close, a lost transport and a server shutdown alike, so only an
+        ordinary close-frame code is called the client's."""
+        ended_by = getattr(self.websocket, "ended_by", None)
+        code = getattr(self.websocket, "close_code", None)
+        if ended_by == "send_error":
+            return "send_failed", None
+        if ended_by == "server":
+            return "server_close", "server"
+        if ended_by != "event":
+            return "stream_ended", None
+        if code == 1012:
+            # Uvicorn sends it when the worker shuts down; a peer may too.
+            return "service_restart", None
+        if not isinstance(code, int) or code in NO_CLOSE_FRAME_CODES:
+            return "connection_lost", None
+        return "client_closed", "client"
 
     def _close_line(self):
         """The one line cleanup writes per socket. It carries no frame
@@ -473,9 +496,9 @@ class WebSocketHandler:
                 except Exception as e:
                     self._log_exception("message processing error")
                     await self.send_error("Message processing error")
-            # The client's stream ended. If the server closed first, its
-            # cause is already recorded and wins.
-            self._note_close("client_closed", "client")
+            # The stream ended. If the server closed first, its cause is
+            # already recorded and wins.
+            self._note_close(*self._stream_end_cause())
 
         except Exception as e:
             if "closed" in str(e).lower():

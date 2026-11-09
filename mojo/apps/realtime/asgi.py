@@ -77,9 +77,13 @@ class ASGIWebSocketWrapper:
         self.receive = receive
         self._send = send
         self._closed = False
-        # The close code: the client's, from its disconnect event, or ours
-        # when we closed first (#10231). Logged by the handler on cleanup.
+        # How the socket ended, for the handler's close line (#10231): the
+        # close code (from the disconnect event, or ours when we closed
+        # first) and what ended it first: "server" (our close), "event" (a
+        # websocket.disconnect, which ASGI sends for a client close, a
+        # transport loss or a server shutdown alike) or "send_error".
         self.close_code = None
+        self.ended_by = None
         # Normalize headers to a simple case-insensitive dict (lower-cased keys)
         headers = {}
         try:
@@ -102,7 +106,8 @@ class ASGIWebSocketWrapper:
                 elif "bytes" in message:
                     yield message["bytes"].decode("utf-8")
             elif message["type"] == "websocket.disconnect":
-                if self.close_code is None:
+                if self.ended_by is None:
+                    self.ended_by = "event"
                     self.close_code = _close_code(message.get("code"))
                 self._closed = True
                 break
@@ -118,13 +123,17 @@ class ASGIWebSocketWrapper:
                 "text": message
             })
         except Exception:
+            if self.ended_by is None:
+                self.ended_by = "send_error"
             self._closed = True
 
     async def close(self, code=1000):
         """Close the WebSocket connection"""
         if not self._closed:
             self._closed = True
-            self.close_code = _close_code(code)
+            if self.ended_by is None:
+                self.ended_by = "server"
+                self.close_code = _close_code(code)
             try:
                 await self._send({
                     "type": "websocket.close",
